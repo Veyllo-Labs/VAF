@@ -107,3 +107,26 @@ def test_the_busy_reason_is_worded_in_every_language():
     assert "t('failureReasons.busy', { seconds:" in wizard
     from vaf.core.app_link import relay
     assert "busy" in relay.FAILURE_REASONS
+
+
+def test_the_veyllo_app_room_is_worded_in_every_language_and_never_a_phone():
+    """The Veyllo App room's texts (``main.appRoom*``): every key in every catalogue, the
+    placeholders kept, and no word for a phone in any of them. MUTATION: write "phone" into
+    one of them, or drop a key from one catalogue - red."""
+    reference = json.loads((ROOT / "web" / "messages" / "en.json").read_text(encoding="utf-8"))
+    keys = sorted(k for k in reference["main"] if k.startswith("appRoom"))
+    assert len(keys) >= 15
+    found = []
+    for lang in LANGS:
+        main = json.loads((ROOT / "web" / "messages" / f"{lang}.json").read_text(
+            encoding="utf-8"))["main"]
+        for key in keys:
+            text = main.get(key)
+            assert isinstance(text, str) and text.strip(), f"{lang}: {key} missing"
+            for holder in ("{name}",):
+                assert (holder in text) == (holder in reference["main"][key]), (lang, key)
+            if _hits(text) or "\u2014" in text:
+                found.append(f"{lang}.main.{key}: {text!r}")
+    assert not found, found
+    room = (ROOT / "vaf" / "core" / "app_link" / "room.py").read_text(encoding="utf-8")
+    assert 'TITLE = "Veyllo App"' in room

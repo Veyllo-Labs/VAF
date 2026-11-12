@@ -741,3 +741,50 @@ def test_body_cannot_name_scope_or_device(room_home, monkeypatch):
     r = client.post("/api/app-link/room", json={"text": "Hallo"})
     assert r.status_code == 409 and r.json()["code"] == "channel_off"
     assert "Settings" in r.json()["detail"]
+
+
+# ── the web server ────────────────────────────────────────────────────────────
+
+def test_auto_load_skips_room_and_app_rows(monkeypatch, tmp_path):
+    """MUTATION: auto-load `web_sessions[0]["id"]` again - red: the connect loads the
+    Veyllo App room's row id as a chat."""
+    import vaf.core.session as session_module
+    from test_live_view_server import BOB, SID, _connect, _until, world as _world
+    TaskQueue._instance = None  # type: ignore[attr-defined]
+    TaskQueue()._legacy_mode = True  # type: ignore[attr-defined]
+    server = _world.__wrapped__(monkeypatch, tmp_path)
+    monkeypatch.setattr(session_module, "_app_room_rows", lambda scope=None: [{
+        "id": "app:veyllo_app", "kind": "app_room", "name": "Veyllo App", "updated_at": "",
+        "message_count": 0, "app_room": {}}])
+    monkeypatch.setattr(session_module, "_room_rows", lambda scope=None: [{
+        "id": "room:r1", "kind": "room", "room_id": "r1", "name": "a room", "updated_at": "",
+        "message_count": 0}])
+    with _connect(server, BOB, "bob") as ws:
+        frames = _until(ws, "history_update")
+    listing = [f for f in frames if f.get("type") == "session_list"][0]["sessions"]
+    assert [s["kind"] for s in listing[:2]] == ["app_room", "room"]
+    assert frames[-1]["sessionId"] == SID and frames[-1]["autoLoad"] is True
+    TaskQueue._instance = None  # type: ignore[attr-defined]
+
+
+def test_open_app_room_is_own_scope_only(monkeypatch, tmp_path):
+    """MUTATION: read the account from the command in `open_app_room` - red."""
+    from test_live_view_server import BOB, _connect, _send, _until, world as _world
+    TaskQueue._instance = None  # type: ignore[attr-defined]
+    TaskQueue()._legacy_mode = True  # type: ignore[attr-defined]
+    server = _world.__wrapped__(monkeypatch, tmp_path)
+    asked = []
+
+    def _view(scope, username=""):
+        asked.append(scope)
+        return {"room": {"id": room.ROW_ID, "roomId": room.ROW_ID, "roomKind": room.ROOM_KIND,
+                         "appRoom": {"devices": 1}}, "messages": []}
+    monkeypatch.setattr(room, "view", _view)
+    monkeypatch.setattr(room, "mark_seen", lambda scope, username="": asked.append(("seen", scope)))
+    with _connect(server, BOB, "bob") as ws:
+        _until(ws, "history_update")
+        _send(ws, {"type": "open_app_room", "user_scope_id": SCOPE_B, "room_id": "x"})
+        frames = _until(ws, "room_transcript")
+    assert asked == [BOB, ("seen", BOB)]
+    assert frames[-1]["room"]["roomKind"] == "veyllo_app"
+    TaskQueue._instance = None  # type: ignore[attr-defined]

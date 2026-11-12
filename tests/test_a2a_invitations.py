@@ -362,10 +362,10 @@ def test_the_browser_forwards_the_door_and_draws_it():
     page = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
     assert "invited?: boolean;" in page and "invitedBy?: string;" in page
     assert "invited?: { by: string; expiresAt: number; invitationId: string };" in page
-    room_row = page.split("{sessions.map(s => isRoom(s) ? (")[1].split("\n                            ) : (\n", 1)[0]
+    room_row = page.split("{sessions.filter(s => !isAppRoom(s)).map(s => isRoom(s) ? (")[1].split("\n                            ) : (\n", 1)[0]
     assert "tMain('roomInviteBadge')" in room_row
     assert "!s.closed && !s.invited" in room_row, "the door offers rename or close"
-    container = page.split("cn(messagesAreaWidthClass,")[1][:3200]
+    container = page.split("cn(messagesAreaWidthClass,")[1].split("<LoadingIllusion kind=\"room\"")[0]
     assert "<RoomInvitationGate" in container and "<RoomConversation" in container
     gate = page.split("function RoomInvitationGate(")[1].split("\nfunction ")[0]
     assert "onAnswer(true)" in gate and "onAnswer(false)" in gate

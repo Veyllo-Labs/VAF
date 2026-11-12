@@ -220,7 +220,7 @@ def test_the_sidebar_shows_rows_until_the_first_list():
     branch = _between(src, "else if (data.type === 'session_list') {", "else if (data.type === 'rooms_changed')")
     assert "setSessionsLoaded(true);" in branch
     assert "setTimeout(() => setSessionsLoaded(true), 15000)" in src
-    sidebar = _between(src, "{/* Session list: outer box", "{sessions.map(s => isRoom(s) ? (")
+    sidebar = _between(src, "{/* Session list: outer box", "{sessions.filter(s => !isAppRoom(s)).map(s => isRoom(s) ? (")
     assert "{!sessionsLoaded && (" in sidebar
     assert "<SkeletonRows count={6}" in sidebar and 'rowClassName="p-2 pl-3.5 h-9 max-md:min-h-[44px] rounded-lg"' in sidebar
     assert 'textClassName="opacity-0 group-hover:opacity-100' in sidebar

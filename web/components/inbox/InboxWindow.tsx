@@ -83,6 +83,8 @@ export interface InboxWindowProps {
     version: number;
     onOpenInChannel: (jump: InboxJump) => void;
     onOpenRoom: (roomId: string, name: string) => void;
+    /** A Veyllo App conversation opens the Veyllo App room, where it lives. */
+    onOpenAppRoom?: () => void;
     /** The rail's gear: how the agent answers what arrives here (Settings, Connections, Inbound). */
     onOpenInbound: () => void;
 }
@@ -117,7 +119,7 @@ function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) =
     );
 }
 
-export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel, onOpenRoom, onOpenInbound }: InboxWindowProps) {
+export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel, onOpenRoom, onOpenAppRoom, onOpenInbound }: InboxWindowProps) {
     const t = useTranslations('inbox');
     const [view, setView] = useState<View>('all');
     const [channel, setChannel] = useState<InboxChannel | null>(null);
@@ -315,6 +317,9 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
 
     const openElsewhere = (r: InboxRow, draft: boolean) => {
         if (r.channel === 'room') { onClose(); onOpenRoom(r.id, r.name); return; }
+        // The listing carries every chat channel of the registry; the Veyllo App's has no
+        // window in Settings, its conversation is the Veyllo App room.
+        if ((r.channel as string) === 'veyllo_app' && onOpenAppRoom) { onClose(); onOpenAppRoom(); return; }
         onClose();
         if (r.channel === 'mail') onOpenInChannel({ channel: 'mail', threadId: Number(r.id), draft });
         else onOpenInChannel({ channel: r.channel, chatId: r.id, draft });

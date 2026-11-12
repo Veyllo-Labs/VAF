@@ -32,7 +32,7 @@ def _sidebar_branches():
     and every assertion afterwards is made against half a row.
     """
     source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
-    body = source.split("{sessions.map(s => isRoom(s) ? (")[1]
+    body = source.split("{sessions.filter(s => !isAppRoom(s)).map(s => isRoom(s) ? (")[1]
     room, chat = body.split("\n                            ) : (\n", 1)
     return room, chat[:8000]
 
@@ -295,7 +295,8 @@ def test_the_frontend_never_picks_a_room_when_it_picks_a_session():
     # here green while protecting nothing - which is the same defect as a test that
     # asserts a guard is called without asserting the guard does anything.
     assert "const isRoom = (s: Session) => s.kind === 'room';" in source
-    assert "const conversationsOnly = (list: Session[]) => list.filter(s => !isRoom(s));" in source
+    assert ("const conversationsOnly = (list: Session[]) => list.filter(s => !isRoom(s) && !isAppRoom(s));"
+            in source)
     # the auto-select on connect (every history request goes through requestHistory)
     assert "requestHistory(wsSocketRef.current, chats[0].id, true);" in source
     assert "id: data.sessions[0].id" not in source, "the auto-load can still pick a room"

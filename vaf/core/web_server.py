@@ -124,7 +124,8 @@ app.add_middleware(OwnOriginCORSMiddleware)
 # answers them (vaf/core/session.py), so a surface that is not the web server -
 # the classic CLI pushes this list too - can build the same rows without
 # importing the web application.
-from vaf.core.session import SESSION_LIST_LIMIT, session_list_payload  # noqa: E402
+from vaf.core.session import (SESSION_LIST_LIMIT, first_conversation_id,  # noqa: E402
+                              session_list_payload)
 
 # Max room frames painted into the browser at once. A room is a finite conversation
 # by design (the named limit in the protocol doc), and every frame is a separate
@@ -5321,10 +5322,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
             })
         except Exception:
             pass
-        # Auto-load latest Web UI session so WebUI gets a valid sessionId immediately (not a channel chat)
-        if web_sessions:
-            sid = web_sessions[0]["id"]
-        else:
+        # Auto-load latest Web UI session so WebUI gets a valid sessionId immediately (not a channel chat).
+        # The first CONVERSATION: the list starts with the Veyllo App room and the agent rooms,
+        # whose ids name no session, and loading one answered an empty history for it.
+        sid = first_conversation_id(web_sessions)
+        if not sid:
             # Create a new default session for the user if they have none
             new_sess = session_mgr.new(user_scope_id=user_scope_id)
             session_mgr.save(new_sess)
@@ -5460,6 +5462,25 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     except Exception as e:
                         log("API", f"open_room failed: {e}", "ERROR")
                         await websocket.send_json({"type": "error", "message": "Room could not be opened"})
+
+                elif type == "open_app_room":
+                    # The Veyllo App room (vaf/core/app_link/room.py): answered as a room view,
+                    # always for the connection's own account. The command names nothing, so
+                    # it cannot ask for another account's room.
+                    user_scope_id = manager.get_connection_user(websocket)
+                    try:
+                        from vaf.core.app_link import room as app_room
+                        payload = await asyncio.to_thread(app_room.view, user_scope_id)
+                        if not payload["room"]["appRoom"]["devices"]:
+                            await websocket.send_json({"type": "error",
+                                                       "message": "No Veyllo App is paired"})
+                            continue
+                        await asyncio.to_thread(app_room.mark_seen, user_scope_id)
+                        await websocket.send_json({"type": "room_transcript", **payload})
+                    except Exception as e:
+                        log("API", f"open_app_room failed: {e}", "ERROR")
+                        await websocket.send_json({"type": "error",
+                                                   "message": "The Veyllo App room could not be opened"})
 
                 elif type == "room_typing":
                     # A keypress in the room's input box. Presence, not

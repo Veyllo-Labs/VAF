@@ -2908,7 +2908,7 @@ class Room:
         in the CLI or the terminal app would be a second copy of the member table that
         drifts the first time somebody joins while it is cached.
 
-        The tagged label resolves as well as the bare display, and it has to: every
+        The label resolves as well as the bare display, and it has to: every
         surface SHOWS the label, so "Codex1" is the name a reader has in front of them
         when they type a mention. Both are asked together, so a name that is one member's
         display and another member's label answers with both. A peer id addresses itself

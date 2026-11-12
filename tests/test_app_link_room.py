@@ -878,6 +878,23 @@ def test_a_line_whose_id_cannot_be_checked_is_refused_before_anything_goes_out(
     assert _chat() is None
 
 
+def test_a_line_is_refused_when_the_delivery_record_cannot_be_read(room_home, monkeypatch):
+    """The delivery record is the room's record too: unreadable while the page's id is checked,
+    the line is refused with "failed" before it is stored, queued or delivered. MUTATION: read
+    the delivery record outside the guarded step - red."""
+    import uuid as _uuid
+    client, _pipe, _row = _capable()
+
+    def _unreadable(scope):
+        raise OSError("disk error")
+    monkeypatch.setattr(devices, "room_acked", _unreadable)
+    with pytest.raises(room.RoomRefused) as refused:
+        room.post(SCOPE_A, "alice", "@VAF wie spät", client_id=str(_uuid.uuid4()))
+    assert (refused.value.code, refused.value.status) == ("failed", 500)
+    client.pump()
+    assert client.of("room_msg") == [] and _queued() == [] and _chat() is None
+
+
 def test_an_unreadable_channel_store_does_not_stop_a_line(room_home, monkeypatch):
     """The room already works through a channel store that fails (a failed write there is only
     logged), so a store that cannot be read answers "not known" and the page's id is kept.
@@ -1379,6 +1396,10 @@ def test_a_long_name_is_cut_to_the_display_limit_and_stays_reachable(tmp_path, l
     agent_room.store.put_member("p-0", record)
     assert agent_room.labels()["p-0"] == long_name[:80]
     assert agent_room.address_from_mention(f"@{long_name[:80]} hi") == {"peer": "p-0"}
+    # Two names that share their first 80 characters are one name: each keeps a label.
+    twins = _members(tmp_path, [long_name, long_name[:80] + "X" * 20], room_id="room-cut-twins")
+    for peer, label in twins.labels().items():
+        assert twins.address_from_mention(f"@{label} hi") == {"peer": peer}
 
 
 @pytest.mark.parametrize("length", [129, 200])
@@ -1397,7 +1418,7 @@ def test_the_texts_the_agent_reads_teach_a_label_the_room_gives(tmp_path):
     address one member. The example must be a label the room really gives: with two members
     called "Codex" the second is "Codex2", and "@Codex2" reaches it. An example of the old
     digest tag ("Codex51") taught mentions that go to the whole room. MUTATION: put the old
-    example back into one of them - red."""
+    example back into one of them - red; MUTATION: drop the first-word clause from one - red."""
     import re
 
     root = Path(__file__).resolve().parents[1]
@@ -1414,6 +1435,14 @@ def test_the_texts_the_agent_reads_teach_a_label_the_room_gives(tmp_path):
         examples = re.findall(r"@(Codex\d+)", text)
         assert examples, name
         assert all(e in labels for e in examples), (name, examples)
+    # A name with a space cannot be mentioned: only the first word is read, and it names only
+    # a member called exactly that word. Each text says so and names the id instead.
+    spaced = _members(tmp_path, ["Mia Lisa", "Alice Smith", "Alice"], room_id="room-spaced")
+    assert spaced.address_from_mention("@Mia Lisa hi") is None
+    assert spaced.address_from_mention("@Alice Smith hi") == {"peer": "p-2"}
+    for name, text in texts.items():
+        flat = " ".join(text.split())
+        assert "first word" in flat and ("--to <peer>" in flat or "id here" in flat), name
 
 
 def test_a_space_after_the_at_still_names(room_home, monkeypatch):

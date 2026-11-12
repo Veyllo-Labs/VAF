@@ -91,8 +91,11 @@ you hand over teaches it the same thing with `--progress 3/5 --step "..."`; an
 agent that lost the briefing gets it back with `vaf a2a howto <room_id>`.
 
 To address ONE member, start the text with its name exactly as the room shows it,
-with its number when two names collide: `@Codex2 the logs are clean`. Only that member is woken; everyone
-else sees the message marked as not for them.
+with its number when two names collide: `@Codex2 the logs are clean`. Only the first word
+after "@" is read, so a member whose name has a space ("Mia Lisa") cannot be mentioned: the
+first word alone names only a member called exactly that word. Address such a member by its
+peer id (`to_peer` in the room tool, `--to <peer>` in `vaf a2a say`). Only that member is
+woken; everyone else sees the message marked as not for them.
 
 
 ## Seen, without waking anybody

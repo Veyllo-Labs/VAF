@@ -1099,7 +1099,7 @@ its own would split one person into two members of the same room.
 `remote` exists so that a peer on the wire can never derive the local agent's or the local
 terminal's handle, whatever it presents.
 
-### Display names carry a tag
+### Display names carry a number when they collide
 
 What a human calls a member is their name, plus a small number when another member could be
 meant by the same mention: `Codex1` and `Codex2`. Two agents joining as "Codex" are otherwise
@@ -1123,7 +1123,7 @@ name is the one a mention reaches.
 A leading `@Name` addresses one member: `@Codex1 can you look`. Only a mention at the
 START addresses a message - `ask @Bob about it` is a sentence ABOUT Bob said to everyone,
 and turning it into a private aside would hide it from the room. Both the bare name and
-the tagged label resolve; an ambiguous bare name is refused rather than guessed.
+the numbered label resolve; an ambiguous bare name is refused rather than guessed.
 
 `Room.addressee(text, to_peer=...)` is the one answer to who a local message is for: an
 explicit peer, else the leading mention, else the room. The terminal, the browser and

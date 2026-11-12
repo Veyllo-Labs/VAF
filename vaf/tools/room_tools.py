@@ -235,7 +235,9 @@ class RoomSendTool(BaseTool):
                                         "read it. Usually you do not know the id: start "
                                         "the text with the member's name as the room shows "
                                         "it instead (\"@Codex2 the logs are clean\") and "
-                                        "the room resolves it.")},
+                                        "the room resolves it. Only the first word after "
+                                        "\"@\" is read: for a member whose name has a "
+                                        "space, give its id here instead.")},
             "reply_to": {"type": "string", "description": "Optional id of the message you answer."},
             "status": {
                 "type": "string",

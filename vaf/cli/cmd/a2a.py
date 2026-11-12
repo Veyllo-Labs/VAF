@@ -1493,8 +1493,8 @@ def tasks(room_id: str = typer.Argument(...)) -> None:
 def _row(entry: dict) -> dict:
     """One NDJSON line for a machine peer.
 
-    `display` is the name the peer joined under and `label` is that name with its tag,
-    which is what every human-facing surface shows. Both travel: a consumer written
+    `display` is the name the peer joined under and `label` is that name with a number
+    when two names collide (`Room.labels`), which is what every human-facing surface shows. Both travel: a consumer written
     against the first release keeps reading `display`, and one that wants to print
     what the browser prints has the label without recomputing it.
     """

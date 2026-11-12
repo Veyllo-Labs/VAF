@@ -176,9 +176,14 @@ A name the hosts file maps to loopback past its first megabyte is judged
 remote, so it is dialed and not refused: on a listed service port it would
 reach a live app.
 The budget is per test; the whole-suite total is reported, not judged, since
-it grows with every test. The whole-suite figure is the "Slow refusal" summary
-that stage 7 of scripts/ci_check.sh prints on every run; no figure for it is
-recorded here.
+it grows with every test. The whole-suite figure is the "Slow refusal"
+summary that stage 7 of scripts/ci_check.sh prints on every run. Measured on its first run (2026-11-12,
+15288 tests): 1953 refused local connects, 2095 s a Windows runner would wait
+(about 35 of the job's 90 minutes), by port 8001: 1364, 5432: 266, 8080: 231,
+9222: 80, 8005: 3, 6379: 2. One key was over the budget: 288 heartbeats, posted
+after the last test by terminal-app heartbeat threads that outlived their tests
+(the thread now ends with its bridge, and the local API's senders pause after a
+refused connect, vaf/core/outage.py).
 Nor does it change the OPENSSL BUILD:
 python.org's 3.13 for Windows and macOS bundles OpenSSL 3.5.9, which loads a
 certificate with a malformed subject alternative name that 3.5.3 refuses

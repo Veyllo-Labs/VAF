@@ -188,6 +188,69 @@ def _room_clock(ts) -> str:
     return frame_clock(ts)
 
 
+#: The Veyllo App room's sentences, exactly as the web UI's English catalogue words them
+#: (web/messages/en.json, the keys named here; a test keeps the two equal), so the terminal and
+#: the page never say one state two ways. English like every other terminal string.
+_APP_ROOM_TEXT = {
+    "appRoomEmpty": "This is your Veyllo App room: you, the agent in your Veyllo App and {name}, "
+                    "your VAF agent. What you write here goes to the agent in your Veyllo App. "
+                    "To ask {name} instead, start the line with @{handle}.",
+    "appRoomEmptyAgentOnly": "This is your Veyllo App room: you, the agent in your Veyllo App and "
+                             "{name}, your VAF agent. Writing to the agent in your Veyllo App is "
+                             "not possible yet. You can ask {name} now: start the line with "
+                             "@{handle}.",
+    "appRoomDelivered": "delivered",
+    "appRoomWaiting": "waiting for the Veyllo App",
+    "appRoomNotDelivered": "not delivered: the Veyllo App did not take it",
+    "appRoomNotDeliveredRemoved": "not delivered: the device was removed",
+    "appRoomNotDeliveredOff": "not delivered: the Veyllo App is switched off for your account",
+    "appRoomNotDeliveredExpired": "not delivered: the Veyllo App was away for more than seven "
+                                  "days",
+    "appRoomSentAgain": "sent again below",
+    "appRoomAwaitingAnswer": "waiting for the answer",
+    "appRoomTurnFailed": "{name} could not answer this message.",
+}
+
+
+def _app_room_delivery(line: dict) -> str:
+    """How a line to the app's agent stands, in the page's words (appRoom.ts `deliveryOf`): a
+    line the person sent again reads that, quietly; otherwise delivered, waiting, or not
+    delivered with its reason. "" for a line without a delivery state."""
+    state = str(line.get("state") or "")
+    if not state:
+        return ""
+    if line.get("resent"):
+        return _APP_ROOM_TEXT["appRoomSentAgain"]
+    if state == "delivered":
+        return _APP_ROOM_TEXT["appRoomDelivered"]
+    if state == "waiting":
+        return _APP_ROOM_TEXT["appRoomWaiting"]
+    key = {"removed": "appRoomNotDeliveredRemoved", "lane_off": "appRoomNotDeliveredOff",
+           "expired": "appRoomNotDeliveredExpired"}.get(str(line.get("reason") or ""),
+                                                        "appRoomNotDelivered")
+    return _APP_ROOM_TEXT[key]
+
+
+def _app_room_badge(line: dict) -> str:
+    """The head row's badge of one room line: who it is for, how it stands, and whether its
+    answer is still awaited."""
+    parts = [f"to {line['toLabel']}"] if line.get("toLabel") else []
+    delivery = _app_room_delivery(line)
+    if delivery:
+        parts.append(delivery)
+    if line.get("pending"):
+        parts.append(_APP_ROOM_TEXT["appRoomAwaitingAnswer"])
+    return " · ".join(parts)
+
+
+def _app_room_header(name: str, handle: str, can_write: bool) -> str:
+    """The note above the replay: who is in the room, where a line goes and how to ask VAF's
+    agent instead (the page's empty-room sentence), and how to write from the terminal."""
+    key = "appRoomEmpty" if can_write else "appRoomEmptyAgentOnly"
+    return (_APP_ROOM_TEXT[key].format(name=name, handle=handle)
+            + " Write with `vaf devices say \"...\"`.")
+
+
 def maintenance_notice(snap: dict, *, started: bool) -> str:
     """The notification for the start or the end of a machine-level job (MAINTENANCE), by its
     kind: the engine switch to vLLM (``local_engine.MAINTENANCE_KIND``) or the memory
@@ -864,34 +927,30 @@ class VafApp(App):
             from vaf.core.app_link import room
             from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
             scope = str(get_local_admin_scope_id() or "")
+            username = str(get_local_admin_username() or "")
             # The account's name, so VAF's agent shows under its persona name as in the web UI.
-            lines = room.transcript(scope, str(get_local_admin_username() or ""))
+            lines = room.transcript(scope, username)
+            header = _app_room_header(room.agent_label(username), room.handle(username),
+                                      bool(room.state(scope).get("can_write")))
         except Exception:
             self.add_event_note("Veyllo App", "the room cannot be read right now; try again "
                                 "in a moment, or open it in the web UI", "warning")
             return
         if not lines:
-            self.add_system_note("Veyllo App: nothing written yet. Write to the agent in your "
-                                 "Veyllo App with `vaf devices say \"...\"`.")
+            self.add_system_note(f"Veyllo App: nothing written yet. {header}")
             return
-        self.add_system_note(f"Veyllo App - {len(lines)} lines. Write with "
-                             "`vaf devices say \"...\"`.")
+        self.add_system_note(f"Veyllo App - {len(lines)} lines. {header}")
         for line in lines[-self.REPLAY_CAP:]:
             if line.get("kind") == "note":
                 # A timer, a background command, a sent draft, a confirmation: nobody's words,
                 # so a system note and never a line under a speaker.
                 self.add_system_note(f"Veyllo App: {line['text']} ({_room_clock(line.get('ts'))})")
                 continue
-            badge = f"to {line['toLabel']}" if line.get("toLabel") else ""
-            if line.get("state"):
-                badge += f" · {line['state'].replace('_', ' ')}"
-            if line.get("pending"):
-                badge += " · waiting for the answer"
             text = line["text"]
             if line.get("code") == "turn_failed":
-                text = f"{line['label']} could not answer this message."
+                text = _APP_ROOM_TEXT["appRoomTurnFailed"].format(name=line["label"])
             self._mount_scrolled(PeerMessage(
-                line["label"] or "VAF", text, badge=badge,
+                line["label"] or "VAF", text, badge=_app_room_badge(line),
                 kind=line.get("kind") or "say", when=_room_clock(line.get("ts"))))
 
     @on(SessionsPanel.Selected)

@@ -704,9 +704,52 @@ def test_tui_app_room_row_and_replay(monkeypatch, tmp_path):
             assert loaded == [] and asked == ["alice"]
             # A wake note is a system note, not a line under a speaker.
             assert any("A timer fired." in note for note in notes)
+            # The header says how to ask VAF's agent, as the page's empty room does.
+            assert any("start the line with @" in note for note in notes)
 
     asyncio.run(_drive())
     tui.shutdown()
+
+
+def test_the_terminal_words_the_room_as_the_page_does():
+    """The terminal's room sentences are the English catalogue's own. MUTATION: change one of
+    them in the terminal - red."""
+    import json
+
+    from vaf.cli.tui_app.app import _APP_ROOM_TEXT
+    catalogue = json.loads(Path("web/messages/en.json").read_text(encoding="utf-8"))["main"]
+    assert {key: catalogue[key] for key in _APP_ROOM_TEXT} == _APP_ROOM_TEXT
+
+
+@pytest.mark.parametrize("line, badge", [
+    ({"toLabel": "Veyllo App", "state": "not_delivered", "reason": "removed", "resent": True},
+     "to Veyllo App · sent again below"),
+    ({"toLabel": "Veyllo App", "state": "not_delivered", "reason": "removed"},
+     "to Veyllo App · not delivered: the device was removed"),
+    ({"toLabel": "Veyllo App", "state": "not_delivered", "reason": "lane_off"},
+     "to Veyllo App · not delivered: the Veyllo App is switched off for your account"),
+    ({"toLabel": "Veyllo App", "state": "not_delivered", "reason": "expired"},
+     "to Veyllo App · not delivered: the Veyllo App was away for more than seven days"),
+    ({"toLabel": "Veyllo App", "state": "not_delivered", "reason": "dropped"},
+     "to Veyllo App · not delivered: the Veyllo App did not take it"),
+    ({"toLabel": "Veyllo App", "state": "waiting"}, "to Veyllo App · waiting for the Veyllo App"),
+    ({"toLabel": "Mia", "pending": True}, "to Mia · waiting for the answer"),
+    ({"toLabel": "You"}, "to You"),
+])
+def test_the_terminal_badge_says_why_and_what_was_sent_again(line, badge):
+    """MUTATION: drop the `resent` check - red (a line sent again read as an open failure);
+    MUTATION: ignore the reason - red."""
+    from vaf.cli.tui_app.app import _app_room_badge
+    assert _app_room_badge(line) == badge
+
+
+def test_the_terminal_header_says_how_to_ask_vafs_agent():
+    """MUTATION: the old header without the mention - red."""
+    from vaf.cli.tui_app.app import _app_room_header
+    header = _app_room_header("Mia", "Mia", True)
+    assert "To ask Mia instead, start the line with @Mia." in header
+    assert "vaf devices say" in header
+    assert "You can ask Mia now: start the line with @Mia." in _app_room_header("Mia", "Mia", False)
 
 
 # ── the command line and the route ────────────────────────────────────────────

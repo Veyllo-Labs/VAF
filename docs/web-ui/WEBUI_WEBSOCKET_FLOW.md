@@ -540,8 +540,8 @@ Key rules:
   browser has no use for key material, and this payload is rebuilt field by field, so
   what is not named here does not arrive. **Already in canonical order** - the server sorts by `(lamport, sender, seq)` so every surface shows the same
   sequence, and a frontend that re-sorted by `ts` would undo it, because the wall clocks
-  of two machines in one room do not agree. `label` is the speaker's name WITH its tag
-  ("Codex51"), resolved by the room so that four renderers cannot disagree about what
+  of two machines in one room do not agree. `label` is the speaker's name, with a number
+  when two names collide ("Codex1", "Bob.2"), resolved by the room so that four renderers cannot disagree about what
   to call the same peer; `me` names the peer that is this user's own agent, which is
   how the view tells it apart from the strangers.
   `room.members_list` names everyone in the room (`peer`, `label`, `role`), sorted by

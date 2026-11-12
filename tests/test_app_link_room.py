@@ -854,6 +854,46 @@ def test_a_line_id_the_account_already_knows_is_replaced(room_home, place):
     assert len(ids) == len(set(ids)), "the app got one id twice"
 
 
+@pytest.mark.parametrize("line", ["Licht aus", "@VAF wie spät"])
+def test_a_line_whose_id_cannot_be_checked_is_refused_before_anything_goes_out(
+        room_home, monkeypatch, line):
+    """The app chat cannot be read while the page's id is checked: the line is refused with
+    "failed" before it is stored or delivered. Taking a server id instead sent the line out
+    under an id the page does not know, so after a give-up the page could not find it and sent
+    it twice. MUTATION: replace the id and go on (the previous rule) - red."""
+    import uuid as _uuid
+
+    from vaf.core.session import SessionManager
+    client, _pipe, _row = _capable()
+
+    def _unreadable(self, *a, **k):
+        raise OSError("disk error")
+    monkeypatch.setattr(SessionManager, "load", _unreadable)
+    with pytest.raises(room.RoomRefused) as refused:
+        room.post(SCOPE_A, "alice", line, client_id=str(_uuid.uuid4()))
+    assert (refused.value.code, refused.value.status) == ("failed", 500)
+    client.pump()
+    assert client.of("room_msg") == [] and _queued() == []
+    monkeypatch.undo()
+    assert _chat() is None
+
+
+def test_an_unreadable_channel_store_does_not_stop_a_line(room_home, monkeypatch):
+    """The room already works through a channel store that fails (a failed write there is only
+    logged), so a store that cannot be read answers "not known" and the page's id is kept.
+    MUTATION: count an unreadable channel store as "in use" (the previous rule) - red."""
+    import uuid as _uuid
+
+    from vaf.core import channel_message_store
+    _capable()
+
+    def _broken(*a, **k):
+        raise OSError("locked")
+    monkeypatch.setattr(channel_message_store, "get_message", _broken)
+    mine = str(_uuid.uuid4())
+    assert room.post(SCOPE_A, "alice", "Licht aus", client_id=mine)["id"] == mine
+
+
 def test_the_route_passes_the_pages_line_id(room_home, monkeypatch):
     """MUTATION: drop `client_id` in the route - red: the page could not recognise its line."""
     import uuid as _uuid
@@ -1350,6 +1390,30 @@ def test_a_long_persona_word_gives_a_hint_that_resolves(monkeypatch, length):
     hint = room.handle("alice")
     assert len(hint) == 80
     assert room.addressee(f"@{hint} hallo", "alice") == "vaf_agent"
+
+
+def test_the_texts_the_agent_reads_teach_a_label_the_room_gives(tmp_path):
+    """The room tool's description, the a2a skill and the room briefing show the agent how to
+    address one member. The example must be a label the room really gives: with two members
+    called "Codex" the second is "Codex2", and "@Codex2" reaches it. An example of the old
+    digest tag ("Codex51") taught mentions that go to the whole room. MUTATION: put the old
+    example back into one of them - red."""
+    import re
+
+    root = Path(__file__).resolve().parents[1]
+    texts = {
+        "room_tools": (root / "vaf" / "tools" / "room_tools.py").read_text(encoding="utf-8"),
+        "skill": (root / "vaf" / "skills" / "builtin" / "a2a_rooms" / "SKILL.md").read_text(
+            encoding="utf-8"),
+        "invite": (root / "vaf" / "core" / "a2a" / "invite.py").read_text(encoding="utf-8"),
+    }
+    agent_room = _members(tmp_path, ["Codex", "Codex"])
+    labels = set(agent_room.labels().values())
+    assert labels == {"Codex1", "Codex2"}
+    for name, text in texts.items():
+        examples = re.findall(r"@(Codex\d+)", text)
+        assert examples, name
+        assert all(e in labels for e in examples), (name, examples)
 
 
 def test_a_space_after_the_at_still_names(room_home, monkeypatch):

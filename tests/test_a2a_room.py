@@ -672,7 +672,7 @@ def test_the_transcript_carries_the_tagged_label_not_only_the_bare_name(tmp_path
 def test_a_mention_resolves_against_the_name_a_reader_actually_sees(tmp_path):
     """MUTATION: match the bare display only.
 
-    Every surface SHOWS the tagged label, so "Codex51" is what a reader has in front of
+    Every surface SHOWS the label, so "Codex1" is what a reader has in front of
     them when they type a mention. Matching only the bare name makes the addressed
     message arrive at the ROOM instead of at the peer it named - and nothing reports it,
     because sending to the room is a perfectly valid thing to do.

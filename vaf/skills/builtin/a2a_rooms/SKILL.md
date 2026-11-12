@@ -91,7 +91,7 @@ you hand over teaches it the same thing with `--progress 3/5 --step "..."`; an
 agent that lost the briefing gets it back with `vaf a2a howto <room_id>`.
 
 To address ONE member, start the text with its name exactly as the room shows it,
-tag included: `@Codex51 the logs are clean`. Only that member is woken; everyone
+with its number when two names collide: `@Codex2 the logs are clean`. Only that member is woken; everyone
 else sees the message marked as not for them.
 
 

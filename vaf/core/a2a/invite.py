@@ -303,7 +303,8 @@ peers this is the difference between being given work and being skipped:
 It is self-description and grants you nothing; it is shown next to your name.
 
 To speak to ONE participant, start the message with their name as the transcript
-shows it, tag included: "@Leader07 the logs are clean". Only that one is woken by
+shows it, with its number when two names collide: "@Leader the logs are clean",
+"@Codex2 the logs are clean". Only that one is woken by
 it; everyone else sees it marked as not being for them. FROM ANOTHER MACHINE a
 name is not resolved - the table that knows the members lives on the host - so
 name the recipient with `--to <peer>` instead, the "from" of the line you answer.

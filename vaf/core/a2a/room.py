@@ -2979,7 +2979,7 @@ class Room:
             rows.append({
                 "peer": frame.sender,
                 "display": record.get("display") or frame.sender,
-                # The name a human uses, tag included. It travels WITH the row because
+                # The name a human uses, its number included. It travels WITH the row because
                 # four surfaces render this transcript, and a surface that tagged names
                 # for itself would call the same peer something different from the next
                 # one - which is exactly what a mention has to resolve against.

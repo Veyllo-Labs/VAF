@@ -52,7 +52,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   the whole room instead of to one of them, and each such member keeps a label of its own to
   be addressed by (`@Bob1`, `@Bob.2`); no mention reaches a different member than it did
   before. An emoji or a symbol written right after the name is part of the word (`@Mia😊`
-  names nobody called "Mia"), so put a space after the name. The same rule decides in the
+  names nobody called "Mia"), so put a space after the name. A member's name is at most 80
+  characters; a longer name is reached by its first 80. The same rule decides in the
   Veyllo App room whether a line goes to your VAF agent.
 
 - **Stopping a browser task no longer keeps the browser busy.** Pressing Stop while the

@@ -658,8 +658,24 @@ def _line_id_in_use(scope: str, owner: str, line_id: str) -> bool:
     queue, the channel store (either direction), or the delivery record. An id the page sends
     again would otherwise overwrite the stored copy of an earlier question, read "delivered"
     at once, reach the app as a repeat it drops, or let the page take the earlier line for the
-    new one. Asked before a page's id is accepted; an id in use is replaced by the server's."""
-    session = _load(devices.chat_session_id(scope))
+    new one. Asked before a page's id is accepted; an id in use is replaced by the server's.
+
+    Raises ``RoomRefused("failed")`` when the app chat or the delivery record cannot be read:
+    they are the room's record, so nothing could be stored or shown either, and taking a
+    server id instead would let the line go out under an id the page that sent it does not
+    know (it then cannot recognise the line after a give-up and sends it twice). The channel
+    store is not one of them: the room already works through it failing (``post`` only logs a
+    failed write there), so an unreadable channel store answers "not known"."""
+    try:
+        try:
+            session = _manager().load(devices.chat_session_id(scope), restore_state=False,
+                                      repoint=False)
+        except FileNotFoundError:
+            session = None
+        acked = devices.room_acked(scope)
+    except Exception:
+        logger.warning("app room: the chat or the delivery record of %s cannot be read", scope)
+        raise RoomRefused("failed", 500)
     for message in getattr(session, "messages", None) or []:
         if line_id in (str(_room_meta(message).get("id") or ""),
                        str(_meta(message).get("channel_message_id") or "")):
@@ -668,7 +684,7 @@ def _line_id_in_use(scope: str, owner: str, line_id: str) -> bool:
     for _sid, task in _pending_turns(sids):
         if str((getattr(task, "metadata", None) or {}).get("channel_message_id") or "") == line_id:
             return True
-    if line_id in devices.room_acked(scope):
+    if line_id in acked:
         return True
     try:
         from vaf.core.channel_message_store import get_message
@@ -677,8 +693,7 @@ def _line_id_in_use(scope: str, owner: str, line_id: str) -> bool:
                            user_scope_id=scope, channel=CHANNEL):
                 return True
     except Exception:
-        # A store that cannot be read confirms nothing: the server's own id is the safe answer.
-        return True
+        logger.debug("app room: the channel store cannot be read", exc_info=True)
     return False
 
 

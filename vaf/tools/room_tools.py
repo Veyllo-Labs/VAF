@@ -234,7 +234,7 @@ class RoomSendTool(BaseTool):
                         "description": ("Optional peer id to address. Everyone can still "
                                         "read it. Usually you do not know the id: start "
                                         "the text with the member's name as the room shows "
-                                        "it instead (\"@Codex51 the logs are clean\") and "
+                                        "it instead (\"@Codex2 the logs are clean\") and "
                                         "the room resolves it.")},
             "reply_to": {"type": "string", "description": "Optional id of the message you answer."},
             "status": {

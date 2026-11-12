@@ -7,6 +7,11 @@ The terminal's door is the admin password, so the listing shows every account's 
 A removal goes to the running VAF first (its link manager cuts the device off at once); with
 nothing listening it is done here, and the relay member is deleted by the next running VAF.
 
+`vaf devices say` writes a line into the machine owner's Veyllo App room through the running
+VAF, because the link lives in the web server's process only (``bridge.start`` and
+``relay.start`` have one caller, ``start_app_link`` in vaf/core/web_server.py); with nothing
+listening it says so and changes nothing.
+
 NAMED BOUNDARY: pairing is not offered here. The one-time value K lives in the web server's
 process and the "is this your device?" confirmation is a step of the signed-in account in the
 web UI; a terminal pairing would need both moved out of that process.
@@ -84,6 +89,30 @@ def list_devices():
         print("* connected now")
     else:
         print("VAF is not running: the connection state is not known.")
+
+
+@app.command("say")
+def say(text: str = typer.Argument(..., help="The line. Start it with @ and your agent's name "
+                                             "to ask your VAF agent instead.")):
+    """Write into your Veyllo App room: to the agent in your Veyllo App, or, led by "@" and
+    your agent's name, to your VAF agent. Needs a running VAF."""
+    answer = ask_running_vaf("POST", "/api/app-link/room", json={"text": text})
+    if answer is None:
+        UI.error("VAF is not running, so nothing was written. Start VAF and try again.")
+        raise typer.Exit(1)
+    status, body = answer
+    body = body if isinstance(body, dict) else {}
+    if status != 200:
+        detail = body.get("detail") if isinstance(body.get("detail"), str) else ""
+        UI.error(detail or f"VAF refused the line ({status}).")
+        raise typer.Exit(1)
+    device = str(body.get("device") or "your Veyllo App")
+    if body.get("to") == "vaf_agent":
+        UI.success("Your VAF agent has the line and answers in the Veyllo App room.")
+    elif body.get("state") == "sent":
+        UI.success(f"Sent to the agent in {device}.")
+    else:
+        UI.success(f"Kept for the agent in {device}; it arrives when the Veyllo App connects.")
 
 
 @app.command("remove")

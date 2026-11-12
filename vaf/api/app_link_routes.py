@@ -73,6 +73,11 @@ class RelaySwitch(BaseModel):
     enabled: bool
 
 
+class RoomLine(BaseModel):
+    # The line only: the account is the caller's, the device the room picks.
+    text: str = ""
+
+
 def _caller(request: Request) -> Dict[str, Any]:
     """The caller as authenticated. Only the tokenless desktop, which has no identity on the
     request at all, is the machine owner; an authenticated caller without a scope is
@@ -245,6 +250,36 @@ async def remove_device(device_id: str, request: Request):
     removed = await asyncio.to_thread(devices.remove_device, device_id,
                                       by=str(user.get("username") or ""), reason="removed")
     return {"removed": bool(removed)}
+
+
+# ── the Veyllo App room (the caller's own account) ─────────────────────────────
+
+# A sentence with the next step for each refusal of a room line; `code` is the catalogue key.
+_ROOM_REFUSALS = {
+    "bad_text": "Write a line of text (at most 65536 characters).",
+    "channel_off": "The Veyllo App is switched off for your account. Switch it on in Settings > "
+                   "Connections.",
+    "no_device": "No Veyllo App is paired with your account. Pair one in Settings > "
+                 "Connections.",
+    "needs_newer_app": "Writing to the agent in your Veyllo App needs a newer version of the "
+                       "Veyllo App. You can still ask your VAF agent: start the line with @ "
+                       "and its name.",
+    "rate_limited": "Too many lines in a minute. Wait a moment and write again.",
+}
+
+
+@router.post("/api/app-link/room")
+async def write_into_room(body: RoomLine, request: Request):
+    """A line of the caller in their own Veyllo App room (vaf/core/app_link/room.py): to the
+    agent in the Veyllo App, or, led by "@" and the agent's name, to VAF's agent."""
+    from vaf.core.app_link import room
+    scope, username = _own(request)
+    try:
+        answer = await asyncio.to_thread(room.post, scope, username, body.text)
+    except room.RoomRefused as refused:
+        return _no_store({"detail": _ROOM_REFUSALS.get(refused.code, refused.code),
+                          "code": refused.code}, refused.status)
+    return _no_store(answer)
 
 
 # ── the relay (admins) ───────────────────────────────────────────────────────

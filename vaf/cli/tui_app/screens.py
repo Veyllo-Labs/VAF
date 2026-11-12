@@ -1595,6 +1595,9 @@ class PaletteScreen(ModalScreen[str]):
 # and a terminal that renders an emoji double-width would push the unread count off the
 # edge on exactly the rooms that have one.
 _ROOM_MARK = "▚"
+# The Veyllo App room's mark: a telephone as a text symbol (U+260F), one column wide in every
+# terminal font that has it, not an emoji.
+_APP_ROOM_MARK = "☏"
 
 
 class SessionsPanel(Vertical):
@@ -1625,6 +1628,10 @@ class SessionsPanel(Vertical):
         def __init__(self, room_id: str) -> None:
             super().__init__()
             self.room_id = room_id
+
+    class AppRoomSelected(events.Message):
+        """The Veyllo App room was picked. Not Selected either: its row names no session,
+        and the room is shown, never loaded."""
 
     class NewRequested(events.Message):
         pass
@@ -1677,6 +1684,23 @@ class SessionsPanel(Vertical):
             # is 26 columns (panel 32 minus paddings and the indent), so the
             # meta line carries id and count, and the third line the summary
             # when there is one, else the date.
+            if entry.get("kind") == "app_room":
+                # The Veyllo App room, pinned first: the person, the agent in the Veyllo
+                # App and this agent. Shown read-only; writing from a terminal is
+                # `vaf devices say`.
+                unread = int(entry.get("unread") or 0)
+                state = entry.get("app_room") or {}
+                head = f"{marker}[$secondary]{_APP_ROOM_MARK}[/] [$text]{_esc(name)}[/]"
+                if unread:
+                    head += f" [$warning]{unread}[/]"
+                meta = "connected" if state.get("connected") else "not connected"
+                last = (entry.get("last") or {}).get("text") or ""
+                tail = (last[:24] + "…") if len(last) > 25 else last
+                lv.append(ListItem(Static(
+                    f"{head}\n"
+                    f"  [$text-disabled]{_esc(meta)}[/]\n"
+                    f"  [$text-disabled]{_esc(tail)}[/]")))
+                continue
             if entry.get("kind") == "room":
                 # A room, not a conversation. The list carries both because a person
                 # thinks of them as one place to look; the row says which is which so
@@ -1722,6 +1746,9 @@ class SessionsPanel(Vertical):
         idx = event.list_view.index or 0
         if 0 <= idx < len(self._entries):
             entry = self._entries[idx]
+            if entry.get("kind") == "app_room":
+                self.post_message(self.AppRoomSelected())
+                return
             if entry.get("kind") == "room":
                 # Never a Selected: that message means "load this session", and a room
                 # is not one. Loading it as a session would open something whose save
@@ -1747,13 +1774,13 @@ class SessionsPanel(Vertical):
 
     def action_rename_session(self) -> None:
         entry = self._highlighted()
-        if entry is not None:
+        if entry is not None and entry.get("kind") != "app_room":
             self.post_message(self.RenameRequested(
                 str(entry.get("id", "")), str(entry.get("name") or "")))
 
     def action_delete_session(self) -> None:
         entry = self._highlighted()
-        if entry is not None:
+        if entry is not None and entry.get("kind") != "app_room":
             self.post_message(self.DeleteRequested(
                 str(entry.get("id", "")), str(entry.get("name") or "")))
 

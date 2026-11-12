@@ -635,3 +635,109 @@ def test_unread_counts_the_other_parties_and_looking_clears_it(room_home):
     assert room.list_row(SCOPE_A)["unread"] == 1
     room.mark_seen(SCOPE_A)
     assert room.list_row(SCOPE_A)["unread"] == 0
+
+
+# ── the terminal ──────────────────────────────────────────────────────────────
+
+def test_tui_app_room_row_and_replay(monkeypatch, tmp_path):
+    """MUTATION: post `Selected` for the app room row (treat it like a chat) - red: the
+    panel would load the row id as a session instead of replaying the room."""
+    import asyncio
+
+    from textual.widgets import ListView
+
+    from test_tui_app_smoke import _settle, smoke_app as _smoke  # noqa: F401
+    from vaf.cli.tui_app.screens import _APP_ROOM_MARK, SessionsPanel
+    from vaf.cli.tui_app.widgets import PeerMessage
+    world = _smoke.__wrapped__(monkeypatch, tmp_path)
+    app, tui = world.app, world.bridge
+    loaded = []
+    tui.load_session = lambda sid: loaded.append(sid)
+    tui.list_sessions = lambda: [
+        {"id": "app:veyllo_app", "kind": "app_room", "name": "Veyllo App", "unread": 1,
+         "app_room": {"connected": True}, "last": {"text": "Der Wecker steht."}},
+        {"id": "aaa111", "name": "a talk", "updated_at": "2026-08-01 10:00",
+         "message_count": 4}]
+    monkeypatch.setattr(room, "transcript", lambda scope, username="", limit=0: [
+        {"id": "l1", "peer": "person", "label": "You", "to": {"peer": "app_agent"},
+         "toLabel": "Veyllo App", "kind": "say", "text": "Wecker auf 7", "ts": 1767225600,
+         "state": "delivered"},
+        {"id": "l2", "peer": "app_agent", "label": "Veyllo App", "to": {"peer": "person"},
+         "toLabel": "You", "kind": "say", "text": "Der Wecker steht.", "ts": 1767225660}])
+    assert len(_APP_ROOM_MARK) == 1 and ord(_APP_ROOM_MARK) < 0x1F000
+
+    async def _drive():
+        async with app.run_test(size=(110, 40)) as pilot:
+            await pilot.pause()
+            app.action_toggle_sessions()
+            panel = app.query_one("#sessions", SessionsPanel)
+            lv = panel.query_one("#session-list", ListView)
+            assert await _settle(pilot, lambda: len(lv.children) >= 2)
+            first = str(lv.children[0].query_one("Static").render())
+            assert f"{_APP_ROOM_MARK} Veyllo App" in first
+            lv.index = 0
+            await pilot.press("enter")
+            assert await _settle(pilot, lambda: len(app.query(PeerMessage)) == 2)
+            heads = [str(w.query_one(".msg-head").render()) for w in app.query(PeerMessage)]
+            assert "You" in heads[0] and "to Veyllo App" in heads[0]
+            assert "Veyllo App" in heads[1]
+            assert loaded == []
+
+    asyncio.run(_drive())
+    tui.shutdown()
+
+
+# ── the command line and the route ────────────────────────────────────────────
+
+def _snapshot(home):
+    return sorted((p.relative_to(home.root).as_posix(), p.stat().st_mtime_ns)
+                  for p in home.root.rglob("*") if p.is_file() and ".lock" not in p.name)
+
+
+def test_devices_say_needs_running_vaf(room_home, monkeypatch):
+    """MUTATION: post the line in-process (`room.post`) when nothing listens - red."""
+    from typer.testing import CliRunner
+
+    from vaf.cli.cmd import devices as devices_cmd
+    runner = CliRunner()
+    _capable()
+    monkeypatch.setattr(devices_cmd, "ask_running_vaf", lambda *a, **k: None)
+    before = _snapshot(room_home)
+    out = runner.invoke(devices_cmd.app, ["say", "Hallo"])
+    assert out.exit_code == 1 and "VAF is not running" in out.output
+    assert _snapshot(room_home) == before and _chat() is None
+    asked = []
+    monkeypatch.setattr(devices_cmd, "ask_running_vaf", lambda method, path, json=None: (
+        asked.append((method, path, json)) or (200, {"id": L1, "to": "app_agent",
+                                                     "state": "sent", "device": "Pixel 9"})))
+    out = runner.invoke(devices_cmd.app, ["say", "Hallo"])
+    assert out.exit_code == 0 and "Pixel 9" in out.output
+    assert asked == [("POST", "/api/app-link/room", {"text": "Hallo"})]
+    monkeypatch.setattr(devices_cmd, "ask_running_vaf", lambda *a, **k: (
+        409, {"detail": "Writing to the agent in your Veyllo App needs a newer version.",
+              "code": "needs_newer_app"}))
+    out = runner.invoke(devices_cmd.app, ["say", "Hallo"])
+    assert out.exit_code == 1 and "newer version" in out.output
+
+
+def test_body_cannot_name_scope_or_device(room_home, monkeypatch):
+    """MUTATION: take the account from the body in the route - red: the line lands in the
+    room of the account it names."""
+    from test_app_link_routes import _app
+    _capable(SCOPE_A)
+    other, _p, other_row = _capable(SCOPE_B, peer="10.0.0.7", connection="c3",
+                                    device=paired_device(SCOPE_B, username="bob"))
+    client = _app(monkeypatch, as_scope=SCOPE_A)
+    r = client.post("/api/app-link/room", json={"text": "Hallo", "user_scope_id": SCOPE_B,
+                                                 "device": other_row["device_id"]})
+    assert r.status_code == 200 and r.json()["to"] == "app_agent"
+    assert r.headers["cache-control"] == "no-store"
+    other.pump()
+    assert other.of("room_msg") == [] and _chat(SCOPE_B) is None
+    assert _kinds(SCOPE_A) == [agent_origin.APP_ROOM_OUT_KIND]
+    r = client.post("/api/app-link/room", json={"text": ""})
+    assert r.status_code == 400 and r.json()["code"] == "bad_text"
+    room_home.lane(SCOPE_A, False)
+    r = client.post("/api/app-link/room", json={"text": "Hallo"})
+    assert r.status_code == 409 and r.json()["code"] == "channel_off"
+    assert "Settings" in r.json()["detail"]

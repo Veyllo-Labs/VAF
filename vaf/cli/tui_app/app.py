@@ -850,6 +850,38 @@ class VafApp(App):
         if event.room_id:
             self._cmd_room([event.room_id])
 
+    @on(SessionsPanel.AppRoomSelected)
+    def _app_room_picked(self, _event) -> None:
+        """The Veyllo App room was picked: a one-shot replay of its lines, with the speaker of
+        each, like an agent room. Nothing is loaded; the live conversation stays."""
+        self.query_one("#sessions", SessionsPanel).remove_class("visible")
+        self.query_one("#promptbox", PromptBox).focus()
+        self._show_app_room()
+
+    def _show_app_room(self) -> None:
+        from vaf.cli.tui_app.widgets import PeerMessage
+        try:
+            from vaf.core.app_link import room
+            from vaf.core.config import get_local_admin_scope_id
+            scope = str(get_local_admin_scope_id() or "")
+            lines = room.transcript(scope)
+        except Exception as exc:
+            self.add_event_note("Veyllo App", f"not available: {exc}", "warning")
+            return
+        if not lines:
+            self.add_system_note("Veyllo App: nothing written yet. Write to the agent in your "
+                                 "Veyllo App with `vaf devices say \"...\"`.")
+            return
+        self.add_system_note(f"Veyllo App - {len(lines)} lines. Write with "
+                             "`vaf devices say \"...\"`.")
+        for line in lines[-self.REPLAY_CAP:]:
+            badge = f"to {line['toLabel']}" if line.get("toLabel") else ""
+            if line.get("state"):
+                badge += f" · {line['state'].replace('_', ' ')}"
+            self._mount_scrolled(PeerMessage(
+                line["label"] or "Veyllo App", line["text"], badge=badge,
+                kind=line.get("kind") or "say", when=_room_clock(line.get("ts"))))
+
     @on(SessionsPanel.Selected)
     def _session_picked(self, event: SessionsPanel.Selected) -> None:
         panel = self.query_one("#sessions", SessionsPanel)

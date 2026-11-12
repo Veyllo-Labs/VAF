@@ -25,7 +25,7 @@ import { downloadText } from '@/lib/download';
 import { type NativeDocxDocument, flattenNativeDocxText, replaceTextInNativeDocx } from '@/lib/docxNative';
 import type { EditorFileInfo } from '@/lib/editorFile';
 import { cacheChat, purgeLegacySessionCache } from '@/lib/sessionCache';
-import { connectAccount, MISSING_BASELINE_RELOAD_KEY } from '@/lib/socketAccount';
+import { connectAccount, markMissingBaselineReload, MISSING_BASELINE_RELOAD_KEY } from '@/lib/socketAccount';
 import { historyMessage, entryActivity, keepCachedOrphan, ComposerDrafts, LiveHistoryHold, planReplay, closesOwnWorkflow } from '@/components/chat/liveView';
 import SettingsModal, { type SettingsModalProps } from '@/components/SettingsModal';
 import { AgentAvatar, SPECIALIST_SKIN, SUBAGENT_ACCENT, type AvatarMode, type SubAgentKind } from '@/components/AgentAvatar';
@@ -7717,14 +7717,22 @@ function VAFDashboardContent() {
                 let reloadedOnce = false;
                 try { reloadedOnce = sessionStorage.getItem(MISSING_BASELINE_RELOAD_KEY) === '1'; } catch { /* blocked */ }
                 const noBaseline = firstAccountRef.current === undefined;
-                const verdict = connectAccount(firstAccountRef.current, data.accountId,
+                let verdict = connectAccount(firstAccountRef.current, data.accountId,
                     { firstSocket, reloadedForMissingBaseline: reloadedOnce });
+                // The one reload for a socket without a baseline is marked, so it cannot repeat;
+                // a mark that cannot be written means no such reload at all (it could repeat
+                // forever). A reload for a known other account never depends on the mark.
+                if (verdict === 'reload' && noBaseline) {
+                    let storage: Storage | null = null;
+                    try { storage = sessionStorage; } catch { /* blocked */ }
+                    if (!markMissingBaselineReload(storage)) verdict = 'adopt';
+                }
                 if (verdict === 'reload') {
                     reloadingRef.current = true;
-                    // The one reload for a socket without a baseline is marked, so it cannot repeat.
-                    if (noBaseline) {
-                        try { sessionStorage.setItem(MISSING_BASELINE_RELOAD_KEY, '1'); } catch { /* blocked */ }
-                    }
+                    // The old document sends nothing more: its socket closes at once, so a timer or
+                    // an effect of this document (an autosuggest ask with the typed text, a
+                    // run-state ask) cannot reach the next account's connection.
+                    try { socket.close(); } catch { /* already closed */ }
                     // Nothing of the first account stays drawn or stored for the next document:
                     // the screen is hidden at once (no React round trip), and the workflow panel
                     // the tab keeps in sessionStorage (a reload keeps sessionStorage) goes.
@@ -7755,6 +7763,8 @@ function VAFDashboardContent() {
             // A socket this effect already replaced closes late: the state is the new
             // socket's now (the cleanup below has done this one's share).
             if (cancelled) return;
+            // Closed for the reload to another account: no reconnect from this document.
+            if (reloadingRef.current) return;
             setStatus('disconnected');
             setWs(null);
             // A browser start sent on this socket is answered on this socket or never.

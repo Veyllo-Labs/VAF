@@ -461,6 +461,21 @@ def test_a_socket_without_a_baseline_reloads_once():
     assert run(json.dumps("bob"), "alice", ctx(False, True)) == "reload"   # the flag holds nothing back
 
 
+
+def test_a_mark_that_cannot_be_written_is_reported():
+    """Blocked storage must not turn the one reload into a loop: the page adopts instead.
+    MUTATION: report success when setItem throws - red."""
+    out = _run(SOCKET, """(() => {
+        const store = {};
+        const ok = m.markMissingBaselineReload({setItem: (k, v) => { store[k] = v; }});
+        const blocked = m.markMissingBaselineReload({setItem: () => { throw new Error('QuotaExceeded'); }});
+        const none = m.markMissingBaselineReload(null);
+        return {ok, blocked, none, store};
+    })()""")
+    assert out == {"ok": True, "blocked": False, "none": False,
+                   "store": {"vaf_socket_baseline_reload": "1"}}
+
+
 def test_the_page_decides_before_any_other_frame():
     src = _page()
     onmsg = _between(src, "socket.onmessage = (event) => {", "socket.onclose")
@@ -472,10 +487,24 @@ def test_the_page_decides_before_any_other_frame():
     reload_at = onmsg.index("window.location.reload();")
     assert onmsg.index("document.documentElement.style.visibility = 'hidden';") < reload_at
     assert onmsg.index("forgetWorkflowState();") < reload_at
-    # The one reload without a baseline is marked; an adopted account clears the mark.
-    assert "sessionStorage.setItem(MISSING_BASELINE_RELOAD_KEY, '1')" in onmsg
+    # The one reload without a baseline is marked, ONLY in that case (a reload for a known
+    # other account never writes it); a mark that cannot be written means no such reload.
+    # MUTATION: write the mark on every reload - red.
+    assert "if (verdict === 'reload' && noBaseline) {" in onmsg
+    assert "if (!markMissingBaselineReload(storage)) verdict = 'adopt';" in onmsg
+    assert onmsg.count("markMissingBaselineReload(") == 1
     assert "sessionStorage.removeItem(MISSING_BASELINE_RELOAD_KEY)" in onmsg
     assert "{ firstSocket, reloadedForMissingBaseline: reloadedOnce }" in onmsg
+    # Only the page load's FIRST socket may set a baseline: the count goes up for every socket,
+    # before the flag is read off it. MUTATION: firstSocket = true - red.
+    opening = _between(src, "const socket = new WebSocket(wsUrl);", "socket.onopen")
+    assert opening.index("socketCountRef.current += 1;") < opening.index(
+        "const firstSocket = socketCountRef.current === 1;")
+    # The old document sends nothing more once the reload is decided: its socket closes, and its
+    # close does not reconnect. MUTATION: drop the close - red; reconnect anyway - red.
+    assert onmsg.index("try { socket.close(); } catch { /* already closed */ }") < reload_at
+    onclose = _between(src, "socket.onclose = () => {", "socket.onerror")
+    assert "if (reloadingRef.current) return;" in onclose
     # The check this replaces is gone: no /api/auth/me on reconnect, no pending state.
     for gone in ("accountCheckRef", "deferredReaskRef", "settle(", "forgetAccountState"):
         assert gone not in src, gone

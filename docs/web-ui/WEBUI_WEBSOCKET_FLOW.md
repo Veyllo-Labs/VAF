@@ -624,9 +624,13 @@ Key rules:
   page load's first connect, or is missing after one that had it, the page reloads before
   it applies any other frame (`web/lib/socketAccount.ts`): it hides the document at once and
   clears the workflow panel it keeps in `sessionStorage` first, so nothing of one account's
-  chats, drafts, viewers or workflow stays on screen or comes back for another. A page whose
-  first socket closed before its `auth_state` reloads once on the next socket (it has no
-  account to compare with), marked in `sessionStorage` so it cannot repeat. With the same account it asks for its own
+  chats, drafts, viewers or workflow stays on screen or comes back for another; it also
+  closes its socket at once, so no timer of the old document (an autosuggest ask carrying the
+  typed text, a run-state ask) reaches the new account's connection. A page whose first
+  socket closed before its `auth_state` reloads once on the next socket (it has no account
+  to compare with), marked in `sessionStorage` so it cannot repeat; when that mark cannot be
+  written (storage blocked), the page takes the account without that reload, because a
+  reload it cannot mark could repeat forever. With the same account it asks for its own
   chat again; if the server refuses (`error`: the chat was deleted meanwhile), the page takes
   the chat the server auto-loaded.
   A chat turn stored per generation round (its answer's metadata carries `rounds`, see

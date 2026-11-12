@@ -469,9 +469,14 @@ agent in their Veyllo App and the VAF agent; its rules are in
   the device. One line is on its way at a time: while a request is open, Enter and every "Send
   again" wait, and the line shows dimmed with "sending". A request gives up after 30 seconds
   (`SEND_TIMEOUT_MS`, `sendWithTimeout` in `web/components/chat/appRoom.ts`, the response body
-  included); the page then asks the room once (`open_app_room`) whether the line arrived
-  anyway, clears the box if it did, and otherwise keeps the text and says that no answer came
-  in time and to send it again if the line does not appear. A question to the VAF agent reads
+  included). Every line carries an id the page chose (`client_id`, kept by the server as the
+  line's `id` or, for a question to the VAF agent, as `msg`). After a give-up the page asks
+  the room with `{"type": "open_app_room", "seen": false}` (which marks nothing read) and
+  reads every transcript that arrives for up to 5 seconds (`confirmAfterGiveUp`, only while
+  the socket is open). If one holds that id the box clears; otherwise the text stays and the
+  page says that no answer came in time and to send it again if the line does not appear.
+  The page keeps watching after that: when the line still turns up and the box holds exactly
+  its text, the box and the notice clear (`lateLine`). A question to the VAF agent reads
   "waiting for the answer" until it is answered. A file dropped on the room is refused with the
   sentence that the room carries text only. A turn nobody typed is never shown under the
   person's name: a fired timer, a finished background command, a sent draft and a

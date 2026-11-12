@@ -31,7 +31,7 @@ def _enable_network(monkeypatch):
 def _spy_connect(monkeypatch):
     """Record manager.connect calls; abort right after so we never enter the receive loop."""
     calls = []
-    async def fake_connect(ws):
+    async def fake_connect(ws, hello=None):  # the server greets with auth_state
         calls.append(ws)
         try:
             await ws.accept()
@@ -112,7 +112,7 @@ def _signed_in_socket_world(monkeypatch):
     _enable_network(monkeypatch)
     seen = []
 
-    async def fake_connect(ws):
+    async def fake_connect(ws, hello=None):  # the server greets with auth_state
         await ws.accept()
 
     def fake_set_user(ws, scope, username=None, role=None):

@@ -543,6 +543,11 @@ def _split_segments(command: str) -> List[tuple]:
     # there opens no heredoc and the next lines run. Its own variable, since a `;` flush
     # clears `buf`; every newline ends it, also one after a backslash.
     comment = False
+    # The closers of the `${` and `$[` open at this level, outside quotes and comments: read
+    # as the text goes, so a quoted or escaped `${` opens none (a tail search was blind to
+    # quotes, and a `}` in a comment then let a fake heredoc open).
+    expansions: List[str] = []
+    subshell_end = -1                   # where the last subshell at this level closed
 
     while i < n:
         ch = command[i]
@@ -573,12 +578,19 @@ def _split_segments(command: str) -> List[tuple]:
                 _put(ch)
             i += 1
             continue
-        if ch == "#" and not depth_stack and _comment_starts_at(command, i) \
-                and not _open_expansion("".join(buf[-200:])):
+        if not depth_stack and not comment:
+            if ch == "$" and nxt in ("{", "["):
+                expansions.append("}" if nxt == "{" else "]")
+            elif expansions and ch == "[" and expansions[-1] == "]":
+                expansions.append("]")      # `$[ a[1] ]`: a subscript inside
+            elif expansions and ch == expansions[-1]:
+                expansions.pop()
+        if ch == "#" and not depth_stack and not expansions \
+                and _comment_starts_at(command, i, subshell_end):
             comment = True
         if (ch == "<" and nxt == "<" and not depth_stack and command[i + 2:i + 3] != "<"
                 and command[i - 1:i] != "<" and len(pending) < 8 and not comment
-                and not _open_expansion("".join(buf[-200:]))):
+                and not expansions):
             word = _heredoc_word(command, i)
             line_end = command.find("\n", i) if word is not None else -1
             if word is not None and line_end >= 0:
@@ -651,6 +663,7 @@ def _split_segments(command: str) -> List[tuple]:
                 # command in front (`echo (a) rm -rf /`).
                 _flush()
                 connector = "seq"
+                subshell_end = i
             i += 1
             continue
         if depth_stack:
@@ -841,18 +854,22 @@ def _heredoc_supplied(body: str) -> str:
     return "".join(out)
 
 
-def _comment_starts_at(command: str, i: int) -> bool:
+def _comment_starts_at(command: str, i: int, subshell_end: int = -1) -> bool:
     """Whether the `#` at `i` starts a comment for bash: it starts a word, at the start of the
     text or after an unescaped blank, newline or operator character. A backslash-newline in
     front of it is joined away first, as bash does (`a \\` NL `#b` is a comment, `a\\` NL
-    `#b` is the word `a#b`); `a\\ #b`, `$#`, `${#x}` and `16#ff` start none."""
+    `#b` is the word `a#b`); `a\\ #b`, `$#`, `${#x}` and `16#ff` start none. A `)` ends a
+    word only where it closes a subshell (`subshell_end`): after `$( )`, `$(( ))`, `<( )` or
+    an array `x=( )` the `#` continues the word (`$(printf x)#`)."""
     j = i
     while j >= 2 and command[j - 1] == "\n" and _escaped(command, j - 1):
         j -= 2                              # a line continuation: bash removes it
     if j == 0:
         return True
+    if command[j - 1] == ")":
+        return j - 1 == subshell_end
     # No `(`: here it always opens a nested level, where no comment mark is set.
-    return command[j - 1] in " \t\n;&|)<>" and not _escaped(command, j - 1)
+    return command[j - 1] in " \t\n;&|<>" and not _escaped(command, j - 1)
 
 
 def _escaped(command: str, k: int) -> bool:
@@ -861,11 +878,6 @@ def _escaped(command: str, k: int) -> bool:
     while k - run - 1 >= 0 and command[k - run - 1] == "\\":
         run += 1
     return run % 2 == 1
-
-
-def _open_expansion(tail: str) -> bool:
-    """Whether `tail` ends inside an open `${...}` or `$[...]`, where `<<` is no heredoc."""
-    return tail.rfind("${") > tail.rfind("}") or tail.rfind("$[") > tail.rfind("]")
 
 
 def _dollar_kind(command: str, i: int) -> str:
@@ -1634,21 +1646,38 @@ _HEREDOC_PROGRAM_OR = " run the substitution as a command of its own first and w
 
 
 def _heredoc_writes_text(text: str) -> bool:
-    """Whether every unquoted heredoc in `text` is written somewhere as text: no shell, `eval`
-    or `source` on its line (`bash <<EOF`, `sudo sh <<EOF`, `cat <<EOF | bash`), where
-    quoting the delimiter would leave the body a script all the same."""
+    """Whether every unquoted heredoc in `text` goes into a file and nowhere else: its line
+    starts with a writer (`cat > f <<EOF`, `tee f <<EOF`) with a file to write, holds no
+    `|` or `&&` (a pipe continues on the next line too), and no word anywhere in the command
+    is a script reader (_SHELL_SINKS, `eval`; `b\\ash` and `/bin/bash` counted) nor a
+    variable where a command starts (`$SHELL`). Only then does quoting the delimiter leave
+    the body plain text; any other way it may reach a shell and run all the same."""
+    words = {w.replace("\\", "").rsplit("/", 1)[-1]
+             for w in re.split(r"[\s;&|()<>`'\"{}:=]+", text) if w}
+    if words & _HEREDOC_SCRIPT_READERS or _VARIABLE_COMMAND_RE.search(text):
+        return False
     found = False
     for m in _UNQUOTED_HEREDOC_RE.finditer(text):
         found = True
         start = text.rfind("\n", 0, m.start()) + 1
         end = text.find("\n", m.start())
         line = text[start:end if end >= 0 else len(text)]
-        words = {w.rsplit("/", 1)[-1] for w in re.split(r"[\s;&|()<>`'\"]+", line) if w}
-        if words & _HEREDOC_SCRIPT_READERS:
+        if "|" in line or "&&" in line:
+            return False
+        toks = line[:m.start() - start].split()
+        if not toks or toks[0] not in _HEREDOC_FILE_WRITERS:
+            return False
+        has_file = any(t.startswith((">", "1>")) for t in toks[1:]) or (
+            toks[0] == "tee" and any(not t.startswith("-") for t in toks[1:]))
+        if not has_file:
             return False
     return found
-# A command that runs the text it is given as shell code.
-_HEREDOC_SCRIPT_READERS = _COMMAND_STRING_SHELLS | {"eval", "source", "."}
+# Commands that write a heredoc into a file as it is (the search for an existing set of
+# writers came back empty).
+_HEREDOC_FILE_WRITERS = frozenset({"cat", "tee"})
+# A variable where a command starts (`| $SHELL`, `; ${SH:-bash} f`); a substitution is
+# not one.
+_VARIABLE_COMMAND_RE = re.compile(r"(?:^|[;&|\n(`])\s*\$[A-Za-z_{0-9]")
 # The reasons the heredoc sentence fits: a command line or a substitution in the text.
 _HEREDOC_LINE_CATEGORIES = frozenset({"destructive_removal", "device_write", "fork_bomb"})
 _HEREDOC_LINE_SHAPES = frozenset({"", "program", "frozen", "lines", "unreadable", "shell_text"})
@@ -1729,6 +1758,9 @@ def _value_from_substitution(exe: str, args: List[str]) -> bool:
 # Shells that read their script from their input when given none, and the two builtins that
 # run a file in the current shell.
 _STDIN_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "source", "."})
+# What runs the text it is given as code: the shells and interpreters that read a script
+# (_SHELL_SINKS, _STDIN_SHELLS) and `eval`.
+_HEREDOC_SCRIPT_READERS = _SHELL_SINKS | _STDIN_SHELLS | {"eval"}
 # A script path that is this process's input or one of its descriptors.
 _DESCRIPTOR_RE = re.compile(r"^(?:-|/dev/stdin|/dev/fd/\d+|/proc/[^/]+/fd/\d+)$")
 # A redirection operator standing as a word of its own (`<`, `3<`, `2>`, `>>`, `&>`).

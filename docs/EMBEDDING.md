@@ -1398,6 +1398,15 @@ without its own `ask_reason` does not receive either key, nor one without
 `call_subject` the second, so a `run` that lists its parameters is not handed one
 it never declared.
 
+`self.first_contact_confirmed(kwargs)` says whether this call may make a FIRST
+contact: the person confirmed it, and the question put was your tool's own (or your
+authorizer allowed the call). A yes to a call that asked nothing of its own (the
+server was known when the funnel looked) is no yes to a first contact. Hand it to
+the engine that would otherwise take a new server, so one forgotten in the last
+moment is refused there instead of trusted: VAF's `ssh` turns it into OpenSSH's
+`StrictHostKeyChecking` (`accept-new` only then, `yes` otherwise), `ftp` into its
+`connect(confirmed=...)`.
+
 **A tool that is not part of "everything".** `account_opt_in = True` keeps a
 tool away from a regular account unless the account's allowlist NAMES it; a
 missing or empty list means "everything" for every other tool. Admins and a

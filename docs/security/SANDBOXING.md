@@ -237,11 +237,17 @@ The `python_exec` tool runs code directly on your host system. It is:
   tool, before its trust check, so a stored "always" does not run it either. The same check
   (`python_code_categories` in `vaf/core/command_policy.py`) judges `python -c CODE` and
   `python -m ftplib` in `host_bash`, also under `pypy`, a free-threaded `python3.13t`, and
-  behind a wrapper, a shell or a project runner. The command a runner starts (`uv run`,
-  `poetry run`, `conda run` ...) is classified like one `bash -c` carries, for every
-  category, so `uv run env python -c ...`, `uv run bash -c "python -c ..."` and
-  `uv run rm -rf /` are refused like the same commands without the runner. A runner's option
-  table is not kept, so the word after any runner option is read both as that option's value
+  behind a wrapper, a shell or a runner. The command a project runner starts (`uv run`,
+  `poetry run`, `conda run` ...) or a package runner starts (`npx`, `bunx`, and after their
+  verb `npm exec`, `pnpm dlx`, `pnpm exec`, `yarn dlx`, `bun x`, `pipx run`) is classified
+  like one `bash -c` carries, for every category, so `uv run env python -c ...`,
+  `uv run bash -c "python -c ..."`, `uv run rm -rf /` and `npx rm -rf /` are refused like the
+  same commands without the runner. A package runner's other subcommands (`npm install`,
+  `npm run build`, `pipx install x`) start nothing here, and a shell string it is handed
+  (`npx -c 'rm -rf /'`, `npm exec -c '...'`) is read as a shell command. Named boundary:
+  `deno`, `cargo run`, `go run`, `nix run`, `mise exec` and `direnv exec` are not read as
+  runners, and the package script `npm run X` or `yarn X` starts is a file, not read like a
+  shell script's content. A runner's option table is not kept, so the word after any runner option is read both as that option's value
   and as the command. A harmless command after such an option is therefore refused only when
   what follows it is refused in its own right (`conda run -n py --no-capture-output echo
   python -c 'import ftplib'`; `uv run -q echo hi` passes), and a value that is itself a
@@ -788,14 +794,30 @@ delete of a system or home root, and a command whose executable is built by a su
 (there the approved text is not the text that would run). It tokenizes quote-aware and
 descends into substitutions rather than matching substrings, so `rm -rf /tmp/scratch` is
 ordinary work while `rm  -rf  /` is not. It also classifies the command a command carries:
-`bash -c '...'`, `su -c '...'`, `eval ...` and the command a project runner starts
-(`uv run ...`, `poetry run ...`) with the lane's own profile, and `ssh host '...'`
-with the `remote` profile (the catastrophic core, while an installer piped into a shell is
-named rather than refused, because that is how a server is commonly set up). A pipe reaches
-through a carried command at both ends: `curl ... | uv run bash` and `uv run curl ... | bash`
-are a fetch piped into a shell like the same pipe without the runner. One command may carry
-at most `MAX_NESTED_COMMANDS` nested commands in all, beyond which it is refused like one
-nested too deep: a runner's command is read at every option's value position, and without
+`bash -c '...'`, `su -c '...'`, `eval ...`, the command a project or package runner starts
+(`uv run ...`, `poetry run ...`, `npx ...`, `pipx run ...`, see the `python_exec` paragraph
+above) and every command substitution, subshell and process substitution (`$(...)`, a
+backtick pair, `(...)`, `<(...)`, `>(...)`) with the lane's own profile, and
+`ssh host '...'` with the `remote` profile (the catastrophic core, while an installer piped
+into a shell is named rather than refused, because that is how a server is commonly set
+up). A substitution stays part of the command it stands in, so a substitution in the
+program word is `opaque_command` wherever that word stands: after a wrapper, a `VAR=`
+prefix or a runner (`env $(echo rm) -rf /`, `uv run $(echo rm) -rf /`), inside quotes or
+in part of the name (`"$(echo rm)"`, `/usr/bin/$(echo rm)`), and in a text a shell parses
+again (`eval "$(conda shell.bash hook)"`, `bash -c "$(curl ...)"`, refused on the remote
+lane too; write `conda run ...`, or the readable `curl ... | sh` that the remote profile
+names). A literal program behind a substitution passes
+(`"$(git rev-parse --show-toplevel)/scripts/build.sh"`), and so does a substitution in an
+argument, an option's value or a `VAR=` prefix (`sudo -u $(whoami) ls`, `X=$(date) make`);
+`$((...))` is arithmetic, only its own substitutions are read. A pipe reaches through a
+carried command at both ends: `curl ... | uv run bash` and `uv run curl ... | bash` are a
+fetch piped into a shell like the same pipe without the runner, and so are
+`curl ... | (bash)`, `curl ... | echo $(bash)`, `curl ... | tee $(mktemp) | bash` and
+`bash <(curl ...)` or `source <(curl ...)`. Every reading, the command itself included,
+spends one of `MAX_NESTED_COMMANDS` (64), so one command carries at most 63 nested commands
+in all, a substitution counting as one, beyond which it is refused like one nested too deep
+(100 KB of substitutions: at most 0.1 s, 65 readings, measured): a runner's command is read
+at every option's value position, and without
 that bound a few hundred characters of `uv run -a uv -a uv ...` held the gate for minutes
 before anyone was asked. Every reading counts, one refused for depth too, and the readings
 stop once the bound is spent, for the whole command and not per segment, so the nested
@@ -828,13 +850,15 @@ after the host). The controls:
    and the admin's hands-off switch, with only "this time" and "cancel" on offer. Where
    nobody is asked (a workflow step) it is refused (`accepts_call_confirmation`), so an
    unattended run reaches only servers a person confirmed. A server that later shows a
-   different key is refused (`StrictHostKeyChecking=accept-new` on the account's own list).
+   different key is refused (`StrictHostKeyChecking=accept-new` on the account's own list,
+   for the confirmed first connection only).
    The call goes only to the server the person was asked about: the funnel hands the tool
    the question it put (`_call_question`), the tool builds it again from the server it is
    about to use, and a server forgotten in between (another tab, `vaf ssh forget`, also
-   after a standing grant) is refused (`BaseTool.changed_since_asked`). Named boundary: a
-   forget in the milliseconds between that check and OpenSSH reading the account's list is
-   taken as a new key, because OpenSSH's `accept-new` has no "confirmed" to refuse it with.
+   after a standing grant) is refused (`BaseTool.changed_since_asked`). A call the person
+   did not confirm as a first connection runs with `StrictHostKeyChecking=yes`
+   (`BaseTool.first_contact_confirmed`), so a server forgotten between that check and the
+   connection is refused by OpenSSH itself, and the next call asks again.
 3. **Never over a messaging channel** (dangerous and restricted with `"channel"`, see 3 in
    the `host_bash` section), and **a regular account only when its allowlist names it**
    (`account_opt_in`).

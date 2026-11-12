@@ -152,11 +152,12 @@ echo "=== 7/9  Hostile environment ==="
 # The same suite in an environment less generous than this machine: narrow
 # output encoding, optional packages hidden, a scratch home reached through a
 # link and read the Windows way, no docker, the old mail parser, a host that
-# reports macOS and tracked files read back with CRLF (the axes are documented
-# in the script). Three CI failures in
+# reports macOS, tracked files read back with CRLF, and refused local connects
+# counted the way a Windows runner pays them (the axes are documented in the
+# script). Three CI failures in
 # a row were environment differences rather than logic errors, and none could
 # be reproduced locally because the suite only ever ran in one environment.
-# The Windows entry takes 27 minutes to answer; this takes the same 2.5 the
+# The Windows entry takes about 90 minutes to answer; this takes the time the
 # suite already takes.
 python scripts/hostile_env.py
 echo "    OK"

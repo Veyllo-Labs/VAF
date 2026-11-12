@@ -122,13 +122,18 @@ jobs:
     #
     # Nothing else in this pipeline can see it coming: every other Linux job runs
     # with UTF-8 output, so the crash is unreachable there, and the windows-latest
-    # entry that CAN see it takes 27 minutes. This job re-runs the suite with the
+    # entry that CAN see it takes about 90 minutes. This job re-runs the suite with the
     # narrow encoding on a fast runner, so the answer arrives with the others.
     #
     # It also hides the optional heavyweight packages (a test that quietly needs a
     # model file the runner never downloaded fails here rather than intermittently
     # elsewhere) and redirects HOME, which matters less on a throwaway runner than
     # it does locally but keeps the script honest in both places.
+    #
+    # And it counts every refused connect to a local port at the two seconds a
+    # Windows runner waits for one, failing a test that would wait over a minute
+    # there: the one cost this fast runner never pays, and the reason the Windows
+    # entry once hung for hours.
     #
     # NOT in the branch ruleset's required checks. Adding a job does not add it
     # there, so this reports without blocking until someone decides otherwise -

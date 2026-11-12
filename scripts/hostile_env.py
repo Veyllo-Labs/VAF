@@ -15,8 +15,9 @@ optional dependency installed and every model already downloaded.
     fresh runner did not, reporting "engine unavailable" where the test expected
     "too short".
 
-Each cost a round trip through CI, and the Windows entry takes 27 minutes to
-answer. This script makes the cheap two thirds of that variance reproducible
+Each cost a round trip through CI, and the Windows entry takes about 90 minutes
+to answer (measured 2026-11-12: the test step alone 89 minutes, against 21 on
+ubuntu and 25 on macOS). This script makes the cheap two thirds of that variance reproducible
 locally, in the time the suite already takes:
 
   NARROW OUTPUT   PYTHONIOENCODING=cp1252, so any print of a character outside
@@ -95,6 +96,33 @@ locally, in the time the suite already takes:
                   Path.read_bytes is converted, not open(path, "rb"), which the
                   tests use on tracked files only to feed ast.parse or a
                   substring check without a newline, both indifferent to CRLF.
+  SLOW REFUSAL    a refused TCP connect to a local address is charged what a
+                  Windows runner waits for it: about two seconds of SYN retries
+                  (or the caller's connect timeout when that is shorter), where
+                  Linux refuses in microseconds. It COUNTS and does not sleep:
+                  every refusal appends one line to a log, and after the run a
+                  test whose total exceeds the budget (60 s) fails the run and
+                  is named. Sleeping would reproduce the wait itself, at its
+                  price: with the account store's outage memory reverted, the
+                  tray and app-link files alone made 10047 refused connects,
+                  19937 s (5.5 hours) of waiting, one test 7296 s. Counted, the
+                  same run takes the minute it took before, and the axis names
+                  that test. The instance is order dependent: the account
+                  directory resolver is registered when vaf.main is imported,
+                  so the app-link files run alone made no database connect at
+                  all, and after a file that imports vaf.main every send asked
+                  the absent store twice. Counted are blocking socket connect
+                  and connect_ex and asyncio's selector sock_connect (asyncpg
+                  and every asyncio client dial through it), each once; a UDP,
+                  Unix-socket or remote refusal is not charged, nor is a
+                  connect that succeeds. The ports VAF's own services use
+                  (3000, 5432, 8001, 8005, 8080, 8443, 9222) are refused
+                  without a dial: the runner has none of them, so the count
+                  must not depend on what this machine runs, and the suite
+                  must never post a test's event into a live app. A refusal
+                  in a thread that outlived its test is charged "after" the
+                  test that finished last; a child process inherits the log
+                  and the running test's name.
 
 WHAT IT CANNOT DO. Real Windows file semantics - ACLs, MoveFileEx sharing
 violations, the read-only-flag-only chmod - need a real Windows machine. Those
@@ -112,17 +140,20 @@ the source tree, and that refusal answered first); such a test gives itself a ho
 of its own (HOME and USERPROFILE under tmp_path), as test_refuses_a_folder_above_home
 does. Measured when this was written: no other test compares the two.
 
-Nor does it make a REFUSED CONNECT SLOW. On Windows a connect to a loopback port
-nobody listens on is retried for about two seconds before it is refused; here it
-is refused at once. The voice front door asked the absent account store twelve
-times per handshake, so its handshake took 24 s there, and five call-queue tests
-whose contention was held for 5 or 10 s from before the handshake failed only
-there. An axis that delays every refusal would reproduce it, and it would cost:
-a tenth of the test modules (79 files, 1230 tests) made 66 refused loopback
-connects, 30 of 32 sampled to the database port, so about 22 minutes on this
-serial run. The class is closed where it arose instead: the voice fixture pins
-the store as unreachable, and test_the_front_door_asks_no_database refuses a
-handshake that opens a database engine. Nor does it change the OPENSSL BUILD:
+The SLOW REFUSAL axis has named boundaries. It charges the wait but does not
+take it, so a test that only fails BECAUSE of the wait (a timer that runs out
+while a handshake retries) stays green here: the voice front door once asked
+the absent account store twelve times per handshake, 24 s on Windows, and five
+call-queue tests whose contention was held for 5 or 10 s failed only there.
+The verdict sees that cause (many refusals in one test), and
+test_the_front_door_asks_no_database pins that instance. Nothing else of
+Windows' socket layer is modelled: a connect to the wildcard address
+(0.0.0.0, ::), which Linux routes to loopback, is charged like one, where
+Windows refuses it at once; the proactor event loop and the order in which
+"localhost" resolves are not reproduced. A C extension that dials on its own (libpq through psycopg2, not
+installed today) is invisible to the counter. The budget is per test; the
+whole-suite total is reported, not judged, since it grows with every test.
+Nor does it change the OPENSSL BUILD:
 python.org's 3.13 for Windows and macOS bundles OpenSSL 3.5.9, which loads a
 certificate with a malformed subject alternative name that 3.5.3 refuses
 (measured with both); a test about such a pair runs both verdicts through
@@ -252,7 +283,192 @@ if _crlf_list:
         return data
 
     _pathlib.Path.read_bytes = _crlf_read_bytes
+
+
+_refusal_log = _os.environ.get("VAF_HOSTILE_REFUSAL_LOG")
+if _refusal_log and _os.name != "nt":
+    import asyncio.selector_events as _selector_events
+    import errno as _errno
+    import socket as _socket
+
+    _WINDOWS_REFUSAL_S = {refusal_s!r}
+    _REFUSE_PORTS = frozenset(
+        int(port) for port in _os.environ.get("VAF_HOSTILE_REFUSE_PORTS", "").split(",")
+        if port.strip().isdigit())
+    _INET = (_socket.AF_INET, _socket.AF_INET6)
+
+    def _tcp(sock):
+        # UDP has no handshake to refuse, and a Unix socket no Windows retry.
+        return sock.family in _INET and sock.type == _socket.SOCK_STREAM
+
+    def _local(address):
+        """A TCP address on this machine: loopback, or the wildcard Linux routes there."""
+        if not isinstance(address, tuple) or len(address) < 2:
+            return False
+        host = str(address[0]).lower()
+        return (host in ("localhost", "::1", "0.0.0.0", "::")
+                or host.startswith("127.") or host.startswith("::ffff:127."))
+
+    def _forced(address):
+        return _local(address) and address[1] in _REFUSE_PORTS
+
+    def _charge(address, timeout):
+        """One line per refusal: who paid, where to, what a Windows runner waits."""
+        cost = _WINDOWS_REFUSAL_S if timeout is None else min(_WINDOWS_REFUSAL_S, timeout)
+        who = _os.environ.get("PYTEST_CURRENT_TEST")
+        if not who:
+            last = _os.environ.get("VAF_HOSTILE_LAST_TEST")
+            who = ("after " + last) if last else "outside any test"
+        line = who.replace("\\t", " ") + "\\t" + str(address[0]) + ":" + str(address[1]) \\
+            + "\\t" + repr(float(cost)) + "\\n"
+        try:
+            # Open, append, close: threads and child processes share this file.
+            with open(_refusal_log, "a", encoding="utf-8") as log:
+                log.write(line)
+        except OSError:
+            pass
+
+    def _refused(address):
+        return ConnectionRefusedError(
+            _errno.ECONNREFUSED, "refused by the hostile environment, never dialed: "
+            + str(address[0]) + ":" + str(address[1]))
+
+    _plain_connect = _socket.socket.connect
+    _plain_connect_ex = _socket.socket.connect_ex
+
+    def _counted_connect(self, address):
+        # A non-blocking socket is asyncio's: its refusal is charged once, in
+        # sock_connect below, never a second time here.
+        counted = _tcp(self) and self.gettimeout() != 0.0 and _local(address)
+        if _tcp(self) and _forced(address):
+            if counted:
+                _charge(address, self.gettimeout())
+            raise _refused(address)
+        try:
+            return _plain_connect(self, address)
+        except ConnectionRefusedError:
+            if counted:
+                _charge(address, self.gettimeout())
+            raise
+
+    def _counted_connect_ex(self, address):
+        counted = _tcp(self) and self.gettimeout() != 0.0 and _local(address)
+        if _tcp(self) and _forced(address):
+            if counted:
+                _charge(address, self.gettimeout())
+            return _errno.ECONNREFUSED
+        code = _plain_connect_ex(self, address)
+        if code == _errno.ECONNREFUSED and counted:
+            _charge(address, self.gettimeout())
+        return code
+
+    _socket.socket.connect = _counted_connect
+    _socket.socket.connect_ex = _counted_connect_ex
+
+    _plain_sock_connect = _selector_events.BaseSelectorEventLoop.sock_connect
+
+    async def _counted_sock_connect(self, sock, address):
+        # asyncpg and every asyncio client dial through here with their own
+        # timeout around it (asyncpg: 60 s), so a refusal costs the full wait. A
+        # service port needs no check of its own: the loop's non-blocking
+        # sock.connect above refuses it before a SYN leaves.
+        counted = _tcp(sock) and _local(address)
+        try:
+            return await _plain_sock_connect(self, sock, address)
+        except ConnectionRefusedError:
+            if counted:
+                _charge(address, None)
+            raise
+
+    _selector_events.BaseSelectorEventLoop.sock_connect = _counted_sock_connect
 '''
+
+# What a refused connect to a closed local port costs on a Windows runner: Windows
+# retries the SYN for about two seconds before it reports the refusal, where Linux
+# and macOS refuse at once. The figure is the Windows CI measurement of the hang
+# that the account store's outage memory fixed (vaf/auth/permissions.py).
+_WINDOWS_REFUSAL_S = 2.0
+
+# Per test (setup, call and teardown together). Measured on the fixed code: the
+# most expensive test of two disjoint tenths of the suite paid 36 s, the worst
+# of the first 72 files in suite order 12 s; with the outage memory reverted nine
+# tests paid over 200 s and one 7296 s.
+_REFUSAL_BUDGET_S = 60.0
+
+# Ports where VAF's own services listen on a developer machine. A connect to them
+# is refused without dialing: the CI runner has none of them, so the count must
+# not depend on whether this machine runs them, and the suite must never deliver
+# a test's request to a live app.
+_VAF_SERVICE_PORTS = (
+    3000,   # the web UI (Next.js)
+    5432,   # the memory and auth database (memory_db_url's default)
+    8001,   # the API server (web_server.py)
+    8005,   # the voice server
+    8080,   # the local llama server
+    8443,   # the HTTPS door
+    9222,   # the browser's DevTools port (service_stack.py)
+)
+
+# Loaded with `-p` in the argv of the one pytest this script starts, not through
+# PYTEST_ADDOPTS, so a pytest a test spawns does not load it.
+_LAST_TEST_PLUGIN = '''
+import os
+
+
+def pytest_runtest_logfinish(nodeid, location):
+    """A thread that dials after its test ended is charged as "after <nodeid>"."""
+    os.environ["VAF_HOSTILE_LAST_TEST"] = nodeid
+'''
+
+_PHASES = (" (setup)", " (call)", " (teardown)")
+
+
+def _refusal_verdict(lines, budget=_REFUSAL_BUDGET_S):
+    """Sum the refusal log per test and judge each test against the budget.
+
+    Returns (report_lines, offender_lines). A test's setup, call and teardown add
+    up; "after <nodeid>" (a thread that outlived its test) is its own key and is
+    judged too. Lines that do not parse (a write cut short) are skipped."""
+    seconds, counts, ports, by_port = {}, {}, {}, {}
+    total_n, total_s = 0, 0.0
+    for raw in lines:
+        parts = raw.rstrip("\n").rsplit("\t", 2)
+        if len(parts) != 3:
+            continue
+        who, address, cost_text = parts
+        try:
+            cost = float(cost_text)
+        except ValueError:
+            continue
+        for phase in _PHASES:
+            if who.endswith(phase):
+                who = who[:-len(phase)]
+                break
+        port = address.rsplit(":", 1)[-1]
+        seconds[who] = seconds.get(who, 0.0) + cost
+        counts[who] = counts.get(who, 0) + 1
+        ports.setdefault(who, set()).add(port)
+        by_port[port] = by_port.get(port, 0) + 1
+        total_n += 1
+        total_s += cost
+    ranked = sorted(seconds, key=lambda key: (-seconds[key], key))
+
+    def _line(key):
+        return (f"{key} would wait {seconds[key]:.1f} s on a Windows runner "
+                f"({counts[key]} refused connects to {', '.join(sorted(ports[key], key=_port_key))})")
+
+    report = [f"  {total_n} refused local connects, {total_s:.1f} s on a Windows runner"]
+    if total_n:
+        report.append("  by port: " + ", ".join(
+            f"{port}: {by_port[port]}" for port in sorted(by_port, key=lambda p: (-by_port[p], p))))
+        report.append("  most expensive:")
+        report.extend(f"    {_line(key)}" for key in ranked[:10])
+    offenders = [_line(key) for key in ranked if seconds[key] > budget]
+    return report, offenders
+
+
+def _port_key(port):
+    return (0, int(port), "") if port.isdigit() else (1, 0, port)
 
 
 _NO_DOCKER = ("npipe:////./pipe/vaf-hostile-no-docker" if os.name == "nt"
@@ -296,7 +512,10 @@ def main() -> int:
         site = Path(tmp) / "site"
         site.mkdir()
         (site / "sitecustomize.py").write_text(
-            _BLOCKER.format(names=repr(set(OPTIONAL_PACKAGES))), encoding="utf-8")
+            _BLOCKER.format(names=repr(set(OPTIONAL_PACKAGES)), refusal_s=_WINDOWS_REFUSAL_S),
+            encoding="utf-8")
+        (site / "vaf_hostile_refusals.py").write_text(_LAST_TEST_PLUGIN, encoding="utf-8")
+        refusal_log = Path(tmp) / "refusals.log"
         crlf_files = _crlf_checkout_files()
         crlf_list = Path(tmp) / "crlf-checkout.txt"
         crlf_list.write_text("\n".join(crlf_files), encoding="utf-8")
@@ -312,6 +531,8 @@ def main() -> int:
             PYTHONPATH=os.pathsep.join([str(site), str(ROOT)]),
             DOCKER_HOST=_NO_DOCKER,
             VAF_HOSTILE_CRLF_FILES=str(crlf_list),
+            VAF_HOSTILE_REFUSAL_LOG=str(refusal_log),
+            VAF_HOSTILE_REFUSE_PORTS=",".join(str(port) for port in _VAF_SERVICE_PORTS),
         )
 
         print("Running the suite with:")
@@ -329,9 +550,31 @@ def main() -> int:
         print(f"  crlf checkout   " + (f"{len(crlf_files)} tracked text files read back with CRLF "
                                      "through Path.read_bytes" if crlf_files
                                      else "not available here (no git checkout)"))
+        print(f"  slow refusal    " + (
+            f"a refused local connect is charged {_WINDOWS_REFUSAL_S:g} s (or the caller's "
+            f"shorter timeout), at most {_REFUSAL_BUDGET_S:g} s per test; ports "
+            f"{', '.join(str(port) for port in _VAF_SERVICE_PORTS)} refused without a dial"
+            if os.name != "nt" else "real host, Windows pays the real wait"))
         print()
-        return subprocess.run([sys.executable, "-m", "pytest", *args],
+        code = subprocess.run([sys.executable, "-m", "pytest", "-p", "vaf_hostile_refusals", *args],
                               cwd=str(ROOT), env=env).returncode
+        try:
+            with open(refusal_log, encoding="utf-8", errors="replace") as log:
+                lines = log.readlines()
+        except FileNotFoundError:
+            lines = []
+        report, offenders = _refusal_verdict(lines)
+        print()
+        print(f"Slow refusal (Windows waits about {_WINDOWS_REFUSAL_S:g} s per refused local connect):")
+        for line in report:
+            print(line)
+        for line in offenders:
+            print(f"FAILED slow refusal: {line}")
+        if offenders:
+            print(f"{len(offenders)} test(s) over the budget of {_REFUSAL_BUDGET_S:g} s: a hot path "
+                  "connects to a closed local port again and again (keep an outage memory, as "
+                  "vaf/auth/permissions.py does for the account store)")
+        return code if code or not offenders else 1
 
 
 if __name__ == "__main__":

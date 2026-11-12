@@ -57,12 +57,11 @@ substitution reads the pipe like the command it stands in (`curl x | (bash)`), a
 process substitution that fetches hands its command fetched code (`bash <(curl x)`), as a
 `>( )` receives what its command writes (`curl x | tee >(bash)`). A shell that runs another
 command's output (`eval "$(...)"`, `source <(...)`, `bash <<< "$(...)"`, a descriptor fed
-by one, _script_input) is `opaque_command` too, literal text fed to a shell is read as
-shell text, and every opaque refusal names the way out for its shape (_OPAQUE_REASONS).
-Every `$((` is read both ways, as arithmetic and as a command, since a `#` comment or a
-backtick moves where bash closes it. A word-initial `#` is a comment to the end of the line,
-and a heredoc body is data up to its delimiter (an unquoted one's substitutions run).
-Every reading spends from one budget per call (MAX_NESTED_COMMANDS), and a runner's
+by one or opened by an earlier command, _script_input) is `opaque_command` too, a literal
+here-string fed to a shell is read as shell text, and every opaque refusal names the way
+out for its shape (_OPAQUE_REASONS). Every `$((` is read both ways, as arithmetic and as a
+command, since a `#` comment or a backtick moves where bash closes it. An array
+assignment's elements (`arr=($(ls))`) are words, not a program. Every reading spends from one budget per call (MAX_NESTED_COMMANDS), and a runner's
 candidates and the readings of a `$((`, each nearly the whole text again, from a second
 one in characters (_RUNNER_TEXT_SLACK); the fork-bomb search is three plain searches. The
 work stays linear in the command's length.
@@ -71,11 +70,26 @@ NAMED BOUNDARY: the shell's compound grammar is not read at the top level: brace
 (`curl x | { bash; }`), `if`/`for`/`while`/`case`, variables and `${...}` as the program,
 ANSI-C quoting (`$'...'`), globs and brace expansion in the program name, line continuation
 inside a word, and wrappers that take a command string of their own (`env -S`, `watch`,
-`find -exec`). Literal text piped into a shell by another command (`echo '...' | bash`) is
-not read. Arithmetic evaluates an array subscript held in a variable as code
-(`x='a[$(...)]'; echo $((x))`, `printf -v 'a[$(...)]' v`), which the text does not show.
-A `case` statement inside a substitution refuses the command, since its pattern's `)`
-would close the substitution early; the word "case" elsewhere does not.
+`find -exec`). Text that reaches a shell by another way than its own arguments,
+here-string or a substitution is not read: a literal piped in (`echo '...' | bash`,
+`printf ... | bash`), `xargs -I{} sh -c {}`, a coprocess, a named pipe, a script file an
+earlier command wrote and a later one runs. Arithmetic evaluates an array subscript held in
+a variable as code (`x='a[$(...)]'; echo $((x))`, `printf -v 'a[$(...)]' v`), which the
+text does not show. The reserved word `case` where a command starts inside a substitution
+refuses the command, since a pattern's `)` would close the substitution early, whatever
+follows; the word elsewhere does not (also not a line of a heredoc body that starts with
+it inside a substitution: that line is refused, see below).
+
+NAMED BOUNDARY, comments and heredocs: a `#` is not read as a comment and `<<` opens no
+heredoc, so nothing is ever hidden from the check by either: every line of a heredoc body
+is read as a command line, and dangerous-looking prose in a body is refused
+(`cat <<'EOF'` with "rm -rf /" in its text). The other side of that: an apostrophe in a
+comment or in a heredoc body opens a quote that swallows every later line (`echo hi #
+it's` then a second line), and a comment that ends in a backslash joins the next line to it
+(`echo hi #\\` then a second line). Design rule for any reading of these: a new reading of the
+shell's grammar may only ADD refusals to the existing reading, never remove one; classify
+both readings, and refuse if either refuses. A lexer that hid comments and heredoc bodies
+from the check was measured to lose refusals that bash runs.
 
 Python that moves files over FTP is the same `ftp_transfer` as an FTP client
 (`python_code_categories`): an import of ftplib, a string naming it (what
@@ -212,6 +226,9 @@ _PROTECTED_ROOTS = ("/", "/*", "/bin", "/boot", "/dev", "/etc", "/home", "/lib",
                     "/usr", "/var", "~", "~/", "$HOME", "${HOME}", "c:\\", "c:/")
 
 _WHITESPACE_RE = re.compile(r"\s+")
+# A substitution where a command starts, read over the raw text, line by line (the reading
+# this check had before substitutions were carried; _substitution_starts_a_command).
+_SUBST_AT_COMMAND_RE = re.compile(r"(?:^|[;&|\n])[ \t]*(\$\(|`)")
 _DEVICE_TARGET_RE = re.compile(r"of=/dev/(sd|nvme|hd|vd|mmcblk|disk)", re.IGNORECASE)
 _REDIRECT_DEVICE_RE = re.compile(r">\s*/dev/(sd|nvme|hd|vd|mmcblk|disk)", re.IGNORECASE)
 # Where a command substitution stood in its segment (_split_segments). Bare, its output is
@@ -254,18 +271,28 @@ CATEGORY_REASONS = {
 
 # The other ways a command hides what runs, each with its way out (all `opaque_command`).
 _OPAQUE_REASONS = {
+    "tool_setup": "runs the shell setup another tool prints, so the text being approved is not "
+                  "the text that will run; use the tool's own direct form (`conda run -n ENV "
+                  "...`, `pyenv exec ...`, `direnv exec . ...`, `opam exec -- ...`, "
+                  "`ssh-agent bash -c '...'`), or save its output to a file, read the file, "
+                  "then run it with `.`",
     "shell_text": "runs shell text that another command prints, so the text being approved is "
-                  "not the text that will run; use the tool's own direct form (`conda run -n "
-                  "ENV ...`, `pyenv exec ...`, `direnv exec . ...`, `opam exec -- ...`, "
-                  "`ssh-agent bash -c '...'`), or save the output to a file, read the file, "
-                  "then run it (for an installer: `curl -fsSL -o install.sh URL`, then "
+                  "not the text that will run; save the output to a file, read the file, then "
+                  "run it (for an installer: `curl -fsSL -o install.sh URL`, then "
                   "`bash install.sh`)",
+    "descriptor": "runs a script from a descriptor an earlier command opened, so the text being "
+                  "approved does not show what runs; save the script to a file, read it, then "
+                  "run the file",
     "option_value": "hands a runner option a value from a command substitution, a word the "
-                    "runner may also start as its program; write the value with `=` "
-                    "(`--with=$(cat r)`)",
+                    "runner may also start as its program; write a long option's value with "
+                    "`=` (`--with=$(cat r)`, `--directory=$(pwd)`), or run the substitution "
+                    "first and write the value in",
     "env_values": "takes its variables and program from a command substitution, so the text "
                   "being approved is not the text that will run; load a .env file with "
                   "`set -a; . ./.env; set +a; make`",
+    "arith_backtick": "uses a backtick inside `$(( ))`, where bash may run the text as a command "
+                      "instead of evaluating it; write `$(...)` instead of the backticks "
+                      "(`echo $(( $(date +%s) - 10 ))`)",
     "unreadable": "has a `case` statement inside a substitution, which this check cannot "
                   "read; write the case as a command of its own",
 }
@@ -315,33 +342,28 @@ def _split_segments(command: str) -> List[tuple]:
     """Split on shell separators OUTSIDE quotes; a substitution stays inside its command.
 
     Returns (connector, segment, carried) triples, where the connector says how a segment
-    is joined to its predecessor: "pipe" only for a single `|`, everything else ("start",
-    ";", "&&") breaks the pipeline. That distinction carries the whole pipe-to-shell
-    judgement: `curl x | bash` is unreviewable, while `curl x > f; python parse.py` is a
-    download followed by a separate, visible command (measured false positive of the first
-    version).
+    is joined to its predecessor: "pipe" only for a single `|` (and `|&`), everything else
+    (";", "&&", a newline) breaks the pipeline. That distinction carries the whole
+    pipe-to-shell judgement: `curl x | bash` is unreviewable, while `curl x > f; python
+    parse.py` is a download followed by a separate, visible command (measured false
+    positive of the first version). The `&` of a redirection (`2>&1`, `&>f`) is no separator.
 
     A substitution is a command the segment CARRIES, not a cut in it. Its text is returned
     whole, with its kind: "command" for `$( )` and backticks, "arithmetic" for a `$(( ))`
-    that bash evaluates (the parenthesis after `$(` closes right before the outer one, and
-    no `#` or backtick inside), "arithmetic*" for any other `$((`, "subshell" for `( )`,
-    "process_in" for `<( )`, "process_out" for `>( )`. Where it stood in the segment a mark
-    is left: _SUBST_BARE outside quotes, _SUBST_QUOTED inside double quotes, _SUBST_PROC for
-    a process substitution (a file name), none for a subshell. Cutting the segment there, as
-    before, separated the command word from its wrapper (`env $(echo rm) -rf /` became
-    `env`, `echo rm` and `-rf /`, and passed) and broke a pipe in two (`curl x | tee
-    $(mktemp) | bash` passed). A segment that has no text of its own but carries a
-    substitution is kept: `(bash)`.
+    whose parentheses show bash evaluates it (the one after `$(` closes right before the
+    outer one, and no `#` or backtick inside, both of which move where bash closes it),
+    "arithmetic*" for any other `$((`, "subshell" for `( )`, "array" for the elements of an
+    array assignment (`arr=($(ls))`, words, not a program), "process_in" for `<( )`,
+    "process_out" for `>( )`, "unreadable" for one holding a `case` statement. Where it
+    stood in the segment a mark is left: _SUBST_BARE outside quotes, _SUBST_QUOTED inside
+    double quotes, _SUBST_PROC for a process substitution (a file name), none for a
+    subshell or an array. Cutting the segment there, as before, separated the command word
+    from its wrapper (`env $(echo rm) -rf /` became `env`, `echo rm` and `-rf /`, and
+    passed) and broke a pipe in two (`curl x | tee $(mktemp) | bash` passed). A segment that
+    has no text of its own but carries a substitution is kept: `(bash)`.
 
-    A heredoc's body is carried too, never read as commands: "heredoc" for a body that is
-    data (a quoted delimiter, or no substitution in it), "heredoc_x" for an unquoted body
-    whose substitutions run (they are carried as "command" next to it). A word-initial `#`
-    starts a comment that ends at the line. Before both, an apostrophe in a comment or in a
-    heredoc body opened a quote that swallowed every later line (`cat <<'EOF'` with
-    "don't" in it, then `rm -rf /`, passed), and a body was read as commands.
-
-    A plain `command.split("|")` would be fooled by `echo "a|b"`, and a regex over the whole
-    string never sees what a substitution actually runs.
+    Nothing is hidden: a `#` is no comment here and `<<` opens no heredoc, so every line of
+    a heredoc body is read as a command line (named boundary in the module docstring).
 
     The quotes and backslashes STAY in the segment text, and shlex takes them off when the
     segment is tokenized. Dropping them here is what hid a nested command: `bash -c 'rm -rf
@@ -367,21 +389,11 @@ def _split_segments(command: str) -> List[tuple]:
     # Nesting of $( ), ( ) and ` `. A closer entered from inside double quotes is
     # stored with the quote in front ('")', '"`') so leaving it re-enters the quote.
     depth_stack: List[str] = []
-    # Heredocs waiting for their body after the next newline: (delimiter, quoted,
-    # strip_tabs, depth, segment), the segment being the command that reads the body.
-    heredocs: List[tuple] = []
     i = 0
     n = len(command)
 
     def _put(text: str) -> None:
         (sub_buf if depth_stack else buf).append(text)
-
-    def _last_char() -> str:
-        target = sub_buf if depth_stack else buf
-        for piece in reversed(target):
-            if piece:
-                return piece[-1]
-        return ""
 
     def _open(closer: str, kind: str, opener: str) -> None:
         nonlocal sub_kind, sub_buf, sub_case, arith_closed, arith_clean, arith_tainted
@@ -400,11 +412,9 @@ def _split_segments(command: str) -> List[tuple]:
 
     def _close(closer_text: str, nxt: str) -> bool:
         """True when the outermost substitution closed."""
-        nonlocal quote, arith_closed, arith_clean, heredocs
+        nonlocal quote, arith_closed, arith_clean
         if depth_stack.pop().startswith('"'):
             quote = '"'
-        if heredocs:
-            heredocs = [h for h in heredocs if h[3] <= len(depth_stack)]
         if depth_stack:
             sub_buf.append(closer_text)
             if sub_kind == "arithmetic" and len(depth_stack) == 1 and not arith_closed:
@@ -430,57 +440,6 @@ def _split_segments(command: str) -> List[tuple]:
         nonlocal buf, subs
         segments.append((connector, "".join(buf).strip(), subs))
         buf, subs = [], []
-
-    def _heredoc_word(at: int) -> tuple:
-        """The delimiter after `<<` at `at`: (end, delimiter, quoted, strip_tabs), or None
-        when no word follows that can be one (`1<<2` in arithmetic is a shift)."""
-        j = at + 2
-        strip_tabs = command[j:j + 1] == "-"
-        if strip_tabs:
-            j += 1
-        while j < n and command[j] in " \t":
-            j += 1
-        k, word, quoted = j, [], False
-        while k < n and command[k] not in " \t\n;&|()<>":
-            c = command[k]
-            if c in ("'", '"'):
-                close = command.find(c, k + 1)
-                close = n if close < 0 else close
-                word.append(command[k + 1:close])
-                quoted, k = True, close + 1
-                continue
-            if c == "\\":
-                word.append(command[k + 1:k + 2])
-                quoted, k = True, k + 2
-                continue
-            word.append(c)
-            k += 1
-        delim = "".join(word)
-        if not delim or not (quoted or delim[0].isalpha() or delim[0] == "_"):
-            return None
-        return k, delim, quoted, strip_tabs
-
-    def _bodies(at: int) -> tuple:
-        """Read the waiting heredocs' bodies after the newline at `at`: (end, [(body,
-        quoted, segment)]), `end` at the newline after the last delimiter line (or the end)."""
-        nonlocal heredocs
-        pos, out = at + 1, []
-        for delim, quoted, strip_tabs, _depth, _segment in heredocs:
-            start = pos
-            while True:
-                if pos >= n:
-                    out.append((command[start:n], quoted, _segment))
-                    break
-                e = command.find("\n", pos)
-                end = n if e < 0 else e
-                line = command[pos:end]
-                if (line.lstrip("\t") if strip_tabs else line) == delim:
-                    out.append((command[start:pos], quoted, _segment))
-                    pos = end + 1 if e >= 0 else n
-                    break
-                pos = end + 1 if e >= 0 else n
-        heredocs = []
-        return (pos - 1 if 0 < pos <= n and command[pos - 1:pos] == "\n" else pos), out
 
     while i < n:
         ch = command[i]
@@ -509,35 +468,6 @@ def _split_segments(command: str) -> List[tuple]:
                 _put(ch)
             i += 1
             continue
-        if ch == "#" and _last_char() in ("", " ", "\t", "\n", ";", "&", "|", "(", ")"):
-            # A comment, to the end of the line: its quotes and parentheses are text.
-            end = command.find("\n", i)
-            end = n if end < 0 else end
-            if depth_stack:
-                sub_buf.append(command[i:end])
-                if sub_kind == "arithmetic":
-                    arith_tainted = True
-            i = end
-            continue
-        if ch == "\n" and heredocs:
-            end, bodies = _bodies(i)
-            if depth_stack:
-                sub_buf.append(command[i:end])  # read again where the substitution is read
-            else:
-                for body, quoted, segment in bodies:
-                    # The body belongs to the command that wrote `<<`, also when a pipe
-                    # follows it on that line (`cat <<EOF | bash`).
-                    target = subs if segment >= len(segments) else segments[segment][2]
-                    if quoted:
-                        target.append(("heredoc", body))
-                    else:
-                        found = _heredoc_substitutions(body)
-                        target.extend(found)
-                        target.append(("heredoc_x" if found else "heredoc", body))
-                _flush()
-                connector = "seq"
-            i = end
-            continue
         if ch in ("'", '"'):
             _put(ch)
             quote = ch
@@ -548,15 +478,6 @@ def _split_segments(command: str) -> List[tuple]:
             _put(nxt)
             i += 2
             continue
-        if (ch == "<" and nxt == "<" and command[i + 2:i + 3] != "<"
-                and command[i - 1:i] != "<"):     # `<<<` is a here-string
-            word = _heredoc_word(i)
-            if word is not None:
-                end, delim, quoted, strip_tabs = word
-                heredocs.append((delim, quoted, strip_tabs, len(depth_stack), len(segments)))
-                _put(command[i:end])
-                i = end
-                continue
         if ch == "$" and nxt == "(":
             _open(")", _dollar_kind(command, i), "$(")
             i += 2
@@ -573,6 +494,8 @@ def _split_segments(command: str) -> List[tuple]:
             if not depth_stack and buf and buf[-1] in ("<", ">"):
                 # `<(...)` and `>(...)`: the operator is the substitution's, not a redirect.
                 kind = "process_in" if buf.pop() == "<" else "process_out"
+            elif not depth_stack and _ARRAY_ASSIGNMENT_RE.search("".join(buf[-80:])):
+                kind = "array"              # `arr=(...)`: its elements are words
             _open(")", kind, "(")
             i += 1
             continue
@@ -587,13 +510,23 @@ def _split_segments(command: str) -> List[tuple]:
             i += 1
             continue
         if depth_stack:
-            if ch == "c" and _CASE_STATEMENT_RE.match(command, i) and _command_position(sub_buf):
+            if ch == "c" and _CASE_WORD_RE.match(command, i) and _command_position(sub_buf):
                 sub_case = True
+            elif ch == "#" and sub_kind == "arithmetic":
+                arith_tainted = True        # a comment moves where bash closes `$((`
             _put(ch)                    # a separator inside a substitution is its own
+            i += 1
+            continue
+        if ch == "&" and (nxt == ">" or (buf and buf[-1] in ("<", ">"))):
+            buf.append(ch)                  # `&>f`, `2>&1`: a redirection, no separator
             i += 1
             continue
         if ch in ";\n&|":
             _flush()
+            if ch == "|" and nxt == "&":    # `|&` pipes stderr too: still a pipe
+                connector = "pipe"
+                i += 2
+                continue
             # && and || are one separator, not two - and only a SINGLE | is a
             # pipe; || is sequencing like ; and &&.
             if nxt == ch:
@@ -611,11 +544,15 @@ def _split_segments(command: str) -> List[tuple]:
     return [(c, seg, carried) for c, seg, carried in segments if seg or carried]
 
 
-# `case WORD in`, the statement, not the word: `grep case f` and a commit message's "in
-# that case" are no statement.
-_CASE_STATEMENT_RE = re.compile(r"case\s+\S+\s+in(?=[\s;]|$)")
+# The reserved word `case` as a word of its own; where a command starts (_command_position)
+# it opens a statement whose pattern's `)` closes a substitution early, whatever follows.
+_CASE_WORD_RE = re.compile(r"case(?=[\s;]|$)")
 # Words after which the next word is a command.
-_COMMAND_LEADERS = frozenset({"then", "do", "else", "elif", "{", "!", "time"})
+_COMMAND_LEADERS = frozenset({"if", "elif", "while", "until", "then", "else", "do", "{", "!",
+                              "time"})
+# `NAME=(`, `NAME+=(`, `NAME[k]=(`: an array assignment, after a blank, a separator or at
+# the start (also after `declare`, `local`, `typeset`, `readonly`, `export`).
+_ARRAY_ASSIGNMENT_RE = re.compile(r"(?:^|[\s;&|(])[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=$")
 
 
 def _command_position(sub_buf: List[str]) -> bool:
@@ -626,32 +563,6 @@ def _command_position(sub_buf: List[str]) -> bool:
     return tail.split()[-1] in _COMMAND_LEADERS
 
 
-def _heredoc_substitutions(body: str) -> List[tuple]:
-    """The substitutions an unquoted heredoc body runs. The body is read as the inside of
-    double quotes: there too `$( )` and backticks run, a backslash escapes only `$`, a
-    backtick, a backslash and a newline, and every other character is text. A `"` in the
-    body is text, so it is escaped for that reading."""
-    out: List[str] = []
-    k = 0
-    while k < len(body):
-        c = body[k]
-        if c == "\\":
-            nx = body[k + 1:k + 2]
-            if nx in ("$", "`", "\\", "\n") and nx:
-                out.append("\\" + nx)
-                k += 2
-                continue
-            out.append("\\\\")
-            k += 1
-            continue
-        out.append('\\"' if c == '"' else c)
-        k += 1
-    found: List[tuple] = []
-    for _connector, _seg, carried in _split_segments('"' + "".join(out) + '"'):
-        found.extend(carried)
-    return found
-
-
 def _dollar_kind(command: str, i: int) -> str:
     """`$((` at `i` may open an arithmetic expansion, any other `$(` a command substitution.
     Whether bash evaluates it or runs it is not decided here: both readings are judged."""
@@ -659,11 +570,55 @@ def _dollar_kind(command: str, i: int) -> str:
 
 
 def _tokens(segment: str) -> List[str]:
-    """shlex tokens, falling back to whitespace split on unbalanced quotes."""
+    """shlex tokens, falling back to whitespace split on unbalanced quotes. A here-string
+    operator written against its words (`bash<<<'x'`, `bash <<<"$(...)"`) is its own token,
+    with its descriptor (`0<<<`), as the shell reads it; inside quotes it is text."""
+    if "<<<" in segment:
+        segment = _spaced_here_strings(segment)
     try:
         return shlex.split(segment, posix=True)
     except ValueError:
         return segment.split()
+
+
+def _spaced_here_strings(segment: str) -> str:
+    """`segment` with a blank around every unquoted `<<<` (and its descriptor digits)."""
+    out: List[str] = []
+    quote = ""
+    i = 0
+    while i < len(segment):
+        ch = segment[i]
+        if quote:
+            if ch == "\\" and quote == '"' and i + 1 < len(segment):
+                out.append(segment[i:i + 2])
+                i += 2
+                continue
+            if ch == quote:
+                quote = ""
+            out.append(ch)
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+        elif ch == "\\" and i + 1 < len(segment):
+            out.append(segment[i:i + 2])
+            i += 2
+            continue
+        elif segment.startswith("<<<", i):
+            digits = 0
+            while digits < len(out) and out[-1 - digits].isdigit():
+                digits += 1
+            word_start = len(out) - digits
+            op = "".join(out[word_start:]) + "<<<"
+            del out[word_start:]
+            if out and not out[-1].isspace():
+                out.append(" ")
+            out.append(op + " ")
+            i += 3
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def _executable_at(tokens: List[str]) -> tuple:
@@ -735,9 +690,28 @@ def _reparsed(text: str) -> str:
     into words there, so its mark becomes the bare one (`bash -c "$(echo rm) -rf /"` runs
     `rm -rf /`, and `eval "$(...)"` runs whatever the substitution prints). A `\\$` or a
     backslashed backtick that double quotes kept here loses its backslash there, so it opens
-    a substitution (`eval "\\$(echo rm) -rf /"` runs `rm -rf /`, measured)."""
-    return (text.replace(_SUBST_QUOTED, _SUBST_BARE)
-            .replace("\\$", "$").replace("\\`", "`"))
+    a substitution (`eval "\\$(echo rm) -rf /"` runs `rm -rf /`, measured). Read in one pass
+    from the left: a pair of backslashes is a literal backslash and stays a pair, so in
+    `bash -c 'echo \\\\$(cmd)'` the substitution stays live, as bash runs it; a single one
+    before `$` or a backtick is dropped. An odd escape is read as live too, the safe side."""
+    text = text.replace(_SUBST_QUOTED, _SUBST_BARE)
+    if "\\" not in text:
+        return text
+    out: List[str] = []
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        nxt = text[i + 1:i + 2]
+        if ch == "\\" and nxt == "\\":
+            out.append("\\\\")
+            i += 2
+        elif ch == "\\" and nxt in ("$", "`") and nxt:
+            out.append(nxt)
+            i += 2
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
 
 
 def _attached_call(word: str) -> Optional[str]:
@@ -1061,6 +1035,9 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
 
     if _is_fork_bomb(text):
         cats.append("fork_bomb")
+    if not _arithmetic and _substitution_starts_a_command(text):
+        cats.append("opaque_command")
+        opaque_shape = "program"
 
     # What a nested command found. A refusal inside refuses the whole; a remote command's
     # categories are shown but judged by the remote profile, not by this one.
@@ -1094,18 +1071,19 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
                     "env_values" if any(_exe_base(t) == "env" for t in toks[:exe_at])
                     else "program")
         # A shell or interpreter that runs another command's OUTPUT as its script: through a
-        # process substitution, a here-string or a heredoc holding a substitution, or a
-        # descriptor fed by one (`source <(pyenv init -)`, `bash <<< "$(...)"`,
-        # `. /dev/fd/3 3< <(...)`): the same as `eval "$(...)"`, the approved text does not
-        # show what runs. Literal text fed to a shell is read as shell text, like `bash -c`.
-        # A file is read as before.
+        # process substitution or a here-string holding a substitution, or a descriptor fed
+        # by one (`source <(pyenv init -)`, `bash <<< "$(...)"`, `. /dev/fd/3 3< <(...)`), or
+        # a descriptor opened by an earlier command: the same as `eval "$(...)"`, the
+        # approved text does not show what runs. A literal here-string fed to a shell is read
+        # as shell text, like `bash -c`. A file is read as before.
         script_literals: List[str] = []
         if exe in _SHELL_SINKS:
-            from_output, script_literals = _script_input(exe, args, carried)
-            if from_output:
+            from_where, script_literals = _script_input(exe, args)
+            if from_where:
                 if "opaque_command" not in cats:
                     cats.append("opaque_command")
-                opaque_shape = "shell_text"
+                opaque_shape = (_shell_text_shape(carried) if from_where == "output"
+                                else "descriptor")
 
         # A local nested command's output is this segment's output: fetched or remote
         # content when it fetches (`uv run curl x | bash`). Applied after this segment's own
@@ -1123,8 +1101,6 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
         # and classify one candidate per segment, past the bound the budget sets per call.
         def _carried():
             for kind, inner in carried:
-                if kind in ("heredoc", "heredoc_x"):
-                    continue                # data; its substitutions are carried apart
                 if kind == "unreadable":
                     yield kind, "", inner
                     continue
@@ -1140,6 +1116,10 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
                     yield "arithmetic*", "charged", ": " + (body[:-1] if body.endswith(")")
                                                             else body)
                     yield "command", "charged", inner
+                elif kind == "array":
+                    # An array's elements are words, the arguments of the no-op `:`; their
+                    # substitutions are read (`arr=($(ls))` runs `ls`, nothing else).
+                    yield kind, "local", ": " + inner
                 else:
                     yield kind, "local", inner
             for literal in script_literals:
@@ -1185,11 +1165,14 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
             if "opaque_command" in sub.categories and not opaque_shape:
                 # `eval "$(...)"`, `bash -c "$(...) ..."`: the text it runs is printed by a
                 # substitution. Otherwise the inner reading's own shape.
-                opaque_shape = ("shell_text" if where in ("local", "remote") and not kind
+                opaque_shape = (_shell_text_shape(carried)
+                                if where in ("local", "remote") and not kind
                                 and _SUBST_BARE in inner else sub.opaque_shape)
                 if where == "runner" and opaque_shape == "program" and _value_from_substitution(
                         args):
                     opaque_shape = "option_value"   # `uv run --with $(cat r) pytest`
+                elif where == "charged" and kind == "command" and "`" in inner:
+                    opaque_shape = "arith_backtick"  # `$(( `date +%s` - 10 ))`
             fetched = "network_fetch" in sub.categories or "remote_login" in sub.categories
             if local and fetched:
                 nested_fetch = True
@@ -1270,6 +1253,44 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
     return verdict
 
 
+def _substitution_starts_a_command(text: str) -> bool:
+    """A substitution where a command starts (at the start of the text, of a line, or after
+    `;`, `&`, `|`), read over the raw text with the quotes of its own line only.
+
+    This is the reading the check had before substitutions were carried, kept as a SECOND
+    reading that can only add a refusal: the carried reading follows the quotes over the
+    whole text, so an apostrophe in a comment or a heredoc body (`echo hi # it's` on one
+    line, `$(echo rm) -rf /` on the next) hid the next line's substitution from it, while
+    bash runs it. A substitution inside a quote that opens and closes on its own line is text
+    (`echo 'a; $(x)'`). One pass over the text."""
+    if "$(" not in text and "`" not in text:
+        return False
+    # Positions inside a quote that opens and closes on the same line.
+    quoted = bytearray(len(text))
+    line_start = 0
+    while line_start <= len(text):
+        end = text.find("\n", line_start)
+        end = len(text) if end < 0 else end
+        k, quote, opened = line_start, "", -1
+        while k < end:
+            ch = text[k]
+            if quote:
+                if ch == "\\" and quote == '"':
+                    k += 2
+                    continue
+                if ch == quote:
+                    quoted[opened:k + 1] = b"\x01" * (k + 1 - opened)
+                    quote = ""
+            elif ch == "\\":
+                k += 2
+                continue
+            elif ch in ("'", '"'):
+                quote, opened = ch, k
+            k += 1
+        line_start = end + 1
+    return any(not quoted[m.start(1)] for m in _SUBST_AT_COMMAND_RE.finditer(text))
+
+
 def _is_fork_bomb(text: str) -> bool:
     """`:(){ :|:& };:`, with any whitespace between its parts: `:(){`, then `|:&`, then `};:`.
     Three searches, one after the other, so the work is linear in the text. A regular
@@ -1302,61 +1323,91 @@ _DESCRIPTOR_RE = re.compile(r"^(?:-|/dev/stdin|/dev/fd/\d+|/proc/self/fd/\d+)$")
 _REDIRECT_RE = re.compile(r"^\d*(?:<|>|>>|<>|>&|<&|&>|&>>)$")
 
 
-def _script_input(exe: str, args: List[str], carried: List[tuple]) -> tuple:
-    """(runs another command's output, literal script texts) for a shell or an interpreter.
+def _script_input(exe: str, args: List[str]) -> tuple:
+    """(where its script comes from, literal script texts) for a shell or an interpreter:
+    "output" when another command's output, "descriptor" when a descriptor this command
+    does not open, "" otherwise.
 
-    Its script is its first word that is no option and no redirection. It comes from its
-    input when there is none, when it is `-` or a descriptor path (`/dev/stdin`,
-    `/dev/fd/N`, `/proc/self/fd/N`), or with `-s`. Fed by a process substitution (as the
-    script itself or through `<`, `3<`), by a here-string or a heredoc holding a
-    substitution, it runs another command's output. Fed by a literal here-string or heredoc
-    body, a shell runs that text, returned to be read like `bash -c` text."""
+    Its script is its first word that is no option, no option's value and no redirection.
+    It comes from its input when there is none, when it is `-` or a descriptor path
+    (`/dev/stdin`, `/dev/fd/N`, `/proc/self/fd/N`), or with `-s`. Fed by a process
+    substitution (as the script itself or through `<`, `3<`) or by a here-string holding a
+    substitution, it runs another command's output. A descriptor above 2 that no
+    redirection of this command opens was opened by an earlier one (`exec 3< <(...);
+    bash /dev/fd/3`), so what it reads is not in this text. Fed by a literal here-string, a
+    shell runs that text, returned to be read like `bash -c` text."""
     shell = exe in _STDIN_SHELLS
     inline = "c" if shell else "cemr"          # -c CODE, -e/-r CODE, -m MODULE
     script = None
     from_stdin = False
     proc_fed = False
+    opened = set()
     here_words: List[str] = []
     pos = 0
     while pos < len(args):
         tok = args[pos]
         nxt = args[pos + 1] if pos + 1 < len(args) else ""
-        if tok == "<<<":
+        if _HERE_OPERATOR_RE.match(tok):
             here_words.append(nxt)
             pos += 2
             continue
         if _REDIRECT_RE.match(tok):
-            proc_fed = proc_fed or (tok.endswith("<") and nxt == _SUBST_PROC)
+            if tok.endswith("<") or tok.endswith("<>"):
+                opened.add(tok.rstrip("<>") or "0")
+                proc_fed = proc_fed or nxt == _SUBST_PROC
             pos += 2
             continue
         if tok[:1] in "<>" or (tok[:1].isdigit() and tok.lstrip("0123456789")[:1] in ("<", ">")):
+            if tok[:1].isdigit() and "<" in tok:
+                opened.add(tok[:len(tok) - len(tok.lstrip("0123456789"))])
             pos += 1                       # `2>/dev/null`, `<file`: an attached redirection
             continue
         if script is None and tok.startswith(("-", "+")) and tok not in ("-", "--"):
             letters = tok[1:] if not tok.startswith("--") else ""
             if any(c in inline for c in letters):
-                return False, []            # code given inline: read elsewhere (`bash -c`)
+                return "", []               # code given inline: read elsewhere (`bash -c`)
             from_stdin = from_stdin or (shell and "s" in letters)
-            pos += 2 if tok in ("-o", "+o") else 1
+            pos += 2 if tok in _SHELL_VALUE_OPTIONS else 1
             continue
         if script is None:
             script = tok
         pos += 1
     if script == _SUBST_PROC:
-        return True, []
+        return "output", []
+    fd = _FD_PATH_RE.match(script or "")
+    if fd and int(fd.group(1)) > 2 and fd.group(1) not in opened:
+        return "descriptor", []
     if exe in ("source", "."):
         from_input = script is not None and bool(_DESCRIPTOR_RE.match(script))
     else:
         from_input = script is None or from_stdin or bool(_DESCRIPTOR_RE.match(script))
     if not from_input:
-        return False, []
-    kinds = [kind for kind, _ in carried]
-    if (proc_fed or "heredoc_x" in kinds
-            or any(_SUBST_BARE in w or _SUBST_QUOTED in w for w in here_words)):
-        return True, []
-    if not shell:
-        return False, []
-    return False, here_words + [body for kind, body in carried if kind == "heredoc"]
+        return "", []
+    if proc_fed or any(_SUBST_BARE in w or _SUBST_QUOTED in w for w in here_words):
+        return "output", []
+    return "", here_words if shell else []
+
+
+# The here-string operator, with its descriptor (`<<<`, `0<<<`).
+_HERE_OPERATOR_RE = re.compile(r"^\d*<<<$")
+# A descriptor path and its number.
+_FD_PATH_RE = re.compile(r"^/(?:dev|proc/self)/fd/(\d+)$")
+# A shell's options that take the next word as their value (`bash -O extglob`).
+_SHELL_VALUE_OPTIONS = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
+# The tools whose shell setup is commonly run through `eval "$(...)"` or `source <(...)`;
+# each has a form that does the same without handing shell text over.
+_SETUP_TOOLS = frozenset({"conda", "mamba", "micromamba", "pyenv", "rbenv", "nodenv", "fnm",
+                          "direnv", "opam", "ssh-agent", "brew", "kubectl"})
+
+
+def _shell_text_shape(carried: List[tuple]) -> str:
+    """"tool_setup" when the shell text comes from a tool's own setup output (`eval
+    "$(conda shell.bash hook)"`), whose direct form the reason names; "shell_text" else."""
+    for kind, inner in carried:
+        words = inner.split()
+        if kind in ("command", "process_in") and words and _exe_base(words[0]) in _SETUP_TOOLS:
+            return "tool_setup"
+    return "shell_text"
 
 
 def is_command_safe(command: str, *, profile: str = "host") -> tuple:

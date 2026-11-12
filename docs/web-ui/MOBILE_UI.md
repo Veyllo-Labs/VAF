@@ -36,6 +36,19 @@ the full width there too. The card's insides stack by construction (a column of 
 the text field grows with the text instead of scrolling, and the buttons wrap
 (`flex-wrap`) when the "take the change back" link joins them on a narrow screen.
 
+## The screenshot strip
+
+The row of check pictures under a turn (`web/components/chat/ShotStrip.tsx`, see Working
+screenshots in [WEB_UI.md](WEB_UI.md)). On a phone it is a native touch swipe:
+`overflow-x-auto` with `overscroll-x-contain`, so a sideways swipe at the row's end does not
+pull the page or trigger the browser's back gesture, and no `touch-action` is set, so a
+vertical swipe on the row still scrolls the chat. The arrow buttons are a desktop affordance
+(`max-md:hidden`); the soft edge alone shows that the row goes on. The thumbnails are
+`max-md:h-[60px] max-md:w-[96px]` instead of 112x70: at 390px three full ones filled the row
+exactly and the fourth did not show at all, so nothing said there was more. The strip follows
+the answer, which the actions timeline drops below the avatar row at full width. A chat
+without check pictures renders exactly as before on every width.
+
 ## The document viewer's preview place
 
 While an Office document waits for its preview, the viewer's header (`DocumentViewer.tsx`,

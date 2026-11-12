@@ -40,6 +40,8 @@ import { draftRefOf, isDraftTurnEnd, DRAFT_WAKE_PREFIX, CONFIRM_WAKE_PREFIX } fr
 import AskChoices from '@/components/chat/AskChoices';
 import { asksOf, withoutOptions } from '@/components/chat/askContract';
 import { bodyAndSay, placeRoundUpdate, removeRoundBubble } from '@/components/chat/turnRounds';
+import { splitTurnFiles, type FileChip } from '@/components/chat/workingShots';
+import { ShotStrip } from '@/components/chat/ShotStrip';
 import type { SettingsChatJump } from '@/components/SettingsModal';
 import CreateAutomationPopup, { type CreateAutomationPayload, type EditAutomationTask } from '@/components/CreateAutomationPopup';
 import NotificationsModal, { type NotificationItem } from '@/components/NotificationsModal';
@@ -86,8 +88,10 @@ type Message = {
     workflowId?: string;
     workflowName?: string;
     initialSteps?: number;
-    /** Files created by a coding agent — shown as blue download chips inside this bubble */
-    downloadFiles?: { path: string; name: string }[];
+    /** Files created by a coding agent - shown as blue download chips inside this bubble.
+     *  `purpose`/`toolId` come from `file_created`: a check picture shows in its step
+     *  (components/chat/workingShots.ts), not as a chip. */
+    downloadFiles?: FileChip[];
     /**
      * Which exchange produced this message (backend `turnId`). File events carry
      * the same id, which is how a created file finds the answer it belongs to.
@@ -138,11 +142,14 @@ const chipTargetIndex = (msgs: Message[], turnId?: string): number | undefined =
  * to appear on that answer too.
  */
 const withChips = (msgs: Message[], idx: number,
-                   chips: { path: string; name: string }[]): Message[] => {
+                   chips: FileChip[]): Message[] => {
     const turnId = msgs[idx]?.turnId;
     const scope = msgs.filter((m, i) => i === idx || (!!turnId && m.turnId === turnId));
     const shown = new Set(scope.flatMap(m => (m.downloadFiles || []).map(f => f.path)));
-    const toAdd = chips.filter(c => !shown.has(c.path)).map(c => ({ path: c.path, name: c.name }));
+    // purpose and toolId travel with the chip: they decide whether it is drawn as an
+    // attachment or as a check picture inside its step.
+    const toAdd = chips.filter(c => !shown.has(c.path))
+        .map(c => ({ path: c.path, name: c.name, purpose: c.purpose, toolId: c.toolId }));
     if (toAdd.length === 0) return msgs;
     const out = [...msgs];
     out[idx] = { ...out[idx], downloadFiles: [...(out[idx].downloadFiles || []), ...toAdd] };
@@ -3165,7 +3172,7 @@ function VAFDashboardContent() {
     // Files announced by the backend that have no message to sit on YET. A file is
     // usually announced while its answer is still being produced, so this is the
     // waiting room; `turnId` is the address the chip is waiting for.
-    const [createdFiles, setCreatedFiles] = useState<{ path: string; name: string; sessionId: string; turnId?: string }[]>([]);
+    const [createdFiles, setCreatedFiles] = useState<(FileChip & { sessionId: string; turnId?: string })[]>([]);
     // Same reason as messagesRef: the WebSocket callback is a closure over the
     // first render, so it needs a ref to see chips that are still waiting.
     const createdFilesRef = useRef<typeof createdFiles>([]);
@@ -7506,6 +7513,10 @@ function VAFDashboardContent() {
                             name: data.title || data.filePath.split('/').pop() || 'file',
                             sessionId: sid,
                             turnId: data.turnId || undefined,
+                            // Why the file exists and which step made it: a check picture
+                            // ("check") is drawn in that step instead of as an attachment.
+                            purpose: typeof data.purpose === 'string' ? data.purpose : undefined,
+                            toolId: typeof data.toolId === 'string' ? data.toolId : undefined,
                         };
                         setCreatedFiles(prev => {
                             // Avoid duplicates
@@ -10259,6 +10270,14 @@ function VAFDashboardContent() {
                                                     const timelineNaturalExpanded = isLatestBot && isGenerating && !userPromptPending;
                                                     const tlManual = timelineExpand.get(msg.timestamp);
                                                     const timelineExpanded = tlManual !== undefined ? tlManual : timelineNaturalExpanded;
+                                                    // Check pictures (purpose "check") are not attachments: in their step while
+                                                    // the timeline is open, one sideways strip for the turn while it is folded
+                                                    // (or when no step on screen took them). Every other chip stays a chip.
+                                                    const shotSplit = splitTurnFiles(
+                                                        turnChips,
+                                                        hasTimeline ? turnTl!.actions.filter(a => a.kind === 'tool').map(a => a.msg.toolId || '') : [],
+                                                        hasTimeline && timelineExpanded,
+                                                    );
                                                     const timelineActions: TimelineAction[] = hasTimeline ? turnTl!.actions.map((act) => {
                                                         const m = act.msg;
                                                         const mIdx = messages.indexOf(m);
@@ -10309,6 +10328,11 @@ function VAFDashboardContent() {
                                                                         onToggleScroll={preserveChatScroll}
                                                                         onToggle={isSub ? (nextExpanded: boolean) => { if (nextExpanded) openSubAgentWindow(true); else closeSubAgentWindow(true); } : undefined}
                                                                     />
+                                                                    {m.toolId && shotSplit.byStep[m.toolId] && (
+                                                                        <div className="mt-1.5">
+                                                                            <ShotStrip shots={shotSplit.byStep[m.toolId]} onOpen={openImageInViewer} />
+                                                                        </div>
+                                                                    )}
                                                                 </div>
                                                             ),
                                                         };
@@ -10319,6 +10343,14 @@ function VAFDashboardContent() {
                                                             {isBot && thought && !hasTimeline && <div className="mb-3"><ThinkingDetails thought={thought} isComplete={thinkingDone} durationKey={msg.timestamp} /></div>}
 
                                                             {isBot && action && <ActionDetails action={action} isComplete={actionDone} />}
+
+                                                            {/* The turn's check pictures as one sideways strip, between the work and the answer */}
+                                                            {isBot && shotSplit.strip.length > 0 && (
+                                                                <div className="mb-2 w-full min-w-0">
+                                                                    <ShotStrip shots={shotSplit.strip} onOpen={openImageInViewer}
+                                                                        label={tMain('workShotsLabel', { count: shotSplit.strip.length })} />
+                                                                </div>
+                                                            )}
 
                                                             {/* Show answer bubble only when there is content (never show empty speech bubble) */}
                                                             {hasBubbleContent && (
@@ -10567,9 +10599,9 @@ function VAFDashboardContent() {
                                                                 <span className="text-[10px] text-gray-400 mt-1 ml-1 animate-in fade-in">{statusMessage}</span>
                                                             )}
                                                             {/* File chips: html → HtmlViewer, code → CodeViewer, others → download */}
-                                                            {isBot && turnChips.length > 0 && (
+                                                            {isBot && shotSplit.files.length > 0 && (
                                                                 <div className="mt-2 flex flex-wrap gap-2">
-                                                                    {turnChips.map((f, fi) => (
+                                                                    {shotSplit.files.map((f, fi) => (
                                                                         isImageFile(f.path) ? (
                                                                             <button
                                                                                 key={fi}

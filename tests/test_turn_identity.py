@@ -155,5 +155,9 @@ def test_the_bubble_carries_its_turn_and_the_whole_turn_is_searched_for_chips():
     # Both the CONDITION and the loop have to read it: a render gated on the
     # anchor's own list drops chips that sit on the turn's final answer, even
     # though the list itself is still computed correctly.
-    assert "{isBot && turnChips.length > 0 && (" in src and "turnChips.map(" in src, \
+    # The row reads the turn-wide list through the split that takes the check pictures
+    # out of it (components/chat/workingShots.ts), so the split must be fed turnChips.
+    assert re.search(r"splitTurnFiles\(\s*turnChips,", src), \
+        "the attachment row is no longer fed the turn-wide chip list"
+    assert "{isBot && shotSplit.files.length > 0 && (" in src and "shotSplit.files.map(" in src, \
         "a grouped turn renders only the anchor's chips again - the rest vanish"

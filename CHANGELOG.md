@@ -72,6 +72,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Changed
 
+- **Screenshots your agent takes to check its work no longer pile up as attachments.** They
+  now show inside the step that took them, and when there are many, as one row you scroll
+  sideways. Click a picture to see it large. Files you asked for stay attachments as before.
 - **The phishing filter's documentation now lists what it really scores.** Look-alike domains
   were never scored; the dead rule that claimed to is gone.
 - **Veyllo App: no more probing an app that is not connected.** When the Veyllo App is not

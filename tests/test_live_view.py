@@ -730,3 +730,27 @@ def test_the_departed_turns_are_bounded():
     departed = led._chats["A"].departed
     assert len(departed) == lv.MAX_DEPARTED
     assert f"t{lv.MAX_DEPARTED + 29}" in departed and "t0" not in departed
+
+
+
+def test_an_empty_turn_id_is_never_remembered_as_departed():
+    """MUTATION: depart "" like any id - red."""
+    led = LiveViewLedger()
+    led.record("A", _msg("t0", turn="t0"))
+    led.turn_left_queue("A", "t0")                           # the record stays (t0 departed)
+    led.turn_left_queue("A", "")
+    assert "" not in led._chats["A"].departed
+    led.record("A", _tool("start", "c1"))                    # an event that names no turn
+    assert [e.get("toolId") for e in led.snapshot("A", active=True)["events"]] == ["c1"]
+
+
+def test_a_turn_with_only_nameless_events_takes_them_when_it_leaves():
+    """T1 ran without a turn context (a nameless tool start only): when it leaves, its card goes,
+    so the next turn's replay does not show it as running. A different tagged turn that is
+    current keeps its nameless card (see the queued-turn test above).
+    MUTATION: keep nameless entries when no tagged turn is current - red."""
+    led = LiveViewLedger()
+    led.record("A", _tool("start", "orphan"))               # T1, nameless
+    led.turn_left_queue("A", "t1")
+    led.record("A", _msg("t2 text", turn="t2"))
+    assert [e.get("content", e.get("toolId")) for e in led.snapshot("A", active=True)["events"]] == ["t2 text"]

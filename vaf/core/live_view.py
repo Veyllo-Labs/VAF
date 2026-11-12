@@ -244,7 +244,9 @@ class _Chat:
         a queued turn that leaves without ever running must not take the running turn's card.
         (A turn that left or was superseded records nothing more, see `_apply`, so no entry of
         one can be left to clear.)"""
-        nameless = turn_id is None or turn_id == self.turn_id
+        # With no tagged turn current, the nameless entries are the leaving turn's own (it ran
+        # without a turn context); with another tagged turn current, they are that turn's.
+        nameless = turn_id is None or self.turn_id is None or turn_id == self.turn_id
         for key in [k for k, e in self.entries.items() if e.group == TURN and (
                 turn_id is None or e.turn == turn_id or (nameless and e.turn == ""))]:
             self.drop(key)
@@ -594,14 +596,19 @@ class LiveViewLedger:
         """The turn is out of the queue (the runner's queue wrapper calls this on every
         `task_done` of a chat turn): what
         it showed is in the stored transcript now, or will never be. Its events and its prompt
-        go; the prompts of turns still queued stay."""
+        go; the prompts of turns still queued stay. An empty or missing turn id clears the whole
+        turn group and is never remembered as departed (a departed "" would drop every later
+        event that names no turn). Named boundary: a turn that leaves while its chat has no
+        record at all is not remembered either, so a late event of it that arrives afterwards
+        (a late file chip) can stand in the next turn's replay; the chip is stored on the
+        session by its own path in any case."""
         if not session_id:
             return
         with self._lock:
             chat = self._chats.get(str(session_id))
             if chat is None:
                 return
-            if turn_id is None:
+            if not turn_id:
                 chat.clear_turn()
                 chat.turn_id = None
             else:

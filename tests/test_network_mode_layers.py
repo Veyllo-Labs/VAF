@@ -239,7 +239,10 @@ def test_the_backend_judges_every_socket(real_app, network, events, monkeypatch)
     import vaf.core.web_server as web_server
 
     reached = []
-    monkeypatch.setattr(web_server.manager, "connect", lambda ws: reached.append("connect"))
+    # The handler passes its first frame (auth_state) as `hello`; a stand-in without it would
+    # raise instead of recording, and "nothing reached connect" would pass for that reason.
+    monkeypatch.setattr(web_server.manager, "connect",
+                        lambda ws, hello=None: reached.append("connect"))
     monkeypatch.setattr(wire, "open_room", lambda room_id: reached.append("room"))
     monkeypatch.setattr(browser_interactive, "get_manager_by_ticket",
                         lambda ticket: reached.append("vnc"))

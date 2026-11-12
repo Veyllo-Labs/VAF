@@ -810,46 +810,59 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   refusal.** A substitution in the program word, wherever that word stands: after a
   wrapper, a `VAR=` prefix or a runner (`env $(echo rm) -rf /`), inside quotes or in part
   of the name (`"$(echo rm)"`, `/usr/bin/$(echo rm)`); the way out is to run the
-  substitution on its own and write the program out. A runner option's value from a
-  substitution (`uv run --with $(cat r)`): write a long option's value with `=`
-  (`--directory=$(pwd)`), or run the substitution first and write the value in. Variables
-  from a substitution (`env $(cat .env | xargs) make`): `set -a; . ./.env; set +a; make`
-  (`.`, not `source`: host_bash and the sandbox run `/bin/sh`, which is dash on Debian and
-  Ubuntu and has no `source`). Shell text another command prints: `eval "$(...)"`,
-  `bash -c "$(curl ...)"` (refused on the remote lane too), and a shell or interpreter
-  whose script comes from another command's output, as a process substitution or a
-  here-string holding a substitution, or a descriptor fed by one (`source <(...)`,
-  `bash <<< "$(...)"`, `bash /dev/stdin < <(...)`, `. /dev/fd/3 3< <(...)`), also with the
-  here-string written against its words or behind a descriptor redirection
-  (`bash <<<"$(...)"`, `bash 2>&1 <<< ...`); for a tool's shell setup the way out is the
-  tool's own direct form (`conda run -n ENV ...`, `pyenv exec ...`, `direnv exec . ...`,
+  substitution on its own and write the program out. A line that starts with `-` and no
+  wrapper (a Markdown bullet) names no program. A runner option's value from a
+  substitution (`uv run --with $(cat r)`, also `--with=$(cat r)`, whose unquoted value is
+  split into words the runner reads as more arguments): write a long option's value with
+  `=` and in double quotes (`--with="$(cat r)"`), or run the substitution first and write
+  the value in. Variables from a substitution (`env $(cat .env | xargs) make`):
+  `set -a; . ./.env; set +a; make` (`.`, not `source`: host_bash and the sandbox run
+  `/bin/sh`, which is dash on Debian and Ubuntu and has no `source`). Shell text another
+  command prints: `eval "$(...)"`, `bash -c "$(curl ...)"` (refused on the remote lane too),
+  and a shell or interpreter whose script comes from another command's output, as a
+  process substitution or a here-string holding a substitution, or a descriptor fed by one
+  (`source <(...)`, `bash <<< "$(...)"`, `bash /dev/stdin < <(...)`,
+  `. /dev/fd/3 3< <(...)`), also with the here-string written against its words or behind
+  a descriptor redirection (`bash <<<"$(...)"`, `bash 2>&1 <<< ...`), after `--`, or after a
+  value option given no value; for a tool's shell setup the way out is the tool's own
+  direct form (`conda run -n ENV ...`, `pyenv exec ...`, `direnv exec . ...`,
   `opam exec -- ...`, `ssh-agent bash -c '...'`), otherwise the output saved to a file,
   read, then run. A shell reading a descriptor above 2 that its own command does not open
-  (`exec 3< <(...); bash /dev/fd/3`) is refused the same way. A literal here-string fed to
-  a shell (`bash <<< 'rm -rf /'`) is read as shell text. A literal program behind a
-  substitution passes (`"$(git rev-parse --show-toplevel)/scripts/build.sh"`), and so does
-  a substitution in an argument, an option's value, a `VAR=` prefix or an array assignment
+  (`exec 3< <(...); bash /dev/fd/3`, `bash <&3`, also spelt `/dev/fd//3` or
+  `/proc/<pid>/fd/3`) is refused the same way. A literal here-string fed to a shell
+  (`bash <<< 'rm -rf /'`) is read as shell text. A literal program behind a substitution
+  passes (`"$(git rev-parse --show-toplevel)/scripts/build.sh"`), and so does a
+  substitution in an argument, an option's value, a `VAR=` prefix or an array assignment
   (`sudo -u $(whoami) ls`, `X=$(date) make`, `arr=($(ls))`).
 - **Arithmetic is read both ways.** Whether bash evaluates `$((...))` or runs it as a
   command substitution holding a subshell depends on more than its parentheses (a `#`
-  comment or a backtick holding a `)` moves where it closes), so every `$((` is read as
-  arithmetic and as a command, and refused when either reading is (`echo $((rm -rf /) )`,
-  `echo $((rm -rf /))`). Real arithmetic names no program, so it passes
-  (`make -j$(($(nproc)+1))`); where the parentheses show bash evaluates it, a substitution
-  in front (`$(nproc)+1`) is an operand there, not a program. A backtick inside `$(( ))`
-  is refused (write `$(...)` instead: `echo $(( $(date +%s) - 10 ))`). The legacy
-  `$[...]` is only ever arithmetic, and its substitutions are read.
-- **`case`, and the reading the check had before.** The reserved word `case` where a
-  command starts inside a substitution (at its start, after `;`, `&&`, `||`, `|`, a newline,
-  or after `if`, `while`, `until`, `then`, `do`, `else`, `{`, `!`, `time`) refuses the
-  command whatever follows: a pattern's `)` closes the substitution early. The word in an
-  argument or a commit message does not. A substitution where a command starts, at the
-  start of a line or after `;`, `&` or `|`, is also read over the raw text with only its own
-  line's quotes, as the check read it before substitutions were carried; that second
-  reading can only add a refusal (an apostrophe on an earlier line cannot hide it). A
-  recursive delete whose target comes from a substitution is judged by the literal part in
-  front of it (`/$(...)`, `"$HOME/$(...)"`, and a quoted `"$(...)"` that names one
-  unreadable path, are refused).
+  comment or a backtick holding a `)` moves where it closes), so every `$((`, and an
+  arithmetic command `(( ... ))`, is read as arithmetic and as a command, and refused when
+  either reading is (`echo $((rm -rf /) )`, `echo $((rm -rf /))`). Real arithmetic names no
+  program, so it passes (`make -j$(($(nproc)+1))`, `(( $(wc -l < f) > 5 ))`); where the
+  parentheses show bash evaluates it, a substitution in front (`$(nproc)+1`) is an operand
+  there, not a program. A backtick inside `$(( ))` is refused (write `$(...)` instead:
+  `echo $(( $(date +%s) - 10 ))`). The legacy `$[...]` is only ever arithmetic, and its
+  substitutions are read.
+- **`case`.** A `case` statement inside a substitution (the reserved word where a command
+  starts, at the start, after `;`, `&&`, `||`, `|`, a newline, or after `if`, `while`,
+  `until`, `then`, `do`, `else`, `{`, `!`, `time`, followed by exactly one shell word and
+  `in`) refuses the command: a pattern's `)` closes the substitution early. The word in an
+  argument, a commit message, or at the start of a line of prose ("case 2 is covered")
+  does not. A recursive delete whose target comes from a substitution is judged by the
+  literal part in front of it (`/$(...)`, `"$HOME/$(...)"`, and a quoted `"$(...)"` that
+  names one unreadable path, are refused).
+- **Nothing refused before is lost.** Every verdict is joined with the FROZEN reading
+  (`vaf/core/command_reading_frozen.py`, the check as it read commands before
+  substitutions were carried, pinned by a hash): a command is refused whenever either
+  reading refuses, with both readings' categories. Every earlier attempt to construct the
+  new reading so that it kept all old refusals lost some that bash runs, found by
+  generators; the union makes it impossible by construction (300 000 generated commands
+  on three lanes, measured against the earlier module: no exception). Its price: what the
+  frozen reading over-refused stays refused (`echo 'a; $(x)'`, words after a closed
+  substitution such as `echo $(true) mkfs x`, a heredoc line that starts with a
+  substitution or a code fence), and the refusal says to join the lines or write the text
+  to a file.
 - **Pipes.** A pipe reaches through a carried command at both ends: `curl ... | uv run bash`
   and `uv run curl ... | bash` are a fetch piped into a shell like the same pipe without the
   runner, and so are `curl ... | (bash)`, `curl ... | echo $(bash)`,
@@ -867,9 +880,15 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   command joined back into text; those candidates, and both readings of a `$((`, may add up
   to the command's own length plus 64 KB, and past that the command is refused the same
   way. Empty parentheses spend no reading. The fork-bomb search is three plain searches.
-  Measured, single process: every shape at most 0.5 s at 100 KB and 3.7 s at 1 MB
-  (`npx --x y ...` took 10 s and 78 s before; the fork-bomb shape `":(){ |:& "` repeated
-  1.6 s at 8 KB and 11 s at 16 KB before).
+  The frozen reading gets fewer readings for a long command (as many as fit into 256 KB of
+  text read, at least 2); a spent budget refuses. A command over 128 KB is refused as
+  unreadable before either reading (`too_long`: write the text to a file and run the
+  file): both readings together, with shlex's own tokenizer quadratic on one long word,
+  took up to 44 s at 1 MB, and nobody approving it can read it either. Measured, single
+  process, both readings: every shape at most 0.9 s at 100 KB, and 0.63 s for `x=`
+  repeated to the 128 KB limit (`npx --x y ...` took 10 s at 100 KB before; the fork-bomb
+  shape `":(){ |:& "` repeated 1.6 s at 8 KB and 11 s at 16 KB before, 0.06 s and 0.12 s
+  now).
 - **Named boundary: what it does not read.** The shell's compound grammar at the top level:
   brace groups (`curl x | { bash; }`), `if`/`for`/`while`/`case`, variables and `${...}` as
   the program, ANSI-C quoting (`$'...'`), globs and brace expansion in the program name,
@@ -877,14 +896,20 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   wrappers that take a command string of their own (`env -S`, `watch`, `find -exec`). Text
   that reaches a shell another way than its own arguments, a here-string or a substitution:
   a literal piped in (`echo 'rm -rf /' | bash`), `xargs -I{} sh -c {}`, a coprocess, a named
-  pipe, a script file an earlier command wrote and a later one runs. Arithmetic evaluates an
+  pipe, a script file an earlier command wrote and a later one runs. Carriers it does not
+  step over (`flock`, `strace`, `chroot`, `busybox`, `runuser`, `coproc`) hide the command
+  they run, also behind a substitution (`flock f $(true) cmd`), as their plain forms did
+  before. A descriptor named through a variable (`exec {fd}< ...; bash /dev/fd/$fd`) is not
+  followed. Arithmetic evaluates an
   array subscript in a variable's value as code (`x='a[$(...)]'; echo $((x))`,
   `printf -v 'a[$(...)]'`), which the text does not show.
 - **Named boundary: comments and heredocs.** A `#` is not read as a comment, and `<<` opens
   no heredoc for the check: nothing is hidden behind either, and every line of a heredoc
-  body is read as a command line. So dangerous-looking prose in a body is refused
-  (`cat <<'EOF'` with "rm -rf /" in its text; inside a substitution, a body line that starts
-  with the word `case` too), and an apostrophe in a comment or in a body opens a quote that
+  body is read as a command line. So a body line that STARTS with what reads as a command
+  is refused (`rm -rf / was the bug`; inside a substitution, a line that reads as a `case`
+  statement too), while one that only mentions it is not (`Fix: rm -rf / no longer runs`);
+  to write such text into a file use the file tool or `echo '...' >> FILE`, which the
+  refusal says. An apostrophe in a comment or in a body opens a quote that
   swallows every later line, as before this check read substitutions; a comment that ends
   in a backslash joins the next line to it. A reading of comments and heredoc bodies that
   hid their text was measured to lose refusals bash runs, so the rule for any later one is:

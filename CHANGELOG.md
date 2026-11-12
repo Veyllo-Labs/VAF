@@ -145,22 +145,30 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   - instead of `"$(which python3)" -m pytest` write `python3 -m pytest`
   - instead of `./scripts/$(whoami).sh` run `whoami` first and write the name:
     `./scripts/alice.sh`
-  - instead of `uv run --with $(cat FILE) pytest` write `uv run --with=$(cat FILE) pytest`
+  - instead of `uv run --with $(cat FILE) pytest` or `uv run --with=$(cat FILE) pytest`
+    write `uv run --with="$(cat FILE)" pytest` (unquoted, the value is split into words the
+    runner reads as more arguments)
   - instead of `bash -c "$(curl -fsSL URL)"` download first and run the file:
     `curl -fsSL -o install.sh URL`, then `bash install.sh`. On a server, through the `ssh`
     tool, `curl -fsSL URL | bash` is allowed, and the tool warns about it.
-- **Also refused now:** a `case` statement inside `$(...)` (write the case as a command of
-  its own; the word "case" in a message or an argument is fine), a backtick inside
+- **Also refused now:** a `case` statement inside `$(...)`, that is `case`, one word and
+  `in` (write the case as a command of its own; the word "case" in a message, an argument
+  or at the start of a sentence is fine), a backtick inside
   `$(( ))` (write `$(...)` instead: `echo $(( $(date +%s) - 10 ))`), a shell reading a
-  descriptor an earlier command opened (`exec 3< <(...); bash /dev/fd/3`: save the script
-  to a file and run the file), and a command with more than 63 nested commands or nested
-  more than four deep (split it into several commands).
-- **Unchanged, and worth knowing:** the check still reads every line of a heredoc as a
-  command line, so a heredoc whose text looks like a dangerous command is refused, also in
-  a commit message written as `git commit -m "$(cat <<'EOF' ... EOF)"`. Rephrase that line,
-  or write the message to a file and use `git commit -F FILE`. An array filled from a
-  command (`arr=($(ls))`) passes, as before.
-- **A text in single quotes is no longer refused by mistake.** `echo 'a; $(x)'` passes.
+  descriptor an earlier command opened (`exec 3< <(...); bash /dev/fd/3` or `bash <&3`:
+  save the script to a file and run the file), a command with more than 63 nested
+  commands or nested more than four deep (split it into several commands), and a command
+  longer than 128 KB (write the text to a file with the file tool and run the file).
+- **Unchanged, and worth knowing:** everything the check refused before is still refused,
+  also where that was over-careful (`echo 'a; $(x)'`). The check still reads every line of
+  a heredoc as a command line, so a line that STARTS with what reads as a command is
+  refused (`rm -rf / was the bug`), also in a commit message written as
+  `git commit -m "$(cat <<'EOF' ... EOF)"`; a line that only mentions one is not
+  (`Fix: rm -rf / no longer runs`). Rephrase that line, or write the message to a file and
+  use `git commit -F FILE`. The same holds for shell setup lines written into a file with a
+  heredoc (`cat >> ~/.bashrc <<'EOF'` with `eval "$(pyenv init -)"`): write them with the
+  file tool or `echo '...' >> ~/.bashrc`. An array filled from a command (`arr=($(ls))`), a
+  Markdown bullet that starts with a code span, and `(( $(wc -l < f) > 5 ))` pass.
 - **An SSH server removed while a call starts is refused instead of trusted with a new key.**
   Only a first connection you confirmed may remember a server's key; a server removed from
   your confirmed servers at that moment is refused, nothing runs, and the next call asks you

@@ -67,8 +67,15 @@ from vaf.core.log_helper import append_domain_log
 # ---------------------------------------------------------------------------
 
 _CDP_WAIT_ABANDONED = "Browser CDP wait abandoned: the run that asked for it has ended"
-_HANDOVER_STOPPED_DETAIL = ("the run was stopped by its owner during the user change; the "
-                            "browser stays unclaimed and is wiped before its next use")
+_HANDOVER_ENDED_DETAIL = ("the run ended during the user change; the browser stays unclaimed "
+                          "and is wiped before its next use")
+
+
+class CdpWaitAbandoned(RuntimeError):
+    """resolve_cdp_ws_url gave up because the run that asked for it has ended (its
+    cancel flag is set), not because the browser failed. A RuntimeError like the
+    deadline's, so every caller that catches that keeps working; its own type lets
+    a caller tell an ended run from a browser failure by the error itself."""
 
 
 def resolve_cdp_ws_url(base: str) -> str:
@@ -98,7 +105,7 @@ def resolve_cdp_ws_url(base: str) -> str:
     while True:
         attempt += 1
         if cancel_requested():
-            raise RuntimeError(_CDP_WAIT_ABANDONED) from last_err
+            raise CdpWaitAbandoned(_CDP_WAIT_ABANDONED) from last_err
         try:
             with _urlreq.urlopen(url, timeout=3) as resp:
                 data = json.loads(resp.read())
@@ -116,7 +123,7 @@ def resolve_cdp_ws_url(base: str) -> str:
             _pause_end = time.monotonic() + min(1.5, max(0.5, 0.5 * attempt))
             while True:
                 if cancel_requested():
-                    raise RuntimeError(_CDP_WAIT_ABANDONED) from last_err
+                    raise CdpWaitAbandoned(_CDP_WAIT_ABANDONED) from last_err
                 _left = _pause_end - time.monotonic()
                 if _left <= 0:
                     break
@@ -1351,8 +1358,10 @@ class InteractiveBrowserManager:
         VAF_BROWSER_MAX_PARALLEL runs at once, and above 1 they share one jar,
         as they always have, and one holder entry: the first run to end releases
         it, so other processes see the browser free while the second run still
-        drives it (and that end also retires a second run still waiting for a
-        probe). The pool is the answer to that, since a per-user instance is only
+        drives it (and that end also retires a second run that has not yet
+        passed the generation check below: one still waiting for a probe, the
+        handover mutex or the previous holder's transfer). The pool is the
+        answer to that, since a per-user instance is only
         ever driven by that user's runs.
 
         `run_generation` is what run_generation() answered after the run passed
@@ -1616,9 +1625,11 @@ class InteractiveBrowserManager:
             self._workspace_wiped()
             append_domain_log(
                 "webui", f"[browser_interactive] {lane} cross-scope handover refused: {e}")
-            # A run stopped mid-handover is refused the same fail-closed way, but
-            # its detail must not read like a browser failure in the security log.
-            detail = (_HANDOVER_STOPPED_DETAIL if cancel_requested() else str(e))[:200]
+            # A run that ended mid-handover is refused the same fail-closed way,
+            # but its detail must not read like a browser failure. Decided by the
+            # error, not by the run's cancel flag: a real failure (a wipe that was
+            # not confirmed) that coincides with the run's end keeps its cause.
+            detail = (_HANDOVER_ENDED_DETAIL if isinstance(e, CdpWaitAbandoned) else str(e))[:200]
             try:
                 from vaf.core.security_events import log_security_event
                 log_security_event("browser_handover_failed",

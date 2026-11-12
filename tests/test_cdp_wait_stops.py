@@ -82,7 +82,7 @@ def test_the_wait_gives_up_within_a_pause_step_of_the_run_ending(clock, refusing
 def test_no_attempt_once_the_run_has_ended(clock, refusing):
     """MUTATION: ask the flag only after the attempt (one more dial of a run that is over)."""
     with cancel_when(lambda: True):
-        with pytest.raises(RuntimeError, match="abandoned"):
+        with pytest.raises(bi.CdpWaitAbandoned, match="abandoned"):
             bi.resolve_cdp_ws_url("http://localhost:9222")
     assert refusing == []
 

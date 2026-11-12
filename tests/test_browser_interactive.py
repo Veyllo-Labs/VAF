@@ -2079,6 +2079,8 @@ def test_a_failed_wipe_refuses_the_lease_and_emits_a_security_event(mgr, monkeyp
     assert res["status"] == "error" and res["reason"] == "handover_failed"
     assert mgr._lease is None
     assert [k for k, _ in events] == ["browser_handover_failed"]
+    # The cause stays readable in the security log: a failed wipe is a failed wipe.
+    assert events[0][1].get("detail") == "profile wipe not confirmed", events
     # Neither the tracker nor the cross-process record names a new owner, so
     # the next attempt re-enters the wipe branch instead of trusting the jar.
     assert mgr._last_cookie_scope is None
@@ -2960,9 +2962,14 @@ def test_a_handover_whose_run_already_ended_starts_nothing(mgr, monkeypatch):
     _cut_left_nothing_and_the_next_holder_wipes(mgr, instance, wipes)
 
 
-def test_a_stopped_cross_user_handover_says_so_in_the_security_log(mgr, monkeypatch):
-    """The refusal stays a security event, but its detail names the stop instead of
-    a browser failure. MUTATION: log `str(e)` as the detail again."""
+# The real resolver, taken before the `mgr` fixture replaces it with a stub.
+_real_resolve_cdp_ws_url = bi.resolve_cdp_ws_url
+
+
+def _cross_user_handover_events(mgr, monkeypatch, *, wipe_confirms, clear_cookies):
+    """scope-b's run hands the browser over from scope-a inside a cancel scope that is
+    set the moment the wipe starts (the run ends during the user change). Returns the
+    security events as (kind, detail)."""
     from vaf.core.bounded_run import cancel_when
     _no_ipc_tasks(monkeypatch)
     _owned_by_scope_a(mgr)
@@ -2970,18 +2977,41 @@ def test_a_stopped_cross_user_handover_says_so_in_the_security_log(mgr, monkeypa
     import vaf.core.security_events as se
     monkeypatch.setattr(se, "log_security_event",
                         lambda kind, **kw: events.append((kind, kw.get("detail"))))
-    stopped = threading.Event()
+    ended = threading.Event()
 
-    def _cookie_op_of_a_run_that_is_stopped(base, op, cookies=None):
-        if op == "clear_cookies":
-            stopped.set()
-            raise RuntimeError(bi._CDP_WAIT_ABANDONED)
+    def _wipe(name, cdp_base=""):
+        ended.set()
+        return wipe_confirms
 
-    monkeypatch.setattr(bi, "_cookie_op", _cookie_op_of_a_run_that_is_stopped)
+    monkeypatch.setattr(bi, "verified_profile_wipe", _wipe)
+    monkeypatch.setattr(bi, "_cookie_op", clear_cookies)
     mgr.stop_for_agent_run()
-    with cancel_when(stopped.is_set):
+    with cancel_when(ended.is_set):
         with pytest.raises(bi.BrowserHandoverError):
             mgr.hand_jar_to_run(user_scope_id="scope-b", run_generation=mgr.run_generation())
     mgr.agent_run_ended()
-    assert events == [("browser_handover_failed", bi._HANDOVER_STOPPED_DETAIL)], events
-    assert "stopped by its owner" in bi._HANDOVER_STOPPED_DETAIL
+    return events
+
+
+def test_a_cross_user_handover_whose_run_ended_says_so_in_the_security_log(mgr, monkeypatch):
+    """The refusal stays a security event, but its detail names the run's end instead of
+    a browser failure. The cookie clear waits for DevTools through the real resolver,
+    which gives up with CdpWaitAbandoned, without a dial, because the run has ended.
+    MUTATION: log `str(e)` as the detail again. MUTATION: let resolve_cdp_ws_url raise
+    a plain RuntimeError again (the ended run can no longer be told from a failure)."""
+    def _clear_cookies_over_devtools(base, op, cookies=None):
+        _real_resolve_cdp_ws_url(base)
+
+    events = _cross_user_handover_events(mgr, monkeypatch, wipe_confirms=True,
+                                         clear_cookies=_clear_cookies_over_devtools)
+    assert events == [("browser_handover_failed", bi._HANDOVER_ENDED_DETAIL)], events
+    assert bi._HANDOVER_ENDED_DETAIL.startswith("the run ended during the user change")
+
+
+def test_a_real_failure_keeps_its_cause_when_the_run_ends_at_the_same_time(mgr, monkeypatch):
+    """The wipe is not confirmed while the run's end arrives (the marker poll cannot be
+    cut): the security event must carry the real failure, not the run's end.
+    MUTATION: choose the detail by the run's cancel flag (`cancel_requested()`)."""
+    events = _cross_user_handover_events(mgr, monkeypatch, wipe_confirms=False,
+                                         clear_cookies=lambda *a, **k: None)
+    assert events == [("browser_handover_failed", "profile wipe not confirmed")], events

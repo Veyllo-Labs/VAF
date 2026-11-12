@@ -948,11 +948,13 @@ partition:
   jar and one holder entry (the first run to end releases it, so other processes see
   the browser free while the second run still drives it), and a second VAF
   installation under another OS account that drives the same container keeps a
-  record of its own - the pool is the answer to both. A run's end cuts only its own
-  waits: a stopped run's handover and DevTools waits are armed with that run's own
-  end, never with the browser's run counter, so one run ending never cuts another
-  run's handover mid-wipe. A stopped cross-user handover is refused like a failed one:
-  the owner record is already cleared, so the next holder wipes first.
+  record of its own - the pool is the answer to both. A run that ends no longer cuts
+  another run's waits: the waits of a run's handover and DevTools resolve end with
+  that run's own end, never with the browser's run counter. A parallel run that has
+  not yet passed the handover's generation check is still refused when another run
+  ends, as named in `hand_jar_to_run`. A cross-user handover whose run ends is refused
+  like a failed one: the owner record is already cleared, so the next holder wipes
+  first.
   Downloads are not a residual: finished ones are swept to their owner's
   `VAF_Projects/<uid8>/Downloads`
   through the threat funnel (origin `browser_download`), only while that folder is an

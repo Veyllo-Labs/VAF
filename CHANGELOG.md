@@ -169,7 +169,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   also where that was over-careful (`echo 'a; $(x)'`, where the message now says to put
   the substitution's result into a variable first). Writing a file through a heredoc
   (`cat > app.js <<'EOF' ... EOF`) is judged as before: the new checks treat its body as the
-  file's text. As before, a heredoc line is still refused when it STARTS with what reads as a
+  file's text. New is only the unquoted heredoc (`<<EOF`) whose body holds `$(...)` as a
+  command in a shell script or inside a code span: the shell expands it while it writes the
+  text, so it is refused; quote the delimiter (`<<'EOF'`) when the text must stay as
+  written, or write the file with the file tool.
+  As before, a heredoc line is still refused when it STARTS with what reads as a
   command or a substitution: a line like `rm -rf / was the bug`, a line that starts with a
   code span or `$(...)`, and a fenced code block, also in a commit or PR message written
   as `git commit -m "$(cat <<'EOF' ... EOF)"`; a line that only mentions one is not

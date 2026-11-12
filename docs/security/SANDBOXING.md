@@ -820,8 +820,10 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   `poetry run --quiet`, `conda run --no-capture-output`, `pipx run --quiet`; the table
   `_VALUELESS_RUNNER_FLAGS`) the next word is the program, so
   `uv run --frozen pytest $(git ls-files tests)` passes. The npx and npm rows are read from
-  npm's own source; the others rest on each tool's documentation, since none of those
-  tools was installed where the table was measured. After a flag the table does not know,
+  npm's own parser (npx-cli's argument loop, then nopt with npm's types: the next word stayed
+  the package for every listed flag); the others rest on each tool's documentation, since
+  none of those tools was installed where the table was measured.
+  After a flag the table does not know,
   the next word may be its value or the program, and a substitution after it is refused
   with the way out: put its result into a variable first
   (`files=$(git ls-files tests); uv run --frozen pytest $files`), or, if the flag takes a
@@ -940,10 +942,17 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   written through `cat > f <<'EOF'` passes whenever the frozen reading lets it (300 of 300
   measured repository files did). An unquoted body's substitutions are read as commands,
   and a body fed to a shell (`bash <<'EOF'`) is that shell's script, read after the body's
-  own escapes (`\$(...)` runs there). A `<<` after a `#` that starts a word opens no
-  heredoc (`echo ok # <<X`): bash ignores the comment and runs the next lines, so they
-  are read as commands. For an unquoted heredoc whose body is expanded, the refusal also
-  offers quoting the delimiter (`<<'EOF'`) where that passes. Its accepted cost: a heredoc
+  own escapes (`\$(...)` runs there). A `<<` after a `#` that starts a comment for bash
+  opens no heredoc (`echo ok # <<X`, also `;#`, `|#`, a tab before it, or after a line
+  continuation; a `;` inside the comment does not end it): bash ignores the rest of the
+  line and runs the next lines, so they are read as commands. A `#` that starts no comment
+  for bash leaves the heredoc open: inside a word (`a#b`, `$#`, `16#ff`), after an escaped
+  blank (`a\ #b`), inside `${...}`, `$(...)` or a backtick pair, or after `\v`. For an
+  unquoted heredoc whose body is expanded, the refusal also offers quoting the delimiter
+  (`<<'EOF'`) when the heredoc is written as text (`cat > f <<EOF`, `tee f <<EOF`) and the
+  frozen reading lets the command pass; never when a shell, `eval` or `source` reads it
+  (`bash <<EOF`, `sudo sh <<EOF`, `cat <<EOF | bash`), whose quoted body is a script all
+  the same. For a writer's program refusal it comes first. Its accepted cost: a heredoc
   piped into a shell is not checked for substitutions inside its body
   (`cat <<'EOF' | bash` with `eval "$(...)"` in it), as on main; a dangerous command line
   in it is still refused. The rule for any

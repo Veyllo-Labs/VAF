@@ -91,6 +91,10 @@ def smoke_app(monkeypatch, tmp_path):
                         type("M", (), {"__init__": lambda self, *a, **k: None,
                                        "save": lambda self, s, **k: None,
                                        "list": lambda self, **k: []}))
+    # The module's shared manager is built from SessionManager on first use: without this a
+    # stub built during the test stays the shared manager for every later test, whose
+    # sessions then cannot be read back (the workspace resolver answered "").
+    monkeypatch.setattr(session_mod, "_manager", None)
     monkeypatch.setattr(speech_mod, "get_speech_manager",
                         lambda: SimpleNamespace(stop=lambda: None))
     # No real IPC files in a test: the poll returns an empty board.

@@ -862,11 +862,13 @@ class VafApp(App):
         from vaf.cli.tui_app.widgets import PeerMessage
         try:
             from vaf.core.app_link import room
-            from vaf.core.config import get_local_admin_scope_id
+            from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
             scope = str(get_local_admin_scope_id() or "")
-            lines = room.transcript(scope)
-        except Exception as exc:
-            self.add_event_note("Veyllo App", f"not available: {exc}", "warning")
+            # The account's name, so VAF's agent shows under its persona name as in the web UI.
+            lines = room.transcript(scope, str(get_local_admin_username() or ""))
+        except Exception:
+            self.add_event_note("Veyllo App", "the room cannot be read right now; try again "
+                                "in a moment, or open it in the web UI", "warning")
             return
         if not lines:
             self.add_system_note("Veyllo App: nothing written yet. Write to the agent in your "
@@ -878,8 +880,13 @@ class VafApp(App):
             badge = f"to {line['toLabel']}" if line.get("toLabel") else ""
             if line.get("state"):
                 badge += f" · {line['state'].replace('_', ' ')}"
+            if line.get("pending"):
+                badge += " · waiting for the answer"
+            text = line["text"]
+            if line.get("code") == "turn_failed":
+                text = f"{line['label']} could not answer this message."
             self._mount_scrolled(PeerMessage(
-                line["label"] or "Veyllo App", line["text"], badge=badge,
+                line["label"] or "Veyllo App", text, badge=badge,
                 kind=line.get("kind") or "say", when=_room_clock(line.get("ts"))))
 
     @on(SessionsPanel.Selected)

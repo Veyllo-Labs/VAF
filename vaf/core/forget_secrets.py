@@ -32,7 +32,10 @@ The sinks, in the order a value reaches them:
   word-suggestion corpus, the Telegram bridge (which tries to delete the person's message there), the
   web chat (which drops its cached copy), and the chat's live record (`vaf/core/live_view.py`,
   the streamed text, tool results, worker lines and the queued prompt a browser is shown when it
-  opens the chat again), which is scrubbed at once and scrubs every later event of the chat.
+  opens the chat again), which is scrubbed at once and scrubs every later event of the chat;
+- the Veyllo App room's waiting questions (vaf/core/app_link/room.py), shown from the queue until
+  the turn is stored: their text is scrubbed with the chat's forgotten values whenever the room
+  is built, and a forget rebuilds the room's cached projection (the values are part of its key).
 
 NAMED BOUNDARIES - where the value stays, stated so nobody promises more:
 - the model provider received the turn;

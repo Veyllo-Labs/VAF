@@ -115,22 +115,23 @@ def agent_label(username: str) -> str:
 
 
 def handle(username: str) -> str:
-    """The one word after "@" that always reaches VAF's agent: the first word of its name
-    (without trailing punctuation), or "VAF"."""
-    words = agent_label(username).split()
-    first = words[0].rstrip(",:;") if words else ""
-    return first or "VAF"
+    """The one word after "@" that always reaches VAF's agent: the first run of letters and
+    digits (of any script) of its name ("Mia Lisa" -> "Mia", "Dr. Mia" -> "Dr", "Mia." ->
+    "Mia"), or "VAF"."""
+    import re
+    found = re.search(r"[^\W_]+", agent_label(username))
+    return found.group(0) if found else "VAF"
 
 
 def addressee(text: Any, username: str) -> str:
     """Who a line the person writes on VAF is for: VAF's agent when it starts with "@" and the
-    first word of that agent's name (``handle``; a name of several words written out begins
-    with it too) or "VAF", case-insensitive and as a whole word ("@Miami" does not name Mia);
-    the agent in the Veyllo App otherwise. The word is the agent rooms' leading mention
-    (a2a.room.leading_mention)."""
-    from vaf.core.a2a.room import leading_mention
-    name = (leading_mention(text) or "").lower()
-    if name and name in {"vaf", handle(username).lower()}:
+    ``handle`` of that agent's name (a name of several words written out begins with it too)
+    or "VAF", case-insensitive, followed by the end of the line or anything that is not a
+    letter or digit ("@Miami" does not name Mia, "@Mia." and "@Mia：" do); the agent in the
+    Veyllo App otherwise: the agent rooms' leading-mention rule for a known name
+    (a2a.room.mentions_at_start)."""
+    from vaf.core.a2a.room import mentions_at_start
+    if mentions_at_start(text, handle(username)) or mentions_at_start(text, "VAF"):
         return VAF_AGENT
     return APP_AGENT
 
@@ -290,11 +291,73 @@ def _pending_turns(sids: Tuple[str, str]) -> List[Tuple[str, Any]]:
     return out
 
 
+#: The note a wake leaves in the room, by its kind (task_queue.WAKE_KINDS), in English for the
+#: terminal; the web words it by ``code``.
+WAKE_NOTES = {"timer": "A timer fired.", "process": "A background command finished.",
+              "draft": "A draft was sent.", "confirm": CONFIRMED_NOTE}
+
+
+def _legacy_wake_prefixes() -> Tuple[Tuple[str, str], ...]:
+    from vaf.core.app_link.confirmations import CONFIRM_WAKE_PREFIX
+    from vaf.core.outbound_hold import DRAFT_WAKE_PREFIX
+    return (("timer", "⏰ Timer fired"), ("process", "⚙ Background command finished"),
+            ("draft", DRAFT_WAKE_PREFIX), ("confirm", CONFIRM_WAKE_PREFIX))
+
+
+def _stored_wake(kind: Any, content: str) -> Optional[str]:
+    """The wake kind of a stored user line: its stored kind, or, for a line stored before
+    wakes carried one and only when it has no kind, how its text begins (the web chat's rule
+    for the same lines)."""
+    if kind in WAKE_NOTES:
+        return str(kind)
+    if kind is None:
+        for wake, prefix in _legacy_wake_prefixes():
+            if content.startswith(prefix):
+                return wake
+    return None
+
+
+def _pending_author(sid: str, sids: Tuple[str, str], task: Any) -> Optional[str]:
+    """Who a turn that runs or waits is shown as: ``person`` for a line the person wrote (in
+    the app chat, from the Veyllo App lane, carrying the message id that the bridge's message
+    handler and ``post`` set), ``app_agent`` for a request of the app's agent (its request
+    session, ``app_agent_ask``), a wake kind (a note), or None for anything else (the
+    compaction, a system command, a turn some other lane queued), which the room does not
+    show."""
+    from vaf.core.task_queue import is_system_command, wake_kind
+    meta = getattr(task, "metadata", None) or {}
+    if is_system_command(task) or meta.get("compaction"):
+        return None
+    wake = wake_kind(meta)
+    if wake:
+        return wake if wake in WAKE_NOTES else None
+    if getattr(task, "source", None) != CHANNEL:
+        return None
+    if sid == sids[1]:
+        return APP_AGENT if meta.get("app_agent_ask") else None
+    if meta.get("app_agent_ask"):
+        return None
+    if meta.get("channel_message_id") or meta.get("app_message_id"):
+        return PERSON
+    return None
+
+
+def _forgotten(session_id: str) -> Dict[str, str]:
+    """The credentials forgotten in this chat (forget_secrets.session_env), or {}."""
+    try:
+        from vaf.core.forget_secrets import session_env
+        return dict(session_env(session_id))
+    except Exception:
+        return {}
+
+
 def _cache_key(scope: str, username: str, sids: Tuple[str, str],
                pending: List[Tuple[str, Any]]) -> Tuple:
     return (agent_label(username), _file_signature(sids[0]), _file_signature(sids[1]),
             devices.generation(), lane_on(scope),
-            tuple(str(getattr(t, "turn_id", "")) for _sid, t in pending))
+            tuple(str(getattr(t, "turn_id", "")) for _sid, t in pending),
+            # A credential forgotten in the chat changes what a waiting question shows.
+            hash(tuple(sorted(_forgotten(sids[0]).items()))))
 
 
 def _projection(scope: str, username: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
@@ -338,7 +401,6 @@ def transcript(user_scope_id: Any, username: str = "",
 
 def _build(scope: str, username: str, sids: Tuple[str, str],
            pending: List[Tuple[str, Any]]) -> List[Dict[str, Any]]:
-    from vaf.core.app_link.confirmations import CONFIRM_WAKE_PREFIX
     from vaf.core.completion import strip_think_blocks
     from vaf.core.session import ASKED_AT_KEY, TURN_ID_KEY, is_failed_turn, model_text
     labels = {PERSON: "You", VAF_AGENT: agent_label(username), APP_AGENT: TITLE}
@@ -348,6 +410,9 @@ def _build(scope: str, username: str, sids: Tuple[str, str],
     turn_anchor: Dict[str, Tuple[float, int]] = {}
     deferred: List[Tuple[str, int, float, int, Dict[str, Any]]] = []
     stored_turns = set()
+
+    def _note(lid: str, wake: str, ts: float) -> Dict[str, Any]:
+        return _line(lid, "", "", WAKE_NOTES[wake], ts, kind="note", code=wake)
 
     def _line(lid: str, peer: str, to: str, text: str, ts: float, kind: str = "say",
               **extra) -> Dict[str, Any]:
@@ -400,12 +465,13 @@ def _build(scope: str, username: str, sids: Tuple[str, str],
                     ts = float(asked)
                 if turn:
                     stored_turns.add(turn)
-                # A confirmation's wake is stored with its own kind (older ones without a kind
-                # and with the prefix); a request of the app's agent is that agent's text,
-                # whatever it begins with.
-                if ask and (kind == origin.APP_CONFIRM_KIND
-                            or (kind is None and content.startswith(CONFIRM_WAKE_PREFIX))):
-                    line = _line(lid, "", "", CONFIRMED_NOTE, ts, kind="note")
+                # A wake (a timer, a background command, a draft sent, a confirmation) is
+                # nobody's words: a neutral note, by its stored kind, or for a line stored
+                # before the kind by how its text begins and only without a kind. A request of
+                # the app's agent is that agent's text, whatever it begins with.
+                wake = _stored_wake(kind, content)
+                if wake:
+                    line = _note(lid, wake, ts)
                 elif ask or kind == origin.APP_AGENT_KIND:
                     line = _line(lid, APP_AGENT, VAF_AGENT, content, ts)
                 else:
@@ -427,18 +493,30 @@ def _build(scope: str, username: str, sids: Tuple[str, str],
                 lines.append(((ts, seq, 0, 0), line))
     # The questions and requests whose turn runs or waits: the runner stores them with the
     # answer, so until then they come from the queue, at the time they were asked.
+    # Only a turn a person or the app's agent started is shown as their words, by the marks
+    # the lanes that start them set (`_pending_author`); a wake is a neutral note, anything
+    # else (the compaction, a system command) is not shown. Its text is shown with the
+    # chat's forgotten credentials replaced, like every other copy of the chat.
+    from vaf.core.forget_secrets import scrub_text
+    forgotten = _forgotten(sids[0])
     for order, (sid, task) in enumerate(pending):
         turn = str(getattr(task, "turn_id", "") or "")
-        meta = getattr(task, "metadata", None) or {}
         text = str(getattr(task, "input_text", "") or "").strip()
-        if not turn or turn in stored_turns or not text or meta.get("app_confirm_id"):
+        if not turn or turn in stored_turns or not text:
+            continue
+        author = _pending_author(sid, sids, task)
+        if author is None:
             continue
         ts = float(getattr(task, "created_at", 0) or 0)
         seq = 2_000_000 + order
-        if sid == sids[1] or meta.get("app_agent_ask"):
-            line = _line(f"turn:{turn}", APP_AGENT, VAF_AGENT, text, ts, pending=True)
+        if author in WAKE_NOTES:
+            line = _note(f"turn:{turn}", author, ts)
+        elif author == APP_AGENT:
+            line = _line(f"turn:{turn}", APP_AGENT, VAF_AGENT, scrub_text(text, forgotten), ts,
+                         pending=True)
         else:
-            line = _line(f"turn:{turn}", PERSON, VAF_AGENT, text, ts, pending=True)
+            line = _line(f"turn:{turn}", PERSON, VAF_AGENT, scrub_text(text, forgotten), ts,
+                         pending=True)
             turn_anchor.setdefault(turn, (ts, seq))
         lines.append(((ts, seq, 0, 0), line))
     for turn, seq, ts, order, line in deferred:
@@ -596,6 +674,18 @@ def _say_budget_ok(scope: str, size: int, now: Optional[float] = None) -> bool:
         return True
 
 
+def _say_refund(scope: str, size: int) -> None:
+    """Give back the newest charge of ``size`` bytes (a line that was not stored)."""
+    with _lock:
+        spent = _say_bytes.get(scope)
+        if not spent:
+            return
+        for index in range(len(spent) - 1, -1, -1):
+            if spent[index][1] == size:
+                del spent[index]
+                return
+
+
 def on_room_say(session, row: Dict[str, Any], message: Dict[str, Any]) -> None:
     """A line the app's agent wrote into the room: stored once in the app chat, acknowledged,
     and the account's views told. No turn of VAF's agent is queued, whatever the text says."""
@@ -627,6 +717,8 @@ def on_room_say(session, row: Dict[str, Any], message: Dict[str, Any]) -> None:
         meta["reply_to"] = message["reply_to"]
     if not _append(scope, text, role="user",
                    kind=origin.APP_ROOM_IN_KIND, meta=meta):
+        # Not stored: the bytes go back to the hour's budget, so a retry is not charged twice.
+        _say_refund(scope, len(text.encode("utf-8")))
         return
     bridge._remember(did, mid)
     session.send_json({"t": "ack", "id": mid})

@@ -24,7 +24,7 @@ from vaf.core.channels import CHAT_CHANNELS, CHAT_SESSION_PREFIXES
 from vaf.core.channel_ingress_policy import CHANNEL_TASK_SOURCES
 from vaf.core.identity_binding import (Identity, identity_from_metadata,
                                        resolve_scope_identity)
-from vaf.core.task_queue import TaskQueue, is_system_command
+from vaf.core.task_queue import WAKE_KINDS, TaskQueue, is_system_command
 from vaf.core.turn_binding import (TurnBinding, TurnRefused, bind_turn, end_turn,
                                    room_turn_marker)
 from vaf.core.subagent_ipc import take_result_notification
@@ -1251,6 +1251,17 @@ def _vllm_start_refusal() -> str:
         return ""
 
 
+def _chat_lock(session_id):
+    """The chat's append lock (`session._append_lock`, the one `append_background_message`
+    holds). Every load, change and save of a chat in this runner holds it, so a line another
+    lane appends in between (a Veyllo App room line, a wake's note) is not overwritten by the
+    older copy. Held only around the in-memory change between the load and the save: never
+    across a model call, a tool call or an await, and never taken twice by one path (it is not
+    re-entrant)."""
+    from vaf.core.session import _append_lock
+    return _append_lock(str(session_id or "").strip())
+
+
 def refuse_turn_without_backend(task, why: str, session_mgr) -> None:
     """Close a turn that has no backend on this installation (inference_profile = api and
     no provider yet): the reason goes to the chat and the turn ends. The exchange is
@@ -1272,21 +1283,26 @@ def refuse_turn_without_backend(task, why: str, session_mgr) -> None:
     except Exception:
         pass
     try:
-        try:
-            session = session_mgr.load(task.session_id)
-        except FileNotFoundError:
-            session = new_session_for_task(task)
-        text = str(getattr(task, "input_text", "") or "").strip()
-        if text:
-            # With its turn id, like every stored question: the live record keeps the prompt
-            # until the turn leaves the queue and recognises the stored copy by it.
-            # The metadata only when there is a turn id, so the question and the refusal are
-            # stored whatever add_message a session object offers.
-            _tid = getattr(task, "turn_id", None)
-            session.add_message(role="user", content=text,
-                                **({"metadata": {TURN_ID_KEY: str(_tid)}} if _tid else {}))
-        session.add_message(role="assistant", content=why)
-        session_mgr.save(session, sync_state=False)
+        with _chat_lock(task.session_id):
+            try:
+                session = session_mgr.load(task.session_id)
+            except FileNotFoundError:
+                session = new_session_for_task(task)
+            text = str(getattr(task, "input_text", "") or "").strip()
+            if text:
+                # With its turn id, like every stored question: the live record keeps the prompt
+                # until the turn leaves the queue and recognises the stored copy by it. And
+                # when it was asked, like the turn-end store. The metadata only when there is a
+                # turn id, so the question and the refusal are stored whatever add_message a
+                # session object offers.
+                _tid = getattr(task, "turn_id", None)
+                _qmeta = {TURN_ID_KEY: str(_tid)} if _tid else {}
+                if _tid and getattr(task, "created_at", None):
+                    _qmeta[ASKED_AT_KEY] = float(task.created_at)
+                session.add_message(role="user", content=text,
+                                    **({"metadata": _qmeta} if _qmeta else {}))
+            session.add_message(role="assistant", content=why)
+            session_mgr.save(session, sync_state=False)
     except Exception as e:
         append_domain_log_always("headless", f"refused turn not stored for {task.session_id}: "
                                              f"{type(e).__name__}: {e}")
@@ -2129,26 +2145,27 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         or meta.get("whatsapp_chat_jid") is not None
                     ):
                         try:
-                            session = session_mgr.load(task.session_id)
-                            # Conditional: only stamp the owner scope when the session has NONE yet (a new
-                            # session). Never relabel an already-owned session to the task's scope — that
-                            # would let a queued chat take over another user's session. Defense-in-depth
-                            # behind the WS ownership gate (_ws_session_owner_ok).
-                            if meta.get("user_scope_id") is not None and not (session.metadata or {}).get("user_scope_id"):
-                                session.metadata["user_scope_id"] = meta.get("user_scope_id")
-                            if meta.get("username") is not None:
-                                session.metadata["username"] = meta.get("username")
-                            if meta.get("telegram_chat_id") is not None:
-                                session.metadata["telegram_chat_id"] = meta["telegram_chat_id"]
-                            if meta.get("discord_channel_id") is not None:
-                                session.metadata["discord_channel_id"] = meta["discord_channel_id"]
-                            if meta.get("whatsapp_chat_jid") is not None:
-                                session.metadata["whatsapp_chat_jid"] = meta["whatsapp_chat_jid"]
-                            if meta.get("voice_lang"):
-                                session.metadata["voice_lang"] = meta["voice_lang"]
-                            if getattr(task, "source", None) in CHAT_CHANNELS:
-                                session.metadata["source"] = task.source
-                            session_mgr.save(session)
+                            with _chat_lock(task.session_id):
+                                session = session_mgr.load(task.session_id)
+                                # Conditional: only stamp the owner scope when the session has NONE yet (a new
+                                # session). Never relabel an already-owned session to the task's scope — that
+                                # would let a queued chat take over another user's session. Defense-in-depth
+                                # behind the WS ownership gate (_ws_session_owner_ok).
+                                if meta.get("user_scope_id") is not None and not (session.metadata or {}).get("user_scope_id"):
+                                    session.metadata["user_scope_id"] = meta.get("user_scope_id")
+                                if meta.get("username") is not None:
+                                    session.metadata["username"] = meta.get("username")
+                                if meta.get("telegram_chat_id") is not None:
+                                    session.metadata["telegram_chat_id"] = meta["telegram_chat_id"]
+                                if meta.get("discord_channel_id") is not None:
+                                    session.metadata["discord_channel_id"] = meta["discord_channel_id"]
+                                if meta.get("whatsapp_chat_jid") is not None:
+                                    session.metadata["whatsapp_chat_jid"] = meta["whatsapp_chat_jid"]
+                                if meta.get("voice_lang"):
+                                    session.metadata["voice_lang"] = meta["voice_lang"]
+                                if getattr(task, "source", None) in CHAT_CHANNELS:
+                                    session.metadata["source"] = task.source
+                                session_mgr.save(session)
                         except Exception:
                             pass
                     # Channel sessions are intentionally bounded to a short recent history
@@ -2774,29 +2791,30 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # Code viewer: inject current open file with numbered lines into this turn only.
                     # Content is stored in runtime_state by web_server.py and cleared here after use.
                     try:
-                        session_for_cv = session_mgr.load(task.session_id)
-                        cv_file = (getattr(session_for_cv, "runtime_state", None) or {}).get("code_viewer_file") or {}
-                        cv_content = (cv_file.get("content") or "").strip()
-                        if cv_content:
-                            cv_name = cv_file.get("name") or "File"
-                            cv_path = cv_file.get("path") or ""
-                            cv_lines = cv_content.splitlines()
-                            width = len(str(len(cv_lines)))
-                            numbered = "\n".join(
-                                f"{i + 1:>{width}}: {line}" for i, line in enumerate(cv_lines)
-                            )
-                            cv_ext = cv_path.rsplit(".", 1)[-1] if "." in cv_path else ""
-                            cv_block = (
-                                f"--- CURRENTLY OPEN IN CODE VIEWER: {cv_name}"
-                                + (f" ({cv_path})" if cv_path else "")
-                                + f" ({len(cv_lines)} lines) ---\n"
-                                + f"```{cv_ext}\n{numbered}\n```\n"
-                                + "---\n\n"
-                            )
-                            effective_input = cv_block + effective_input
-                            # Clear after injection — frontend will resend next turn if viewer still open
-                            session_for_cv.runtime_state.pop("code_viewer_file", None)
-                            session_mgr.save(session_for_cv, sync_state=False)
+                        with _chat_lock(task.session_id):
+                            session_for_cv = session_mgr.load(task.session_id)
+                            cv_file = (getattr(session_for_cv, "runtime_state", None) or {}).get("code_viewer_file") or {}
+                            cv_content = (cv_file.get("content") or "").strip()
+                            if cv_content:
+                                cv_name = cv_file.get("name") or "File"
+                                cv_path = cv_file.get("path") or ""
+                                cv_lines = cv_content.splitlines()
+                                width = len(str(len(cv_lines)))
+                                numbered = "\n".join(
+                                    f"{i + 1:>{width}}: {line}" for i, line in enumerate(cv_lines)
+                                )
+                                cv_ext = cv_path.rsplit(".", 1)[-1] if "." in cv_path else ""
+                                cv_block = (
+                                    f"--- CURRENTLY OPEN IN CODE VIEWER: {cv_name}"
+                                    + (f" ({cv_path})" if cv_path else "")
+                                    + f" ({len(cv_lines)} lines) ---\n"
+                                    + f"```{cv_ext}\n{numbered}\n```\n"
+                                    + "---\n\n"
+                                )
+                                effective_input = cv_block + effective_input
+                                # Clear after injection — frontend will resend next turn if viewer still open
+                                session_for_cv.runtime_state.pop("code_viewer_file", None)
+                                session_mgr.save(session_for_cv, sync_state=False)
                     except Exception:
                         pass
 
@@ -2806,35 +2824,36 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # attached-images lane. Injected into THIS turn only and cleared, the
                     # code-viewer lifecycle.
                     try:
-                        session_for_bc = session_mgr.load(task.session_id)
-                        bc = (getattr(session_for_bc, "runtime_state", None) or {}).get("browser_context") or {}
-                        bc_url = (bc.get("url") or "").strip()
-                        if bc_url:
-                            bc_sel = (bc.get("selection") or "").strip()
-                            bc_block = (
-                                "--- USER IS IN THE INTERACTIVE BROWSER ---\n"
-                                f"They are currently on this page: {bc_url}\n"
-                                + (f"Text they have selected on the page:\n\"{bc_sel}\"\n" if bc_sel else "")
-                                + "A screenshot of their current view is attached to this message as an image.\n"
-                                # State of the world plus what can be DONE with it. Without the
-                                # second half the model was told where the person is and drew no
-                                # conclusion from it - measured live: asked to open a page and
-                                # wait, it neither knew the person was in the browser nor that it
-                                # could take that same browser over.
-                                + "To act in this browser yourself - open a page, click, wait, read "
-                                  "something back - call the browser_agent tool. It drives THIS "
-                                  "browser: it takes over from the user for the length of the run "
-                                  "and hands control back when it finishes, and it sees whatever "
-                                  "the user is logged into.\n"
-                                + "Taking over CONTINUES the user's session: the run is told which "
-                                  "page they were on, their tab stays open and their logins stay "
-                                  "live. Phrase the task as continuing there (e.g. 'continue on the "
-                                  "open page and ...'), not as opening the site fresh.\n"
-                                + "---\n\n"
-                            )
-                            effective_input = bc_block + effective_input
-                            session_for_bc.runtime_state.pop("browser_context", None)
-                            session_mgr.save(session_for_bc, sync_state=False)
+                        with _chat_lock(task.session_id):
+                            session_for_bc = session_mgr.load(task.session_id)
+                            bc = (getattr(session_for_bc, "runtime_state", None) or {}).get("browser_context") or {}
+                            bc_url = (bc.get("url") or "").strip()
+                            if bc_url:
+                                bc_sel = (bc.get("selection") or "").strip()
+                                bc_block = (
+                                    "--- USER IS IN THE INTERACTIVE BROWSER ---\n"
+                                    f"They are currently on this page: {bc_url}\n"
+                                    + (f"Text they have selected on the page:\n\"{bc_sel}\"\n" if bc_sel else "")
+                                    + "A screenshot of their current view is attached to this message as an image.\n"
+                                    # State of the world plus what can be DONE with it. Without the
+                                    # second half the model was told where the person is and drew no
+                                    # conclusion from it - measured live: asked to open a page and
+                                    # wait, it neither knew the person was in the browser nor that it
+                                    # could take that same browser over.
+                                    + "To act in this browser yourself - open a page, click, wait, read "
+                                      "something back - call the browser_agent tool. It drives THIS "
+                                      "browser: it takes over from the user for the length of the run "
+                                      "and hands control back when it finishes, and it sees whatever "
+                                      "the user is logged into.\n"
+                                    + "Taking over CONTINUES the user's session: the run is told which "
+                                      "page they were on, their tab stays open and their logins stay "
+                                      "live. Phrase the task as continuing there (e.g. 'continue on the "
+                                      "open page and ...'), not as opening the site fresh.\n"
+                                    + "---\n\n"
+                                )
+                                effective_input = bc_block + effective_input
+                                session_for_bc.runtime_state.pop("browser_context", None)
+                                session_mgr.save(session_for_bc, sync_state=False)
                     except Exception:
                         pass
 
@@ -2848,48 +2867,49 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # where the person is, without saying what can be done about it, was
                     # measured to change nothing about the model's behaviour.
                     try:
-                        session_for_sw = session_mgr.load(task.session_id)
-                        sw_kind = ((getattr(session_for_sw, "runtime_state", None) or {})
-                                   .get("subagent_window") or "").strip()
-                        _SW = {
-                            "coder": ("the Coder", "coding_agent",
-                                      "writing and changing code in a project, running its "
-                                      "tests and checking the page it built. If the context "
-                                      "line above names a folder the user PICKED as the "
-                                      "project, pass that absolute path to coding_agent as "
-                                      "project_path so the run continues there instead of "
-                                      "creating a fresh project"),
-                            "research": ("the Researcher", "research_agent",
-                                         "digging through many sources and coming back with a "
-                                         "written, sourced answer"),
-                            "document": ("the Document Writer", "document_agent",
-                                         "drafting and editing long documents, reports and letters"),
-                            "librarian": ("the Librarian", "librarian_agent",
-                                          "finding its way around the user's files: searching, "
-                                          "sorting, tidying and reporting what is where"),
-                        }
-                        if sw_kind in _SW:
-                            _label, _tool, _does = _SW[sw_kind]
-                            sw_detail = ((getattr(session_for_sw, "runtime_state", None) or {})
-                                         .get("subagent_window_detail") or "").strip()
-                            sw_block = (
-                                f"--- USER HAS {_label.upper()}'S WINDOW OPEN ---\n"
-                                f"They opened it themselves, so their message is most likely "
-                                f"about that work even when they do not name it.\n"
-                                + (f"Right now they are: {sw_detail}\n" if sw_detail else "")
-                                + f"{_label} handles {_does}.\n"
-                                f"To do that work, call the {_tool} tool - its run appears in "
-                                f"the window they are already looking at, so they watch it "
-                                f"happen rather than waiting on a silent reply.\n"
-                                f"An open window does NOT mean a run is going. If one already "
-                                f"is, you are told separately - then keep chatting and do not "
-                                f"start a second one.\n"
-                                f"---\n\n"
-                            )
-                            effective_input = sw_block + effective_input
-                            session_for_sw.runtime_state.pop("subagent_window", None)
-                            session_for_sw.runtime_state.pop("subagent_window_detail", None)
-                            session_mgr.save(session_for_sw, sync_state=False)
+                        with _chat_lock(task.session_id):
+                            session_for_sw = session_mgr.load(task.session_id)
+                            sw_kind = ((getattr(session_for_sw, "runtime_state", None) or {})
+                                       .get("subagent_window") or "").strip()
+                            _SW = {
+                                "coder": ("the Coder", "coding_agent",
+                                          "writing and changing code in a project, running its "
+                                          "tests and checking the page it built. If the context "
+                                          "line above names a folder the user PICKED as the "
+                                          "project, pass that absolute path to coding_agent as "
+                                          "project_path so the run continues there instead of "
+                                          "creating a fresh project"),
+                                "research": ("the Researcher", "research_agent",
+                                             "digging through many sources and coming back with a "
+                                             "written, sourced answer"),
+                                "document": ("the Document Writer", "document_agent",
+                                             "drafting and editing long documents, reports and letters"),
+                                "librarian": ("the Librarian", "librarian_agent",
+                                              "finding its way around the user's files: searching, "
+                                              "sorting, tidying and reporting what is where"),
+                            }
+                            if sw_kind in _SW:
+                                _label, _tool, _does = _SW[sw_kind]
+                                sw_detail = ((getattr(session_for_sw, "runtime_state", None) or {})
+                                             .get("subagent_window_detail") or "").strip()
+                                sw_block = (
+                                    f"--- USER HAS {_label.upper()}'S WINDOW OPEN ---\n"
+                                    f"They opened it themselves, so their message is most likely "
+                                    f"about that work even when they do not name it.\n"
+                                    + (f"Right now they are: {sw_detail}\n" if sw_detail else "")
+                                    + f"{_label} handles {_does}.\n"
+                                    f"To do that work, call the {_tool} tool - its run appears in "
+                                    f"the window they are already looking at, so they watch it "
+                                    f"happen rather than waiting on a silent reply.\n"
+                                    f"An open window does NOT mean a run is going. If one already "
+                                    f"is, you are told separately - then keep chatting and do not "
+                                    f"start a second one.\n"
+                                    f"---\n\n"
+                                )
+                                effective_input = sw_block + effective_input
+                                session_for_sw.runtime_state.pop("subagent_window", None)
+                                session_for_sw.runtime_state.pop("subagent_window_detail", None)
+                                session_mgr.save(session_for_sw, sync_state=False)
                     except Exception:
                         pass
 
@@ -2899,40 +2919,42 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # — same lifecycle as the code viewer, so the description stays in context exactly as
                     # long as the viewer is open.
                     try:
-                        session_for_iv = session_mgr.load(task.session_id)
-                        iv_ctx = (getattr(session_for_iv, "runtime_state", None) or {}).get("image_viewer_context") or {}
-                        iv_desc = (iv_ctx.get("description") or "").strip()
-                        if iv_desc:
-                            iv_name = iv_ctx.get("name") or "image"
-                            iv_block = (
-                                f"--- CURRENTLY OPEN IN IMAGE VIEWER: {iv_name} (vision description) ---\n"
-                                f"{iv_desc}\n"
-                                f"(The user is looking at this image. For finer detail call analyze_image.)\n"
-                                f"---\n\n"
-                            )
-                            effective_input = iv_block + effective_input
-                            session_for_iv.runtime_state.pop("image_viewer_context", None)
-                            session_mgr.save(session_for_iv, sync_state=False)
+                        with _chat_lock(task.session_id):
+                            session_for_iv = session_mgr.load(task.session_id)
+                            iv_ctx = (getattr(session_for_iv, "runtime_state", None) or {}).get("image_viewer_context") or {}
+                            iv_desc = (iv_ctx.get("description") or "").strip()
+                            if iv_desc:
+                                iv_name = iv_ctx.get("name") or "image"
+                                iv_block = (
+                                    f"--- CURRENTLY OPEN IN IMAGE VIEWER: {iv_name} (vision description) ---\n"
+                                    f"{iv_desc}\n"
+                                    f"(The user is looking at this image. For finer detail call analyze_image.)\n"
+                                    f"---\n\n"
+                                )
+                                effective_input = iv_block + effective_input
+                                session_for_iv.runtime_state.pop("image_viewer_context", None)
+                                session_mgr.save(session_for_iv, sync_state=False)
                     except Exception:
                         pass
 
                     # Marked region: inject the vision answer about the user's yellow-marked region
                     # for THIS turn only (computed in web_server when the question was sent), then clear.
                     try:
-                        session_for_mr = session_mgr.load(task.session_id)
-                        mr = (getattr(session_for_mr, "runtime_state", None) or {}).get("marked_region_answer") or {}
-                        mr_text = (mr.get("text") or "").strip()
-                        if mr_text:
-                            mr_name = mr.get("name") or "image"
-                            mr_block = (
-                                f"--- MARKED REGION on {mr_name} (the yellow box the user drew) — "
-                                f"vision answer to their question ---\n"
-                                f"{mr_text}\n"
-                                f"---\n\n"
-                            )
-                            effective_input = mr_block + effective_input
-                            session_for_mr.runtime_state.pop("marked_region_answer", None)
-                            session_mgr.save(session_for_mr, sync_state=False)
+                        with _chat_lock(task.session_id):
+                            session_for_mr = session_mgr.load(task.session_id)
+                            mr = (getattr(session_for_mr, "runtime_state", None) or {}).get("marked_region_answer") or {}
+                            mr_text = (mr.get("text") or "").strip()
+                            if mr_text:
+                                mr_name = mr.get("name") or "image"
+                                mr_block = (
+                                    f"--- MARKED REGION on {mr_name} (the yellow box the user drew) — "
+                                    f"vision answer to their question ---\n"
+                                    f"{mr_text}\n"
+                                    f"---\n\n"
+                                )
+                                effective_input = mr_block + effective_input
+                                session_for_mr.runtime_state.pop("marked_region_answer", None)
+                                session_mgr.save(session_for_mr, sync_state=False)
                     except Exception:
                         pass
 
@@ -3369,13 +3391,11 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 f.write(f"{_dt.now().isoformat()} SESSION_SAVE_START session_id={task.session_id}\n")
                     except Exception:
                         pass
-                    # The turn's load, change and save of the chat as ONE step against the
-                    # background lanes (session._append_lock, the lock append_background_message
-                    # holds): a line another lane appended between this load and the save below
-                    # (a Veyllo App room line, a sub-agent result) was overwritten by this older
-                    # copy. Held for the save only, never during the turn.
-                    from vaf.core.session import _append_lock as _chat_append_lock
-                    _chat_save_lock = _chat_append_lock(str(task.session_id or "").strip())
+                    # The turn's load, change and save of the chat as ONE step (`_chat_lock`): a
+                    # line another lane appended between this load and the save below was
+                    # overwritten by this older copy. Held for the save only, never during the
+                    # turn.
+                    _chat_save_lock = _chat_lock(task.session_id)
                     _chat_save_lock.acquire()
                     try:
                         try:
@@ -3405,12 +3425,23 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             # equal to this input must not make it look like a repeat.
                             from vaf.core.agent_origin import APP_ROOM_KINDS as _room_kinds
                             last_user_msg = None
+                            _last_user_turn = None
                             for msg in reversed(session.messages):
                                 if getattr(msg, "kind", None) in _room_kinds:
                                     continue
                                 if _msg_role(msg) == "user":
                                     last_user_msg = _msg_content(msg)
+                                    _last_user_turn = ((getattr(msg, "metadata", None) or {})
+                                                       .get(TURN_ID_KEY))
                                     break
+                            # In a Veyllo App chat the same words asked again in a turn of their
+                            # own are a second question (the room shows each question while its
+                            # turn runs), not a repeat of the stored one.
+                            if (last_user_msg == _user_input.strip()
+                                    and getattr(task, "source", None) == "veyllo_app"
+                                    and getattr(task, "turn_id", None) and _last_user_turn
+                                    and str(_last_user_turn) != str(task.turn_id)):
+                                last_user_msg = None
 
                             # What became of the chat's drafts (vaf/core/outbound_hold.py): the
                             # agent put that note right BEFORE this input, so the turn-context
@@ -3470,9 +3501,11 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                         and not getattr(_binding, "wake", None):
                                     from vaf.core.agent_origin import APP_AGENT_KIND
                                     _msg_kind = APP_AGENT_KIND
-                                elif (getattr(_binding, "wake", None) or ("",))[0] == "confirm":
-                                    from vaf.core.agent_origin import APP_CONFIRM_KIND
-                                    _msg_kind = APP_CONFIRM_KIND
+                                elif (getattr(_binding, "wake", None) or ("",))[0] in WAKE_KINDS:
+                                    # A wake (a timer, a background command, a draft sent, a
+                                    # confirmation) is stored with its kind, which the web chat
+                                    # and the Veyllo App room read; nobody typed it.
+                                    _msg_kind = _binding.wake[0]
                                 session.add_message(role="user", content=_user_input.strip(),
                                                     metadata=(_user_meta or None), kind=_msg_kind)
                                 # Increment persistent user_turn_count in runtime_state
@@ -4318,11 +4351,12 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                     # 3. Save to session so browser reload / reconnect shows the response
                                     try:
                                         if _result_sid:
-                                            _saved_sess = session_mgr.load(_result_sid)
-                                            _saved_sess.add_message(
-                                                role="assistant", content=_clean_result,
-                                                metadata=_drain_meta)
-                                            session_mgr.save(_saved_sess)
+                                            with _chat_lock(_result_sid):
+                                                _saved_sess = session_mgr.load(_result_sid)
+                                                _saved_sess.add_message(
+                                                    role="assistant", content=_clean_result,
+                                                    metadata=_drain_meta)
+                                                session_mgr.save(_saved_sess)
                                     except Exception:
                                         pass
                                 else:
@@ -4344,9 +4378,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                         pass
                                     try:
                                         if _result_sid:
-                                            _saved_sess = session_mgr.load(_result_sid)
-                                            _saved_sess.add_message(role="assistant", content=_fb_msg)
-                                            session_mgr.save(_saved_sess)
+                                            with _chat_lock(_result_sid):
+                                                _saved_sess = session_mgr.load(_result_sid)
+                                                _saved_sess.add_message(role="assistant", content=_fb_msg)
+                                                session_mgr.save(_saved_sess)
                                     except Exception:
                                         pass
 

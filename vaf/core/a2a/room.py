@@ -122,16 +122,35 @@ def leading_mention(text: Any) -> Optional[str]:
     """The name a message's leading "@Name" gives, or None.
 
     Only a mention at the START counts: "@Bob can you look" is aimed at Bob, "ask @Bob
-    about it" is a sentence about Bob. The name is the first word after the "@", without
-    a trailing ",", ":" or ";". The one parse of that rule: an agent room resolves the name
-    against its members (`Room.address_from_mention`), the Veyllo App room against the
-    names of the account's agent (vaf/core/app_link/room.py)."""
+    about it" is a sentence about Bob. The name is the run right after the "@" of letters and
+    digits of any script, with "-", "_" and "." inside it (a peer id like "p-bob", a tag like
+    "Codex51"), ending at the first other character and without a trailing "-", "_" or ".":
+    "@Bob, look", "@Bob. look", "@Bob? look", "@Bob：look" and "@Bob's idea" all give "Bob";
+    "@Bobby" gives "Bobby", never "Bob". The one parse of that rule: an agent room resolves
+    the name against its members (`Room.address_from_mention`), the Veyllo App room against
+    the handle of the account's agent (vaf/core/app_link/room.py)."""
     stripped = str(text or "").lstrip()
     if not stripped.startswith("@"):
         return None
-    parts = stripped[1:].split(None, 1)
-    name = parts[0].rstrip(",:;") if parts else ""
+    end = 1
+    while end < len(stripped) and (stripped[end].isalnum() or stripped[end] in "-_."):
+        end += 1
+    name = stripped[1:end].rstrip("-_.")
     return name or None
+
+
+def mentions_at_start(text: Any, name: str) -> bool:
+    """Whether a message starts with "@" and the KNOWN ``name`` (case-insensitive), followed by
+    its end or by any character that is not a letter or digit: the leading-mention rule of
+    `leading_mention` for a caller that already knows the one name it listens for (the
+    Veyllo App room's agent), so "@Mia.", "@Mia：", "@Mia-" name Mia and "@Miami" does not."""
+    wanted = str(name or "")
+    stripped = str(text or "").lstrip()
+    if not wanted or not stripped.startswith("@"):
+        return False
+    head = stripped[1:1 + len(wanted)]
+    after = stripped[1 + len(wanted):2 + len(wanted)]
+    return head.lower() == wanted.lower() and not (after and after.isalnum())
 
 
 def participant_key(lane: str, scope_id: Optional[str] = None) -> str:
@@ -722,7 +741,10 @@ class Room:
         whether it moved (a closed room, an empty one, or a cursor already there move
         nothing), so a caller announces real movement only. The room view and the inbox's
         read marks share this one rule; a reading position is the reader's own file and
-        needs no membership."""
+        needs no membership. NAMED BOUNDARY: it moves to the newest frame at the time of the
+        call, so a frame that arrived after the view's transcript was built and before this
+        call counts as read without having been shown (the Veyllo App room passes the newest
+        line it sent instead, vaf/core/app_link/room.py `mark_seen`)."""
         if not peer_id or self.closed:
             return False
         latest = self.store.highest_lamport()

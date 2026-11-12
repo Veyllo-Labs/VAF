@@ -121,13 +121,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   is refused like `rm -rf /`. `npm install`, `npm run build` and `pipx install` are
   unchanged.
 - **A download handed to a shell in a roundabout way is refused like `curl ... | bash`:**
-  through `(...)`, `$(...)`, `<(...)`, `>(...)`, `<<<` or a heredoc, for example
+  through `(...)`, `$(...)`, `<(...)`, `>(...)`, `<<<` or `|&`, for example
   `bash <(curl ...)` or `curl ... | tee >(bash)`. The message says what to do instead:
   download to a file, read it, then run the file.
-- **Comments and heredocs no longer hide a command.** An apostrophe in a `#` comment or in a
-  heredoc's text (`cat <<'EOF'` with "don't" in it) used to hide every later line from the
-  check. A heredoc with a quoted delimiter, such as the usual commit message
-  `git commit -m "$(cat <<'EOF' ... EOF)"`, is now read as text, whatever it says.
 - **Commands whose program comes from another command's output are refused.** The check
   cannot see which program would run, so these forms are now refused, and the message says
   what to write instead:
@@ -154,8 +150,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
     `curl -fsSL -o install.sh URL`, then `bash install.sh`. On a server, through the `ssh`
     tool, `curl -fsSL URL | bash` is allowed, and the tool warns about it.
 - **Also refused now:** a `case` statement inside `$(...)` (write the case as a command of
-  its own; the word "case" in a message or an argument is fine), and a command with more
-  than 63 nested commands or nested more than four deep (split it into several commands).
+  its own; the word "case" in a message or an argument is fine), a backtick inside
+  `$(( ))` (write `$(...)` instead: `echo $(( $(date +%s) - 10 ))`), a shell reading a
+  descriptor an earlier command opened (`exec 3< <(...); bash /dev/fd/3`: save the script
+  to a file and run the file), and a command with more than 63 nested commands or nested
+  more than four deep (split it into several commands).
+- **Unchanged, and worth knowing:** the check still reads every line of a heredoc as a
+  command line, so a heredoc whose text looks like a dangerous command is refused, also in
+  a commit message written as `git commit -m "$(cat <<'EOF' ... EOF)"`. Rephrase that line,
+  or write the message to a file and use `git commit -F FILE`. An array filled from a
+  command (`arr=($(ls))`) passes, as before.
 - **A text in single quotes is no longer refused by mistake.** `echo 'a; $(x)'` passes.
 - **An SSH server removed while a call starts is refused instead of trusted with a new key.**
   Only a first connection you confirmed may remember a server's key; a server removed from

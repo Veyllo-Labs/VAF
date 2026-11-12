@@ -112,6 +112,11 @@ def boot_env(monkeypatch):
                         lambda: ipc_calls.append("cleanup_others"))
     monkeypatch.setattr(config_mod, "get_local_admin_scope_id", lambda: SCOPE)
     monkeypatch.setattr(config_mod, "get_local_admin_username", lambda: "admin-test")
+    # The at-rest sweep is stubbed too: on a store with nothing plain left it
+    # writes allow_plaintext_at_rest=false into the suite's one shared config,
+    # and every later test that writes a plaintext chat file then reads nothing.
+    import vaf.core.at_rest_migration as at_rest_mod
+    monkeypatch.setattr(at_rest_mod, "run_once", lambda *a, **k: {})
     # The service-stack start is stubbed HARD: a boot test that reached the
     # real primitive would run `docker compose up` against the machine.
     import vaf.core.service_stack as stack_mod

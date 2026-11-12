@@ -730,6 +730,22 @@ def _no_wake_runner_left_over(monkeypatch):
     monkeypatch.setattr(task_queue, "_wake_runner_threads", {})
 
 
+@pytest.fixture(autouse=True)
+def _usage_label_starts_clean():
+    """Every test starts with the usage label a fresh thread has: lane "main", no scope.
+
+    A turn sets the label without a block to leave (vaf/core/cost.py set_usage_context),
+    because the next turn overwrites it. In the suite there is no next turn: a test that
+    runs a real room turn on the main thread left the lane at "room", and a later test
+    that reads the default label failed depending on test order."""
+    from vaf.core import cost
+    lane_token = cost._LANE.set("main")
+    scope_token = cost._SCOPE.set(None)
+    yield
+    cost._SCOPE.reset(scope_token)
+    cost._LANE.reset(lane_token)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _sandbox_env_housekeeping_off():
     """No reaper, quit stop or revocation stop for sandbox environments in the suite.

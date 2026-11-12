@@ -40,9 +40,14 @@ export function refusalKey(code: string): string {
         case 'channel_off': return 'appRoomChannelOff';
         case 'no_device': return 'appRoomNoDevice';
         case 'rate_limited': return 'appRoomRateLimited';
+        case 'text_only': return 'appRoomTextOnly';
         default: return 'appRoomFailed';
     }
 }
+
+/** The empty room's explanation: while no line can reach the app's agent it says what IS
+ *  possible (asking the VAF agent with its handle). */
+export const emptyKey = (canWrite: boolean) => (canWrite ? 'appRoomEmpty' : 'appRoomEmptyAgentOnly');
 
 /** The composer's hint: while no line can reach the app's agent, only the VAF agent's form. */
 export const placeholderKey = (canWrite: boolean) => (canWrite ? 'appRoomPlaceholder' : 'appRoomPlaceholderAgentOnly');
@@ -52,7 +57,14 @@ export const toKey = (peer: string) => (peer === 'person' ? 'appRoomToYou' : 'ap
 
 /** The catalogue key of how a line to the agent in the Veyllo App stands, and whether the
  *  person is offered to send it again (only a line that will not arrive any more). */
-export function deliveryOf(state: string, reason?: string, devices?: number, device?: string):
+export function deliveryOf(state: string, reason?: string, devices?: number, device?: string,
+    resent?: boolean): { key: string; values?: Record<string, string>; resend: boolean } {
+    const d = deliveryState(state, reason, devices, device);
+    // A line the person already sent again offers no second resend.
+    return resent ? { ...d, resend: false } : d;
+}
+
+function deliveryState(state: string, reason?: string, devices?: number, device?: string):
     { key: string; values?: Record<string, string>; resend: boolean } {
     if (state === 'delivered') {
         return (devices || 0) > 1 && device
@@ -73,6 +85,10 @@ export function deliveryOf(state: string, reason?: string, devices?: number, dev
  *  failed. Null when the line's text is shown as it is. */
 export function lineTextKey(code?: string): string | null {
     switch (code) {
+        case 'timer': return 'appRoomWakeTimer';
+        case 'process': return 'appRoomWakeProcess';
+        case 'draft': return 'appRoomWakeDraft';
+        case 'confirm': return 'appRoomConfirmed';
         case 'turn_failed': return 'appRoomTurnFailed';
         case 'declined': return 'appRoomTaskDeclined';
         case 'unavailable': return 'appRoomTaskUnavailable';
@@ -83,6 +99,18 @@ export function lineTextKey(code?: string): string | null {
         case 'file_refused': return 'appRoomTaskFileRefused';
         default: return null;
     }
+}
+
+/** One line on its way at a time: Enter, the send button and every "Send again" wait until
+ *  the open request answered, so a double Enter or a second click never sends the line twice
+ *  (each "@" line is a model call, each line to the app a billed relay message). */
+export type RoomSend = { busy: boolean; text: string; resendOf: string | null };
+export const ROOM_SEND_IDLE: RoomSend = { busy: false, text: '', resendOf: null };
+
+/** The send that starts now, or null while another is open or there is nothing to send. */
+export function beginSend(current: RoomSend, text: string, resendOf?: string | null): RoomSend | null {
+    if (current.busy || !text.trim()) return null;
+    return { busy: true, text: text.trim(), resendOf: resendOf || null };
 }
 
 /** Whether the composer is cleared when a line was taken: only while the view it was written in

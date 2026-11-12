@@ -39,8 +39,9 @@ import InboxWindow from '@/components/inbox/InboxWindow';
 import { TurnDrafts, UnplacedDrafts, isWaitingDraft, type HeldSendRow } from '@/components/outbox/HeldSendCard';
 import { useChatDrafts } from '@/components/outbox/useChatDrafts';
 import {
-    APP_ROOM_ID, APP_ROOM_TITLE, clearAfterSend, deliveryOf, isAppRoom, lineTextKey,
-    placeholderKey, refusalKey, roomOpenCommand, roomStillListed, showUnreadDot, toKey,
+    APP_ROOM_ID, APP_ROOM_TITLE, ROOM_SEND_IDLE, beginSend, clearAfterSend, deliveryOf, emptyKey,
+    isAppRoom, lineTextKey, placeholderKey, refusalKey, roomOpenCommand, roomStillListed,
+    showUnreadDot, toKey, type RoomSend,
 } from '@/components/chat/appRoom';
 import { draftRefOf, isDraftTurnEnd, DRAFT_WAKE_PREFIX, CONFIRM_WAKE_PREFIX } from '@/components/outbox/draftRefs';
 import AskChoices from '@/components/chat/AskChoices';
@@ -244,6 +245,8 @@ type RoomMessage = {
     seconds?: number;
     /** A question whose turn runs or waits; the runner stores it with the answer. */
     pending?: boolean;
+    /** A line to the app's agent the person already sent again. */
+    resent?: boolean;
     /** What a reader may conclude about who wrote this: "unsigned" (nobody claimed,
      *  the ordinary case), "valid", "foreign_key", "invalid" or "unreadable". The
      *  verdict, never the signature - the browser has no use for key material. */
@@ -2196,9 +2199,9 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
     /** The Veyllo App room's words: the person's own name, the line under the header, "to
      *  <name>" and the delivery state of a line to the app's agent. Set only for that room. */
     appRoom?: { you: string; line: string; to: (peer: string, name: string) => string;
-        delivery: (state: string, reason?: string, device?: string) => { text: string; resend: boolean };
+        delivery: (state: string, reason?: string, device?: string, resent?: boolean) => { text: string; resend: boolean };
         lineText: (code?: string, seconds?: number) => string | null;
-        sendAgain: string; onSendAgain: (text: string) => void;
+        sendAgain: string; onSendAgain: (text: string, lineId: string) => void; sending: boolean;
         empty: string; confirmed: string };
     onMembers: () => void;
     closedNote: string;
@@ -2495,7 +2498,7 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                         {daySeparator}
                         <div className="flex justify-center py-2 room-msg-enter">
                             <span className="max-w-[85%] text-center text-[12.5px] rounded-xl px-3.5 py-2 border border-gray-200 bg-gray-50 text-gray-600 dark:border-[#3a3a3a] dark:bg-[#202020] dark:text-[#c8c8c8]">
-                                {appRoom && m.kind === 'note' ? appRoom.confirmed : m.text}
+                                {appRoom && m.kind === 'note' ? (appRoom.lineText(m.code) || appRoom.confirmed) : m.text}
                             </span>
                         </div>
                         </Fragment>
@@ -2597,15 +2600,16 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                                 waiting while its queue holds it, not delivered with why, and the
                                 offer to send a line again that will not arrive any more. */}
                             {appRoom && m.state && (() => {
-                                const d = appRoom.delivery(m.state, m.reason, m.device);
+                                const d = appRoom.delivery(m.state, m.reason, m.device, m.resent);
                                 return (
                                     <div data-delivery={m.state} className={cn("text-[10px] mt-0.5 flex items-center gap-2",
                                         m.state === 'not_delivered' ? "text-amber-600 dark:text-amber-400"
                                             : "text-gray-400 dark:text-[#7a7a7a]")}>
                                         <span>{d.text}</span>
                                         {d.resend && (
-                                            <button type="button" onClick={() => appRoom.onSendAgain(m.text)}
-                                                className="underline underline-offset-2 hover:text-gray-900 dark:hover:text-[#e6e6e6]">
+                                            <button type="button" onClick={() => appRoom.onSendAgain(m.text, m.id)}
+                                                disabled={appRoom.sending}
+                                                className="underline underline-offset-2 hover:text-gray-900 dark:hover:text-[#e6e6e6] disabled:opacity-50 disabled:no-underline">
                                                 {appRoom.sendAgain}
                                             </button>
                                         )}
@@ -3175,6 +3179,9 @@ function VAFDashboardContent() {
     const [roomOpening, setRoomOpening] = useState<{ roomId: string; name: string } | null>(null);
     // Why the Veyllo App room refused the last line (a code of POST /api/app-link/room).
     const [appRoomError, setAppRoomError] = useState('');
+    // The line on its way to the room (appRoom.ts `beginSend`): the ref guards, the state draws.
+    const appRoomSendRef = useRef<RoomSend>(ROOM_SEND_IDLE);
+    const [appRoomSending, setAppRoomSending] = useState<RoomSend>(ROOM_SEND_IDLE);
     useEffect(() => {
         if (!roomOpening) return;
         const t = setTimeout(() => setRoomOpening(null), 15000);
@@ -4069,8 +4076,8 @@ function VAFDashboardContent() {
         you: tMain('appRoomYou'),
         line: roomView.room.appRoom?.connected ? tMain('appRoomConnected') : tMain('appRoomNotConnected'),
         to: (peer: string, name: string) => tMain(toKey(peer), { name }),
-        delivery: (state: string, reason?: string, device?: string) => {
-            const d = deliveryOf(state, reason, roomView.room.appRoom?.devices, device);
+        delivery: (state: string, reason?: string, device?: string, resent?: boolean) => {
+            const d = deliveryOf(state, reason, roomView.room.appRoom?.devices, device, resent);
             return { text: tMain(d.key, d.values || {}), resend: d.resend };
         },
         lineText: (code?: string, seconds?: number) => {
@@ -4078,8 +4085,9 @@ function VAFDashboardContent() {
             return key ? tMain(key, { name: appRoomAgentName, seconds: seconds ?? 0 }) : null;
         },
         sendAgain: tMain('appRoomSendAgain'),
-        onSendAgain: (text: string) => { void sendToAppRoom(text); },
-        empty: tMain('appRoomEmpty', appRoomNames),
+        onSendAgain: (text: string, lineId: string) => { void sendToAppRoom(text, lineId); },
+        sending: appRoomSending.busy,
+        empty: tMain(emptyKey(!!roomView.room.appRoom?.canWrite), appRoomNames),
         confirmed: tMain('appRoomConfirmed'),
     } : undefined;
     // Why a line to the agent in the Veyllo App cannot be written, as the room says it
@@ -5149,14 +5157,20 @@ function VAFDashboardContent() {
     // A line in the Veyllo App room: to the agent in the Veyllo App, or, led by "@" and the
     // agent's name, to the VAF agent (the server decides, vaf/core/app_link/room.py). The box
     // clears only when the line was taken; a refusal keeps it and says why under the input.
-    const sendToAppRoom = async (text: string) => {
+    const sendToAppRoom = async (text: string, resendOf?: string) => {
+        // One line on its way at a time (appRoom.ts `beginSend`): a double Enter or a second
+        // click on "Send again" while a request is open sends nothing.
+        const next = beginSend(appRoomSendRef.current, text, resendOf);
+        if (!next) return;
+        appRoomSendRef.current = next;
+        setAppRoomSending(next);
         setAppRoomError('');
         const sentFrom = roomViewRef.current?.room.roomId ?? null;
         try {
             const res = await fetch(`${getApiBase()}/api/app-link/room`, {
                 method: 'POST', credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text }),
+                body: JSON.stringify({ text: next.text, ...(next.resendOf ? { resend_of: next.resendOf } : {}) }),
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
@@ -5165,9 +5179,14 @@ function VAFDashboardContent() {
             }
             setInput(prev => (clearAfterSend(sentFrom, roomViewRef.current?.room.roomId ?? null, text, prev)
                 ? '' : prev));
+            // The new line is where the view goes once the room answers.
+            pendingScrollRestore.current = 'bottom';
             wsSocketRef.current?.send(JSON.stringify(roomOpenCommand(APP_ROOM_ID)));
         } catch {
             setAppRoomError('failed');
+        } finally {
+            appRoomSendRef.current = ROOM_SEND_IDLE;
+            setAppRoomSending(ROOM_SEND_IDLE);
         }
     };
 
@@ -8693,6 +8712,12 @@ function VAFDashboardContent() {
         e.preventDefault();
         e.stopPropagation();
         setIsDragOver(false);
+        // The Veyllo App room carries text only: a dropped file is refused with that sentence
+        // instead of staging a chip its send would ignore.
+        if (roomViewRef.current?.room.roomKind === 'veyllo_app') {
+            setAppRoomError('text_only');
+            return;
+        }
         const files = e.dataTransfer.files ? Array.from(e.dataTransfer.files) : [];
         if (files.length > 0) addFilesAsAttachments(files);
     }, [addFilesAsAttachments]);
@@ -10299,7 +10324,9 @@ function VAFDashboardContent() {
                                             if (!sock || sock.readyState !== WebSocket.OPEN) return;
                                             sock.send(JSON.stringify({ type: 'room_react', room_id: roomView.room.roomId, reply_to: frameId, emoji }));
                                         } : undefined}
-                                        pending={pendingRoomSays.filter(p => p.roomId === roomView.room.roomId)}
+                                        pending={appRoomWords
+                                            ? (appRoomSending.busy ? [{ key: 1, text: appRoomSending.text }] : [])
+                                            : pendingRoomSays.filter(p => p.roomId === roomView.room.roomId)}
                                         pendingNote={tMain('roomSending')}
                                         recentSends={recentRoomSendsRef.current} />
                                     {/* The Veyllo App room: the drafts waiting in its two sessions (the

@@ -105,10 +105,35 @@ def test_every_key_the_rules_name_is_in_every_catalogue():
         " m.deliveryOf('delivered', '', 1, 'd').key,"
         " ...['turn_failed','declined','unavailable','timeout','failed','cancelled','disconnected',"
         "'file_refused'].map(m.lineTextKey), m.placeholderKey(true), m.placeholderKey(false),"
-        " m.toKey('person'), m.toKey('vaf_agent')]"))
+        " m.toKey('person'), m.toKey('vaf_agent'), m.refusalKey('text_only'),"
+        " ...['timer','process','draft'].map(m.lineTextKey), m.emptyKey(true), m.emptyKey(false)]"))
     assert len(keys) >= 25
     for lang in LANGS:
         main = json.loads((ROOT / "web" / "messages" / f"{lang}.json").read_text(
             encoding="utf-8"))["main"]
         missing = sorted(k for k in keys if not str(main.get(k) or "").strip())
         assert not missing, (lang, missing)
+
+
+def test_one_send_at_a_time():
+    """MUTATION: let a send start while another is open - red (a double Enter sent twice)."""
+    first = _call("m.beginSend(m.ROOM_SEND_IDLE, ' Hallo ', 'l1')")
+    assert first == {"busy": True, "text": "Hallo", "resendOf": "l1"}
+    assert _call("m.beginSend(m.beginSend(m.ROOM_SEND_IDLE, 'Hallo'), 'Hallo')") is None
+    assert _call("m.beginSend(m.ROOM_SEND_IDLE, '   ')") is None
+
+
+def test_a_line_sent_again_offers_no_second_resend():
+    """MUTATION: ignore `resent` - red."""
+    assert _call("m.deliveryOf('not_delivered', 'removed', 1, '', true)")["resend"] is False
+    assert _call("m.deliveryOf('not_delivered', 'removed', 1, '', false)")["resend"] is True
+
+
+def test_wake_notes_and_the_empty_room_are_worded():
+    """MUTATION: word a timer note as the general failure, or one empty text whatever the room
+    can do - red."""
+    assert _call("['timer','process','draft','confirm'].map(m.lineTextKey)") == [
+        "appRoomWakeTimer", "appRoomWakeProcess", "appRoomWakeDraft", "appRoomConfirmed"]
+    assert _call("m.emptyKey(true)") == "appRoomEmpty"
+    assert _call("m.emptyKey(false)") == "appRoomEmptyAgentOnly"
+    assert _call("m.refusalKey('text_only')") == "appRoomTextOnly"

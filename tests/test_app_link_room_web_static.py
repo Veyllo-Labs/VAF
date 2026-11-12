@@ -79,9 +79,11 @@ def test_the_composer_posts_the_line_without_a_chooser():
     or clear the box without `clearAfterSend` - red."""
     branch = _between(PAGE, "if (roomView.room.roomKind === 'veyllo_app') {", "}")
     assert "void sendToAppRoom(roomText);" in branch
-    sender = _between(PAGE, "const sendToAppRoom = async (text: string) => {", "\n    };")
+    sender = _between(PAGE, "const sendToAppRoom = async (text: string, resendOf?: string) => {",
+                      "\n    };")
     assert "/api/app-link/room" in sender and "method: 'POST'" in sender
-    assert "body: JSON.stringify({ text })," in sender, "the body carries the line only"
+    assert ("body: JSON.stringify({ text: next.text, ...(next.resendOf ? { resend_of: next.resendOf } : {}) }),"
+            in sender), "the body carries the line (and the line it sends again) only"
     assert "const sentFrom = roomViewRef.current?.room.roomId ?? null;" in sender
     refused = _between(sender, "if (!res.ok) {", "}")
     assert "setAppRoomError(String(data.code || 'failed'));" in refused and "setInput" not in refused
@@ -121,19 +123,19 @@ def test_a_line_shows_its_speaker_addressee_delivery_and_its_words():
     """MUTATION: drop the delivery state, the resend, the coded text or the empty state -
     red."""
     view = _between(PAGE, "function RoomConversation(", "function VAFDashboardContent(")
-    assert "const d = appRoom.delivery(m.state, m.reason, m.device);" in view
-    assert "onClick={() => appRoom.onSendAgain(m.text)}" in view
+    assert "const d = appRoom.delivery(m.state, m.reason, m.device, m.resent);" in view
+    assert "onClick={() => appRoom.onSendAgain(m.text, m.id)}" in view
     assert "{(appRoom && appRoom.lineText(m.code, m.seconds)) || m.text}" in view
     assert "{appRoom.to(m.to.peer, m.toLabel || '')}" in view
-    assert "{appRoom && m.kind === 'note' ? appRoom.confirmed : m.text}" in view
+    assert "{appRoom && m.kind === 'note' ? (appRoom.lineText(m.code) || appRoom.confirmed) : m.text}" in view
     assert "{appRoom.empty}" in view
     assert "const isAppAgent = !!appRoom && m.peer === 'app_agent';" in view
     words = _between(PAGE, "const appRoomWords = roomView?.room.roomKind === 'veyllo_app' ? {",
                      "} : undefined;")
     assert "tMain(toKey(peer), { name })" in words
-    assert "deliveryOf(state, reason, roomView.room.appRoom?.devices, device)" in words
+    assert "deliveryOf(state, reason, roomView.room.appRoom?.devices, device, resent)" in words
     assert "lineTextKey(code)" in words
-    assert "tMain('appRoomEmpty', appRoomNames)" in words
+    assert "tMain(emptyKey(!!roomView.room.appRoom?.canWrite), appRoomNames)" in words
     assert "appRoom={appRoomWords}" in PAGE
 
 
@@ -171,3 +173,24 @@ def test_the_inbox_opens_the_room_by_the_registry_name():
     assert "onOpenAppRoom={openAppRoom}" in PAGE
     assert "if (r.channel === VEYLLO_APP_CHANNEL && onOpenAppRoom) { onClose(); onOpenAppRoom(); return; }" in INBOX
     assert "'veyllo_app'" not in INBOX
+
+
+def test_one_line_is_on_its_way_at_a_time_and_shows_it():
+    """MUTATION: drop the `beginSend` guard, the disabled resend or the pending copy while a
+    line is on its way - red."""
+    sender = _between(PAGE, "const sendToAppRoom = async (text: string, resendOf?: string) => {",
+                      "\n    };")
+    assert "const next = beginSend(appRoomSendRef.current, text, resendOf);\n        if (!next) return;" in sender
+    assert "appRoomSendRef.current = ROOM_SEND_IDLE;" in _between(sender, "} finally {", "}")
+    assert "pendingScrollRestore.current = 'bottom';" in sender
+    view = _between(PAGE, "function RoomConversation(", "function VAFDashboardContent(")
+    assert "disabled={appRoom.sending}" in view
+    assert "(appRoomSending.busy ? [{ key: 1, text: appRoomSending.text }] : [])" in PAGE
+
+
+def test_a_dropped_file_is_refused_in_the_room():
+    """MUTATION: stage a dropped file in the Veyllo App room - red."""
+    drop = _between(PAGE, "const handleDrop = useCallback((e: React.DragEvent) => {", "}, [")
+    guard = drop.index("if (roomViewRef.current?.room.roomKind === 'veyllo_app') {")
+    assert "setAppRoomError('text_only');" in drop
+    assert guard < drop.index("addFilesAsAttachments(files)")

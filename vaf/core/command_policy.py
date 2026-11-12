@@ -109,9 +109,10 @@ lines, no nested readings, so a file written through `cat > f <<'EOF'` passes wh
 frozen reading lets it; an unquoted body's substitutions are read as commands, never as a
 program word, and a body fed to a shell is that shell's script. Everywhere else the lines
 are read as command lines, so a wrong guess here can only cost refusals this reading
-adds, never one of the frozen reading. A `<<` after a word-initial `#` on its line opens
-no heredoc: bash takes the rest of the line as a comment and runs the next lines
-(`echo ok # <<X`). More than eight heredocs on one line are not something a person writes;
+adds, never one of the frozen reading. A `<<` after a `#` that starts a comment for bash
+on its line (_comment_starts_at) opens no heredoc: bash takes the rest of the line as a
+comment and runs the next lines (`echo ok # <<X`).
+More than eight heredocs on one line are not something a person writes;
 the rest are read as command lines. Its accepted cost: a heredoc piped into a shell is not
 checked for substitutions inside its body (`cat <<'EOF' | bash` with `eval "$(...)"` in
 the body), as before this reading; a dangerous command line in it is still refused.
@@ -213,12 +214,14 @@ _PYTHON_RUNNERS = frozenset({"uv", "uvx", "poetry", "pipenv", "pdm", "hatch", "r
 _RUNNER_VERBS = frozenset({"run", "exec", "tool"})
 # Flags of a runner known to take no value. After one, the next word is the command, not a
 # value; after any other flag both readings stay (_runner_commands). The npx and npm rows are
-# read from npm's own source (bin/npx-cli.js takes every Boolean config definition, plus
-# `--no-install`, the removed `--ignore-existing` and `-q`, as a switch); the other rows rest
-# on each tool's documentation only, since none of them could be run where this was written.
+# measured with npm's own parser: bin/npx-cli.js's argument loop, then nopt with npm's types
+# and shorthands, left the next word as the package for every flag here (npm 11). The other
+# rows rest on each tool's documentation only, since none of them could be run where this
+# was written.
 _NPM_SWITCHES = frozenset({"-y", "--yes", "--no", "-q", "--quiet", "--workspaces",
                            "--include-workspace-root", "--legacy-peer-deps", "--prefer-offline",
-                           "--prefer-online", "--offline", "--ignore-scripts", "--force"})
+                           "--prefer-online", "--offline", "--ignore-scripts", "--force",
+                           "--silent", "--no-fund", "--no-audit"})
 _UV_SWITCHES = frozenset({"-q", "--quiet", "-v", "--verbose", "--offline", "--isolated",
                           "--refresh", "--reinstall", "-U", "--upgrade", "-n", "--no-cache",
                           "--no-config", "--native-tls", "--compile-bytecode"})
@@ -226,7 +229,7 @@ _VALUELESS_RUNNER_FLAGS = {
     "uv": _UV_SWITCHES | {"--frozen", "--locked", "--no-sync", "--no-project", "--active",
                           "--exact", "--no-dev", "--all-extras", "-m", "--module",
                           "--no-editable", "--no-install-project", "--no-install-workspace",
-                          "--only-dev", "--all-packages", "-s", "--script"},
+                          "--only-dev", "--all-packages", "-s", "--script", "--no-build"},
     "uvx": _UV_SWITCHES,
     "npx": _NPM_SWITCHES | {"--no-install", "--ignore-existing"},
     "npm": _NPM_SWITCHES,
@@ -535,14 +538,17 @@ def _split_segments(command: str) -> List[tuple]:
     # delimiter line exists); otherwise its lines are read as command lines.
     pending: List[tuple] = []
     lines: Optional[_HeredocLines] = None
-    # A word-initial `#` outside quotes earlier on this line: bash reads the rest of the line
-    # as a comment, so a `<<WORD` there opens no heredoc and the next lines run. Its own
-    # variable, since a `;` flush clears `buf`; cleared by a newline at the top level.
+    # A `#` that starts a comment for bash earlier on this line (_comment_starts_at, at this
+    # level, outside `${...}` and `$[...]`): the rest of the line is no code, so a `<<WORD`
+    # there opens no heredoc and the next lines run. Its own variable, since a `;` flush
+    # clears `buf`; every newline ends it, also one after a backslash.
     comment = False
 
     while i < n:
         ch = command[i]
         nxt = command[i + 1] if i + 1 < n else ""
+        if ch == "\n" or (ch == "\\" and nxt == "\n"):
+            comment = False
         if quote:
             # Inside single quotes nothing is special; inside double quotes a
             # substitution still runs, so keep descending.
@@ -567,7 +573,8 @@ def _split_segments(command: str) -> List[tuple]:
                 _put(ch)
             i += 1
             continue
-        if ch == "#" and (i == 0 or command[i - 1].isspace() or command[i - 1] in ";&|()<>`"):
+        if ch == "#" and not depth_stack and _comment_starts_at(command, i) \
+                and not _open_expansion("".join(buf[-200:])):
             comment = True
         if (ch == "<" and nxt == "<" and not depth_stack and command[i + 2:i + 3] != "<"
                 and command[i - 1:i] != "<" and len(pending) < 8 and not comment
@@ -599,7 +606,6 @@ def _split_segments(command: str) -> List[tuple]:
                                text if quoted else _heredoc_supplied(text)))
                 pos = span[1] + 1
             pending = []
-            comment = False
             _flush()
             connector = "seq"
             i = max(i + 1, min(pos - 1, n))
@@ -660,7 +666,6 @@ def _split_segments(command: str) -> List[tuple]:
             i += 1
             continue
         if ch in ";\n&|":
-            comment = comment and ch != "\n"
             _flush()
             if ch == "|" and nxt == "&":    # `|&` pipes stderr too: still a pipe
                 connector = "pipe"
@@ -834,6 +839,28 @@ def _heredoc_supplied(body: str) -> str:
             out.append(c)
             k += 1
     return "".join(out)
+
+
+def _comment_starts_at(command: str, i: int) -> bool:
+    """Whether the `#` at `i` starts a comment for bash: it starts a word, at the start of the
+    text or after an unescaped blank, newline or operator character. A backslash-newline in
+    front of it is joined away first, as bash does (`a \\` NL `#b` is a comment, `a\\` NL
+    `#b` is the word `a#b`); `a\\ #b`, `$#`, `${#x}` and `16#ff` start none."""
+    j = i
+    while j >= 2 and command[j - 1] == "\n" and _escaped(command, j - 1):
+        j -= 2                              # a line continuation: bash removes it
+    if j == 0:
+        return True
+    # No `(`: here it always opens a nested level, where no comment mark is set.
+    return command[j - 1] in " \t\n;&|)<>" and not _escaped(command, j - 1)
+
+
+def _escaped(command: str, k: int) -> bool:
+    """Whether the character at `k` follows an odd run of backslashes."""
+    run = 0
+    while k - run - 1 >= 0 and command[k - run - 1] == "\\":
+        run += 1
+    return run % 2 == 1
 
 
 def _open_expansion(tail: str) -> bool:
@@ -1572,15 +1599,20 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[List[int
 def _refusal(category: str, opaque_shape: str, text: str) -> str:
     """The refusal sentence for `category`, with the way out where one exists."""
     sentence = CATEGORY_REASONS[category]
+    heredoc = "<<" in text.replace("<<<", "")
+    # An unquoted heredoc's body is expanded as it is written: quoting its delimiter makes it
+    # plain text, which helps a writer (`cat > f <<EOF`), never a shell that runs it.
+    quote_cure = (heredoc and category == "opaque_command"
+                  and opaque_shape in ("program", "shell_text")
+                  and ("$(" in text or "`" in text) and _heredoc_writes_text(text))
     if category == "opaque_command":
         sentence = _OPAQUE_REASONS.get(opaque_shape, sentence)
-        if opaque_shape in ("program", "frozen") and "\n" in text:
+        if quote_cure and opaque_shape == "program":
+            sentence = _HEREDOC_PROGRAM + _QUOTE_FIRST + _HEREDOC_PROGRAM_OR
+        elif opaque_shape in ("program", "frozen") and "\n" in text:
             sentence += _OPAQUE_REASONS["lines"]    # perhaps a code fence or a continued line
     sentence += _WAY_OUT.get(category, "")
-    heredoc = "<<" in text.replace("<<<", "")
-    if heredoc and category == "opaque_command" and opaque_shape in ("program", "shell_text") \
-            and _UNQUOTED_HEREDOC_RE.search(text) and ("$(" in text or "`" in text):
-        # An unquoted heredoc's body is expanded by the shell that writes it.
+    if quote_cure and opaque_shape == "shell_text":
         sentence += _QUOTE_THE_DELIMITER
     if heredoc and (category in _HEREDOC_LINE_CATEGORIES or (
             category == "opaque_command" and opaque_shape in _HEREDOC_LINE_SHAPES)):
@@ -1591,9 +1623,32 @@ def _refusal(category: str, opaque_shape: str, text: str) -> str:
                      "message `git commit -F FILE` or `gh pr create --body-file FILE`")
     return f"Command contains a forbidden pattern: it {sentence}"
 # Offered only while the frozen reading lets the command pass (_join_the_frozen_reading
-# takes it out otherwise): that reading reads every line, quoted delimiter or not.
+# takes both out otherwise): that reading reads every line, quoted delimiter or not.
 _QUOTE_THE_DELIMITER = ("; or, if the heredoc's text must not be expanded, quote its delimiter "
                         "(`<<'EOF'`)")
+_QUOTE_FIRST = (" quote the heredoc's delimiter (`<<'EOF'`) if its text must not be "
+                "expanded, or")
+_HEREDOC_PROGRAM = ("takes a program name from a command substitution in an unquoted heredoc, "
+                    "which the shell expands as it writes the text;")
+_HEREDOC_PROGRAM_OR = " run the substitution as a command of its own first and write the result in"
+
+
+def _heredoc_writes_text(text: str) -> bool:
+    """Whether every unquoted heredoc in `text` is written somewhere as text: no shell, `eval`
+    or `source` on its line (`bash <<EOF`, `sudo sh <<EOF`, `cat <<EOF | bash`), where
+    quoting the delimiter would leave the body a script all the same."""
+    found = False
+    for m in _UNQUOTED_HEREDOC_RE.finditer(text):
+        found = True
+        start = text.rfind("\n", 0, m.start()) + 1
+        end = text.find("\n", m.start())
+        line = text[start:end if end >= 0 else len(text)]
+        words = {w.rsplit("/", 1)[-1] for w in re.split(r"[\s;&|()<>`'\"]+", line) if w}
+        if words & _HEREDOC_SCRIPT_READERS:
+            return False
+    return found
+# A command that runs the text it is given as shell code.
+_HEREDOC_SCRIPT_READERS = _COMMAND_STRING_SHELLS | {"eval", "source", "."}
 # The reasons the heredoc sentence fits: a command line or a substitution in the text.
 _HEREDOC_LINE_CATEGORIES = frozenset({"destructive_removal", "device_write", "fork_bomb"})
 _HEREDOC_LINE_SHAPES = frozenset({"", "program", "frozen", "lines", "unreadable", "shell_text"})
@@ -1617,7 +1672,8 @@ def _join_the_frozen_reading(verdict: CommandVerdict, text: str, profile: str) -
     seen = set(verdict.segments)            # a list lookup per segment was quadratic
     verdict.segments.extend(s for s in frozen.segments if s not in seen)
     if frozen.blocked:
-        verdict.reason = verdict.reason.replace(_QUOTE_THE_DELIMITER, "")
+        verdict.reason = verdict.reason.replace(_QUOTE_THE_DELIMITER, "").replace(
+            _QUOTE_FIRST, "")
     if verdict.blocked or not frozen.blocked:
         return
     verdict.blocked = True
@@ -1653,7 +1709,7 @@ def _after_unknown_flag(exe: str, args: List[str]) -> bool:
     valueless = _VALUELESS_RUNNER_FLAGS.get(exe, frozenset())
     for k, tok in enumerate(args):
         if _SUBST_BARE in tok or _SUBST_QUOTED in tok:
-            return not args[k - 1].startswith("-") and any(
+            return k >= 1 and not args[k - 1].startswith("-") and any(
                 t.startswith("-") and "=" not in t and t not in valueless for t in args[:k - 1])
     return False
 

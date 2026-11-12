@@ -155,20 +155,28 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   `in` (write the case as a command of its own; the word "case" in a message, an argument
   or at the start of a sentence is fine), a backtick inside
   `$(( ))` (write `$(...)` instead: `echo $(( $(date +%s) - 10 ))`), a shell reading a
-  descriptor an earlier command opened (`exec 3< <(...); bash /dev/fd/3` or `bash <&3`:
-  save the script to a file and run the file), a command with more than 63 nested
+  descriptor an earlier command opened (`exec 3< <(...); bash /dev/fd/3`, `bash <&3` or
+  `bash < /dev/fd/3`: save the script to a file and run the file), a program from a
+  substitution after a leading `-` (`zsh -c '- $(echo rm) -rf /'`, which zsh runs as
+  `rm -rf /`), a command with more than 63 nested
   commands or nested more than four deep (split it into several commands), and a command
-  longer than 128 KB (write the text to a file with the file tool and run the file).
+  longer than 128 K characters (write the text to a file with the file tool and run the
+  file). Under about 12 K characters the number of nested commands the check reads is
+  unchanged; a longer command with many nested shells may be refused as nested too deep
+  (split it into several commands).
 - **Unchanged, and worth knowing:** everything the check refused before is still refused,
-  also where that was over-careful (`echo 'a; $(x)'`). The check still reads every line of
-  a heredoc as a command line, so a line that STARTS with what reads as a command is
-  refused (`rm -rf / was the bug`), also in a commit message written as
-  `git commit -m "$(cat <<'EOF' ... EOF)"`; a line that only mentions one is not
-  (`Fix: rm -rf / no longer runs`). Rephrase that line, or write the message to a file and
-  use `git commit -F FILE`. The same holds for shell setup lines written into a file with a
-  heredoc (`cat >> ~/.bashrc <<'EOF'` with `eval "$(pyenv init -)"`): write them with the
-  file tool or `echo '...' >> ~/.bashrc`. An array filled from a command (`arr=($(ls))`), a
-  Markdown bullet that starts with a code span, and `(( $(wc -l < f) > 5 ))` pass.
+  also where that was over-careful (`echo 'a; $(x)'`, where the message now says to put
+  the substitution's result into a variable first). Writing a file through a heredoc
+  (`cat > app.js <<'EOF' ... EOF`) is judged as before: the new checks treat its body as the
+  file's text. As before, a heredoc line is still refused when it STARTS with what reads as a
+  command or a substitution: a line like `rm -rf / was the bug`, a line that starts with a
+  code span or `$(...)`, and a fenced code block, also in a commit or PR message written
+  as `git commit -m "$(cat <<'EOF' ... EOF)"`; a line that only mentions one is not
+  (`Fix: rm -rf / no longer runs`). Rephrase that line, or write the text to a file with
+  the file tool and use `git commit -F FILE`. An array filled from a command
+  (`arr=($(ls))`), a Markdown bullet in a heredoc body, `(( $(wc -l < f) > 5 ))`
+  and a runner flag without a value before a substitution (`uv run --frozen pytest
+  $(git ls-files tests)`) pass.
 - **An SSH server removed while a call starts is refused instead of trusted with a new key.**
   Only a first connection you confirmed may remember a server's key; a server removed from
   your confirmed servers at that moment is refused, nothing runs, and the next call asks you

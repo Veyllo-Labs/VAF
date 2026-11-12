@@ -810,12 +810,18 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   refusal.** A substitution in the program word, wherever that word stands: after a
   wrapper, a `VAR=` prefix or a runner (`env $(echo rm) -rf /`), inside quotes or in part
   of the name (`"$(echo rm)"`, `/usr/bin/$(echo rm)`); the way out is to run the
-  substitution on its own and write the program out. A line that starts with `-` and no
-  wrapper (a Markdown bullet) names no program. A runner option's value from a
-  substitution (`uv run --with $(cat r)`, also `--with=$(cat r)`, whose unquoted value is
-  split into words the runner reads as more arguments): write a long option's value with
-  `=` and in double quotes (`--with="$(cat r)"`), or run the substitution first and write
-  the value in. Variables from a substitution (`env $(cat .env | xargs) make`):
+  substitution on its own and write the program out. A leading `-` changes nothing: zsh
+  reads it as a precommand modifier, so `zsh -c '- $(echo rm) -rf /'` runs rm. A runner
+  option's value from a substitution (`uv run --with $(cat r)`, also `--with=$(cat r)`,
+  whose unquoted value is split into words the runner reads as more arguments): write a
+  long option's value with `=` and in double quotes (`--with="$(cat r)"`), or run the
+  substitution first and write the value in. After a runner flag known to take no value
+  (`uv run --frozen`, `npx -y`, `pipx run --quiet`, the table `_VALUELESS_RUNNER_FLAGS`)
+  the next word is the program, so `uv run --frozen pytest $(git ls-files tests)` passes;
+  after a flag the table does not know, the next word may be its value or the program,
+  and a substitution after it is refused with the way out: put its result into a variable
+  first (`files=$(git ls-files tests); uv run --frozen pytest $files`) or write the flag
+  as `--flag=value`. Variables from a substitution (`env $(cat .env | xargs) make`):
   `set -a; . ./.env; set +a; make` (`.`, not `source`: host_bash and the sandbox run
   `/bin/sh`, which is dash on Debian and Ubuntu and has no `source`). Shell text another
   command prints: `eval "$(...)"`, `bash -c "$(curl ...)"` (refused on the remote lane too),
@@ -828,8 +834,9 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   direct form (`conda run -n ENV ...`, `pyenv exec ...`, `direnv exec . ...`,
   `opam exec -- ...`, `ssh-agent bash -c '...'`), otherwise the output saved to a file,
   read, then run. A shell reading a descriptor above 2 that its own command does not open
-  (`exec 3< <(...); bash /dev/fd/3`, `bash <&3`, also spelt `/dev/fd//3` or
-  `/proc/<pid>/fd/3`) is refused the same way. A literal here-string fed to a shell
+  (`exec 3< <(...); bash /dev/fd/3`, `bash <&3`, `bash < /dev/fd/3`, `bash /dev/fd/0 <&3`,
+  also spelt `//dev/fd/3`, `/dev/fd//3` or `/proc/<pid>/fd/3`) is refused the same way.
+  A literal here-string fed to a shell
   (`bash <<< 'rm -rf /'`) is read as shell text. A literal program behind a substitution
   passes (`"$(git rev-parse --show-toplevel)/scripts/build.sh"`), and so does a
   substitution in an argument, an option's value, a `VAR=` prefix or an array assignment
@@ -861,8 +868,12 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   on three lanes, measured against the earlier module: no exception). Its price: what the
   frozen reading over-refused stays refused (`echo 'a; $(x)'`, words after a closed
   substitution such as `echo $(true) mkfs x`, a heredoc line that starts with a
-  substitution or a code fence), and the refusal says to join the lines or write the text
-  to a file.
+  substitution or a code fence), and the refusal says what it saw (a substitution where
+  a command may start), to put the substitution's result into a variable first, or to
+  join the lines or write the text to a file. A reading that fails refuses the command
+  (`unreadable`, logged), never passes it. The frozen module goes once this reading
+  refuses everything it refuses on its own: at least 300 000 generated commands on three
+  lanes with none refused there and allowed here.
 - **Pipes.** A pipe reaches through a carried command at both ends: `curl ... | uv run bash`
   and `uv run curl ... | bash` are a fetch piped into a shell like the same pipe without the
   runner, and so are `curl ... | (bash)`, `curl ... | echo $(bash)`,
@@ -880,15 +891,18 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   command joined back into text; those candidates, and both readings of a `$((`, may add up
   to the command's own length plus 64 KB, and past that the command is refused the same
   way. Empty parentheses spend no reading. The fork-bomb search is three plain searches.
-  The frozen reading gets fewer readings for a long command (as many as fit into 256 KB of
-  text read, at least 2); a spent budget refuses. A command over 128 KB is refused as
-  unreadable before either reading (`too_long`: write the text to a file and run the
-  file): both readings together, with shlex's own tokenizer quadratic on one long word,
-  took up to 44 s at 1 MB, and nobody approving it can read it either. Measured, single
-  process, both readings: every shape at most 0.9 s at 100 KB, and 0.63 s for `x=`
-  repeated to the 128 KB limit (`npx --x y ...` took 10 s at 100 KB before; the fork-bomb
-  shape `":(){ |:& "` repeated 1.6 s at 8 KB and 11 s at 16 KB before, 0.06 s and 0.12 s
-  now).
+  The frozen reading gets fewer readings for a long command (as many as fit into 768 K
+  characters of text read: all 64 up to 12 K characters, 6 at the cap); a spent budget
+  refuses. A command over 128 K characters is refused as unreadable before either reading
+  (`too_long`: write the text to a file and run the file): both readings together, with
+  shlex's own tokenizer quadratic on one long word, took up to 44 s at 1 MB, and nobody
+  approving it can read it either. The frozen copy differs from the earlier module in two
+  documented substitutions with the same answers, both for time: the fork-bomb search, and
+  its substitution search run over the text with every whitespace run collapsed (a run of
+  newlines took 125 s at the cap, now 0.04 s; 300 000 random strings, no different
+  answer). Measured, single process, both readings, best of two, 20 shapes repeated to the
+  128 K-character cap: every one at most 1.0 s (`uv run -a` 0.97 s, the fork-bomb shape
+  0.85 s, `x=` 0.59 s, a heredoc file 0.13 s; `npx --x y ...` took 10 s at 100 KB before).
 - **Named boundary: what it does not read.** The shell's compound grammar at the top level:
   brace groups (`curl x | { bash; }`), `if`/`for`/`while`/`case`, variables and `${...}` as
   the program, ANSI-C quoting (`$'...'`), globs and brace expansion in the program name,
@@ -902,19 +916,28 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   before. A descriptor named through a variable (`exec {fd}< ...; bash /dev/fd/$fd`) is not
   followed. Arithmetic evaluates an
   array subscript in a variable's value as code (`x='a[$(...)]'; echo $((x))`,
-  `printf -v 'a[$(...)]'`), which the text does not show.
-- **Named boundary: comments and heredocs.** A `#` is not read as a comment, and `<<` opens
-  no heredoc for the check: nothing is hidden behind either, and every line of a heredoc
-  body is read as a command line. So a body line that STARTS with what reads as a command
-  is refused (`rm -rf / was the bug`; inside a substitution, a line that reads as a `case`
-  statement too), while one that only mentions it is not (`Fix: rm -rf / no longer runs`);
-  to write such text into a file use the file tool or `echo '...' >> FILE`, which the
-  refusal says. An apostrophe in a comment or in a body opens a quote that
-  swallows every later line, as before this check read substitutions; a comment that ends
-  in a backslash joins the next line to it. A reading of comments and heredoc bodies that
-  hid their text was measured to lose refusals bash runs, so the rule for any later one is:
-  a new reading may only ADD refusals to the existing reading, never remove one (classify
-  both, refuse if either refuses).
+  `printf -v 'a[$(...)]'`), which the text does not show. A redirection glued to its
+  target (`rm -rf ~>/dev/null`) and a `case` body at the top level
+  (`case x in x) rm -rf /;; esac`) are not read, by either reading.
+- **Named boundary: comments and heredocs.** A `#` is not read as a comment by either
+  reading. The frozen reading reads every line of a heredoc body as a command line: a body
+  line that STARTS with what reads as a command is refused (`rm -rf / was the bug`), while
+  one that only mentions it is not (`Fix: rm -rf / no longer runs`); to write such text
+  into a file use the file tool or `echo '...' >> FILE`, which the refusal says. An
+  apostrophe in a comment or in a body opens a quote that swallows every later line, as
+  before this check read substitutions; a comment that ends in a backslash joins the next
+  line to it. The new reading takes a heredoc body as data where it surely is one
+  (`<<WORD`, `<<'WORD'`, `<<-WORD` at the top level, outside quotes, `${...}` and `$[...]`,
+  with its delimiter line present): no command lines and no nested readings, so a file
+  written through `cat > f <<'EOF'` passes whenever the frozen reading lets it (300 of 300
+  measured repository files did). An unquoted body's substitutions are read as commands,
+  and a body fed to a shell (`bash <<'EOF'`) is that shell's script, read after the body's
+  own escapes (`\$(...)` runs there). Its accepted cost: a program or shell text from a
+  substitution inside a body that reaches a shell another way than as its input
+  (`cat <<'EOF' | bash` with `eval "$(...)"` in the body) is not refused by the classes
+  this reading adds; the frozen reading's refusals of such a body stay. The rule for any
+  later reading: it may only ADD refusals to the existing reading, never remove one
+  (classify both, refuse if either refuses).
 
 For the main agent's own call, the real safety is still the person's approval plus the
 local-only rule in 3. The unattended lanes (the coder and workflow steps, point 2) have no

@@ -318,8 +318,12 @@ App. It shows everything the three wrote to each other: your messages from the a
 agent's answers, the requests of the app's agent and your agent's answers to them, the tasks
 your agent handed the app with their results, the lines you wrote to the app's agent on VAF
 and what it wrote back, and the "Confirmed in the Veyllo App" line of a confirmation card.
-It stays there while a device is paired, also with the Veyllo App switched off for your
-account; it is your account's only, and another account never sees it.
+It appears the moment the pairing is confirmed (no reload) and goes with the last device that
+is removed; it stays there while a device is paired, also with the Veyllo App switched off for
+your account, and stays at the top of the list however far the list scrolls. It is your
+account's only, and another account never sees it. A question you or the app's agent asked
+shows at once, at the time it was asked, while your agent is still answering it. An empty room
+says who is in it and where a line goes.
 
 **One line, one addressee.** Every line has exactly one addressee, and only the addressee
 answers it:
@@ -327,15 +331,17 @@ answers it:
 | A line | Addressee | Who answers | Model calls on VAF |
 |---|---|---|---|
 | You on VAF, with no leading mention | the agent in your Veyllo App | that agent, with a line into the room | none |
-| You on VAF, starting with `@` and your agent's name (or `@VAF`) | your VAF agent | your VAF agent, in your app chat; the app's agent stays quiet | one turn |
+| You on VAF, starting with `@` and the first word of your agent's name (or `@VAF`) | your VAF agent | your VAF agent, in your app chat; the app's agent stays quiet | one turn |
 | You in the Veyllo App | your VAF agent | your VAF agent, as today; the app's agent stays quiet | one turn |
 | The app's agent writes into the room | you | nobody; your VAF agent reads it at its next turn | none |
 | The app's agent asks your agent (`agent_ask`) | your VAF agent | your VAF agent, as described above | one turn |
 | Your agent hands the app a task (`user_phone`) | the agent in your Veyllo App | that agent, with the task's result | none on VAF |
 
 There is no chooser: what you write on VAF goes to the app's agent unless it starts with `@`
-and your agent's name, the same leading-mention rule as in an agent room ("frag @VAF" in the
-middle of a line still goes to the app's agent). The composer says so.
+and the first word of your agent's name (a name of several words written out begins with it
+too) or `@VAF`, as a whole word ("@Miami" does not name Mia), the same leading-mention rule as
+in an agent room ("frag @VAF" in the middle of a line still goes to the app's agent). The
+composer's hint names that word, and `@` completes it.
 
 **What "your agent is in the room" means.** Your VAF agent reads every room line at its next
 turn in your app chat, where your own turns run: a line you wrote to the app's agent after a
@@ -352,13 +358,16 @@ memories by the chat's compaction.
 **Delivery.** A line to the app's agent goes to ONE device: the one that announced the room
 and was used most recently. It is kept in that device's queue until the device confirms it,
 up to seven days, with the push notice of any other message while the device is away. Under
-the line the room shows **delivered** (the device confirmed it), **waiting for the Veyllo
-App** (still queued) or **not delivered** (the device was removed meanwhile). A second device
-of the account does not get the line.
+the line the room shows **delivered** (the device confirmed it; with more than one device, to
+which), **waiting for the Veyllo App** (still queued) or **not delivered** with why: the device
+was removed, the Veyllo App is switched off for your account, the app was away for more than
+seven days, or the app did not take room lines. A line that will not arrive any more can be
+sent again with one click. A second device of the account does not get the line.
 
 **An older Veyllo App.** A Veyllo App that does not announce the room keeps working as it is.
 The room shows what exists without it, and writing to the app's agent is refused with the
-sentence that a newer Veyllo App is needed; a line to your VAF agent (`@` and its name) still
+sentence that a newer Veyllo App is needed (a device that has not connected since its pairing
+is told "open it once" instead, because VAF does not know yet what it supports); a line to your VAF agent (`@` and its name) still
 works and its answer reaches the older app as an ordinary reply. An app that answers a room
 line with "unknown type" is treated as an older app until it announces the room again.
 
@@ -398,8 +407,13 @@ working unchanged.
   repeated id (within 24 hours, or already stored) is acknowledged again and stored once.
   Errors carry the id in `ref`: `rate_limited` (shared with the device's 30 messages per minute;
   retry later with the same id), `refused` (the Veyllo App is off for the account; do not retry
-  before the next `welcome`), `bad_field` (do not retry). It never starts a turn of VAF's agent,
-  also when it names that agent: the app's agent asks VAF's agent with `agent_ask`.
+  before the next `welcome`), `bad_field` (do not retry; also for blank text and a `reply_to`
+  that is not a uuid). `rate_limited` also answers when the account's lines of `room_say` passed
+  2 MiB of text in the last hour (`room.ROOM_SAY_BYTES_PER_HOUR`: every line rewrites the chat
+  file, and a device at its full rate with ordinary chat lines stays below it); retry later.
+  It never starts a turn of VAF's agent, also when it names that agent: the app's agent asks
+  VAF's agent with `agent_ask`. An id the app chose that equals one of VAF's `room_msg` ids is
+  a new line, not a repeat.
 - **While the app is away.** VAF keeps a `room_msg` in the device's queue in order with the
   device's other messages, sends the push notice when the device is paired through the relay,
   and replays it after `welcome` with its original `id`, `text`, `ts`, `from` and `to`. The app

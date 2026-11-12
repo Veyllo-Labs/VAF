@@ -17,7 +17,7 @@ Connect external apps and services to interact with your VAF agent.
 | Microsoft Teams | Coming Soon | Bot Framework for Teams integration |
 | Matrix (Element) | Coming Soon | Open-source chat protocol |
 | IRC | Coming Soon | Classic IRC for communities |
-| **Veyllo App** | Available | Chat with your agent in the Veyllo App, through the Veyllo relay or directly over your VPN; your agent can hand tasks to the Veyllo App ([VEYLLO_APP.md](VEYLLO_APP.md)) |
+| **Veyllo App** | Available | Chat with your agent in the Veyllo App, through the Veyllo relay or directly over your VPN; your agent can hand tasks to the Veyllo App; once paired, the [Veyllo App room](VEYLLO_APP.md#the-veyllo-app-room) at the top of the chat list shows you, your agent and the app's agent together ([VEYLLO_APP.md](VEYLLO_APP.md)) |
 | **Contacts** | Available | Central contact list with personal file and assistant whitelist |
 
 ### Calendar
@@ -748,6 +748,11 @@ accounts="shared")`. What differs ([VEYLLO_APP.md](VEYLLO_APP.md) for the whole 
   (`veyllo_app_<key>`) in process, and the reply streams back to the device. The account
   comes from the device row its certificate names, never from the message.
 - **No read tool**: the account's one chat is its own history.
+- **The conversation is the Veyllo App room**, pinned at the top of the chat list while a
+  device is paired: you, your agent and the agent in the Veyllo App in one view, where a line
+  you write goes to the app's agent and `@` with your agent's name asks your agent
+  ([VEYLLO_APP.md](VEYLLO_APP.md#the-veyllo-app-room)). The inbox opens a Veyllo App
+  conversation there.
 - **`accounts="shared"`**: one relay instance serves every account; `veyllo_app_config.enabled`
   is the channel's switch, admins ride it, every other account has its own switch, which a
   confirmed pairing turns on.

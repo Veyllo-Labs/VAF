@@ -445,7 +445,10 @@ brackets or a Cyrillic word.
 
 Once a Veyllo App is paired with the account, the sidebar starts with **Veyllo App**, drawn
 with the app's symbol (`Smartphone`), a green dot while a device is connected and the count
-of new lines; it stands above the agent rooms and the conversations
+of new lines (no dot while the room is open). It appears when the pairing is confirmed and goes
+with the last device (`app_room_changed`, no reload), and it sticks to the top of the list on
+the list's own surface tone, in the expanded sidebar and the collapsed rail; it is a button,
+so the keyboard reaches it. It stands above the agent rooms and the conversations
 (`SessionManager.list_ui`, row kind `app_room`, id `app:veyllo_app`, which names no session:
 delete, rename and hide refuse it). It is one conversation of three parties, the person, the
 agent in their Veyllo App and the VAF agent; its rules are in
@@ -457,13 +460,23 @@ agent in their Veyllo App and the VAF agent; its rules are in
   their own words, the VAF agent with its living avatar, the app's agent with the app's symbol
   on a sky accent) and "to <name>"; under a line to the app's agent its delivery state
   (delivered, waiting for the Veyllo App, not delivered); a confirmation from a card stands as
-  one centred line. What the room does not have stays hidden: member chips, the member panel,
-  reactions, the shared folder, the task board, votes and the typing signal of a keypress.
+  one centred line. A question shows at once, marked as waiting for the answer, at the time it
+  was asked. A task's ending and a failed answer are worded by the page in the viewer's
+  language (the server sends a code), and the person addressed reads "to you" in their own
+  form. A line that was not delivered says why and offers "Send again"; with two devices the
+  delivered state names the device. The empty room explains who is in it and where a line
+  goes. What the room does not have stays hidden: member chips, the member panel, reactions,
+  the shared folder, the task board, votes, the typing signal of a keypress, and the
+  attachment and call buttons (the room carries text only). Its rules are plain functions in
+  `web/components/chat/appRoom.ts`, run in node by `tests/test_app_link_room_web.py`.
 - **The composer has no chooser.** It posts the line (`POST /api/app-link/room`) and the server
   decides the addressee: the app's agent, or the VAF agent when the line starts with `@` and its
-  name. `@` completes only the VAF agent's name. The box clears when the line was taken; a
-  refusal keeps the text and says why above the box (an older Veyllo App, the Veyllo App off,
-  no device), and the older-app sentence stands there as long as no device announces the room.
+  first word of its name (the handle). `@` completes only that handle, and the hint names it;
+  while no line can reach the app's agent the hint offers only the handle. The box clears when
+  the line was taken, and only in the view it was written in; a refusal keeps the text and says
+  why above the box (an older Veyllo App, a device not connected since pairing, the Veyllo App
+  off, no device). That sentence sits in the dock, so the transcript's padding makes room for
+  it, and a draft that arrives after the room opened re-pins the view to the bottom.
 - **Drafts.** The drafts waiting in either of the room's two sessions (the app chat and the
   app agent's requests) show at the end of the room, as the unplaced drafts of a chat do.
 - **Signals.** `app_room_changed` refetches the list (the row's count) and an open room view.

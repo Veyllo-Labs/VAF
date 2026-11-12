@@ -374,8 +374,12 @@ Key rules:
   `me = "person"`, `agentPeer = "vaf_agent"`, `typing` holding the VAF agent while a turn of
   either of the room's sessions runs, `canManage`/`canInvite` false, no tasks, votes,
   invitations or read positions, and `room.appRoom = { devices, connected, canWrite, reason,
-  agentName, sessions }`. Each message adds `toLabel` and, for a line to the app's agent,
-  `state` (`delivered`, `waiting`, `not_delivered`). Opening marks the room as read. The page
+  agentName, handle, sessions }`. Each message adds `toLabel` and, as they apply: `state`
+  (`delivered`, `waiting`, `not_delivered`) with `reason` (`removed`, `lane_off`, `expired`,
+  `dropped`) and `device` for a line to the app's agent, `code` (how a task ended, or
+  `turn_failed`) with `seconds` for a timeout, and `pending` for a question whose turn runs or
+  waits. After the answer went out the read position moves to the newest line OF THAT ANSWER
+  (a line arriving meanwhile stays new), and a move sends `app_room_changed`. The page
   stores `data.room` whole, so `appRoom` reaches the view without a field list. The 3-second
   poll sends `open_app_room` again while that room is open.
 
@@ -456,7 +460,8 @@ Key rules:
 ### Server → Client
 
 - `app_room_changed` (no payload): the user's Veyllo App room changed (a line written on VAF,
-  a line of the app's agent, a delivery, a task of the VAF agent). Sent to that account's
+  a line of the app's agent, a delivery, a task of the VAF agent, a device paired or removed,
+  the room read). Sent to that account's
   connections only (`push_update_to_user`, `vaf/core/app_link/room.py`). A signal, not the
   room: the browser answers with `get_sessions` (the row's count) and, while the room is open,
   `open_app_room`.

@@ -40,7 +40,7 @@ import { draftRefOf, isDraftTurnEnd, DRAFT_WAKE_PREFIX, CONFIRM_WAKE_PREFIX } fr
 import AskChoices from '@/components/chat/AskChoices';
 import { asksOf, withoutOptions } from '@/components/chat/askContract';
 import { bodyAndSay, placeRoundUpdate, removeRoundBubble } from '@/components/chat/turnRounds';
-import { splitTurnFiles, type FileChip } from '@/components/chat/workingShots';
+import { splitTurnFiles, stepShots, stepToolIds, type FileChip } from '@/components/chat/workingShots';
 import { ShotStrip } from '@/components/chat/ShotStrip';
 import type { SettingsChatJump } from '@/components/SettingsModal';
 import CreateAutomationPopup, { type CreateAutomationPayload, type EditAutomationTask } from '@/components/CreateAutomationPopup';
@@ -10275,7 +10275,7 @@ function VAFDashboardContent() {
                                                     // (or when no step on screen took them). Every other chip stays a chip.
                                                     const shotSplit = splitTurnFiles(
                                                         turnChips,
-                                                        hasTimeline ? turnTl!.actions.filter(a => a.kind === 'tool').map(a => a.msg.toolId || '') : [],
+                                                        hasTimeline ? stepToolIds(turnTl!.actions) : [],
                                                         hasTimeline && timelineExpanded,
                                                     );
                                                     const timelineActions: TimelineAction[] = hasTimeline ? turnTl!.actions.map((act) => {
@@ -10328,9 +10328,9 @@ function VAFDashboardContent() {
                                                                         onToggleScroll={preserveChatScroll}
                                                                         onToggle={isSub ? (nextExpanded: boolean) => { if (nextExpanded) openSubAgentWindow(true); else closeSubAgentWindow(true); } : undefined}
                                                                     />
-                                                                    {m.toolId && shotSplit.byStep[m.toolId] && (
+                                                                    {stepShots(shotSplit.byStep, m.toolId).length > 0 && (
                                                                         <div className="mt-1.5">
-                                                                            <ShotStrip shots={shotSplit.byStep[m.toolId]} onOpen={openImageInViewer} />
+                                                                            <ShotStrip shots={stepShots(shotSplit.byStep, m.toolId)} onOpen={openImageInViewer} />
                                                                         </div>
                                                                     )}
                                                                 </div>

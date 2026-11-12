@@ -185,7 +185,7 @@
     "msgActionCopy": "Als Markdown kopieren",
     "msgActionCopied": "Kopiert",
     "msgActionRegenerate": "Neu beantworten",
-    "workShotsLabel": "Beim Prüfen aufgenommen ({count})",
+    "workShotsLabel": "Beim Prüfen aufgenommene Screenshots ({count})",
     "workShotOpen": "Screenshot {index} von {count} öffnen",
     "workShotsEarlier": "Frühere Screenshots",
     "workShotsLater": "Spätere Screenshots",

@@ -17,6 +17,7 @@ MUTATIONS, each turns the named test red:
 - stamp no `toolId` in notify_file_created -> test_the_event_names_the_step;
 - drop the VAF_TOOL_CALL_ID fallback -> test_the_event_names_the_step;
 - skip the token reset in tool_call_context -> test_the_context_restores_on_every_exit;
+- store the id without coercing "" to None -> test_an_empty_call_id_declares_no_step;
 - send `purpose` unconditionally -> test_only_a_known_purpose_is_sent;
 - drop tool_call_context from _execute_tool_and_spawns -> test_the_agent_declares_the_call_for_its_tool;
 - drop the kwarg at one call site -> test_every_dispatch_passes_the_call_id;
@@ -128,6 +129,15 @@ def test_the_context_restores_on_every_exit():
                 raise RuntimeError("tool failed")
         assert ipc.get_current_tool_call_id() == "outer"
     assert ipc._tool_call_ctx.get() is ipc._UNSET, "never told must come back as never told"
+
+
+def test_an_empty_call_id_declares_no_step(monkeypatch):
+    """A provider that sends an empty tool-call id gives the step no id; that is a
+    declaration of "no step", so a parent's id in the environment does not apply either."""
+    monkeypatch.setenv("VAF_TOOL_CALL_ID", "from-parent")
+    with ipc.tool_call_context(""):
+        assert ipc.get_current_tool_call_id() is None
+    assert ipc.get_current_tool_call_id() == "from-parent"
 
 
 def test_the_agent_declares_the_call_for_its_tool():

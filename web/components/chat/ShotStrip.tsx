@@ -6,24 +6,13 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Camera, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import type { FileChip } from '@/components/chat/workingShots';
+import { edgeMask, FADE_PX, type FileChip } from '@/components/chat/workingShots';
 
-// The faded edge, in px. Only the side where more pictures hide gets it, so a row that
-// fits shows sharp edges and the fade itself says "there is more this way".
-const FADE_PX = 28;
-
-/**
- * The soft edge is a gradient MASK on the scroller, not a blur: a filter over scrolling
- * content is rasterised again on every scroll frame, a mask is composited and costs
- * nothing while the row stands still. Nothing here animates; the only motion is a
- * `scrollBy`, smooth unless the reader asked for reduced motion.
- */
-function edgeMask(atStart: boolean, atEnd: boolean): string | undefined {
-    if (atStart && atEnd) return undefined;
-    const left = atStart ? '#000 0' : `transparent 0, #000 ${FADE_PX}px`;
-    const right = atEnd ? '#000 100%' : `#000 calc(100% - ${FADE_PX}px), transparent 100%`;
-    return `linear-gradient(to right, ${left}, ${right})`;
-}
+// How far from either edge a picture the keys move to stays: past the faded edge and the
+// 28px arrow button over it, so the focused picture and its ring are never under either.
+// No scroll snapping on the row: a snap point pulled the keyboard's scrollIntoView back
+// half a picture, which left the focused one cut at the edge.
+const KEEP_CLEAR_PX = FADE_PX + 12;
 
 function prefersReducedMotion(): boolean {
     try {
@@ -133,8 +122,8 @@ export function ShotStrip({ shots, onOpen, label }: Props) {
                 <div
                     ref={scrollerRef}
                     onScroll={scheduleMeasure}
-                    className="flex gap-2 overflow-x-auto overscroll-x-contain snap-x snap-proximity scroll-px-2 py-1 px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-                    style={mask ? { WebkitMaskImage: mask, maskImage: mask } : undefined}
+                    className="flex gap-2 overflow-x-auto overscroll-x-contain py-1 px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                    style={{ scrollPaddingInline: KEEP_CLEAR_PX, ...(mask ? { WebkitMaskImage: mask, maskImage: mask } : {}) }}
                 >
                     {shots.map((s, i) => (
                         <button
@@ -145,9 +134,8 @@ export function ShotStrip({ shots, onOpen, label }: Props) {
                             onClick={() => { setActive(i); onOpen(s.path, s.name); }}
                             onKeyDown={e => onKeyDown(e, i)}
                             onFocus={() => setActive(i)}
-                            title={s.name}
                             aria-label={t('workShotOpen', { index: i + 1, count })}
-                            className="snap-start shrink-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                            className="shrink-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                         >
                             {/* Smaller below md: at a phone's width three full pictures filled the
                                 row exactly and the fourth did not show at all, so nothing said

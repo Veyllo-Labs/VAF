@@ -40,7 +40,7 @@ the text field grows with the text instead of scrolling, and the buttons wrap
 
 The row of check pictures under a turn (`web/components/chat/ShotStrip.tsx`, see Working
 screenshots in [WEB_UI.md](WEB_UI.md)). On a phone it is a native touch swipe:
-`overflow-x-auto` with `overscroll-x-contain`, so a sideways swipe at the row's end does not
+`overflow-x-auto` with `overscroll-x-contain` and no scroll snapping, so a sideways swipe at the row's end does not
 pull the page or trigger the browser's back gesture, and no `touch-action` is set, so a
 vertical swipe on the row still scrolls the chat. The arrow buttons are a desktop affordance
 (`max-md:hidden`); the soft edge alone shows that the row goes on. The thumbnails are

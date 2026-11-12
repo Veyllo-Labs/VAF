@@ -19,7 +19,13 @@ MUTATIONS, each turns the named test red:
 - drop toolId from newChip, or rebuild {path, name} in withChips -> test_page_forwards_both_fields;
 - map turnChips in the chip row -> test_chip_row_draws_only_the_attachments;
 - add animate-pulse or blur-sm to the strip -> test_strip_has_no_animation_and_no_filter;
-- drop a key from th.json -> test_four_keys_in_every_catalogue.
+- drop a key from th.json -> test_four_keys_in_every_catalogue;
+- hand splitTurnFiles [] instead of the step ids -> test_page_places_the_strips;
+- keep tool steps without an id, or take 'say' steps -> test_step_tool_ids;
+- swap atStart and atEnd in edgeMask -> test_edge_mask;
+- a plain {} for byStep -> test_provider_ids_are_plain_keys (__proto__);
+- read byStep[id] without the own-key check -> test_provider_ids_are_plain_keys (constructor);
+- snap the row again, or a scroll padding inside the fade -> test_keyboard_focus_clears_the_fade.
 """
 import json
 import re
@@ -54,7 +60,8 @@ def _call(fn, *args):
         "const m = {exports: {}}; new Function('module', 'exports', js)(m, m.exports);"
         "const [fn, args] = JSON.parse(process.argv[3]);"
         "const v = m.exports[fn];"
-        "process.stdout.write(JSON.stringify(typeof v === 'function' ? v(...args) : v));"
+        "const r = typeof v === 'function' ? v(...args) : v;"
+        "process.stdout.write(JSON.stringify(r === undefined ? null : r));"
     )
     out = subprocess.run(["node", "-e", script, str(_TS), str(MODULE), json.dumps([fn, list(args)])],
                          capture_output=True, text=True, check=True).stdout
@@ -149,7 +156,10 @@ def test_chip_row_draws_only_the_attachments():
 def test_page_places_the_strips():
     src = _src(PAGE)
     assert "hasTimeline && timelineExpanded," in src, "collapsed or timeline-less turns use one strip"
-    assert "<ShotStrip shots={shotSplit.byStep[m.toolId]} onOpen={openImageInViewer} />" in src
+    assert "hasTimeline ? stepToolIds(turnTl!.actions) : []," in src, \
+        "without the step ids nothing is ever drawn inside its step"
+    assert "<ShotStrip shots={stepShots(shotSplit.byStep, m.toolId)} onOpen={openImageInViewer} />" in src
+    assert "shotSplit.byStep[" not in src, "a bare index finds inherited members for ids like 'constructor'"
     assert re.search(r"<ShotStrip shots=\{shotSplit\.strip\} onOpen=\{openImageInViewer\}\s+"
                      r"label=\{tMain\('workShotsLabel'", src)
 
@@ -176,6 +186,54 @@ def test_strip_keyboard_and_mobile_rules():
     assert 'loading="lazy"' in src
     # At 390px three 112px pictures fill the row exactly and hide the fourth entirely.
     assert "max-md:w-[96px]" in src
+
+
+def test_step_tool_ids():
+    actions = [{"kind": "think", "msg": {}}, {"kind": "tool", "msg": {"toolId": "c1"}},
+               {"kind": "say", "msg": {"toolId": "s1"}}, {"kind": "tool", "msg": {}},
+               {"kind": "tool", "msg": {"toolId": ""}}, {"kind": "tool", "msg": {"toolId": "c2"}}]
+    assert _call("stepToolIds", actions) == ["c1", "c2"]
+
+
+def test_edge_mask():
+    assert _call("edgeMask", True, True) is None, "a row that fits has sharp edges"
+    start = _call("edgeMask", True, False)
+    middle = _call("edgeMask", False, False)
+    end = _call("edgeMask", False, True)
+    assert start == "linear-gradient(to right, #000 0, #000 calc(100% - 28px), transparent 100%)"
+    assert middle == "linear-gradient(to right, transparent 0, #000 28px, #000 calc(100% - 28px), transparent 100%)"
+    assert end == "linear-gradient(to right, transparent 0, #000 28px, #000 100%)"
+
+
+def test_provider_ids_are_plain_keys():
+    """Tool-call ids come from the provider. An id that names an Object member must be a key
+    like any other: '__proto__' used to throw while splitting, 'constructor' handed the strip a
+    function while rendering."""
+    odd = [_shot(1, "__proto__"), _shot(2, "constructor"), _shot(3, "hasOwnProperty")]
+    out = _call("splitTurnFiles", odd, ["__proto__", "constructor", "hasOwnProperty"], True)
+    assert out["byStep"] == {"__proto__": [odd[0]], "constructor": [odd[1]], "hasOwnProperty": [odd[2]]}
+    assert out["strip"] == []
+    # A step with such an id and no pictures finds nothing (the page's lookup).
+    for name in ("constructor", "hasOwnProperty", "isPrototypeOf", "toString"):
+        assert _call("stepShots", {"c1": [odd[0]]}, name) == []
+    assert _call("stepShots", {"c1": [odd[0]]}, "c1") == [odd[0]]
+    assert _call("stepShots", {"c1": [odd[0]]}, None) == []
+
+
+def test_keyboard_focus_clears_the_fade():
+    """Measured in a browser: with proximity snapping a picture the arrow keys moved to was
+    pulled back to a snap point and stayed cut at the edge, under the fade and the arrow
+    button; and a 8px scroll padding left it inside the 28px fade. The row does not snap, and
+    the padding clears the fade plus the arrow button (left-1/right-1, 28px wide, so 32px)."""
+    src = _src(STRIP)
+    code = re.sub(r"^\s*(//|\*|/\*).*$", "", src, flags=re.M)
+    assert not re.search(r"\bsnap-", code), "scroll snapping fights scrollIntoView"
+    assert "scrollPaddingInline: KEEP_CLEAR_PX" in src
+    extra = int(re.search(r"const KEEP_CLEAR_PX = FADE_PX \+ (\d+);", src).group(1))
+    fade = int(re.search(r"export const FADE_PX = (\d+);", _src(MODULE)).group(1))
+    assert fade + extra > 4 + 28, "the padding must clear the arrow button over the fade"
+    assert "inline: 'nearest'" in src
+    assert "title={s.name}" not in src, "the raw file name is no hover text; the aria-label names the picture"
 
 
 def test_four_keys_in_every_catalogue():

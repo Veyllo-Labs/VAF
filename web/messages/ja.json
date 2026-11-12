@@ -186,7 +186,7 @@
     "msgActionCopied": "コピーしました",
     "msgActionRegenerate": "回答を再生成",
     "workShotsLabel": "確認中に撮ったスクリーンショット（{count}）",
-    "workShotOpen": "スクリーンショット {index}/{count} を開く",
+    "workShotOpen": "スクリーンショット{index}/{count}を開く",
     "workShotsEarlier": "前のスクリーンショット",
     "workShotsLater": "後のスクリーンショット",
     "msgActionRegenerateConfirm": "置き換えますか？",

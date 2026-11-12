@@ -37,11 +37,22 @@ export function isWorkingShot(chip: FileChip): boolean {
     return SHOT_IMAGE_EXTS.includes(ext);
 }
 
+/**
+ * The tool-call ids of a turn's steps, the keys a check picture is matched on. Only tool
+ * steps have one (thinking and spoken lines do not), and a step without an id matches
+ * nothing, so its pictures go to the turn strip.
+ */
+export function stepToolIds(actions: { kind: string; msg: { toolId?: string } }[]): string[] {
+    return actions.filter(a => a.kind === 'tool').map(a => a.msg.toolId || '').filter(id => id !== '');
+}
+
 export function splitTurnFiles(chips: FileChip[], stepToolIds: string[], expanded: boolean): TurnFiles {
     const files: FileChip[] = [];
     const shots: FileChip[] = [];
     for (const c of chips) (isWorkingShot(c) ? shots : files).push(c);
-    const byStep: Record<string, FileChip[]> = {};
+    // No prototype: the keys are tool-call ids from the provider, and an id such as
+    // "constructor" or "__proto__" must be a key like any other, not an inherited member.
+    const byStep: Record<string, FileChip[]> = Object.create(null);
     if (!expanded) return { files, byStep, strip: shots };
     const steps = new Set(stepToolIds.filter(id => !!id));
     const strip: FileChip[] = [];
@@ -50,4 +61,27 @@ export function splitTurnFiles(chips: FileChip[], stepToolIds: string[], expande
         else strip.push(s);
     }
     return { files, byStep, strip };
+}
+
+/** The check pictures of one step, or none. An own key only, for the reason above. */
+export function stepShots(byStep: Record<string, FileChip[]>, toolId: string | undefined): FileChip[] {
+    if (!toolId || !Object.prototype.hasOwnProperty.call(byStep, toolId)) return [];
+    const shots = byStep[toolId];
+    return Array.isArray(shots) ? shots : [];
+}
+
+// The faded edge of the screenshot strip, in px. Only the side where more pictures hide
+// gets it, so a row that fits shows sharp edges and the fade itself says "there is more".
+export const FADE_PX = 28;
+
+/**
+ * The soft edge is a gradient MASK on the scroller, not a blur: a filter over scrolling
+ * content is rasterised again on every scroll frame, a mask is composited and costs
+ * nothing while the row stands still. `undefined` when everything fits.
+ */
+export function edgeMask(atStart: boolean, atEnd: boolean): string | undefined {
+    if (atStart && atEnd) return undefined;
+    const left = atStart ? '#000 0' : `transparent 0, #000 ${FADE_PX}px`;
+    const right = atEnd ? '#000 100%' : `#000 calc(100% - ${FADE_PX}px), transparent 100%`;
+    return `linear-gradient(to right, ${left}, ${right})`;
 }

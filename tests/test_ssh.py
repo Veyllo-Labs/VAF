@@ -874,3 +874,52 @@ def test_a_folder_stream_never_enters_a_linked_folder(tmp_path):
     with tarfile.open(fileobj=buf) as tar:
         names = tar.getnames()
     assert names == ["index.html"] and count == 1
+
+
+def _known_hosts_file():
+    from vaf.core import ssh
+    return ssh.known_hosts_path(ALICE)
+
+
+@pytest.mark.parametrize("stderr_lines, why", [
+    ([], "no OpenSSH line at all"),
+    (["No ED25519 host key is known for [other.example]:2222 and you have requested strict "
+      "checking.", "Host key verification failed."], "a line naming another server"),
+])
+def test_a_command_that_ran_and_removed_the_list_is_not_reported_as_not_run(
+        lab, stderr_lines, why):
+    """The command RAN on a remembered server: it removed this account's list and exited 255,
+    with nothing on stdout. "Nothing ran, call again" would invite repeating a command that
+    already changed state; only OpenSSH's own line naming THIS server makes that claim.
+    MUTATION: drop the unknown-server line from not_confirmed - red (no line);
+    MUTATION: drop the server-name match - red (another server)."""
+    import shlex
+    _tool(command="true", login_credential="SERVER_PASS", _call_confirmed=True)
+    printed = "".join(f"printf '%s\\n' {shlex.quote(line)} >&2; " for line in stderr_lines)
+    out = _tool(command=f"rm -f {shlex.quote(str(_known_hosts_file()))}; echo did-run >&2; "
+                        f"{printed}exit 255", login_credential="SERVER_PASS")
+    assert "removed from this account's confirmed servers" not in out, (why, out)
+    assert "Call again" not in out, out
+    if not stderr_lines:
+        assert "did-run" in out and out.rstrip().endswith("Exit 255"), out
+
+
+def test_the_changed_key_words_with_exit_0_are_output_not_a_refusal(lab):
+    """OpenSSH refuses a changed key with exit 255; a remote command that prints the words
+    and succeeds ran. MUTATION: read a changed key whatever the exit status - red."""
+    _tool(command="true", login_credential="SERVER_PASS", _call_confirmed=True)
+    out = _tool(command="printf '%s\\n' '@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!"
+                        "     @' >&2; exit 0", login_credential="SERVER_PASS")
+    assert "REFUSED" not in out and out.rstrip().endswith("OK"), out
+
+
+def test_the_changed_key_words_next_to_real_output_are_shown_as_they_came(lab):
+    """A remote command printed output and then OpenSSH's changed-key line, and exited 255:
+    it ran, so what it printed is shown, not replaced by the key report.
+    MUTATION: drop the nothing-came-back guard from the key readings - red."""
+    _tool(command="true", login_credential="SERVER_PASS", _call_confirmed=True)
+    line = ("Host key for [127.0.0.1]:2222 has changed and you have requested strict "
+            "checking.")
+    out = _tool(command=f"echo did-run; printf '%s\\n' '{line}' >&2; exit 255",
+                login_credential="SERVER_PASS")
+    assert "did-run" in out and "REFUSED" not in out and out.rstrip().endswith("Exit 255"), out

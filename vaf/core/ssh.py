@@ -582,7 +582,9 @@ def run(target: Target, remote_command: str, *, user_scope_id: Optional[str],
                     stderr=stderr, timed_out=state["timed_out"],
                     too_large=state["too_large"], bytes_out=written)
     lines = stderr.splitlines()
-    failed = result.returncode == 255
+    # OpenSSH refuses a key before any session: exit 255 with nothing come back. Output
+    # means a remote command ran, and what it printed is shown as it is.
+    failed = result.returncode == 255 and not out_chunks and written == 0
     # A key that differs from the remembered one comes first: OpenSSH words it the same way
     # under accept-new and yes, and it must never read as anything milder.
     changed = failed and ("REMOTE HOST IDENTIFICATION HAS CHANGED" in stderr
@@ -601,8 +603,8 @@ def run(target: Target, remote_command: str, *, user_scope_id: Optional[str],
     # A remembered server refused for its key without those lines (a key of another type
     # than the remembered one): OpenSSH's own last line, with nothing come back.
     result.host_key_changed = changed or (
-        not result.not_confirmed and failed and was_known and not out_chunks
-        and written == 0 and "Host key verification failed." in lines)
+        not result.not_confirmed and failed and was_known
+        and "Host key verification failed." in lines)
     result.auth_failed = result.returncode == 255 and "Permission denied" in stderr
     if not was_known and is_known(target, user_scope_id):
         result.first_contact = True

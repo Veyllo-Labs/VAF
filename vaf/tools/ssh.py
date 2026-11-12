@@ -326,10 +326,11 @@ class SshTool(BaseTool):
         if result.host_key_changed:
             if stdout_path is not None:
                 stdout_path.unlink(missing_ok=True)
-            return (f"[SSH {target}] REFUSED: the server shows a DIFFERENT key than the one "
-                    "remembered. Either it was reinstalled, or someone is in between. Tell the "
-                    "user; only if they know why, they remove the server in Settings, "
-                    "Connections, SSH (or `vaf ssh forget`), and the next call asks again.")
+            return (f"[SSH {target}] REFUSED: OpenSSH reported a key problem: a DIFFERENT "
+                    "key than the one remembered for this server. Either it was reinstalled, "
+                    "or someone is in between. Tell the user; only if they know why, they "
+                    "remove the server in Settings, Connections, SSH (or `vaf ssh forget`), "
+                    "and the next call asks again.")
         if result.auth_failed:
             if stdout_path is not None:
                 stdout_path.unlink(missing_ok=True)

@@ -436,33 +436,64 @@ def test_a_fetch_beside_a_runner_is_not_a_pipe_into_a_shell(cmd):
     assert "pipe_to_shell" not in classify_command(cmd, profile="host").categories, cmd
 
 
-def test_a_command_of_many_runner_options_is_classified_in_bounded_time():
+def _count_classifications(monkeypatch):
+    """Counts every classify_command call, the nested ones too (they look the name up in the
+    module), and fails at the first call past the budget's bound, so an unbounded run is red
+    at once instead of running for minutes. Counted rather than timed: a busy CI worker that
+    pauses the process cannot fail a correct classification."""
+    from vaf.core import command_policy
+    from vaf.core.command_policy import MAX_NESTED_COMMANDS
+
+    calls = []
+    real = command_policy.classify_command
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        # The top-level call plus at most MAX_NESTED_COMMANDS nested ones, the last of
+        # which overdraws the budget and is refused.
+        assert len(calls) <= MAX_NESTED_COMMANDS + 1, "classifications past the budget"
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(command_policy, "classify_command", counting)
+    return counting, calls
+
+
+def test_a_command_of_many_runner_options_is_classified_in_bounded_time(monkeypatch):
     """Every runner option's value position is a candidate, and a candidate that is a runner
     branches again, so without a shared budget the work grew with the 4th power of the
     command (measured: 30 options 2.4 s, 80 did not finish in 300 s). The gate classifies
     before anyone is asked, in the server process. MUTATION: never spend the budget (pass a
-    fresh one to each nested call) - red (the timer)."""
-    import time
-
-    cmd = "uv run " + "-a uv " * 40 + "python -c 1"
-    started = time.monotonic()
-    v = classify_command(cmd, profile="host")
-    assert time.monotonic() - started < 1.0
+    fresh one to each nested call) - red (the count)."""
+    classify, _ = _count_classifications(monkeypatch)
+    v = classify("uv run " + "-a uv " * 40 + "python -c 1", profile="host")
     assert v.blocked and "nested_too_deep" in v.categories
 
 
-def test_a_long_runner_command_stays_linear_at_the_depth_limit():
+def test_a_long_runner_command_stays_linear_at_the_depth_limit(monkeypatch):
     """A call refused at the depth limit spends from the budget too. When it cost nothing, a
     runner at the depth limit tried every value position, each joined back into text, so the
     work grew with the square of the length (measured: 2000 options, 12 KB, 39 s).
-    MUTATION: spend the budget only after the depth check - red (the timer)."""
-    import time
-
-    cmd = "uv run " + "-a uv " * 2000 + "python -c 1"
-    started = time.monotonic()
-    v = classify_command(cmd, profile="host")
-    assert time.monotonic() - started < 1.0
+    MUTATION: spend the budget only after the depth check - red (the count)."""
+    classify, _ = _count_classifications(monkeypatch)
+    v = classify("uv run " + "-a uv " * 2000 + "python -c 1", profile="host")
     assert v.blocked and "nested_too_deep" in v.categories
+
+
+def test_the_budget_bounds_the_whole_call_not_each_segment(monkeypatch):
+    """The budget is per call. Once a segment overdraws it, the later segments' nested
+    commands are not read: before, each of them still joined and classified one candidate,
+    so 200 segments made 201 classifications against a bound of 64. A command within the
+    budget is read as before. MUTATION: read the nested commands of every segment whatever
+    the budget - red (the count)."""
+    from vaf.core.command_policy import MAX_NESTED_COMMANDS
+
+    classify, calls = _count_classifications(monkeypatch)
+    v = classify("; ".join(["uv run echo ok"] * 200), profile="host")
+    assert v.blocked and "nested_too_deep" in v.categories
+    calls.clear()
+    within = "; ".join(["uv run echo ok"] * (MAX_NESTED_COMMANDS - 1))
+    assert not classify(within, profile="host").blocked
+    assert len(calls) == MAX_NESTED_COMMANDS
 
 
 @pytest.mark.parametrize("cmd", [

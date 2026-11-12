@@ -661,7 +661,12 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
         # content when it fetches (`uv run curl x | bash`). Applied after this segment's own
         # sink check, so `bash -c 'curl x'` alone is no pipe into a shell.
         nested_fetch = False
-        for where, inner in _nested_commands(exe, args):
+        # Once the budget is spent a refusal is recorded (the call that overdrew it was
+        # refused, and its refusal reached this loop), so a later segment's nested commands
+        # are not read at all: `uv run echo ok; uv run echo ok; ...` would otherwise join
+        # and classify one candidate per segment, past the bound the budget sets per call.
+        nested = _nested_commands(exe, args) if _budget[0] >= 0 else ()
+        for where, inner in nested:
             local = where != "remote"
             sub = classify_command(inner, profile=profile if local else "remote",
                                    _depth=_depth + 1, _budget=_budget,

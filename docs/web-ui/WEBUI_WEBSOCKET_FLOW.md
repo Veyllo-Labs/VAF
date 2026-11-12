@@ -212,10 +212,15 @@ Key rules:
     other turn event), `file_created` (per path and turn) and the turn's end
     (`message_complete` or `generation_stopped`, kept and replayed: a turn that ended but is
     not stored yet is drawn as ended, quietly). The group lives until the turn LEAVES THE
-    QUEUE: the runner calls `WebInterfaceManager.turn_left_queue(session, turn)` right before
-    `task_done`, after the save, and only then do the turn's entries and prompt go. A turn
-    event with another turn id drops what an earlier turn left behind (one that died without
-    leaving the queue cleanly). Next to it, the prompt of each queued or running web turn,
+    QUEUE: every `task_done` of a web turn goes through the runner's queue wrapper
+    (`_TurnEndingQueue` in `headless_runner.py`), which calls
+    `WebInterfaceManager.turn_left_queue(session, turn)` first, on the normal end (after the
+    save) and on every other exit (a revoked account, a failed load, a refused, dropped or
+    stopped turn); only then do the turn's entries and prompt go. A stream event of a turn
+    that was queued after the one on record drops what the earlier turn left behind (one that
+    died without leaving the queue cleanly); an event of an older turn id never moves the turn
+    (an async coder announces its files with its own, earlier turn id while the next turn
+    runs), and only the running turn's prompt is kept alive by the turn's events. Next to it, the prompt of each queued or running web turn,
     by turn id (`set_prompt` after `tq.add`, as typed, without the editor block; the
     regenerate re-ask too), at most 20 per chat. `generation_stopped` drops the queued ones;
     the runner also stores the turn id on the person's message (`metadata["turn_id"]`), so a

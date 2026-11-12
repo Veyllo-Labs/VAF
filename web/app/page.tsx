@@ -2202,6 +2202,7 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
         delivery: (state: string, reason?: string, device?: string, resent?: boolean) => { text: string; resend: boolean; quiet: boolean };
         lineText: (code?: string, seconds?: number) => string | null;
         sendAgain: string; onSendAgain: (text: string, lineId: string) => void; sending: boolean;
+        awaiting: string;
         empty: string; confirmed: string };
     onMembers: () => void;
     closedNote: string;
@@ -2609,7 +2610,7 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                                         {d.resend && (
                                             <button type="button" onClick={() => appRoom.onSendAgain(m.text, m.id)}
                                                 disabled={appRoom.sending}
-                                                className="underline underline-offset-2 hover:text-gray-900 dark:hover:text-[#e6e6e6] disabled:opacity-50 disabled:no-underline">
+                                                className="whitespace-nowrap shrink-0 underline underline-offset-2 hover:text-gray-900 dark:hover:text-[#e6e6e6] disabled:opacity-50 disabled:no-underline max-md:py-[15px] max-md:-my-[15px] max-md:px-2 max-md:-mx-2">
                                                 {appRoom.sendAgain}
                                             </button>
                                         )}
@@ -2617,7 +2618,9 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                                 );
                             })()}
                             {appRoom && m.pending && (
-                                <div className="text-[10px] mt-0.5 text-gray-400 dark:text-[#7a7a7a] vaf-pulse-note">…</div>
+                                <div role="status" className="text-[10px] mt-0.5 text-gray-400 dark:text-[#7a7a7a] vaf-pulse-note">
+                                    {appRoom.awaiting}
+                                </div>
                             )}
                             {/* What was left in the room's shared folder with this
                                 message. A chip per file, because a filename inside a
@@ -4087,6 +4090,7 @@ function VAFDashboardContent() {
         sendAgain: tMain('appRoomSendAgain'),
         onSendAgain: (text: string, lineId: string) => { void sendToAppRoom(text, lineId); },
         sending: appRoomSending.busy,
+        awaiting: tMain('appRoomAwaitingAnswer'),
         empty: tMain(emptyKey(!!roomView.room.appRoom?.canWrite), appRoomNames),
         confirmed: tMain('appRoomConfirmed'),
     } : undefined;
@@ -10341,9 +10345,14 @@ function VAFDashboardContent() {
                                         person's chat and the app agent's requests) wait here, where the
                                         Veyllo App and its answers say they do. */}
                                     {appRoomWords && (
+                                        /* The cards in the room's text column: the room has no
+                                           avatar gutter of the chat's width, so the card's spacer
+                                           goes and its inset is the room's (avatar 32 + gap 12). */
+                                        <div data-app-room-drafts className="[&_.vaf-msg-row>div>div:first-child]:hidden [&_.vaf-msg-row>div>div:last-child]:pl-11 [&_.vaf-msg-row>div]:max-w-full">
                                         <UnplacedDrafts rows={appRoomDrafts} apiBase={getApiBase()}
                                             onChanged={() => { appRoomChatDrafts.reload(); appRoomAskDrafts.reload(); }}
                                             formatTime={draftTime} />
+                                        </div>
                                     )}
                                 </>) : (
                                     /* Invited, not in: the door where the transcript would be. */

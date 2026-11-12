@@ -130,3 +130,10 @@ def test_the_veyllo_app_room_is_worded_in_every_language_and_never_a_phone():
     assert not found, found
     room = (ROOT / "vaf" / "core" / "app_link" / "room.py").read_text(encoding="utf-8")
     assert 'TITLE = "Veyllo App"' in room
+    # The agent-only hint names the handle only: a long persona name broke it to three lines
+    # on a phone. MUTATION: put {name} back into one catalogue - red.
+    for lang in LANGS:
+        main = json.loads((ROOT / "web" / "messages" / f"{lang}.json").read_text(
+            encoding="utf-8"))["main"]
+        assert "{name}" not in main["appRoomPlaceholderAgentOnly"], lang
+        assert "{handle}" in main["appRoomPlaceholderAgentOnly"], lang

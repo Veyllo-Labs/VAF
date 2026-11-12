@@ -206,3 +206,17 @@ def test_a_send_gives_up_after_its_timeout_and_scrolls_only_the_room():
             "                pendingScrollRestore.current = 'bottom';") in sender
     view = _between(PAGE, "function RoomConversation(", "function VAFDashboardContent(")
     assert "m.state === 'not_delivered' && !d.quiet ?" in view
+
+
+def test_the_room_details_read_on_a_phone():
+    """MUTATION: let "Send again" wrap or shrink its hit area on a phone, drop the word or the
+    status role of a waiting question, or put the draft cards back into the chat's gutter -
+    red."""
+    view = _between(PAGE, "function RoomConversation(", "function VAFDashboardContent(")
+    resend = _between(view, "onClick={() => appRoom.onSendAgain(m.text, m.id)}", ">")
+    assert "whitespace-nowrap shrink-0" in resend and "max-md:py-[15px] max-md:-my-[15px]" in resend
+    assert '<div role="status" className="text-[10px] mt-0.5 text-gray-400 dark:text-[#7a7a7a] vaf-pulse-note">\n                                    {appRoom.awaiting}' in view
+    assert "awaiting: tMain('appRoomAwaitingAnswer')," in PAGE
+    drafts = _between(PAGE, "<div data-app-room-drafts className=\"", "\">")
+    assert "[&_.vaf-msg-row>div>div:first-child]:hidden" in drafts
+    assert "[&_.vaf-msg-row>div>div:last-child]:pl-11" in drafts

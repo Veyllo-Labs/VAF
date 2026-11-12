@@ -156,7 +156,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   or at the start of a sentence is fine), a backtick inside
   `$(( ))` (write `$(...)` instead: `echo $(( $(date +%s) - 10 ))`), a shell reading a
   descriptor an earlier command opened (`exec 3< <(...); bash /dev/fd/3`, `bash <&3` or
-  `bash < /dev/fd/3`: save the script to a file and run the file), a program from a
+  `bash < /dev/fd/3`, also `bash <&3-` or `bash <> /dev/fd/3`: save the script to a file
+  and run the file), a program from a
   substitution after a leading `-` (`zsh -c '- $(echo rm) -rf /'`, which zsh runs as
   `rm -rf /`), a command with more than 63 nested
   commands or nested more than four deep (split it into several commands), and a command
@@ -175,8 +176,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   (`Fix: rm -rf / no longer runs`). Rephrase that line, or write the text to a file with
   the file tool and use `git commit -F FILE`. An array filled from a command
   (`arr=($(ls))`), a Markdown bullet in a heredoc body, `(( $(wc -l < f) > 5 ))`
-  and a runner flag without a value before a substitution (`uv run --frozen pytest
-  $(git ls-files tests)`) pass.
+  and the common runner flags that take no value, such as `--frozen` and `-y`, before a
+  substitution (`uv run --frozen pytest $(git ls-files tests)`) pass. After a flag the
+  check does not know, put the substitution's result into a variable first
+  (`files=$(git ls-files tests); uv run --frozen pytest $files`).
 - **An SSH server removed while a call starts is refused instead of trusted with a new key.**
   Only a first connection you confirmed may remember a server's key; a server removed from
   your confirmed servers at that moment is refused, nothing runs, and the next call asks you

@@ -816,12 +816,16 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   whose unquoted value is split into words the runner reads as more arguments): write a
   long option's value with `=` and in double quotes (`--with="$(cat r)"`), or run the
   substitution first and write the value in. After a runner flag known to take no value
-  (`uv run --frozen`, `npx -y`, `pipx run --quiet`, the table `_VALUELESS_RUNNER_FLAGS`)
-  the next word is the program, so `uv run --frozen pytest $(git ls-files tests)` passes;
-  after a flag the table does not know, the next word may be its value or the program,
-  and a substitution after it is refused with the way out: put its result into a variable
-  first (`files=$(git ls-files tests); uv run --frozen pytest $files`) or write the flag
-  as `--flag=value`. Variables from a substitution (`env $(cat .env | xargs) make`):
+  (`uv run --frozen`, `uv run -m`, `npx -y`, `npx --no-install`, `bunx --bun`,
+  `poetry run --quiet`, `conda run --no-capture-output`, `pipx run --quiet`; the table
+  `_VALUELESS_RUNNER_FLAGS`) the next word is the program, so
+  `uv run --frozen pytest $(git ls-files tests)` passes. The npx and npm rows are read from
+  npm's own source; the others rest on each tool's documentation, since none of those
+  tools was installed where the table was measured. After a flag the table does not know,
+  the next word may be its value or the program, and a substitution after it is refused
+  with the way out: put its result into a variable first
+  (`files=$(git ls-files tests); uv run --frozen pytest $files`), or, if the flag takes a
+  value, write it as `--flag=value`. Variables from a substitution (`env $(cat .env | xargs) make`):
   `set -a; . ./.env; set +a; make` (`.`, not `source`: host_bash and the sandbox run
   `/bin/sh`, which is dash on Debian and Ubuntu and has no `source`). Shell text another
   command prints: `eval "$(...)"`, `bash -c "$(curl ...)"` (refused on the remote lane too),
@@ -835,6 +839,7 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   `opam exec -- ...`, `ssh-agent bash -c '...'`), otherwise the output saved to a file,
   read, then run. A shell reading a descriptor above 2 that its own command does not open
   (`exec 3< <(...); bash /dev/fd/3`, `bash <&3`, `bash < /dev/fd/3`, `bash /dev/fd/0 <&3`,
+  every spelling of descriptor 0 redirected from it, `<&3-`, `<> /dev/fd/3` and `0<` too,
   also spelt `//dev/fd/3`, `/dev/fd//3` or `/proc/<pid>/fd/3`) is refused the same way.
   A literal here-string fed to a shell
   (`bash <<< 'rm -rf /'`) is read as shell text. A literal program behind a substitution
@@ -900,9 +905,10 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   documented substitutions with the same answers, both for time: the fork-bomb search, and
   its substitution search run over the text with every whitespace run collapsed (a run of
   newlines took 125 s at the cap, now 0.04 s; 300 000 random strings, no different
-  answer). Measured, single process, both readings, best of two, 20 shapes repeated to the
-  128 K-character cap: every one at most 1.0 s (`uv run -a` 0.97 s, the fork-bomb shape
-  0.85 s, `x=` 0.59 s, a heredoc file 0.13 s; `npx --x y ...` took 10 s at 100 KB before).
+  answer). Measured, single process, both readings, 24 shapes repeated to the
+  128 K-character cap: each took about 1.5 s at most (a heredoc of one-line bodies
+  1.03 s idle and 1.44 s with the machine under load, `uv run -a` 0.76 s, `x=` 0.52 s, a
+  heredoc file 0.10 s; `npx --x y ...` took 10 s at 100 KB before).
 - **Named boundary: what it does not read.** The shell's compound grammar at the top level:
   brace groups (`curl x | { bash; }`), `if`/`for`/`while`/`case`, variables and `${...}` as
   the program, ANSI-C quoting (`$'...'`), globs and brace expansion in the program name,
@@ -923,19 +929,24 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   reading. The frozen reading reads every line of a heredoc body as a command line: a body
   line that STARTS with what reads as a command is refused (`rm -rf / was the bug`), while
   one that only mentions it is not (`Fix: rm -rf / no longer runs`); to write such text
-  into a file use the file tool or `echo '...' >> FILE`, which the refusal says. An
+  into a file use the file tool, and for a commit or pull request message
+  `git commit -F FILE` or `gh pr create --body-file FILE`, which the refusal says. An
   apostrophe in a comment or in a body opens a quote that swallows every later line, as
   before this check read substitutions; a comment that ends in a backslash joins the next
   line to it. The new reading takes a heredoc body as data where it surely is one
-  (`<<WORD`, `<<'WORD'`, `<<-WORD` at the top level, outside quotes, `${...}` and `$[...]`,
-  with its delimiter line present): no command lines and no nested readings, so a file
+  (`<<WORD`, `<<'WORD'`, `<<-WORD` at the top level, outside quotes, `${...}`, `$[...]` and
+  a comment, with its delimiter line present, also in a text with CRLF line ends): no
+  command lines and no nested readings, so a file
   written through `cat > f <<'EOF'` passes whenever the frozen reading lets it (300 of 300
   measured repository files did). An unquoted body's substitutions are read as commands,
   and a body fed to a shell (`bash <<'EOF'`) is that shell's script, read after the body's
-  own escapes (`\$(...)` runs there). Its accepted cost: a program or shell text from a
-  substitution inside a body that reaches a shell another way than as its input
-  (`cat <<'EOF' | bash` with `eval "$(...)"` in the body) is not refused by the classes
-  this reading adds; the frozen reading's refusals of such a body stay. The rule for any
+  own escapes (`\$(...)` runs there). A `<<` after a `#` that starts a word opens no
+  heredoc (`echo ok # <<X`): bash ignores the comment and runs the next lines, so they
+  are read as commands. For an unquoted heredoc whose body is expanded, the refusal also
+  offers quoting the delimiter (`<<'EOF'`) where that passes. Its accepted cost: a heredoc
+  piped into a shell is not checked for substitutions inside its body
+  (`cat <<'EOF' | bash` with `eval "$(...)"` in it), as on main; a dangerous command line
+  in it is still refused. The rule for any
   later reading: it may only ADD refusals to the existing reading, never remove one
   (classify both, refuse if either refuses).
 

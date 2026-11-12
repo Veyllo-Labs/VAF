@@ -12,7 +12,14 @@ again after the pause at the latest, and every caller gets exactly what an unrea
 service gives it in the meantime.
 
 Users: the auth store (vaf/auth/permissions.py, the account directory and the permission
-row) and the local API (vaf/core/web_interface.py, the push fallback).
+row) and the local API (vaf/core/web_interface.py, the push fallback; the terminal app's
+heartbeat reports into the same instance).
+
+Named boundary: not on the public facade (vaf/__init__.py). Both users are VAF's own
+services on fixed local ports, and an embedder never dials either; no embedder-facing code
+has been measured hand-rolling such a pause, and docs/EMBEDDING.md names no hot path that
+dials a local service. Promote it when a facade primitive (a tool, a channel, a provider)
+is shown to repeat the same local connect per call.
 """
 from __future__ import annotations
 

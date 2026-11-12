@@ -251,21 +251,25 @@ def _no_remembered_vllm_start():
 
 @pytest.fixture(autouse=True)
 def _no_remembered_outage():
-    """No test sees an outage another test remembered, and none leaves one behind.
+    """No test sees a local API outage another test remembered, and none leaves one behind.
 
-    The local API's outage memory (`vaf.core.web_interface.LOCAL_API_DOWN`) and the auth
-    store's (`vaf.auth.permissions._store_down`) live for the process. One refused push in
-    an earlier test paused every later push and heartbeat check for ten seconds, so a test
-    that expects a dial saw none, and a test that marks the API down hid the next test's
-    dials. Only when the module is loaded: importing it here would cost every test."""
+    The local API's outage memory (`vaf.core.web_interface.LOCAL_API_DOWN`) lives for the
+    process. One refused push in an earlier test paused every later push for ten seconds,
+    so a test that expects a dial saw none, and a test that marks the API down hid the next
+    test's dials. Only when the module is loaded: importing it here would cost every test.
+
+    Deliberately NOT reset here: the auth store's memory (`vaf.auth.permissions._store_down`).
+    It only ever remembers "down", which is the answer the suite's absent store gives anyway,
+    and every test that fakes a reachable store calls `invalidate_permissions_cache()`, which
+    forgets it. Forgetting it around every test made each later directory lookup dial the
+    closed database port again: 266 refused connects to it in the whole suite became 1894.
+    Pinned by tests/test_outage_memory_between_tests.py."""
     import sys as _sys
 
     def _forget():
-        for name, attr in (("vaf.core.web_interface", "LOCAL_API_DOWN"),
-                           ("vaf.auth.permissions", "_store_down")):
-            memory = getattr(_sys.modules.get(name), attr, None)
-            if memory is not None and hasattr(memory, "forget"):
-                memory.forget()
+        memory = getattr(_sys.modules.get("vaf.core.web_interface"), "LOCAL_API_DOWN", None)
+        if memory is not None and hasattr(memory, "forget"):
+            memory.forget()
 
     _forget()
     yield

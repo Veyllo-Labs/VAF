@@ -72,11 +72,24 @@ server_key = os.environ["FAKE_SSH_HOSTKEY"]
 lines = []
 if os.path.exists(kh):
     lines = [l for l in open(kh).read().splitlines() if l.split(" ", 1)[0] == name]
+# OpenSSH's own lines (sshconnect.c, as the installed OpenSSH 10.6 client prints them).
 if lines and lines[0].split(" ", 1)[1].strip() != server_key:
-    done(255, err="@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@\nHost key verification failed.\n")
+    # A changed key: the same text under accept-new and yes. FAKE_SSH_CHANGED picks the banner
+    # or the closing line alone, so each reading of it is pinned by itself.
+    part = os.environ.get("FAKE_SSH_CHANGED", "all")
+    banner = ("@" * 59 + "\n@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\n"
+              + "@" * 59 + "\nIT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!\n"
+              "Someone could be eavesdropping on you right now (man-in-the-middle attack)!\n"
+              "It is also possible that a host key has just been changed.\n"
+              "The fingerprint for the ED25519 key sent by the remote host is\nSHA256:fake.\n"
+              "Please contact your system administrator.\n"
+              "Add correct host key in " + kh + " to get rid of this message.\n"
+              "Offending ED25519 key in " + kh + ":1\n")
+    line = "Host key for " + name + " has changed and you have requested strict checking.\n"
+    done(255, err=(banner if part != "line" else "") + (line if part != "banner" else "")
+         + "Host key verification failed.\n")
 if not lines:
     if opts.get("StrictHostKeyChecking") != "accept-new":
-        # OpenSSH's own words under strict checking (sshconnect.c).
         done(255, err="No ED25519 host key is known for " + name
              + " and you have requested strict checking.\nHost key verification failed.\n")
     with open(kh, "a") as f:
@@ -259,11 +272,14 @@ def test_the_command_line_keeps_the_owners_setup_out_and_survives_odd_paths(lab)
     argv = ssh.build_argv(t, "uptime", user_scope_id=ALICE, password_login=False)
     joined = " ".join(argv)
     for option in ("-F none", "IdentitiesOnly=yes", "IdentityAgent=none",
-                   "StrictHostKeyChecking=yes", "PasswordAuthentication=no",
+                   "StrictHostKeyChecking=yes", "GlobalKnownHostsFile=/dev/null",
+                   "PasswordAuthentication=no",
                    "KbdInteractiveAuthentication=no"):
         assert option in joined, option
-    # Only a confirmed first contact may take a new key; the default is the closed one.
-    # MUTATION: default confirmed=True in build_argv - red.
+    # Only a confirmed first contact may take a new key; the default is the closed one, and
+    # no global list stands in for the account's own.
+    # MUTATION: default confirmed=True in build_argv - red;
+    # MUTATION: drop GlobalKnownHostsFile - red.
     assert "StrictHostKeyChecking=accept-new" not in joined
     assert "StrictHostKeyChecking=accept-new" in ssh.build_argv(
         t, "uptime", user_scope_id=ALICE, password_login=False, confirmed=True)
@@ -317,11 +333,74 @@ def test_a_refused_login_shows_the_public_key(lab):
     assert "Login refused" in out and ssh.public_key(ALICE) in out
 
 
-def test_a_changed_server_key_is_refused(lab):
+@pytest.mark.parametrize("confirmed_call", [False, True], ids=["strict", "accept-new"])
+def test_a_changed_server_key_is_refused(lab, confirmed_call):
+    """OpenSSH words a changed key "Host key for H has changed and you have requested strict
+    checking." under accept-new and yes alike (the fake prints the real lines), and that
+    must read as a DIFFERENT key, never as a server that was merely removed.
+    MUTATION: key not_confirmed on "you have requested strict checking" alone - red (strict);
+    MUTATION: let not_confirmed win over the changed-key lines - red."""
     _tool(command="true", login_credential="SERVER_PASS", _call_confirmed=True)
     lab.rekey()
-    out = _tool(command="echo should-not-run", login_credential="SERVER_PASS")
-    assert "DIFFERENT key" in out and "should-not-run" not in out
+    out = _tool(command="echo should-not-run", login_credential="SERVER_PASS",
+                _call_confirmed=confirmed_call)
+    assert "DIFFERENT key" in out and "should-not-run" not in out, out
+    assert "removed from this account's confirmed servers" not in out
+    want = "accept-new" if confirmed_call else "yes"
+    assert f"StrictHostKeyChecking={want}" in lab.calls()[-1]["argv"]
+
+
+@pytest.mark.parametrize("part", ["banner", "line"])
+def test_a_changed_key_reads_as_one_also_for_a_server_confirmed_while_the_call_started(
+        lab, monkeypatch, part):
+    """Another tab confirmed the server between this call's look at the list and the
+    connection, and the server now shows a different key: OpenSSH's own words about the
+    changed key are what tells it, the server was not remembered when the call looked.
+    MUTATION: drop the banner reading - red (banner); drop the closing-line reading - red
+    (line)."""
+    from vaf.core import ssh
+    _tool(command="true", login_credential="SERVER_PASS", _call_confirmed=True)
+    lab.rekey()
+    monkeypatch.setenv("FAKE_SSH_CHANGED", part)
+    real_is_known, real_argv = ssh.is_known, ssh.build_argv
+    state = {"argv_built": False, "lied": False}
+
+    def build_argv(*a, **k):
+        state["argv_built"] = True
+        return real_argv(*a, **k)
+
+    def is_known(target, scope):
+        # The look right after the command line is built: not yet remembered.
+        if state["argv_built"] and not state["lied"]:
+            state["lied"] = True
+            return False
+        return real_is_known(target, scope)
+
+    monkeypatch.setattr(ssh, "build_argv", build_argv)
+    monkeypatch.setattr(ssh, "is_known", is_known)
+    out = _tool(command="echo should-not-run", login_credential="SERVER_PASS",
+                _call_confirmed=True)
+    assert state["lied"] and "DIFFERENT key" in out and "should-not-run" not in out, out
+
+
+def test_a_remote_command_that_prints_the_words_and_exits_255_is_reported_as_it_ran(lab):
+    """The remote command ran; it only printed OpenSSH's unknown-key words and exited 255.
+    Saying "nothing ran, call again" would invite repeating a command that changed state.
+    MUTATION: drop the still-missing-from-the-list check from not_confirmed - red."""
+    _tool(command="true", login_credential="SERVER_PASS", _call_confirmed=True)
+    words = ("No ED25519 host key is known for [127.0.0.1]:2222 and you have requested "
+             "strict checking.")
+    out = _tool(command=f"echo did-run; printf '%s\\n%s\\n' '{words}' "
+                        "'Host key verification failed.' >&2; exit 255",
+                login_credential="SERVER_PASS")
+    assert "REFUSED" not in out and "did-run" in out and out.rstrip().endswith("Exit 255"), out
+    # With nothing on stdout the words cannot be told from OpenSSH's own refusal of a known
+    # server (a key of another type); it may read as a key problem, never as "call again".
+    out = _tool(command=f"printf '%s\\n%s\\n' '{words}' "
+                        "'Host key verification failed.' >&2; exit 255",
+                login_credential="SERVER_PASS")
+    assert "removed from this account's confirmed servers" not in out, out
+    assert "Call again" not in out, out
 
 
 def test_sudo_reads_its_password_and_the_output_never_shows_it(lab):

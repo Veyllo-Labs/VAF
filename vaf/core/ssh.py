@@ -23,7 +23,8 @@ What this does instead:
   methods are off, so a server cannot ask for anything), a password login turns the key off.
   A server's own prompt therefore can never be answered with the key's passphrase.
 - `-F none` reads no `~/.ssh/config`, `IdentityAgent=none` offers no agent key,
-  `IdentitiesOnly` offers no other key, and THIS account's own list is the only known_hosts.
+  `IdentitiesOnly` offers no other key, and THIS account's own list is the only known_hosts
+  (`GlobalKnownHostsFile=/dev/null`: a key in the system's global list does not count).
   A call the person confirmed as a first contact (`run(confirmed=True)`) runs with
   `StrictHostKeyChecking=accept-new`, which takes a new server's key into that list and
   refuses a changed one; every other call runs with `StrictHostKeyChecking=yes`, so OpenSSH
@@ -37,7 +38,8 @@ What this does instead:
 NAMED BOUNDARIES:
 - The first connection trusts the key the server shows (the person sees server and
   fingerprint; comparing it with the hoster's panel is a human's job).
-- Windows is refused: the helper is a POSIX script, the OpenSSH that ships with many Windows
+- Windows is refused (and with it `/dev/null` as the empty global list, which is `NUL`
+  there): the helper is a POSIX script, the OpenSSH that ships with many Windows
   installs (8.1) predates `SSH_ASKPASS_REQUIRE`, and the folder rights do not apply there.
 - No background runs yet: a detached command keeps stdin open for host_process, so a wrong
   sudo password would wait for more lines.
@@ -77,6 +79,13 @@ _USER_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$")
 _HOST_RE = re.compile(r"^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$")
 _IPV6_RE = re.compile(r"^[0-9A-Fa-f:.]{2,45}$")
 _FINGERPRINT_RE = re.compile(r"SHA256:[A-Za-z0-9+/=]+")
+# OpenSSH's own diagnostics (sshconnect.c, the same in OpenSSH 10.6): a key that differs from
+# the remembered one, under every strict mode, and a server missing from the list under
+# StrictHostKeyChecking=yes. The client prints them before any remote output.
+_CHANGED_KEY_RE = re.compile(r"^Host key for (\S+) has changed and you have requested strict "
+                             r"checking\.$")
+_UNKNOWN_KEY_RE = re.compile(r"^No \S+ host key is known for (\S+) and you have requested "
+                             r"strict checking\.$")
 
 # The answer to an OpenSSH prompt comes from the environment of the one call that needs it;
 # nothing secret is written here. Passphrase first: a key prompt never says "password".
@@ -378,6 +387,10 @@ def build_argv(target: Target, remote_command: str, *, user_scope_id: Optional[s
             "-o", "IdentitiesOnly=yes",
             "-o", "IdentityAgent=none",
             "-o", f"UserKnownHostsFile={_option_path(folder / KNOWN_HOSTS_FILE)}",
+            # Only this account's list: under StrictHostKeyChecking=yes a key in the system's
+            # global list (/etc/ssh/ssh_known_hosts) would let a server this account never
+            # confirmed through, or one it forgot.
+            "-o", "GlobalKnownHostsFile=/dev/null",
             "-o", "StrictHostKeyChecking=" + ("accept-new" if confirmed else "yes"),
             "-o", "ConnectTimeout=15",
             "-o", "ServerAliveInterval=30",
@@ -568,15 +581,28 @@ def run(target: Target, remote_command: str, *, user_scope_id: Optional[str],
                     stdout=b"".join(out_chunks).decode("utf-8", errors="replace"),
                     stderr=stderr, timed_out=state["timed_out"],
                     too_large=state["too_large"], bytes_out=written)
-    # OpenSSH's text for a server missing from the list under strict checking (sshconnect.c:
-    # "No %s host key is known for %.200s and you have requested strict checking."). Before
-    # the changed-key reading: a server forgotten after was_known was read fails with "Host
-    # key verification failed" too, and is no DIFFERENT key.
-    result.not_confirmed = (not confirmed and result.returncode == 255
-                            and "you have requested strict checking" in stderr)
-    result.host_key_changed = not result.not_confirmed and (
-        "REMOTE HOST IDENTIFICATION HAS CHANGED" in stderr
-        or (was_known and "Host key verification failed" in stderr))
+    lines = stderr.splitlines()
+    failed = result.returncode == 255
+    # A key that differs from the remembered one comes first: OpenSSH words it the same way
+    # under accept-new and yes, and it must never read as anything milder.
+    changed = failed and ("REMOTE HOST IDENTIFICATION HAS CHANGED" in stderr
+                          or any(_CHANGED_KEY_RE.match(ln) for ln in lines))
+    # "Nothing ran" only when that is certain: OpenSSH refused the server as missing from
+    # this account's list (its own line, naming this server), and the server is still
+    # missing, so under StrictHostKeyChecking=yes, with no global list, it cannot have been
+    # reached. Exit 255 and the words alone are no proof: a remote command on a remembered
+    # server can print them and exit 255 too, and then it ran. A changed key cannot read as
+    # this: it needs the server in the list, and this needs it gone.
+    result.not_confirmed = (
+        not confirmed and failed
+        and any((m := _UNKNOWN_KEY_RE.match(ln)) and m.group(1) == target.known_hosts_name
+                for ln in lines)
+        and not is_known(target, user_scope_id))
+    # A remembered server refused for its key without those lines (a key of another type
+    # than the remembered one): OpenSSH's own last line, with nothing come back.
+    result.host_key_changed = changed or (
+        not result.not_confirmed and failed and was_known and not out_chunks
+        and written == 0 and "Host key verification failed." in lines)
     result.auth_failed = result.returncode == 255 and "Permission denied" in stderr
     if not was_known and is_known(target, user_scope_id):
         result.first_contact = True

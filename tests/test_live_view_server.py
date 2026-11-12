@@ -422,3 +422,95 @@ def test_a_stored_prompt_is_recognised_by_its_turn_not_its_text():
     prompts = [{"role": "user", "content": "again?", "turnId": "t1"},
                {"role": "user", "content": "again?", "turnId": "t2"}]
     assert server._unstored_prompts(prompts, s) == [prompts[1]]
+
+
+# ── round 2: the readers pass the owner, the stream event names its turn ─────────
+
+@pytest.mark.parametrize("reader", ["history", "replay"])
+def test_each_reader_refuses_a_record_kept_for_another_account(monkeypatch, reader, _fresh_queue):
+    """A record stamped for Bob on a chat that now belongs to Alice (the id was freed and
+    claimed). Each of the two readers is asked on its own, because the first one drops the
+    record: tested together, the second would never see it.
+    MUTATION: drop owner= from _live_history_update - red; from _send_live_view - red."""
+    import vaf.core.web_server as server
+    from vaf.core.session import Session
+    sid = "web-chat-0099"
+    led = LiveViewLedger(owner_of=lambda s: BOB)
+    monkeypatch.setattr(server.manager, "live_view", led)
+    _busy(_fresh_queue, sid)
+    led.set_prompt(sid, "t1", {"role": "user", "content": "bob's prompt"}, owner=BOB)
+    led.record(sid, {"type": "coder_state", "code": "bob's code"})
+    loaded = Session(id=sid, name="Alices Chat")
+    loaded.metadata["user_scope_id"] = ALICE
+    if reader == "history":
+        out = server._live_history_update(loaded, sid)
+    else:
+        sock = _Sock()
+
+        async def _send_json(obj):
+            sock.sent.append(obj)
+        sock.send_json = _send_json
+        asyncio.run(server._send_live_view(sock, sid, loaded))
+        out = sock.sent
+    assert "bob's" not in json.dumps(out)
+
+
+def test_tool_update_names_its_turn(monkeypatch):
+    """MUTATION: drop turnId from emit_tool_update - red."""
+    import vaf.core.web_interface as wi_mod
+    m = _fresh_manager()
+    sent = []
+    monkeypatch.setattr(m, "_push_session_update", lambda sid, data: sent.append(data))
+    monkeypatch.setattr(wi_mod, "_current_turn_id", lambda: "t7")
+    m.emit_tool_update("start", "read_file", "c1", data="{}", session_id="A")
+    assert sent[0]["turnId"] == "t7"
+
+
+def test_every_exit_of_a_web_turn_tells_the_record(monkeypatch):
+    """The runner's queue wrapper: task_done with the task, without it (several exits call it
+    bare), a system command and a non-web task. MUTATION: no call in the wrapper - red;
+    forget the handed-out task - red."""
+    import types
+    from vaf.core import headless_runner as hr
+    from vaf.core.task_queue import AgentTask
+    left = []
+    monkeypatch.setattr(hr, "get_web_interface", lambda: types.SimpleNamespace(
+        turn_left_queue=lambda sid, tid: left.append((sid, tid))))
+
+    class _Q:
+        def __init__(self, tasks):
+            self.tasks, self.done = list(tasks), []
+
+        def get(self):
+            return self.tasks.pop(0) if self.tasks else None
+
+        def task_done(self, task=None):
+            self.done.append(task)
+
+    web = AgentTask(session_id="A", input_text="hi", source="web")
+    web2 = AgentTask(session_id="B", input_text="hi", source="web")
+    tg = AgentTask(session_id="telegram_1", input_text="hi", source="telegram")
+    q = hr._TurnEndingQueue(_Q([web, web2, tg]))
+    assert q.get() is web
+    q.task_done()                       # a bare exit
+    q.get()
+    q.task_done(task=web2)              # an exit that names it
+    q.get()
+    q.task_done()                       # a messenger turn: not a web chat's record
+    assert left == [("A", web.turn_id), ("B", web2.turn_id)]
+
+
+def test_a_refused_turn_stores_its_turn_id(tmp_path, monkeypatch):
+    """The refused turn's question is stored too; with its turn id the record's prompt is
+    recognised as stored. MUTATION: store it without the turn id - red."""
+    import types
+    from vaf.core import headless_runner as hr
+    from vaf.core.session import TURN_ID_KEY, SessionManager
+    monkeypatch.setattr(hr, "get_web_interface", lambda: types.SimpleNamespace(
+        emit_agent_message=lambda *a, **k: None, emit_message_complete=lambda *a, **k: None))
+    mgr = SessionManager(storage_dir=str(tmp_path))
+    task = types.SimpleNamespace(session_id="green123456", input_text="hello", turn_id="t5",
+                                 metadata={"username": "alice", "user_scope_id": "ab12cd34"})
+    hr.refuse_turn_without_backend(task, "no model", mgr)
+    asked = [m for m in mgr.load("green123456").messages if m.role == "user"][0]
+    assert asked.metadata[TURN_ID_KEY] == "t5"

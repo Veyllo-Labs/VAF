@@ -21,15 +21,17 @@ re-run of the whole stream.
 Rules, each against its failure mode:
 
 - Groups. The TURN group (streamed text, tool cards, created files and the end of the running
-  turn) lives until the turn LEAVES THE QUEUE (`turn_left_queue`, called by the runner right
-  before `task_done`), not until its `message_complete`: the runner sends `message_complete`
+  turn) lives until the turn LEAVES THE QUEUE (`turn_left_queue`, called on every
+  `task_done` of a web turn by the runner's queue wrapper), not until its `message_complete`: the runner sends `message_complete`
   first and saves the chat afterwards, so a turn dropped at `message_complete` would be in
   neither the record nor the stored transcript for that window. Its `message_complete` is
   kept and replayed, so a turn that ended but is not stored yet is drawn as ended.
   `snapshot(active=False)` never returns the group: when the queue says no turn runs, nothing
   of a turn is replayed, so a turn that ended while nobody watched can never come back as a
-  spinner. A turn event with another turn id drops what a previous turn left behind (a turn
-  that died without leaving the queue cleanly). The WORKER group (sub-agent window, coder and
+  spinner. A stream event of a turn that was queued after the one on record (its prompt is on
+  record) drops what the earlier turn left behind (one that died without leaving the queue
+  cleanly); an event of any other turn id never moves the turn, because an async coder
+  announces its files minutes after its own turn, while the chat's next turn runs. The WORKER group (sub-agent window, coder and
   other `*_state` views, workflow steps) survives the turn, because an async worker outlives
   the turn that started it; it expires on its own, and a last value moves to the end on each
   write, so the replay plays the worker's states in the order they happened. The PREVIEW
@@ -93,6 +95,9 @@ RING_SIZES = {
 TURN, WORKER, PREVIEW = "turn", "worker", "preview"
 _TURN_EVENTS = frozenset({"agent_message_update", "tool_update", "file_created",
                           "clear_last_assistant"})
+# The events that may tell which turn RUNS now. Not file_created: an async coder announces its
+# files minutes after its turn, with that older turn's id.
+_TURN_STREAM = frozenset({"agent_message_update", "tool_update", "clear_last_assistant"})
 _WORKFLOW = frozenset({"workflow_start", "workflow_update", "workflow_done", "workflow_output_stream"})
 
 # Eviction ranks: the lowest goes first.
@@ -142,18 +147,38 @@ def _scrub(obj: Any, env: Dict[str, str]) -> Any:
     return scrub_obj(obj, env)
 
 
-class _Entry:
-    __slots__ = ("group", "event", "size", "written", "expires", "protected", "rank")
+def _scrub_cut_tails(obj: Any, env: Dict[str, str]) -> Any:
+    """A string cut at the size limit BEFORE a value was forgotten may end in the first part of
+    that value, which no whole-value replacement finds: such a tail is replaced too."""
+    if isinstance(obj, str):
+        if not obj.endswith(TRUNCATED):
+            return obj
+        body = obj[:-len(TRUNCATED)]
+        try:
+            from vaf.core.user_secrets import MIN_SCRUB_LENGTH as least
+        except Exception:
+            least = 4
+        for name, value in env.items():
+            for k in range(len(value) - 1, max(least, 1) - 1, -1):
+                if body.endswith(value[:k]):
+                    return body[:-k] + f"[{name}]" + TRUNCATED
+        return obj
+    if isinstance(obj, dict):
+        return {k: _scrub_cut_tails(v, env) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_scrub_cut_tails(v, env) for v in obj]
+    return obj
 
-    def __init__(self, group: str, event: dict, now: float, ttl: float, rank: int,
-                 protected: bool = False):
+
+class _Entry:
+    __slots__ = ("group", "event", "size", "expires", "rank")
+
+    def __init__(self, group: str, event: dict, now: float, ttl: float, rank: int):
         self.group = group
         self.event = event
         self.size = _size(event)
-        self.written = now
         self.expires = now + ttl
         self.rank = rank
-        self.protected = protected
 
 
 class _Chat:
@@ -259,8 +284,11 @@ class LiveViewLedger:
             return
         # Outside the lock: the owner is read from the store, once per new record.
         owner = None if known else self._lookup_owner(sid)
-        env = _forgotten(sid)
         with self._lock:
+            # Read under the record's lock: a forget that scrubs the record between this read
+            # and the write would otherwise let this event in unscrubbed. forget_secrets
+            # releases its own lock before it calls the listeners, so the order cannot invert.
+            env = _forgotten(sid)
             now = self._clock()
             chat = self._chat(sid, owner)
             self._purge(chat, now)
@@ -287,22 +315,30 @@ class LiveViewLedger:
         return False
 
     def _enter_turn(self, chat: _Chat, event: dict) -> None:
-        """A turn event of another turn than the one on record: what that one left behind
-        (it died without leaving the queue cleanly) is not this turn's."""
+        """A stream event of a turn that was QUEUED after the one on record (its prompt is on
+        record): what the earlier one left behind (it died without leaving the queue cleanly) is
+        not this turn's. An event of any other turn id never moves the turn: an older turn's
+        late event (a sub-agent's) must not wipe the running one."""
         tid = event.get("turnId")
-        if not isinstance(tid, str) or not tid:
+        if not isinstance(tid, str) or not tid or tid == chat.turn_id:
             return
-        if chat.turn_id and chat.turn_id != tid:
-            chat.clear_turn()
-            chat.prompts.pop(chat.turn_id, None)
+        if chat.turn_id is None:
+            chat.turn_id = tid
+            return
+        if tid not in chat.prompts:
+            return
+        chat.clear_turn()
+        chat.prompts.pop(chat.turn_id, None)
         chat.turn_id = tid
 
     def _apply(self, chat: _Chat, etype: str, event: dict, now: float) -> None:
-        if etype in _TURN_EVENTS:
+        if etype in _TURN_STREAM:
             self._enter_turn(chat, event)
-            # A turn that still produces events is not abandoned: its prompts stay.
-            for prompt in chat.prompts.values():
-                prompt["_expires"] = now + TURN_TTL
+        if etype in _TURN_EVENTS:
+            # A turn that still produces events is not abandoned: its own prompt stays.
+            current = chat.prompts.get(chat.turn_id or "")
+            if current is not None:
+                current["_expires"] = now + TURN_TTL
 
         if etype in ("message_complete", "generation_stopped"):
             # The end of the turn is part of its picture until the turn leaves the queue.
@@ -314,7 +350,10 @@ class LiveViewLedger:
             if not chat.entries and not chat.prompts:
                 return
             tid = event.get("turnId") or chat.turn_id or ""
-            chat.put(("end", str(tid)), _Entry(TURN, _cap(event), now, ENTRY_TTL, R_STATE))
+            # At the end of the record: a second completion of the turn (the guard path sends
+            # one after a corrected update) must stay the last word.
+            chat.put(("end", str(tid)), _Entry(TURN, _cap(event), now, ENTRY_TTL, R_STATE),
+                     to_end=True)
             chat.last_turn_key = None
             return
 
@@ -358,13 +397,12 @@ class LiveViewLedger:
                 # A tool that started and has not ended is the step the person is waiting on.
                 running = ("tool", str(tool_id), "end") not in chat.entries
                 chat.put(key, _Entry(TURN, _cap(event), now, TURN_TTL if running else ENTRY_TTL,
-                                     R_RUNNING if running else R_TURN, protected=running))
+                                     R_RUNNING if running else R_TURN))
             else:
                 key = ("tool", str(tool_id), "end")
                 chat.put(key, _Entry(TURN, _cap(event), now, ENTRY_TTL, R_LINES))
                 start = chat.entries.get(("tool", str(tool_id), "start"))
                 if start is not None:
-                    start.protected = False
                     start.rank = R_TURN
                     start.expires = min(start.expires, now + ENTRY_TTL)
             chat.last_turn_key = key
@@ -492,7 +530,6 @@ class LiveViewLedger:
         if not session_id or not turn_id or not isinstance(entry, dict):
             return
         sid = str(session_id)
-        env = _forgotten(sid)
         if owner is None:
             with self._lock:
                 known = sid in self._chats
@@ -504,7 +541,10 @@ class LiveViewLedger:
                 self._chats.pop(sid, None)
                 chat = None
             chat = self._chat(sid, str(owner) if owner is not None else None)
-            stored = _scrub(_cap(dict(entry)), env)
+            env = _forgotten(sid)
+            # Scrubbed BEFORE the cut: a forgotten value that straddles the 64 KB cut would keep
+            # its start otherwise.
+            stored = _cap(_scrub(dict(entry), env))
             stored["turnId"] = str(turn_id)
             stored["_expires"] = now + TURN_TTL
             stored["_size"] = _size(stored)
@@ -540,14 +580,17 @@ class LiveViewLedger:
             if chat is None:
                 return
             for key, entry in list(chat.entries.items()):
-                clean = _scrub(entry.event, env)
+                clean = _scrub_cut_tails(_scrub(entry.event, env), env)
                 if clean != entry.event:
                     chat.bytes -= entry.size
                     entry.event = clean
                     entry.size = _size(clean)
                     chat.bytes += entry.size
             for tid, prompt in list(chat.prompts.items()):
-                chat.prompts[tid] = _scrub(prompt, env)
+                clean = _scrub_cut_tails(_scrub(prompt, env), env)
+                clean["_size"] = _size({k: v for k, v in clean.items() if k != "_size"})
+                chat.prompts[tid] = clean
+            self._bound(chat)
 
     def forget(self, session_id: Optional[str]) -> None:
         """Drop everything about a chat (deleted, hidden)."""

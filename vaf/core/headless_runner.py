@@ -1278,7 +1278,11 @@ def refuse_turn_without_backend(task, why: str, session_mgr) -> None:
             session = new_session_for_task(task)
         text = str(getattr(task, "input_text", "") or "").strip()
         if text:
-            session.add_message(role="user", content=text)
+            # With its turn id, like every stored question: the live record keeps the prompt
+            # until the turn leaves the queue and recognises the stored copy by it.
+            _tid = getattr(task, "turn_id", None)
+            session.add_message(role="user", content=text,
+                                metadata=({TURN_ID_KEY: str(_tid)} if _tid else None))
         session.add_message(role="assistant", content=why)
         session_mgr.save(session, sync_state=False)
     except Exception as e:
@@ -1609,6 +1613,42 @@ def worker_status():
     return {"started": len(threads), "alive": sum(1 for t in threads if t.is_alive())}
 
 
+class _TurnEndingQueue:
+    """The task queue as the runner loop uses it, plus one duty: every way a web turn leaves the
+    queue tells the chat's live record (`vaf/core/live_view.py`), whichever exit calls
+    `task_done` (the normal end, a revoked account, a failed load, a refused or dropped turn).
+    Before this, only the normal end did, and the other exits left the prompt on record, where a
+    later turn of the chat showed it as an unanswered message.
+
+    It remembers the task `get` handed out, because several exits call `task_done()` without
+    naming it. Everything else is the queue's own."""
+
+    def __init__(self, queue):
+        self._queue = queue
+        self._task = None
+
+    def __getattr__(self, name):
+        return getattr(self._queue, name)
+
+    def get(self, *args, **kwargs):
+        task = self._queue.get(*args, **kwargs)
+        self._task = task
+        return task
+
+    def task_done(self, *args, **kwargs):
+        task = kwargs.get("task") or (args[0] if args else None) or self._task
+        try:
+            if (task is not None and getattr(task, "source", None) == "web"
+                    and not is_system_command(task)):
+                get_web_interface().turn_left_queue(getattr(task, "session_id", None),
+                                                    getattr(task, "turn_id", None))
+        except Exception:
+            pass
+        if task is self._task:
+            self._task = None
+        return self._queue.task_done(*args, **kwargs)
+
+
 def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
     """
     Run a headless agent loop that processes tasks from the TaskQueue.
@@ -1767,7 +1807,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
     # Task Queue — wrapped in try/except so daemon thread crashes are captured
     try:
         _lifecycle("Creating TaskQueue singleton")
-        tq = TaskQueue()
+        tq = _TurnEndingQueue(TaskQueue())
         _lifecycle("TaskQueue OK, resetting runtime state")
         # Self-heal: after worker restarts, clear stale in-flight runtime locks so
         # queued tasks cannot remain blocked behind orphaned session locks.
@@ -3712,11 +3752,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                 except Exception:
                     pass
                 # The turn leaves the queue: what it showed is stored now (or never will be),
-                # so its live record goes (vaf/core/live_view.py).
-                try:
-                    get_web_interface().turn_left_queue(task.session_id, getattr(task, "turn_id", None))
-                except Exception:
-                    pass
+                # so its live record goes (_TurnEndingQueue tells it, on this exit and all others).
                 tq.task_done()
             else:
                 # Background maintenance runs only on primary worker to avoid duplicates.

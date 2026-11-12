@@ -487,3 +487,127 @@ def test_a_forgotten_value_is_replaced_in_the_record(monkeypatch):
     led.record("A", {"type": "subagent_output_stream", "line": f"login with {secret}"})
     out = json.dumps(led.snapshot("A", active=True))
     assert secret not in out and "[FTP_PASS]" in out
+
+
+# ── round 2: late files, the turn's end, forget timing ───────────────────────────
+
+def test_a_late_file_of_an_older_turn_never_wipes_the_running_turn():
+    """The async coder of turn T1 announces its files with T1's id while T2 runs.
+    MUTATION: let file_created move the turn again - red; let any newer id move it - red."""
+    led = LiveViewLedger()
+    led.set_prompt("A", "t2", {"role": "user", "content": "second question"})
+    led.record("A", _msg("streaming t2", turn="t2"))
+    led.record("A", dict(_tool("start", "c9"), turnId="t2"))
+    led.record("A", {"type": "file_created", "filePath": "/w/late.txt", "turnId": "t1"})
+    led.record("A", {"type": "agent_message_update", "content": "old drain", "turnId": "t1"})
+    snap = led.snapshot("A", active=True)
+    assert [p["content"] for p in snap["prompts"]] == ["second question"]
+    assert [(e["type"], e.get("turnId")) for e in snap["events"]] == [
+        ("agent_message_update", "t2"), ("tool_update", "t2"), ("file_created", "t1"),
+        ("agent_message_update", "t1")]
+
+
+def test_an_upload_announced_for_the_queued_turn_never_wipes_the_running_one():
+    """The chat handler announces an attached image with the NEW queued turn's id while the
+    current turn still runs; that turn's prompt is on record already.
+    MUTATION: let file_created move the turn - red."""
+    led = LiveViewLedger()
+    led.set_prompt("A", "t1", {"role": "user", "content": "running"})
+    led.record("A", _msg("streaming t1", turn="t1"))
+    led.set_prompt("A", "t2", {"role": "user", "content": "queued with an image"})
+    led.record("A", {"type": "file_created", "filePath": "/w/photo.png", "turnId": "t2"})
+    snap = led.snapshot("A", active=True)
+    assert [p["content"] for p in snap["prompts"]] == ["running", "queued with an image"]
+    assert _types(snap) == ["agent_message_update", "file_created"]
+
+
+def test_a_second_completion_stays_the_last_word():
+    """The guard path sends a corrected update and a second message_complete for the same turn:
+    the end must replay after the correction. MUTATION: keep the first completion's place - red."""
+    led = LiveViewLedger()
+    led.record("A", _msg("first", turn="t1"))
+    led.record("A", {"type": "message_complete", "turnId": "t1"})
+    led.record("A", {"type": "agent_message_update", "content": "corrected", "turnId": "t1"})
+    led.record("A", {"type": "message_complete", "turnId": "t1"})
+    assert _types(led.snapshot("A", active=True))[-1] == "message_complete"
+
+
+def test_only_the_running_turns_prompt_is_renewed():
+    """A queued turn's prompt is not kept alive by another turn's events.
+    MUTATION: renew every prompt on a turn event - red."""
+    clock = _Clock()
+    led = LiveViewLedger(clock=clock)
+    led.set_prompt("A", "t1", {"role": "user", "content": "running"})
+    led.set_prompt("A", "t0", {"role": "user", "content": "stale"})
+    led.record("A", _msg("x", turn="t1"))
+    clock.t += lv.TURN_TTL - 10
+    led.record("A", _msg("y", turn="t1"))
+    clock.t += 20
+    assert [p["content"] for p in led.snapshot("A", active=True)["prompts"]] == ["running"]
+
+
+def test_an_event_recorded_while_a_forget_runs_is_scrubbed(monkeypatch):
+    """The forgotten values are read under the record's lock. The race: the event's record has
+    read the (empty) values when a forget remembers the value and scrubs the record on another
+    thread. With the read outside the lock that scrub finishes first and the event goes in raw;
+    inside the lock the scrub waits and catches it. MUTATION: read them before the lock - red."""
+    import threading
+    from vaf.core import forget_secrets
+    monkeypatch.setattr(forget_secrets, "_by_session", {})
+    secret = "timing-secret-0042"
+    led = LiveViewLedger()
+    led.record("A", {"type": "coder_state", "x": 1})
+    real = lv._forgotten
+    fired = []
+
+    def racing(sid):
+        out = real(sid)
+        if not fired:
+            fired.append(1)
+            forget_secrets.remember("A", {"PW": secret})
+            other = threading.Thread(target=led.scrub, args=("A", {"PW": secret}))
+            other.start()
+            other.join(0.3)          # done at once when the lock is free, waits when it is held
+            fired.append(other)
+        return out
+    monkeypatch.setattr(lv, "_forgotten", racing)
+    led.record("A", {"type": "subagent_output_stream", "line": f"pw {secret}"})
+    fired[1].join(2)
+    monkeypatch.setattr(lv, "_forgotten", real)
+    assert secret not in json.dumps(led.snapshot("A", active=True))
+
+
+def test_a_prompt_is_scrubbed_before_it_is_cut(monkeypatch):
+    """MUTATION: cut before scrubbing - red."""
+    from vaf.core import forget_secrets
+    monkeypatch.setattr(forget_secrets, "_by_session", {})
+    secret = "Sup3rSecretValue99"
+    forget_secrets.remember("A", {"PW": secret})
+    led = LiveViewLedger()
+    text = "x" * (lv.MAX_STRING - 6) + secret
+    led.set_prompt("A", "t1", {"role": "user", "content": text})
+    content = led.snapshot("A", active=True)["prompts"][0]["content"]
+    assert "Sup3rS" not in content and "[PW]" in content
+
+
+def test_a_value_cut_before_it_was_forgotten_loses_its_start_too(monkeypatch):
+    """A string cut at the limit before the forget ends in the value's first part.
+    MUTATION: no tail scrub - red."""
+    from vaf.core import forget_secrets
+    monkeypatch.setattr(forget_secrets, "_by_session", {})
+    secret = "Sup3rSecretValue99"
+    led = LiveViewLedger()
+    led.record("A", _tool("end", "c1", data="x" * (lv.MAX_STRING - 6) + secret))
+    led.scrub("A", {"PW": secret})
+    data = led.snapshot("A", active=True)["events"][0]["data"]
+    assert "Sup3rS" not in data and data.endswith("[PW]" + lv.TRUNCATED)
+
+
+def test_a_scrubbed_prompt_is_recounted():
+    """MUTATION: keep the old size after a scrub - red."""
+    led = LiveViewLedger()
+    secret = "s" * 5000
+    led.set_prompt("A", "t1", {"role": "user", "content": secret})
+    before = led._chats["A"].prompt_bytes
+    led.scrub("A", {"PW": secret})
+    assert led._chats["A"].prompt_bytes < before - 4000

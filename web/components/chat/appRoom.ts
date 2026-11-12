@@ -149,13 +149,79 @@ export async function sendWithTimeout(fetchFn: typeof fetch, url: string, init: 
     }
 }
 
-/** After a send gave up: whether the room now holds the line anyway (stored and sent after the
- *  browser stopped waiting). It does when a line of the person that was not there before the
- *  send carries the same text. */
-export function arrivedAfterAll(before: ReadonlySet<string>,
-    lines: ReadonlyArray<{ id: string; peer: string; text: string }>, text: string): boolean {
-    const wanted = text.trim();
-    return lines.some(l => l.peer === 'person' && !before.has(l.id) && (l.text || '').trim() === wanted);
+/** The id the page gives a line it sends (`client_id`), so it can recognise the line in the
+ *  room if it stops waiting for the answer. "" where the browser has no `randomUUID`: the
+ *  server then picks the id and a give-up cannot be confirmed. */
+export function newLineId(): string {
+    try {
+        return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+            ? crypto.randomUUID() : '';
+    } catch {
+        return '';
+    }
+}
+
+/** A line of the room as the check reads it: the person's line keeps the page's id as its
+ *  `id` (to the app's agent) or as `msg` (to the VAF agent, waiting and stored alike). */
+export type CheckedLine = { id: string; peer: string; msg?: string };
+
+/** Whether a transcript holds the line the page sent under `lineId`. Only that line counts: an
+ *  earlier line with the same words has another id. */
+export function holdsLine(lines: ReadonlyArray<CheckedLine>, lineId: string): boolean {
+    return !!lineId && lines.some(l => l.peer === 'person' && (l.id === lineId || l.msg === lineId));
+}
+
+/** How long the page asks the room after a give-up before it shows the notice. */
+export const CONFIRM_WAIT_MS = 5000;
+
+/** The socket as the check needs it. */
+export type CheckSocket = { readyState: number; send(data: string): void } | null | undefined;
+/** Hands every Veyllo App room transcript that arrives to `cb`; returns the unsubscribe. */
+export type TranscriptListen = (cb: (lines: ReadonlyArray<CheckedLine>) => void) => () => void;
+type Timers = { set: (fn: () => void, ms: number) => unknown; clear: (handle: unknown) => void };
+
+/** After a send gave up: ask the room once, without marking anything read (`seen: false`), and
+ *  read every transcript that arrives until one holds the line or `waitMs` passed. A poll
+ *  answer from before the line was stored ends nothing. True: the line is there. False: not
+ *  seen in time, or the room could not be asked (the socket is not open, or sending threw);
+ *  the timer and the listener are gone in every case. */
+export function confirmAfterGiveUp(socket: CheckSocket, listen: TranscriptListen, lineId: string,
+    waitMs: number = CONFIRM_WAIT_MS,
+    timers: Timers = { set: (fn, ms) => setTimeout(fn, ms), clear: h => clearTimeout(h as ReturnType<typeof setTimeout>) },
+): Promise<boolean> {
+    return new Promise(resolve => {
+        if (!lineId || !socket || socket.readyState !== 1) {
+            resolve(false);
+            return;
+        }
+        let done = false;
+        let stop: () => void = () => undefined;
+        let handle: unknown = null;
+        const finish = (found: boolean) => {
+            if (done) return;
+            done = true;
+            stop();
+            timers.clear(handle);
+            resolve(found);
+        };
+        stop = listen(lines => { if (holdsLine(lines, lineId)) finish(true); });
+        handle = timers.set(() => finish(false), waitMs);
+        try {
+            socket.send(JSON.stringify({ type: 'open_app_room', seen: false }));
+        } catch {
+            finish(false);
+        }
+    });
+}
+
+/** What a transcript means for a line the page gave up on and showed the notice for: `clear`
+ *  when the line has arrived and the box still holds exactly its text (clear the box and the
+ *  notice: a second Enter would send it twice), `drop` when it arrived but the box holds
+ *  something else (stop watching, leave the box), `wait` otherwise. */
+export function lateLine(lines: ReadonlyArray<CheckedLine>, lineId: string, text: string,
+    box: string): 'clear' | 'drop' | 'wait' {
+    if (!holdsLine(lines, lineId)) return 'wait';
+    return box.trim() === text.trim() ? 'clear' : 'drop';
 }
 
 /** Whether the composer is cleared when a line was taken: only while the view it was written in

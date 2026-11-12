@@ -717,7 +717,8 @@ def test_the_terminal_words_the_room_as_the_page_does():
     import json
 
     from vaf.cli.tui_app.app import _APP_ROOM_TEXT
-    catalogue = json.loads(Path("web/messages/en.json").read_text(encoding="utf-8"))["main"]
+    catalogue = json.loads((Path(__file__).resolve().parents[1] / "web" / "messages" / "en.json")
+                           .read_text(encoding="utf-8"))["main"]
     assert {key: catalogue[key] for key in _APP_ROOM_TEXT} == _APP_ROOM_TEXT
 
 
@@ -747,9 +748,10 @@ def test_the_terminal_header_says_how_to_ask_vafs_agent():
     """MUTATION: the old header without the mention - red."""
     from vaf.cli.tui_app.app import _app_room_header
     header = _app_room_header("Mia", "Mia", True)
-    assert "To ask Mia instead, start the line with @Mia." in header
+    assert "To ask Mia instead, start the line with @Mia and a space." in header
     assert "vaf devices say" in header
-    assert "You can ask Mia now: start the line with @Mia." in _app_room_header("Mia", "Mia", False)
+    assert "You can ask Mia now: start the line with @Mia and a space." in _app_room_header(
+        "Mia", "Mia", False)
 
 
 # ── the command line and the route ────────────────────────────────────────────
@@ -808,6 +810,18 @@ def test_body_cannot_name_scope_or_device(room_home, monkeypatch):
     assert "Settings" in r.json()["detail"]
 
 
+def test_the_route_passes_the_pages_line_id(room_home, monkeypatch):
+    """MUTATION: drop `client_id` in the route - red: the page could not recognise its line."""
+    import uuid as _uuid
+
+    from test_app_link_routes import _app
+    _capable(SCOPE_A)
+    client = _app(monkeypatch, as_scope=SCOPE_A)
+    mine = str(_uuid.uuid4())
+    r = client.post("/api/app-link/room", json={"text": "Hallo", "client_id": mine})
+    assert r.status_code == 200 and r.json()["id"] == mine
+
+
 # ── the web server ────────────────────────────────────────────────────────────
 
 def test_auto_load_skips_room_and_app_rows(monkeypatch, tmp_path):
@@ -861,6 +875,63 @@ def test_open_app_room_is_own_scope_only(monkeypatch, tmp_path):
     assert asked == [BOB, ("seen", BOB, 200.0)]
     assert frames[-1]["room"]["roomKind"] == "veyllo_app"
     TaskQueue._instance = None  # type: ignore[attr-defined]
+
+
+def test_open_app_room_that_only_looks_marks_nothing_seen(monkeypatch, tmp_path):
+    """The page checks whether a line it gave up on arrived with "seen": false, maybe while
+    another chat is open: the room's lines must keep their unread mark. MUTATION: mark seen
+    whatever the command says - red."""
+    from test_live_view_server import BOB, _connect, _send, _until, world as _world
+    TaskQueue._instance = None  # type: ignore[attr-defined]
+    TaskQueue()._legacy_mode = True  # type: ignore[attr-defined]
+    server = _world.__wrapped__(monkeypatch, tmp_path)
+    asked = []
+    monkeypatch.setattr(room, "view", lambda scope, username="": {
+        "room": {"id": room.ROW_ID, "roomId": room.ROW_ID, "roomKind": room.ROOM_KIND,
+                 "appRoom": {"devices": 1}}, "messages": [{"id": "a", "ts": 100.0}]})
+    monkeypatch.setattr(room, "mark_seen", lambda scope, upto=None, username="": asked.append(
+        ("seen", scope, upto)) and False)
+    with _connect(server, BOB, "bob") as ws:
+        _until(ws, "history_update")
+        _send(ws, {"type": "open_app_room", "seen": False})
+        _until(ws, "room_transcript")
+        _send(ws, {"type": "open_app_room"})
+        _until(ws, "room_transcript")
+        deadline = time.monotonic() + 5
+        while not asked and time.monotonic() < deadline:
+            time.sleep(0.02)
+        time.sleep(0.2)
+    assert asked == [("seen", BOB, 100.0)], "only the ordinary open marks the room read"
+    TaskQueue._instance = None  # type: ignore[attr-defined]
+
+
+def test_a_line_keeps_the_id_the_page_chose(room_home):
+    """A page that stopped waiting recognises its line by the id it sent: a line to the app's
+    agent carries it as its id, a line to VAF's agent as `msg`, waiting and stored alike. An id
+    that is no UUID, or one a room line already has, is replaced. MUTATION: ignore the page's
+    id - red; MUTATION: drop `msg` from the waiting question - red."""
+    import uuid as _uuid
+
+    from vaf.core.session import TURN_ID_KEY, Message, get_manager
+    _capable()
+    mine = str(_uuid.uuid4())
+    assert room.post(SCOPE_A, "alice", "Licht aus", client_id=mine)["id"] == mine
+    assert room.post(SCOPE_A, "alice", "Licht an", client_id=mine)["id"] != mine
+    assert room.post(SCOPE_A, "alice", "Hallo", client_id="not-an-id")["id"] != "not-an-id"
+    asked = str(_uuid.uuid4())
+    answer = room.post(SCOPE_A, "alice", "@VAF wie spät", client_id=asked)
+    assert answer["id"] == asked
+    [waiting] = [l for l in room.transcript(SCOPE_A) if l.get("pending")]
+    assert waiting["msg"] == asked
+    [task] = _queued()
+    session = get_manager().load(devices.chat_session_id(SCOPE_A), restore_state=False,
+                                 repoint=False)
+    session.messages.append(Message(role="user", content="@VAF wie spät", metadata={
+        TURN_ID_KEY: str(task.turn_id), "channel_message_id": asked}))
+    get_manager().save(session, sync_state=False)
+    TaskQueue()._queued_by_session.clear()
+    [stored] = [l for l in room.transcript(SCOPE_A) if l["text"] == "@VAF wie spät"]
+    assert stored["msg"] == asked and not stored.get("pending")
 
 
 # ── what the person sees of their own lines and of the room appearing ────────
@@ -1107,6 +1178,74 @@ def test_folded_twins_go_to_the_room_and_keep_their_labels(tmp_path, first, seco
     assert len({label.casefold() for label in labels.values()}) == 2
     for peer, label in labels.items():
         assert agent_room.address_from_mention(f"@{label} hi") == {"peer": peer}
+
+
+@pytest.mark.parametrize("names", [
+    ["Bob", "bob", "Bob1"],
+    ["Bob", "bob", "Bob1", "BOB2"],
+    ["Codex", "Codex", "codex1", "Codex2."],
+    ["Bob", "Bob.", "Bob1"],
+])
+def test_every_label_names_exactly_one_member(tmp_path, names):
+    """A generated label never equals another member's name or label, also after folding or
+    with a sentence ending: with "Bob", "bob" and "Bob1" the twins do not both end up with a
+    label "Bob1". MUTATION: number the collision without skipping taken names (the previous
+    rule) - red; MUTATION: skip only exact names, not folded ones - red."""
+    agent_room = _members(tmp_path, names)
+    labels = agent_room.labels()
+    assert len(labels) == len(names)
+    for peer, label in labels.items():
+        assert agent_room.peers_named(label) == [peer], (label, labels)
+        assert agent_room.address_from_mention(f"@{label} hi") == {"peer": peer}, (label, labels)
+
+
+@pytest.mark.parametrize("plain, twin", [("Bob", "Bob."), ("Dr", "Dr."), ("Mia", "Mia's")])
+def test_a_punctuated_twin_is_a_collision_with_labels_of_its_own(tmp_path, plain, twin):
+    """"Bob." beside "Bob" could be meant by "@Bob.", so the two are told apart by labels like
+    folded twins: each label reaches its member, the bare name still reaches its own member,
+    and the mention both could mean goes to the room. MUTATION: find collisions by the fold
+    alone (no sentence endings taken off) - red (the twin had no mention of its own)."""
+    agent_room = _members(tmp_path, [plain, twin])
+    labels = agent_room.labels()
+    assert labels["p-0"] != plain and labels["p-1"] != twin
+    for peer, label in labels.items():
+        assert agent_room.address_from_mention(f"@{label} hi") == {"peer": peer}
+    assert agent_room.address_from_mention(f"@{plain} hi") == {"peer": "p-0"}
+    assert agent_room.address_from_mention(f"@{twin} hi") is None
+
+
+def test_a_mention_of_65535_full_stops_costs_one_pass(tmp_path):
+    """A room line may carry 65,536 characters. The candidates of "@" and 65,535 full stops
+    were every shorter copy of the word (about 2 GB, 104 s measured); they are walked by index
+    now and only forms a name can have are kept. MUTATION: keep every shorter form (the
+    previous loop) - red (time and memory); MUTATION: no length bound - red (memory)."""
+    import time
+    import tracemalloc
+
+    from vaf.core.a2a.room import MENTION_MAX_CHARS, mention_candidates
+    agent_room = _members(tmp_path, ["Bob"])
+    line = "@" + "." * 65535 + " hi"
+    tracemalloc.start()
+    started = time.perf_counter()
+    candidates = mention_candidates(line)
+    assert agent_room.address_from_mention(line) is None
+    assert agent_room.address_from_mention("@Bob" + "." * 65532) == {"peer": "p-0"}
+    elapsed = time.perf_counter() - started
+    _now, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    assert elapsed < 5.0 and peak < 20_000_000, (elapsed, peak)
+    assert all(len(c) <= MENTION_MAX_CHARS for c in candidates)
+    assert len(candidates) <= MENTION_MAX_CHARS
+
+
+@pytest.mark.parametrize("display, line", [("a@b", "@a@b@ hi"), ("x\\y", "@x\\y\\ hi"),
+                                           ("C#", "@C#. hi"), ("x_y", "@x_y. hi")])
+def test_at_and_backslash_end_a_sentence_like_other_punctuation(tmp_path, display, line):
+    """Only "#", "%", "&", "*", "/" and "_" belong to a name's spelling (A2A_PROTOCOL.md); "@"
+    and a backslash are sentence punctuation like any other mark, so one after the name is
+    taken off. MUTATION: put "@" or the backslash back into the name punctuation - red."""
+    agent_room = _members(tmp_path, [display, "Other"])
+    assert agent_room.address_from_mention(line) == {"peer": "p-0"}
 
 
 def test_a_space_after_the_at_still_names(room_home, monkeypatch):
@@ -1663,6 +1802,33 @@ def test_a_line_that_could_not_be_stored_is_not_delivered(room_home, monkeypatch
         room.post(SCOPE_A, "alice", "Hallo")
     client.pump()
     assert refused.value.code == "failed" and client.of("room_msg") == []
+
+
+def test_a_resend_on_a_chat_that_cannot_be_read_is_failed_not_sent_again(room_home, monkeypatch):
+    """The original line was found, then the store broke: the append stores nothing and the chat
+    cannot be read back. Nothing confirmed a resend, so the answer is "failed", not
+    "already_sent_again". MUTATION: ask the guard with whatever was loaded (None included) -
+    red."""
+    client, _pipe, _row = _capable()
+    first = room.post(SCOPE_A, "alice", "Licht aus")
+    monkeypatch.setattr(room, "_append", lambda *a, **k: False)
+    monkeypatch.setattr(room, "_load", lambda sid: None)
+    monkeypatch.setattr(room, "_line_text", lambda *a, **k: "Licht aus")
+    with pytest.raises(room.RoomRefused) as refused:
+        room.post(SCOPE_A, "alice", "Licht aus", resend_of=first["id"])
+    assert (refused.value.code, refused.value.status) == ("failed", 500)
+
+
+def test_the_append_boundary_lets_an_interrupt_through(room_home, monkeypatch):
+    """`_append` turns a failing store into "not stored", but a KeyboardInterrupt (or a
+    SystemExit) is not a store failure and must leave. MUTATION: catch BaseException - red."""
+    from vaf.core.session import SessionManager
+
+    def _interrupted(self, *a, **k):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(SessionManager, "append_background_message", _interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        room._append(SCOPE_A, "x", role="user", kind="k", meta={})
 
 
 def test_a_store_that_raises_is_the_failed_refusal(room_home, monkeypatch, caplog):

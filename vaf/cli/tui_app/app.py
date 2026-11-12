@@ -194,11 +194,11 @@ def _room_clock(ts) -> str:
 _APP_ROOM_TEXT = {
     "appRoomEmpty": "This is your Veyllo App room: you, the agent in your Veyllo App and {name}, "
                     "your VAF agent. What you write here goes to the agent in your Veyllo App. "
-                    "To ask {name} instead, start the line with @{handle}.",
+                    "To ask {name} instead, start the line with @{handle} and a space.",
     "appRoomEmptyAgentOnly": "This is your Veyllo App room: you, the agent in your Veyllo App and "
                              "{name}, your VAF agent. Writing to the agent in your Veyllo App is "
                              "not possible yet. You can ask {name} now: start the line with "
-                             "@{handle}.",
+                             "@{handle} and a space.",
     "appRoomDelivered": "delivered",
     "appRoomWaiting": "waiting for the Veyllo App",
     "appRoomNotDelivered": "not delivered: the Veyllo App did not take it",

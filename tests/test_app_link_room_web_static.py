@@ -82,8 +82,9 @@ def test_the_composer_posts_the_line_without_a_chooser():
     sender = _between(PAGE, "const sendToAppRoom = async (text: string, resendOf?: string) => {",
                       "\n    };")
     assert "/api/app-link/room" in sender and "method: 'POST'" in sender
-    assert ("body: JSON.stringify({ text: next.text, ...(next.resendOf ? { resend_of: next.resendOf } : {}) }),"
-            in sender), "the body carries the line (and the line it sends again) only"
+    assert ("body: JSON.stringify({ text: next.text, ...(next.resendOf ? { resend_of: next.resendOf } : {}),\n"
+            "                    ...(lineId ? { client_id: lineId } : {}) }),"
+            in sender), "the body carries the line, the line it sends again and its own id only"
     assert "const sentFrom = roomViewRef.current?.room.roomId ?? null;" in sender
     refused = _between(sender, "} else if (outcome.status === 'refused') {", "}")
     assert "setAppRoomError(String(outcome.data.code || 'failed'));" in refused
@@ -208,20 +209,28 @@ def test_a_send_gives_up_after_its_timeout_and_scrolls_only_the_room():
     test_app_link_room_web.py), asks the room once after a give-up before it shows anything,
     and scrolls only the room. MUTATION: fetch directly again - red; MUTATION: show the
     give-up before the room was asked - red; MUTATION: set the scroll target whatever is on
-    screen - red."""
+    screen - red; MUTATION: send no line id, hand the check no transcripts, or stop watching
+    for a late line - red."""
     sender = _code_only(_between(PAGE, "const sendToAppRoom = async (text: string, resendOf?: string) => {",
                                  "\n    };\n"))
     assert "await sendWithTimeout(fetch, `${getApiBase()}/api/app-link/room`" in sender
     assert "await fetch(" not in sender
+    # The line carries the page's own id, and a give-up hands the check (appRoom.ts
+    # `confirmAfterGiveUp`, run in node) the socket, every transcript and that id.
+    assert "...(lineId ? { client_id: lineId } : {})" in sender
     give_up = _between(sender, "} else if (outcome.status === 'timeout') {", "} else {\n                setAppRoomError('failed');")
-    asked = give_up.index("wsSocketRef.current?.send(JSON.stringify(roomOpenCommand(APP_ROOM_ID)));")
-    decided = give_up.index("if (lines && arrivedAfterAll(before, lines, next.text)) {")
+    asked = give_up.index("await confirmAfterGiveUp(wsSocketRef.current, cb => {")
+    decided = give_up.index("if (found) {")
     assert asked < decided < give_up.index("setAppRoomError('timeout');")
+    assert "appRoomLateRef.current = { lineId, text: next.text };" in give_up
+    assert "if (socket && socket.readyState === WebSocket.OPEN) {" in sender
     assert ("if (roomViewRef.current?.room.roomId === APP_ROOM_ID) {\n"
             "                pendingScrollRestore.current = 'bottom';") in sender
     handler = _code_only(_between(PAGE, "else if (data.type === 'room_transcript') {",
                                   "else if (data.type === 'room_invite_candidates')"))
-    assert "if (rid === APP_ROOM_ID && appRoomCheckRef.current) {" in handler
+    assert "appRoomListenersRef.current.forEach(cb => cb(lines));" in handler
+    assert ("const verdict = lateLine(lines, late.lineId, late.text, inputValueRef.current || '');"
+            in handler)
     view = _between(PAGE, "function RoomConversation(", "function VAFDashboardContent(")
     assert "m.state === 'not_delivered' && !d.quiet ?" in view
 

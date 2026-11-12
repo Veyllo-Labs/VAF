@@ -240,16 +240,84 @@ def test_a_room_send_that_answered_leaves_no_timer_behind():
     assert out == ["ok", False, "timeout", True]
 
 
-def test_a_line_stored_after_the_give_up_counts_as_sent():
-    """After a give-up the room is asked once: a line of the person that was not there before
-    and carries the text means the line was taken. MUTATION: match any line with the text
-    (an older one) - red; MUTATION: match another party's line - red."""
-    lines = ("[{id: 'old', peer: 'person', text: 'Licht aus'},"
-             " {id: 'n1', peer: 'app_agent', text: 'Licht aus'}]")
-    assert _call(f"m.arrivedAfterAll(new Set(['old']), {lines}, ' Licht aus ')") is False
-    more = lines[:-1] + ", {id: 'n2', peer: 'person', text: 'Licht aus'}]"
-    assert _call(f"m.arrivedAfterAll(new Set(['old']), {more}, 'Licht aus')") is True
-    assert _call(f"m.arrivedAfterAll(new Set(['old']), {more}, 'Licht an')") is False
+def test_a_send_that_failed_outright_is_an_error_not_a_give_up():
+    """A request that fails before any time ran out (the network is gone) is `error`, not
+    `timeout`. MUTATION: report every failure as a give-up - red."""
+    out = _run_async("""
+        const fail = () => Promise.reject(new TypeError('network'));
+        return (await m.sendWithTimeout(fail, '/x', {method: 'POST'}, 1000)).status;
+    """)
+    assert out == "error"
+
+
+def test_only_the_line_the_page_sent_counts_as_arrived():
+    """The line is recognised by the id the page sent with it: as its `id` (to the app's agent)
+    or `msg` (to the VAF agent, waiting or stored). An earlier line with the same words, another
+    party's line, or no id at all is not it. MUTATION: match on the text - red; MUTATION:
+    accept another party's line - red; MUTATION: ignore `msg` - red."""
+    lines = ("[{id: 'chat:4', peer: 'person', msg: 'old-id', text: '@Mia ok'},"
+             " {id: 'new-id', peer: 'app_agent', text: '@Mia ok'}]")
+    assert _call(f"m.holdsLine({lines}, 'new-id')") is False
+    assert _call(f"m.holdsLine({lines}, '')") is False
+    assert _call("m.holdsLine([{id: 'turn:t1', peer: 'person', msg: 'new-id'}], 'new-id')") is True
+    assert _call("m.holdsLine([{id: 'new-id', peer: 'person'}], 'new-id')") is True
+
+
+# A fake socket and fake timers for `confirmAfterGiveUp`: the test decides when transcripts
+# arrive and when the wait ends.
+_CHECK = """
+const sent = [];
+let listener = null, listening = 0;
+const listen = cb => { listener = cb; listening += 1; return () => { listener = null; listening -= 1; }; };
+let fire = null, cleared = 0, waited = null;
+const timers = { set: (fn, ms) => { fire = fn; waited = ms; return 7; }, clear: h => { if (h === 7) cleared += 1; } };
+const open = { readyState: 1, send: d => sent.push(JSON.parse(d)) };
+"""
+
+
+@pytest.mark.parametrize("script, expected", [
+    # A poll answer from before the line was stored ends nothing; the next one with the line does.
+    ("""const p = m.confirmAfterGiveUp(open, listen, 'L1', 5000, timers);
+        listener([{id: 'x', peer: 'person'}]); listener([{id: 'turn:9', peer: 'person', msg: 'L1'}]);
+        return [await p, sent, listening, cleared, waited];""",
+     [True, [{"type": "open_app_room", "seen": False}], 0, 1, 5000]),
+    # Nothing in time: not confirmed, listener and timer gone.
+    ("""const p = m.confirmAfterGiveUp(open, listen, 'L1', 5000, timers);
+        listener([{id: 'x', peer: 'person'}]); fire();
+        return [await p, sent.length, listening, cleared];""",
+     [False, 1, 0, 1]),
+    # A socket that is reconnecting: nothing is sent, not confirmed, nothing left behind.
+    ("""const p = m.confirmAfterGiveUp({readyState: 0, send: () => { throw new Error('x'); }},
+                                       listen, 'L1', 5000, timers);
+        return [await p, listening, fire === null];""",
+     [False, 0, True]),
+    # Sending throws: not confirmed, listener and timer gone.
+    ("""const p = m.confirmAfterGiveUp({readyState: 1, send: () => { throw new Error('x'); }},
+                                       listen, 'L1', 5000, timers);
+        return [await p, listening, cleared];""",
+     [False, 0, 1]),
+    # No id: the room cannot tell the line, so it is not asked.
+    ("""const p = m.confirmAfterGiveUp(open, listen, '', 5000, timers);
+        return [await p, sent.length, listening];""",
+     [False, 0, 0]),
+])
+def test_the_give_up_check(script, expected):
+    """Each branch of `confirmAfterGiveUp`, against a fake socket and fake timers. MUTATIONS,
+    each red: end the check on the first transcript; never clear the timer; leave the
+    listener; send while the socket is not open; mark the room read (no `seen: false`); wait
+    0 ms instead of the given time."""
+    assert _run_async(_CHECK + script) == expected
+
+
+@pytest.mark.parametrize("box, verdict", [("Licht aus", "clear"), (" Licht aus ", "clear"),
+                                          ("Licht an", "drop")])
+def test_a_line_that_turns_up_after_the_notice_clears_the_box(box, verdict):
+    """After the notice the page keeps watching: the line turning up with the box still holding
+    exactly its text clears both (a second Enter would send it twice); with other text in the
+    box it stops watching and leaves the box. MUTATION: clear whatever the box holds - red."""
+    lines = "[{id: 'L1', peer: 'person'}]"
+    assert _call(f"m.lateLine({lines}, 'L1', 'Licht aus', {json.dumps(box)})") == verdict
+    assert _call("m.lateLine([{id: 'x', peer: 'person'}], 'L1', 'Licht aus', 'Licht aus')") == "wait"
 
 
 def test_a_give_up_without_the_line_says_it_may_still_come():
@@ -267,3 +335,14 @@ def test_a_sentence_in_the_room_texts_is_followed_by_a_space(lang):
     glued = {key: text for key, text in main.items()
              if key.startswith("appRoom") and re.search(r"[.!?:](?=[^\s.!?…)\]\"'{}0-9])", text)}
     assert not glued, glued
+
+
+@pytest.mark.parametrize("lang, marker", [("de", "Leerzeichen"), ("en", "a space"), ("tr", "boşluk")])
+def test_the_empty_room_says_to_put_a_space_after_the_name(lang, marker):
+    """An emoji or a symbol glued to the name continues the word (`@Mia😊` names nobody), so the
+    empty room says to put a space after the name in the Latin-script languages too. MUTATION:
+    drop the words from one of the texts - red."""
+    main = json.loads((ROOT / "web" / "messages" / f"{lang}.json").read_text(
+        encoding="utf-8"))["main"]
+    for key in ("appRoomEmpty", "appRoomEmptyAgentOnly"):
+        assert marker in main[key], (lang, key)

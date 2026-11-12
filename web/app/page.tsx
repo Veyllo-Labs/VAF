@@ -39,8 +39,8 @@ import InboxWindow from '@/components/inbox/InboxWindow';
 import { TurnDrafts, UnplacedDrafts, isWaitingDraft, type HeldSendRow } from '@/components/outbox/HeldSendCard';
 import { useChatDrafts } from '@/components/outbox/useChatDrafts';
 import {
-    APP_ROOM_ID, APP_ROOM_TITLE, ROOM_SEND_IDLE, arrivedAfterAll, beginSend, clearAfterSend, deliveryOf, emptyKey,
-    isAppRoom, lineTextKey, placeholderKey, refusalKey, roomOpenCommand, roomStillListed, sendWithTimeout,
+    APP_ROOM_ID, APP_ROOM_TITLE, ROOM_SEND_IDLE, beginSend, clearAfterSend, confirmAfterGiveUp, deliveryOf, emptyKey,
+    isAppRoom, lateLine, lineTextKey, newLineId, placeholderKey, refusalKey, roomOpenCommand, roomStillListed, sendWithTimeout,
     showUnreadDot, toKey, type RoomSend,
 } from '@/components/chat/appRoom';
 import { draftRefOf, isDraftTurnEnd, DRAFT_WAKE_PREFIX, CONFIRM_WAKE_PREFIX } from '@/components/outbox/draftRefs';
@@ -236,6 +236,8 @@ type RoomMessage = {
     /** The Veyllo App room: the addressee's name, and how far a line to the app's agent
      *  got (delivered, waiting, not_delivered). */
     toLabel?: string;
+    /** The Veyllo App room: the id the page chose for one of the person's own lines. */
+    msg?: string;
     state?: string;
     /** Why a line was not delivered, and the device a line went to. */
     reason?: string;
@@ -3184,9 +3186,13 @@ function VAFDashboardContent() {
     const [appRoomError, setAppRoomError] = useState('');
     // The line on its way to the room (appRoom.ts `beginSend`): the ref guards, the state draws.
     const appRoomSendRef = useRef<RoomSend>(ROOM_SEND_IDLE);
-    // Set while a send that gave up asks the room once whether its line arrived anyway: the
-    // next Veyllo App room transcript is handed to it, whether or not the room is on screen.
-    const appRoomCheckRef = useRef<((lines: RoomMessage[]) => void) | null>(null);
+    // The listeners of every Veyllo App room transcript that arrives, on screen or not: a send
+    // that gave up asks the room whether its line arrived anyway (appRoom.ts
+    // `confirmAfterGiveUp`).
+    const appRoomListenersRef = useRef(new Set<(lines: RoomMessage[]) => void>());
+    // A line the page gave up on and showed the notice for: when it still turns up and the box
+    // holds exactly its text, the box and the notice clear (appRoom.ts `lateLine`).
+    const appRoomLateRef = useRef<{ lineId: string; text: string } | null>(null);
     const [appRoomSending, setAppRoomSending] = useState<RoomSend>(ROOM_SEND_IDLE);
     useEffect(() => {
         if (!roomOpening) return;
@@ -5173,10 +5179,15 @@ function VAFDashboardContent() {
         setAppRoomSending(next);
         setAppRoomError('');
         const sentFrom = roomViewRef.current?.room.roomId ?? null;
-        // The lines on screen before the send, so a line that arrives after a give-up can be
-        // told from an older line with the same words.
-        const before = new Set((roomViewRef.current?.room.roomId === APP_ROOM_ID
-            ? roomViewRef.current.messages : []).map(m => m.id));
+        // The line's own id, so the page can recognise it in the room if it stops waiting.
+        const lineId = newLineId();
+        appRoomLateRef.current = null;
+        const refresh = () => {
+            const socket = wsSocketRef.current;
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                try { socket.send(JSON.stringify(roomOpenCommand(APP_ROOM_ID))); } catch { /* the poll refreshes */ }
+            }
+        };
         // The line was taken: clear the box (only where it was written) and go to the line.
         const taken = () => {
             setInput(prev => (clearAfterSend(sentFrom, roomViewRef.current?.room.roomId ?? null, text, prev)
@@ -5186,7 +5197,7 @@ function VAFDashboardContent() {
             if (roomViewRef.current?.room.roomId === APP_ROOM_ID) {
                 pendingScrollRestore.current = 'bottom';
             }
-            wsSocketRef.current?.send(JSON.stringify(roomOpenCommand(APP_ROOM_ID)));
+            refresh();
         };
         try {
             // A request that never answers ends after SEND_TIMEOUT_MS (appRoom.ts
@@ -5194,28 +5205,26 @@ function VAFDashboardContent() {
             const outcome = await sendWithTimeout(fetch, `${getApiBase()}/api/app-link/room`, {
                 method: 'POST', credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text: next.text, ...(next.resendOf ? { resend_of: next.resendOf } : {}) }),
+                body: JSON.stringify({ text: next.text, ...(next.resendOf ? { resend_of: next.resendOf } : {}),
+                    ...(lineId ? { client_id: lineId } : {}) }),
             });
             if (outcome.status === 'ok') {
                 taken();
             } else if (outcome.status === 'refused') {
                 setAppRoomError(String(outcome.data.code || 'failed'));
             } else if (outcome.status === 'timeout') {
-                // The browser stopped waiting, the server may not have: ask the room once. A
-                // line that is there was taken after all, and a second Enter would send it twice.
-                const lines = await new Promise<RoomMessage[] | null>(resolve => {
-                    const give = setTimeout(() => { appRoomCheckRef.current = null; resolve(null); }, 5000);
-                    appRoomCheckRef.current = (got) => {
-                        clearTimeout(give);
-                        appRoomCheckRef.current = null;
-                        resolve(got);
-                    };
-                    wsSocketRef.current?.send(JSON.stringify(roomOpenCommand(APP_ROOM_ID)));
-                });
-                if (lines && arrivedAfterAll(before, lines, next.text)) {
+                // The browser stopped waiting, the server may not have: ask the room (without
+                // marking it read) until the line shows or the wait ends. A line that is there
+                // was taken after all, and a second Enter would send it twice.
+                const found = await confirmAfterGiveUp(wsSocketRef.current, cb => {
+                    appRoomListenersRef.current.add(cb);
+                    return () => { appRoomListenersRef.current.delete(cb); };
+                }, lineId);
+                if (found) {
                     taken();
                 } else {
                     setAppRoomError('timeout');
+                    if (lineId) appRoomLateRef.current = { lineId, text: next.text };
                 }
             } else {
                 setAppRoomError('failed');
@@ -6476,9 +6485,21 @@ function VAFDashboardContent() {
                     // every attempt to leave the room bounced straight back.
                     {
                         const rid = data.room?.roomId;
-                        // A send that gave up asked whether its line arrived anyway.
-                        if (rid === APP_ROOM_ID && appRoomCheckRef.current) {
-                            appRoomCheckRef.current(data.messages || []);
+                        if (rid === APP_ROOM_ID) {
+                            const lines: RoomMessage[] = data.messages || [];
+                            // A send that gave up asks whether its line arrived anyway.
+                            appRoomListenersRef.current.forEach(cb => cb(lines));
+                            // A line the notice was shown for that turns up later: clear the
+                            // box and the notice while the box still holds exactly its text.
+                            const late = appRoomLateRef.current;
+                            if (late) {
+                                const verdict = lateLine(lines, late.lineId, late.text, inputValueRef.current || '');
+                                if (verdict !== 'wait') appRoomLateRef.current = null;
+                                if (verdict === 'clear') {
+                                    setInput('');
+                                    setAppRoomError('');
+                                }
+                            }
                         }
                         const wanted = (roomViewRef.current && roomViewRef.current.room.roomId === rid)
                             || pendingRoomOpenRef.current === rid;

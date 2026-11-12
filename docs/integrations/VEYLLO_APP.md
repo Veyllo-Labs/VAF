@@ -384,8 +384,8 @@ the browser's side: the page then asks the room, without marking anything read, 
 line arrived anyway; it recognises exactly its own line by the id it sent with it. If it did,
 the box is cleared as for any sent line; if not, the text stays in the box and the page says
 that no answer came in time and to send it again if the line does not appear. Should the line
-still turn up while the box holds exactly its text, the box and the notice clear, so a second
-Enter does not send it twice. A second device of the account does not get the line.
+still turn up, the notice goes, and the box clears too while it holds exactly the line's text,
+so a second Enter does not send it twice. A second device of the account does not get the line.
 
 **An older Veyllo App.** A Veyllo App that does not announce the room keeps working as it is.
 The room shows what exists without it, and writing to the app's agent is refused with the

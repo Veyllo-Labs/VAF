@@ -40,7 +40,7 @@ import { TurnDrafts, UnplacedDrafts, isWaitingDraft, type HeldSendRow } from '@/
 import { useChatDrafts } from '@/components/outbox/useChatDrafts';
 import {
     APP_ROOM_ID, APP_ROOM_TITLE, ROOM_SEND_IDLE, beginSend, clearAfterSend, confirmAfterGiveUp, deliveryOf, emptyKey,
-    isAppRoom, lateLine, lineTextKey, newLineId, placeholderKey, refusalKey, roomOpenCommand, roomStillListed, sendWithTimeout,
+    goToTakenLine, isAppRoom, lateEffect, lateLine, lineTextKey, newLineId, placeholderKey, refusalKey, roomOpenCommand, roomStillListed, sendWithTimeout,
     showUnreadDot, toKey, type RoomSend,
 } from '@/components/chat/appRoom';
 import { draftRefOf, isDraftTurnEnd, DRAFT_WAKE_PREFIX, CONFIRM_WAKE_PREFIX } from '@/components/outbox/draftRefs';
@@ -5193,8 +5193,8 @@ function VAFDashboardContent() {
             setInput(prev => (clearAfterSend(sentFrom, roomViewRef.current?.room.roomId ?? null, text, prev)
                 ? '' : prev));
             // The new line is where the view goes once the room answers, while the room is
-            // still what is on screen (another chat must not jump to its bottom).
-            if (roomViewRef.current?.room.roomId === APP_ROOM_ID) {
+            // still what is on screen and the view still follows (appRoom.ts `goToTakenLine`).
+            if (goToTakenLine(roomViewRef.current?.room.roomId ?? null, isAtBottomRef.current)) {
                 pendingScrollRestore.current = 'bottom';
             }
             refresh();
@@ -6512,10 +6512,9 @@ function VAFDashboardContent() {
                                 const verdict = lateLine(lines, late.lineId, late.sentFrom,
                                     roomViewRef.current?.room.roomId ?? null, late.text, inputValueRef.current || '');
                                 if (verdict !== 'wait') appRoomLateRef.current = null;
-                                if (verdict === 'clear') {
-                                    setInput('');
-                                    setAppRoomError('');
-                                }
+                                const effect = lateEffect(verdict);
+                                if (effect.box) setInput('');
+                                if (effect.notice) setAppRoomError('');
                             }
                         }
                     }

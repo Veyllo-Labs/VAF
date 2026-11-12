@@ -380,3 +380,32 @@ def test_the_empty_room_says_to_put_a_space_after_the_name(lang, marker):
         encoding="utf-8"))["main"]
     for key in ("appRoomEmpty", "appRoomEmptyAgentOnly"):
         assert marker in main[key], (lang, key)
+
+
+@pytest.mark.parametrize("verdict, effect", [("clear", {"box": True, "notice": True}),
+                                             ("drop", {"box": False, "notice": True}),
+                                             ("wait", {"box": False, "notice": False})])
+def test_a_line_that_turned_up_takes_the_notice_away_also_when_the_box_changed(verdict, effect):
+    """The line is in the room for `clear` and `drop`, so "send it again if it does not appear"
+    is no longer true: the notice goes in both, the box only when it still holds the line.
+    MUTATION: keep the notice on `drop` (the previous page) - red."""
+    assert _call(f"m.lateEffect('{verdict}')") == effect
+
+
+@pytest.mark.parametrize("on_screen, at_bottom, go", [
+    ("app:veyllo_app", True, True), ("app:veyllo_app", False, False),
+    ("green123456", True, False), (None, True, False),
+])
+def test_the_view_goes_to_a_taken_line_only_for_a_reader_at_the_bottom(on_screen, at_bottom, go):
+    """A reader who scrolled up while the line was on its way stays where they are, as in every
+    chat on the page; a view at the bottom goes to the line; another chat never jumps.
+    MUTATION: go whenever the room is on screen (the previous rule) - red."""
+    assert _call(f"m.goToTakenLine({json.dumps(on_screen)}, {json.dumps(at_bottom)})") is go
+
+
+def test_a_give_up_without_the_line_says_it_may_still_come():
+    """The notice after a give-up is its own sentence ("No answer came in time. If the message
+    does not appear in the room, send it again."), not the plain failure. MUTATION: drop the
+    `timeout` case - red."""
+    assert _call("m.refusalKey('timeout')") == "appRoomSendUnconfirmed"
+    assert _call("m.refusalKey('failed')") == "appRoomFailed"

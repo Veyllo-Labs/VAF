@@ -1915,6 +1915,10 @@ def test_a_stale_transcript_cannot_reopen_a_room_the_person_left():
     adopt = handler.index("setRoomView({ room: data.room")
     assert "roomViewRef.current" in handler[:adopt] and "pendingRoomOpenRef" in handler[:adopt], \
         "the transcript handler must decide against the OPEN view before adopting"
+    # The adoption sits INSIDE the decision: the last block opened before it is `if (wanted)`.
+    import re
+    opened = [m.group(0) for m in re.finditer(r"if \([^\n]*\) \{", handler[:adopt])]
+    assert opened and opened[-1] == "if (wanted) {", opened[-1:]
     switch = source.split("const handleSessionSwitch")[1][:800]
     assert "pendingRoomOpenRef.current = null" in switch, \
         "switching away must clear the pending mark"

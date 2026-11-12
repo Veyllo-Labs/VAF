@@ -228,6 +228,22 @@ export function lateLine(lines: ReadonlyArray<CheckedLine>, lineId: string, sent
     return sentFrom !== onScreen ? 'wait' : 'drop';
 }
 
+/** What the page does with a `lateLine` verdict: the line is in the room for `clear` and `drop`,
+ *  so the notice ("send it again if it does not appear") is no longer true and goes in both;
+ *  the box is emptied only for `clear` (it still holds exactly the line), a box the person
+ *  changed is kept. */
+export function lateEffect(verdict: 'clear' | 'drop' | 'wait'): { box: boolean; notice: boolean } {
+    return { box: verdict === 'clear', notice: verdict !== 'wait' };
+}
+
+/** Whether the view goes to the person's line once the room took it: only while the room is
+ *  still on screen (another chat must not jump to its bottom) and the view is at the bottom.
+ *  A reader who scrolled up while the line was on its way stays where they are, the rule of
+ *  every chat on the page. */
+export function goToTakenLine(onScreen: string | null, atBottom: boolean): boolean {
+    return onScreen === APP_ROOM_ID && atBottom;
+}
+
 /** Whether the composer is cleared when a line was taken: only while the view it was written in
  *  is still the one on screen and the box still holds that line. Typing the same words in
  *  another chat afterwards must not lose them. */

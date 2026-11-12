@@ -238,18 +238,52 @@ def test_a_send_gives_up_after_its_timeout_and_scrolls_only_the_room():
     assert asked < decided < give_up.index("setAppRoomError('timeout');")
     assert "appRoomLateRef.current = { lineId, text: next.text, sentFrom };" in give_up
     assert "if (socket && socket.readyState === WebSocket.OPEN) {" in sender
-    assert ("if (roomViewRef.current?.room.roomId === APP_ROOM_ID) {\n"
-            "                pendingScrollRestore.current = 'bottom';") in sender
+    # The view goes to the taken line only by the decision of appRoom.ts `goToTakenLine` (run in
+    # node), asked with the room on screen and whether the view is at the bottom NOW: the
+    # parked restore is set inside that condition and nowhere else in the sender.
+    taken = _code_only(_between(sender, "const taken = () => {", "\n        };"))
+    decision = "if (goToTakenLine(roomViewRef.current?.room.roomId ?? null, isAtBottomRef.current)) {"
+    assert taken.index(decision) < taken.index("pendingScrollRestore.current = 'bottom';")
+    assert sender.count("pendingScrollRestore.current = 'bottom';") == 1
     handler = _code_only(_between(PAGE, "else if (data.type === 'room_transcript') {",
                                   "else if (data.type === 'room_invite_candidates')"))
     assert "appRoomListenersRef.current.forEach(cb => cb(lines));" in handler
     assert ("const verdict = lateLine(lines, late.lineId, late.sentFrom,\n"
             "                                    roomViewRef.current?.room.roomId ?? null, late.text, inputValueRef.current || '');"
             in handler)
+    # What the verdict does is appRoom.ts `lateEffect` (run in node), and only that.
+    effect = _between(handler, "const effect = lateEffect(verdict);", "}")
+    assert "if (effect.box) setInput('');" in effect and "if (effect.notice) setAppRoomError('');" in effect
+    assert handler.count("setAppRoomError(") == 1 and handler.count("setInput(") == 1
     # The check runs with the page's default wait (appRoom.ts `CONFIRM_WAIT_MS`).
     assert "return () => { appRoomListenersRef.current.delete(cb); };\n                }, lineId);" in give_up
     view = _between(PAGE, "function RoomConversation(", "function VAFDashboardContent(")
     assert "m.state === 'not_delivered' && !d.quiet ?" in view
+
+
+def _block(src, opener):
+    """The text of the block that `opener` (ending in "{") opens, braces counted."""
+    start = src.index(opener) + len(opener)
+    depth = 1
+    for i in range(start, len(src)):
+        depth += {"{": 1, "}": -1}.get(src[i], 0)
+        if depth == 0:
+            return src[start:i]
+    raise AssertionError(f"unclosed block after {opener!r}")
+
+
+def test_the_give_up_listeners_see_every_veyllo_app_transcript():
+    """A person may switch chats during the 5 s check: the listeners and the late watch get
+    EVERY Veyllo App transcript, also one the view does not adopt, and only the clearing is
+    guarded (`lateLine` through `clearAfterSend`). MUTATION: hand them the transcript only
+    inside `if (wanted)` - red."""
+    handler = _code_only(_between(PAGE, "else if (data.type === 'room_transcript') {",
+                                  "else if (data.type === 'room_invite_candidates')"))
+    adopted = _block(handler, "if (wanted) {")
+    assert "appRoomListenersRef" not in adopted and "appRoomLateRef" not in adopted
+    listeners = _block(handler, "if (rid === APP_ROOM_ID) {")
+    assert "appRoomListenersRef.current.forEach(cb => cb(lines));" in listeners
+    assert "lateLine(" in listeners
 
 
 def test_the_room_details_read_on_a_phone():

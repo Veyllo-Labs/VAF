@@ -116,8 +116,10 @@ def agent_label(username: str) -> str:
 
 def handle(username: str) -> str:
     """The one word after "@" that always reaches VAF's agent and that the hint shows: the
-    first word of its name without trailing punctuation or symbols (a2a.room.trim_name):
-    "Mia Lisa" -> "Mia", "Mia." -> "Mia", "Dr. Mia" -> "Dr", "O'Neil" -> "O'Neil"; or "VAF"."""
+    first word of its name without sentence punctuation at either end or a trailing "'s"
+    (a2a.room.trim_name): "Mia Lisa" -> "Mia", "Mia." -> "Mia", "(Mia)" -> "Mia", "Dr. Mia" ->
+    "Dr", "O'Neil" -> "O'Neil", "C++" -> "C++"; or "VAF". "@" + the handle, typed back, is a
+    mention the rule resolves to VAF's agent."""
     from vaf.core.a2a.room import trim_name
     words = agent_label(username).split()
     first = trim_name(words[0]) if words else ""
@@ -127,12 +129,12 @@ def handle(username: str) -> str:
 def addressee(text: Any, username: str) -> str:
     """Who a line the person writes on VAF is for: VAF's agent when its leading "@" names the
     agent's ``handle`` or "VAF", by the agent rooms' one rule (a2a.room.resolve_mention: the
-    first word after "@", whole or without trailing punctuation, compared case-folded), so
+    first word after "@", whole or with sentence endings taken off, compared case-folded), so
     "@Mia.", "@mia?" and "@MIA, hi" name Mia and "@Miami" does not; the agent in the Veyllo App
-    otherwise."""
+    otherwise, which is also where a mention the rule finds ambiguous goes."""
     from vaf.core.a2a.room import fold_name, resolve_mention
     known = {fold_name(handle(username)), fold_name("VAF")}
-    if resolve_mention(text, lambda name: fold_name(name) in known):
+    if resolve_mention(text, lambda name: [VAF_AGENT] if fold_name(name) in known else []):
         return VAF_AGENT
     return APP_AGENT
 
@@ -233,11 +235,18 @@ def _append(scope: str, content: str, *, role: str, kind: str, meta: Dict[str, A
             only_if=None) -> bool:
     """One room line into the account's app chat (created when it has none yet), through the
     background writer and its per-session lock, which the runner's save of a turn holds too.
-    ``only_if(session)`` is asked under that lock (the writer's ``only_if``)."""
+    ``only_if(session)`` is asked under that lock (the writer's ``only_if``). False when nothing
+    was stored, also when the store raised (a full disk, a chat that cannot be read): every
+    caller then refuses or gives up instead of delivering a line the room does not hold. The
+    log names the chat and the error, never the line's text."""
     sid = devices.chat_session_id(scope)
-    saved = _manager().append_background_message(
-        sid, content, role=role, kind=kind, create=True, name=TITLE, user_scope_id=scope,
-        metadata={"app_room": meta}, only_if=only_if)
+    try:
+        saved = _manager().append_background_message(
+            sid, content, role=role, kind=kind, create=True, name=TITLE, user_scope_id=scope,
+            metadata={"app_room": meta}, only_if=only_if)
+    except Exception as exc:
+        logger.warning("app room: a line was not stored in %s: %s", sid, type(exc).__name__)
+        return False
     return saved is not None
 
 
@@ -670,7 +679,11 @@ def post(user_scope_id: Any, username: str, text: Any,
             # Not stored (the chat cannot be written, or the line was sent again meanwhile from
             # another screen): nothing is delivered, so the app never holds a line the room
             # does not show.
-            if guard is not None and not guard(_load(devices.chat_session_id(scope))):
+            try:
+                sent_again = guard is not None and not guard(_load(devices.chat_session_id(scope)))
+            except Exception:
+                sent_again = False
+            if sent_again:
                 raise RoomRefused("already_sent_again", 409)
             raise RoomRefused("failed", 500)
     else:

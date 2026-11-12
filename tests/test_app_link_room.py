@@ -338,11 +338,11 @@ def test_leading_mention_is_the_one_parse():
     """MUTATION: put a second inline parse into `Room.address_from_mention` - red."""
     import inspect
 
-    from vaf.core.a2a.room import Room, leading_mention
+    from vaf.core.a2a.room import Room, mention_candidates
     from vaf.core.app_link import room as app_room
-    assert leading_mention("@Bob, can you look") == "Bob"
-    assert leading_mention("  @Bob: the logs") == "Bob"
-    assert leading_mention("ask @Bob") is None and leading_mention("@") is None
+    assert mention_candidates("@Bob, can you look") == ["Bob,", "Bob"]
+    assert mention_candidates("  @Bob: the logs") == ["Bob:", "Bob"]
+    assert mention_candidates("ask @Bob") == [] and mention_candidates("@") == []
     source = inspect.getsource(Room.address_from_mention)
     assert "resolve_mention(" in source and "startswith" not in source
     assert "resolve_mention(" in inspect.getsource(app_room.addressee)
@@ -926,7 +926,10 @@ def test_the_agent_is_named_by_its_handle_or_vaf(monkeypatch, persona, line, to)
     ("O'Brien", "@O'Brien can you look", True),
     ("C++", "@C++ hello", True),
     ("Mia♥", "@Mia♥ hi", True),
-    ("Mia", "@Mia♥ hi", True),
+    ("Mia", "@Mia♥ hi", False),
+    ("C++", "@C++. hello", True),
+    ("Zoë", "@Zoe\u0308 hi", True),
+    ("Bob", "@ Bob hi", True),
     ("a2a:bob", "@a2a:bob look", True),
     ("राम", "@राम नमस्ते", True),
     ("สมชาย", "@สมชาย สวัสดี", True),
@@ -941,9 +944,10 @@ def test_the_agent_is_named_by_its_handle_or_vaf(monkeypatch, persona, line, to)
 def test_an_agent_room_resolves_the_mention_against_its_members(tmp_path, display, line,
                                                                  addressed):
     """MUTATION: parse the mention as the first run of letters (the previous rule) - red for
-    "O'Brien", "C++", "a2a:bob" and the Devanagari name; MUTATION: drop the trimmed candidate
-    - red for "@Bob." and "@Mia♥" against "Mia"; MUTATION: try only the trimmed word - red
-    for "@C++"."""
+    "O'Brien", "C++", "a2a:bob" and the Devanagari name; MUTATION: only the whole word - red
+    for "@Bob."; MUTATION: take symbols off like sentence punctuation - red for "@Mia♥"
+    against "Mia"; MUTATION: fold without NFC - red for the decomposed "@Zoë"; MUTATION:
+    require the name right after the "@" - red for "@ Bob"."""
     from vaf.core.a2a.room import Room
     agent_room = Room.create(kind="round", owner_scope="s", base=tmp_path, room_id="room-names")
     agent_room.join(display=display, scope_id="s", peer_id="p-one")
@@ -982,11 +986,108 @@ def test_every_name_that_was_addressed_before_still_is():
         before = _resolved_before(line, _NAMES_BEFORE)
         if before is None:
             continue
-        now = resolve_mention(line, lambda n: next(
-            (x for x in _NAMES_BEFORE if fold_name(x) == fold_name(n)), None))
+        now = resolve_mention(line, lambda n: [x for x in _NAMES_BEFORE
+                                               if fold_name(x) == fold_name(n)])
         assert now == before, (line, before, now)
         checked += 1
     assert checked >= 120
+
+
+def _members(tmp_path, names, room_id="room-props"):
+    from vaf.core.a2a.room import Room
+    agent_room = Room.create(kind="round", owner_scope="s", base=tmp_path, room_id=room_id)
+    for index, name in enumerate(names):
+        agent_room.join(display=name, scope_id="s", peer_id=f"p-{index}")
+    return agent_room
+
+
+_LOOKALIKES = ["Bob,", "Bob:", "Bob.", "Bob?", "Bob;", "bob", "Codex51.", "C++:"]
+
+
+def test_no_member_takes_a_mention_that_reached_another_member_before(tmp_path):
+    """A member may choose any name, also one that differs from another member's only by a
+    sentence ending or by case. On a real room with those look-alikes, every line that reached
+    a member at de707d3f reaches that same member now or, when it has become ambiguous, the
+    room: never a different member. MUTATION: the first candidate that answers wins (the
+    previous longest-first rule) - red ("@Bob, look" reaches the member "Bob,")."""
+    names = _NAMES_BEFORE + _LOOKALIKES
+    agent_room = _members(tmp_path, names)
+    peer_of = {name: f"p-{index}" for index, name in enumerate(names)}
+    checked = 0
+    for name in names:
+        for form in ("@{} hi", "@{}, hi", "@{}: hi", "@{}; hi", "@{}. hi", "@{}? hi", "@{}"):
+            for line in (form.format(name), form.format(name.upper())):
+                before = _resolved_before(line, names)
+                if before is None:
+                    continue
+                now = agent_room.address_from_mention(line)
+                assert now in (None, {"peer": peer_of[before]}), (line, before, now)
+                checked += 1
+    assert checked >= 100
+
+
+def test_a_name_and_its_punctuated_twin_split_the_mentions(tmp_path):
+    """With members "Bob" and "Bob." in one room, "@Bob." could mean either and goes to the
+    room; "@Bob" can only mean Bob and reaches him. MUTATION: the first candidate that answers
+    wins - red; MUTATION: the same with the candidate order reversed - red."""
+    agent_room = _members(tmp_path, ["Bob", "Bob."])
+    assert agent_room.address_from_mention("@Bob. look") is None
+    assert agent_room.addressee("@Bob. look") == {"room": True}
+    assert agent_room.address_from_mention("@Bob look") == {"peer": "p-0"}
+    assert agent_room.address_from_mention("@Bob") == {"peer": "p-0"}
+
+
+def test_a_name_ending_in_a_symbol_is_reached_before_a_full_stop(tmp_path):
+    """"C++" ends in a symbol, not in sentence punctuation: "@C++." reaches C++ also when a
+    member "C" is in the room, and "@C." reaches C. MUTATION: take "+" and "#" off like a full
+    stop - red (C++ and C both answer, the mention goes to the room)."""
+    agent_room = _members(tmp_path, ["C++", "C", "C#"])
+    assert agent_room.address_from_mention("@C++. what now") == {"peer": "p-0"}
+    assert agent_room.address_from_mention("@C#? what now") == {"peer": "p-2"}
+    assert agent_room.address_from_mention("@C. what now") == {"peer": "p-1"}
+
+
+@pytest.mark.parametrize("first, second, mention", [
+    ("Bob", "bob", "@bob hi"),
+    ("Straße", "STRASSE", "@STRASSE hi"),
+    ("Zoë", "Zoe\u0308", "@zoë hi"),
+])
+def test_folded_twins_go_to_the_room_and_keep_their_labels(tmp_path, first, second, mention):
+    """Two members whose names fold to one name are a collision: a mention of the bare name
+    goes to the room, and each keeps a label that tells them apart and reaches only them.
+    MUTATION: detect label collisions by the exact string (the previous rule) - red (neither
+    gets a tag and the bare name reaches nobody's label alone); MUTATION: take the first
+    folded match instead of the only one - red."""
+    agent_room = _members(tmp_path, [first, second])
+    assert agent_room.address_from_mention(mention) is None
+    labels = agent_room.labels()
+    assert len({label.casefold() for label in labels.values()}) == 2
+    for peer, label in labels.items():
+        assert agent_room.address_from_mention(f"@{label} hi") == {"peer": peer}
+
+
+def test_a_space_after_the_at_still_names(room_home, monkeypatch):
+    """"@ VAF hi" (a space after the "@") names VAF's agent, the way agent rooms have always read
+    "@ Bob". MUTATION: require the name right after the "@" - red."""
+    from vaf.core import app_link
+    monkeypatch.setattr(app_link, "_agent_name_resolver", lambda username: "Mia")
+    assert room.addressee("@ VAF hi", "alice") == "vaf_agent"
+    assert room.addressee("@ mia, hi", "alice") == "vaf_agent"
+    assert room.addressee("@ hi", "alice") == "app_agent"
+
+
+@pytest.mark.parametrize("persona, hint", [
+    ("(Mia)", "Mia"), ("“Mia”", "Mia"), ("¡Mia!", "Mia"), ("Mia's", "Mia"),
+    ("C++", "C++"), ("...", "VAF"),
+])
+def test_the_hint_is_a_handle_the_rule_resolves(monkeypatch, persona, hint):
+    """The handle the page shows, typed back after "@", reaches VAF's agent. MUTATION: trim only
+    the end of the name (the previous rule) - red: "(Mia)" gave the hint "@(Mia"."""
+    from vaf.core import app_link
+    monkeypatch.setattr(app_link, "_agent_name_resolver", lambda username: persona)
+    assert room.handle("alice") == hint
+    assert room.addressee(f"@{hint} hallo", "alice") == "vaf_agent"
+    assert room.addressee(f"@{hint}. hallo", "alice") == "vaf_agent"
 
 
 def test_a_device_not_connected_yet_is_not_an_older_app(room_home):
@@ -1415,8 +1516,8 @@ def test_a_refused_turn_stores_when_it_was_asked(runner_world):
     import vaf.core.headless_runner as hr
     from vaf.core.session import ASKED_AT_KEY, get_manager
     from vaf.core.task_queue import AgentTask
-    # A web turn: a messenger's refused turn is only logged.
-    task = AgentTask(session_id=RUNNER_CHAT, input_text="Hallo?", source="web",
+    # A Veyllo App turn: the one channel whose refused turn is stored (the room's record).
+    task = AgentTask(session_id=RUNNER_CHAT, input_text="Hallo?", source="veyllo_app",
                      metadata={"user_scope_id": "x"})
     hr.refuse_turn_without_backend(task, "No model is set up.", get_manager())
     stored = get_manager().load(RUNNER_CHAT, restore_state=False, repoint=False)
@@ -1521,6 +1622,26 @@ def test_a_line_that_could_not_be_stored_is_not_delivered(room_home, monkeypatch
     assert refused.value.code == "failed" and client.of("room_msg") == []
 
 
+def test_a_store_that_raises_is_the_failed_refusal(room_home, monkeypatch, caplog):
+    """The chat's save raises (a full disk): the post answers the "failed" refusal, nothing is
+    delivered, and the log does not carry the line's text. MUTATION: let the store's exception
+    leave `_append` - red."""
+    import logging
+
+    from vaf.core.session import SessionManager
+    client, _pipe, _row = _capable()
+
+    def _full_disk(self, *a, **k):
+        raise OSError("No space left on device")
+    monkeypatch.setattr(SessionManager, "save", _full_disk)
+    with caplog.at_level(logging.DEBUG, logger=room.__name__):
+        with pytest.raises(room.RoomRefused) as refused:
+            room.post(SCOPE_A, "alice", "Mein geheimer Satz")
+    client.pump()
+    assert refused.value.code == "failed" and client.of("room_msg") == []
+    assert "Mein geheimer Satz" not in caplog.text
+
+
 def test_two_resends_of_one_line_deliver_once(room_home):
     """Two screens send the same line again at the same moment. MUTATION: check for an earlier
     resend outside the chat's lock (before the append) - red (both are delivered)."""
@@ -1571,7 +1692,7 @@ def test_a_refused_turn_keeps_who_wrote_it(runner_world, meta, kind):
     import vaf.core.headless_runner as hr
     from vaf.core.session import get_manager, model_text
     from vaf.core.task_queue import AgentTask
-    task = AgentTask(session_id=RUNNER_CHAT, input_text="Mach etwas", source="web",
+    task = AgentTask(session_id=RUNNER_CHAT, input_text="Mach etwas", source="veyllo_app",
                      metadata={"user_scope_id": "x", **meta})
     hr.refuse_turn_without_backend(task, "No model is set up.", get_manager())
     stored = get_manager().load(RUNNER_CHAT, restore_state=False, repoint=False)
@@ -1581,12 +1702,53 @@ def test_a_refused_turn_keeps_who_wrote_it(runner_world, meta, kind):
         assert agent_origin.is_app_agent_request_text(model_text(question))
 
 
+def test_a_refused_line_to_vafs_agent_stays_in_the_room(room_home):
+    """On an installation with no model backend, a person's "@VAF" line is refused on the path
+    the room's turns really take (source veyllo_app): the room keeps the line as the person's,
+    with the refusal under it, after its turn left the queue. MUTATION: keep the early return
+    for every channel - red (the line vanished); MUTATION: store the question without the
+    person's message id - red (the id is what makes a stored line the person's whatever it
+    begins with, `_stored_wake`)."""
+    import vaf.core.headless_runner as hr
+    from vaf.core.session import get_manager
+    _capable()
+    answer = room.post(SCOPE_A, "alice", "@VAF hi")
+    [task] = _queued()
+    assert task.source == "veyllo_app"
+    TaskQueue()._queued_by_session.clear()
+    hr.refuse_turn_without_backend(task, "No model is set up.", get_manager())
+    lines = room.transcript(SCOPE_A)
+    assert [(l["peer"], l["text"]) for l in lines] == [
+        ("person", "@VAF hi"), (room.VAF_AGENT, "No model is set up.")]
+    stored = _chat()
+    question = [m for m in stored.messages if m.role == "user"][-1]
+    assert question.metadata["channel_message_id"] == answer["id"]
+
+
+def test_a_refused_messenger_turn_still_stores_nothing(runner_world):
+    """The exception is the Veyllo App's only: a messenger's refused turn is still only logged
+    (the reason is the admin's setup, not something to store for whoever wrote in). MUTATION:
+    store every channel's refused turn - red."""
+    import vaf.core.headless_runner as hr
+    from vaf.core.app_link import CHANNEL
+    from vaf.core.channels import CHAT_CHANNELS
+    from vaf.core.session import get_manager
+    from vaf.core.task_queue import AgentTask
+    other = next(c for c in CHAT_CHANNELS if c != CHANNEL)
+    before = len(get_manager().load(RUNNER_CHAT, restore_state=False, repoint=False).messages)
+    task = AgentTask(session_id=RUNNER_CHAT, input_text="Hallo?", source=other,
+                     metadata={"user_scope_id": "x"})
+    hr.refuse_turn_without_backend(task, "No model is set up.", get_manager())
+    after = get_manager().load(RUNNER_CHAT, restore_state=False, repoint=False).messages
+    assert len(after) == before
+
+
 def test_a_refused_confirmation_stores_the_report(runner_world):
     """MUTATION: store the queued text instead of the text the turn would have read - red."""
     import vaf.core.headless_runner as hr
     from vaf.core.session import get_manager
     from vaf.core.task_queue import AgentTask
-    task = AgentTask(session_id=RUNNER_CHAT, input_text="queued", source="web",
+    task = AgentTask(session_id=RUNNER_CHAT, input_text="queued", source="veyllo_app",
                      metadata={"user_scope_id": "x", "wake": "confirm"})
     hr.refuse_turn_without_backend(task, "No model.", get_manager(), text="✔ the report")
     stored = get_manager().load(RUNNER_CHAT, restore_state=False, repoint=False)

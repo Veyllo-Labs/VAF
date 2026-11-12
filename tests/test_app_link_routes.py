@@ -317,6 +317,45 @@ def test_every_pairing_refusal_has_a_sentence():
     assert all(app_link_routes._REFUSALS[c].endswith(".") for c in codes)
 
 
+def _room_refusal_codes():
+    """Every code `room.post` can refuse with, read from the code: the literal first argument
+    of each `RoomRefused(...)`, and for a code computed by a function of the module (as
+    `_no_capable_reason`) every string that function returns."""
+    import ast
+    from pathlib import Path
+
+    from vaf.core.app_link import room as room_mod
+    tree = ast.parse(Path(room_mod.__file__).read_text(encoding="utf-8"))
+    functions = {node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    codes = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and getattr(node.func, "id", "") == "RoomRefused"
+                and node.args):
+            continue
+        first = node.args[0]
+        if isinstance(first, ast.Constant):
+            codes.add(first.value)
+        elif isinstance(first, ast.Call) and getattr(first.func, "id", "") in functions:
+            for inner in ast.walk(functions[first.func.id]):
+                if isinstance(inner, ast.Return) and isinstance(inner.value, ast.Constant):
+                    codes.add(inner.value.value)
+        else:
+            raise AssertionError(f"a refusal code this test cannot read: {ast.dump(first)}")
+    return codes
+
+
+def test_every_room_refusal_has_a_sentence():
+    """A refusal of a room line reaches `vaf devices say` as the route's sentence; a code
+    without one would print the bare code with no next step. MUTATION: drop the
+    `not_connected_yet` sentence - red."""
+    codes = _room_refusal_codes()
+    assert {"not_connected_yet", "needs_newer_app", "failed", "already_sent_again"} <= codes
+    missing = codes - set(app_link_routes._ROOM_REFUSALS)
+    assert not missing, missing
+    assert all(app_link_routes._ROOM_REFUSALS[c].endswith(".") for c in codes)
+    assert "Open it once" in app_link_routes._ROOM_REFUSALS["not_connected_yet"]
+
+
 def test_a_pairing_answers_its_qr_as_an_image(app_link_home, monkeypatch):
     """The window shows the QR as an image drawn on this machine, of exactly the QR string,
     with this machine's clock for the countdown, and nothing of it is cached."""

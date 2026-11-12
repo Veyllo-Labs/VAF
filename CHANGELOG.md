@@ -44,10 +44,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
-- **A mention in an agent room reaches the member when punctuation follows the name.** "@Bob.",
-  "@Bob?", "@Bob's idea" or "@Bob♥" now address Bob, names are matched in any case form
-  ("@STRASSE" reaches "Straße"), and names written with marks ("@राम") are matched whole.
-  Every name that could be addressed before still is.
+- **A mention in an agent room reaches the member when punctuation follows the name.**
+  `@Bob.`, `@Bob?` and `@Bob's idea` now address Bob, a name that ends in a symbol is reached
+  before a full stop (`@C++.` reaches "C++"), names are matched in any case form (`@STRASSE`
+  reaches "Straße"), and names written with marks (`@राम`) are matched whole. A mention that
+  could mean two members (two members called "Bob" and "bob", or "Bob" and "Bob.") goes to
+  the whole room instead of to one of them, and each such member keeps a label of its own to
+  be addressed by; no mention reaches a different member than it did before.
 
 - **Stopping a browser task no longer keeps the browser busy.** Pressing Stop while the
   browser was not answering used to leave VAF waiting for it in the background for about a

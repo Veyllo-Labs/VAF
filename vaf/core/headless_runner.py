@@ -1286,12 +1286,19 @@ def refuse_turn_without_backend(task, why: str, session_mgr, text: "str | None" 
     logged: the reason is the admin's setup, not something to tell whoever wrote in, and
     running the turn anyway sent them "[Error] No response was produced ... try closing the
     Document Editor" (measured through _prepare_channel_outbound, which lets it pass).
+    The Veyllo App is the exception, and only in what is STORED: whoever writes there is the
+    account's own person or the agent in their own app, the same as on the web, and the app
+    chat is the record the Veyllo App room shows (vaf/core/app_link/room.py). Without the
+    stored pair the person's line vanished from the room once its turn left the queue. Nothing
+    of the refusal is sent to the device: the reason stays the admin's setup.
 
     ``text`` is what the turn would have read (a confirmed action's report instead of the
     queued text); the question is stored under the same author kind the turn's own save
     gives it: a request of the app's agent as that agent's, a wake with its kind."""
+    from vaf.core.app_link import CHANNEL as _APP_CHANNEL
     from vaf.core.channels import CHANNEL_LABELS
-    if getattr(task, "source", None) in CHANNEL_LABELS:
+    if getattr(task, "source", None) in CHANNEL_LABELS \
+            and getattr(task, "source", None) != _APP_CHANNEL:
         append_domain_log_always("headless", f"{task.source} turn closed without a reply, no "
                                              f"backend: session={task.session_id} ({why[:160]})")
         return
@@ -1317,6 +1324,12 @@ def refuse_turn_without_backend(task, why: str, session_mgr, text: "str | None" 
                 _qmeta = {TURN_ID_KEY: str(_tid)} if _tid else {}
                 if _tid and getattr(task, "created_at", None):
                     _qmeta[ASKED_AT_KEY] = float(task.created_at)
+                # The person's message id, as the turn's own store keeps it: the line is then
+                # theirs in the room whatever it begins with.
+                _chan_msg_id = ((getattr(task, "metadata", None) or {})
+                                .get("channel_message_id"))
+                if _chan_msg_id:
+                    _qmeta["channel_message_id"] = str(_chan_msg_id)
                 session.add_message(role="user", content=text,
                                     **({"metadata": _qmeta} if _qmeta else {}),
                                     **({"kind": _refused_kind(task)} if _refused_kind(task) else {}))

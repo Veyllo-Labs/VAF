@@ -119,26 +119,47 @@ PARTICIPANT_LANES = ("agent", "cli", "remote")
 
 
 def fold_name(name: Any) -> str:
-    """A name as names are compared: NFC-normalised and case-folded ("Straße" == "STRASSE")."""
+    """A name as names are compared: NFC-normalised and case-folded ("Straße" == "STRASSE",
+    a precomposed "ë" == "e" + combining diaeresis)."""
     import unicodedata
     return unicodedata.normalize("NFC", str(name or "").strip()).casefold()
 
 
-def trim_name(word: Any) -> str:
-    """``word`` without what follows a name in a sentence: trailing punctuation and symbols of
-    any script (Unicode categories P and S: ".", "?", "!", ",", "：", "。", a heart) and a
-    trailing possessive "'s". Marks stay with their letter."""
+#: Punctuation that belongs to the name's own spelling rather than to the sentence around it
+#: ("C#", "100%", "R&D", "a/b", "x_y"). Symbols (Unicode category S: "+", a heart) are never
+#: sentence punctuation either, so "@C++." still reaches a member called "C++".
+_NAME_PUNCTUATION = frozenset("#%&*@/\\_")
+_POSSESSIVES = ("'s", "’s")
+
+
+def _is_sentence_punctuation(char: str) -> bool:
     import unicodedata
+    return unicodedata.category(char)[0] == "P" and char not in _NAME_PUNCTUATION
+
+
+def _shorter(word: str) -> str:
+    """``word`` with ONE sentence ending taken off its end: a punctuation mark, or a trailing
+    possessive "'s". The word unchanged when it has none."""
+    if word and _is_sentence_punctuation(word[-1]):
+        return word[:-1]
+    for ending in _POSSESSIVES:
+        if word.lower().endswith(ending) and len(word) > len(ending):
+            return word[:-len(ending)]
+    return word
+
+
+def trim_name(word: Any) -> str:
+    """``word`` as a name a mention can reach: sentence punctuation taken off both ends
+    ("(Mia)" -> "Mia", "Dr." -> "Dr") and a trailing possessive "'s". What is left is the
+    shortest of `mention_candidates`, so "@" + it, typed back, names the same thing."""
     text = str(word or "")
+    while text and _is_sentence_punctuation(text[0]):
+        text = text[1:]
     while True:
-        before = text
-        while text and unicodedata.category(text[-1])[0] in "PS":
-            text = text[:-1]
-        for ending in ("'s", "\u2019s"):
-            if text.lower().endswith(ending) and len(text) > len(ending):
-                text = text[:-len(ending)]
-        if text == before:
+        shorter = _shorter(text)
+        if shorter == text:
             return text
+        text = shorter
 
 
 def mention_candidates(text: Any) -> List[str]:
@@ -146,45 +167,43 @@ def mention_candidates(text: Any) -> List[str]:
 
     Only a mention at the START counts: "@Bob can you look" is aimed at Bob, "ask @Bob
     about it" is a sentence about Bob. The mention is the first whitespace-delimited word after
-    the "@" as it stands ("@O'Brien", "@C++", "@a2a:bob", "@राम"), then that word without a
-    trailing ",", ":" or ";", then without any trailing punctuation or symbol (`trim_name`).
-    The caller resolves them in this order against the names it KNOWS, so the longest known
-    name wins: "@Bob." names Bob, "@O'Brien" names O'Brien (and never O), "@Bobby" never
-    names Bob. A letter of a script written without spaces continues the word: "@Mia你好" is
-    no mention of Mia (the person puts a space after the name)."""
+    the "@" (a space between the "@" and the word is skipped, as it always was: "@ Bob hi"
+    names Bob) as it stands ("@O'Brien", "@C++", "@a2a:bob", "@राम"), then that word with one
+    sentence ending after another taken off its end: a punctuation mark of any script (".",
+    "?", "!", ",", ":", "：", "。") or a possessive "'s". "C++." gives "C++." and "C++"; the
+    "+" is no sentence ending, so "C" is never a candidate. A symbol (a heart, "+") or a letter
+    of a script written without spaces continues the word: "@Mia你好" is no mention of Mia (the
+    person puts a space after the name)."""
     stripped = str(text or "").lstrip()
     if not stripped.startswith("@"):
         return []
     parts = stripped[1:].split(None, 1)
-    raw = parts[0] if parts else ""
+    word = parts[0] if parts else ""
     out: List[str] = []
-    for candidate in (raw, raw.rstrip(",:;"), trim_name(raw)):
-        if candidate and candidate not in out:
-            out.append(candidate)
+    while word and word not in out:
+        out.append(word)
+        word = _shorter(word)
     return out
 
 
-def leading_mention(text: Any) -> Optional[str]:
-    """The name a message's leading "@Name" gives as typed (the first word, without a trailing
-    ",", ":" or ";"), or None. For resolving it, use `resolve_mention`, which also tries the
-    whole word and the word without trailing punctuation."""
-    candidates = mention_candidates(text)
-    if not candidates:
-        return None
-    raw = candidates[0]
-    return raw.rstrip(",:;") or None
+def resolve_mention(text: Any, known: Callable[[str], Iterable[Any]]) -> Any:
+    """Who a message's leading mention names, or None. ONE rule for every room.
 
-
-def resolve_mention(text: Any, known: Callable[[str], Any]) -> Any:
-    """The first non-empty answer of ``known(name)`` over `mention_candidates`, longest name
-    first, or None. ONE rule for every room: an agent room asks its member table
-    (`Room.peer_by_display`), the Veyllo App room its agent's handle and "VAF"
-    (vaf/core/app_link/room.py)."""
+    ``known(name)`` answers with EVERY party the room knows by that name (none, one, or
+    several when two members share it). Every candidate of `mention_candidates` is asked, and
+    the mention names a party only when all their answers together hold exactly one: "@Bob."
+    reaches Bob in a room with only Bob; with members "Bob" and "Bob." in one room "@Bob." is
+    ambiguous and names nobody, while "@Bob" still reaches Bob. So a member can never take a
+    mention from another by choosing a name that differs from it only by a sentence ending,
+    and nobody is guessed at. An agent room asks its member table (`Room.peers_named`), the
+    Veyllo App room its agent's handle and "VAF" (vaf/core/app_link/room.py); what names
+    nobody goes where an unknown name goes in that room."""
+    found: List[Any] = []
     for candidate in mention_candidates(text):
-        hit = known(candidate)
-        if hit:
-            return hit
-    return None
+        for hit in known(candidate) or ():
+            if hit and hit not in found:
+                found.append(hit)
+    return found[0] if len(found) == 1 else None
 
 
 def participant_key(lane: str, scope_id: Optional[str] = None) -> str:
@@ -2774,8 +2793,11 @@ class Room:
         # "Nobel" into "Nobel88" for no reason anybody could see: the name was already
         # the only one in the room. A tag is the answer to a COLLISION, so it appears
         # when there is one and not before.
+        # Compared as names are compared (`fold_name`): "Bob" and "bob", or "Straße" and
+        # "STRASSE", are one name to a mention, so they are a collision here too and both
+        # members keep a label that tells them apart.
         same = sorted(other for other, rec in members.items()
-                      if str(rec.get("display") or other) == base)
+                      if fold_name(rec.get("display") or other) == fold_name(base))
         if len(same) < 2:
             return base
 
@@ -2790,35 +2812,42 @@ class Room:
         """Every member's human label, resolved together so they cannot clash."""
         return {peer: self.label_for(peer) for peer in self.store.members()}
 
-    def peer_by_display(self, name: str) -> Optional[str]:
-        """The peer behind a display name, or None if it is unknown or ambiguous.
+    def peers_named(self, name: str) -> List[str]:
+        """Every member a name can mean: by display name or by label, compared folded.
 
         Lives HERE and nowhere else: only the room knows who is in it, and a resolver
         in the CLI or the terminal app would be a second copy of the member table that
         drifts the first time somebody joins while it is cached.
 
-        Ambiguity is refused rather than guessed. Two members called "Codex" and a
-        message addressed at one of them is a message that must not be delivered to a
-        coin toss.
+        The tagged label resolves as well as the bare display, and it has to: every
+        surface SHOWS the label, so "Codex51" is the name a reader has in front of them
+        when they type a mention. Both are asked together, so a name that is one member's
+        display and another member's label answers with both. A peer id addresses itself
+        when no name matches, which is what a machine consumer will use.
         """
         wanted = fold_name(str(name or "").strip().lstrip("@"))
         if not wanted:
-            return None
-        hits = [peer for peer, record in self.members().items()
-                if fold_name(record.get("display")) == wanted]
-        if len(hits) == 1:
-            return hits[0]
-        # The tagged label resolves too, and it has to: every surface SHOWS the label,
-        # so "Codex51" is the name a reader has in front of them when they type a
-        # mention. Matching only the bare display would make the addressed message
-        # arrive at the room instead of at the person it named - a quiet mis-delivery
-        # rather than an error. Labels are unique within the room by construction, so
-        # a hit here is never the coin toss the paragraph above refuses.
+            return []
+        hits: List[str] = []
+        for peer, record in self.members().items():
+            if fold_name(record.get("display")) == wanted:
+                hits.append(peer)
         for peer, label in self.labels().items():
-            if fold_name(label) == wanted:
-                return peer
-        # A peer id addresses itself, which is what a machine consumer will use.
-        return name if name in self.roles() else None
+            if fold_name(label) == wanted and peer not in hits:
+                hits.append(peer)
+        if hits:
+            return hits
+        return [str(name)] if name in self.roles() else []
+
+    def peer_by_display(self, name: str) -> Optional[str]:
+        """The peer behind a display name or label, or None if it is unknown or ambiguous.
+
+        Ambiguity is refused rather than guessed. Two members called "Codex" (or "Bob"
+        and "bob") and a message addressed at one of them is a message that must not be
+        delivered to a coin toss.
+        """
+        hits = self.peers_named(name)
+        return hits[0] if len(hits) == 1 else None
 
     def address_from_mention(self, text: str) -> Optional[Dict[str, Any]]:
         """The ``to`` a leading "@Name" asks for, or None.
@@ -2827,7 +2856,7 @@ class Room:
         at Bob; "ask @Bob about it" is a sentence ABOUT Bob, said to the room, and
         turning that into a private aside would quietly hide it from everyone else.
         """
-        peer = resolve_mention(text, self.peer_by_display)
+        peer = resolve_mention(text, self.peers_named)
         return {"peer": peer} if peer else None
 
     def addressee(self, text: str, *, to_peer: str = "") -> Dict[str, Any]:

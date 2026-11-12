@@ -1122,19 +1122,34 @@ over the wire the text stays text (the table that resolves a name lives on the h
 `--to <peer>`.
 
 The rule for the leading mention lives in `vaf/core/a2a/room.py`, one function for every
-room: `resolve_mention(text, known)` takes the first whitespace-delimited word after a leading
-"@" and asks `known` for it in three forms, longest first: the whole word ("@O'Brien",
-"@C++", "@a2a:bob"), the word without a trailing `,`, `:` or `;` (the rule before), and the word
-without any trailing punctuation or symbol of any script and a trailing "'s" (`trim_name`:
-"@Bob.", "@Bob?", "@Bob's idea"). Names are compared NFC-normalised and case-folded
-(`fold_name`: "@STRASSE" names "Straße"); combining marks stay with their letter ("@राम"). A
-letter of a script written without spaces continues the word, so "@Mia你好" names nobody and
-the person puts a space after the name. `Room.address_from_mention` asks it with the member
-table (`peer_by_display`); every name that resolved before still resolves the same way
-(`tests/test_app_link_room.py`, a differential against the earlier parse). The Veyllo App room
-(`vaf/core/app_link/room.py`, [VEYLLO_APP.md](../integrations/VEYLLO_APP.md#the-veyllo-app-room))
-asks the same function with the two names it listens for, the agent's handle and "VAF", to
-tell a line for the VAF agent from a line for the agent in the Veyllo App. That room is deliberately NOT an agent room: seating the app's agent as a member would
+room: `resolve_mention(text, known)`. The mention is the first whitespace-delimited word after
+a leading "@"; a space between the "@" and the word is skipped, as it always was (`@ Bob hi`
+names Bob). Its candidates are that word as it stands (`@O'Brien`, `@C++`, `@a2a:bob`) and then
+the word with one sentence ending after another taken off its end: a punctuation mark of any
+script (`.`, `?`, `!`, `,`, `:`, `。`) or a possessive "'s". Punctuation that is part of a name's
+spelling (`#`, `%`, `&`, `*`, `/`, `_`) and symbols (`+`, a heart) are not sentence endings, so
+`@C++.` gives `C++.` and `C++`, never `C`. `known(name)` answers with every party the room
+knows by that name, and the mention names a party only when all candidates together give
+exactly ONE: `@Bob.` reaches Bob in a room with only Bob; with members "Bob" and "Bob." in one
+room `@Bob.` is ambiguous and goes to the room, while `@Bob` still reaches Bob. So a member
+cannot take a mention from another by choosing a name that differs from it only by a sentence
+ending, and no mention reaches a different member than it did under the earlier parse (first
+word without a trailing `,`, `:` or `;`); a mention that has become ambiguous goes to the room
+(`tests/test_app_link_room.py`, a differential against that parse on a real room with
+look-alike names). Names are compared NFC-normalised and case-folded (`fold_name`: `@STRASSE`
+names "Straße", a decomposed "e" + U+0308 names "Zoë"); combining marks stay with their letter
+(`@राम`). A symbol or a letter of a script written without spaces continues the word, so
+`@Mia你好` and `@Mia♥` name nobody called "Mia" and the person puts a space after the name.
+`Room.address_from_mention` asks it with the member table (`Room.peers_named`: display names
+and labels together). Labels are made unique by the same folding: members "Bob" and "bob" are
+a collision and become `Bob1` and `bob2`, each reachable by its label, while `@bob` goes to
+the room.
+
+The Veyllo App room (`vaf/core/app_link/room.py`,
+[VEYLLO_APP.md](../integrations/VEYLLO_APP.md#the-veyllo-app-room)) asks the same function
+with the two names it listens for, the agent's handle and "VAF", to tell a line for the VAF
+agent from a line for the agent in the Veyllo App; a mention that names neither goes to the
+app's agent. That room is deliberately NOT an agent room: seating the app's agent as a member would
 put its requests under the wake rules of this protocol instead of the limits of its own
 `agent_ask` lane, put the person's app chat turns under room-turn binding, and add a third
 store of lines that already live in two sessions. Its record is those two sessions and a

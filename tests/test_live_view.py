@@ -504,9 +504,10 @@ def test_a_late_file_of_an_older_turn_never_wipes_the_running_turn():
     led.record("A", {"type": "agent_message_update", "content": "old drain", "turnId": "t1"})
     snap = led.snapshot("A", active=True)
     assert [p["content"] for p in snap["prompts"]] == ["second question"]
+    # The departed turn's late file and drain line are not part of T2's picture (the file is
+    # stored on the session by its notify path and shows on T1's answer in the transcript).
     assert [(e["type"], e.get("turnId")) for e in snap["events"]] == [
-        ("agent_message_update", "t2"), ("tool_update", "t2"), ("file_created", "t1"),
-        ("agent_message_update", "t1")]
+        ("agent_message_update", "t2"), ("tool_update", "t2")]
 
 
 def test_an_upload_announced_for_the_queued_turn_never_wipes_the_running_one():
@@ -648,3 +649,84 @@ def test_an_automation_after_a_late_event_of_a_departed_turn():
     led.turn_left_queue("A", "auto1")
     contents = [e.get("content") for e in led.snapshot("A", active=True)["events"]]
     assert "automation runs" not in contents
+
+
+# ── late events of turns that are over ─────────────────────────────────────────────────
+
+def test_a_departed_turns_late_events_never_outlive_it():
+    """T1 left; the drain's summary for T1 arrives; T2 runs and leaves; T3 runs: the snapshot
+    during T3 holds T3 alone. A late tool start of T1 is never drawn as running.
+    MUTATION: record turn events of a departed turn again - red."""
+    led = LiveViewLedger()
+    led.record("A", _msg("a1", turn="t1"))
+    led.turn_left_queue("A", "t1")
+    led.record("A", {"type": "agent_message_update", "content": "drain summary", "turnId": "t1"})
+    led.record("A", dict(_tool("start", "late"), turnId="t1"))
+    led.record("A", _msg("a2", turn="t2"))
+    # While T2 runs, T1's late start is not drawn as a running step next to it.
+    assert [e.get("content", e.get("toolId")) for e in led.snapshot("A", active=True)["events"]] == ["a2"]
+    led.turn_left_queue("A", "t2")
+    led.record("A", _msg("a3", turn="t3"))
+    assert [e.get("content", e.get("toolId")) for e in led.snapshot("A", active=True)["events"]] == ["a3"]
+
+
+def test_a_queued_turn_leaving_keeps_the_running_turns_nameless_card():
+    """A tool event recorded outside a turn context names no turn and belongs to the running
+    turn; a QUEUED turn that leaves without ever running (Stop, a refusal) must not take it.
+    MUTATION: let any leaving turn clear nameless entries - red."""
+    led = LiveViewLedger()
+    led.record("A", _msg("t2 running", turn="t2"))
+    led.record("A", _tool("start", "c1"))                    # no turnId
+    led.turn_left_queue("A", "t3")                           # queued, never ran
+    assert [e.get("toolId") for e in led.snapshot("A", active=True)["events"]] == [None, "c1"]
+    led.turn_left_queue("A", "t2")                           # the running turn leaves: it goes
+    assert led.snapshot("A", active=True)["events"] == []
+
+
+def test_a_superseded_turn_never_comes_back():
+    """M1 stopped without its queue cleanup and M2 took over; a late M1 update must not replace
+    M2. MUTATION: do not remember superseded turns - red."""
+    led = LiveViewLedger()
+    led.record("A", _msg("m1", turn="m1"))
+    led.record("A", _msg("m2", turn="m2"))
+    led.set_prompt("A", "m2", {"role": "user", "content": "second"})
+    led.record("A", _msg("late m1", turn="m1"))
+    snap = led.snapshot("A", active=True)
+    assert [e["content"] for e in snap["events"]] == ["m2"]
+    assert [p["content"] for p in snap["prompts"]] == ["second"]
+
+
+def test_a_late_stop_of_a_departed_turn_keeps_the_queued_prompt():
+    """T1 left, T2 runs, T3 is queued: a late generation_stopped for T1 changes nothing.
+    MUTATION: check the departed turn after the prompt drop - red."""
+    led = LiveViewLedger()
+    led.record("A", _msg("a1", turn="t1"))
+    led.turn_left_queue("A", "t1")
+    led.record("A", _msg("a2", turn="t2"))
+    led.set_prompt("A", "t3", {"role": "user", "content": "queued"})
+    led.record("A", {"type": "generation_stopped", "turnId": "t1"})
+    snap = led.snapshot("A", active=True)
+    assert [p["content"] for p in snap["prompts"]] == ["queued"]
+    assert _types(snap) == ["agent_message_update"]
+
+
+def test_the_end_of_a_departed_turn_is_not_recorded():
+    """T1 left, T2 runs: a late message_complete for T1 gives no end entry.
+    MUTATION: record it - red."""
+    led = LiveViewLedger()
+    led.record("A", _msg("a1", turn="t1"))
+    led.turn_left_queue("A", "t1")
+    led.record("A", _msg("a2", turn="t2"))
+    led.record("A", {"type": "message_complete", "turnId": "t1"})
+    assert _types(led.snapshot("A", active=True)) == ["agent_message_update"]
+
+
+def test_the_departed_turns_are_bounded():
+    """MUTATION: no bound on the departed turns - red."""
+    led = LiveViewLedger()
+    for i in range(lv.MAX_DEPARTED + 30):
+        led.record("A", _msg("x", turn=f"t{i}"))
+        led.turn_left_queue("A", f"t{i}")
+    departed = led._chats["A"].departed
+    assert len(departed) == lv.MAX_DEPARTED
+    assert f"t{lv.MAX_DEPARTED + 29}" in departed and "t0" not in departed

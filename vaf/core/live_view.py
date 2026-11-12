@@ -239,9 +239,14 @@ class _Chat:
             self.drop(key)
 
     def clear_turn(self, turn_id: Optional[str] = None) -> None:
-        """Drop a turn's entries (and those that name no turn); every turn's with None."""
-        for key in [k for k, e in self.entries.items() if e.group == TURN
-                    and (turn_id is None or e.turn in ("", turn_id))]:
+        """Drop a turn's entries; every turn's with None. Entries that name no turn (recorded
+        outside a turn context) belong to the CURRENT turn, so only its own clearing takes them:
+        a queued turn that leaves without ever running must not take the running turn's card.
+        (A turn that left or was superseded records nothing more, see `_apply`, so no entry of
+        one can be left to clear.)"""
+        nameless = turn_id is None or turn_id == self.turn_id
+        for key in [k for k, e in self.entries.items() if e.group == TURN and (
+                turn_id is None or e.turn == turn_id or (nameless and e.turn == ""))]:
             self.drop(key)
         self.last_turn_key = None
         self.untagged_seg += 1
@@ -350,9 +355,19 @@ class LiveViewLedger:
         if chat.turn_id is not None:
             chat.clear_turn(chat.turn_id)
             chat.prompts.pop(chat.turn_id, None)
+            # Superseded: like a turn that left, it can never come back (a late event of it
+            # would otherwise take the place, and the entries, of the turn that replaced it).
+            chat.depart(chat.turn_id)
         chat.turn_id = tid
 
     def _apply(self, chat: _Chat, etype: str, event: dict, now: float) -> None:
+        # A turn that left the queue (or was superseded) records nothing more: its late text,
+        # tool step, file or end would stand in the replay of the turns after it. A late file
+        # is not lost by this: both notify paths store it on the session (record_created_file),
+        # and the transcript shows it on its answer.
+        if etype in _TURN_EVENTS or etype in ("message_complete", "generation_stopped"):
+            if str(event.get("turnId") or "") in chat.departed:
+                return
         if etype in _TURN_STREAM:
             self._enter_turn(chat, event)
         if etype in _TURN_EVENTS:
@@ -368,8 +383,8 @@ class LiveViewLedger:
                 # leaves the queue (it may still be stored).
                 for tid in [t for t in chat.prompts if t != chat.turn_id]:
                     chat.prompts.pop(tid, None)
-            # Nothing of a turn on record, or the end of a turn that already left: no entry.
-            if (not chat.entries and not chat.prompts) or str(event.get("turnId") or "") in chat.departed:
+            # Nothing of a turn on record: no entry.
+            if not chat.entries and not chat.prompts:
                 return
             tid = event.get("turnId") or chat.turn_id or ""
             # At the end of the record: a second completion of the turn (the guard path sends

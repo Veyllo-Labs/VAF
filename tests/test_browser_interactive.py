@@ -3015,3 +3015,51 @@ def test_a_real_failure_keeps_its_cause_when_the_run_ends_at_the_same_time(mgr, 
     events = _cross_user_handover_events(mgr, monkeypatch, wipe_confirms=False,
                                          clear_cookies=lambda *a, **k: None)
     assert events == [("browser_handover_failed", "profile wipe not confirmed")], events
+
+
+def test_a_run_that_ends_during_the_wipes_readiness_wait_is_an_unconfirmed_wipe(mgr, monkeypatch):
+    """Pins a deliberate choice. The verified wipe is never cut or special-cased: a run
+    that ends while the wipe waits for the relaunched browser makes the wipe report
+    "not confirmed", fail-closed, and the security event says so ("profile wipe not
+    confirmed"), not "the run ended". The owner record stays cleared, so the next
+    holder of another account wipes first. Real verified_profile_wipe (its docker seam
+    scripted) and the real resolver, which gives up without a dial.
+    MUTATION: re-raise CdpWaitAbandoned from the wipe's readiness wait."""
+    from vaf.core import browser_jar
+    from vaf.core.bounded_run import cancel_when
+    _no_ipc_tasks(monkeypatch)
+    instance = _owned_by_scope_a(mgr)
+    recording_wipe = bi.verified_profile_wipe
+    events = []
+    import vaf.core.security_events as se
+    monkeypatch.setattr(se, "log_security_event",
+                        lambda kind, **kw: events.append((kind, kw.get("detail"))))
+    ended = threading.Event()
+
+    class _EndsAtConfirmation(_WipeExecScript):
+        def __call__(self, name, cmd, as_root=False, timeout=20):
+            rc = super().__call__(name, cmd, as_root=as_root, timeout=timeout)
+            if "test ! -f" in cmd and rc == 0:
+                ended.set()          # the run ends while the relaunch is awaited
+            return rc
+
+    monkeypatch.setattr(bi, "_wipe_exec", _EndsAtConfirmation())
+    monkeypatch.setattr(bi, "verified_profile_wipe", bi._real_verified_profile_wipe)
+    monkeypatch.setattr(bi, "resolve_cdp_ws_url", _real_resolve_cdp_ws_url)
+    mgr.stop_for_agent_run()
+    with cancel_when(ended.is_set):
+        with pytest.raises(bi.BrowserHandoverError, match="profile wipe not confirmed"):
+            mgr.hand_jar_to_run(user_scope_id="scope-b", run_generation=mgr.run_generation())
+    mgr.agent_run_ended()
+    assert ended.is_set(), "the run's end never landed in the readiness wait"
+    assert events == [("browser_handover_failed", "profile wipe not confirmed")], events
+    assert not browser_jar.record_for("vaf-browser").owner_is("scope-b", instance)
+    assert not browser_jar.record_for("vaf-browser").owner_is("scope-a", instance)
+    # The next holder of another account still goes through the wipe first.
+    monkeypatch.setattr(bi, "verified_profile_wipe", recording_wipe)
+    wipes = len(mgr._test_wipes)
+    mgr.stop_for_agent_run()
+    mgr.hand_jar_to_run(user_scope_id="scope-c")
+    mgr.agent_run_ended()
+    assert len(mgr._test_wipes) == wipes + 1
+    assert browser_jar.record_for("vaf-browser").owner_is("scope-c", instance)

@@ -136,7 +136,8 @@ rather than being abandoned, in one of two ways:
   resolve, not with a counter another run's end also moves. `resolve_cdp_ws_url` and the
   handover's waits (previous holder's transfer, the handover mutex, another process's page check)
   honour the flag, so a stopped run no longer leaves a thread dialing the DevTools port until the
-  30 s deadline or holding the handover. Internal, not on the facade: two sites use it, both in the
+  30 s deadline or holding the handover; only the container commands of a cross-user wipe still
+  run to their end (named in BROWSER_AGENT.md, "Stopping a run"). Internal, not on the facade: two sites use it, both in the
   browser lane.
 
 ## Background host commands (`vaf/core/processes.py`)

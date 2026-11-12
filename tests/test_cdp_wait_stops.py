@@ -70,7 +70,7 @@ def test_the_wait_gives_up_within_a_pause_step_of_the_run_ending(clock, refusing
     run_ended_at = 0.7
 
     with cancel_when(lambda: clock.now >= run_ended_at):
-        with pytest.raises(RuntimeError, match="abandoned"):
+        with pytest.raises(bi.CdpWaitAbandoned, match="abandoned"):
             bi.resolve_cdp_ws_url("http://localhost:9222")
     gave_up = clock.now
     assert gave_up - run_ended_at < 0.3, (

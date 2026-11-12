@@ -948,13 +948,19 @@ partition:
   jar and one holder entry (the first run to end releases it, so other processes see
   the browser free while the second run still drives it), and a second VAF
   installation under another OS account that drives the same container keeps a
-  record of its own - the pool is the answer to both. A run that ends no longer cuts
-  another run's waits: the waits of a run's handover and DevTools resolve end with
-  that run's own end, never with the browser's run counter. A parallel run that has
-  not yet passed the handover's generation check is still refused when another run
-  ends, as named in `hand_jar_to_run`. A cross-user handover whose run ends is refused
-  like a failed one: the owner record is already cleared, so the next holder wipes
-  first.
+  record of its own - the pool is the answer to both. For an admin deciding whether to
+  allow two browser tasks at once: a task that is already browsing is not cut when
+  another task ends. A second task that is still waiting when the first one ends (for
+  the browser's handover lock, for a page check of another VAF process, or for the
+  previous holder's file transfer to finish) is refused, and the person sees "Error
+  (browser_agent): the browser could not be cleaned for this user change, so the run
+  was refused. Try again in a moment; if it persists, check the vaf-browser
+  container." and starts it again; nothing of the other account is exposed. A task
+  that is stopped during its own change of hands from another account is refused the
+  same fail-closed way: if the stop lands before the browser's record of whose state
+  the profile holds was cleared, that record still names the previous holder; if it
+  lands after, it names nobody. Either way every other account's next use of the
+  browser wipes the profile first.
   Downloads are not a residual: finished ones are swept to their owner's
   `VAF_Projects/<uid8>/Downloads`
   through the threat funnel (origin `browser_download`), only while that folder is an

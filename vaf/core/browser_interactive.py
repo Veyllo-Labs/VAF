@@ -75,7 +75,10 @@ class CdpWaitAbandoned(RuntimeError):
     """resolve_cdp_ws_url gave up because the run that asked for it has ended (its
     cancel flag is set), not because the browser failed. A RuntimeError like the
     deadline's, so every caller that catches that keeps working; its own type lets
-    a caller tell an ended run from a browser failure by the error itself."""
+    a caller tell an ended run from a browser failure by the error itself. Inside
+    verified_profile_wipe it is reported as an unconfirmed wipe, deliberately (see
+    there), so the handover's ended-run detail (_HANDOVER_ENDED_DETAIL) appears only
+    for an end after a confirmed wipe."""
 
 
 def resolve_cdp_ws_url(base: str) -> str:
@@ -921,7 +924,10 @@ def verified_profile_wipe(container_name: str = "vaf-browser",
     2. Kill Chromium, best-effort (`|| true`).
     3. Poll for the marker's ABSENCE (the wipe confirmation; relaunch is
        measured at 3-5s, the deadline is generous).
-    4. Only then wait for CDP as plain readiness.
+    4. Only then wait for CDP as plain readiness. A run that ends during this
+       wait (CdpWaitAbandoned) is reported like any unreachable relaunch, as an
+       unconfirmed wipe, deliberately: the wipe is fail-closed and is never cut
+       short or special-cased, and the log line names the real cause.
     On failure, remove the marker best-effort so no delayed wipe lies in wait.
     Module-level so tests can stub it as bi.<name>.
     """

@@ -28,6 +28,7 @@ and raises instead of answering a sentinel.
 """
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import logging
 import math
@@ -67,6 +68,49 @@ def cancel_check() -> Callable[[], bool]:
     """
     ev = getattr(_thread_cancel, "event", None)
     return ev.is_set if ev is not None else (lambda: False)
+
+
+class _ScopedCancel:
+    """The flag inside ``cancel_when``: set when the outer flag is, or when ``check()`` says
+    so. A ``check`` that raises answers False, like a failing ``stop_check`` of run_bounded."""
+
+    def __init__(self, previous: Any, check: Callable[[], bool]) -> None:
+        self._previous = previous
+        self._check = check
+
+    def is_set(self) -> bool:
+        if self._previous is not None and self._previous.is_set():
+            return True
+        try:
+            return bool(self._check())
+        except Exception:
+            return False
+
+
+@contextlib.contextmanager
+def cancel_when(check: Callable[[], bool]):
+    """Arm THIS thread's cancel flag from ``check`` for the length of the block.
+
+    For a worker that ``run_bounded`` did not start, so nothing sets its flag when the work it
+    does stops mattering: inside the block ``cancel_requested()`` and ``cancel_check()`` also
+    answer True once ``check()`` does, and the code below polls them unchanged. Measured: a
+    stopped browser run left its jar handover on a loop executor thread, dialing the closed
+    DevTools port for the rest of the 30 s CDP deadline (40 refused connects, the handover
+    mutex held 29.1 s); armed with the run's generation, the wait ends at its next check. An
+    outer flag (an abandoned ``run_bounded`` worker) keeps working inside, and the previous
+    flag is put back on exit, an exception included.
+
+    Named boundary: internal to VAF's own lanes, not on the facade. Two sites need it, both
+    in the browser lane (the jar handover and the run's own CDP resolve), and ``bounded_run``
+    as a whole is not exported; promote it to the facade when a tool outside VAF's own lanes
+    needs it.
+    """
+    previous = getattr(_thread_cancel, "event", None)
+    _thread_cancel.event = _ScopedCancel(previous, check)
+    try:
+        yield
+    finally:
+        _thread_cancel.event = previous
 
 
 # Sentinels returned (not raised) when a call is aborted. Kept as recognizable

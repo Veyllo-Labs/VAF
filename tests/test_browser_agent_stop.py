@@ -103,20 +103,40 @@ def _stub_browser_use(monkeypatch):
         monkeypatch.setitem(sys.modules, name, mod)
 
 
-def test_stop_ends_a_run_hung_in_browser_startup(monkeypatch):
-    """MUTATION 1: resolve the session id inside the browser thread again.
-    MUTATION 2: start the stop watchdog only after the browser is up.
+class _RefusingDevTools:
+    """`urllib.request.urlopen` for a browser that is not answering: every call to the
+    DevTools version endpoint is refused at once, recorded with the thread that made it,
+    and no socket is opened (a running vaf-browser on the developer's machine is never
+    reached). Other URLs answer an empty JSON object."""
 
-    The live incident: the run hung inside startup, produced nothing, and ten
-    Stop presses did nothing. Two defects stacked - the run executes on a fresh
-    thread whose contextvar context answers None for the session id, which
-    disarmed every stop lane; and the only stop lane was a coroutine created
-    AFTER the startup phase that was hanging. The session id must cross the
-    thread boundary as an argument, and the watchdog thread must be armed
-    before anything can block, so a stop during startup cancels the run task.
-    """
+    def __init__(self):
+        import threading
+        self.lock = threading.Lock()
+        self.calls = 0
+        self.threads = set()
+
+    def __call__(self, request, timeout=None):
+        import threading
+        import urllib.error
+        url = request if isinstance(request, str) else request.full_url
+        if not url.endswith("/json/version"):
+            class _Empty:
+                def read(self): return b"{}"
+                def __enter__(self): return self
+                def __exit__(self, *a): return False
+            return _Empty()
+        with self.lock:
+            self.calls += 1
+            self.threads.add(threading.current_thread())
+        raise urllib.error.URLError("refused")
+
+
+def _run_and_stop(monkeypatch, sid):
+    """Start a browser run against a browser that is not answering and press Stop after
+    0.8 s. Returns (result, seconds the run took, the fake DevTools)."""
     import threading
     import time as _time
+    import urllib.request as _req
 
     # session_context, NOT set_current_session_id: a bare set(None) on the way
     # out DECLARES "no session" on pytest's main thread, and that declaration
@@ -126,17 +146,12 @@ def test_stop_ends_a_run_hung_in_browser_startup(monkeypatch):
     from vaf.core.subagent_ipc import session_context
 
     _stub_browser_use(monkeypatch)
+    devtools = _RefusingDevTools()
+    monkeypatch.setattr(_req, "urlopen", devtools)
+    # Not lowered to hide anything: the fixed product gives up within 0.1 s of the
+    # stop either way. 8 s only bounds what a MUTATED run leaves behind.
+    monkeypatch.setenv("VAF_BROWSER_CDP_WAIT_S", "8")
 
-    hang = threading.Event()
-
-    def _hanging_resolve(_base):
-        hang.wait(20.0)
-        raise RuntimeError("resolver unblocked without stop")
-
-    monkeypatch.setattr(BrowserAgentTool, "_resolve_cdp_url",
-                        staticmethod(_hanging_resolve))
-
-    sid = "browseragent-hangstop-test"
     tq = TaskQueue()
     tq.clear_stop(sid)
     try:
@@ -150,11 +165,78 @@ def test_stop_ends_a_run_hung_in_browser_startup(monkeypatch):
             result = BrowserAgentTool().run(task="probe")
             took = _time.monotonic() - t0
     finally:
-        hang.set()
         tq.clear_stop(sid)
+    return result, took, devtools
+
+
+def _assert_no_worker_keeps_dialing(devtools, join_s):
+    import time as _time
+
+    assert devtools.threads, "the run never waited for the browser's DevTools port"
+    for worker in devtools.threads:
+        worker.join(join_s)
+    alive = [w.name for w in devtools.threads if w.is_alive()]
+    assert not alive, (
+        f"the stopped run left {alive} dialing the DevTools port; it ends only at the "
+        f"CDP deadline, holding the browser for the next run and the browser window")
+    calls = devtools.calls
+    _time.sleep(1.0)
+    assert devtools.calls == calls, (
+        f"{devtools.calls - calls} DevTools connects after the stopped run had ended")
+
+
+def test_stop_ends_a_run_hung_in_browser_startup(monkeypatch):
+    """MUTATION 1: resolve the session id inside the browser thread again.
+    MUTATION 2: start the stop watchdog only after the browser is up.
+    MUTATION 3: drop the cancel checks from resolve_cdp_ws_url's retry loop.
+    MUTATION 4: drop the cancel_when around the body of hand_jar_to_run.
+
+    The live incident: the run hung inside startup, produced nothing, and ten
+    Stop presses did nothing. Two defects stacked - the run executes on a fresh
+    thread whose contextvar context answers None for the session id, which
+    disarmed every stop lane; and the only stop lane was a coroutine created
+    AFTER the startup phase that was hanging. The session id must cross the
+    thread boundary as an argument, and the watchdog thread must be armed
+    before anything can block, so a stop during startup cancels the run task.
+
+    Where the run really hangs is the jar handover: it waits in an executor
+    thread for a browser that is not answering, and the stop does not wait for
+    that thread. Measured before the fix: the thread kept dialing the DevTools
+    port for 29.1 s after the run had returned and held the handover mutex as
+    long, so the browser window and the next run waited too. It must end with
+    the run.
+    """
+    from vaf.core.browser_interactive import _manager_for_run
+
+    result, took, devtools = _run_and_stop(monkeypatch, "browseragent-hangstop-test")
 
     assert result == "Browser task stopped by user.", result
     assert took < 10.0, f"stop took {took:.1f}s - the watchdog never fired"
+    mutex = _manager_for_run(None)._handover_mutex
+    assert mutex.acquire(timeout=1.0), "the stopped run's handover still holds the browser"
+    mutex.release()
+    _assert_no_worker_keeps_dialing(devtools, join_s=3.0)
+
+
+def test_stop_ends_the_runs_own_cdp_wait(monkeypatch):
+    """MUTATION: drop the cancel_when around _resolve_cdp_url in _run_browser.
+
+    Past the handover the run resolves the browser's DevTools URL itself, in an
+    executor thread the stop does not wait for either: the same leftover, a
+    thread dialing a browser that is not answering until the CDP deadline.
+    """
+    import vaf.core.browser_interactive as bi
+
+    monkeypatch.setattr(bi, "hand_jar_to_run", lambda **kwargs: None)
+    # Past the handover the run grants its window a live stream (a push to the web
+    # app's port) and mirrors the workspace (docker): neither is what this pins.
+    monkeypatch.setattr(bi, "agent_stream_started", lambda *a, **k: None)
+    monkeypatch.setattr(bi, "sync_workspace_for_run", lambda **kwargs: [])
+    result, took, devtools = _run_and_stop(monkeypatch, "browseragent-ownwait-test")
+
+    assert result == "Browser task stopped by user.", result
+    assert took < 10.0, f"stop took {took:.1f}s - the watchdog never fired"
+    _assert_no_worker_keeps_dialing(devtools, join_s=1.0)
 
 
 def test_a_finished_run_parks_the_browser_on_a_blank_tab(monkeypatch):

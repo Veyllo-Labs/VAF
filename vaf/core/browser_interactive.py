@@ -65,6 +65,9 @@ from vaf.core.log_helper import append_domain_log
 # Shared helpers (moved here from vaf/tools/browser_agent.py, which delegates)
 # ---------------------------------------------------------------------------
 
+_CDP_WAIT_ABANDONED = "Browser CDP wait abandoned: the run that asked for it has ended"
+
+
 def resolve_cdp_ws_url(base: str) -> str:
     """Fetch /json/version and return the full webSocketDebuggerUrl.
 
@@ -74,9 +77,13 @@ def resolve_cdp_ws_url(base: str) -> str:
     just-restarted vaf-browser must not fail on the first try. Deadline is
     VAF_BROWSER_CDP_WAIT_S (default 30s, > start_period + one healthcheck
     interval). BLOCKING (sleeps): call from a worker thread, never on an event
-    loop.
+    loop. Inside bounded_run.cancel_when, or on an abandoned run_bounded worker,
+    the wait ends early: the flag is asked before every attempt and every 0.1 s
+    of the pause, and a set flag raises without a further dial.
     """
     import urllib.request as _urlreq
+
+    from vaf.core.bounded_run import cancel_requested
 
     http_base = base.replace("ws://", "http://").replace("wss://", "https://")
     url = http_base.rstrip("/") + "/json/version"
@@ -89,6 +96,8 @@ def resolve_cdp_ws_url(base: str) -> str:
     attempt = 0
     while True:
         attempt += 1
+        if cancel_requested():
+            raise RuntimeError(_CDP_WAIT_ABANDONED) from last_err
         try:
             with _urlreq.urlopen(url, timeout=3) as resp:
                 data = json.loads(resp.read())
@@ -101,7 +110,16 @@ def resolve_cdp_ws_url(base: str) -> str:
             last_err = e
             if time.monotonic() >= _deadline:
                 break
-            time.sleep(min(1.5, max(0.5, 0.5 * attempt)))
+            # The pause is slept in short steps so a run that ended meanwhile
+            # does not leave this thread dialing for the rest of the deadline.
+            _pause_end = time.monotonic() + min(1.5, max(0.5, 0.5 * attempt))
+            while True:
+                if cancel_requested():
+                    raise RuntimeError(_CDP_WAIT_ABANDONED) from last_err
+                _left = _pause_end - time.monotonic()
+                if _left <= 0:
+                    break
+                time.sleep(min(0.1, _left))
     raise RuntimeError(
         f"Browser service not ready: Chrome DevTools at {http_base} did not respond within "
         f"{int(_deadline_s)}s. Is `vaf-browser` running/healthy? "
@@ -1333,7 +1351,7 @@ class InteractiveBrowserManager:
         as they always have, and one holder entry: the first run to end releases
         it, so other processes see the browser free while the second run still
         drives it (and that end also retires a second run still waiting for a
-        probe). The pool is the answer to that, since a per-user instance is only
+        probe, and cuts its CDP wait short). The pool is the answer to that, since a per-user instance is only
         ever driven by that user's runs.
 
         `run_generation` is what run_generation() answered after the run passed
@@ -1348,8 +1366,14 @@ class InteractiveBrowserManager:
         the record for the life of the process and every other process saw the
         browser busy (measured: a coder's render_check busy until a restart). A
         run that is no longer current when its claim lands releases it and
-        raises BrowserHandoverError before it touches the jar. Without the
-        argument the generation is read here, on entry.
+        raises BrowserHandoverError before it touches the jar. The same
+        generation arms bounded_run.cancel_when around the whole handover, so a
+        CDP wait that is under way when the run ends gives up within 0.1 s and
+        the mutex is free again: a cross-scope handover then refuses as before
+        (BrowserHandoverError, logged), a same-scope scrub or download policy is
+        logged as failed. Measured before: the stopped run's thread kept dialing
+        a browser that was not answering for 29.1 s and held the mutex as long.
+        Without the argument the generation is read here, on entry.
 
         A SCOPE CHANGE is fail-closed: the verified profile wipe either
         confirms, or this raises BrowserHandoverError and the run must not
@@ -1359,39 +1383,46 @@ class InteractiveBrowserManager:
         scope = resolve_browser_scope(user_scope_id)
         with self._lock:
             generation = self._run_generation if run_generation is None else run_generation
-        self._wait_for_previous_holder(scope)
-        with self._handover_mutex:
-            with self._lock:
-                claimed = self._run_token is not None
-                current = self._run_generation == generation
-            if not current:
-                raise BrowserHandoverError("the run ended before it held the browser")
-            if self._dedicated_scope is None and not claimed:
-                # The run is claimed in the cross-process record before it takes
-                # the jar: a probe of another process is waited out, a lease or a
-                # run there refuses this one (BrowserHeldElsewhere). Released by
-                # agent_run_ended, like the in-process flag.
-                from vaf.core.browser_jar import KIND_RUN
-                token, other = self._claim_shared(KIND_RUN, scope, wait_s=self.PROBE_WAIT_S)
-                if token is None:
-                    append_domain_log("webui", "[browser_interactive] shared browser held by "
-                                               f"another VAF process ({(other or {}).get('kind')}); "
-                                               "run refused")
-                    raise BrowserHeldElsewhere(
-                        f"shared browser in use by another VAF process ({(other or {}).get('kind')})")
+        # Every CDP wait below (the cookie ops, the download policy, the CDP step
+        # of the profile wipe) ends within 0.1 s once this run is no longer the
+        # current one: a Stop does not wait for this executor thread, and it
+        # used to dial a browser that was not answering for the rest of the
+        # 30 s deadline, twice on the same-scope path, holding the mutex.
+        from vaf.core.bounded_run import cancel_when
+        with cancel_when(lambda: self.run_generation() != generation):
+            self._wait_for_previous_holder(scope)
+            with self._handover_mutex:
                 with self._lock:
+                    claimed = self._run_token is not None
                     current = self._run_generation == generation
-                    if current:
-                        self._run_token = token
                 if not current:
-                    self._release_shared(token)
-                    append_domain_log("webui", "[browser_interactive] the run ended while it "
-                                               "waited for the shared browser; claim released")
-                    raise BrowserHandoverError("the run ended while it waited for the browser")
-            self._hand_jar_locked(scope, persistent=persistent, continuing=continuing)
-            with self._lock:
-                if self._run_generation == generation:
-                    self._xfer_scope = scope
+                    raise BrowserHandoverError("the run ended before it held the browser")
+                if self._dedicated_scope is None and not claimed:
+                    # The run is claimed in the cross-process record before it takes
+                    # the jar: a probe of another process is waited out, a lease or a
+                    # run there refuses this one (BrowserHeldElsewhere). Released by
+                    # agent_run_ended, like the in-process flag.
+                    from vaf.core.browser_jar import KIND_RUN
+                    token, other = self._claim_shared(KIND_RUN, scope, wait_s=self.PROBE_WAIT_S)
+                    if token is None:
+                        append_domain_log("webui", "[browser_interactive] shared browser held by "
+                                                   f"another VAF process ({(other or {}).get('kind')}); "
+                                                   "run refused")
+                        raise BrowserHeldElsewhere(
+                            f"shared browser in use by another VAF process ({(other or {}).get('kind')})")
+                    with self._lock:
+                        current = self._run_generation == generation
+                        if current:
+                            self._run_token = token
+                    if not current:
+                        self._release_shared(token)
+                        append_domain_log("webui", "[browser_interactive] the run ended while it "
+                                                   "waited for the shared browser; claim released")
+                        raise BrowserHandoverError("the run ended while it waited for the browser")
+                self._hand_jar_locked(scope, persistent=persistent, continuing=continuing)
+                with self._lock:
+                    if self._run_generation == generation:
+                        self._xfer_scope = scope
 
     @contextlib.contextmanager
     def hold_for_probe(self, user_scope_id: Optional[str] = None):

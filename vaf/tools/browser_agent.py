@@ -1414,13 +1414,19 @@ class BrowserAgentTool(BaseTool):
         # In the executor, not inline: the resolver polls with sleeps for up to
         # 30s, and run inside the coroutine that starves the loop - the stop
         # watchdog's cancel could not land during exactly the phase the user is
-        # most likely to abort (a browser that will not come up).
-        cdp_url = await asyncio.get_running_loop().run_in_executor(
-            None,
-            lambda: self._resolve_cdp_url(
-                cdp_base or os.environ.get("VAF_BROWSER_CDP_URL", "http://localhost:9222")
-            ),
-        )
+        # most likely to abort (a browser that will not come up). The cancel
+        # lands at this await, not in the executor thread, so the resolve is
+        # armed with the run's generation: once the run has ended it stops
+        # dialing within 0.1 s instead of for the rest of its 30 s deadline.
+        from vaf.core.bounded_run import cancel_when
+
+        def _resolve_for_this_run():
+            with cancel_when(lambda: run_generation(container_name=container_name) != _run_gen):
+                return self._resolve_cdp_url(
+                    cdp_base or os.environ.get("VAF_BROWSER_CDP_URL", "http://localhost:9222")
+                )
+
+        cdp_url = await asyncio.get_running_loop().run_in_executor(None, _resolve_for_this_run)
 
         # ── Persistent session: resolve cookie store path ─────────────────────
         # Shared with the interactive browser lane (vaf/core/browser_interactive):

@@ -440,6 +440,37 @@ def _no_container_wipe():
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _no_give_back_parker():
+    """No test may arm the browser's give-back parker thread.
+
+    The parker sleeps UNCLAIMED_PARK_S (20 s) and then parks the browser through its
+    DevTools port. In a test it fires inside whatever test runs 20 s later: measured over
+    the browser test files, 12 tests left one behind, each dialing 9222 twice after its
+    test had ended. The tests about parking call `_park_if_unclaimed` directly; the real
+    arming stays reachable as `_real_arm_unclaimed_parker`.
+
+    Named boundary, the class rather than this instance: a generic "no thread a test
+    started is alive at its teardown" guard was measured (402 tests of the browser,
+    bounded-run, boot-bridge and local-API files, 6.1 ms in all) and left out. 54 of the
+    402 tests (13 %) leave a thread alive, mostly on purpose: abandoned run_bounded
+    workers are the behaviour under test, stop watchdogs end within 0.5 s, idle executor
+    workers wait for work. Making it pass would take an allowlist of about 30 thread kinds
+    or edits to about 50 tests. A thread that keeps DIALING after its test is what the
+    refusal axis of scripts/hostile_env.py charges to the test running at that moment,
+    with the port it dialed; that axis stays the guard of the class.
+    """
+    from vaf.core.browser_interactive import InteractiveBrowserManager as manager
+
+    previous = manager._arm_unclaimed_parker
+    manager._real_arm_unclaimed_parker = previous
+    manager._arm_unclaimed_parker = lambda self: None
+    try:
+        yield
+    finally:
+        manager._arm_unclaimed_parker = previous
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _no_command_in_a_real_container():
     """No test may run a command INSIDE a real container, or start, stop or remove one.
 

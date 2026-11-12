@@ -127,6 +127,14 @@ rather than being abandoned, in one of two ways:
   every result page, before each per-page summary LLM call, and before the final synthesis (live
   incident 2026-07-16: an abandoned search kept feeding the single local llama-server for 40+
   seconds after Stop). New long-loop tools should adopt the same checkpoints.
+- **Scoped cancel for other workers** (`bounded_run.cancel_when(check)`): a context manager that
+  arms the same thread-local flag for a worker `run_bounded` did not start, such as a loop executor
+  thread. Inside the block `cancel_requested()` and `cancel_check()` also answer True once
+  `check()` does; an outer `run_bounded` flag keeps working, the previous flag is restored on exit,
+  and a `check` that raises counts as False. The browser run arms it with its run generation around
+  the jar handover and its own CDP resolve, and `resolve_cdp_ws_url` honours the flag, so a stopped
+  run no longer leaves a thread dialing the DevTools port until the 30 s deadline. Internal, not
+  on the facade: two sites use it, both in the browser lane.
 
 ## Background host commands (`vaf/core/processes.py`)
 

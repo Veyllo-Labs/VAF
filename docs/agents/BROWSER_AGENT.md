@@ -160,6 +160,13 @@ The monitor keeps trying until the run actually ends, instead of giving up after
 
 The closing awaits (`export_storage_state`, `browser.stop()`) are bounded too, so a browser that died mid-run cannot turn the stop itself into the next hang.
 
+**The executor threads end with the run.** The watchdog's cancel lands at an `await`, not inside the executor thread the run is waiting on, and a stop does not wait for that thread. Two of those threads wait for the browser's DevTools port: the cookie-jar handover (`hand_jar_to_run`) and the run's own CDP resolve. Both run inside `bounded_run.cancel_when`, armed with the run's generation, which `agent_run_ended` moves on before `run()` returns. `resolve_cdp_ws_url` asks that flag before every attempt and every 0.1 s of its pause, and gives up without a further dial. A stop during either wait therefore ends it within 0.1 s and frees the handover mutex for the next run, the browser window and a coder's page check. Before, the thread kept dialing a browser that was not answering until the `VAF_BROWSER_CDP_WAIT_S` deadline, 30 s per resolve and two resolves on the same-scope path, holding the mutex the whole time. Measured on Linux: the mutex was free again 29.1 s after the stopped run returned, and 0.00 s after. On a stopped cross-scope handover the run is refused and logged as before; on the same-scope path the skipped scrub and download policy are logged as failed.
+
+Two named boundaries:
+
+- **The attempt in flight is not interrupted.** A blocking connect cannot be cancelled from another thread, so the flag is seen after it. On Linux a refused connect returns at once; on Windows one attempt costs about 4 s (the two addresses `localhost` resolves to, refused after about 2 s each), so up to about 4 s remain after a stop there, instead of 30 to 34 s per resolve.
+- **The marker poll of `verified_profile_wipe` is not stop-aware.** It is a `docker exec` loop (up to 40 s), not a DevTools dial, and it runs only on a cross-scope change of hands; cutting it short could remove the marker while the supervisor is still wiping. The CDP step after it is covered.
+
 ### Result format
 
 The tool always returns a plain string - the VAF agent reads it and incorporates it into its response to the user.

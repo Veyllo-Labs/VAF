@@ -602,7 +602,6 @@ def test_give_back_keeps_the_browser_unparked_until_claimed(mgr, monkeypatch):
     _no_ipc_tasks(monkeypatch)
     parked = []
     monkeypatch.setattr(bi, "park_browser_idle", lambda base: parked.append(base))
-    mgr._arm_unclaimed_parker = lambda: None      # no sleeping threads in unit tests
     mgr.start("scope-a", "sess-1")
     mgr.stop_for_agent_run()
     assert mgr.give_back_pending() is True        # the run's parking must skip

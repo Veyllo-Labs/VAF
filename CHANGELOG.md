@@ -32,6 +32,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **Stopping a browser task frees the browser at once.** Pressing Stop while the browser
+  was not answering used to leave VAF waiting for it in the background for up to a minute,
+  and opening the browser window or starting the next browser task waited that long too.
+  The wait now ends with the stop.
 - **A terminal session without the web app no longer waits on every event.** With no web
   app running, `vaf run` tried to reach it once per live event and every few seconds for
   its heartbeat; on Windows each attempt waited up to two seconds. After a failed attempt it

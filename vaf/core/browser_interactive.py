@@ -926,8 +926,10 @@ def verified_profile_wipe(container_name: str = "vaf-browser",
        measured at 3-5s, the deadline is generous).
     4. Only then wait for CDP as plain readiness. A run that ends during this
        wait (CdpWaitAbandoned) is reported like any unreachable relaunch, as an
-       unconfirmed wipe, deliberately: the wipe is fail-closed and is never cut
-       short or special-cased, and the log line names the real cause.
+       unconfirmed wipe, deliberately: the wipe is fail-closed and its verdict is
+       never special-cased (this readiness wait is cut like every DevTools wait,
+       and the cut is reported as an unconfirmed wipe); the log line names the
+       real cause.
     On failure, remove the marker best-effort so no delayed wipe lies in wait.
     Module-level so tests can stub it as bi.<name>.
     """

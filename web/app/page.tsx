@@ -8118,7 +8118,7 @@ function VAFDashboardContent() {
             // intent; see its comment for why both halves are needed.
             requestAnimationFrame(() => setChatScroll(containerRef.current?.scrollHeight ?? 0));
         }
-    }, [messages, loading, roomView?.messages.length, appRoomDrafts.length]);
+    }, [messages, loading, roomView?.messages.length, appRoomDrafts.length, dockHeight]);
 
     // Run the prompt navigator's parked jump once the widened window has been
     // committed and laid out. Parked rather than timed: the previous version
@@ -8189,7 +8189,10 @@ function VAFDashboardContent() {
     const _chatSigRef = useRef('');
     const _chatGrew = () => {
         const last = messages[messages.length - 1];
-        const sig = `${messages.length}:${String(last?.content ?? '').length}:${roomView?.messages.length ?? 0}`;
+        // The Veyllo App room's waiting drafts end its transcript and arrive after it, and its
+        // notice grows the dock: a view that was at the bottom follows both, or the last card
+        // opens behind the composer or under the notice.
+        const sig = `${messages.length}:${String(last?.content ?? '').length}:${roomView?.messages.length ?? 0}:${appRoomDrafts.length}:${dockHeight}`;
         if (sig === _chatSigRef.current) return false;
         _chatSigRef.current = sig;
         return true;

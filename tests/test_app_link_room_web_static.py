@@ -156,7 +156,9 @@ def test_the_drafts_of_both_sessions_show_and_pin_the_view():
     assert "useChatDrafts(getApiBase(), appRoomSessions[1] || '', heldVersion)" in PAGE
     assert "[...appRoomChatDrafts.rows, ...appRoomAskDrafts.rows]" in PAGE
     assert "<UnplacedDrafts rows={appRoomDrafts}" in PAGE
-    assert "}, [messages, loading, roomView?.messages.length, appRoomDrafts.length]);" in PAGE
+    assert "}, [messages, loading, roomView?.messages.length, appRoomDrafts.length, dockHeight]);" in PAGE
+    grew = _between(PAGE, "const _chatGrew = () => {", "\n    };")
+    assert ":${appRoomDrafts.length}:${dockHeight}`;" in grew
 
 
 def test_the_inbox_opens_the_room_by_the_registry_name():

@@ -34,8 +34,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 - **A terminal session without the web app no longer waits on every event.** With no web
   app running, `vaf run` tried to reach it once per live event and every few seconds for
-  its heartbeat; on Windows each attempt waited up to two seconds. It now tries again after
-  ten seconds at the earliest, and the terminal app's heartbeat ends with its session.
+  its heartbeat; on Windows each attempt waited up to two seconds. After a failed attempt it
+  now sends live events again after ten seconds at the earliest, and the terminal app's
+  heartbeat ends with its session. Live events from the first seconds after the web app
+  starts are therefore not shown afterwards; results are not affected.
 - **Coming back to a busy chat shows it as you left it.** The running answer, its steps, the
   specialist's window and its files are there when you switch back, after a reconnect (you stay
   in your chat unless it no longer exists) and after a reload (the chat shows a loading state

@@ -138,31 +138,39 @@ def _heartbeat_loop(interval=5, stop=None):
     """Background thread to send heartbeats to the persistent server (Tray App).
 
     Ends when `stop` (a threading.Event) is set; the owner of the thread sets it on its
-    own shutdown, so a session that ended leaves no thread posting behind it. With no
-    server, a failed connect pauses every sender of this process for
-    LOCAL_API_DOWN.pause_s instead of being repeated (about a second per refused
-    connect on Windows)."""
+    own shutdown, so a session that ended leaves no thread posting behind it.
+
+    It dials every interval even while LOCAL_API_DOWN holds a pause: the tray judges a
+    session idle after server_idle_timeout (15 s by default) without a heartbeat, and a
+    heartbeat held back by a pause another sender started would stretch the gap to the
+    pause plus the interval. It reports its outcome to the memory, so a heartbeat that
+    gets through ends the push fallback's pause early and one that is refused starts it.
+    Its own refused connect costs about a second on Windows, in this background thread."""
     import threading
     import uuid
-    from vaf.core.web_interface import LOCAL_API_DOWN, _is_connect_failure, internal_api_base
+    try:
+        from vaf.core.web_interface import LOCAL_API_DOWN, _is_connect_failure, internal_api_base
+    except ImportError:
+        # A slim install without the [server] extra (no fastapi) runs no local API to
+        # signal; the heartbeat has nothing to do there and ends instead of dying.
+        return
     stop = stop or threading.Event()
     client_id = str(uuid.uuid4())
     while not stop.is_set():
         # TLS-aware internal base: with local_network_tls_enabled the public
         # 8001 port speaks HTTPS - a hardcoded plain-HTTP POST dies silently.
         base = internal_api_base()
-        if not LOCAL_API_DOWN.is_down(base):
-            try:
-                requests.post(
-                    f"{base}/api/heartbeat",
-                    json={"client_id": client_id, "timestamp": time.time()},
-                    timeout=1
-                )
-                LOCAL_API_DOWN.reached(base)
-            except Exception as exc:
-                # Silence if the server is not running or unreachable.
-                if _is_connect_failure(exc):
-                    LOCAL_API_DOWN.failed(base)
+        try:
+            requests.post(
+                f"{base}/api/heartbeat",
+                json={"client_id": client_id, "timestamp": time.time()},
+                timeout=1
+            )
+            LOCAL_API_DOWN.reached(base)
+        except Exception as exc:
+            # Silence if the server is not running or unreachable.
+            if _is_connect_failure(exc):
+                LOCAL_API_DOWN.failed(base)
         stop.wait(interval)
 
 

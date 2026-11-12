@@ -331,3 +331,18 @@ def test_the_heartbeat_runs_while_the_bridge_lives_and_ends_with_it(boot_env):
     bridge.shutdown()
     threads[0].join(timeout=2.0)
     assert not threads[0].is_alive()
+
+
+def test_a_boot_that_stops_early_leaves_no_heartbeat(boot_env, monkeypatch):
+    """The heartbeat starts once the bridge that ends it exists: a boot refused at the
+    git preflight has no bridge to shut down, so it must not have started one.
+    MUTATION: start the heartbeat at the top of boot_bridge again - red."""
+    import threading as _threading
+
+    import vaf.cli.cmd.run as run_mod
+    from vaf.cli.tui_app.agent_bridge import boot_bridge
+
+    monkeypatch.setattr(run_mod, "_check_and_install_git", lambda tui: False)
+    with pytest.raises(SystemExit):
+        boot_bridge(_events(), "vaf", None, False)
+    assert not [t for t in _threading.enumerate() if t.name == "vaf-tui-heartbeat"]

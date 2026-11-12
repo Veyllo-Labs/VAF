@@ -250,6 +250,29 @@ def _no_remembered_vllm_start():
 
 
 @pytest.fixture(autouse=True)
+def _no_remembered_outage():
+    """No test sees an outage another test remembered, and none leaves one behind.
+
+    The local API's outage memory (`vaf.core.web_interface.LOCAL_API_DOWN`) and the auth
+    store's (`vaf.auth.permissions._store_down`) live for the process. One refused push in
+    an earlier test paused every later push and heartbeat check for ten seconds, so a test
+    that expects a dial saw none, and a test that marks the API down hid the next test's
+    dials. Only when the module is loaded: importing it here would cost every test."""
+    import sys as _sys
+
+    def _forget():
+        for name, attr in (("vaf.core.web_interface", "LOCAL_API_DOWN"),
+                           ("vaf.auth.permissions", "_store_down")):
+            memory = getattr(_sys.modules.get(name), attr, None)
+            if memory is not None and hasattr(memory, "forget"):
+                memory.forget()
+
+    _forget()
+    yield
+    _forget()
+
+
+@pytest.fixture(autouse=True)
 def _no_queue_left_behind():
     """No test sees a fair queue another test registered.
 

@@ -1353,12 +1353,27 @@ LOCAL_API_DOWN = OutageMemory(_LOCAL_API_PAUSE_S)
 
 def _is_connect_failure(exc: BaseException) -> bool:
     """The connect itself failed (refused, unreachable, connect timeout), not the request
-    after it: a slow but listening server is not down."""
+    after it. A server that accepted and then reset or closed is listening: requests raises
+    the same ConnectionError for it, but with a ProtocolError inside instead of urllib3's
+    NewConnectionError (measured), and one such reset must not pause the live view."""
     try:
-        from requests.exceptions import ConnectionError as _RequestsConnectionError
+        from requests.exceptions import ConnectTimeout
+        from urllib3.exceptions import NewConnectionError
     except ImportError:              # pragma: no cover - requests is a hard dependency
-        _RequestsConnectionError = ()
-    return isinstance(exc, (ConnectionRefusedError, _RequestsConnectionError))
+        return isinstance(exc, ConnectionRefusedError)
+    if isinstance(exc, ConnectTimeout):
+        return True
+    seen, stack = set(), [exc]
+    while stack:
+        cause = stack.pop()
+        if cause is None or id(cause) in seen:
+            continue
+        seen.add(id(cause))
+        if isinstance(cause, (ConnectionRefusedError, NewConnectionError)):
+            return True
+        stack += [cause.__cause__, cause.__context__, getattr(cause, "reason", None)]
+        stack += [arg for arg in getattr(cause, "args", ()) if isinstance(arg, BaseException)]
+    return False
 
 
 def announce_room_invitation(room, invitation: dict, *, inviter_scope: Optional[str],
@@ -1498,6 +1513,9 @@ def notify_file_created(session_id: Optional[str], file_path, title: Optional[st
             from vaf.core.config import Config
             tls_on = Config.get("local_network_tls_enabled", False)
             port = 8005 if tls_on else 8001
+            # Deliberately not paused by LOCAL_API_DOWN: /api/workflow/update does durable
+            # work (the file chip in the transcript, the session workspace anchor), and a
+            # notice skipped while the pause holds is a chip the person never sees.
             requests.post(f"http://127.0.0.1:{port}/api/workflow/update", json=payload, timeout=1)
         except Exception:
             pass
@@ -1535,6 +1553,9 @@ def notify_document_created(session_id: Optional[str], file_path, title: Optiona
             from vaf.core.config import Config
             tls_on = Config.get("local_network_tls_enabled", False)
             port = 8005 if tls_on else 8001
+            # Deliberately not paused by LOCAL_API_DOWN: /api/workflow/update does durable
+            # work (the file chip in the transcript, the session workspace anchor), and a
+            # notice skipped while the pause holds is a chip the person never sees.
             requests.post(f"http://127.0.0.1:{port}/api/workflow/update", json=payload, timeout=1)
         except Exception:
             pass

@@ -4942,12 +4942,15 @@ function VAFDashboardContent() {
     };
     // Coming back to a chat that was left at its bottom keeps it pinned there once the
     // server's transcript and replay are in, not only on the kept first picture.
-    const stickToBottomRef = useRef(false);
+    const stickToBottomRef = useRef<string | null>(null);
     // Until when the chat follows its bottom as it grows (see the scroll keeper below).
     const bottomPinUntilRef = useRef(0);
     // A reconnect re-asks for the open chat; when the server refuses (a deleted chat, another
     // account on this tab) the page takes the chat the server auto-loaded instead.
     const reaskRef = useRef<string | null>(null);
+    // A reconnect's account check is running; the re-ask it holds back.
+    const accountCheckRef = useRef(false);
+    const deferredReaskRef = useRef<string | null>(null);
     const autoLoadedRef = useRef<string | null>(null);
     const currentUserRef = useRef<any>(null);
     useEffect(() => { currentUserRef.current = currentUser; }, [currentUser]);
@@ -4957,6 +4960,23 @@ function VAFDashboardContent() {
         sessionCache.current = {};
         composerDraftsRef.current = new ComposerDrafts<InsertedSelectionRange>();
         forgetWorkflowState();
+        // What is ON SCREEN goes as well, before anything of the next account is shown: the
+        // open chat or room, its held transcript, its worker window and its kept per-chat state.
+        liveHistoryRef.current.take();
+        currentSessionIdRef.current = null;
+        setCurrentSessionId(null);
+        messagesRef.current = [];
+        snapshotLenRef.current = 0;
+        setMessages([]);
+        roomViewRef.current = null;
+        setRoomView(null);
+        sessionLoadingStates.current = {};
+        sessionSubAgentStates.current = {};
+        sessionScrollPositions.current = {};
+        setSessionViewerState({});
+        setSubAgentState({ ...IDLE_SUB_AGENT_STATE, isOpen: false });
+        stickToBottomRef.current = null;
+        reaskRef.current = null;
     };
     const sessionsRef = useRef<Session[]>([]);
     useEffect(() => {
@@ -5082,7 +5102,7 @@ function VAFDashboardContent() {
         setRealContext(null);
         const savedScroll = sessionScrollPositions.current[id] as { scrollTop: number; wasAtBottom: boolean } | undefined;
         pendingScrollRestore.current = savedScroll ?? 'bottom';
-        stickToBottomRef.current = !savedScroll || savedScroll.wasAtBottom;
+        stickToBottomRef.current = (!savedScroll || savedScroll.wasAtBottom) ? id : null;
 
         // 4. Restore animation state for target session (or default to idle)
         const targetState = sessionLoadingStates.current[id];
@@ -5217,20 +5237,32 @@ function VAFDashboardContent() {
             // while this tab was disconnected): what this tab kept of the first account's
             // chats goes, and the view takes the server's chat for the new one.
             if (reconnect) {
+                // Until the answer is in, the page does not ask for its old chat again (the
+                // auto-load branch defers it), so nothing of the old view is drawn anew.
+                accountCheckRef.current = true;
+                const settle = (me: any) => {
+                    if (cancelled) return;
+                    accountCheckRef.current = false;
+                    const was = currentUserRef.current;
+                    const key = (u: any) => String(u?.user_scope_id ?? u?.id ?? '');
+                    const deferred = deferredReaskRef.current;
+                    deferredReaskRef.current = null;
+                    // Fail closed: no answer, or another account, and what this tab kept goes.
+                    if (!me || (was && key(was) !== key(me))) {
+                        forgetAccountState();
+                        if (me) setCurrentUser(me);
+                        if (autoLoadedRef.current) requestHistory(wsSocketRef.current, autoLoadedRef.current, true);
+                        return;
+                    }
+                    if (deferred) {
+                        reaskRef.current = deferred;
+                        requestHistory(wsSocketRef.current, deferred, false);
+                    }
+                };
                 fetch(`${getApiBase() || ''}/api/auth/me`, { credentials: 'include', cache: 'no-store' })
                     .then(res => res.ok ? res.json() : null)
-                    .then(me => {
-                        if (!me || cancelled) return;
-                        const was = currentUserRef.current;
-                        const key = (u: any) => String(u?.user_scope_id ?? u?.id ?? '');
-                        if (was && key(was) !== key(me)) {
-                            forgetAccountState();
-                            setCurrentUser(me);
-                            reaskRef.current = null;
-                            if (autoLoadedRef.current) requestHistory(wsSocketRef.current, autoLoadedRef.current, true);
-                        }
-                    })
-                    .catch(() => {});
+                    .then(settle)
+                    .catch(() => settle(null));
             }
             setStatus('connected');
             socket.send(JSON.stringify({ type: 'get_sessions' }));
@@ -5345,19 +5377,25 @@ function VAFDashboardContent() {
                         subAgentOutputSetRef.current = new Set();
                         setSubAgentState({ ...IDLE_SUB_AGENT_STATE, isOpen: false });
                     }
-                    for (const ev of replayed) handleFrame({ ...ev, replay: true });
+                    // A workflow that finished while away is not replayed at all: the store holds
+                    // one workflow for every chat, and a finished one of this chat must not take
+                    // the place (or the controls) of a workflow another chat is running.
+                    for (const ev of replayed) {
+                        if (plan.workflowDone && /^workflow_/.test(ev.type)) continue;
+                        handleFrame({ ...ev, replay: true });
+                    }
                     // A worker that already said it is done stays closed, as it would have.
                     if (plan.finishedWorker) setSubAgentState(prev => ({ ...prev, isOpen: false }));
-                    // A workflow that finished while away does not open its panel again.
-                    if (plan.workflowDone) useWorkflowStore.getState().closeWorkflow();
                     // What the replay drew was already there: no row of it slides in, and a
                     // chat left at its bottom is at its bottom again.
                     setMessages(prev => { snapshotLenRef.current = prev.length; return prev; });
-                    if (stickToBottomRef.current) {
+                    // Only for the chat the switch was made to, and only once: every load ends in
+                    // exactly one replay, which is where the stick ends.
+                    if (stickToBottomRef.current === data.sessionId) {
                         pendingScrollRestore.current = 'bottom';
                         bottomPinUntilRef.current = performance.now() + BOTTOM_PIN_MS;
-                        stickToBottomRef.current = false;
                     }
+                    stickToBottomRef.current = null;
                     return;
                 }
 
@@ -6912,6 +6950,11 @@ function VAFDashboardContent() {
                     // which also subscribes this new socket to it.
                     if (data.autoLoad) autoLoadedRef.current = data.sessionId;
                     if (data.autoLoad && prevSessionId && data.sessionId !== prevSessionId) {
+                        // While the reconnect's account check runs, the re-ask waits for it.
+                        if (accountCheckRef.current) {
+                            deferredReaskRef.current = prevSessionId;
+                            return;
+                        }
                         reaskRef.current = prevSessionId;
                         requestHistory(wsSocketRef.current, prevSessionId, false);
                         return;
@@ -6996,7 +7039,7 @@ function VAFDashboardContent() {
                         if (sessionSwitched || finalServerMsgs.length > 0 || messagesRef.current.length === 0) {
                             snapshotLenRef.current = finalServerMsgs.length;
                             setMessages(finalServerMsgs);
-                            if (stickToBottomRef.current) pendingScrollRestore.current = 'bottom';
+                            if (stickToBottomRef.current === data.sessionId) pendingScrollRestore.current = 'bottom';
                         }
 
                         // If a chat was queued before we had a session, send it now.
@@ -7084,7 +7127,7 @@ function VAFDashboardContent() {
                     // The running turn's prompt comes with this history_update and its cards
                     // and streamed text with the live_replay behind it, so a kept copy of any
                     // of them could only be stale (keepCachedOrphan).
-                    const orphans = cachedMsgs.filter(m => keepCachedOrphan(m, hydratedServerMsgs, lastUserSendTimeRef.current))
+                    const orphans = cachedMsgs.filter(m => keepCachedOrphan(m, hydratedServerMsgs, lastUserSendTimeRef.current, cachedMsgs))
                         .map((m, idx) => ({ ...m, _order: 100000 + idx })); // So orphans sort after server when timestamps tie
 
                     // Sort by _order only so server order is strict (fixes user message appearing below assistant when backend timestamps differ or are equal)
@@ -7211,7 +7254,7 @@ function VAFDashboardContent() {
                     } else {
                         snapshotLenRef.current = finalMsgs.length;
                         setMessages(finalMsgs);
-                        if (stickToBottomRef.current) pendingScrollRestore.current = 'bottom';
+                        if (stickToBottomRef.current === data.sessionId) pendingScrollRestore.current = 'bottom';
                     }
 
                     // If a chat was queued before we had a session, send it now.
@@ -7995,7 +8038,13 @@ function VAFDashboardContent() {
         if (!el) return;
         let raf = 0;
         let lastHuman = 0;
-        const human = () => { lastHuman = performance.now(); scrollIntentRef.current = el.scrollTop; bottomPinUntilRef.current = 0; };
+        const human = () => {
+            lastHuman = performance.now();
+            scrollIntentRef.current = el.scrollTop;
+            // The person decides: no pin, and no bottom waiting for a replay still on its way.
+            bottomPinUntilRef.current = 0;
+            stickToBottomRef.current = null;
+        };
         const evts: (keyof HTMLElementEventMap)[] = ['wheel', 'touchstart', 'touchmove', 'keydown', 'mousedown'];
         evts.forEach(e => el.addEventListener(e, human, { passive: true }));
         scrollIntentRef.current = el.scrollTop;

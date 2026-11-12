@@ -327,7 +327,9 @@ def test_every_history_request_restarts_the_wait():
     # A refused re-ask, and an account change on reconnect, take the server's auto-loaded chat.
     assert "requestHistory(wsSocketRef.current, fallback, true);" in src
     assert "requestHistory(wsSocketRef.current, autoLoadedRef.current, true);" in src
-    assert src.count("requestHistory(") == 7, "the seven callers"
+    # And the re-ask a reconnect's account check held back.
+    assert "requestHistory(wsSocketRef.current, deferred, false);" in src
+    assert src.count("requestHistory(") == 8, "the eight callers"
 
 
 def test_every_persona_writer_counts_against_a_late_refetch():

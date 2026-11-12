@@ -127,11 +127,15 @@ export const LOCAL_PROMPT_SLACK_MS = 2000;
  */
 export function keepCachedOrphan(msg: { role: string; content?: unknown; timestamp?: number },
                                  serverMsgs: { role: string; content?: unknown }[] = [],
-                                 lastLocalSendMs = 0): boolean {
+                                 lastLocalSendMs = 0,
+                                 keptMsgs: { role: string; content?: unknown }[] = [msg]): boolean {
     if (msg.role === 'system') return true;
     if (msg.role !== 'user' || !(lastLocalSendMs > 0)) return false;
     if ((msg.timestamp ?? 0) < lastLocalSendMs - LOCAL_PROMPT_SLACK_MS) return false;
-    return !serverMsgs.some(s => s.role === 'user' && s.content === msg.content);
+    // Counted, not matched: the same words sent twice are two prompts, and an earlier one the
+    // server has stored must not stand in for the one it has not seen yet.
+    const same = (m: { role: string; content?: unknown }) => m.role === 'user' && m.content === msg.content;
+    return keptMsgs.filter(same).length > serverMsgs.filter(same).length;
 }
 
 /** What a replay asks of the page around the events themselves. */
@@ -146,11 +150,19 @@ export type ReplayPlan = {
 
 export const WORKER_EVENT = /^(subagent_|browser_)|_state$/;
 
-export function planReplay(events: { type?: unknown; presence?: unknown }[]): ReplayPlan {
+/** Tools that open the specialist's window (the page's own test in its tool_update branch). */
+const WORKER_TOOL = /(?:^|[^a-z])(librarian|research|document|coding|browser)_agent(?:$|[^a-z])/;
+
+export function planReplay(events: { type?: unknown; presence?: unknown; subType?: unknown; name?: unknown }[]): ReplayPlan {
     const types = events.map(e => String(e?.type ?? ''));
-    const presences = events.filter(e => e?.type === 'subagent_update' && e.presence)
-        .map(e => String(e.presence).trim().toLowerCase());
-    const last = presences[presences.length - 1];
+    // The worker's last word, in the order things happened: a worker's own presence, or the
+    // start of a specialist tool after it (a new worker that is running now).
+    let last: string | undefined;
+    for (const e of events) {
+        if (e?.type === 'subagent_update' && e.presence) last = String(e.presence).trim().toLowerCase();
+        else if (e?.type === 'tool_update' && e.subType === 'start'
+                 && WORKER_TOOL.test(String(e.name ?? '').toLowerCase())) last = 'online';
+    }
     return {
         workerEvents: types.some(t => WORKER_EVENT.test(t)),
         finishedWorker: last === 'idle' || last === 'error',

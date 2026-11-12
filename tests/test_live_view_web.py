@@ -113,7 +113,7 @@ def test_only_system_lines_are_kept_beside_the_server():
     out = _run(LIVE, "['system', 'user', 'tool', 'assistant', 'workflow'].map(r => m.keepCachedOrphan({role: r}))")
     assert out == [True, False, False, False, False]
     merge = _between(_page(), "const orphans = cachedMsgs", ";")
-    assert "keepCachedOrphan(m, hydratedServerMsgs, lastUserSendTimeRef.current)" in merge
+    assert "keepCachedOrphan(m, hydratedServerMsgs, lastUserSendTimeRef.current, cachedMsgs)" in merge
 
 
 def test_the_prompt_just_sent_survives_an_early_snapshot():
@@ -125,6 +125,11 @@ def test_the_prompt_just_sent_survives_an_early_snapshot():
     just_sent = {"role": "user", "content": "go", "timestamp": now + 5}
     assert keep(just_sent, []) is True
     assert keep(just_sent, [{"role": "user", "content": "go"}]) is False      # the server has it
+    # E5: "go" sent twice; the server has the first one only. MUTATION: match by content - red.
+    first = {"role": "user", "content": "go", "timestamp": now - 90_000}
+    two = _run(LIVE, f"m.keepCachedOrphan({json.dumps(just_sent)}, {json.dumps([first])}, {now}, "
+                     f"{json.dumps([first, just_sent])})")
+    assert two is True
     assert keep({"role": "user", "content": "old", "timestamp": now - 60_000}, []) is False
     assert _run(LIVE, f"m.keepCachedOrphan({json.dumps(just_sent)}, [], 0)") is False   # no local send
 
@@ -145,11 +150,17 @@ def test_a_replay_plan_replaces_closes_and_keeps_closed():
     assert plan([{"type": "subagent_update", "presence": "idle"},
                  {"type": "subagent_update", "presence": "online"}])["finishedWorker"] is False
     assert plan([{"type": "workflow_start"}, {"type": "workflow_done"}])["workflowDone"] is True
+    # A new specialist that started after the old one said idle is running: its window stays.
+    # MUTATION: ignore later starts - red.
+    assert plan([{"type": "subagent_update", "presence": "idle"},
+                 {"type": "tool_update", "subType": "start", "name": "browser_agent"}])["finishedWorker"] is False
+    assert plan([{"type": "subagent_update", "presence": "idle"},
+                 {"type": "tool_update", "subType": "start", "name": "read_file"}])["finishedWorker"] is True
 
 
 def test_the_page_follows_the_plan():
     replay = _between(_page(), "if (data.type === 'live_replay') {", "if (data.type === 'new_log')")
-    loop = replay.index("for (const ev of replayed) handleFrame({ ...ev, replay: true });")
+    loop = replay.index("for (const ev of replayed) {")
     reset = replay[replay.index("if (plan.workerEvents) {"):loop]
     # The console's duplicate filters are reset with the window, or every line this page
     # already showed once is refused and the console comes back empty.
@@ -158,7 +169,9 @@ def test_the_page_follows_the_plan():
         assert needle in reset, needle
     after = replay[loop:]
     assert "if (plan.finishedWorker) setSubAgentState(prev => ({ ...prev, isOpen: false }));" in after
-    assert "if (plan.workflowDone) useWorkflowStore.getState().closeWorkflow();" in after
+    # A finished workflow is not replayed at all: the one store must not lose another chat's run.
+    loop_block = replay[replay.index("for (const ev of replayed) {"):]
+    assert "if (plan.workflowDone && /^workflow_/.test(ev.type)) continue;" in loop_block
     # Nothing the replay drew slides in, and a chat left at its bottom is there again.
     assert "setMessages(prev => { snapshotLenRef.current = prev.length; return prev; });" in after
     assert "pendingScrollRestore.current = 'bottom';" in after
@@ -168,7 +181,25 @@ def test_the_page_follows_the_plan():
     keeper = _between(src, "const tick = () => {", "raf = requestAnimationFrame(tick);")
     assert "if (bottomPinUntilRef.current > performance.now() && performance.now() - lastHuman >= 300) {" in keeper
     assert "scrollIntentRef.current = Math.max(0, el.scrollHeight - el.clientHeight);" in keeper
-    assert "bottomPinUntilRef.current = 0;" in _between(src, "const human = () => {", "};")
+    human = _between(src, "const human = () => {", "};")
+    assert "bottomPinUntilRef.current = 0;" in human
+    # E2: a touch also drops the bottom a replay still on its way would pull back to.
+    assert "stickToBottomRef.current = null;" in human
+
+
+def test_the_bottom_is_for_the_chat_switched_to_and_only_once():
+    """E1: a later history_update of the same chat (a reconnect, a regenerate, the forget
+    repaint) must not jump to the bottom. MUTATION: a boolean stick that only a replay
+    clears - red; the replay not ending the stick - red."""
+    src = _page()
+    switch = _between(src, "const handleSessionSwitch = (id: string) => {", "const switchAfterDelete")
+    assert "stickToBottomRef.current = (!savedScroll || savedScroll.wasAtBottom) ? id : null;" in switch
+    hist = _between(src, "else if (data.type === 'history_update')", "else if (data.type === 'context_checkpoint')")
+    assert hist.count("if (stickToBottomRef.current === data.sessionId) pendingScrollRestore.current = 'bottom';") == 2
+    replay = _between(src, "if (data.type === 'live_replay') {", "if (data.type === 'new_log')")
+    assert "if (stickToBottomRef.current === data.sessionId) {" in replay
+    assert "stickToBottomRef.current = null;" in replay
+    assert "stickToBottomRef = useRef<string | null>(null)" in src
 
 
 def test_the_hold_releases_once_by_replay_or_by_timeout():
@@ -252,10 +283,10 @@ def test_the_session_ref_moves_with_the_switch():
 def test_a_reconnect_keeps_the_open_chat():
     """MUTATION: drop the autoLoad branch - red."""
     hist = _between(_page(), "else if (data.type === 'history_update')", "const isActive")
-    branch = "if (data.autoLoad && prevSessionId && data.sessionId !== prevSessionId) {\n" \
-             "                        reaskRef.current = prevSessionId;\n" \
-             "                        requestHistory(wsSocketRef.current, prevSessionId, false);\n" \
-             "                        return;"
+    branch = "if (data.autoLoad && prevSessionId && data.sessionId !== prevSessionId) {"
+    assert "                        reaskRef.current = prevSessionId;\n" \
+           "                        requestHistory(wsSocketRef.current, prevSessionId, false);\n" \
+           "                        return;" in hist
     assert branch in hist
     assert hist.index(branch) < hist.index("setCurrentSessionId(data.sessionId);")
 
@@ -363,13 +394,26 @@ def test_another_account_on_the_tab_gets_nothing_of_the_first():
     """MUTATION: no account check on reconnect - red; sign-out keeps the workflow panel - red."""
     src = _page()
     opened = _between(src, "socket.onopen = () => {", "socket.send(JSON.stringify({ type: 'get_sessions' }));")
-    assert "if (was && key(was) !== key(me)) {" in opened and "forgetAccountState();" in opened
+    assert "if (!me || (was && key(was) !== key(me))) {" in opened and "forgetAccountState();" in opened
     forget = _between(src, "const forgetAccountState = () => {", "\n    };")
     for needle in ("sessionCache.current = {};", "composerDraftsRef.current = new ComposerDrafts", "forgetWorkflowState();"):
         assert needle in forget, needle
     logout = _between(src, "onLogout={() => {", "}}")
     assert "forgetWorkflowState();" in logout
     assert src.count("forgetWorkflowState();\n") >= 4    # sign-out, two ended sessions, account change
+    # D1: what is on screen goes too, before the next account is shown.
+    for needle in ("setMessages([]);", "setRoomView(null);", "currentSessionIdRef.current = null;",
+                   "liveHistoryRef.current.take();", "setSessionViewerState({});"):
+        assert needle in forget, needle
+    # D2: fail closed - no answer from /api/auth/me is treated like another account.
+    assert "if (!me || (was && key(was) !== key(me))) {" in opened
+    assert ".catch(() => settle(null));" in opened
+    # The re-ask waits for the check, so the old view is not drawn again meanwhile.
+    hist = _between(src, "else if (data.type === 'history_update')", "const isActive")
+    assert "if (accountCheckRef.current) {\n                            deferredReaskRef.current = prevSessionId;" in hist
+    # D3: a session that ran out reaches /login past the app; the login page clears the panel.
+    login = (ROOT / "web" / "app" / "login" / "page.tsx").read_text(encoding="utf-8")
+    assert "useEffect(() => { forgetWorkflowState(); }, []);" in login
     store = (ROOT / "web" / "components" / "workflows" / "stores" / "workflowStore.ts").read_text(encoding="utf-8")
     assert "useWorkflowStore.persist.clearStorage();" in _between(store, "export function forgetWorkflowState", "\n}")
 
@@ -382,3 +426,20 @@ def test_the_legacy_copy_is_removed_and_a_blocked_storage_is_harmless():
     out = _run(CACHE, "(() => { m.purgeLegacySessionCache(); return 'ok'; })()", setup=(
         "globalThis.window = {get localStorage() { throw new Error('blocked'); }};"))
     assert out == "ok"
+
+
+def test_a_stored_answer_still_on_record_is_drawn_once():
+    """A5: between the save and turn_left_queue, the stored transcript and the replay both carry
+    the turn. The replayed round lands on the stored round's bubble (same turn, same round), and
+    a replayed tool start for a stored card is a duplicate start.
+    MUTATION: drop turnId from the history rebuild - red."""
+    rows = [_run(LIVE, f"m.historyMessage({json.dumps(w)}, {i}, 0)") for i, w in enumerate([
+        {"role": "user", "content": "q", "timestamp": "2026-01-01T10:00:00"},
+        {"role": "assistant", "content": "the answer", "timestamp": "2026-01-01T10:00:05",
+         "round": 1, "roundAnswer": True, "turnId": "t1"}])]
+    turn_rounds = ROOT / "web" / "components" / "chat" / "turnRounds.ts"
+    placed = _run(turn_rounds, f"m.placeRoundUpdate({json.dumps(rows)}, "
+                               "{round: 1, content: 'the answer', turnId: 't1', now: 99})")
+    assert placed["created"] is False and len(placed["messages"]) == 2
+    tool = _between(_page(), "else if (data.type === 'tool_update') {", "else if (data.type === 'cursor_animation')")
+    assert "if (existingIdx !== -1) return prev; // Duplicate start" in tool

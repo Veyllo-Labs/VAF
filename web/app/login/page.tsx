@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { forgetWorkflowState } from '@/components/workflows/stores/workflowStore';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     User, Lock, Eye, EyeOff, ArrowRight, ShieldCheck,
@@ -141,6 +142,9 @@ export default function LoginPage() {
     const setTheme = useThemeStore((s) => s.setTheme);
     const initTheme = useThemeStore((s) => s.init);
     useEffect(() => { initTheme(); }, [initTheme]);
+    // The workflow panel the tab kept (sessionStorage) belongs to whoever signed in before: a
+    // session that ran out reaches this page through the page gate, past the app's own clearing.
+    useEffect(() => { forgetWorkflowState(); }, []);
 
     // If network TLS/proxy mode is active, avoid showing login on :3000.
     // Redirect to HTTPS access port so login/session use the correct origin.

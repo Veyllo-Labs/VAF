@@ -42,6 +42,8 @@ import threading
 import time
 from typing import Optional
 
+from vaf.core.outage import OutageMemory
+
 _TTL_SECONDS = 10.0
 # What the row lookup answers when no ACTIVE account has the scope: nothing is allowed.
 _NO_ACCOUNT = object()
@@ -60,7 +62,7 @@ _cache_lock = threading.Lock()
 # each caller gets exactly what an unreachable store gives it - it only delays noticing
 # that the store is back by at most this long.
 _STORE_DOWN_S = 30.0
-_store_down: dict = {}   # database url -> monotonic time the store counts as down until
+_store_down = OutageMemory(_STORE_DOWN_S)   # keyed on the database url
 
 
 def _store_url() -> str:
@@ -96,14 +98,14 @@ def _fetch_permissions_row(user_scope_id: str):
             return user.permissions
 
     url = _store_url()
-    if time.monotonic() < _store_down.get(url, 0.0):
+    if _store_down.is_down(url):
         raise ConnectionError("auth store unreachable (asked again after a pause)")
     try:
         row = asyncio.run(_query())
     except Exception:
-        _store_down[url] = time.monotonic() + _STORE_DOWN_S
+        _store_down.failed(url)
         raise
-    _store_down.pop(url, None)
+    _store_down.reached(url)
     return row
 
 
@@ -255,7 +257,7 @@ def list_accounts() -> list:
                 for u in users if u.username and u.user_scope_id]
 
     url = _store_url()
-    if time.monotonic() < _store_down.get(url, 0.0):
+    if _store_down.is_down(url):
         return []
     try:
         try:
@@ -281,9 +283,9 @@ def list_accounts() -> list:
                 raise RuntimeError("account directory lookup failed or timed out")
             rows = box[0]
     except Exception:
-        _store_down[url] = time.monotonic() + _STORE_DOWN_S
+        _store_down.failed(url)
         return []
-    _store_down.pop(url, None)
+    _store_down.reached(url)
     return list(rows or [])
 
 
@@ -350,7 +352,7 @@ def invalidate_permissions_cache(user_scope_id: Optional[str] = None) -> None:
     allowlists: the route writes tools and workflows in one save. It also forgets a
     remembered store outage: whoever just saved reached the store, so the next lookup asks
     it at once instead of answering from the outage."""
-    _store_down.clear()
+    _store_down.forget()
     with _cache_lock:
         if user_scope_id is None:
             _cache.clear()

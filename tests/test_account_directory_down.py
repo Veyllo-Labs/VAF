@@ -13,6 +13,9 @@ import contextlib
 import pytest
 
 from vaf.auth import permissions
+from vaf.core.outage import OutageMemory
+
+_URL = "postgresql://test-store"
 
 
 class _Store:
@@ -48,8 +51,8 @@ def store(monkeypatch):
     monkeypatch.setattr(auth_db, "get_auth_db", fake.session)
     clock = {"t": 1000.0}
     monkeypatch.setattr(permissions.time, "monotonic", lambda: clock["t"])
-    monkeypatch.setattr(permissions, "_store_url", lambda: "postgresql://test-store")
-    monkeypatch.setattr(permissions, "_store_down", {})
+    monkeypatch.setattr(permissions, "_store_url", lambda: _URL)
+    monkeypatch.setattr(permissions, "_store_down", OutageMemory(permissions._STORE_DOWN_S))
     fake.clock = clock
     return fake
 
@@ -73,7 +76,7 @@ def test_a_store_that_is_back_is_asked_every_time(store):
     assert permissions.list_accounts() == []
     assert permissions.list_accounts() == []
     assert store.calls == 3
-    assert permissions._store_down == {}
+    assert not permissions._store_down.is_down(_URL)
 
 
 def test_the_outage_is_kept_per_database(store, monkeypatch):
@@ -100,7 +103,7 @@ def test_the_permission_row_remembers_the_outage_too(store, monkeypatch):
     store.clock["t"] += permissions._STORE_DOWN_S + 0.1
     assert permissions._fetch_permissions_row("ab12cd34-0000-4000-8000-000000000001") \
         is permissions._NO_ACCOUNT
-    assert store.calls == 2 and permissions._store_down == {}
+    assert store.calls == 2 and not permissions._store_down.is_down(_URL)
 
 
 async def _async(value):
@@ -112,6 +115,6 @@ def test_an_invalidation_forgets_the_outage(store):
     invalidates must not be answered from an outage another caller remembered.
     MUTATION: drop the clear in invalidate_permissions_cache - red."""
     permissions.list_accounts()
-    assert permissions._store_down
+    assert permissions._store_down.is_down(_URL)
     permissions.invalidate_permissions_cache()
-    assert permissions._store_down == {}
+    assert not permissions._store_down.is_down(_URL)

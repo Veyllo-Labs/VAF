@@ -11,8 +11,8 @@ for a fixed pause; the first success forgets it. A service that comes back is re
 again after the pause at the latest, and every caller gets exactly what an unreachable
 service gives it in the meantime.
 
-Named boundary: vaf/auth/permissions.py keeps its own dict (`_store_down`), the first
-instance of this pattern; its tests pin that representation, so it is not converted here.
+Users: the auth store (vaf/auth/permissions.py, the account directory and the permission
+row) and the local API (vaf/core/web_interface.py, the push fallback).
 """
 from __future__ import annotations
 

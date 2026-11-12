@@ -126,10 +126,14 @@ def fold_name(name: Any) -> str:
 
 
 #: Punctuation that belongs to the name's own spelling rather than to the sentence around it
-#: ("C#", "100%", "R&D", "a/b", "x_y"). Symbols (Unicode category S: "+", a heart) are never
-#: sentence punctuation either, so "@C++." still reaches a member called "C++".
-_NAME_PUNCTUATION = frozenset("#%&*@/\\_")
+#: ("C#", "100%", "R&D", "a*b", "a/b", "x_y"). Symbols (Unicode category S: "+", a heart) are
+#: never sentence punctuation either, so "@C++." still reaches a member called "C++".
+_NAME_PUNCTUATION = frozenset("#%&*/_")
 _POSSESSIVES = ("'s", "’s")
+#: The longest name a mention can give. A member's display name is cut to 80 characters and a
+#: label adds a few digits, so nothing longer can name anybody; the bound keeps the work of one
+#: line linear whatever follows the "@" (a line may carry 65,536 characters).
+MENTION_MAX_CHARS = 128
 
 
 def _is_sentence_punctuation(char: str) -> bool:
@@ -137,15 +141,27 @@ def _is_sentence_punctuation(char: str) -> bool:
     return unicodedata.category(char)[0] == "P" and char not in _NAME_PUNCTUATION
 
 
-def _shorter(word: str) -> str:
-    """``word`` with ONE sentence ending taken off its end: a punctuation mark, or a trailing
-    possessive "'s". The word unchanged when it has none."""
-    if word and _is_sentence_punctuation(word[-1]):
-        return word[:-1]
+def _shorter_end(word: str, end: int) -> int:
+    """Where ``word[:end]`` ends with ONE sentence ending taken off: a punctuation mark, or a
+    trailing possessive "'s". ``end`` itself when it has none. Constant work per call: only
+    the last characters are looked at, nothing is copied."""
+    if end > 0 and _is_sentence_punctuation(word[end - 1]):
+        return end - 1
     for ending in _POSSESSIVES:
-        if word.lower().endswith(ending) and len(word) > len(ending):
-            return word[:-len(ending)]
-    return word
+        size = len(ending)
+        if end > size and word[end - size:end].lower() == ending:
+            return end - size
+    return end
+
+
+def _trimmed_end(word: str) -> int:
+    """Where ``word`` ends with every sentence ending taken off its end."""
+    end = len(word)
+    while True:
+        shorter = _shorter_end(word, end)
+        if shorter == end:
+            return end
+        end = shorter
 
 
 def trim_name(word: Any) -> str:
@@ -153,13 +169,19 @@ def trim_name(word: Any) -> str:
     ("(Mia)" -> "Mia", "Dr." -> "Dr") and a trailing possessive "'s". What is left is the
     shortest of `mention_candidates`, so "@" + it, typed back, names the same thing."""
     text = str(word or "")
-    while text and _is_sentence_punctuation(text[0]):
-        text = text[1:]
-    while True:
-        shorter = _shorter(text)
-        if shorter == text:
-            return text
-        text = shorter
+    start = 0
+    while start < len(text) and _is_sentence_punctuation(text[start]):
+        start += 1
+    text = text[start:]
+    return text[:_trimmed_end(text)]
+
+
+def name_key(name: Any) -> str:
+    """A name reduced the way a mention reduces it: folded (`fold_name`) and with its sentence
+    endings taken off its end. Two members with one key can be meant by one mention ("Bob" and
+    "bob", "Bob" and "Bob."), so they are told apart by labels (`Room.labels`)."""
+    folded = fold_name(name)
+    return folded[:_trimmed_end(folded)]
 
 
 def mention_candidates(text: Any) -> List[str]:
@@ -173,16 +195,23 @@ def mention_candidates(text: Any) -> List[str]:
     "?", "!", ",", ":", "：", "。") or a possessive "'s". "C++." gives "C++." and "C++"; the
     "+" is no sentence ending, so "C" is never a candidate. A symbol (a heart, "+") or a letter
     of a script written without spaces continues the word: "@Mia你好" is no mention of Mia (the
-    person puts a space after the name)."""
+    person puts a space after the name). A form longer than `MENTION_MAX_CHARS` names nobody
+    and is not offered; the endings are walked by index, so a word of 65,535 full stops costs
+    one pass and no copies."""
     stripped = str(text or "").lstrip()
     if not stripped.startswith("@"):
         return []
     parts = stripped[1:].split(None, 1)
     word = parts[0] if parts else ""
     out: List[str] = []
-    while word and word not in out:
-        out.append(word)
-        word = _shorter(word)
+    end = len(word)
+    while end > 0:
+        if end <= MENTION_MAX_CHARS:
+            out.append(word[:end])
+        shorter = _shorter_end(word, end)
+        if shorter == end:
+            break
+        end = shorter
     return out
 
 
@@ -2772,45 +2801,57 @@ class Room:
         return mode
 
     def label_for(self, peer_id: str) -> str:
-        """What a human calls this member: their name plus a short tag, "Codex51".
-
-        Two agents joining as "Codex" are indistinguishable in a transcript, and a
-        person reading it has no way to ask one of them anything. The tag is derived
-        from the peer handle, so it survives restarts and needs no counter written into
-        the room - the kind of shared, incrementing state this store spends its whole
-        design avoiding.
-
-        UNIQUE WITHIN THE ROOM, which is the property that matters and the reason this
-        lives on the room rather than in a helper: a collision is resolved by taking
-        more of the digest, and a room without name collisions has no undeliverable
-        mentions at all.
-        """
-        members = self.store.members()
-        record = members.get(peer_id) or {}
-        base = str(record.get("display") or peer_id)
-
-        # A UNIQUE NAME IS LEFT ALONE. Every name used to carry a tag, which made
-        # "Nobel" into "Nobel88" for no reason anybody could see: the name was already
-        # the only one in the room. A tag is the answer to a COLLISION, so it appears
-        # when there is one and not before.
-        # Compared as names are compared (`fold_name`): "Bob" and "bob", or "Straße" and
-        # "STRASSE", are one name to a mention, so they are a collision here too and both
-        # members keep a label that tells them apart.
-        same = sorted(other for other, rec in members.items()
-                      if fold_name(rec.get("display") or other) == fold_name(base))
-        if len(same) < 2:
-            return base
-
-        # Two agents called Codex: they become Codex1 and Codex2, numbered by the order
-        # their handles sort in. Small numbers rather than a digest, because a human
-        # reads them back to somebody else - and stable, because the ordering comes from
-        # the handles, which do not move. A newcomer joining later takes the next free
-        # number without renaming anybody who is already being spoken to.
-        return f"{base}{same.index(peer_id) + 1}" if peer_id in same else base
+        """What a human calls this member: their name, plus a small number when another
+        member could be meant by the same mention ("Codex1", "Codex2"). See `labels`."""
+        return self.labels().get(peer_id, str(peer_id))
 
     def labels(self) -> Dict[str, str]:
-        """Every member's human label, resolved together so they cannot clash."""
-        return {peer: self.label_for(peer) for peer in self.store.members()}
+        """Every member's human label, resolved together so they cannot clash.
+
+        Two agents joining as "Codex" are indistinguishable in a transcript, and a
+        person reading it has no way to ask one of them anything.
+
+        A UNIQUE NAME IS LEFT ALONE. Every name used to carry a tag, which made "Nobel"
+        into "Nobel88" for no reason anybody could see. A tag is the answer to a
+        COLLISION, and a collision is what a mention cannot tell apart: names with one
+        `name_key` (folded, sentence endings taken off its end), so "Bob" and "bob",
+        "Straße" and "STRASSE", "Bob" and "Bob." are each one collision.
+
+        The members of a collision are numbered in the order their handles sort in
+        (stable: the handles do not move), and a number is skipped when the label it
+        gives could already mean somebody: its fold or its key equals any member's name,
+        name key, or a label given before it. So with "Bob", "bob" and "Bob1" in one room
+        the first two become "Bob2" and "bob3", and every label names exactly one member.
+        Small numbers rather than a digest, because a human reads them back to somebody
+        else. UNIQUE WITHIN THE ROOM is the property that matters, and the reason this
+        lives on the room rather than in a helper: a room whose labels are unique has no
+        member a mention cannot reach.
+        """
+        members = self.store.members()
+        names = {peer: str(rec.get("display") or peer) for peer, rec in members.items()}
+        groups: Dict[str, List[str]] = {}
+        for peer in sorted(names):
+            groups.setdefault(name_key(names[peer]), []).append(peer)
+        taken = set()
+        for name in names.values():
+            taken.add(fold_name(name))
+            taken.add(name_key(name))
+        out = {peer: name for peer, name in names.items()
+               if len(groups[name_key(name)]) < 2}
+        for key in sorted(groups):
+            if len(groups[key]) < 2:
+                continue
+            number = 0
+            for peer in groups[key]:
+                while True:
+                    number += 1
+                    label = f"{names[peer]}{number}"
+                    if fold_name(label) not in taken and name_key(label) not in taken:
+                        break
+                taken.add(fold_name(label))
+                taken.add(name_key(label))
+                out[peer] = label
+        return out
 
     def peers_named(self, name: str) -> List[str]:
         """Every member a name can mean: by display name or by label, compared folded.

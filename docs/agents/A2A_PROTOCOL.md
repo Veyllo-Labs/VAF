@@ -1101,11 +1101,16 @@ terminal's handle, whatever it presents.
 
 ### Display names carry a tag
 
-What a human calls a member is their name plus a short derived number: `Codex51`. Two
-agents joining as "Codex" are otherwise indistinguishable in a transcript, and nobody can
-address one of them. The tag is derived from the handle, so it survives restarts and needs
-no counter written into the room; a collision is resolved by taking more digits. **It is
-unique within the room**, which is what makes every mention deliverable.
+What a human calls a member is their name, plus a small number when another member could be
+meant by the same mention: `Codex1` and `Codex2`. Two agents joining as "Codex" are otherwise
+indistinguishable in a transcript, and nobody can address one of them. A collision is two
+names with one `name_key` (folded and with sentence endings taken off their end), so "Bob" and
+"bob", "Straße" and "STRASSE", and "Bob" and "Bob." are each one. The members of a collision
+are numbered in the order their handles sort in (stable across restarts, no counter written
+into the room), and a number is skipped when the label it would give could already mean
+somebody: with members "Bob", "bob" and "Bob1" the first two become `Bob2` and `bob3`
+(`Room.labels`). **Every label is unique within the room**, which is what makes every member
+reachable by a mention.
 
 A leading `@Name` addresses one member: `@Codex51 can you look`. Only a mention at the
 START addresses a message - `ask @Bob about it` is a sentence ABOUT Bob said to everyone,
@@ -1126,9 +1131,12 @@ room: `resolve_mention(text, known)`. The mention is the first whitespace-delimi
 a leading "@"; a space between the "@" and the word is skipped, as it always was (`@ Bob hi`
 names Bob). Its candidates are that word as it stands (`@O'Brien`, `@C++`, `@a2a:bob`) and then
 the word with one sentence ending after another taken off its end: a punctuation mark of any
-script (`.`, `?`, `!`, `,`, `:`, `。`) or a possessive "'s". Punctuation that is part of a name's
-spelling (`#`, `%`, `&`, `*`, `/`, `_`) and symbols (`+`, a heart) are not sentence endings, so
-`@C++.` gives `C++.` and `C++`, never `C`. `known(name)` answers with every party the room
+script (`.`, `?`, `!`, `,`, `:`, `。`, also `@` and a backslash) or a possessive "'s".
+Punctuation that is part of a name's spelling (exactly these six: `#`, `%`, `&`, `*`, `/`,
+`_`) and symbols (`+`, a heart, an emoji) are not sentence endings, so `@C++.` gives `C++.` and
+`C++`, never `C`. A form longer than 128 characters (`MENTION_MAX_CHARS`; a display name is cut
+to 80) names nobody and is not offered, and the endings are walked by index: a line of `@` and
+65,535 full stops costs one pass and no copies. `known(name)` answers with every party the room
 knows by that name, and the mention names a party only when all candidates together give
 exactly ONE: `@Bob.` reaches Bob in a room with only Bob; with members "Bob" and "Bob." in one
 room `@Bob.` is ambiguous and goes to the room, while `@Bob` still reaches Bob. So a member
@@ -1139,11 +1147,12 @@ word without a trailing `,`, `:` or `;`); a mention that has become ambiguous go
 look-alike names). Names are compared NFC-normalised and case-folded (`fold_name`: `@STRASSE`
 names "Straße", a decomposed "e" + U+0308 names "Zoë"); combining marks stay with their letter
 (`@राम`). A symbol or a letter of a script written without spaces continues the word, so
-`@Mia你好` and `@Mia♥` name nobody called "Mia" and the person puts a space after the name.
-`Room.address_from_mention` asks it with the member table (`Room.peers_named`: display names
-and labels together). Labels are made unique by the same folding: members "Bob" and "bob" are
-a collision and become `Bob1` and `bob2`, each reachable by its label, while `@bob` goes to
-the room.
+`@Mia你好`, `@Mia♥` and `@Mia😊` name nobody called "Mia" and the person puts a space after the
+name. `Room.address_from_mention` asks it with the member table (`Room.peers_named`: display
+names and labels together). Members of one collision keep a label each and are reachable by
+it: with "Bob" and "bob" in a room `@bob` goes to the room and `@Bob1` and `@bob2` reach one
+member each; with "Bob" and "Bob." `@Bob` still reaches Bob, `@Bob.` goes to the room, and
+`@Bob.2` reaches the member called "Bob.".
 
 The Veyllo App room (`vaf/core/app_link/room.py`,
 [VEYLLO_APP.md](../integrations/VEYLLO_APP.md#the-veyllo-app-room)) asks the same function

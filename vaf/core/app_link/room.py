@@ -509,7 +509,10 @@ def _build(scope: str, username: str, sids: Tuple[str, str],
                 elif ask or kind == origin.APP_AGENT_KIND:
                     line = _line(lid, APP_AGENT, VAF_AGENT, content, ts)
                 else:
-                    line = _line(lid, PERSON, VAF_AGENT, content, ts)
+                    # `msg`: the line's id as the person's page sent it (the message id the
+                    # turn carries), the same before and after the turn stores it.
+                    line = _line(lid, PERSON, VAF_AGENT, content, ts,
+                                 msg=str(meta.get("channel_message_id") or ""))
                     if turn:
                         turn_anchor[turn] = (ts, seq)
             elif role == "assistant" and not getattr(message, "tool_calls", None):
@@ -550,7 +553,9 @@ def _build(scope: str, username: str, sids: Tuple[str, str],
                          scrub_text(text, forgotten.get(sid) or {}), ts, pending=True)
         else:
             line = _line(f"turn:{turn}", PERSON, VAF_AGENT,
-                         scrub_text(text, forgotten.get(sid) or {}), ts, pending=True)
+                         scrub_text(text, forgotten.get(sid) or {}), ts, pending=True,
+                         msg=str((getattr(task, "metadata", None) or {}).get("channel_message_id")
+                                 or ""))
             turn_anchor.setdefault(turn, (ts, seq))
         lines.append(((ts, seq, 0, 0), line))
     for turn, seq, ts, order, line in deferred:
@@ -635,14 +640,27 @@ def _deliver(scope: str, target: Dict[str, Any], line_id: str, text: str, ts: fl
     return "kept"
 
 
+def _client_line_id(client_id: Any) -> str:
+    """The id the person's page chose for a line, when it is a UUID (canonical form), else "".
+    The page names its line so that, when it stopped waiting for the answer, it can find out
+    whether the line was stored anyway (`msg` of a line); an id is unique per page send."""
+    try:
+        return str(uuid.UUID(str(client_id or "").strip()))
+    except (ValueError, AttributeError, TypeError):
+        return ""
+
+
 def post(user_scope_id: Any, username: str, text: Any,
-         resend_of: Optional[str] = None) -> Dict[str, Any]:
+         resend_of: Optional[str] = None, client_id: Optional[str] = None) -> Dict[str, Any]:
     """A line the person writes in the room on VAF: to the agent in the Veyllo App, or, led
     by "@" and the name of the account's agent, to VAF's agent (``addressee``). The account is
     the caller's; nothing here reads an account or a device from the line. Raises
     ``RoomRefused`` and then stores and sends nothing. Answers ``{id, to, state, device}``.
     ``resend_of`` names an earlier line of the person to the app's agent that this one sends
-    again; that line then stops offering a resend (an id that is no such line is ignored)."""
+    again; that line then stops offering a resend (an id that is no such line is ignored).
+    ``client_id`` is the id the page chose for the line (`_client_line_id`): the line keeps it
+    (as its id, and for a line to VAF's agent as the message id its turn carries), so a page
+    that stopped waiting can recognise it in the room."""
     from vaf.core.app_link import bridge
     scope = str(user_scope_id or "").strip()
     body = str(text or "").strip()
@@ -664,7 +682,11 @@ def post(user_scope_id: Any, username: str, text: Any,
         raise RoomRefused(_no_capable_reason(standing), 409)
     if not bridge._rate_ok((target or standing[0])["device_id"]):
         raise RoomRefused("rate_limited", 429)
-    line_id = str(uuid.uuid4())
+    # The page's own id for the line when it sent one and no room line carries it yet (an id
+    # used twice would make two lines one for the delivery record); a fresh one otherwise.
+    line_id = _client_line_id(client_id)
+    if not line_id or _line_text(scope, line_id) is not None:
+        line_id = str(uuid.uuid4())
     now = time.time()
     if to == APP_AGENT:
         meta = {"id": line_id, "to": APP_AGENT, "device": str(target.get("model") or ""),
@@ -679,8 +701,11 @@ def post(user_scope_id: Any, username: str, text: Any,
             # Not stored (the chat cannot be written, or the line was sent again meanwhile from
             # another screen): nothing is delivered, so the app never holds a line the room
             # does not show.
+            # "Sent again" only on a chat that was read and holds the resend: a chat that
+            # cannot be read confirms nothing, and that is the "failed" refusal.
             try:
-                sent_again = guard is not None and not guard(_load(devices.chat_session_id(scope)))
+                stored = _load(devices.chat_session_id(scope)) if guard is not None else None
+                sent_again = stored is not None and not guard(stored)
             except Exception:
                 sent_again = False
             if sent_again:

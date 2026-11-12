@@ -347,8 +347,9 @@ and the handle of your agent's name or `@VAF`. The handle is the first word of t
 without sentence punctuation at either end: "Mia" for "Mia Lisa", "Mia." or "(Mia)", "Dr" for
 "Dr. Mia", "O'Neil" for "O'Neil". The first word after "@" counts, whole or with sentence
 punctuation taken off its end, in any case form: `@Mia.`, `@mia?` and `@MIA, hi` name Mia,
-`@Miami` and `@Mia♥` do not, and a space between the "@" and the name is allowed (`@ Mia hi`).
-In a script written without spaces put a space after the name (`@Mia 你好`). It is the same
+`@Miami`, `@Mia♥` and `@Mia😊` do not (a symbol or an emoji continues the word), and a space
+between the "@" and the name is allowed (`@ Mia hi`). So put a space after the name, also in a
+script written without spaces (`@Mia 你好`); the empty room says so in every language. It is the same
 leading-mention rule as in an agent room
 ([A2A_PROTOCOL.md](../agents/A2A_PROTOCOL.md#display-names-carry-a-tag)), so `ask @VAF` in
 the middle of a line still goes to the app's agent. The composer's hint names that word, and

@@ -736,7 +736,8 @@ in three minutes, each about 40 s of load and compile).
   logs/vllm_server.log. Switch to llama.cpp in Settings > AI & Model or with `vaf engine
   llama`, or switch to vLLM again to retry." through the runner's turn refusal
   (`headless_runner.turn_refusal_reason`), shown and stored with the message; a messenger
-  turn is only logged.
+  turn is only logged, except a Veyllo App turn, which is stored in the account's app chat
+  (the Veyllo App room's record) and sends nothing to the device.
 - **The tray** starts nothing while the failure is remembered and logs it once.
 - **The status:** `local_engine.status_row` gives `degraded` with code `vllm_failed` and the
   cause (`vaf health`, Update and Repair), `state()["vllm"]["start_failure"]` carries it to

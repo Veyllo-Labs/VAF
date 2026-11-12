@@ -318,8 +318,8 @@ def test_every_pairing_refusal_has_a_sentence():
 
 
 def _room_refusal_codes():
-    """Every code `room.post` can refuse with, read from the code: the literal first argument
-    of each `RoomRefused(...)`, and for a code computed by a function of the module (as
+    """Every code `room.post` can refuse with, read from the code: the literal code of each
+    `RoomRefused(...)` (positional or `code=`), and for a code computed by a function of the module (as
     `_no_capable_reason`) every string that function returns."""
     import ast
     from pathlib import Path
@@ -329,10 +329,14 @@ def _room_refusal_codes():
     functions = {node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
     codes = set()
     for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call) and getattr(node.func, "id", "") == "RoomRefused"
-                and node.args):
+        if not (isinstance(node, ast.Call) and getattr(node.func, "id", "") == "RoomRefused"):
             continue
-        first = node.args[0]
+        # The code as the first positional argument or as `code=`; a call with neither is a
+        # refusal this test cannot read, which fails it.
+        keyword = [k.value for k in node.keywords if k.arg == "code"]
+        first = node.args[0] if node.args else (keyword[0] if keyword else None)
+        if first is None:
+            raise AssertionError(f"a RoomRefused without a code: {ast.dump(node)}")
         if isinstance(first, ast.Constant):
             codes.add(first.value)
         elif isinstance(first, ast.Call) and getattr(first.func, "id", "") in functions:

@@ -50,7 +50,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   reaches "Straße"), and names written with marks (`@राम`) are matched whole. A mention that
   could mean two members (two members called "Bob" and "bob", or "Bob" and "Bob.") goes to
   the whole room instead of to one of them, and each such member keeps a label of its own to
-  be addressed by; no mention reaches a different member than it did before.
+  be addressed by (`@Bob1`, `@Bob.2`); no mention reaches a different member than it did
+  before. An emoji or a symbol written right after the name is part of the word (`@Mia😊`
+  names nobody called "Mia"), so put a space after the name. The same rule decides in the
+  Veyllo App room whether a line goes to your VAF agent.
 
 - **Stopping a browser task no longer keeps the browser busy.** Pressing Stop while the
   browser was not answering used to leave VAF waiting for it in the background for about a

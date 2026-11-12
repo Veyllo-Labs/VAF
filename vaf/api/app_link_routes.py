@@ -78,6 +78,9 @@ class RoomLine(BaseModel):
     # id of one of the caller's own earlier lines this one sends again (room.post checks it).
     text: str = ""
     resend_of: str = ""
+    # The page's own id for the line (a UUID), so a page that stopped waiting for the answer
+    # can recognise the line in the room; anything else is replaced by the server's id.
+    client_id: str = ""
 
 
 def _caller(request: Request) -> Dict[str, Any]:
@@ -283,7 +286,7 @@ async def write_into_room(body: RoomLine, request: Request):
     scope, username = _own(request)
     try:
         answer = await asyncio.to_thread(room.post, scope, username, body.text,
-                                         body.resend_of or None)
+                                         body.resend_of or None, body.client_id or None)
     except room.RoomRefused as refused:
         return _no_store({"detail": _ROOM_REFUSALS.get(refused.code, refused.code),
                           "code": refused.code}, refused.status)

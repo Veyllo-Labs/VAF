@@ -5478,10 +5478,14 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         await websocket.send_json({"type": "room_transcript", **payload})
                         # Read up to the newest line of what was SENT, after it went out: a
                         # line arriving meanwhile stays new. A move tells the account's screens
-                        # (the row's count); the poll that follows moves nothing more.
+                        # (the row's count); the poll that follows moves nothing more. A
+                        # request with "seen": false only looks (the page checking whether a
+                        # line it gave up on arrived, maybe while another chat is open), and
+                        # marks nothing read that the person has not seen.
                         newest = max((float(m.get("ts") or 0) for m in payload["messages"]),
                                      default=0.0)
-                        if await asyncio.to_thread(app_room.mark_seen, user_scope_id, newest):
+                        if cmd.get("seen", True) is not False and await asyncio.to_thread(
+                                app_room.mark_seen, user_scope_id, newest):
                             app_room.changed(user_scope_id)
                     except Exception as e:
                         log("API", f"open_app_room failed: {e}", "ERROR")

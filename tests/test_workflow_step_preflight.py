@@ -325,6 +325,8 @@ def test_create_refuses_without_writing(run, tmp_path):
     # a substitution is a command of its own, read whole: its download counts
     ("echo $(pip install x)", True), ("ls $(git rev-parse --show-toplevel)", False),
     ("cd \"$(npm ci)\"", True),
+    # read by the earlier reading as its own command: either reading counts
+    ("echo $(( ) ) pip install x", True),
 ])
 def test_command_needs_network(command, downloads):
     from vaf.tools.bash import command_needs_network

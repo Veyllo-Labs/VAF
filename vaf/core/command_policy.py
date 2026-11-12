@@ -67,7 +67,7 @@ runner's candidates and the readings of a `$((`, each nearly the whole text agai
 second one in characters (_RUNNER_TEXT_SLACK); the fork-bomb search is three plain
 searches. The readings stay linear in the command's length; shlex's own tokenizer is not
 on one word of hundreds of kilobytes (`x=` repeated: 20 s at 1 MB, the same before), so a
-command over _MAX_COMMAND_BYTES (128 KB) is refused as unreadable before it is read.
+command over _MAX_COMMAND_CHARS (128 K characters) is refused as unreadable before it is read.
 
 Every verdict is joined with the FROZEN reading (vaf/core/command_reading_frozen.py, the
 check as it read commands before substitutions were carried): the command is refused
@@ -93,18 +93,25 @@ shell word (quote-aware) and `in`. The word elsewhere, also at the start of a li
 `chroot`, `busybox`, `runuser`, `coproc`, `find -exec`, `watch`) hide the command they run,
 also behind a substitution (`flock f $(true) cmd`), as their plain forms did before; a
 descriptor named through a variable (`exec {fd}< ...; bash /dev/fd/$fd`) is not followed.
+A redirection glued to the target (`rm -rf ~>/dev/null`) and a `case` body at the top level
+(`case x in x) rm -rf /;; esac`) are not read, by either reading.
 
-NAMED BOUNDARY, comments and heredocs: a `#` is not read as a comment and `<<` opens no
-heredoc, so nothing is ever hidden from the check by either: every line of a heredoc body
-is read as a command line, and dangerous-looking prose in a body is refused
-(`cat <<'EOF'` with "rm -rf /" in its text). The other side of that: an apostrophe in a
-comment or in a heredoc body opens a quote that swallows every later line (`echo hi #
-it's` then a second line), and a comment that ends in a backslash joins the next line to it
-(`echo hi #\\` then a second line). A heredoc line is refused when it STARTS with what
-reads as a command (`rm -rf / was the bug`), not when it only mentions one. Design rule for
-any reading of these, now held by the frozen reading: a new reading may only ADD refusals
-to the existing reading, never remove one. A lexer that hid comments and heredoc bodies
-from the check was measured to lose refusals that bash runs.
+NAMED BOUNDARY, comments and heredocs. Neither reading takes a `#` as a comment, so an
+apostrophe in a comment opens a quote that swallows later lines (`echo hi # it's` then a
+second line), as before, and a comment ending in a backslash joins the next line. The
+frozen reading reads every line of a heredoc body as a command line: a body line that
+STARTS with what reads as a command is refused (`rm -rf / was the bug`), one that only
+mentions it is not, and an apostrophe in a body opens a quote there too. This reading takes
+a heredoc body as data where it is surely one (`<<WORD`, `<<'WORD'`, `<<-WORD` at the top
+level, outside quotes, `${...}` and `$[...]`, with its delimiter line present): no command
+lines, no nested readings, so a file written through `cat > f <<'EOF'` passes when the
+frozen reading lets it; an unquoted body's substitutions are read as commands, never as a
+program word, and a body fed to a shell is that shell's script. A wrong guess here can
+only cost refusals this reading adds, never one of the frozen reading. Its accepted cost: a
+program or shell text from a substitution (the classes this reading adds) inside a heredoc
+body that reaches a shell another way than as its own input (`cat <<'EOF' | bash` with
+`eval "$(...)"` in the body) is not refused. Design rule for any reading: a new one may only
+ADD refusals to the existing reading, never remove one; the frozen reading holds it.
 
 Python that moves files over FTP is the same `ftp_transfer` as an FTP client
 (`python_code_categories`): an import of ftplib, a string naming it (what
@@ -130,11 +137,14 @@ Stdlib-only on purpose - it is imported on the dispatch hot path.
 """
 from __future__ import annotations
 
+import logging
 import posixpath
 import re
 import shlex
 from dataclasses import dataclass, field
 from typing import Iterable, List, Optional
+
+_log = logging.getLogger(__name__)
 
 # Executables that read a script from stdin: the sink half of "fetch | shell". `source`
 # and `.` run a file as shell code, so `source <(curl ...)` is the same pipe.
@@ -194,6 +204,22 @@ _PYTHON_RUNNERS = frozenset({"uv", "uvx", "poetry", "pipenv", "pdm", "hatch", "r
                              "pixi"})
 # The words between a runner and its command that select what it does (`uv tool run`).
 _RUNNER_VERBS = frozenset({"run", "exec", "tool"})
+# Flags of a runner known to take no value (`npx --help` on this machine for npx, the tools'
+# documented flags for the others). After one, the next word is the command, not a value;
+# after any other flag both readings stay (_runner_commands).
+_VALUELESS_RUNNER_FLAGS = {
+    "uv": frozenset({"--frozen", "--locked", "--no-sync", "--isolated", "--offline", "-q",
+                     "--quiet", "-v", "--verbose", "--no-project", "--active", "--exact",
+                     "--no-dev", "--all-extras"}),
+    "uvx": frozenset({"--isolated", "--offline", "-q", "--quiet", "-v", "--verbose"}),
+    "npx": frozenset({"-y", "--yes", "--no", "-q", "--quiet", "--workspaces",
+                      "--include-workspace-root"}),
+    "npm": frozenset({"-y", "--yes", "--no", "-q", "--quiet", "--workspaces",
+                      "--include-workspace-root"}),
+    "pipx": frozenset({"-q", "--quiet", "-v", "--verbose", "--no-cache", "--pypackages"}),
+    "pnpm": frozenset({"-s", "--silent"}),
+    "yarn": frozenset({"-s", "--silent"}),
+}
 # Package runners, and the verbs after which they start a command. An empty set: the first
 # plain word is the command (`npx eslint .`). Otherwise the runner starts a command only
 # after one of its verbs (`npm exec`, `pnpm dlx`, `pipx run`); any other first plain word
@@ -258,13 +284,14 @@ _SUBST_PROC = "\x02"
 # (measured: 100 KB in 10 s, 1 MB in 78 s).
 _RUNNER_TEXT_SLACK = 64 * 1024
 # The frozen reading's readings, scaled to the text's length: as many as fit into this much
-# text read in all, at least _FROZEN_MIN_READINGS, at most MAX_NESTED_COMMANDS.
-_FROZEN_TEXT_BUDGET = 256 * 1024
-# The longest command the check reads at all. A person approving a command cannot read more
-# than this either, and both readings together, with shlex's own tokenizer quadratic on one
-# long word, took up to 44 s at 1 MB (measured); a longer command is refused as unreadable.
-_MAX_COMMAND_BYTES = 128 * 1024
-_FROZEN_MIN_READINGS = 2
+# text read in all, at most MAX_NESTED_COMMANDS: all 64 up to 12 KB, 6 at the length cap.
+# Measured: 64 readings of its worst shape cost about 1 s at 13 KB.
+_FROZEN_TEXT_BUDGET = 768 * 1024
+# The longest command the check reads at all, in characters. A person approving a command
+# cannot read more than this either, and both readings together, with shlex's own tokenizer
+# quadratic on one long word, took up to 44 s at 1 MB (measured); a longer command is
+# refused as unreadable.
+_MAX_COMMAND_CHARS = 128 * 1024
 
 CATEGORY_REASONS = {
     "pipe_to_shell": "downloads code from the network and pipes it into a shell",
@@ -283,6 +310,8 @@ CATEGORY_REASONS = {
                        "too deep; split it into several commands",
     "too_long": "is longer than anyone can review before it runs; write the text to a file "
                 "with the file tool and run the file",
+    "unreadable": "could not be read by this check; write it as several simpler commands, or "
+                  "put the text into a file",
     "remote_login": "logs in to another machine with this computer's own SSH setup; use the "
                     "ssh tool, which keeps each account's key and servers apart and answers "
                     "the password prompt",
@@ -317,10 +346,17 @@ _OPAQUE_REASONS = {
     "arith_backtick": "uses a backtick inside `$(( ))`, where bash may run the text as a command "
                       "instead of evaluating it; write `$(...)` instead of the backticks "
                       "(`echo $(( $(date +%s) - 10 ))`)",
-    "lines": "takes its program name from a command substitution at the start of a line or "
-             "after a separator, so the text being approved is not the text that will run; "
-             "if it is text spanning lines (a continued line, quoted text, a heredoc or a "
+    "lines": "; if it is text spanning lines (a continued line, quoted text, a heredoc or a "
              "code block), join the lines, or write the text to a file",
+    "frozen": "has a substitution where a command may start: after a `;`, `&&` or `|`, also "
+              "one inside quotes, or at the start of a line, it reads as the start of a new "
+              "command; write the substitution's result into a variable first, or put the "
+              "text into a file",
+    "runner_args": "gives a runner a command substitution among its words after a flag this "
+                   "check does not know, so the substitution may be read as the program the "
+                   "runner starts; put its result into a variable first "
+                   "(`files=$(git ls-files tests); uv run --frozen pytest $files`), or write "
+                   "the flag as `--flag=value`",
     "unreadable": "has a `case` statement inside a substitution, which this check cannot "
                   "read; write the case as a command of its own",
 }
@@ -335,14 +371,15 @@ _WAY_OUT = {
 # What each profile refuses outright. Everything else in CATEGORY_REASONS is a note.
 _BLOCKING = {
     "host": ("fork_bomb", "device_write", "destructive_removal", "pipe_to_shell",
-             "opaque_command", "nested_too_deep", "remote_login", "ftp_transfer", "too_long"),
+             "opaque_command", "nested_too_deep", "remote_login", "ftp_transfer", "too_long",
+             "unreadable"),
     # The jail has no network and its workspace is disposable; only what reaches the
     # machine or the jail root is refused.
     "jailed": ("fork_bomb", "device_write", "destructive_removal", "opaque_command",
-               "nested_too_deep", "too_long"),
+               "nested_too_deep", "too_long", "unreadable"),
     # Another machine: see the module docstring for why the fetch-into-shell is only named.
     "remote": ("fork_bomb", "device_write", "destructive_removal", "opaque_command",
-               "nested_too_deep", "too_long"),
+               "nested_too_deep", "too_long", "unreadable"),
 }
 
 
@@ -469,6 +506,12 @@ def _split_segments(command: str) -> List[tuple]:
         segments.append((connector, "".join(buf).strip(), subs))
         buf, subs = [], []
 
+    # Heredocs of this level waiting for their body after the line ends: (delimiter, quoted,
+    # strip_tabs, segment that wrote `<<`). Only where it is surely one (_heredoc_word, a
+    # delimiter line exists); otherwise its lines are read as command lines.
+    pending: List[tuple] = []
+    lines: Optional[_HeredocLines] = None
+
     while i < n:
         ch = command[i]
         nxt = command[i + 1] if i + 1 < n else ""
@@ -495,6 +538,40 @@ def _split_segments(command: str) -> List[tuple]:
             else:
                 _put(ch)
             i += 1
+            continue
+        if (ch == "<" and nxt == "<" and not depth_stack and command[i + 2:i + 3] != "<"
+                and command[i - 1:i] != "<" and len(pending) < 8
+                and not _open_expansion("".join(buf[-200:]))):
+            word = _heredoc_word(command, i)
+            line_end = command.find("\n", i) if word is not None else -1
+            if word is not None and line_end >= 0:
+                end, delim, quoted, strip_tabs = word
+                lines = lines or _HeredocLines(command)
+                if lines.after(delim, line_end + 1, strip_tabs) is not None:
+                    pending.append((delim, quoted, strip_tabs, len(segments)))
+                    buf.append(command[i:end])
+                    i = end
+                    continue
+        if ch == "\n" and pending and not depth_stack:
+            # The bodies are data for this reading: not command lines, no reading spent. An
+            # unquoted one's substitutions run and are read, never as a program word.
+            pos = i + 1
+            for delim, quoted, strip_tabs, segment in pending:
+                span = lines.after(delim, pos, strip_tabs) if lines else None
+                if span is None:
+                    break
+                text = command[pos:span[0]]
+                target = subs if segment >= len(segments) else segments[segment][2]
+                found = [] if quoted else _heredoc_substitutions(text)
+                target.extend(found)
+                # What the body supplies: an unquoted one after its own escapes are removed.
+                target.append(("heredoc_u" if found else "heredoc_q",
+                               text if quoted else _heredoc_supplied(text)))
+                pos = span[1] + 1
+            pending = []
+            _flush()
+            connector = "seq"
+            i = max(i + 1, min(pos - 1, n))
             continue
         if ch in ("'", '"'):
             _put(ch)
@@ -605,7 +682,8 @@ def _is_case_statement(command: str, i: int) -> bool:
 def _starts_a_command(tail: str) -> bool:
     """Whether the next word after `tail` (text before it on the same level) is a command."""
     tail = tail.rstrip(" \t")
-    return not tail or tail[-1] in ";&|(\n`" or tail.split()[-1] in _COMMAND_LEADERS
+    words = tail.split()                    # empty for a tail of `\r`, `\v` or `\f` alone
+    return not words or tail[-1] in ";&|(\n`" or words[-1] in _COMMAND_LEADERS
 # Words after which the next word is a command.
 _COMMAND_LEADERS = frozenset({"if", "elif", "while", "until", "then", "else", "do", "{", "!",
                               "time"})
@@ -617,6 +695,114 @@ _ARRAY_ASSIGNMENT_RE = re.compile(r"(?:^|[\s;&|(])[A-Za-z_][A-Za-z0-9_]*(?:\[[^\
 def _command_position(sub_buf: List[str]) -> bool:
     """Whether the next word of a substitution's text stands where a command starts."""
     return _starts_a_command("".join(sub_buf[-40:]))
+
+
+class _HeredocLines:
+    """The text's lines, indexed once, to find a heredoc's delimiter line after a position:
+    (start of the line, end of the line) of the first line equal to the delimiter."""
+
+    def __init__(self, command: str) -> None:
+        self.exact: dict = {}
+        self.tabbed: dict = {}
+        pos = 0
+        while pos <= len(command):
+            end = command.find("\n", pos)
+            end = len(command) if end < 0 else end
+            line = command[pos:end]
+            self.exact.setdefault(line, []).append((pos, end))
+            self.tabbed.setdefault(line.lstrip("\t"), []).append((pos, end))
+            pos = end + 1
+
+    def after(self, delimiter: str, pos: int, strip_tabs: bool) -> Optional[tuple]:
+        import bisect
+        spans = (self.tabbed if strip_tabs else self.exact).get(delimiter)
+        if not spans:
+            return None
+        k = bisect.bisect_left(spans, (pos, -1))
+        return spans[k] if k < len(spans) else None
+
+
+def _heredoc_word(command: str, at: int) -> Optional[tuple]:
+    """The delimiter after `<<` at `at`: (end of the word, delimiter, quoted, strip_tabs),
+    or None when no word follows that is surely a delimiter (a `$` word, `1<<2`)."""
+    n = len(command)
+    j = at + 2
+    strip_tabs = command[j:j + 1] == "-"
+    if strip_tabs:
+        j += 1
+    while j < n and command[j] in " \t":
+        j += 1
+    k, word, quoted = j, [], False
+    while k < n and command[k] not in " \t\n;&|()<>":
+        c = command[k]
+        if c in ("'", '"'):
+            close = command.find(c, k + 1)
+            if close < 0:
+                return None
+            word.append(command[k + 1:close])
+            quoted, k = True, close + 1
+            continue
+        if c == "\\":
+            word.append(command[k + 1:k + 2])
+            quoted, k = True, k + 2
+            continue
+        word.append(c)
+        k += 1
+    delim = "".join(word)
+    if not delim or command[j:j + 1] == "$" or not (
+            quoted or delim[0].isalpha() or delim[0] == "_"):
+        return None
+    return k, delim, quoted, strip_tabs
+
+
+def _heredoc_substitutions(body: str) -> List[tuple]:
+    """The substitutions an unquoted heredoc body runs. The body is read as the inside of
+    double quotes: there too `$( )` and backticks run, a backslash escapes only `$`, a
+    backtick, a backslash and a newline, and every other character is text."""
+    out: List[str] = []
+    k = 0
+    while k < len(body):
+        c = body[k]
+        if c == "\\":
+            nx = body[k + 1:k + 2]
+            if nx in ("$", "`", "\\", "\n") and nx:
+                out.append("\\" + nx)
+                k += 2
+                continue
+            out.append("\\\\")
+            k += 1
+            continue
+        out.append('\\"' if c == '"' else c)
+        k += 1
+    found: List[tuple] = []
+    for _connector, _seg, carried in _split_segments('"' + "".join(out) + '"'):
+        found.extend(c for c in carried if c[0] in ("command", "arithmetic", "arithmetic*"))
+    return found
+
+
+def _heredoc_supplied(body: str) -> str:
+    """The text an unquoted heredoc body supplies: a backslash before `$`, a backtick or a
+    backslash is removed, and a backslash-newline joins the lines (`\\$(cmd)` in the body
+    hands `$(cmd)` to the shell that reads it)."""
+    out: List[str] = []
+    k = 0
+    while k < len(body):
+        c = body[k]
+        nx = body[k + 1:k + 2]
+        if c == "\\" and nx in ("$", "`", "\\") and nx:
+            out.append(nx)
+            k += 2
+        elif c == "\\" and nx == "\n":
+            k += 2
+        else:
+            out.append(c)
+            k += 1
+    return "".join(out)
+
+
+def _open_expansion(tail: str) -> bool:
+    """Whether `tail` ends inside an open `${...}` or `$[...]`, where `<<` is no heredoc."""
+    return tail.rfind("${") > tail.rfind("}") or tail.rfind("$[") > tail.rfind("]")
 
 
 def _dollar_kind(command: str, i: int) -> str:
@@ -926,6 +1112,7 @@ def _runner_commands(exe: str, args: List[str]) -> List[int]:
     else:
         return []
     package = exe in _PACKAGE_RUNNERS
+    valueless = _VALUELESS_RUNNER_FLAGS.get(exe, frozenset())
     start = 0
     # npm reads its options anywhere: a `--call`/`-c` before the verb runs its text too
     # (`npm --call='...' exec`, `npm -c '...' exec`, measured with an echo).
@@ -969,7 +1156,8 @@ def _runner_commands(exe: str, args: List[str]) -> List[int]:
                 found.append(pos)       # `--call=TEXT`: a shell string (_runner_text)
                 maybe_value = False
                 continue
-            maybe_value = "=" not in tok
+            # A flag known to take no value: the next word is no value but the command.
+            maybe_value = "=" not in tok and tok not in valueless
             continue
         if maybe_value:                 # a possible value, and a possible command
             found.append(pos)
@@ -1052,7 +1240,8 @@ def _is_protected_target(arg: str) -> bool:
 def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
                      _budget: Optional[List[int]] = None,
                      _stdin_fetch: bool = False, _arithmetic: bool = False) -> CommandVerdict:
-    """Classify a shell command offline. Never raises, never executes anything.
+    """Classify a shell command offline. Never executes anything, never raises: a reading that
+    fails (either one) refuses the command as unreadable and is logged.
 
     profile="host"   - unsandboxed lane: refuse the catastrophic set.
     profile="jailed" - bubblewrap/container lane: refuse only what escapes the
@@ -1067,12 +1256,29 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
     evaluates, read as a command too: a substitution where a program would stand is its
     operand there (`$(($(nproc)+1))`), every other check holds.
     """
+    if _budget is None and _depth == 0:
+        try:
+            return _read(command, profile=profile, _depth=0, _budget=None,
+                         _stdin_fetch=_stdin_fetch, _arithmetic=_arithmetic)
+        except Exception as exc:        # noqa: BLE001 - fail closed, whatever went wrong
+            _log.warning("command check failed, the command is refused: %s: %s",
+                         type(exc).__name__, exc)
+            return CommandVerdict(blocked=True, categories=["unreadable"],
+                                  reason="Command contains a forbidden pattern: it "
+                                         + CATEGORY_REASONS["unreadable"])
+    return _read(command, profile=profile, _depth=_depth, _budget=_budget,
+                 _stdin_fetch=_stdin_fetch, _arithmetic=_arithmetic)
+
+
+def _read(command: str, *, profile: str, _depth: int, _budget: Optional[List[int]],
+          _stdin_fetch: bool, _arithmetic: bool) -> CommandVerdict:
+    """classify_command's reading; nested readings go through classify_command."""
     verdict = CommandVerdict()
     text = (command or "").strip()
     if not text:
         return verdict
     if _budget is None:
-        if len(text) > _MAX_COMMAND_BYTES:
+        if len(text) > _MAX_COMMAND_CHARS:
             verdict.blocked = True
             verdict.categories = ["too_long"]
             verdict.reason = ("Command contains a forbidden pattern: it "
@@ -1121,11 +1327,8 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
         # what runs. Judged at the program word itself, so a wrapper, a `VAR=` prefix or a
         # runner in front (`env $(echo rm) -rf /`) changes nothing, while one in an argument
         # or a wrapper option's value (`sudo -u $(whoami) ls`) is ordinary.
-        # A line that starts with `-` and no wrapper (a Markdown bullet in a heredoc body,
-        # ``- `parse()` returns None``): bash runs `-`, which no system has; the word after it
-        # is no program. The other checks still read past it, as they did before.
-        if (exe_at >= 0 and "opaque_command" not in cats and not _arithmetic
-                and not toks[0].startswith("-")):
+        # Also after a leading `-`: zsh reads `-` as a precommand modifier (`- cmd` runs cmd).
+        if exe_at >= 0 and "opaque_command" not in cats and not _arithmetic:
             word = toks[exe_at]
             if (_SUBST_BARE in word or _SUBST_PROC in word
                     or _SUBST_QUOTED in word.rsplit("/", 1)[-1]):
@@ -1151,7 +1354,7 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
         # as shell text, like `bash -c`. A file is read as before.
         script_literals: List[str] = []
         if exe in _SHELL_SINKS:
-            from_where, script_literals = _script_input(exe, args)
+            from_where, script_literals = _script_input(exe, args, carried)
             if from_where:
                 if "opaque_command" not in cats:
                     cats.append("opaque_command")
@@ -1174,6 +1377,8 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
         # and classify one candidate per segment, past the bound the budget sets per call.
         def _carried():
             for kind, inner in carried:
+                if kind in ("heredoc_q", "heredoc_u"):
+                    continue                # a heredoc body: data, its substitutions apart
                 if kind == "unreadable":
                     yield kind, "", inner
                     continue
@@ -1241,9 +1446,11 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
                 opaque_shape = (_shell_text_shape(carried)
                                 if where in ("local", "remote") and not kind
                                 and _SUBST_BARE in inner else sub.opaque_shape)
-                if where == "runner" and opaque_shape == "program" and _value_from_substitution(
-                        args):
-                    opaque_shape = "option_value"   # `uv run --with $(cat r) pytest`
+                if where == "runner" and opaque_shape == "program":
+                    if _value_from_substitution(exe, args):
+                        opaque_shape = "option_value"   # `uv run --with $(cat r) pytest`
+                    elif _after_unknown_flag(exe, args):
+                        opaque_shape = "runner_args"    # `uv run --x pytest $(...)`
                 elif where == "charged" and kind == "command" and "`" in inner:
                     opaque_shape = "arith_backtick"  # `$(( `date +%s` - 10 ))`
             fetched = "network_fetch" in sub.categories or "remote_login" in sub.categories
@@ -1327,9 +1534,9 @@ def _refusal(category: str, opaque_shape: str, text: str) -> str:
     """The refusal sentence for `category`, with the way out where one exists."""
     sentence = CATEGORY_REASONS[category]
     if category == "opaque_command":
-        if opaque_shape == "program" and "\n" in text:
-            opaque_shape = "lines"          # a code fence or a continued line, not a program
         sentence = _OPAQUE_REASONS.get(opaque_shape, sentence)
+        if opaque_shape in ("program", "frozen") and "\n" in text:
+            sentence += _OPAQUE_REASONS["lines"]    # perhaps a code fence or a continued line
     sentence += _WAY_OUT.get(category, "")
     if "<<" in text.replace("<<<", ""):
         # A heredoc's lines are read as command lines: the check reads no heredoc.
@@ -1348,10 +1555,12 @@ def _join_the_frozen_reading(verdict: CommandVerdict, text: str, profile: str) -
     # Its nested readings each read the rest of the text again (a runner's candidates); its
     # own bound counts readings only, so a long command gets fewer of them. A spent budget
     # refuses (nested_too_deep), so a smaller one can only add refusals.
-    budget = max(_FROZEN_MIN_READINGS,
-                 min(MAX_NESTED_COMMANDS, _FROZEN_TEXT_BUDGET // max(1, len(text))))
+    budget = min(MAX_NESTED_COMMANDS, _FROZEN_TEXT_BUDGET // max(1, len(text)))
     frozen = command_reading_frozen.classify_command(text, profile=profile, _budget=[budget])
     verdict.categories.extend(c for c in frozen.categories if c not in verdict.categories)
+    # Its segments too: `command_needs_network` (vaf/tools/bash.py) reads them.
+    seen = set(verdict.segments)            # a list lookup per segment was quadratic
+    verdict.segments.extend(s for s in frozen.segments if s not in seen)
     if verdict.blocked or not frozen.blocked:
         return
     verdict.blocked = True
@@ -1361,9 +1570,9 @@ def _join_the_frozen_reading(verdict: CommandVerdict, text: str, profile: str) -
         verdict.reason = frozen.reason
         return
     if first == "opaque_command":
-        # The frozen reading refuses a substitution at the start of a line or after a
-        # separator, also in text that spans lines.
-        verdict.opaque_shape = verdict.opaque_shape or "program"
+        # Only the frozen reading refuses: it saw a substitution where a command would start
+        # after a `;`, `&&` or `|`, also one inside quotes, or at the start of a line.
+        verdict.opaque_shape = verdict.opaque_shape or "frozen"
     verdict.reason = _refusal(first, verdict.opaque_shape, text)
 
 
@@ -1380,12 +1589,26 @@ def _is_fork_bomb(text: str) -> bool:
     return pipe >= 0 and flat.find("};:", pipe + 3) >= 0
 
 
-def _value_from_substitution(args: List[str]) -> bool:
-    """Whether a runner's option takes its value from a substitution as the next word."""
+def _after_unknown_flag(exe: str, args: List[str]) -> bool:
+    """Whether the first substitution in a runner's words comes after a word that followed a
+    flag without `=` the check does not know: that word may be the flag's value, so the
+    substitution may be read as the program (`uv run --x pytest $(...)`)."""
+    valueless = _VALUELESS_RUNNER_FLAGS.get(exe, frozenset())
+    for k, tok in enumerate(args):
+        if _SUBST_BARE in tok or _SUBST_QUOTED in tok:
+            return k >= 2 and not args[k - 1].startswith("-") and any(
+                t.startswith("-") and "=" not in t and t not in valueless for t in args[:k - 1])
+    return False
+
+
+def _value_from_substitution(exe: str, args: List[str]) -> bool:
+    """Whether a runner's option takes its value from a substitution as the next word (an
+    option known to take no value takes none: `uv run --frozen $(...)` is the program)."""
+    valueless = _VALUELESS_RUNNER_FLAGS.get(exe, frozenset())
     for pos, tok in enumerate(args[1:], start=1):
         prev = args[pos - 1]
         if (_SUBST_BARE in tok or _SUBST_QUOTED in tok) and prev.startswith("-") \
-                and "=" not in prev:
+                and "=" not in prev and prev not in valueless:
             return True
     return False
 
@@ -1399,7 +1622,7 @@ _DESCRIPTOR_RE = re.compile(r"^(?:-|/dev/stdin|/dev/fd/\d+|/proc/[^/]+/fd/\d+)$"
 _REDIRECT_RE = re.compile(r"^\d*(?:<|>|>>|<>|>&|<&|&>|&>>)$")
 
 
-def _script_input(exe: str, args: List[str]) -> tuple:
+def _script_input(exe: str, args: List[str], carried: List[tuple]) -> tuple:
     """(where its script comes from, literal script texts) for a shell or an interpreter:
     "output" when another command's output, "descriptor" when a descriptor this command
     does not open, "" otherwise.
@@ -1407,11 +1630,14 @@ def _script_input(exe: str, args: List[str]) -> tuple:
     Its script is its first word that is no option, no option's value and no redirection.
     It comes from its input when there is none, when it is `-` or a descriptor path
     (`/dev/stdin`, `/dev/fd/N`, `/proc/self/fd/N`), or with `-s`. Fed by a process
-    substitution (as the script itself or through `<`, `3<`) or by a here-string holding a
-    substitution, it runs another command's output. A descriptor above 2 that no
+    substitution (as the script itself or through `<`, `3<`), by a here-string or by an
+    unquoted heredoc holding a substitution, it runs another command's output. A descriptor
+    above 2 that no
     redirection of this command opens was opened by an earlier one (`exec 3< <(...);
-    bash /dev/fd/3`), so what it reads is not in this text. Fed by a literal here-string, a
-    shell runs that text, returned to be read like `bash -c` text."""
+    bash /dev/fd/3`), so what it reads is not in this text; so is an input read from one
+    (`bash <&3`, `bash < /dev/fd/3`, `bash /dev/fd/0 <&3`). A descriptor path is read as
+    Linux resolves it (`//dev/fd/3`, `/dev/./fd/3`). Fed by a literal here-string or
+    heredoc body, a shell runs that text, returned to be read like `bash -c` text."""
     shell = exe in _STDIN_SHELLS
     inline = "c" if shell else "cemr"          # -c CODE, -e/-r CODE, -m MODULE
     script = None
@@ -1431,6 +1657,8 @@ def _script_input(exe: str, args: List[str]) -> tuple:
         if _REDIRECT_RE.match(tok):
             if tok.endswith("<&") and tok[:-2] in ("", "0"):
                 stdin_fd = nxt
+            elif tok in ("<", "0<") and _fd_path(nxt):
+                stdin_fd = _fd_path(nxt)        # `< /dev/fd/3` reads descriptor 3, like `<&3`
             elif tok.endswith("<") or tok.endswith("<>"):
                 opened.add(tok.rstrip("<>") or "0")
                 proc_fed = proc_fed or nxt == _SUBST_PROC
@@ -1438,8 +1666,11 @@ def _script_input(exe: str, args: List[str]) -> tuple:
             continue
         if tok[:1] in "<>" or (tok[:1].isdigit() and tok.lstrip("0123456789")[:1] in ("<", ">")):
             dup = _STDIN_DUP_RE.match(tok)
+            attached = tok[2:] if tok.startswith("0<") else tok[1:] if tok.startswith("<") else ""
             if dup:
                 stdin_fd = dup.group(1)
+            elif _fd_path(attached):
+                stdin_fd = _fd_path(attached)
             elif tok[:1].isdigit() and "<" in tok:
                 opened.add(tok[:len(tok) - len(tok.lstrip("0123456789"))])
             pos += 1                       # `2>/dev/null`, `<file`: an attached redirection
@@ -1461,11 +1692,13 @@ def _script_input(exe: str, args: List[str]) -> tuple:
         pos += 1
     if script == _SUBST_PROC:
         return "output", []
-    path = posixpath.normpath(script) if script and script.startswith("/") else (script or "")
+    path = _normal_path(script) if script and script.startswith("/") else (script or "")
     fd = _FD_PATH_RE.match(path)
     if fd and int(fd.group(1)) > 2 and fd.group(1) not in opened:
         return "descriptor", []
-    if (script is None or from_stdin or path in ("/dev/stdin", "-")) and stdin_fd.isdigit() \
+    reads_input = script is None or from_stdin or path in ("/dev/stdin", "-") \
+        or bool(fd and fd.group(1) == "0")
+    if reads_input and stdin_fd.isdigit() \
             and int(stdin_fd) > 2 and stdin_fd not in opened:
         return "descriptor", []             # `bash <&3`: descriptor 3, opened earlier
     script = path or script
@@ -1475,15 +1708,32 @@ def _script_input(exe: str, args: List[str]) -> tuple:
         from_input = script is None or from_stdin or bool(_DESCRIPTOR_RE.match(script))
     if not from_input:
         return "", []
-    if proc_fed or any(_SUBST_BARE in w or _SUBST_QUOTED in w for w in here_words):
+    kinds = [kind for kind, _ in carried]
+    if proc_fed or "heredoc_u" in kinds or any(_SUBST_BARE in w or _SUBST_QUOTED in w
+                                                for w in here_words):
         return "output", []
-    return "", here_words if shell else []
+    if not shell:
+        return "", []
+    # A heredoc fed to a shell is its script: read as shell text, like `bash -c`.
+    return "", here_words + [text for kind, text in carried if kind == "heredoc_q"]
 
 
 # The here-string operator, with its descriptor (`<<<`, `0<<<`).
 _HERE_OPERATOR_RE = re.compile(r"^\d*<<<$")
 # A descriptor path and its number.
 _FD_PATH_RE = re.compile(r"^/(?:dev|proc/[^/]+)/fd/(\d+)$")
+
+
+def _normal_path(path: str) -> str:
+    """An absolute path as Linux resolves it: `normpath` keeps exactly two leading slashes
+    (`//dev/fd/3`), which Linux reads as one."""
+    return posixpath.normpath("/" + path.lstrip("/"))
+
+
+def _fd_path(word: str) -> str:
+    """The descriptor number a descriptor path names (`/dev/fd/3`, `//proc/self/fd/3`), else ""."""
+    m = _FD_PATH_RE.match(_normal_path(word)) if word.startswith("/") else None
+    return m.group(1) if m else ""
 # Input taken from another descriptor (`<&3`, `0<&3`).
 _STDIN_DUP_RE = re.compile(r"^0?<&(\d+)$")
 # A shell's options that take the next word as their value (`bash -O extglob`).

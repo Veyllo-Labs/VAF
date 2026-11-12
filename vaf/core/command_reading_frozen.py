@@ -15,9 +15,21 @@ hash; a change of the rules belongs in vaf/core/command_policy.py, which is the 
 that is maintained. The names here are this module's own (it is imported, never used by
 name elsewhere), and `classify_command` is the frozen reading's entry point.
 
-One change from the text it froze, made so the gate stays bounded: the fork-bomb search
-runs `_fork_bomb_linear` instead of the pattern `_FORK_BOMB_RE` (kept below), which grew
-with the cube of the length. It refuses every text the pattern refused.
+Two changes from the text it froze, both made so the gate stays bounded, both with the same
+answers as the text they replace:
+- the fork-bomb search runs `_fork_bomb_linear` instead of the pattern `_FORK_BOMB_RE`
+  (kept below), which grew with the cube of the length (16 KB of `:(){ |:& `: 11 s). It
+  refuses every text the pattern refused: the three parts in the same order, found once
+  whitespace is removed.
+- the search for a substitution where a command starts (`_SUBST_IN_CMD_POS_RE`) runs over
+  `_collapsed_blanks(text)`: every run of whitespace becomes one newline when it holds one,
+  else one blank. On a long run of newlines the pattern was quadratic (`"x;" + "\n" *
+  131069 + "x"`: 125 s); collapsed, 0.001 s. Measured on 300 000 random strings: the same
+  answer every time.
+
+This module may be deleted only together with a reading of the full shell grammar that
+replaces both readings, proven by the same differential: at least 300 000 generated
+commands on the three lanes, none refused here and allowed there.
 """
 from __future__ import annotations
 
@@ -113,8 +125,6 @@ _PROTECTED_ROOTS = ("/", "/*", "/bin", "/boot", "/dev", "/etc", "/home", "/lib",
 _FORK_BOMB_RE = re.compile(r":\s*\(\s*\)\s*\{.*\|\s*:\s*&.*\}\s*;\s*:", re.DOTALL)
 _DEVICE_TARGET_RE = re.compile(r"of=/dev/(sd|nvme|hd|vd|mmcblk|disk)", re.IGNORECASE)
 _REDIRECT_DEVICE_RE = re.compile(r">\s*/dev/(sd|nvme|hd|vd|mmcblk|disk)", re.IGNORECASE)
-# A substitution standing where the executable belongs: start of the command,
-# or right after a separator.
 def _fork_bomb_linear(text: str) -> bool:
     """`:(){`, `|:&` and `};:` in that order once whitespace is removed: refuses every text
     the pattern above matches (and may refuse more), with three plain searches instead of
@@ -125,6 +135,14 @@ def _fork_bomb_linear(text: str) -> bool:
     return pipe >= 0 and flat.find("};:", pipe + 3) >= 0
 
 
+def _collapsed_blanks(text: str) -> str:
+    """Every run of whitespace as one newline when it holds one, else one blank: the same
+    matches for `_SUBST_IN_CMD_POS_RE`, without its quadratic search on long runs."""
+    return re.sub(r"\s+", lambda m: "\n" if "\n" in m.group(0) else " ", text)
+
+
+# A substitution standing where the executable belongs: start of the command,
+# or right after a separator.
 _SUBST_IN_CMD_POS_RE = re.compile(r"(?:^|[;&|\n]|&&|\|\|)\s*(?:\$\(|`)")
 
 CATEGORY_REASONS = {
@@ -592,7 +610,7 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
     # `$(echo rm) -rf /` reads as harmless and executes as `rm -rf /`: the
     # substitution supplies the executable, so no reader - human or classifier
     # - can tell from the text what runs.
-    opaque = bool(_SUBST_IN_CMD_POS_RE.search(text))
+    opaque = bool(_SUBST_IN_CMD_POS_RE.search(_collapsed_blanks(text)))
     cats: List[str] = []
 
     if _fork_bomb_linear(text):

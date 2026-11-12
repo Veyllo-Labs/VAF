@@ -463,15 +463,21 @@ agent in their Veyllo App and the VAF agent; its rules are in
   one centred line. A question shows at once, marked as waiting for the answer, at the time it
   was asked. A task's ending and a failed answer are worded by the page in the viewer's
   language (the server sends a code), and the person addressed reads "to you" in their own
-  form. A line that was not delivered says why and offers "Send again"; with two devices the
-  delivered state names the device. The empty room explains who is in it and where a line
+  form. A line that was not delivered says why and offers "Send again" (once: the line sent again
+  no longer offers it); with two devices the delivered state names the device. One line is on
+  its way at a time: while a request is open, Enter and every "Send again" wait, and the line
+  shows dimmed with "sending". A file dropped on the room is refused with the sentence that the
+  room carries text only. A turn nobody typed is never shown under the person's name: a fired
+  timer, a finished background command, a sent draft and a confirmation are neutral note lines
+  in the viewer's language, and the compaction and system commands are not shown. The empty room explains who is in it and where a line
   goes. What the room does not have stays hidden: member chips, the member panel, reactions,
   the shared folder, the task board, votes, the typing signal of a keypress, and the
   attachment and call buttons (the room carries text only). Its rules are plain functions in
   `web/components/chat/appRoom.ts`, run in node by `tests/test_app_link_room_web.py`.
 - **The composer has no chooser.** It posts the line (`POST /api/app-link/room`) and the server
-  decides the addressee: the app's agent, or the VAF agent when the line starts with `@` and its
-  first word of its name (the handle). `@` completes only that handle, and the hint names it;
+  decides the addressee: the app's agent, or the VAF agent when the line starts with `@` and the
+  handle (the first run of letters and digits of the agent's name). `@` completes only that
+  handle, and the hint names it;
   while no line can reach the app's agent the hint offers only the handle. The box clears when
   the line was taken, and only in the view it was written in; a refusal keeps the text and says
   why above the box (an older Veyllo App, a device not connected since pairing, the Veyllo App

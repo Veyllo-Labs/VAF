@@ -317,9 +317,13 @@ symbol: one conversation of three parties, you, your VAF agent and the agent in 
 App. It shows everything the three wrote to each other: your messages from the app and your
 agent's answers, the requests of the app's agent and your agent's answers to them, the tasks
 your agent handed the app with their results, the lines you wrote to the app's agent on VAF
-and what it wrote back, and the "Confirmed in the Veyllo App" line of a confirmation card.
+and what it wrote back, and the "Confirmed in the Veyllo App" line of a confirmation card. A
+turn nobody typed (a fired timer, a finished background command, a draft you sent, a
+confirmation) shows as a neutral note line, never under your name; the chat's compaction and
+system commands are not shown.
 It appears the moment the pairing is confirmed (no reload) and goes with the last device that
-is removed; it stays there while a device is paired, also with the Veyllo App switched off for
+is removed; pairing again brings its history back, because the room's two sessions belong to
+the account and stay when a device goes; it stays there while a device is paired, also with the Veyllo App switched off for
 your account, and stays at the top of the list however far the list scrolls. It is your
 account's only, and another account never sees it. A question you or the app's agent asked
 shows at once, at the time it was asked, while your agent is still answering it. An empty room
@@ -338,8 +342,9 @@ answers it:
 | Your agent hands the app a task (`user_phone`) | the agent in your Veyllo App | that agent, with the task's result | none on VAF |
 
 There is no chooser: what you write on VAF goes to the app's agent unless it starts with `@`
-and the first word of your agent's name (a name of several words written out begins with it
-too) or `@VAF`, as a whole word ("@Miami" does not name Mia), the same leading-mention rule as
+and the handle of your agent's name (its first run of letters and digits: "Mia" for "Mia Lisa"
+or "Mia.", "Dr" for "Dr. Mia") or `@VAF`, followed by the end of the line or anything that is
+not a letter or digit ("@Mia." and "@Mia：" name Mia, "@Miami" does not), the same leading-mention rule as
 in an agent room ("frag @VAF" in the middle of a line still goes to the app's agent). The
 composer's hint names that word, and `@` completes it.
 
@@ -362,7 +367,8 @@ the line the room shows **delivered** (the device confirmed it; with more than o
 which), **waiting for the Veyllo App** (still queued) or **not delivered** with why: the device
 was removed, the Veyllo App is switched off for your account, the app was away for more than
 seven days, or the app did not take room lines. A line that will not arrive any more can be
-sent again with one click. A second device of the account does not get the line.
+sent again with one click, once: the line sent again stops offering it. One line is on its way
+at a time, so a double Enter never sends it twice. A second device of the account does not get the line.
 
 **An older Veyllo App.** A Veyllo App that does not announce the room keeps working as it is.
 The room shows what exists without it, and writing to the app's agent is refused with the

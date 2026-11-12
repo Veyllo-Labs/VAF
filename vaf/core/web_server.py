@@ -5200,7 +5200,20 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
             log("API", f"WebSocket local-admin fallback failed: {_e}")
 
     try:
-        await manager.connect(websocket)
+        # The connection says who it is, in its very first frame (`auth_state`): the account
+        # the ownership checks use (the token's scope, the local admin's on the tokenless
+        # localhost lane). A page that reconnects compares it with the account of its first
+        # connect and reloads when it differs, so nothing of one account's chats stays on
+        # screen for another (web/lib/socketAccount.ts).
+        _account_id = ((user_context.get("user_scope_id") or user_context.get("user_id"))
+                       if user_context else None)
+        await manager.connect(websocket, hello={
+            "type": "auth_state",
+            "authenticated": bool(user_context),
+            "accountId": str(_account_id) if _account_id else None,
+            "username": (user_context or {}).get("username"),
+            "role": (user_context or {}).get("role"),
+        })
         # Store user_scope_id for RAG/task metadata (memory_save, memory search). Fallback to user_id if no scope in token.
         if user_context and (user_context.get("user_scope_id") or user_context.get("user_id")):
             manager.set_connection_user(
@@ -5254,14 +5267,6 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 "persistent": tray_context.is_persistent(),
                 "provider": provider
             })
-            # Send user context if authenticated
-            if user_context:
-                await websocket.send_json({
-                    "type": "auth_state",
-                    "authenticated": True,
-                    "username": user_context.get("username"),
-                    "role": user_context.get("role"),
-                })
         except Exception:
             pass
     except Exception as e:

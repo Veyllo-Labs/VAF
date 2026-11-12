@@ -264,9 +264,14 @@ class WebInterfaceManager:
     # CONNECTION MANAGEMENT (Session-Scoped)
     # ═══════════════════════════════════════════════════════════════════════════
 
-    async def connect(self, websocket: WebSocket):
-        """Accept a new WebSocket connection."""
+    async def connect(self, websocket: WebSocket, hello: Optional[dict] = None):
+        """Accept a new WebSocket connection.
+
+        `hello` is sent right after the accept, before the connection joins any broadcast and
+        before the initial state: the one frame a client can rely on being the first."""
         await websocket.accept()
+        if hello:
+            await websocket.send_text(json.dumps(hello))
         # Self-heal after restarts/reloads: always bind to the currently running
         # WebSocket event loop so thread-safe pushes use a live loop.
         try:

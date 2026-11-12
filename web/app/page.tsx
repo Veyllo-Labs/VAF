@@ -25,7 +25,8 @@ import { downloadText } from '@/lib/download';
 import { type NativeDocxDocument, flattenNativeDocxText, replaceTextInNativeDocx } from '@/lib/docxNative';
 import type { EditorFileInfo } from '@/lib/editorFile';
 import { cacheChat, purgeLegacySessionCache } from '@/lib/sessionCache';
-import { historyMessage, entryActivity, keepCachedOrphan, ComposerDrafts, LiveHistoryHold, planReplay } from '@/components/chat/liveView';
+import { connectAccount } from '@/lib/socketAccount';
+import { historyMessage, entryActivity, keepCachedOrphan, ComposerDrafts, LiveHistoryHold, planReplay, closesOwnWorkflow } from '@/components/chat/liveView';
 import SettingsModal, { type SettingsModalProps } from '@/components/SettingsModal';
 import { AgentAvatar, SPECIALIST_SKIN, SUBAGENT_ACCENT, type AvatarMode, type SubAgentKind } from '@/components/AgentAvatar';
 import { VoiceEnrollmentCall } from '@/components/VoiceEnrollmentCall';
@@ -4945,39 +4946,15 @@ function VAFDashboardContent() {
     const stickToBottomRef = useRef<string | null>(null);
     // Until when the chat follows its bottom as it grows (see the scroll keeper below).
     const bottomPinUntilRef = useRef(0);
-    // A reconnect re-asks for the open chat; when the server refuses (a deleted chat, another
-    // account on this tab) the page takes the chat the server auto-loaded instead.
+    // A reconnect re-asks for the open chat; when the server refuses (the chat was deleted
+    // meanwhile) the page takes the chat the server auto-loaded instead.
     const reaskRef = useRef<string | null>(null);
-    // A reconnect's account check is running; the re-ask it holds back.
-    const accountCheckRef = useRef(false);
-    const deferredReaskRef = useRef<string | null>(null);
     const autoLoadedRef = useRef<string | null>(null);
-    const currentUserRef = useRef<any>(null);
-    useEffect(() => { currentUserRef.current = currentUser; }, [currentUser]);
-    // What this tab keeps of the chats it showed (transcripts, drafts, the workflow panel)
-    // belongs to the account it showed them to.
-    const forgetAccountState = () => {
-        sessionCache.current = {};
-        composerDraftsRef.current = new ComposerDrafts<InsertedSelectionRange>();
-        forgetWorkflowState();
-        // What is ON SCREEN goes as well, before anything of the next account is shown: the
-        // open chat or room, its held transcript, its worker window and its kept per-chat state.
-        liveHistoryRef.current.take();
-        currentSessionIdRef.current = null;
-        setCurrentSessionId(null);
-        messagesRef.current = [];
-        snapshotLenRef.current = 0;
-        setMessages([]);
-        roomViewRef.current = null;
-        setRoomView(null);
-        sessionLoadingStates.current = {};
-        sessionSubAgentStates.current = {};
-        sessionScrollPositions.current = {};
-        setSessionViewerState({});
-        setSubAgentState({ ...IDLE_SUB_AGENT_STATE, isOpen: false });
-        stickToBottomRef.current = null;
-        reaskRef.current = null;
-    };
+    // The account of this page load's first connect (undefined before it). A later connect
+    // of another account reloads the page (web/lib/socketAccount.ts); the frames that arrive
+    // until the reload are not applied.
+    const firstAccountRef = useRef<string | null | undefined>(undefined);
+    const reloadingRef = useRef(false);
     const sessionsRef = useRef<Session[]>([]);
     useEffect(() => {
         sessionsRef.current = sessions;
@@ -5231,39 +5208,7 @@ function VAFDashboardContent() {
             wsSocketRef.current = socket;
             let opened = false;
             socket.onopen = () => {
-            const reconnect = opened || currentUserRef.current !== null;
             opened = true;
-            // A reconnect may belong to another account (signed out and in again elsewhere
-            // while this tab was disconnected): what this tab kept of the first account's
-            // chats goes, and the view takes the server's chat for the new one.
-            if (reconnect) {
-                // Until the answer is in, the page does not ask for its old chat again (the
-                // auto-load branch defers it), so nothing of the old view is drawn anew.
-                accountCheckRef.current = true;
-                const settle = (me: any) => {
-                    if (cancelled) return;
-                    accountCheckRef.current = false;
-                    const was = currentUserRef.current;
-                    const key = (u: any) => String(u?.user_scope_id ?? u?.id ?? '');
-                    const deferred = deferredReaskRef.current;
-                    deferredReaskRef.current = null;
-                    // Fail closed: no answer, or another account, and what this tab kept goes.
-                    if (!me || (was && key(was) !== key(me))) {
-                        forgetAccountState();
-                        if (me) setCurrentUser(me);
-                        if (autoLoadedRef.current) requestHistory(wsSocketRef.current, autoLoadedRef.current, true);
-                        return;
-                    }
-                    if (deferred) {
-                        reaskRef.current = deferred;
-                        requestHistory(wsSocketRef.current, deferred, false);
-                    }
-                };
-                fetch(`${getApiBase() || ''}/api/auth/me`, { credentials: 'include', cache: 'no-store' })
-                    .then(res => res.ok ? res.json() : null)
-                    .then(settle)
-                    .catch(() => settle(null));
-            }
             setStatus('connected');
             socket.send(JSON.stringify({ type: 'get_sessions' }));
             socket.send(JSON.stringify({ type: 'get_config' }));
@@ -5386,6 +5331,11 @@ function VAFDashboardContent() {
                     }
                     // A worker that already said it is done stays closed, as it would have.
                     if (plan.finishedWorker) setSubAgentState(prev => ({ ...prev, isOpen: false }));
+                    // The panel of this chat's workflow, still kept as running from before the
+                    // person left, closes now instead of seconds later.
+                    if (closesOwnWorkflow(plan, useWorkflowStore.getState().workflow?.sessionId, data.sessionId)) {
+                        useWorkflowStore.getState().closeWorkflow();
+                    }
                     // What the replay drew was already there: no row of it slides in, and a
                     // chat left at its bottom is at its bottom again.
                     setMessages(prev => { snapshotLenRef.current = prev.length; return prev; });
@@ -6950,11 +6900,6 @@ function VAFDashboardContent() {
                     // which also subscribes this new socket to it.
                     if (data.autoLoad) autoLoadedRef.current = data.sessionId;
                     if (data.autoLoad && prevSessionId && data.sessionId !== prevSessionId) {
-                        // While the reconnect's account check runs, the re-ask waits for it.
-                        if (accountCheckRef.current) {
-                            deferredReaskRef.current = prevSessionId;
-                            return;
-                        }
                         reaskRef.current = prevSessionId;
                         requestHistory(wsSocketRef.current, prevSessionId, false);
                         return;
@@ -7164,6 +7109,10 @@ function VAFDashboardContent() {
                         .trim()
                         .slice(0, 400);
                     finalMsgs = finalMsgs.filter((msg, i) => {
+                        // Not the person's own messages: the only ones taken from the kept copy
+                        // are counted prompts (keepCachedOrphan), and the same words asked twice
+                        // are two messages, never one.
+                        if (msg.role === 'user') return true;
                         const n = norm(String(msg.content ?? ''));
                         const firstIdx = finalMsgs.findIndex(m => m.role === msg.role && norm(String(m.content ?? '')) === n);
                         return firstIdx === i;
@@ -7270,10 +7219,10 @@ function VAFDashboardContent() {
                     }
                 }
                 else if (data.type === 'error') {
-                    // The server refused the chat a reconnect asked for again (deleted meanwhile,
-                    // or this tab now belongs to another account): the view takes the chat the
-                    // server auto-loaded for this connection instead of keeping a picture of a
-                    // chat it may no longer show.
+                    // The server refused the chat a reconnect asked for again (deleted meanwhile):
+                    // the view takes the chat the server auto-loaded for this connection instead
+                    // of keeping a picture of a chat it no longer shows. (A reconnect of another
+                    // account never gets here: the page reloads on its first frame.)
                     if (reaskRef.current && autoLoadedRef.current) {
                         const fallback = autoLoadedRef.current;
                         reaskRef.current = null;
@@ -7755,8 +7704,23 @@ function VAFDashboardContent() {
             } catch (e) { console.error(e); }
         };
         socket.onmessage = (event) => {
+            if (reloadingRef.current) return;
             let data: any;
             try { data = JSON.parse(event.data); } catch (e) { console.error(e); return; }
+            // The connection's first frame says whose it is. Another account than this page
+            // load's first connect: reload before anything else of this socket is applied.
+            if (data?.type === 'auth_state') {
+                const verdict = connectAccount(firstAccountRef.current, data.accountId);
+                if (verdict === 'reload') {
+                    reloadingRef.current = true;
+                    window.location.reload();
+                    return;
+                }
+                if (verdict === 'adopt') {
+                    firstAccountRef.current = typeof data.accountId === 'string' && data.accountId ? data.accountId : null;
+                }
+                return;
+            }
             handleFrame(data);
         };
         const scheduleReconnect = () => {

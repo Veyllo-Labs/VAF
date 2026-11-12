@@ -59,7 +59,7 @@ def _between(src, start, end):
     return src[i:src.index(end, i + len(start))]
 
 
-# ── AC8: history rows carry their turn and their files ───────────────────────────
+# ── history rows carry their turn and their files ──────────────────────────────────────────
 
 def test_history_message_forwards_turn_and_files():
     """MUTATION: historyMessage without downloadFiles - red."""
@@ -91,7 +91,7 @@ def test_the_page_rebuilds_history_through_the_helper():
     assert "role: m.role," not in hist, "a second hand copy of the rebuild is back"
 
 
-# ── AC9: the server wins ─────────────────────────────────────────────────────────
+# ── the server wins ────────────────────────────────────────────────────────────────────────
 
 def test_a_kept_generating_flag_never_outvotes_the_server():
     """MUTATION: let the kept flag win whenever it is set - red."""
@@ -235,7 +235,7 @@ def test_a_running_chats_transcript_is_drawn_with_its_replay():
     assert "!eventBelongsHere(data, activeSessionId, 'chat')" in replay
 
 
-# ── AC10: a replay is quiet ──────────────────────────────────────────────────────
+# ── a replay is quiet ──────────────────────────────────────────────────────────────────────
 
 QUIET_GUARDS = [
     # message_complete of a turn that ended but is not stored yet: no sound, no read-out,
@@ -270,7 +270,7 @@ def test_the_replay_goes_through_the_one_dispatch():
     assert "ev.type !== 'live_replay'" in src
 
 
-# ── AC3, AC11: the open chat ─────────────────────────────────────────────────────
+# ── the open chat ──────────────────────────────────────────────────────────────────────────
 
 def test_the_session_ref_moves_with_the_switch():
     src = _page()
@@ -291,7 +291,7 @@ def test_a_reconnect_keeps_the_open_chat():
     assert hist.index(branch) < hist.index("setCurrentSessionId(data.sessionId);")
 
 
-# ── AC12, AC13 ───────────────────────────────────────────────────────────────────
+# ── a dropped socket, a chip of another chat ───────────────────────────────────────────────
 
 def test_a_dropped_socket_clears_every_preview_place():
     """MUTATION: no reset in onclose - red."""
@@ -310,7 +310,7 @@ def test_a_chip_of_one_chat_never_lands_in_another():
     assert "&& (!f.sessionId || f.sessionId === data.sessionId));" in complete
 
 
-# ── AC14: the composer per chat, in memory ───────────────────────────────────────
+# ── the composer per chat, in memory ───────────────────────────────────────────────────────
 
 def test_composer_drafts_are_per_chat_and_bounded():
     """MUTATION: no bound - red; MUTATION: drop the most recently left chat first - red."""
@@ -349,7 +349,7 @@ def test_composer_swaps_on_every_chat_change():
     assert "localStorage" not in swap and "sessionStorage" not in swap
 
 
-# ── AC15: no chat message in browser storage ─────────────────────────────────────
+# ── no chat message in browser storage ─────────────────────────────────────────────────────
 
 def test_no_message_content_is_written_to_browser_storage():
     """MUTATION: write the cache to localStorage again - red."""
@@ -390,32 +390,18 @@ def test_a_refused_reask_takes_the_servers_chat():
     assert "reaskRef.current = prevSessionId;" in hist
 
 
-def test_another_account_on_the_tab_gets_nothing_of_the_first():
-    """MUTATION: no account check on reconnect - red; sign-out keeps the workflow panel - red."""
+def test_sign_out_and_the_sign_in_page_clear_the_workflow_panel():
+    """The tab's sessionStorage copy of the workflow panel goes at sign-out, when the app finds
+    its session ended, and on the sign-in page (an expired session reaches it through the page
+    gate). MUTATION: sign-out keeps the panel - red; the sign-in page keeps it - red."""
     src = _page()
-    opened = _between(src, "socket.onopen = () => {", "socket.send(JSON.stringify({ type: 'get_sessions' }));")
-    assert "if (!me || (was && key(was) !== key(me))) {" in opened and "forgetAccountState();" in opened
-    forget = _between(src, "const forgetAccountState = () => {", "\n    };")
-    for needle in ("sessionCache.current = {};", "composerDraftsRef.current = new ComposerDrafts", "forgetWorkflowState();"):
-        assert needle in forget, needle
     logout = _between(src, "onLogout={() => {", "}}")
     assert "forgetWorkflowState();" in logout
-    assert src.count("forgetWorkflowState();\n") >= 4    # sign-out, two ended sessions, account change
-    # D1: what is on screen goes too, before the next account is shown.
-    for needle in ("setMessages([]);", "setRoomView(null);", "currentSessionIdRef.current = null;",
-                   "liveHistoryRef.current.take();", "setSessionViewerState({});"):
-        assert needle in forget, needle
-    # D2: fail closed - no answer from /api/auth/me is treated like another account.
-    assert "if (!me || (was && key(was) !== key(me))) {" in opened
-    assert ".catch(() => settle(null));" in opened
-    # The re-ask waits for the check, so the old view is not drawn again meanwhile.
-    hist = _between(src, "else if (data.type === 'history_update')", "const isActive")
-    assert "if (accountCheckRef.current) {\n                            deferredReaskRef.current = prevSessionId;" in hist
-    # D3: a session that ran out reaches /login past the app; the login page clears the panel.
-    login = (ROOT / "web" / "app" / "login" / "page.tsx").read_text(encoding="utf-8")
-    assert "useEffect(() => { forgetWorkflowState(); }, []);" in login
+    assert src.count("forgetWorkflowState();\n") >= 3    # sign-out and the two ended sessions
     store = (ROOT / "web" / "components" / "workflows" / "stores" / "workflowStore.ts").read_text(encoding="utf-8")
     assert "useWorkflowStore.persist.clearStorage();" in _between(store, "export function forgetWorkflowState", "\n}")
+    login = (ROOT / "web" / "app" / "login" / "page.tsx").read_text(encoding="utf-8")
+    assert "useEffect(() => { forgetWorkflowState(); }, []);" in login
 
 
 def test_the_legacy_copy_is_removed_and_a_blocked_storage_is_harmless():
@@ -443,3 +429,63 @@ def test_a_stored_answer_still_on_record_is_drawn_once():
     assert placed["created"] is False and len(placed["messages"]) == 2
     tool = _between(_page(), "else if (data.type === 'tool_update') {", "else if (data.type === 'cursor_animation')")
     assert "if (existingIdx !== -1) return prev; // Duplicate start" in tool
+
+
+SOCKET = ROOT / "web" / "lib" / "socketAccount.ts"
+
+
+def test_another_account_on_a_reconnect_reloads_the_page():
+    """MUTATION: accept another account - red; accept a frame without an account after one with
+    an account - red; reload on the first connect - red."""
+    verdict = lambda first, incoming: _run(SOCKET, f"m.connectAccount({json.dumps(first)}, {json.dumps(incoming)})")
+    assert _run(SOCKET, "m.connectAccount(undefined, 'bob')") == "adopt"      # the first connect
+    assert verdict("bob", "bob") == "same"
+    assert verdict("bob", "alice") == "reload"
+    assert verdict("bob", None) == "reload"
+    assert verdict("bob", "") == "reload"
+    assert verdict(None, None) == "same"
+
+
+def test_the_page_decides_before_any_other_frame():
+    src = _page()
+    onmsg = _between(src, "socket.onmessage = (event) => {", "socket.onclose")
+    assert onmsg.index("if (reloadingRef.current) return;") < onmsg.index("handleFrame(data);")
+    assert onmsg.index("connectAccount(firstAccountRef.current, data.accountId)") < onmsg.index("handleFrame(data);")
+    assert "window.location.reload();" in onmsg
+    # The check this replaces is gone: no /api/auth/me on reconnect, no pending state.
+    for gone in ("accountCheckRef", "deferredReaskRef", "settle(", "forgetAccountState"):
+        assert gone not in src, gone
+
+
+def test_the_same_words_twice_keep_both_and_the_stored_one_is_not_the_orphan():
+    """"go", answered and stored, then "go" again within a second: the server's transcript has
+    the first. Only the second is the kept prompt; the first is the server's.
+    MUTATION: count by content only (no occurrence) - red."""
+    now = 1_000_000
+    out = _run(LIVE, f"""(() => {{
+        const first = {{role: 'user', content: 'go', timestamp: {now - 1000}}};
+        const second = {{role: 'user', content: 'go', timestamp: {now}}};
+        const kept = [first, {{role: 'assistant', content: 'ok'}}, second];
+        const server = [{{role: 'user', content: 'go'}}, {{role: 'assistant', content: 'ok'}}];
+        return [m.keepCachedOrphan(first, server, {now}, kept), m.keepCachedOrphan(second, server, {now}, kept)];
+    }})()""")
+    assert out == [False, True]
+
+
+def test_the_dedup_never_merges_two_equal_questions():
+    """MUTATION: dedupe user messages by text again - red."""
+    merge = _between(_page(), "// Deduplicate: when switching back to a session", "// NOTE: Do NOT sort by timestamp here.")
+    assert "if (msg.role === 'user') return true;" in merge
+
+
+def test_a_finished_workflow_closes_only_its_own_chats_panel():
+    """MUTATION: close whatever the store holds - red; never close - red."""
+    done = {"workerEvents": False, "finishedWorker": False, "workflowDone": True}
+    running = dict(done, workflowDone=False)
+    close = lambda plan, store_sid, chat: _run(LIVE, f"m.closesOwnWorkflow({json.dumps(plan)}, {json.dumps(store_sid)}, {json.dumps(chat)})")
+    assert close(done, "A", "A") is True
+    assert close(done, "B", "A") is False          # another chat's workflow keeps its panel
+    assert close(done, None, "A") is False
+    assert close(running, "A", "A") is False
+    replay = _between(_page(), "if (data.type === 'live_replay') {", "if (data.type === 'new_log')")
+    assert "if (closesOwnWorkflow(plan, useWorkflowStore.getState().workflow?.sessionId, data.sessionId)) {" in replay

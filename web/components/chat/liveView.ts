@@ -132,10 +132,14 @@ export function keepCachedOrphan(msg: { role: string; content?: unknown; timesta
     if (msg.role === 'system') return true;
     if (msg.role !== 'user' || !(lastLocalSendMs > 0)) return false;
     if ((msg.timestamp ?? 0) < lastLocalSendMs - LOCAL_PROMPT_SLACK_MS) return false;
-    // Counted, not matched: the same words sent twice are two prompts, and an earlier one the
-    // server has stored must not stand in for the one it has not seen yet.
+    // By occurrence, not by text: the same words sent twice are two prompts. The server has the
+    // first N of them (it stores in order), so the kept one counts only when it is past those
+    // N; an earlier one the server has stored is not an orphan.
     const same = (m: { role: string; content?: unknown }) => m.role === 'user' && m.content === msg.content;
-    return keptMsgs.filter(same).length > serverMsgs.filter(same).length;
+    const equals = keptMsgs.filter(same);
+    const position = equals.indexOf(msg);
+    const stored = serverMsgs.filter(same).length;
+    return position < 0 ? equals.length > stored : position >= stored;
 }
 
 /** What a replay asks of the page around the events themselves. */
@@ -168,6 +172,16 @@ export function planReplay(events: { type?: unknown; presence?: unknown; subType
         finishedWorker: last === 'idle' || last === 'error',
         workflowDone: types.includes('workflow_done'),
     };
+}
+
+/**
+ * Whether the replay's finished workflow closes the workflow store's panel now: only when the
+ * store holds a workflow of THIS chat (it is one store for every chat, and another chat's
+ * running workflow must keep its panel and controls).
+ */
+export function closesOwnWorkflow(plan: ReplayPlan, storeWorkflowSessionId: string | null | undefined,
+                                  chatId: string): boolean {
+    return plan.workflowDone && !!storeWorkflowSessionId && storeWorkflowSessionId === chatId;
 }
 
 type Timers = { set: (fn: () => void, ms: number) => unknown; clear: (handle: unknown) => void };

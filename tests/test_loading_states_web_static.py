@@ -324,12 +324,10 @@ def test_every_history_request_restarts_the_wait():
         assert "requestHistory(wsSocketRef.current, data.sessionId, true);" in branch, kind
     # And a reconnect that keeps its open chat instead of the server's auto-loaded pick.
     assert "requestHistory(wsSocketRef.current, prevSessionId, false);" in src
-    # A refused re-ask, and an account change on reconnect, take the server's auto-loaded chat.
+    # A refused re-ask takes the server's auto-loaded chat. (Another account on a reconnect
+    # reloads the page instead, web/lib/socketAccount.ts.)
     assert "requestHistory(wsSocketRef.current, fallback, true);" in src
-    assert "requestHistory(wsSocketRef.current, autoLoadedRef.current, true);" in src
-    # And the re-ask a reconnect's account check held back.
-    assert "requestHistory(wsSocketRef.current, deferred, false);" in src
-    assert src.count("requestHistory(") == 8, "the eight callers"
+    assert src.count("requestHistory(") == 6, "the six callers"
 
 
 def test_every_persona_writer_counts_against_a_late_refetch():

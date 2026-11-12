@@ -118,3 +118,11 @@ def test_an_invalidation_forgets_the_outage(store):
     assert permissions._store_down.is_down(_URL)
     permissions.invalidate_permissions_cache()
     assert not permissions._store_down.is_down(_URL)
+
+
+def test_the_store_pause_is_thirty_seconds():
+    """The documented pause (docs/security/USER_ISOLATION.md): the constant AND the instance
+    the code really uses, read without the store fixture, which installs its own memory.
+    MUTATION: `_STORE_DOWN_S = 7.0` - red; `_store_down = OutageMemory(0.0)` - red."""
+    assert permissions._STORE_DOWN_S == 30.0
+    assert permissions._store_down.pause_s == 30.0

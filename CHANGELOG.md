@@ -32,6 +32,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **Coming back to a busy chat shows it as you left it.** The running answer, its steps, the
+  specialist's window and its files are there at once when you switch back, after a reconnect
+  and after a reload; attachments no longer disappear, and what you type stays with its chat.
+  The browser no longer stores chat messages on disk.
 - **FTP and SSH connect only to the server you were asked about.** If a stored host changes
   or a server is forgotten while the question is open, or after a standing "always", the call
   is refused instead of going somewhere else, also between two servers you confirmed

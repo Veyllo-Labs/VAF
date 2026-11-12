@@ -74,7 +74,7 @@ directly and never passes through the proxy at all. **A new socket is tested ove
 ## Connection Sequence (Happy Path)
 
 1. WebUI opens its WebSocket. Any HTTPS page, and an HTTP page on port 80 or with no explicit port in its URL, dials its own origin (`/ws`): it came through a proxy, and the integrated one relays `/ws` itself. Asking the server instead would name the port the proxy bound, which is not the port the browser dialled once a port forward, a NAT or a load balancer sits in between (measured: a page on a forwarded `:18443` dialled `:8443` and never connected). Every other page asks `/api/network/ws-config`: `ws://<host>:<local_network_port>/ws` when TLS is off (8001 unless that key says otherwise), and plain `ws://127.0.0.1:8005/ws` for the local desktop (which loads `http://127.0.0.1:3000` and cannot use the proxy's self-signed cert). Pinned by `tests/test_ws_config.py`.
-2. Backend sends `session_list` and then `history_update` (auto-load latest session).
+2. Backend sends `session_list` and then `history_update` (auto-load latest session, marked `autoLoad: true`) followed by that chat's `live_replay`. A page that already shows a chat (a reconnect) ignores the auto-loaded one and sends `load_session` for its own chat.
 3. Frontend sets `currentSessionId` and starts sending `chat` messages with session ID.
 4. Backend queues the task with metadata (`origin_channel`, `task_class`, `enqueue_session_id`).
 5. Headless agent processes and streams `agent_message_update`.
@@ -195,6 +195,53 @@ Key rules:
   `/api/subagent/stream` fallback take. The live stream itself (`agent_message_update`,
   `tool_update`, ...) stays per subscription: that is display isolation, and a chat
   the user is not looking at must not paint into the one they are.
+- **A chat the browser left is still recorded, and replayed when it is opened again.**
+  Because the live stream stays per subscription, a browser that switched from chat A to
+  chat B receives nothing more about A (measured with a real `WebInterfaceManager`: of
+  `agent_message_update`, `tool_update`, `coder_state`, `file_created`, `subagent_update` and
+  `message_complete` emitted by A after the switch, only `message_complete` arrived). The
+  stored transcript does not have the running turn either: the runner writes a turn when it
+  ends. So the server keeps `LiveViewLedger` (`vaf/core/live_view.py`,
+  `WebInterfaceManager.live_view`), a per-chat record of the live events, written in
+  `broadcast_to_session`, `broadcast_to_session_and_owner` and the room branches of
+  `_push_session_update` and `/api/subagent/stream` (the lanes that bypass the first one),
+  always BEFORE the send. It is coalesced, not a log, in three groups:
+  - **turn**: `agent_message_update` (the last text of a round at the round's first place;
+    an untagged stream starts a new entry after any other turn event), `clear_last_assistant`,
+    `tool_update` (a start and an end per `toolId`) and `file_created` (per path and turn),
+    plus the prompt of each queued or running web turn (`set_prompt` after `tq.add`, as typed,
+    without the editor block; the regenerate re-ask too). Cleared by `message_complete` (its
+    turn's prompt) and `generation_stopped` (all prompts);
+  - **worker**: the last value of `subagent_update` and of every `*_state` type, merged
+    shallowly like the page merges them (a `subagent_update` without steps keeps the previous
+    ones; an embedder's own `*_state` view needs no registration), the last
+    `browser_frame_update` (none above 1.5 MB), rings of 200 `subagent_output_stream`,
+    `browser_step_update` and `workflow_output_stream` lines and of 20 `subagent_output`
+    blocks, and the workflow run (`workflow_start` resets it, `workflow_update` per `stepId`,
+    `workflow_done`). Survives the turn end, because async workers outlive it. Every type of `VAF_LIVE_VIEW_TYPES` (`vaf/core/progress.py`) is kept here, pinned by `tests/test_live_view.py`;
+  - **preview**: a `document_preview_wait` with a place (the upload socket's lane records
+    through `_recording_notify`); position 0, `document_preview_busy` and
+    `sidebar_documents_set` clear it.
+  Every other type is ignored. Bounds: 64 KB per string field (cut and marked
+  ` [truncated]`), 600 entries and 2 MB per chat with the oldest entry dropped first (never a
+  tool that started and has not ended, never a prompt), 32 chats (the one written least
+  recently goes), and expiry: 10 minutes after a worker said idle or error or after
+  `workflow_done`, 10 minutes for a preview place without an update, 30 minutes after any
+  entry's last write. A deleted or hidden chat's record goes with it; a credential the agent
+  stored from the chat (`_refresh_after_forget`) drops the chat's kept prompt.
+  `load_session` (after its ownership gate) and the connect-time auto-load (the connection's
+  own newest chat) send the `history_update` and then exactly one `live_replay`; nothing else
+  reads the record, and it is never read for prompt content, so a replay reaches exactly the
+  people the live events reached. Each of the two frames reads the record right before its
+  send, with no await in between: an event recorded earlier is in the frame, one recorded
+  later is sent to this (already subscribed) connection after it. **The server wins:** a turn
+  the queue says is over (`TaskQueue.is_busy_for_session` false) is never replayed, neither
+  its events nor its prompt, so a turn that ended while nobody watched cannot come back as a
+  spinner. Worst case 32 x 2 MB of server memory; a usual active chat holds a few hundred KB.
+  **The terminal UI does not need this (named boundary):** it runs every turn and every chat
+  switch on one lane thread (`_lane_loop`/`_submit` in `vaf/cli/tui_app/agent_bridge.py`), so
+  a switch waits behind a running turn and replays the stored transcript; it never shows one
+  chat while another runs, and it has no `file_created` consumer.
 - The per-session UI state (stop button, loader) is restored from the client's own
   bookkeeping on switch, but the `history_update`'s `isActive` (queue-answered, per
   session) is the truth and overrides a stale local "generating" flag. The local flag
@@ -476,7 +523,7 @@ Key rules:
   briefing } }`): the briefing of one agent invitation, freshly minted or shown again.
 
 - `sidebar_documents_set`: sent after processing `set_sidebar_documents`. Payload: `{ contents: Array<{ name, content, data?, mimeType?, htmlContent? }>, sessionId?, error? }`. Each entry has `name` and `content` (extracted text for the LLM); `data` (base64) and `mimeType` for display. When Gotenberg is available, Office docs (.docx, .xlsx, .pptx, .odt, .ods, .odp) are converted to PDF on the backend and returned as `mimeType: application/pdf` with `data` (PDF base64), so the frontend uses the PDF viewer for original layout. Without Gotenberg, the backend provides `htmlContent` or the frontend falls back to client-side mammoth.js for DOCX.
-- `document_preview_wait` (`{ sessionId, name, position, eta_ms, waited_ms }`): an Office document's conversion waits in the `gotenberg` fair queue. Sent only after it has waited half a second (`PREVIEW_WAIT_GRACE_S`), then on each change of place, and with `position: 0` when its turn comes; a conversion granted within the grace sends nothing. It goes to the uploading socket (`set_sidebar_documents`, the chat inject), or for a report opened in the viewer to that session's subscribers through `broadcast_to_session`, never through `_push_session_update`. `page.tsx` forwards `sessionId`, `name`, `position` and `eta_ms` into a place kept per chat and shows it in the viewer's header (`previewNotice`) for the chat on screen. Both preview events are in `crossSessionAllowed`, so the grant or busy of a chat switched away from still clears its entry.
+- `document_preview_wait` (`{ sessionId, name, position, eta_ms, waited_ms }`): an Office document's conversion waits in the `gotenberg` fair queue. Sent only after it has waited half a second (`PREVIEW_WAIT_GRACE_S`), then on each change of place, and with `position: 0` when its turn comes; a conversion granted within the grace sends nothing. It goes to the uploading socket (`set_sidebar_documents`, the chat inject), or for a report opened in the viewer to that session's subscribers through `broadcast_to_session`, never through `_push_session_update`. `page.tsx` forwards `sessionId`, `name`, `position` and `eta_ms` into a place kept per chat and shows it in the viewer's header (`previewNotice`) for the chat on screen. Both preview events are in `crossSessionAllowed`, so the grant or busy of a chat switched away from still clears its entry. A socket that closes clears every place (its grants and busies would go to the dead socket and the notice would stay forever); the `live_replay` after the reconnect brings back the places the server still holds, recorded on both lanes.
 - `document_preview_busy` (`{ sessionId, name, reason }`, `reason` `timeout` or `full`): the queue turned the conversion away. Comes before the `sidebar_documents_set` that carries the document in the simpler layout; `page.tsx` shows it as a neutral toast (`docPreviewBusy`, the toast's `notice` variant) in the chat on screen only. A place still held back in its grace when the refusal comes is never sent (`still_waiting`).
 - `editor_apply_edit`: sent when the agent calls `replace_editor_selection` or when `replace_editor_text` resolves an exact text match in the current editor document. Payload: `{ sessionId, selectionIndex, newText, start, end }`. The frontend replaces the character range `[start, end]` in the Document Editor with `newText` and removes that selection chip when `selectionIndex >= 0`. For native DOCX sessions, this is applied to the native document model; for legacy editor sessions it is applied to HTML/text content.
 - `document_ready`: opens a newly created/generated file in the right panel. Payload: `{ sessionId, filePath, title }`. Sent by `notify_document_created()` (`vaf/core/web_interface.py`) - from the main process via WebSocket, from sub-agent terminals via HTTP POST `/api/workflow/update`. Routing in the frontend: document extensions (`.md`, `.mdx`, `.html`, `.htm`, `.docx`, `.xlsx`, `.pptx`, `.txt`, `.rtf`) open in the Document Editor (native DOCX editor path for `.docx`); genuine code files open in the CodeViewer. The document-extension check runs BEFORE `isCodeFile()` - Markdown and HTML count as CodeViewer languages, so research/document reports would otherwise land in the code view. The handler reads the active session from `currentSessionIdRef` (not the closure variable, which is stale/null on the first connect).
@@ -500,9 +547,37 @@ Key rules:
   text only when that agent is provably on this session, otherwise the neutral `working`.
   `chatWait` (`{ position, eta_ms, more }` or null) is the place of this chat's first queued turn
   (`TaskQueue.wait_for_session`), so a reload or a chat switch shows it at once; `page.tsx`
-  reads the three fields explicitly. The three history_update builders from the stored transcript
-  share one helper (`_session_activity` in `web_server.py`); the regenerate repaint keeps its
-  literal `isActive: true`, and its queued turn reports through `chat_wait`.
+  reads the three fields explicitly. The history_update builders from the stored transcript
+  share one helper (`_session_activity` in `web_server.py`): `load_session` and the
+  connect-time auto-load through `_live_history_update`, the forget repaint directly; the
+  regenerate repaint keeps its literal `isActive: true`, and its queued turn reports through
+  `chat_wait`.
+  The `load_session` and auto-load builds also carry `live` (bool: a running turn of this
+  chat is on record, so the `live_replay` right behind brings its streamed text and cards)
+  and, while a web turn of the chat is queued or running, its prompt as the LAST message
+  (`{role: "user", content, timestamp, images?}`, the text as typed; the regenerate repaint's
+  precedent), because the runner stores the prompt only with the answer. The auto-load build
+  adds `autoLoad: true`. The regenerate and forget repaints carry neither: their viewers are
+  subscribed. Every answer entry stored with its turn id carries `turnId` (round entries
+  included), and an answer that came with files carries `files`
+  (`[{path, name, purpose?, toolId?}]`, see `file_created`). `page.tsx` rebuilds each message
+  field by field in ONE helper, `historyMessage` in `web/components/chat/liveView.ts`, which
+  forwards `turnId` and turns `files` into the bubble's chips; a running chat's transcript
+  (`live: true`) is held and drawn together with its `live_replay` (within 1.5 s at most), so
+  the view is never swapped for one without the running reply in between.
+- `live_replay`: a chat's recorded live events, sent right after the `history_update` of
+  `load_session` and of the connect-time auto-load, exactly once and empty when nothing is on
+  record. Payload: `{ sessionId, events: [...] }`, each event as it was sent (`sessionId`
+  included). The page hands each one to the same dispatch a live frame takes (`handleFrame`),
+  marked `replay: true`, and only for the chat that is open. A replayed frame is quiet: no
+  avatar reaction, no `agent-cursor` event, no minimum hold of the tool animation, no
+  workspace refetch, no learning walk; a replayed running tool still sets the avatar's tool
+  mode, because that tool is running. When the replay carries worker events, the page first
+  resets the specialist's window to idle (the server's picture replaces the kept one, which
+  would otherwise show every console line twice), and closes it again when the last
+  `subagent_update` said idle or error. No `message_complete` or `generation_stopped` is ever
+  replayed (they clear the turn), so no completion sound can come from a replay. Not in
+  `crossSessionAllowed`: it is addressed to the open chat.
   A chat turn stored per generation round (its answer's metadata carries `rounds`, see
   `agent_message_update` below) is projected the way it streamed (`_history_projection`):
   one assistant entry per round with text, carrying `round` and `roundAnswer`, each followed
@@ -529,7 +604,7 @@ Key rules:
   - The turn's answer is stored as before (the joined stream, cleaned, byte-identical), and when two or more rounds streamed text or called a tool its metadata gets `rounds` (`TURN_ROUNDS_KEY`): `[{round, text, tool_call_ids, answer}]`, which a reload projects (see `history_update`). A turn that ends at a draft, a delegation (`[ASYNC_ACK]`) or a system-log-only reply shows and stores one message, as before. A stop is shown in the round it hit: that round's bubble gets its own text plus the stop notice, tagged with the round and without a `clear_last_assistant`, so earlier rounds keep their bubbles. What is stored depends on where the stop was seen. A stop the engine reported (`[Generation stopped by user]`, seen at the top of a round) is stored per round like any other turn, the notice included in its round and in the stored text, so a reload shows what the live chat showed. A stop the stream raised mid-round (`_StopGenerationRequested`) leaves the turn before it is saved, so nothing of that turn is stored and a reload does not show it; that is how it was before rounds existed, and it is a named boundary, because storing a turn that was cut mid-stream is a decision of its own (what of the cut round counts as said). The stop handler sends the notice only to the stream of the stopped task's own chat (`_stop_stream_for`).
   - **Without `round`** (the sub-agent drain, the room lane, and the draft and delegation emits): the old rule. The frontend shows a **separate** assistant bubble when the last message is a tool card: only the text after the previous assistant content is shown in the new bubble, so tool use and the follow-up answer appear distinctly.
 - `agent_message_append`: a complete, **standalone** assistant message that is always appended as its own new bubble - never streamed or merged in-place. Used for proactive messages (e.g. automation results) where there is no live agent turn to attach to; the streaming `agent_message_update` path would otherwise overwrite the previous reply or drop the text. If it targets the active session the frontend appends it; if it targets another session the frontend shows an unread badge instead; if no session is active yet the frontend adopts and loads the target session. **"Standalone" has to hold in the transcript too, not only on arrival:** the chat groups a turn's assistant messages into one actions timeline (a turn being the span between two USER messages, its last assistant supplying the answer), so a proactive message it cannot recognise lands inside the preceding turn and replaces its answer bubble. `kind` is that recognition mark, which is why every proactive lane passes one and persists it on the stored message - see the **Actions Timeline** and **Wake / system-activity messages** sections of [WEB_UI.md](WEB_UI.md), pinned by `tests/test_proactive_bubbles_stand_alone.py`.
-- `file_created`: a file the agent (or an upload) produced, shown as a chip inside an assistant bubble. Payload: `sessionId`, `filePath`, `title`, `turnId`, `toolId` (the tool call that produced it, or `null`) and, only when known, `purpose`. One purpose exists, `"check"`: a picture a tool took to check its own work (`render_check`, `sandbox_preview`), which the chat draws inside its step and not as a chip (see Working screenshots in [WEB_UI.md](WEB_UI.md)). `notify_file_created` sends only a value from `web_interface.FILE_PURPOSES` and drops any other, so an unknown purpose leaves the file an attachment. A subprocess posts the same dict to `/api/workflow/update`, whose `WorkflowUpdate` model keeps undeclared fields (`extra="allow"`). The page copies both fields into the chip in the `file_created` branch (`newChip`) and keeps them in `withChips`; a chip rebuilt from `path` and `name` alone would put every check picture back among the attachments.
+- `file_created`: a file the agent (or an upload) produced, shown as a chip inside an assistant bubble. Payload: `sessionId`, `filePath`, `title`, `turnId`, `toolId` (the tool call that produced it, or `null`) and, only when known, `purpose`. One purpose exists, `"check"`: a picture a tool took to check its own work (`render_check`, `sandbox_preview`), which the chat draws inside its step and not as a chip (see Working screenshots in [WEB_UI.md](WEB_UI.md)). `notify_file_created` sends only a value from `web_interface.FILE_PURPOSES` and drops any other, so an unknown purpose leaves the file an attachment. Both notify paths also store the file on the chat (`record_created_file`: `runtime_state["created_files"]`, `{path, name, turnId, purpose, toolId, ts}`, deduplicated by path and turn, at most 300, also for a folder that is not a safe project folder), and the runner stores the turn's id on its answer (`metadata["turn_id"]`, `TURN_ID_KEY`), so `history_update` brings every chip back on its answer after a switch or a reload. A subprocess posts the same dict to `/api/workflow/update`, whose `WorkflowUpdate` model keeps undeclared fields (`extra="allow"`). The page copies both fields into the chip in the `file_created` branch (`newChip`) and keeps them in `withChips`; a chip rebuilt from `path` and `name` alone would put every check picture back among the attachments.
 - `maintenance_progress`: machine-level maintenance job progress (the memory re-embed migration today; generic by `kind` for later jobs such as DB backups). Payload: `kind` (str), `active` (bool), `done` (int), `total` (int), `pct` (float), `phase` (str, code-authored), `error` (str). Carries NO `sessionId` on purpose - the job is machine-wide and every connected client shows the banner (model-download precedent). Driven by `vaf/core/maintenance_state.MAINTENANCE` through the polling broadcaster `start_maintenance_broadcast` in `web_interface.py` (the poll interval is the throttle); NOT a `StatePublisher` lane (that publisher is per-session by design) and NOT in `VAF_LIVE_VIEW_TYPES` (banner event, not a live view - same as `model_download_progress`). Late joiners request the current snapshot with `get_maintenance_status` in `socket.onopen`; an inactive frame with an empty `kind` means "no job", not "job finished". Only a running job is replayed (`maintenance_snapshot_frame`): a client connecting after the end gets the "no job" frame, because the snapshot keeps the last job's kind and error, and a reload or reconnect replayed the finished banner (the red "aborted" one for 15 s) long after the job. The end is pushed to the clients that were connected; the result stays readable where the job reports it (Settings, the TUI).
 - `maintenance_progress` with `kind = "vllm_engine"`: a switch of the local engine (`local_engine.apply`, [VLLM_ENGINE.md](../llm/VLLM_ENGINE.md)). `phase` is one of `local_engine.PHASES` (the page translates it, `localEngine.phase.*`), `done`/`total` are finished steps of 7 with the vLLM install and 4 without (the last is `first_start`, one start of vLLM with a test completion before the engine changes), and `error` on the closing frame is the failure's code (`local_engine.FAILURE_CODES`); the banner shows its line `localEngine.banner.<code>` under the title and, for an admin, a Details button that opens Settings on AI & Model. No field is added for that: the code is the frame's `error`. The banner shows no "Please do nothing and wait." for this kind: llama.cpp keeps answering until the switch is done.
 - `model_download_progress` / `model_download_done` for every download that runs through `web_interface.model_download_broadcast` (the automatic GGUF download in `backend.ensure_model_available` and a vLLM model in `vllm_server.ensure_model`): the closing `model_download_done` carries `models` (the new GGUF list) only for a GGUF; a vLLM model's carries none, and the page then keeps its GGUF list (`Array.isArray(data.models)`).
@@ -707,6 +782,7 @@ If the tool card expands but the panel does not open:
 | Automation result not shown in WebUI (only created files appear) | Result delivered via streaming `agent_message_update`, which overwrote/dropped the bubble when no live turn was active; the `session_unread` fallback was filtered out by the cross-session guard | Deliver results via `agent_message_append` (always appends a new bubble); allow `session_unread` and `agent_message_append` through the cross-session filter |
 | Chat empty after app start until switching sessions and back | `session_list` auto-select sent `load_session` via the `ws` STATE variable, which the `onmessage` closure captured as `null` on the first connect - the send silently did nothing | Handlers send via `wsSocketRef.current` (set before `onopen`) instead of the captured state |
 | LAN WebUI keeps reconnecting / connection lost on a heavy session | Oversized `history_update` frame (inline base64 images) exceeded the proxy relay's default 1 MB per-frame cap (`PayloadTooBig`), tearing down the relay | Proxy relay connects to the backend with `max_size=None`; every uvicorn passes `WS_MAX_SIZE_BYTES` (200 MB) explicitly - see WebSocket Frame Sizing below |
+| Coming back to a busy chat: the streamed reply, the specialist's window, tool cards or file chips missing until the next live event, or a sentence typed in one chat sitting in the next one's box | The browser receives nothing for a chat it left (one subscription), the running turn is stored only when it ends, chips were browser state only, and the composer was one global field | The server's per-chat record and `live_replay` after every `history_update` of a load (`vaf/core/live_view.py`), chips stored on the session, the composer kept per chat in memory |
 | Stop button / loader from chat A visible in chat B, or stuck forever after switching back | Per-turn state was process-global (sub-agent window, workflow store, stop-press feedback, tool avatar) and the terminal events that clear the per-session flags were dropped by the cross-session filter, so a stale "generating" could never heal | Sub-agent window snapshots are swapped per session on switch, the workflow store records its run's `sessionId`, transient stop/tool state is cleared on switch, `message_complete`/`generation_stopped` pass the filter for bookkeeping, and `history_update.isActive` (queue-answered, per session) is the truth on a genuine switch |
 
 ## Message Ordering (history_update)
@@ -715,7 +791,7 @@ When the frontend receives `history_update`, it applies a multi-step pipeline to
 
 1. **Idle reload fast path (source of truth)**: If the session is not active (`isActive=false`), the frontend uses backend `history_update` as-is and skips cache/orphan merge. This avoids stale client fragments and improves reload stability.
 2. **Server order (`_order`)**: For active-session merge paths, server messages are indexed by response order.
-3. **Restricted orphan merge**: Only cache messages that are safe to re-inject are considered. Assistant/user cache orphans are not re-injected to prevent out-of-turn fragments after reload.
+3. **Restricted orphan merge**: Only the browser's own system log lines are re-added from its kept copy (`keepCachedOrphan`). A kept assistant bubble, tool card or user prompt is never re-added: the server sends the running turn's prompt with the `history_update` and its cards and streamed text with the `live_replay`, so a kept copy could only be a stale one.
 4. **Reorder + dedup**: System/tool messages are normalized into turn order and duplicates are removed.
 5. **Thinking merge (parser-based)**: Thinking-only assistant orphans are detected via `parseContent()` (works for complete and incomplete think blocks) and merged into adjacent answer assistant messages.
 6. **Turn-based role sort (safety net)**: Within each turn (between user messages), messages are sorted by role weight: `system (0) → tool (1) → assistant (2)`, using stable ordering within the same role.

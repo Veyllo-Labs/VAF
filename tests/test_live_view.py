@@ -307,3 +307,15 @@ def test_record_never_raises_on_odd_input():
     led.record(None, {"type": "coder_state"})
     led.record("", {"type": "coder_state"})
     assert led.snapshot(None, active=True) == {"prompts": [], "events": [], "turn": False}
+
+
+def test_every_live_view_type_of_vaf_is_kept_beside_the_turn():
+    """`VAF_LIVE_VIEW_TYPES` (vaf/core/progress.py) names VAF's own live views; each one has to
+    come back after a chat switch, also once the turn that started its worker is over.
+    MUTATION: drop a type's rule (e.g. browser_step_update from the rings) - red."""
+    from vaf.core.progress import VAF_LIVE_VIEW_TYPES
+    for t in sorted(VAF_LIVE_VIEW_TYPES):
+        led = LiveViewLedger()
+        led.record("A", {"type": t, "line": "x", "frame": "f"})
+        led.record("A", {"type": "message_complete"})
+        assert _types(led.snapshot("A", active=False)) == [t], t

@@ -2683,6 +2683,17 @@ turn (a spawned coder) is still addressed correctly. Skipping it is not an
 error - events simply carry `None` and your UI has to fall back to arrival
 order, which is the bug this exists to remove.
 
+VAF's own queue runner also stores the turn id on the turn's answer
+(`metadata["turn_id"]`, `vaf.core.session.TURN_ID_KEY`), and both notify paths of
+`notify_file_created` record the file on the session with that id
+(`runtime_state["created_files"]`), so a transcript read back after a reload can still
+put each file on its answer. VAF's web interface also keeps a bounded per-chat record of
+the live events it delivers (`vaf/core/live_view.py`) and sends it to a browser that opens
+the chat again; every `<name>_state` type you emit through
+`get_web_interface().emit_agent_state(...)` is kept there as its last value without any
+registration, so a view of your own is not blank after a chat switch. That record belongs
+to VAF's web UI and is not part of the facade.
+
 One level finer than the turn is the STEP. The agent loop declares the id of
 the tool call it is running (`vaf.core.subagent_ipc.tool_call_context`, read
 back with `get_current_tool_call_id`, carried into a spawned coder as

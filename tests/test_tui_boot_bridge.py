@@ -129,8 +129,20 @@ def boot_env(monkeypatch):
     fake_langid = SimpleNamespace(classify=lambda t: langid_calls.append(t))
     monkeypatch.setitem(_sys.modules, "vaf.vendor.langid", fake_langid)
     monkeypatch.setattr(_vendor, "langid", fake_langid, raising=False)
-    return SimpleNamespace(agent=agent, web=web, ipc=ipc_calls,
-                           langid=langid_calls, stack=stack_calls)
+    # The tray heartbeat is real (a thread per booted bridge) but posts nowhere: a
+    # running VAF on this machine must not receive a test's heartbeats.
+    heartbeats = []
+    monkeypatch.setattr(run_mod, "requests", SimpleNamespace(
+        post=lambda url, **kwargs: heartbeats.append(url)))
+    yield SimpleNamespace(agent=agent, web=web, ipc=ipc_calls,
+                          langid=langid_calls, stack=stack_calls, heartbeats=heartbeats)
+    # Every booted bridge is shut down by its test, and its heartbeat must end with
+    # it: a thread left behind posted every five seconds for the rest of the run.
+    import threading as _threading
+    left = [t for t in _threading.enumerate() if t.name == "vaf-tui-heartbeat"]
+    for thread in left:
+        thread.join(timeout=2.0)
+    assert not [t for t in left if t.is_alive()], "a shut-down bridge left its heartbeat running"
 
 
 def _events():
@@ -266,10 +278,11 @@ def test_boot_starts_the_service_stack_in_the_background(boot_env):
 
     from vaf.cli.tui_app.agent_bridge import boot_bridge
 
-    boot_bridge(_events(), "vaf", None, False)
+    bridge = boot_bridge(_events(), "vaf", None, False)
     deadline = _time.monotonic() + 3.0
     while _time.monotonic() < deadline and not boot_env.stack:
         _time.sleep(0.02)
+    bridge.shutdown()
     assert boot_env.stack == ["ensure"], (
         "boot never started the service stack (or started it twice)")
 
@@ -282,8 +295,9 @@ def test_boot_skips_the_stack_without_a_compose_file(boot_env, monkeypatch):
     from vaf.cli.tui_app.agent_bridge import boot_bridge
 
     monkeypatch.setattr(stack_mod, "find_stack_root", lambda: None)
-    boot_bridge(_events(), "vaf", None, False)
+    bridge = boot_bridge(_events(), "vaf", None, False)
     _time.sleep(0.2)
+    bridge.shutdown()
     assert boot_env.stack == []
 
 
@@ -292,5 +306,28 @@ def test_boot_claims_legacy_unscoped_sessions_for_the_owner(boot_env):
     them to every user - boot stamps them with the machine owner's scope."""
     from vaf.cli.tui_app.agent_bridge import boot_bridge
 
-    boot_bridge(_events(), "vaf", None, False)
+    bridge = boot_bridge(_events(), "vaf", None, False)
+    bridge.shutdown()
     assert StubMgr.instances[0].claimed_scope == SCOPE
+
+
+def test_the_heartbeat_runs_while_the_bridge_lives_and_ends_with_it(boot_env):
+    """The tray's liveness signal starts with the booted bridge and ends at its
+    shutdown; before, the thread ran an endless loop and outlived the session.
+    MUTATION: shutdown() without setting the heartbeat's stop - red (here and in
+    the fixture's teardown)."""
+    import threading as _threading
+    import time as _time
+
+    from vaf.cli.tui_app.agent_bridge import boot_bridge
+
+    bridge = boot_bridge(_events(), "vaf", None, False)
+    deadline = _time.monotonic() + 3.0
+    while _time.monotonic() < deadline and not boot_env.heartbeats:
+        _time.sleep(0.02)
+    assert boot_env.heartbeats and boot_env.heartbeats[0].endswith("/api/heartbeat")
+    threads = [t for t in _threading.enumerate() if t.name == "vaf-tui-heartbeat"]
+    assert len(threads) == 1 and threads[0].is_alive()
+    bridge.shutdown()
+    threads[0].join(timeout=2.0)
+    assert not threads[0].is_alive()

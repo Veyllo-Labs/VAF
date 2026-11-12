@@ -134,23 +134,36 @@ def _quiet_cli_http_logs() -> None:
         logging.getLogger(_name).setLevel(logging.WARNING)
 
 
-def _heartbeat_loop(interval=5):
-    """Background thread to send heartbeats to the persistent server (Tray App)."""
+def _heartbeat_loop(interval=5, stop=None):
+    """Background thread to send heartbeats to the persistent server (Tray App).
+
+    Ends when `stop` (a threading.Event) is set; the owner of the thread sets it on its
+    own shutdown, so a session that ended leaves no thread posting behind it. With no
+    server, a failed connect pauses every sender of this process for
+    LOCAL_API_DOWN.pause_s instead of being repeated (about a second per refused
+    connect on Windows)."""
+    import threading
     import uuid
+    from vaf.core.web_interface import LOCAL_API_DOWN, _is_connect_failure, internal_api_base
+    stop = stop or threading.Event()
     client_id = str(uuid.uuid4())
-    while True:
-        try:
-            # TLS-aware internal base: with local_network_tls_enabled the public
-            # 8001 port speaks HTTPS - a hardcoded plain-HTTP POST dies silently.
-            from vaf.core.web_interface import internal_api_base
-            requests.post(
-                f"{internal_api_base()}/api/heartbeat",
-                json={"client_id": client_id, "timestamp": time.time()},
-                timeout=1
-            )
-        except:
-            pass # Use silence if server is not running or unreachable
-        time.sleep(interval)
+    while not stop.is_set():
+        # TLS-aware internal base: with local_network_tls_enabled the public
+        # 8001 port speaks HTTPS - a hardcoded plain-HTTP POST dies silently.
+        base = internal_api_base()
+        if not LOCAL_API_DOWN.is_down(base):
+            try:
+                requests.post(
+                    f"{base}/api/heartbeat",
+                    json={"client_id": client_id, "timestamp": time.time()},
+                    timeout=1
+                )
+                LOCAL_API_DOWN.reached(base)
+            except Exception as exc:
+                # Silence if the server is not running or unreachable.
+                if _is_connect_failure(exc):
+                    LOCAL_API_DOWN.failed(base)
+        stop.wait(interval)
 
 
 class _RunGroup(TyperGroup):

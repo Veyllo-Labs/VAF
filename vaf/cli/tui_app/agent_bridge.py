@@ -190,6 +190,9 @@ class AgentBridge:
         self._worker = threading.Thread(target=self._lane_loop, daemon=True,
                                         name="vaf-tui-lane")
         self._worker.start()
+        # Ends the tray heartbeat boot_bridge starts for this bridge; without it the
+        # thread posted for the rest of the process after the session ended.
+        self._heartbeat_stop = threading.Event()
         self._busy = False
         self._tools_ran = False
         self._streaming = False
@@ -1355,6 +1358,7 @@ class AgentBridge:
         stop a queue tick, because this method runs after that loop is gone.
         """
         self._stopping.set()
+        self._heartbeat_stop.set()
         try:
             session_id = getattr(self.agent, "current_session_id", None)
             self._get_web().resolve_gate(session_id, "cancel")
@@ -1468,10 +1472,6 @@ def boot_bridge(events, theme_key: str, session_id: Optional[str], verbose: bool
 
     _quiet_cli_http_logs()
     boot_tui = TUI(theme_key)
-
-    # The tray's liveness signal. Daemon so it never holds the process open.
-    threading.Thread(target=_heartbeat_loop, daemon=True,
-                     name="vaf-tui-heartbeat").start()
 
     if not _check_and_install_git(boot_tui):
         boot_tui.error("Git is required. Install it and run `vaf run` again.")
@@ -1641,4 +1641,9 @@ def boot_bridge(events, theme_key: str, session_id: Optional[str], verbose: bool
 
     bridge = AgentBridge(agent, session, session_mgr, events)
     agent.set_event_sink(bridge.on_sink_event)
+    # The tray's liveness signal, started once the bridge that ends it exists: a boot
+    # that stops earlier leaves no thread behind, and bridge.shutdown() stops this one.
+    # Daemon so it never holds the process open.
+    threading.Thread(target=_heartbeat_loop, kwargs={"stop": bridge._heartbeat_stop},
+                     daemon=True, name="vaf-tui-heartbeat").start()
     return bridge

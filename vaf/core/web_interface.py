@@ -24,6 +24,7 @@ TERMINAL_SESSION_EVENTS = frozenset({"message_complete"})
 from fastapi import WebSocket
 from vaf.core.platform import Platform
 from vaf.core.log_helper import append_domain_log
+from vaf.core.outage import OutageMemory
 from pathlib import Path
 
 import queue
@@ -1127,16 +1128,28 @@ class WebInterfaceManager:
             self.push_update(data)
 
     def _http_fallback_push(self, data: dict):
-        """POST to the internal API when the asyncio loop reference is stale."""
+        """POST to the internal API when the asyncio loop reference is stale.
+
+        Runs inline for every event, so with no web server it would dial a closed port
+        once per event: free on Linux, about half a second each on Windows (this call's
+        connect timeout). After a failed connect the local API counts as down for
+        LOCAL_API_DOWN.pause_s and events are dropped without a dial, as a refused push
+        drops them anyway. Only the live view loses them: results reach the session
+        through the runner's queue drain, never through this push."""
         msg_type = data.get('type', '')
+        base = internal_api_base()
+        if LOCAL_API_DOWN.is_down(base):
+            _diag_log(f"[PUSH_DROP] local API down, not dialed: type={msg_type} "
+                      f"session={data.get('sessionId')}")
+            return
         try:
             import requests as _req
-            from vaf.core.config import Config
-            tls_on = Config.get("local_network_tls_enabled", False)
-            port = 8005 if tls_on else 8001
-            _req.post(f"http://127.0.0.1:{port}/api/subagent/stream", json=data, timeout=0.5)
-            _diag_log(f"[PUSH_HTTP_OK] type={msg_type} session={data.get('sessionId')} port={port}")
+            _req.post(f"{base}/api/subagent/stream", json=data, timeout=0.5)
+            LOCAL_API_DOWN.reached(base)
+            _diag_log(f"[PUSH_HTTP_OK] type={msg_type} session={data.get('sessionId')} base={base}")
         except Exception as exc:
+            if _is_connect_failure(exc):
+                LOCAL_API_DOWN.failed(base)
             _diag_log(f"[PUSH_DROP] No _server_loop + HTTP fallback failed! type={msg_type} "
                       f"session={data.get('sessionId')} err={exc}")
 
@@ -1327,6 +1340,25 @@ def internal_api_base() -> str:
     except Exception:
         tls_on = False
     return "http://127.0.0.1:8005" if tls_on else "http://127.0.0.1:8001"
+
+
+# How long the local API counts as down after a connect to it failed. Shared by every
+# sender in this process (the push fallback, the CLI heartbeat), keyed on
+# internal_api_base(). Short, because a web app that starts mid-run should see the live
+# events again soon; long enough that a process without one stops paying a refused
+# connect per event (about 0.5 to 2 s each on Windows).
+_LOCAL_API_PAUSE_S = 10.0
+LOCAL_API_DOWN = OutageMemory(_LOCAL_API_PAUSE_S)
+
+
+def _is_connect_failure(exc: BaseException) -> bool:
+    """The connect itself failed (refused, unreachable, connect timeout), not the request
+    after it: a slow but listening server is not down."""
+    try:
+        from requests.exceptions import ConnectionError as _RequestsConnectionError
+    except ImportError:              # pragma: no cover - requests is a hard dependency
+        _RequestsConnectionError = ()
+    return isinstance(exc, (ConnectionRefusedError, _RequestsConnectionError))
 
 
 def announce_room_invitation(room, invitation: dict, *, inviter_scope: Optional[str],

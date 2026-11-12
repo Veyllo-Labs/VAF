@@ -288,7 +288,7 @@
     "appRoomWaiting": "กำลังรอ Veyllo App",
     "appRoomNotDelivered": "ยังส่งไม่ถึง Veyllo App ไม่ได้รับข้อความนี้",
     "appRoomConfirmed": "ยืนยันใน Veyllo App แล้ว",
-    "appRoomPlaceholder": "ถึง Veyllo App หรือ @{handle} แล้วเว้นวรรค",
+    "appRoomPlaceholder": "Veyllo App หรือ @{handle} เว้นวรรค",
     "appRoomNeedsNewerApp": "การเขียนถึงเอเจนต์ใน Veyllo App ต้องใช้ Veyllo App เวอร์ชันใหม่กว่านี้ คุณยังถาม {name} ได้ด้วย @{handle}",
     "appRoomChannelOff": "Veyllo App ปิดอยู่สำหรับบัญชีของคุณ เปิดได้ที่การตั้งค่า การเชื่อมต่อ",
     "appRoomNoDevice": "ยังไม่มี Veyllo App ที่จับคู่กับบัญชีของคุณ",

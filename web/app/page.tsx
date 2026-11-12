@@ -24,7 +24,8 @@ import { copyText } from '@/lib/clipboard';
 import { downloadText } from '@/lib/download';
 import { type NativeDocxDocument, flattenNativeDocxText, replaceTextInNativeDocx } from '@/lib/docxNative';
 import type { EditorFileInfo } from '@/lib/editorFile';
-import { loadSessionCache, trimSessionCache, saveSessionCache } from '@/lib/sessionCache';
+import { trimSessionCache, purgeLegacySessionCache } from '@/lib/sessionCache';
+import { historyMessage, entryActivity, keepCachedOrphan, ComposerDrafts } from '@/components/chat/liveView';
 import SettingsModal, { type SettingsModalProps } from '@/components/SettingsModal';
 import { AgentAvatar, SPECIALIST_SKIN, SUBAGENT_ACCENT, type AvatarMode, type SubAgentKind } from '@/components/AgentAvatar';
 import { VoiceEnrollmentCall } from '@/components/VoiceEnrollmentCall';
@@ -95,8 +96,8 @@ type Message = {
     /**
      * Which exchange produced this message (backend `turnId`). File events carry
      * the same id, which is how a created file finds the answer it belongs to.
-     * Absent on messages restored from history and on proactive messages, which
-     * belong to no turn.
+     * Restored from history for answers stored with their turn id; absent on older
+     * answers and on proactive messages, which belong to no turn.
      */
     turnId?: string;
     /**
@@ -125,6 +126,9 @@ type Message = {
  * change, and anything emitted outside a turn, have no address, and showing such
  * a file on the newest answer beats not showing it at all.
  */
+/** How long a running chat's transcript waits for its live_replay (see liveHistoryRef). */
+const LIVE_HISTORY_HOLD_MS = 1500;
+
 const chipTargetIndex = (msgs: Message[], turnId?: string): number | undefined => {
     for (let i = msgs.length - 1; i >= 0; i--) {
         if (msgs[i].role !== 'assistant') continue;
@@ -2845,6 +2849,10 @@ function VAFDashboardContent() {
     const [input, setInput] = useState('');
     const inputValueRef = useRef('');
     const [insertedSelections, setInsertedSelections] = useState<InsertedSelectionRange[]>([]);
+    const insertedSelectionsRef = useRef<InsertedSelectionRange[]>([]);
+    useEffect(() => { insertedSelectionsRef.current = insertedSelections; }, [insertedSelections]);
+    // What was typed in each chat the person left, kept in memory only (components/chat/liveView.ts).
+    const composerDraftsRef = useRef(new ComposerDrafts<InsertedSelectionRange>());
     const [suggestion, setSuggestion] = useState('');
     const [messages, setMessages] = useState<Message[]>([]);
     const messagesRef = useRef<Message[]>([]); // Ref to access messages in WebSocket callback
@@ -3439,6 +3447,26 @@ function VAFDashboardContent() {
     const [isDragOver, setIsDragOver] = useState(false);
     /** Images staged in the input bar, cleared after send */
     const [attachedImages, setAttachedImages] = useState<{ id: string; url: string; name: string }[]>([]);
+    const attachedImagesRef = useRef<{ id: string; url: string; name: string }[]>([]);
+    useEffect(() => { attachedImagesRef.current = attachedImages; }, [attachedImages]);
+    // The composer belongs to its chat: what was typed (and attached) in the chat being left
+    // is kept, the entered chat gets its own back or an empty box. Setters and refs only, so
+    // the socket handler's closure from an earlier render may call it.
+    const swapComposer = (fromId: string | null | undefined, toId: string | null | undefined) => {
+        composerDraftsRef.current.save(fromId, {
+            text: inputValueRef.current,
+            images: attachedImagesRef.current,
+            selections: insertedSelectionsRef.current,
+        });
+        const next = composerDraftsRef.current.take(toId);
+        inputValueRef.current = next.text;
+        attachedImagesRef.current = next.images;
+        insertedSelectionsRef.current = next.selections;
+        setInput(next.text);
+        setAttachedImages(next.images);
+        setInsertedSelections(next.selections);
+        setSuggestion('');
+    };
 
     // Stats state
     type TokenStats = {
@@ -4884,40 +4912,52 @@ function VAFDashboardContent() {
         preserveChatScroll(() => setSubAgentState(prev => ({ ...prev, isOpen: false })));
     }, [isWorkflowRunning]);
 
-    // Cache State
+    // Cache State: each chat's messages as the first picture for a switch back, in MEMORY
+    // only. The server's history_update and live_replay replace it (components/chat/liveView.ts).
+    // It used to be written to localStorage, keyed by chat id alone and never cleared at
+    // logout, so a second account on the same browser could see the first one's chats.
     const sessionCache = useRef<Record<string, Message[]>>({});
-    const cacheSaveTimeout = useRef<NodeJS.Timeout | null>(null);
+    // The transcript of a chat with a running turn, held until the live_replay right behind
+    // it arrives: both are drawn in one go, so the kept picture is never swapped for a
+    // transcript without the running reply in between. A replay that does not come within
+    // LIVE_HISTORY_HOLD_MS still lets the transcript through.
+    const liveHistoryRef = useRef<{ sessionId: string; messages: Message[]; timer: ReturnType<typeof setTimeout> } | null>(null);
+    const applyLiveHistory = (sessionId?: string) => {
+        const held = liveHistoryRef.current;
+        if (!held || (sessionId && held.sessionId !== sessionId)) return;
+        clearTimeout(held.timer);
+        liveHistoryRef.current = null;
+        if (held.sessionId !== currentSessionIdRef.current) return;   // the person moved on
+        snapshotLenRef.current = held.messages.length;
+        setMessages(held.messages);
+        setHistoryLoading(false);
+    };
+    const holdLiveHistory = (sessionId: string, messages: Message[]) => {
+        if (liveHistoryRef.current) clearTimeout(liveHistoryRef.current.timer);
+        liveHistoryRef.current = { sessionId, messages,
+            timer: setTimeout(() => applyLiveHistory(sessionId), LIVE_HISTORY_HOLD_MS) };
+    };
     const sessionsRef = useRef<Session[]>([]);
     useEffect(() => {
         sessionsRef.current = sessions;
     }, [sessions]);
 
-    // Load Cache on Mount
+    // The stored copy an older version left behind goes on the first load.
     useEffect(() => {
-        sessionCache.current = loadSessionCache();
+        purgeLegacySessionCache();
     }, []);
 
-    // Save Cache on Update (Debounced)
     useEffect(() => {
         if (!currentSessionId) return;
-
-        // Update in-memory cache immediately
+        const isNew = !(currentSessionId in sessionCache.current);
         sessionCache.current[currentSessionId] = messages;
-
-        // Debounce save to disk
-        if (cacheSaveTimeout.current) clearTimeout(cacheSaveTimeout.current);
-        cacheSaveTimeout.current = setTimeout(() => {
-            const sessionIdsInOrder = sessionsRef.current.map((s) => s.id);
-            const trimmed = trimSessionCache(sessionCache.current, {
+        // Bounded like before (chats, messages per chat), trimmed when a chat joins.
+        if (isNew) {
+            sessionCache.current = trimSessionCache(sessionCache.current, {
                 currentSessionId,
-                sessionIdsInOrder,
-            });
-            sessionCache.current = trimmed;
-            saveSessionCache(sessionCache.current, {
-                currentSessionId,
-                sessionIdsInOrder,
-            });
-        }, 1000);
+                sessionIdsInOrder: sessionsRef.current.map((s) => s.id),
+            }) as Record<string, Message[]>;
+        }
     }, [messages, currentSessionId]);
 
     useEffect(() => {
@@ -5004,7 +5044,11 @@ function VAFDashboardContent() {
         setStopBtnPos(null);
         setStopHovered(false);
 
-        // 3. Optimistic Switch (viewer state is derived from sessionViewerState[id] automatically)
+        // 3. Optimistic Switch (viewer state is derived from sessionViewerState[id] automatically).
+        // The ref moves at once: an event of the chat being left that arrives before the next
+        // render would otherwise pass the session filter and paint into this one.
+        currentSessionIdRef.current = id;
+        swapComposer(currentSessionId, id);
         setCurrentSessionId(id);
         setUnreadSessions(prev => { const next = new Set(prev); next.delete(id); return next; });
         expectNewAssistantRef.current = false;
@@ -5237,6 +5281,37 @@ function VAFDashboardContent() {
                     }
                 }
 
+                // A chat's recorded live events (vaf/core/live_view.py), sent right after its
+                // history_update: what the running turn and its workers did while this view
+                // showed another chat. Each one goes through this same dispatch, marked as a
+                // replay so it stays quiet (no reaction, no cursor, no hold timer).
+                if (data.type === 'live_replay') {
+                    // The open chat's own record only (never a room's, never a chat left since).
+                    if (!data.sessionId || !activeSessionId || !eventBelongsHere(data, activeSessionId, 'chat')
+                        || !Array.isArray(data.events)) return;
+                    // The transcript held for this replay first, in the same task as the
+                    // events below, so React draws them as one picture.
+                    applyLiveHistory(data.sessionId);
+                    const replayed = data.events.filter((ev: any) => ev && typeof ev === 'object'
+                        && typeof ev.type === 'string' && ev.type !== 'live_replay');
+                    // The server's picture of the workers replaces the one kept for this chat;
+                    // replaying it on top of the kept window would show every line twice.
+                    const workerTypes = /^(subagent_|browser_)|_state$/;
+                    if (replayed.some((ev: any) => workerTypes.test(ev.type))) {
+                        subAgentStepsRef.current = [];
+                        lastSubAgentStatusRef.current = '';
+                        setSubAgentState({ ...IDLE_SUB_AGENT_STATE, isOpen: false });
+                    }
+                    for (const ev of replayed) handleFrame({ ...ev, replay: true });
+                    // A worker that already said it is done stays closed, as it would have.
+                    const lastPresence = [...replayed].reverse()
+                        .find((ev: any) => ev.type === 'subagent_update' && ev.presence)?.presence;
+                    if (lastPresence === 'idle' || lastPresence === 'error') {
+                        setSubAgentState(prev => ({ ...prev, isOpen: false }));
+                    }
+                    return;
+                }
+
                 if (data.type === 'new_log') {
                     const entry = data.entry || {};
                     const src = String(entry.source || "");
@@ -5318,7 +5393,8 @@ function VAFDashboardContent() {
                         if (toolModeClearTimerRef.current) { clearTimeout(toolModeClearTimerRef.current); toolModeClearTimerRef.current = null; }
                         const release = () => { setActiveToolName(''); setActiveToolMode(null); toolModeClearTimerRef.current = null; };
                         const elapsed = Date.now() - toolModeStartRef.current;
-                        if (elapsed >= TOOL_ANIM_MIN_MS) release();
+                        // A replayed end is history: no minimum hold for an animation nobody saw start.
+                        if (data.replay || elapsed >= TOOL_ANIM_MIN_MS) release();
                         else toolModeClearTimerRef.current = setTimeout(release, TOOL_ANIM_MIN_MS - elapsed);
                     }
 
@@ -5428,7 +5504,8 @@ function VAFDashboardContent() {
 
                     // Flash the main agent avatar with the tool's outcome. A plan-gate / policy block
                     // arrives as the tool RESULT ([PLAN REQUIRED] / Security Error) -> `blocked` (bumps a wall).
-                    if (subType === 'end' || subType === 'error') {
+                    // Not for a replayed end: that outcome happened while another chat was open.
+                    if (!data.replay && (subType === 'end' || subType === 'error')) {
                         const res = String(eventData ?? '');
                         if (res.includes('[PLAN REQUIRED]') || res.startsWith('Security Error:')) {
                             fireAgentReaction('blocked');
@@ -5457,14 +5534,14 @@ function VAFDashboardContent() {
                     // Clear status message when tool runs
                     setStatusMessage('');
 
-                    // Drive agent-cursor animation
-                    if (toolName === 'learn_attached_knowledge') {
+                    // Drive agent-cursor animation (a live tool only: a replay moves no cursor)
+                    if (!data.replay && toolName === 'learn_attached_knowledge') {
                         if (subType === 'start') {
                             window.dispatchEvent(new CustomEvent('agent-cursor', { detail: { phase: 'start' } }));
                         } else if (subType === 'end' || subType === 'error') {
                             window.dispatchEvent(new CustomEvent('agent-cursor', { detail: { phase: 'end' } }));
                         }
-                    } else if (subType === 'start') {
+                    } else if (!data.replay && subType === 'start') {
                         if (toolName === 'create_workflow') {
                             let args: Record<string, unknown> = {};
                             try { args = JSON.parse(eventData || '{}'); } catch { /* empty */ }
@@ -5945,7 +6022,9 @@ function VAFDashboardContent() {
                             // Unaddressed chips (emitted outside any turn) ride along: they
                             // have nothing better to wait for, and a completed turn is the
                             // same target the old code would have picked.
-                            const ready = pending.filter(f => !f.turnId || f.turnId === data.turnId);
+                            // ...but only this chat's: a chip of another chat never lands here.
+                            const ready = pending.filter(f => (!f.turnId || f.turnId === data.turnId)
+                                && (!f.sessionId || f.sessionId === data.sessionId));
                             if (ready.length > 0) {
                                 setMessages(prev => {
                                     let out = prev;
@@ -6588,8 +6667,9 @@ function VAFDashboardContent() {
                     }
                     // Drive the viewer's page-walk animation exactly like the old
                     // chat lane did (same agent-cursor event; the viewer prefers
-                    // its real page count over the total we pass).
-                    if (_phase === 'learning' && !learnCursorActiveRef.current) {
+                    // its real page count over the total we pass). A replayed frame starts
+                    // no walk; the next live one does.
+                    if (!data.replay && _phase === 'learning' && !learnCursorActiveRef.current) {
                         learnCursorActiveRef.current = true;
                         window.dispatchEvent(new CustomEvent('agent-cursor', {
                             detail: { phase: 'start', total: (typeof data.batchesTotal === 'number' && data.batchesTotal > 0) ? data.batchesTotal : 1 },
@@ -6778,6 +6858,14 @@ function VAFDashboardContent() {
                 }
                 else if (data.type === 'history_update') {
                     const prevSessionId = currentSessionIdRef.current;
+                    // The connect-time auto-load is the server's pick (the newest chat). A view
+                    // that already shows a chat - a reconnect - keeps it and asks for it again,
+                    // which also subscribes this new socket to it.
+                    if (data.autoLoad && prevSessionId && data.sessionId !== prevSessionId) {
+                        requestHistory(wsSocketRef.current, prevSessionId, false);
+                        return;
+                    }
+                    currentSessionIdRef.current = data.sessionId;
                     setCurrentSessionId(data.sessionId);
                     // The place of this chat's queued turn, read field by field: a reload or a
                     // chat switch shows it at once instead of waiting for the next change.
@@ -6791,7 +6879,14 @@ function VAFDashboardContent() {
                     if (data.sessionId !== prevSessionId) {
                         clearBrowserStartWait();
                         setSubAgentState(dropPendingBrowserStart);
+                        // The composer belongs to its chat (New Chat, an adopted chat). The first
+                        // chat of a page load adopts what is already typed.
+                        if (prevSessionId) swapComposer(prevSessionId, data.sessionId);
                     }
+                    // A chat opened from the server (load or auto-load, which carry `live`):
+                    // its kept preview place goes, the live_replay behind this brings it back
+                    // when the server still has one.
+                    if (typeof data.live === 'boolean') clearDocPreviewWait(data.sessionId);
                     // Do not clear Document Viewer documents here – they are kept per session in sessionViewerState and would be lost on second switch-back
                     sidebarDocsSyncedForSessionRef.current = null;
 
@@ -6806,17 +6901,17 @@ function VAFDashboardContent() {
                     // unconditional `isActive || local flag` was a workaround for the old
                     // always-false backend signal, and it made a stale flag for a
                     // backgrounded chat re-arm the stop button on every visit, forever.
-                    const prevLocalState = sessionLoadingStates.current[data.sessionId];
-                    const recentLocalSend = lastUserSendTimeRef.current > 0 &&
-                        (Date.now() - lastUserSendTimeRef.current) < 15000;
-                    const hadLocalGenerating = recentLocalSend && !!prevLocalState?.isGenerating;
-                    const effectiveActive = isActive || hadLocalGenerating;
+                    const { active: effectiveActive, hadLocalGenerating } = entryActivity(
+                        isActive, sessionLoadingStates.current[data.sessionId],
+                        lastUserSendTimeRef.current, Date.now());
                     const status = data.currentStatus && isActive ? `Agent: ${data.currentStatus}` : '';
                     setLoading(effectiveActive);
                     setIsGenerating(effectiveActive);
                     setStatusMessage(status);
                     syncedSessions.current.add(data.sessionId);
-                    setHistoryLoading(false);  // history snapshot arrived (active OR idle/empty) → stop the load spinner
+                    // history snapshot arrived (active OR idle/empty) → stop the load spinner. A
+                    // running chat's transcript waits for its live_replay, and so does the spinner.
+                    if (data.live !== true) setHistoryLoading(false);
 
                     // Update per-session loading state tracking. loadingMessageId is the
                     // TTS spinner's index into the LOCAL message list; the server's message
@@ -6828,27 +6923,12 @@ function VAFDashboardContent() {
                         loadingMessageId: null
                     };
 
-                    // Parse server messages and preserve server order (index) so sort is stable
+                    // Parse server messages and preserve server order (index) so sort is stable.
+                    // Rebuilt field by field in ONE helper (historyMessage), which also carries
+                    // the answer's turn and its stored files.
                     const serverMsgs: Array<Message & { _order: number }> = data.messages
                         .filter((m: any) => m.role !== 'system') // Hide raw system prompts from server (we have better local logs)
-                        .map((m: any, idx: number) => ({
-                            role: m.role,
-                            content: m.content,
-                            timestamp: m.timestamp ? new Date(m.timestamp).getTime() : Date.now(),
-                            kind: m.kind,   // proactive bubble tag -> re-plays the avatar animation on reload/chat-switch
-                            // The backend has always sent these for a user message that carried
-                            // an attachment; this rebuild dropped them, so a reloaded chat lost
-                            // its own pictures. Same class as the diffs/activity fields before.
-                            images: m.images,
-                            _order: idx,
-                            toolId: m.toolId,
-                            toolName: m.toolName,
-                            toolStatus: m.toolStatus as Message['toolStatus'] | undefined,
-                            // A turn stored per generation round (_history_projection): the
-                            // same placement and answer rule as while it streamed.
-                            round: typeof m.round === 'number' ? m.round : undefined,
-                            roundAnswer: typeof m.roundAnswer === 'boolean' ? m.roundAnswer : undefined
-                        }));
+                        .map((m: any, idx: number) => historyMessage(m, idx, Date.now()) as Message & { _order: number });
 
                     // Best practice for reload/network stability:
                     // When no generation is active, treat backend history as source of truth.
@@ -6864,7 +6944,6 @@ function VAFDashboardContent() {
                         if (sessionSwitched || finalServerMsgs.length > 0 || messagesRef.current.length === 0) {
                             snapshotLenRef.current = finalServerMsgs.length;
                             setMessages(finalServerMsgs);
-                            if (sessionSwitched) setAttachedImages([]);
                         }
 
                         // If a chat was queued before we had a session, send it now.
@@ -6948,30 +7027,12 @@ function VAFDashboardContent() {
                         return srvMsg;
                     });
 
-                    // Find Orphans: Messages in Cache but NOT in Server
-                    const orphans = cachedMsgs.filter(cMsg => {
-                        // Trust server history for assistant turns: cached assistant orphans
-                        // (especially thinking-only stream fragments) can appear out of turn
-                        // after restart, and the live stream rebuilds the current bubble
-                        // anyway (agent_message_update carries the full content so far).
-                        // USER prompts are different: this merge only runs while the turn is
-                        // ACTIVE, and the runner saves the session AFTER the turn - so the
-                        // in-flight turn's own prompt is exactly the user message the server
-                        // does not have yet. Dropping it made the prompt vanish on a
-                        // switch-back into a running turn (live incident, screenshot: the
-                        // running tool card stood alone with no prompt above it).
-                        if (cMsg.role === 'assistant') return false;
-                        if (cMsg.role === 'system') return true;
-
-                        const existsInServer = hydratedServerMsgs.some((sMsg: Message) => {
-                            if (sMsg.role !== cMsg.role) return false;
-                            if (sMsg.content === cMsg.content) return true;
-                            if (Math.abs(sMsg.timestamp - cMsg.timestamp) < 2000) return true;
-                            return false;
-                        });
-
-                        return !existsInServer;
-                    }).map((m, idx) => ({ ...m, _order: 100000 + idx })); // So orphans sort after server when timestamps tie
+                    // Kept rows next to the server's: only the browser's own system log lines.
+                    // The running turn's prompt comes with this history_update and its cards
+                    // and streamed text with the live_replay behind it, so a kept copy of any
+                    // of them could only be stale (keepCachedOrphan).
+                    const orphans = cachedMsgs.filter(keepCachedOrphan)
+                        .map((m, idx) => ({ ...m, _order: 100000 + idx })); // So orphans sort after server when timestamps tie
 
                     // Sort by _order only so server order is strict (fixes user message appearing below assistant when backend timestamps differ or are equal)
                     let finalMsgs = [...hydratedServerMsgs, ...orphans].sort((a, b) =>
@@ -7090,8 +7151,14 @@ function VAFDashboardContent() {
                         }
                     }
 
-                    snapshotLenRef.current = finalMsgs.length;
-                    setMessages(finalMsgs);
+                    // A running turn (`live`): drawn together with its live_replay, which brings
+                    // the streamed text and the cards this transcript does not have yet.
+                    if (data.live === true) {
+                        holdLiveHistory(data.sessionId, finalMsgs);
+                    } else {
+                        snapshotLenRef.current = finalMsgs.length;
+                        setMessages(finalMsgs);
+                    }
 
                     // If a chat was queued before we had a session, send it now.
                     if (pendingSendRef.current && data.sessionId) {
@@ -7507,7 +7574,7 @@ function VAFDashboardContent() {
                         // Keep the workspace chip/window in sync with new files — but only while the
                         // viewer is showing the active chat's workspace, so a background file event
                         // never yanks the view away from another workspace the user is browsing.
-                        if (viewedWorkspaceSidRef.current == null || viewedWorkspaceSidRef.current === activeSessionId) {
+                        if (!data.replay && (viewedWorkspaceSidRef.current == null || viewedWorkspaceSidRef.current === activeSessionId)) {
                             refreshWorkspace(activeSessionId);
                         }
                         const newChip = {
@@ -7603,6 +7670,10 @@ function VAFDashboardContent() {
             // A browser start sent on this socket is answered on this socket or never.
             clearBrowserStartWait();
             setSubAgentState(dropPendingBrowserStart);
+            // So is a preview's place: its grant or busy would go to this dead socket and
+            // the notice would stay forever. The replay after the reconnect brings back the
+            // places the server still holds.
+            setDocPreviewWaits({});
             // A socket that closed WITHOUT ever opening = a rejected handshake (expired/invalid token,
             // or the server briefly down). Re-check auth before reconnecting so an expired session
             // routes cleanly to /login instead of hammering /ws.

@@ -156,7 +156,10 @@ def test_a_reloaded_chat_keeps_its_own_attachments():
     src = _src(_PAGE)
     rebuild = src.split("const serverMsgs: Array<Message & { _order: number }>", 1)
     assert len(rebuild) == 2, "the history rebuild changed shape"
-    block = rebuild[1].split("}));", 1)[0]
+    assert "historyMessage(m, idx" in rebuild[1].split(";", 1)[0], \
+        "the history rebuild no longer goes through the one helper"
+    helper = _src(_PAGE.parent.parent / "components" / "chat" / "liveView.ts")
+    block = helper.split("export function historyMessage(", 1)[1].split("\n}", 1)[0]
     assert "images: m.images" in block, \
         "history_update drops the images field again, so a reloaded chat loses its own pictures"
 

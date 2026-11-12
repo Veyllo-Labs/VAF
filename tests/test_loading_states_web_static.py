@@ -205,7 +205,10 @@ def test_a_transcript_from_a_snapshot_arrives_without_the_enter_animation():
     assert '"flex vaf-msg-row animate-in' not in src and '"flex gap-4 pt-4 animate-in' not in src
     handler = _between(src, "else if (data.type === 'history_update') {", "else if (data.type === 'context_checkpoint')")
     assert "snapshotLenRef.current = finalServerMsgs.length;\n                            setMessages(finalServerMsgs);" in handler
-    assert "snapshotLenRef.current = finalMsgs.length;\n                    setMessages(finalMsgs);" in handler
+    assert "snapshotLenRef.current = finalMsgs.length;\n                        setMessages(finalMsgs);" in handler
+    # A running chat's transcript is held for its live_replay and set the same way.
+    held = _between(src, "const applyLiveHistory = (", "const holdLiveHistory")
+    assert "snapshotLenRef.current = held.messages.length;\n        setMessages(held.messages);" in held
     assert "snapshotLenRef.current = cached.length;\n        setMessages(cached);" in src
     assert "if (messages.length < snapshotLenRef.current) snapshotLenRef.current = messages.length;" in src
 
@@ -319,7 +322,9 @@ def test_every_history_request_restarts_the_wait():
         start = src.index(f"else if (data.type === '{kind}') {{")
         branch = src[start:src.index("else if (data.type === ", start + 30)]
         assert "requestHistory(wsSocketRef.current, data.sessionId, true);" in branch, kind
-    assert src.count("requestHistory(") == 4, "the four callers"
+    # And a reconnect that keeps its open chat instead of the server's auto-loaded pick.
+    assert "requestHistory(wsSocketRef.current, prevSessionId, false);" in src
+    assert src.count("requestHistory(") == 5, "the five callers"
 
 
 def test_every_persona_writer_counts_against_a_late_refetch():

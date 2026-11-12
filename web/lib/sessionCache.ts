@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 /**
- * Session cache persistence with LocalStorage quota limits.
- * Trims by session count, messages per session, and total bytes; retries on QuotaExceededError.
+ * The in-memory per-chat message cache: its bounds, and the removal of the localStorage copy
+ * older versions wrote. Chat messages are never written to browser storage.
  */
 
+// The key older versions stored the cache under; only ever removed now.
 const STORAGE_KEY = "vaf_session_cache_v1";
 
-const MAX_CACHE_BYTES = 4 * 1024 * 1024; // 4 MB
 const MAX_SESSIONS = 50;
 const MAX_MESSAGES_PER_SESSION = 150;
 
@@ -66,72 +66,16 @@ export function trimSessionCache(
 }
 
 /**
- * Load cache from LocalStorage. Returns {} on missing, oversized, or invalid data.
- * Result is trimmed to limits.
+ * Remove the copy of chat messages an older version kept in localStorage. The cache is held
+ * in memory now: the stored copy was keyed by chat id alone and outlived a logout, so on a
+ * shared browser a second account could see the first one's chats before the server refused
+ * them. Never throws (storage may be blocked or missing).
  */
-export function loadSessionCache(): SessionCache {
-  if (typeof window === "undefined" || !window.localStorage) return {};
+export function purgeLegacySessionCache(): void {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved === null) return {};
-    if (saved.length > MAX_CACHE_BYTES) return {};
-    const parsed = JSON.parse(saved) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    const cache = parsed as SessionCache;
-    const keys = Object.keys(cache);
-    return trimSessionCache(cache, {
-      currentSessionId: null,
-      sessionIdsInOrder: keys,
-    });
+    if (typeof window === "undefined" || !window.localStorage) return;
+    window.localStorage.removeItem(STORAGE_KEY);
   } catch {
-    return {};
-  }
-}
-
-function isQuotaError(e: unknown): boolean {
-  if (e instanceof DOMException && e.name === "QuotaExceededError") return true;
-  if (e instanceof Error && /quota|storage/i.test(e.message)) return true;
-  return false;
-}
-
-/**
- * Trim cache, then persist. If payload exceeds MAX_CACHE_BYTES, trims more aggressively.
- * On QuotaExceededError, retries once with halved limits. Does not overwrite with {} on failure.
- */
-export function saveSessionCache(cache: SessionCache, options: TrimOptions): void {
-  if (typeof window === "undefined" || !window.localStorage) return;
-
-  let trimmed = trimSessionCache(cache, options);
-  let payload = JSON.stringify(trimmed);
-
-  if (payload.length > MAX_CACHE_BYTES) {
-    const halfSessions = Math.max(1, Math.floor(MAX_SESSIONS / 2));
-    const halfMessages = Math.max(10, Math.floor(MAX_MESSAGES_PER_SESSION / 2));
-    trimmed = trimSessionCache(cache, options, {
-      maxSessions: halfSessions,
-      maxMessagesPerSession: halfMessages,
-    });
-    payload = JSON.stringify(trimmed);
-  }
-
-  try {
-    localStorage.setItem(STORAGE_KEY, payload);
-  } catch (e) {
-    if (!isQuotaError(e)) {
-      console.warn("Failed to save session cache.", e);
-      return;
-    }
-    const halfSessions = Math.max(1, Math.floor(MAX_SESSIONS / 2));
-    const halfMessages = Math.max(10, Math.floor(MAX_MESSAGES_PER_SESSION / 2));
-    const retryTrimmed = trimSessionCache(cache, options, {
-      maxSessions: halfSessions,
-      maxMessagesPerSession: halfMessages,
-    });
-    const retryPayload = JSON.stringify(retryTrimmed);
-    try {
-      localStorage.setItem(STORAGE_KEY, retryPayload);
-    } catch (retryErr) {
-      console.warn("LocalStorage quota exceeded, failed to save session cache after retry.", retryErr);
-    }
+    /* storage blocked: nothing was stored either */
   }
 }

@@ -1522,7 +1522,9 @@ def _live_history_update(loaded, sid: str, **extra) -> dict:
 
 
 async def _send_live_view(websocket, sid: str) -> None:
-    """Send the chat's live record as one `live_replay` frame, after its `history_update`.
+    """Send the chat's live record as one `live_replay` frame, after its `history_update`:
+    always exactly one, empty when nothing is on record, so the page can draw a running chat's
+    transcript and its live events together instead of guessing whether more is coming.
 
     Only ever called for a connection that already passed the chat's ownership gate (or opens
     its own newest chat) and is subscribed to it. The record is read right before the send,
@@ -1530,8 +1532,7 @@ async def _send_live_view(websocket, sid: str) -> None:
     later is sent to this subscribed connection after the frame, so nothing is lost and no
     older state lands after a newer one. A turn the queue says is over is not replayed."""
     snap = manager.live_view.snapshot(sid, active=_session_is_active(sid))
-    if snap["events"]:
-        await websocket.send_json({"type": "live_replay", "sessionId": sid, "events": snap["events"]})
+    await websocket.send_json({"type": "live_replay", "sessionId": sid, "events": snap["events"]})
 
 
 def _recording_notify(send, session_id):

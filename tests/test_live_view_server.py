@@ -226,6 +226,14 @@ def _until(ws, kind, timeout=10.0):
     return seen
 
 
+def _replay_of(ws, sid):
+    """Frames up to and including the live_replay of `sid` (the auto-load sends its own pair)."""
+    frames = _until(ws, "live_replay")
+    while frames[-1].get("sessionId") != sid:
+        frames += _until(ws, "live_replay")
+    return frames
+
+
 def _busy(tq, sid):
     """A turn of `sid` taken by a worker: the queue says the chat is active."""
     task = tq.add(session_id=sid, input_text="running", source="web",
@@ -248,9 +256,9 @@ def test_load_session_sends_history_then_one_replay(world, _fresh_queue):
                                          "timestamp": "2999-01-01T00:00:00"})
     _record(server, OLDER)
     with _connect(server, BOB, "bob") as ws:
-        _until(ws, "history_update")              # the auto-load of the newest chat
+        _replay_of(ws, SID)                       # the auto-load of the newest chat
         _send(ws, {"type": "load_session", "id": OLDER})
-        frames = _until(ws, "live_replay")
+        frames = _replay_of(ws, OLDER)
         mine = [f for f in frames if f.get("sessionId") == OLDER
                 and f.get("type") in ("history_update", "live_replay")]
         assert [f["type"] for f in mine] == ["history_update", "live_replay"]
@@ -268,9 +276,9 @@ def test_a_finished_turn_is_not_replayed_and_not_live(world):
     server.manager.live_view.set_prompt(OLDER, "t1", {"role": "user", "content": "q"})
     _record(server, OLDER)
     with _connect(server, BOB, "bob") as ws:
-        _until(ws, "history_update")
+        _replay_of(ws, SID)
         _send(ws, {"type": "load_session", "id": OLDER})
-        frames = _until(ws, "live_replay")
+        frames = _replay_of(ws, OLDER)
         history = [f for f in frames if f.get("type") == "history_update"
                    and f.get("sessionId") == OLDER][-1]
         assert history["live"] is False and history["isActive"] is False
@@ -286,13 +294,14 @@ def test_another_account_gets_neither_history_nor_replay(world, _fresh_queue):
     server.manager.live_view.set_prompt(OLDER, "t1", {"role": "user", "content": "bob's secret"})
     _record(server, OLDER)
     with _connect(server, ALICE, "alice") as ws:
-        first = _until(ws, "history_update")       # her own (new) chat
+        first = _until(ws, "live_replay")          # her own (new) chat
         assert all(f.get("sessionId") != OLDER for f in first)
         _send(ws, {"type": "load_session", "id": OLDER})
         _send(ws, {"type": "get_sessions"})
         frames = _until(ws, "session_list")
         assert {"type": "error", "message": "Access denied"} in frames
-        leaked = [f for f in frames if f.get("type") in ("history_update", "live_replay")]
+        leaked = [f for f in frames if f.get("type") in ("history_update", "live_replay")
+                  or f.get("sessionId") == OLDER]
         assert leaked == [], leaked
         assert "bob's secret" not in json.dumps(frames)
 
@@ -310,14 +319,16 @@ def test_the_auto_load_sends_the_pair_marked(world, _fresh_queue):
         assert pair[0]["autoLoad"] is True and pair[0]["live"] is True
 
 
-def test_no_replay_frame_without_events(world):
+def test_an_empty_record_still_sends_one_empty_replay(world):
+    """The page draws a running chat's transcript together with its replay, so the replay
+    always comes, empty when nothing is on record."""
     server = world
     with _connect(server, BOB, "bob") as ws:
+        _replay_of(ws, SID)
         _send(ws, {"type": "load_session", "id": OLDER})
-        _send(ws, {"type": "get_sessions"})
-        frames = _until(ws, "session_list")
-        frames += _until(ws, "session_list")
-        assert not [f for f in frames if f.get("type") == "live_replay"]
+        frames = _replay_of(ws, OLDER)
+        replays = [f for f in frames if f.get("type") == "live_replay"]
+        assert replays == [{"type": "live_replay", "sessionId": OLDER, "events": []}]
 
 
 def test_a_running_turns_prompt_is_kept_as_typed(world, _fresh_queue):
@@ -325,7 +336,7 @@ def test_a_running_turns_prompt_is_kept_as_typed(world, _fresh_queue):
     MUTATION: record the prompt from the editor-prefixed content - red."""
     server = world
     with _connect(server, BOB, "bob") as ws:
-        _until(ws, "history_update")
+        _replay_of(ws, SID)
         _send(ws, {"type": "chat", "content": "fix the intro", "sessionId": OLDER,
                    "editorDocument": {"name": "Draft", "content": "Once upon a time"}})
         deadline = time.monotonic() + 10

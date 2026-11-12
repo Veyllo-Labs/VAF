@@ -578,7 +578,12 @@ def test_page_forwards_and_shows_the_preview_place():
     assert "notice: true" in busy
     docs = page.index("data.type === 'sidebar_documents_set'")
     assert "clearDocPreviewWait(sid)" in page[docs:docs + 400]
-    assert not re.search(r"setDocPreviewWaits?\((null|\{\})\)", page), "a switch drops every place"
+    # A switch keeps every place; only a dropped socket clears them (its grants would go to
+    # the dead socket), and the replay after the reconnect brings the live ones back.
+    onclose = page[page.index("socket.onclose = () => {"):page.index("socket.onerror")]
+    assert "setDocPreviewWaits({});" in onclose
+    assert not re.search(r"setDocPreviewWaits?\((null|\{\})\)", page.replace(onclose, "")), \
+        "a switch drops every place"
     assert "[currentSessionId]);" not in page[page.index("const [docPreviewWaits"):
                                               page.index("const docPreviewNotice")]
     assert "docPreviewWaits[currentSessionId]" in page

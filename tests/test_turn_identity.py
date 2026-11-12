@@ -142,7 +142,7 @@ def test_the_browser_no_longer_guesses_the_newest_answer():
 
 def test_a_chip_waits_for_its_own_turn():
     src = _page()
-    assert "const ready = pending.filter(f => !f.turnId || f.turnId === data.turnId)" in src, \
+    assert "const ready = pending.filter(f => (!f.turnId || f.turnId === data.turnId)" in src, \
         "completing one turn flushes chips belonging to another turn again"
     assert "setCreatedFiles([]);" not in src, \
         "sending a message throws away chips that are still waiting for their turn"

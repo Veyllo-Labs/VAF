@@ -147,7 +147,9 @@ def test_history_update_forwards_round_fields():
     """Rule 2: the rebuild copies field by field, so an unforwarded field is dropped."""
     src = _page()
     rebuild = src.split("const serverMsgs: Array<Message & { _order: number }> = data.messages", 1)[1]
-    rebuild = rebuild.split("}));", 1)[0]
+    assert "historyMessage(m, idx" in rebuild.split(";", 1)[0]
+    helper = (ROOT / "web" / "components" / "chat" / "liveView.ts").read_text(encoding="utf-8")
+    rebuild = helper.split("export function historyMessage(", 1)[1].split("\n}", 1)[0]
     assert "round: typeof m.round === 'number' ? m.round : undefined" in rebuild
     assert "roundAnswer: typeof m.roundAnswer === 'boolean' ? m.roundAnswer : undefined" in rebuild
 

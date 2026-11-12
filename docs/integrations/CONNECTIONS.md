@@ -68,7 +68,8 @@ The person can also simply hand a credential to the agent in the chat - in the b
 terminal or over Telegram ("FTP: user xy, password ..."). The agent stores each value at once
 with `store_credential`, and from then on it is gone from everywhere VAF keeps that chat: the
 agent's history, the saved chat, the stored intent, the context archives, the channel store,
-the word suggestions, the terminal's input history and the debug logs of the last two days,
+the word suggestions, the terminal's input history, the record of the running turn the web chat
+replays when you open the chat again, and the debug logs of the last two days,
 each message kept in place with the
 value replaced by `[VAF_SECRET_<NAME>]` so the chat stays valid. Over Telegram the bot also
 tries to delete the person's message - an attempt: a bot may do that for 48 hours, and only for

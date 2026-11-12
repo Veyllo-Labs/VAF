@@ -200,42 +200,69 @@ Key rules:
   chat B receives nothing more about A (measured with a real `WebInterfaceManager`: of
   `agent_message_update`, `tool_update`, `coder_state`, `file_created`, `subagent_update` and
   `message_complete` emitted by A after the switch, only `message_complete` arrived). The
-  stored transcript does not have the running turn either: the runner writes a turn when it
-  ends. So the server keeps `LiveViewLedger` (`vaf/core/live_view.py`,
+  stored transcript does not have the running turn either: the runner sends the turn's
+  `message_complete` first and saves the chat afterwards. So the server keeps `LiveViewLedger` (`vaf/core/live_view.py`,
   `WebInterfaceManager.live_view`), a per-chat record of the live events, written in
   `broadcast_to_session`, `broadcast_to_session_and_owner` and the room branches of
   `_push_session_update` and `/api/subagent/stream` (the lanes that bypass the first one),
   always BEFORE the send. It is coalesced, not a log, in three groups:
   - **turn**: `agent_message_update` (the last text of a round at the round's first place;
     an untagged stream starts a new entry after any other turn event), `clear_last_assistant`,
-    `tool_update` (a start and an end per `toolId`) and `file_created` (per path and turn),
-    plus the prompt of each queued or running web turn (`set_prompt` after `tq.add`, as typed,
-    without the editor block; the regenerate re-ask too). Cleared by `message_complete` (its
-    turn's prompt) and `generation_stopped` (all prompts);
+    `tool_update` (a start and an end per `toolId`; the event carries `turnId` like every
+    other turn event), `file_created` (per path and turn) and the turn's end
+    (`message_complete` or `generation_stopped`, kept and replayed: a turn that ended but is
+    not stored yet is drawn as ended, quietly). The group lives until the turn LEAVES THE
+    QUEUE: the runner calls `WebInterfaceManager.turn_left_queue(session, turn)` right before
+    `task_done`, after the save, and only then do the turn's entries and prompt go. A turn
+    event with another turn id drops what an earlier turn left behind (one that died without
+    leaving the queue cleanly). Next to it, the prompt of each queued or running web turn,
+    by turn id (`set_prompt` after `tq.add`, as typed, without the editor block; the
+    regenerate re-ask too), at most 20 per chat. `generation_stopped` drops the queued ones;
+    the runner also stores the turn id on the person's message (`metadata["turn_id"]`), so a
+    view built between the save and `turn_left_queue` recognises the stored copy by its turn,
+    never by its text (`_unstored_prompts`);
   - **worker**: the last value of `subagent_update` and of every `*_state` type, merged
     shallowly like the page merges them (a `subagent_update` without steps keeps the previous
     ones; an embedder's own `*_state` view needs no registration), the last
     `browser_frame_update` (none above 1.5 MB), rings of 200 `subagent_output_stream`,
     `browser_step_update` and `workflow_output_stream` lines and of 20 `subagent_output`
     blocks, and the workflow run (`workflow_start` resets it, `workflow_update` per `stepId`,
-    `workflow_done`). Survives the turn end, because async workers outlive it. Every type of `VAF_LIVE_VIEW_TYPES` (`vaf/core/progress.py`) is kept here, pinned by `tests/test_live_view.py`;
+    `workflow_done`). Survives the turn end, because async workers outlive it. A last value
+    moves to the end of the record on every write, so the replay plays a worker's states in
+    the order they happened (an idle after a frame stays the last word). Every type of
+    `VAF_LIVE_VIEW_TYPES` (`vaf/core/progress.py`) is kept here, pinned by
+    `tests/test_live_view.py`;
   - **preview**: a `document_preview_wait` with a place (the upload socket's lane records
     through `_recording_notify`); position 0, `document_preview_busy` and
     `sidebar_documents_set` clear it.
   Every other type is ignored. Bounds: 64 KB per string field (cut and marked
-  ` [truncated]`), 600 entries and 2 MB per chat with the oldest entry dropped first (never a
-  tool that started and has not ended, never a prompt), 32 chats (the one written least
-  recently goes), and expiry: 10 minutes after a worker said idle or error or after
-  `workflow_done`, 10 minutes for a preview place without an update, 30 minutes after any
-  entry's last write, except a tool that started and has not ended, and the prompts of a turn
-  that still records events (a turn longer than 30 minutes keeps both). A deleted or hidden chat's record goes with it; a credential the agent
-  stored from the chat (`_refresh_after_forget`) drops the chat's kept prompt.
+  ` [truncated]`; content nested deeper than 12 levels replaced), 600 entries and 2 MB per
+  chat with the prompts counted, 32 chats (the one written least recently goes). Eviction
+  goes by rank, oldest first within a rank: output lines, tool results and browser frames
+  first; streamed text, files and step updates next; worker states, the turn's end and the
+  preview place after that; a tool that started and has not ended last of the entries, then
+  the prompts, so the limits always hold and a long tool flood never takes the worker's
+  window. Expiry: 10 minutes after a worker said idle or error or after `workflow_done`, 10
+  minutes for a preview place without an update, 30 minutes after any other entry's last
+  write; a running tool and the prompts only after six hours, as a memory safety net (the
+  queue's state and `turn_left_queue` decide what is shown). A deleted or hidden chat's
+  record goes with it. **A forgotten credential** (`vaf/core/forget_secrets.py`) is replaced
+  in the record like everywhere else the chat is kept: the web interface registers a forget
+  listener that scrubs the chat's entries and prompts when the agent stores a value mid-turn
+  and after a save replaced one, and every later event of the chat is scrubbed as it is
+  recorded. **The owner:** the record is stamped with the chat's owning account when it is
+  created (asked from the store once, or given by `set_prompt`), and both readers pass the
+  chat's current owner; a record kept for another account (a deleted chat's id claimed by a
+  second account while a late event re-created it) is dropped, not sent.
   `load_session` (after its ownership gate) and the connect-time auto-load (the connection's
   own newest chat) send the `history_update` and then exactly one `live_replay`; nothing else
   reads the record, and it is never read for prompt content, so a replay reaches exactly the
   people the live events reached. Each of the two frames reads the record right before its
-  send, with no await in between: an event recorded earlier is in the frame, one recorded
-  later is sent to this (already subscribed) connection after it. **The server wins:** a turn
+  send, with no await in between: an event recorded earlier is in the frame, and one recorded
+  later reaches this (already subscribed) connection by its own send, so no event is lost.
+  That send can still arrive before the frame (two coroutines' sends interleave), so the page
+  may draw a live event and then an older value of the same entry, until the entry's next
+  event corrects it. **The server wins:** a turn
   the queue says is over (`TaskQueue.is_busy_for_session` false) is never replayed, neither
   its events nor its prompt, so a turn that ended while nobody watched cannot come back as a
   spinner. Worst case 32 x 2 MB of server memory; a usual active chat holds a few hundred KB.
@@ -576,9 +603,18 @@ Key rules:
   mode, because that tool is running. When the replay carries worker events, the page first
   resets the specialist's window to idle (the server's picture replaces the kept one, which
   would otherwise show every console line twice), and closes it again when the last
-  `subagent_update` said idle or error. No `message_complete` or `generation_stopped` is ever
-  replayed (they clear the turn), so no completion sound can come from a replay. Not in
-  `crossSessionAllowed`: it is addressed to the open chat.
+  `subagent_update` said idle or error (the window's duplicate filters are reset with it, or
+  every console line this page showed once would be refused), keeps a workflow's panel
+  closed when the replay holds its `workflow_done`, marks every replayed row as already
+  shown (no enter animation) and, when the chat was left at its bottom, follows the bottom
+  for 1.5 s while the restored content lays itself out (`bottomPinUntilRef`; a touch ends
+  it). A replayed `message_complete` (a turn that ended and is not stored yet) plays no
+  sound, reads nothing aloud and fires no reaction. Not in `crossSessionAllowed`: it is
+  addressed to the open chat. After a reconnect the page asks for its own chat again; if the
+  server refuses (`error`: the chat was deleted, or the tab's connection now belongs to
+  another account), the page takes the chat the server auto-loaded. When the reconnected
+  account differs from the one the page showed chats to (`/api/auth/me`), the page also
+  drops its kept transcripts, the composer drafts and the workflow panel stored in the tab.
   A chat turn stored per generation round (its answer's metadata carries `rounds`, see
   `agent_message_update` below) is projected the way it streamed (`_history_projection`):
   one assistant entry per round with text, carrying `round` and `roundAnswer`, each followed

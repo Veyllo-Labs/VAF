@@ -8,6 +8,7 @@ posixpath.expanduser and the socket layer for the whole process it runs in. Ever
 child gets an environment without this script's own variables and PYTHONPATH, so
 the tests mean the same thing when the suite itself runs under hostile_env.
 """
+import ast
 import importlib.util
 import os
 import re
@@ -15,6 +16,8 @@ import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 _ROOT = Path(__file__).resolve().parent.parent
 
@@ -68,6 +71,16 @@ def _clean_env(**extra) -> dict:
     return env
 
 
+# Which test runs where. On a Windows host the generated sitecustomize installs no
+# refusal counter (the real wait is paid there), so every test that needs the counter
+# carries this mark and is skipped on Windows; test_on_windows_the_axis_installs_nothing
+# runs everywhere, on a POSIX host with os.name forced to "nt" in its child, and
+# test_every_counter_test_is_skipped_on_windows keeps the mark from being forgotten.
+# The verdict, main() and port-list tests are pure and run on every OS.
+needs_counter = pytest.mark.skipif(
+    os.name == "nt", reason="the refusal counter is not installed on a Windows host")
+
+
 # The SLOW REFUSAL axis. `pre` runs before the snippet is installed, `post` after;
 # `closed_port()` binds without listen(), so a connect to it is refused at once.
 _REFUSAL_CHILD = r'''
@@ -82,11 +95,16 @@ def closed_port():
 
 
 def refused(sock, address):
+    return reason(sock, address) is not None
+
+
+def reason(sock, address):
+    """The refusal's message, or None when the connect went through."""
     try:
         sock.connect(address)
-    except ConnectionRefusedError:
-        return True
-    return False
+    except ConnectionRefusedError as exc:
+        return str(exc)
+    return None
 
 
 exec(pre)
@@ -112,11 +130,14 @@ def _refusal_run(tmp_path, post, pre="", **env):
     return out.stdout, [line.split("\t") for line in lines]
 
 
+@needs_counter
 def test_a_refused_local_connect_is_charged_what_windows_waits(tmp_path):
     """A blocking refusal costs about 2 s on a Windows runner, or the caller's shorter
     connect timeout; it is counted, not slept, and a connect that succeeds costs nothing.
+    ::1 counts like 127.0.0.1 ("localhost" is tried on ::1 first).
     MUTATION: drop the min() with the timeout - red (0.5 charged 2.0); drop the connect
-    wrapper - red (no line); sleep the charge - red (elapsed)."""
+    wrapper - red (no line); sleep the charge - red (elapsed); count IPv4 loopback
+    only - red (no ::1 line)."""
     stdout, lines = _refusal_run(tmp_path, r'''
 holder, port = closed_port()
 started = time.monotonic()
@@ -131,13 +152,25 @@ server.bind(("127.0.0.1", 0))
 server.listen(1)
 socket.create_connection(server.getsockname(), timeout=5).close()
 print(time.monotonic() - started)
+try:
+    holder6 = socket.socket(socket.AF_INET6)
+    holder6.bind(("::1", 0))
+except OSError:
+    print("no ipv6")
+else:
+    assert refused(socket.socket(socket.AF_INET6), ("::1", holder6.getsockname()[1]))
 ''')
-    assert [(who, cost) for who, _addr, cost in lines] == [
-        (_TEST_NAME, "2.0"), (_TEST_NAME, "0.5"), (_TEST_NAME, "2.0")]
-    assert all(addr.startswith("127.0.0.1:") for _who, addr, _cost in lines)
-    assert float(stdout) < 1.0
+    elapsed, *ipv6 = stdout.split()
+    assert float(elapsed) < 1.0
+    expected = [(_TEST_NAME, "2.0"), (_TEST_NAME, "0.5"), (_TEST_NAME, "2.0")]
+    if not ipv6:
+        expected.append((_TEST_NAME, "2.0"))
+        assert lines[-1][1].startswith("::1:")
+    assert [(who, cost) for who, _addr, cost in lines] == expected
+    assert all(addr.startswith("127.0.0.1:") for _who, addr, _cost in lines[:3])
 
 
+@needs_counter
 def test_an_asyncio_refusal_is_charged_once(tmp_path):
     """asyncio dials a non-blocking socket inside sock_connect: one refusal, one line,
     whether the kernel reports it later (Linux, through SO_ERROR) or at once from the
@@ -173,21 +206,43 @@ socket.socket.connect = _refuse_at_once
     assert [(who, cost) for who, _addr, cost in lines] == [(_TEST_NAME, "2.0")]
 
 
+@needs_counter
 def test_a_vaf_service_port_is_refused_without_a_dial(tmp_path):
-    """A port on the service list is refused before any SYN leaves: a listener of the
-    test's own on it accepts nothing, blocking or through asyncio. (A free port of the
-    test's own stands in for the list; the real ports are never dialed here.)
-    MUTATION: drop the forced check in the connect wrapper (blocking and asyncio both
-    connect) or in the connect_ex wrapper - red (accept() returns)."""
-    stdout, lines = _refusal_run(tmp_path, pre=r'''
-server = socket.socket()
-server.bind(("127.0.0.1", 0))
-server.listen(8)
+    """A port on the service list is refused before any SYN leaves, in every spelling of
+    a local address: a listener of the test's own on it accepts nothing, blocking,
+    through connect_ex or through asyncio. (A free port of the test's own stands in for
+    the list; the real ports are never dialed here.) The alias comes from a hosts file of
+    the test's own, so no name is looked up.
+    MUTATION: drop the forced check in the connect or connect_ex wrapper - red; drop
+    the numeric parse of "0"/"127.1", the IPv4-mapped form (judged with the older
+    ipaddress answer), the wildcard, the trailing dot or the hosts-file names - red
+    (that spelling connects, or is looked up)."""
+    hosts = tmp_path / "hosts"
+    hosts.write_text("# a comment\n127.0.0.1 vaf-hostile-alias.example\n"
+                     "192.0.2.1 vaf-remote.example\n", encoding="utf-8")
+    stdout, lines = _refusal_run(tmp_path, VAF_HOSTILE_HOSTS_FILE=str(hosts), pre=r'''
+server = socket.socket(socket.AF_INET6 if socket.has_ipv6 else socket.AF_INET)
+if socket.has_ipv6:
+    server.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+    server.bind(("::", 0))
+else:
+    server.bind(("127.0.0.1", 0))
+server.listen(32)
 server.settimeout(0.5)
 port = server.getsockname()[1]
 os.environ["VAF_HOSTILE_REFUSE_PORTS"] = "1," + str(port)
+# The answer of older patch releases: an IPv4-mapped loopback is not loopback. Current
+# 3.12 and 3.13 say it is, which would hide a missing mapped-address branch.
+import ipaddress
+ipaddress.IPv6Address.is_loopback = property(lambda self: self._ip == 1)
 ''', post=r'''
-assert refused(socket.socket(), ("127.0.0.1", port))
+spellings = ["127.0.0.1", "localhost", "localhost.", "LOCALHOST", "0", "0.0.0.0", "127.1",
+             "vaf-hostile-alias.example", "vaf-hostile-alias.example."]
+for host in spellings:
+    assert refused(socket.socket(), (host, port)), host
+v6 = ["::1", "::ffff:127.0.0.1", "::ffff:7f00:1", "::"] if socket.has_ipv6 else []
+for host in v6:
+    assert refused(socket.socket(socket.AF_INET6), (host, port)), host
 assert socket.socket().connect_ex(("localhost", port)) == errno.ECONNREFUSED
 
 
@@ -203,34 +258,59 @@ asyncio.run(dial())
 try:
     server.accept()
 except TimeoutError:
-    print("nothing arrived")
+    print("nothing arrived", len(spellings) + len(v6) + 2)
 ''')
-    assert stdout.strip() == "nothing arrived"
-    assert [cost for _who, _addr, cost in lines] == ["2.0", "2.0", "2.0"]
+    word1, word2, attempts = stdout.split()
+    assert (word1, word2) == ("nothing", "arrived")
+    assert [cost for _who, _addr, cost in lines] == ["2.0"] * int(attempts)
 
 
+@needs_counter
 def test_unix_udp_and_remote_refusals_are_not_charged(tmp_path):
-    """Only a TCP refusal to a local address is a Windows wait. A plain connect that
-    refuses everything stands in for the network, so a remote refusal needs no network;
-    the local TCP control proves the stand-in reaches the counter. Without the log
-    variable nothing is wrapped at all.
-    MUTATION: drop the family/type check - red (UDP and Unix charged); treat every host
-    as local - red (remote charged); install the wrappers without the log - red."""
+    """Only a TCP refusal to a local address is a Windows wait. A plain connect and
+    connect_ex that refuse everything stand in for the network, so a remote refusal needs
+    no network; the local TCP controls prove the stand-ins reach the counter. A remote
+    host on a service port reaches the plain connect (it is no service of this machine),
+    a non-blocking connect_ex is asyncio's business, and asyncio's own remote refusal is
+    not charged either. Without the log variable nothing is wrapped at all.
+    MUTATION: drop the family/type check - red; treat every host as local - red;
+    refuse a service port without the local check - red (the remote one gets the forced
+    message); count a non-blocking connect_ex - red; charge a remote sock_connect - red;
+    install the wrappers without the log - red."""
     _stdout, lines = _refusal_run(tmp_path, pre=r'''
+os.environ["VAF_HOSTILE_REFUSE_PORTS"] = "80"
+
+
 def _refuse_all(self, address):
-    raise ConnectionRefusedError(errno.ECONNREFUSED, "refused")
+    raise ConnectionRefusedError(errno.ECONNREFUSED, "stand-in refusal")
 
 
 socket.socket.connect = _refuse_all
+socket.socket.connect_ex = lambda self, address: errno.ECONNREFUSED
 ''', post=r'''
-assert refused(socket.socket(), ("192.0.2.1", 80))
-assert refused(socket.socket(), ("example.invalid", 80))
-assert refused(socket.socket(socket.AF_INET, socket.SOCK_DGRAM), ("127.0.0.1", 80))
+assert reason(socket.socket(), ("192.0.2.1", 80)) == "[Errno %d] stand-in refusal" % errno.ECONNREFUSED
+assert refused(socket.socket(), ("example.invalid", 81))
+assert refused(socket.socket(socket.AF_INET, socket.SOCK_DGRAM), ("127.0.0.1", 81))
 if hasattr(socket, "AF_UNIX"):
     assert refused(socket.socket(socket.AF_UNIX), "/nonexistent/vaf.sock")
+nonblocking = socket.socket()
+nonblocking.setblocking(False)
+assert nonblocking.connect_ex(("127.0.0.1", 82)) == errno.ECONNREFUSED
+
+
+async def dial():
+    try:
+        await asyncio.open_connection("192.0.2.1", 83)
+    except ConnectionRefusedError:
+        return
+    raise SystemExit("connected")
+
+
+asyncio.run(dial())
 assert refused(socket.socket(), ("127.0.0.1", 80))
+assert socket.socket().connect_ex(("127.0.0.1", 81)) == errno.ECONNREFUSED
 ''')
-    assert [addr for _who, addr, _cost in lines] == ["127.0.0.1:80"]
+    assert [addr for _who, addr, _cost in lines] == ["127.0.0.1:80", "127.0.0.1:81"]
 
     unlogged = tmp_path / "unlogged"
     unlogged.mkdir()
@@ -244,13 +324,57 @@ print((socket.socket.connect, socket.socket.connect_ex,
     assert stdout.strip() == "True" and lines == []
 
 
+def test_on_windows_the_axis_installs_nothing(tmp_path):
+    """A Windows host pays the real wait, so the generated sitecustomize installs no
+    counter there and writes no log; main() then judges an empty log, which passes.
+    Runs on every OS: on a POSIX host the child forces os.name to "nt" before the
+    snippet runs, so the Windows branch is exercised here and not first on the runner.
+    MUTATION: drop the os.name check from the install condition - red."""
+    force_nt = "" if os.name == "nt" else "os.name = 'nt'\n"
+    stdout, lines = _refusal_run(tmp_path, pre=force_nt + r'''
+import asyncio.selector_events as se
+plain = (socket.socket.connect, socket.socket.connect_ex, se.BaseSelectorEventLoop.sock_connect)
+''', post=r'''
+print((socket.socket.connect, socket.socket.connect_ex,
+       se.BaseSelectorEventLoop.sock_connect) == plain)
+''')
+    assert stdout.strip() == "True" and lines == []
+    assert _module()._refusal_verdict([]) == (
+        ["  0 refused local connects, 0.0 s on a Windows runner"], [])
+
+
+def test_every_counter_test_is_skipped_on_windows():
+    """A test that needs the counter fails on the Windows runner, where nothing is
+    installed, unless it carries needs_counter. Static, so it fails on any OS.
+    MUTATION: remove the mark from one counter test - red."""
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    missing = []
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef) or not node.name.startswith("test_"):
+            continue
+        if node.name in ("test_on_windows_the_axis_installs_nothing",
+                         "test_every_counter_test_is_skipped_on_windows"):
+            continue
+        names = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+        texts = {n.value for n in ast.walk(node) if isinstance(n, ast.Constant)
+                 and isinstance(n.value, str)}
+        runs_counter = "_refusal_run" in names or "sitecustomize.py" in texts
+        marked = any(isinstance(d, ast.Name) and d.id == "needs_counter"
+                     for d in node.decorator_list)
+        if runs_counter and not marked:
+            missing.append(node.name)
+    assert missing == []
+
+
+@needs_counter
 def test_the_axis_survives_monkeypatches_children_and_finished_tests(tmp_path):
     """The real sitecustomize, loaded by the interpreter from PYTHONPATH: a test that
     patches socket.socket.connect and restores it leaves the counter in place, a child
     process charges the test that started it, and a refusal after the test ended is
-    charged "after" the last finished test.
+    charged "after" the last finished test; with neither name it is "outside any test".
     MUTATION: pop VAF_HOSTILE_REFUSAL_LOG from the environment after reading it - red
-    (the child charges nothing); empty the plugin's hook - red ("outside any test")."""
+    (the child charges nothing); empty the plugin's hook - red ("outside any test");
+    drop the fallback key - red."""
     module = _module()
     site = tmp_path / "site"
     site.mkdir()
@@ -274,6 +398,11 @@ import vaf_hostile_refusals
 del os.environ["PYTEST_CURRENT_TEST"]
 vaf_hostile_refusals.pytest_runtest_logfinish(nodeid="tests/test_example.py::test_pays", location=None)
 assert socket.socket().connect_ex(("127.0.0.1", port)) != 0
+bare = dict(os.environ)
+del bare["VAF_HOSTILE_LAST_TEST"]
+assert subprocess.run([sys.executable, "-c",
+    "import socket, sys; sys.exit(socket.socket().connect_ex(('127.0.0.1', %d)) == 0)" % port],
+    env=bare).returncode == 0
 '''
     out = subprocess.run(
         [sys.executable, "-c", child], capture_output=True, text=True, timeout=60,
@@ -281,13 +410,15 @@ assert socket.socket().connect_ex(("127.0.0.1", port)) != 0
                        PYTEST_CURRENT_TEST=_TEST_NAME))
     assert out.returncode == 0, out.stderr
     who = [line.split("\t")[0] for line in log.read_text(encoding="utf-8").splitlines()]
-    assert who == [_TEST_NAME, _TEST_NAME, "after tests/test_example.py::test_pays"]
+    assert who == [_TEST_NAME, _TEST_NAME, "after tests/test_example.py::test_pays",
+                   "outside any test"]
 
 
 def test_the_verdict_sums_phases_and_names_the_test():
     """setup + call + teardown of one test add up; each key over the budget is named,
     the most expensive first; a thread that outlived its test is judged as well.
-    MUTATION: key on the raw name with its phase - red (no test reaches 61 s)."""
+    MUTATION: key on the raw name with its phase - red (no test reaches 61 s); rank by
+    name - red; cut the top list at 11 - red."""
     verdict = _module()._refusal_verdict
     lines = (["t.py::a (setup)\t127.0.0.1:5432\t2.0\n"] * 15
              + ["t.py::a (call)\t::1:5432\t2.0\n"] * 15
@@ -307,11 +438,20 @@ def test_the_verdict_sums_phases_and_names_the_test():
     assert "t.py::b would wait 59.0 s" in report[-2]
     assert verdict([], budget=60.0) == (["  0 refused local connects, 0.0 s on a Windows runner"], [])
 
+    # Ranked by cost, not by name, and cut at ten: k11 is the dearest and sorts last.
+    many = [f"t.py::k{i:02d} (call)\t127.0.0.1:5432\t{i + 1}.0\n" for i in range(12)]
+    report, offenders = verdict(many, budget=10.5)
+    ranked = [line.split()[0] for line in report[3:]]
+    assert ranked == [f"t.py::k{i:02d}" for i in range(11, 1, -1)]
+    assert [line.split()[0] for line in offenders] == ["t.py::k11", "t.py::k10"]
+
 
 def test_main_fails_a_green_run_over_budget(tmp_path, monkeypatch, capsys):
     """A test over the budget fails a run pytest called green and is named; pytest's own
-    failure is passed through unchanged; under the budget the run stays green.
-    MUTATION: return pytest's code regardless of the offenders - red."""
+    failure is passed through unchanged; under the budget, or with no log at all, the
+    run stays green.
+    MUTATION: return pytest's code regardless of the offenders - red; read the log
+    without the missing-file fallback - red; drop the asyncio deadline hint - red."""
     module = _module()
     monkeypatch.setattr(module, "_crlf_checkout_files", lambda: [])
     monkeypatch.setattr(sys, "argv", ["hostile_env.py", "tests/test_example.py"])
@@ -323,8 +463,10 @@ def test_main_fails_a_green_run_over_budget(tmp_path, monkeypatch, capsys):
             site = Path(env["PYTHONPATH"].split(os.pathsep)[0])
             assert (site / "vaf_hostile_refusals.py").is_file()
             assert "8443" in env["VAF_HOSTILE_REFUSE_PORTS"].split(",")
-            with open(env["VAF_HOSTILE_REFUSAL_LOG"], "a", encoding="utf-8") as log:
-                log.write("tests/test_example.py::test_pays (call)\t127.0.0.1:5432\t2.0\n" * n_lines)
+            if n_lines is not None:     # None: the run left no log at all
+                with open(env["VAF_HOSTILE_REFUSAL_LOG"], "a", encoding="utf-8") as log:
+                    log.write("tests/test_example.py::test_pays (call)\t127.0.0.1:5432\t2.0\n"
+                              * n_lines)
             return SimpleNamespace(returncode=pytest_rc)
         monkeypatch.setattr(module.subprocess, "run", fake_run)
         return module.main()
@@ -333,12 +475,16 @@ def test_main_fails_a_green_run_over_budget(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert ("FAILED slow refusal: tests/test_example.py::test_pays would wait 62.0 s"
             in out)
+    assert "asyncio.wait_for" in out          # the deadline the count cannot see
     assert seen[-1][-3:] == ["-p", "vaf_hostile_refusals", "tests/test_example.py"]
     assert run(2, 31) == 2
     capsys.readouterr()
     assert run(0, 30) == 0
     assert "FAILED slow refusal" not in capsys.readouterr().out
     assert run(0, 0) == 0
+    capsys.readouterr()
+    assert run(0, None) == 0
+    assert "  0 refused local connects" in capsys.readouterr().out
 
 
 def test_every_port_the_door_harness_avoids_is_refused():

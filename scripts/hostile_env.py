@@ -115,9 +115,13 @@ locally, in the time the suite already takes:
                   all, and after a file that imports vaf.main every send asked
                   the absent store twice. Counted are blocking socket connect
                   and connect_ex and asyncio's selector sock_connect (asyncpg
-                  and every asyncio client dial through it), each once; a UDP,
-                  Unix-socket or remote refusal is not charged, nor is a
-                  connect that succeeds. The ports VAF's own services use
+                  and asyncio's own clients dial through it), each once; a
+                  UDP, Unix-socket or remote refusal is not charged, nor is a
+                  connect that succeeds. Local means a numeric loopback or
+                  wildcard address in any spelling the C library parses ("0",
+                  "127.1", ::ffff:127.0.0.1) or a name the hosts file or the
+                  host name puts on this machine, decided without a lookup.
+                  The ports VAF's own services use
                   (3000, 5432, 8001, 8005, 8080, 8443, 9222) are refused
                   without a dial: the runner has none of them, so the count
                   must not depend on what this machine runs, and the suite
@@ -148,13 +152,28 @@ while a handshake retries) stays green here: the voice front door once asked
 the absent account store twelve times per handshake, 24 s on Windows, and five
 call-queue tests whose contention was held for 5 or 10 s failed only there.
 The verdict sees that cause (many refusals in one test), and
-test_the_front_door_asks_no_database pins that instance. Nothing else of
+test_the_front_door_asks_no_database pins that instance. An asyncio refusal is
+charged the full two seconds even when the caller waits less. A deadline set
+with asyncio.timeout() leaves nothing the counter can read, and before 3.12
+asyncio.wait_for runs the connect in a task of its own; measured on 3.12 and
+3.13, only wait_for's own frame shows its timeout and the task holds no
+deadline. So a red run says that this may be the case. Nothing else of
 Windows' socket layer is modelled: a connect to the wildcard address
 (0.0.0.0, ::), which Linux routes to loopback, is charged like one, where
 Windows refuses it at once; the proactor event loop and the order in which
-"localhost" resolves are not reproduced. A C extension that dials on its own (libpq through psycopg2, not
-installed today) is invisible to the counter. The budget is per test; the
-whole-suite total is reported, not judged, since it grows with every test.
+"localhost" resolves are not reproduced. On a Windows host the axis installs
+nothing, since the real wait is paid there. Invisible to the counter, neither
+counted nor refused: a C extension that dials on its own (libpq through
+psycopg2, not installed today); a client on uvloop, which uvicorn[standard]
+installs and which dials through libuv, not the selector loop (no test dials
+a client through it today, and uvicorn servers in tests may run on it, so it
+is not hidden here); connect() called on the C base class _socket.socket
+directly; and a literal address of one of this machine's own network
+interfaces, through which a live app bound to all interfaces stays reachable.
+The budget is per test; the whole-suite total is reported, not judged, since
+it grows with every test. The whole-suite figure is the "Slow refusal" summary
+that stage 7 of scripts/ci_check.sh prints on every run; no figure for it is
+recorded here.
 Nor does it change the OPENSSL BUILD:
 python.org's 3.13 for Windows and macOS bundles OpenSSL 3.5.9, which loads a
 certificate with a malformed subject alternative name that 3.5.3 refuses
@@ -303,13 +322,51 @@ if _refusal_log and _os.name != "nt":
         # UDP has no handshake to refuse, and a Unix socket no Windows retry.
         return sock.family in _INET and sock.type == _socket.SOCK_STREAM
 
+    import ipaddress as _ipaddress
+
+    def _local_ip(ip):
+        # The wildcard counts: Linux routes a connect to it to loopback.
+        if getattr(ip, "ipv4_mapped", None) is not None:
+            ip = ip.ipv4_mapped
+        return ip.is_loopback or ip.is_unspecified
+
+    def _hosts_file_names():
+        """The names the hosts file maps to this machine, read without any lookup."""
+        names = set()
+        try:
+            with open(_os.environ.get("VAF_HOSTILE_HOSTS_FILE") or "/etc/hosts",
+                      encoding="utf-8", errors="replace") as hosts:
+                for row in hosts:
+                    fields = row.split("#", 1)[0].split()
+                    try:
+                        if fields and _local_ip(_ipaddress.ip_address(fields[0].split("%")[0])):
+                            names.update(name.lower().rstrip(".") for name in fields[1:])
+                    except ValueError:
+                        continue
+        except OSError:
+            pass
+        return names
+
+    _LOCAL_NAMES = _hosts_file_names() | set(
+        [_socket.gethostname().lower().rstrip("."), "localhost"])
+
     def _local(address):
-        """A TCP address on this machine: loopback, or the wildcard Linux routes there."""
+        """A TCP address on this machine, decided without a lookup: a numeric address
+        (any spelling the C library accepts, "0" and "127.1" included) that is loopback
+        or the wildcard, or a name the hosts file or the host name puts here."""
         if not isinstance(address, tuple) or len(address) < 2:
             return False
-        host = str(address[0]).lower()
-        return (host in ("localhost", "::1", "0.0.0.0", "::")
-                or host.startswith("127.") or host.startswith("::ffff:127."))
+        host = str(address[0])
+        try:
+            return _local_ip(_ipaddress.ip_address(host.split("%")[0]))
+        except ValueError:
+            pass
+        try:
+            return _local_ip(_ipaddress.ip_address(_socket.inet_aton(host)))
+        except (OSError, ValueError):
+            pass
+        name = host.lower().rstrip(".")
+        return name in _LOCAL_NAMES or name.endswith(".localhost")
 
     def _forced(address):
         return _local(address) and address[1] in _REFUSE_PORTS
@@ -577,6 +634,10 @@ def main() -> int:
             print(f"{len(offenders)} test(s) over the budget of {_REFUSAL_BUDGET_S:g} s: a hot path "
                   "connects to a closed local port again and again (keep an outage memory, as "
                   "vaf/auth/permissions.py does for the account store)")
+            print("A refusal through asyncio is charged the full "
+                  f"{_WINDOWS_REFUSAL_S:g} s: a shorter deadline around it (asyncio.wait_for, "
+                  "asyncio.timeout) is not visible to this count, so a test that sets one may "
+                  "be charged more than a Windows runner would wait.")
         return code if code or not offenders else 1
 
 

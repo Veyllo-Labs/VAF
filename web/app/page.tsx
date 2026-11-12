@@ -8171,6 +8171,11 @@ function VAFDashboardContent() {
     }, [input, ws, status]);
 
     useEffect(() => {
+        // The signature moves on EVERY pass, also when a parked restore below takes the pass:
+        // skipped there, it kept the state of before the restore (the Veyllo App room: "a line
+        // is sending"), and the next send, which sets that same state again, read as no
+        // change and the view stayed short of its waiting row.
+        const grew = _chatGrew();
         if (pendingScrollRestore.current !== null) {
             const restore = pendingScrollRestore.current;
             pendingScrollRestore.current = null;
@@ -8181,7 +8186,7 @@ function VAFDashboardContent() {
                     ? container.scrollHeight
                     : restore.scrollTop);
             });
-        } else if (isAtBottomRef.current && _chatGrew()) {
+        } else if (isAtBottomRef.current && grew) {
             // Set the position directly instead of asking for a smooth scroll.
             // Measured in the desktop window against this very container: an
             // identical call with behavior:'smooth' moves it 0px, while the same

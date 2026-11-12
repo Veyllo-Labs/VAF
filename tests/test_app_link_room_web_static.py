@@ -165,6 +165,20 @@ def test_the_drafts_of_both_sessions_show_and_pin_the_view():
     assert ":${appRoomDrafts.length}:${dockHeight}:${appRoomSending.busy}`;" in grew
 
 
+def test_the_follow_signature_moves_on_every_pass():
+    """The signature of the follow moves also when a parked restore takes the pass. Skipped
+    there, it kept "a line is sending" from the first send, and every later send, which sets
+    that same state again, read as no change: the view stayed 86 px short of the waiting row
+    (measured on the page: 0 of 4 later sends followed with the signature inside the branch,
+    every one of 24 after). MUTATION: ask `_chatGrew()` only in the follow branch - red."""
+    effect = _code_only(_between(PAGE, "    useEffect(() => {\n        // The signature moves on EVERY pass",
+                                 "appRoomDrafts.length, dockHeight, appRoomSending.busy]);"))
+    grew_at = effect.index("const grew = _chatGrew();")
+    assert grew_at < effect.index("if (pendingScrollRestore.current !== null) {")
+    assert "} else if (isAtBottomRef.current && grew) {" in effect
+    assert effect.count("_chatGrew()") == 1
+
+
 def test_the_inbox_opens_the_room_by_the_registry_name():
     """MUTATION: send a Veyllo App row of the inbox to Settings again, or spell the channel by
     hand - red."""

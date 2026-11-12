@@ -66,6 +66,20 @@ export function trimSessionCache(
 }
 
 /**
+ * The cache with this chat's messages put in: at most MAX_MESSAGES_PER_SESSION of them (the
+ * newest) on every update, and the whole cache trimmed to its chat bound when a chat joins.
+ * Returns a new object.
+ */
+export function cacheChat<M>(cache: Record<string, M[]>, chatId: string, messages: M[],
+                             options: TrimOptions,
+                             limits?: { maxSessions: number; maxMessagesPerSession: number }): Record<string, M[]> {
+  const max = limits?.maxMessagesPerSession ?? MAX_MESSAGES_PER_SESSION;
+  const isNew = !(chatId in cache);
+  const next = { ...cache, [chatId]: messages.length > max ? messages.slice(-max) : messages };
+  return isNew ? (trimSessionCache(next as unknown as SessionCache, options, limits) as unknown as Record<string, M[]>) : next;
+}
+
+/**
  * Remove the copy of chat messages an older version kept in localStorage. The cache is held
  * in memory now: the stored copy was keyed by chat id alone and outlived a logout, so on a
  * shared browser a second account could see the first one's chats before the server refused

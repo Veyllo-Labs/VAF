@@ -49,7 +49,7 @@ export type HistoryMessage = {
     _order: number;
 };
 
-/** The files of a stored answer as chips, keeping F-295's `purpose` and `toolId`. */
+/** The files of a stored answer as chips, keeping the `purpose` and `toolId` fields of the file event. */
 export function historyFiles(files: unknown): FileChip[] | undefined {
     if (!Array.isArray(files)) return undefined;
     const out: FileChip[] = [];
@@ -114,14 +114,79 @@ export function entryActivity(serverActive: boolean, kept: { isGenerating?: bool
     return { active: serverActive || hadLocalGenerating, hadLocalGenerating };
 }
 
+/** How close to the local send a kept prompt has to be to count as the one just sent. */
+export const LOCAL_PROMPT_SLACK_MS = 2000;
+
 /**
- * Which kept row of an active chat may stand next to the server's transcript: only the
- * browser's own system log lines, which the server never sends. A kept user prompt, tool card
- * or assistant bubble is not re-added: the server sends the running turn's prompt and the
- * replay its cards and its streamed text, so a kept copy could only be a stale one.
+ * Which kept row of an active chat may stand next to the server's transcript: the browser's
+ * own system log lines, which the server never sends, and the person's own prompt sent in
+ * this tab moments ago when the server's answer was computed before that chat frame reached
+ * it (the enqueue race; the server sends the prompt in every later answer). A kept tool card,
+ * assistant bubble or older prompt is not re-added: the server sends the running turn's
+ * prompt and the replay its cards and its streamed text, so a kept copy could only be stale.
  */
-export function keepCachedOrphan(msg: { role: string }): boolean {
-    return msg.role === 'system';
+export function keepCachedOrphan(msg: { role: string; content?: unknown; timestamp?: number },
+                                 serverMsgs: { role: string; content?: unknown }[] = [],
+                                 lastLocalSendMs = 0): boolean {
+    if (msg.role === 'system') return true;
+    if (msg.role !== 'user' || !(lastLocalSendMs > 0)) return false;
+    if ((msg.timestamp ?? 0) < lastLocalSendMs - LOCAL_PROMPT_SLACK_MS) return false;
+    return !serverMsgs.some(s => s.role === 'user' && s.content === msg.content);
+}
+
+/** What a replay asks of the page around the events themselves. */
+export type ReplayPlan = {
+    /** It carries the server's picture of a worker: the kept window is replaced by it. */
+    workerEvents: boolean;
+    /** The worker's last word was idle or error: its window stays closed. */
+    finishedWorker: boolean;
+    /** A workflow finished while the chat was not on screen: its panel stays closed. */
+    workflowDone: boolean;
+};
+
+export const WORKER_EVENT = /^(subagent_|browser_)|_state$/;
+
+export function planReplay(events: { type?: unknown; presence?: unknown }[]): ReplayPlan {
+    const types = events.map(e => String(e?.type ?? ''));
+    const presences = events.filter(e => e?.type === 'subagent_update' && e.presence)
+        .map(e => String(e.presence).trim().toLowerCase());
+    const last = presences[presences.length - 1];
+    return {
+        workerEvents: types.some(t => WORKER_EVENT.test(t)),
+        finishedWorker: last === 'idle' || last === 'error',
+        workflowDone: types.includes('workflow_done'),
+    };
+}
+
+type Timers = { set: (fn: () => void, ms: number) => unknown; clear: (handle: unknown) => void };
+
+/**
+ * A running chat's transcript, held until its live_replay arrives, so both are drawn in one
+ * go: drawn alone, the transcript would replace the kept picture without the running reply
+ * for a frame (the blink). A replay that does not come within `ms` still lets it through.
+ */
+export class LiveHistoryHold<M> {
+    private held: { sessionId: string; messages: M[]; handle: unknown } | null = null;
+
+    constructor(private readonly ms: number,
+                private readonly timers: Timers = {
+                    set: (fn, ms) => setTimeout(fn, ms),
+                    clear: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+                }) {}
+
+    hold(sessionId: string, messages: M[], onTimeout: () => void): void {
+        if (this.held) this.timers.clear(this.held.handle);
+        this.held = { sessionId, messages, handle: this.timers.set(onTimeout, this.ms) };
+    }
+
+    /** The held transcript of this chat (any chat when none is named), released. */
+    take(sessionId?: string): M[] | undefined {
+        const held = this.held;
+        if (!held || (sessionId && held.sessionId !== sessionId)) return undefined;
+        this.timers.clear(held.handle);
+        this.held = null;
+        return held.messages;
+    }
 }
 
 /** What the person had typed (and attached) in a chat, kept while they look at another. */
@@ -146,7 +211,7 @@ export class ComposerDrafts<S = unknown> {
     save(chatId: string | null | undefined, draft: ComposerDraft<S>): void {
         if (!chatId) return;
         this.drafts.delete(chatId);
-        if (!draft.text && draft.images.length === 0) return;
+        if (!draft.text && draft.images.length === 0 && draft.selections.length === 0) return;
         this.drafts.set(chatId, draft);
         while (this.drafts.size > this.max) {
             const oldest = this.drafts.keys().next().value as string;

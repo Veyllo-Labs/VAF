@@ -208,7 +208,7 @@ def test_a_transcript_from_a_snapshot_arrives_without_the_enter_animation():
     assert "snapshotLenRef.current = finalMsgs.length;\n                        setMessages(finalMsgs);" in handler
     # A running chat's transcript is held for its live_replay and set the same way.
     held = _between(src, "const applyLiveHistory = (", "const holdLiveHistory")
-    assert "snapshotLenRef.current = held.messages.length;\n        setMessages(held.messages);" in held
+    assert "snapshotLenRef.current = held.length;\n        setMessages(held);" in held
     assert "snapshotLenRef.current = cached.length;\n        setMessages(cached);" in src
     assert "if (messages.length < snapshotLenRef.current) snapshotLenRef.current = messages.length;" in src
 
@@ -324,7 +324,10 @@ def test_every_history_request_restarts_the_wait():
         assert "requestHistory(wsSocketRef.current, data.sessionId, true);" in branch, kind
     # And a reconnect that keeps its open chat instead of the server's auto-loaded pick.
     assert "requestHistory(wsSocketRef.current, prevSessionId, false);" in src
-    assert src.count("requestHistory(") == 5, "the five callers"
+    # A refused re-ask, and an account change on reconnect, take the server's auto-loaded chat.
+    assert "requestHistory(wsSocketRef.current, fallback, true);" in src
+    assert "requestHistory(wsSocketRef.current, autoLoadedRef.current, true);" in src
+    assert src.count("requestHistory(") == 7, "the seven callers"
 
 
 def test_every_persona_writer_counts_against_a_late_refetch():

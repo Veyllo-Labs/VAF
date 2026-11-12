@@ -51,7 +51,7 @@ def _run(module: Path, body: str, setup: str = ""):
 
 
 def _page():
-    return PAGE.read_bytes().decode()
+    return PAGE.read_text(encoding="utf-8")
 
 
 def _between(src, start, end):
@@ -109,18 +109,84 @@ def test_a_kept_generating_flag_never_outvotes_the_server():
 
 
 def test_only_system_lines_are_kept_beside_the_server():
-    """MUTATION: re-add kept tool cards (or bubbles, or prompts) - red."""
+    """MUTATION: re-add kept tool cards (or bubbles, or older prompts) - red."""
     out = _run(LIVE, "['system', 'user', 'tool', 'assistant', 'workflow'].map(r => m.keepCachedOrphan({role: r}))")
     assert out == [True, False, False, False, False]
     merge = _between(_page(), "const orphans = cachedMsgs", ";")
-    assert merge.strip() == "const orphans = cachedMsgs.filter(keepCachedOrphan)\n" \
-        "                        .map((m, idx) => ({ ...m, _order: 100000 + idx }))"
+    assert "keepCachedOrphan(m, hydratedServerMsgs, lastUserSendTimeRef.current)" in merge
 
 
-def test_the_worker_window_comes_back_idle_and_closed():
-    switch = _between(_page(), "const handleSessionSwitch = (id: string) => {", "const switchAfterDelete")
-    assert "isOpen: false," in switch
-    assert "presence: restoredSubAgent.presence === 'error' ? 'error' : 'idle'," in switch
+def test_the_prompt_just_sent_survives_an_early_snapshot():
+    """The server computed its answer before this tab's chat frame reached it: the person's own
+    prompt, sent moments ago, stays until the server's transcript has it.
+    MUTATION: drop kept user prompts again - red; keep any older prompt - red."""
+    now = 1_000_000
+    keep = lambda msg, server: _run(LIVE, f"m.keepCachedOrphan({json.dumps(msg)}, {json.dumps(server)}, {now})")
+    just_sent = {"role": "user", "content": "go", "timestamp": now + 5}
+    assert keep(just_sent, []) is True
+    assert keep(just_sent, [{"role": "user", "content": "go"}]) is False      # the server has it
+    assert keep({"role": "user", "content": "old", "timestamp": now - 60_000}, []) is False
+    assert _run(LIVE, f"m.keepCachedOrphan({json.dumps(just_sent)}, [], 0)") is False   # no local send
+
+
+def test_a_replay_plan_replaces_closes_and_keeps_closed():
+    """The replay resets the kept worker window when it carries worker events, closes it when
+    the worker's last word was idle or error, and keeps a finished workflow's panel closed.
+    MUTATION: no reset on worker events - red; a finished window not closed - red;
+    workflow_done ignored - red."""
+    plan = lambda evs: _run(LIVE, f"m.planReplay({json.dumps(evs)})")
+    assert plan([{"type": "agent_message_update"}]) == {
+        "workerEvents": False, "finishedWorker": False, "workflowDone": False}
+    assert plan([{"type": "coder_state"}])["workerEvents"] is True
+    assert plan([{"type": "subagent_output_stream"}])["workerEvents"] is True
+    assert plan([{"type": "subagent_update", "presence": "online"},
+                 {"type": "browser_frame_update"},
+                 {"type": "subagent_update", "presence": "idle"}])["finishedWorker"] is True
+    assert plan([{"type": "subagent_update", "presence": "idle"},
+                 {"type": "subagent_update", "presence": "online"}])["finishedWorker"] is False
+    assert plan([{"type": "workflow_start"}, {"type": "workflow_done"}])["workflowDone"] is True
+
+
+def test_the_page_follows_the_plan():
+    replay = _between(_page(), "if (data.type === 'live_replay') {", "if (data.type === 'new_log')")
+    loop = replay.index("for (const ev of replayed) handleFrame({ ...ev, replay: true });")
+    reset = replay[replay.index("if (plan.workerEvents) {"):loop]
+    # The console's duplicate filters are reset with the window, or every line this page
+    # already showed once is refused and the console comes back empty.
+    for needle in ("subAgentLogSetRef.current = new Set();", "subAgentOutputSetRef.current = new Set();",
+                   "setSubAgentState({ ...IDLE_SUB_AGENT_STATE, isOpen: false });"):
+        assert needle in reset, needle
+    after = replay[loop:]
+    assert "if (plan.finishedWorker) setSubAgentState(prev => ({ ...prev, isOpen: false }));" in after
+    assert "if (plan.workflowDone) useWorkflowStore.getState().closeWorkflow();" in after
+    # Nothing the replay drew slides in, and a chat left at its bottom is there again.
+    assert "setMessages(prev => { snapshotLenRef.current = prev.length; return prev; });" in after
+    assert "pendingScrollRestore.current = 'bottom';" in after
+    assert "bottomPinUntilRef.current = performance.now() + BOTTOM_PIN_MS;" in after
+    # The scroll keeper follows the moving bottom while the pin lasts, and a touch ends it.
+    src = _page()
+    keeper = _between(src, "const tick = () => {", "raf = requestAnimationFrame(tick);")
+    assert "if (bottomPinUntilRef.current > performance.now() && performance.now() - lastHuman >= 300) {" in keeper
+    assert "scrollIntentRef.current = Math.max(0, el.scrollHeight - el.clientHeight);" in keeper
+    assert "bottomPinUntilRef.current = 0;" in _between(src, "const human = () => {", "};")
+
+
+def test_the_hold_releases_once_by_replay_or_by_timeout():
+    """MUTATION: a hold whose timeout does nothing - red; take for another chat - red."""
+    out = _run(LIVE, """(() => {
+        const timers = []; const fake = {set: (fn, ms) => { timers.push({fn, ms, on: true}); return timers.length - 1; },
+                                         clear: (h) => { timers[h].on = false; }};
+        const h = new m.LiveHistoryHold(1500, fake);
+        const fired = [];
+        h.hold('A', ['a1'], () => fired.push('A'));
+        const other = h.take('B');
+        const mine = h.take('A');
+        const again = h.take('A');
+        h.hold('C', ['c1'], () => fired.push(h.take('C')));
+        timers.filter(t => t.on).forEach(t => t.fn());
+        return {other: other ?? null, mine, again: again ?? null, fired, ms: timers[0].ms, cleared: !timers[0].on};
+    })()""")
+    assert out == {"other": None, "mine": ["a1"], "again": None, "fired": [["c1"]], "ms": 1500, "cleared": True}
 
 
 def test_a_running_chats_transcript_is_drawn_with_its_replay():
@@ -141,6 +207,11 @@ def test_a_running_chats_transcript_is_drawn_with_its_replay():
 # ── AC10: a replay is quiet ──────────────────────────────────────────────────────
 
 QUIET_GUARDS = [
+    # message_complete of a turn that ended but is not stored yet: no sound, no read-out,
+    # no reaction
+    "if (completeIsActiveSession && !data.replay) try {",
+    "if (completeIsActiveSession && !data.replay && config.tts_auto_speak",
+    "if (!data.replay && lastCh === '?') fireAgentReaction('permission', 3000);",
     # tool_update: no hold timer, no reaction, no cursor
     "if (data.replay || elapsed >= TOOL_ANIM_MIN_MS) release();",
     "if (!data.replay && (subType === 'end' || subType === 'error')) {",
@@ -163,8 +234,8 @@ def test_the_replay_goes_through_the_one_dispatch():
     src = _page()
     assert "const handleFrame = (data: any) => {" in src
     assert "handleFrame(data);" in _between(src, "socket.onmessage = (event) => {", "};")
-    # Never a replay inside a replay, and never a terminal event (the server sends none:
-    # the turn group is cleared by message_complete), so no sound can come from a replay.
+    # Never a replay inside a replay. A replayed message_complete (a turn that ended and is not
+    # stored yet) is quiet by the guards above.
     assert "ev.type !== 'live_replay'" in src
 
 
@@ -182,6 +253,7 @@ def test_a_reconnect_keeps_the_open_chat():
     """MUTATION: drop the autoLoad branch - red."""
     hist = _between(_page(), "else if (data.type === 'history_update')", "const isActive")
     branch = "if (data.autoLoad && prevSessionId && data.sessionId !== prevSessionId) {\n" \
+             "                        reaskRef.current = prevSessionId;\n" \
              "                        requestHistory(wsSocketRef.current, prevSessionId, false);\n" \
              "                        return;"
     assert branch in hist
@@ -223,6 +295,14 @@ def test_composer_drafts_are_per_chat_and_bounded():
         return {a: a.text, e: e.text, again: again.text, size: d.size, b: d.take('B').text};
     })()""")
     assert out == {"a": "", "e": "e", "again": "", "size": 2, "b": ""}
+    kept = _run(LIVE, """(() => {
+        const d = new m.ComposerDrafts(5);
+        d.save('X', {text: '', images: [], selections: []});
+        const emptyKept = d.size;
+        d.save('Y', {text: '', images: [], selections: [{start: 1, end: 4}]});
+        return {emptyKept, sel: d.take('Y').selections.length};
+    })()""")
+    assert kept == {"emptyKept": 0, "sel": 1}
     default = _run(LIVE, "m.MAX_COMPOSER_DRAFTS")
     assert default == 20
 
@@ -242,15 +322,56 @@ def test_composer_swaps_on_every_chat_change():
 
 def test_no_message_content_is_written_to_browser_storage():
     """MUTATION: write the cache to localStorage again - red."""
-    cache = CACHE.read_bytes().decode()
+    cache = CACHE.read_text(encoding="utf-8")
     assert "setItem" not in cache
     assert "loadSessionCache" not in cache and "saveSessionCache" not in cache
     src = _page()
     assert "loadSessionCache" not in src and "saveSessionCache" not in src
     assert "vaf_session_cache" not in src
     assert "purgeLegacySessionCache();" in src
-    live = LIVE.read_bytes().decode()
+    live = LIVE.read_text(encoding="utf-8")
     assert "localStorage" not in live.split("*/", 1)[1] and "setItem" not in live
+
+
+def test_the_cache_is_bounded_on_every_update():
+    """MUTATION: bound the chat only when it first joins the cache - red."""
+    out = _run(CACHE, """(() => {
+        const opt = {currentSessionId: 'A', sessionIdsInOrder: ['A', 'B']};
+        let c = m.cacheChat({}, 'A', [1, 2], opt, {maxSessions: 1, maxMessagesPerSession: 3});
+        c = m.cacheChat(c, 'A', [1, 2, 3, 4, 5, 6], opt, {maxSessions: 1, maxMessagesPerSession: 3});
+        const afterUpdate = c['A'];
+        c = m.cacheChat(c, 'B', [9], {currentSessionId: 'B', sessionIdsInOrder: ['A', 'B']},
+                        {maxSessions: 1, maxMessagesPerSession: 3});
+        return {afterUpdate, keys: Object.keys(c)};
+    })()""")
+    assert out == {"afterUpdate": [4, 5, 6], "keys": ["B"]}
+    assert "cacheChat(sessionCache.current, currentSessionId, messages," in _page()
+
+
+def test_a_refused_reask_takes_the_servers_chat():
+    """A reconnect re-asks for the open chat; a refusal (deleted, another account) takes the
+    chat the server auto-loaded. MUTATION: no error branch - red."""
+    src = _page()
+    err = _between(src, "else if (data.type === 'error') {", "else if (data.type === 'context_checkpoint')")
+    assert "if (reaskRef.current && autoLoadedRef.current) {" in err
+    assert "requestHistory(wsSocketRef.current, fallback, true);" in err
+    hist = _between(src, "else if (data.type === 'history_update')", "const isActive")
+    assert "reaskRef.current = prevSessionId;" in hist
+
+
+def test_another_account_on_the_tab_gets_nothing_of_the_first():
+    """MUTATION: no account check on reconnect - red; sign-out keeps the workflow panel - red."""
+    src = _page()
+    opened = _between(src, "socket.onopen = () => {", "socket.send(JSON.stringify({ type: 'get_sessions' }));")
+    assert "if (was && key(was) !== key(me)) {" in opened and "forgetAccountState();" in opened
+    forget = _between(src, "const forgetAccountState = () => {", "\n    };")
+    for needle in ("sessionCache.current = {};", "composerDraftsRef.current = new ComposerDrafts", "forgetWorkflowState();"):
+        assert needle in forget, needle
+    logout = _between(src, "onLogout={() => {", "}}")
+    assert "forgetWorkflowState();" in logout
+    assert src.count("forgetWorkflowState();\n") >= 4    # sign-out, two ended sessions, account change
+    store = (ROOT / "web" / "components" / "workflows" / "stores" / "workflowStore.ts").read_text(encoding="utf-8")
+    assert "useWorkflowStore.persist.clearStorage();" in _between(store, "export function forgetWorkflowState", "\n}")
 
 
 def test_the_legacy_copy_is_removed_and_a_blocked_storage_is_harmless():

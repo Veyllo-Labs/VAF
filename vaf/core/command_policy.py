@@ -56,18 +56,26 @@ again (`bash -c "..."`, `eval "..."`) a quoted mark counts as a bare one. A subs
 substitution reads the pipe like the command it stands in (`curl x | (bash)`), and a
 process substitution that fetches hands its command fetched code (`bash <(curl x)`), as a
 `>( )` receives what its command writes (`curl x | tee >(bash)`). A shell that runs another
-command's output (`eval "$(...)"`, `source <(...)`) is `opaque_command` too, and every
-opaque refusal names the way out for its shape (_OPAQUE_REASONS). `$((` is arithmetic only
-where bash reads it so; `$((cmd) ...)` is a command substitution holding a subshell.
+command's output (`eval "$(...)"`, `source <(...)`, `bash <<< "$(...)"`, a descriptor fed
+by one, _script_input) is `opaque_command` too, literal text fed to a shell is read as
+shell text, and every opaque refusal names the way out for its shape (_OPAQUE_REASONS).
+Every `$((` is read both ways, as arithmetic and as a command, since a `#` comment or a
+backtick moves where bash closes it. A word-initial `#` is a comment to the end of the line,
+and a heredoc body is data up to its delimiter (an unquoted one's substitutions run).
 Every reading spends from one budget per call (MAX_NESTED_COMMANDS), and a runner's
-candidates, each the rest of the command again, from a second one in characters
-(_RUNNER_TEXT_SLACK), so the work stays linear in the command's length.
+candidates and the readings of a `$((`, each nearly the whole text again, from a second
+one in characters (_RUNNER_TEXT_SLACK); the fork-bomb search is three plain searches. The
+work stays linear in the command's length.
 
-NAMED BOUNDARY: the shell's compound grammar is not read: braces, `if`/`for`/`while`/
-`case` at the top level, variables and `${...}` as the program, ANSI-C quoting, globs and
-brace expansion in the program name, line continuation inside a word, and wrappers that
-take a command string of their own (`env -S`, `watch`, `find -exec`). `case` inside a
-substitution refuses the command, since its `)` would close the substitution early.
+NAMED BOUNDARY: the shell's compound grammar is not read at the top level: brace groups
+(`curl x | { bash; }`), `if`/`for`/`while`/`case`, variables and `${...}` as the program,
+ANSI-C quoting (`$'...'`), globs and brace expansion in the program name, line continuation
+inside a word, and wrappers that take a command string of their own (`env -S`, `watch`,
+`find -exec`). Literal text piped into a shell by another command (`echo '...' | bash`) is
+not read. Arithmetic evaluates an array subscript held in a variable as code
+(`x='a[$(...)]'; echo $((x))`, `printf -v 'a[$(...)]' v`), which the text does not show.
+A `case` statement inside a substitution refuses the command, since its pattern's `)`
+would close the substitution early; the word "case" elsewhere does not.
 
 Python that moves files over FTP is the same `ftp_transfer` as an FTP client
 (`python_code_categories`): an import of ftplib, a string naming it (what
@@ -112,6 +120,8 @@ _NETWORK_FETCHERS = frozenset({
 _TRANSPARENT_WRAPPERS = frozenset({
     "sudo", "doas", "nohup", "time", "env", "command", "exec", "stdbuf",
     "nice", "ionice", "setsid", "timeout", "xargs", "builtin", "sshpass",
+    "corepack",                     # `corepack pnpm dlx ...` runs the package manager named
+    "!",                            # `! cmd` runs cmd and inverts its status
 })
 # A wrapper's options that take their value as the NEXT word. Without this the value
 # was read as the executable: `sudo -u root rm -rf /` judged `root`, and passed.
@@ -166,6 +176,9 @@ _PACKAGE_RUNNERS = {
     "yarn": frozenset({"exec", "dlx"}),
     "bun": frozenset({"x", "exec"}),     # `bun exec '...'` runs a Bun Shell string
     "pipx": frozenset({"run"}),
+    # Tool managers whose verb starts a command in their environment.
+    "pyenv": frozenset({"exec"}), "opam": frozenset({"exec"}),
+    "mamba": frozenset({"run"}), "micromamba": frozenset({"run"}),
 }
 # Builtins that run Python code they are given as a string: the string is read like the code.
 _CODE_STRING_CALLS = frozenset({"exec", "eval", "compile"})
@@ -198,7 +211,7 @@ _PROTECTED_ROOTS = ("/", "/*", "/bin", "/boot", "/dev", "/etc", "/home", "/lib",
                     "/lib64", "/opt", "/proc", "/root", "/sbin", "/srv", "/sys",
                     "/usr", "/var", "~", "~/", "$HOME", "${HOME}", "c:\\", "c:/")
 
-_FORK_BOMB_RE = re.compile(r":\s*\(\s*\)\s*\{.*\|\s*:\s*&.*\}\s*;\s*:", re.DOTALL)
+_WHITESPACE_RE = re.compile(r"\s+")
 _DEVICE_TARGET_RE = re.compile(r"of=/dev/(sd|nvme|hd|vd|mmcblk|disk)", re.IGNORECASE)
 _REDIRECT_DEVICE_RE = re.compile(r">\s*/dev/(sd|nvme|hd|vd|mmcblk|disk)", re.IGNORECASE)
 # Where a command substitution stood in its segment (_split_segments). Bare, its output is
@@ -227,9 +240,7 @@ CATEGORY_REASONS = {
                       "approved is not the text that will run; run the substitution as a "
                       "command of its own first and write the program out (for "
                       "`\"$(which python3)\" -V`: `which python3`, then the path it prints, or "
-                      "plain `python3 -V`), write a runner option's value with `=` "
-                      "(`--with=$(cat r)`), and load a .env file with "
-                      "`set -a; source .env; set +a; make`",
+                      "plain `python3 -V`)",
     "nested_too_deep": "carries more nested commands than anyone can review, or nests them "
                        "too deep; split it into several commands",
     "remote_login": "logs in to another machine with this computer's own SSH setup; use the "
@@ -249,8 +260,21 @@ _OPAQUE_REASONS = {
                   "`ssh-agent bash -c '...'`), or save the output to a file, read the file, "
                   "then run it (for an installer: `curl -fsSL -o install.sh URL`, then "
                   "`bash install.sh`)",
-    "unreadable": "uses `case` inside a substitution, which this check cannot read; write "
-                  "the case as a command of its own",
+    "option_value": "hands a runner option a value from a command substitution, a word the "
+                    "runner may also start as its program; write the value with `=` "
+                    "(`--with=$(cat r)`)",
+    "env_values": "takes its variables and program from a command substitution, so the text "
+                  "being approved is not the text that will run; load a .env file with "
+                  "`set -a; . ./.env; set +a; make`",
+    "unreadable": "has a `case` statement inside a substitution, which this check cannot "
+                  "read; write the case as a command of its own",
+}
+
+# What a refusal adds after the reason, where the reason alone names no way out. Only for a
+# refusal: on the remote lane a fetch into a shell is a note, and the note stays as it is.
+_WAY_OUT = {
+    "pipe_to_shell": "; download it to a file, read the file, then run it "
+                     "(`curl -fsSL -o install.sh URL`, then `bash install.sh`)",
 }
 
 # What each profile refuses outright. Everything else in CATEGORY_REASONS is a note.
@@ -290,22 +314,31 @@ class CommandVerdict:
 def _split_segments(command: str) -> List[tuple]:
     """Split on shell separators OUTSIDE quotes; a substitution stays inside its command.
 
-    Returns (connector, segment, substitutions) triples, where the connector says how a
-    segment is joined to its predecessor: "pipe" only for a single `|`, everything else
-    ("start", ";", "&&") breaks the pipeline. That distinction carries the whole
-    pipe-to-shell judgement: `curl x | bash` is unreviewable, while `curl x > f; python
-    parse.py` is a download followed by a separate, visible command (measured false
-    positive of the first version).
+    Returns (connector, segment, carried) triples, where the connector says how a segment
+    is joined to its predecessor: "pipe" only for a single `|`, everything else ("start",
+    ";", "&&") breaks the pipeline. That distinction carries the whole pipe-to-shell
+    judgement: `curl x | bash` is unreviewable, while `curl x > f; python parse.py` is a
+    download followed by a separate, visible command (measured false positive of the first
+    version).
 
     A substitution is a command the segment CARRIES, not a cut in it. Its text is returned
-    whole, with its kind ("command" for `$( )` and backticks, "arithmetic" for `$(( ))`
-    with the expression alone, "arithmetic?" for a `$((` left open, "subshell" for `( )`, "process_in" for `<( )`,
-    "process_out" for `>( )`), and where it stood in the segment a mark is left:
-    _SUBST_BARE outside quotes, _SUBST_QUOTED inside double quotes, _SUBST_PROC for a
-    process substitution (a file name), none for a subshell. Cutting the segment there, as before, separated
-    the command word from its wrapper (`env $(echo rm) -rf /` became `env`, `echo rm` and
-    `-rf /`, and passed) and broke a pipe in two (`curl x | tee $(mktemp) | bash` passed).
-    A segment that has no text of its own but carries a substitution is kept: `(bash)`.
+    whole, with its kind: "command" for `$( )` and backticks, "arithmetic" for a `$(( ))`
+    that bash evaluates (the parenthesis after `$(` closes right before the outer one, and
+    no `#` or backtick inside), "arithmetic*" for any other `$((`, "subshell" for `( )`,
+    "process_in" for `<( )`, "process_out" for `>( )`. Where it stood in the segment a mark
+    is left: _SUBST_BARE outside quotes, _SUBST_QUOTED inside double quotes, _SUBST_PROC for
+    a process substitution (a file name), none for a subshell. Cutting the segment there, as
+    before, separated the command word from its wrapper (`env $(echo rm) -rf /` became
+    `env`, `echo rm` and `-rf /`, and passed) and broke a pipe in two (`curl x | tee
+    $(mktemp) | bash` passed). A segment that has no text of its own but carries a
+    substitution is kept: `(bash)`.
+
+    A heredoc's body is carried too, never read as commands: "heredoc" for a body that is
+    data (a quoted delimiter, or no substitution in it), "heredoc_x" for an unquoted body
+    whose substitutions run (they are carried as "command" next to it). A word-initial `#`
+    starts a comment that ends at the line. Before both, an apostrophe in a comment or in a
+    heredoc body opened a quote that swallowed every later line (`cat <<'EOF'` with
+    "don't" in it, then `rm -rf /`, passed), and a body was read as commands.
 
     A plain `command.split("|")` would be fooled by `echo "a|b"`, and a regex over the whole
     string never sees what a substitution actually runs.
@@ -323,27 +356,43 @@ def _split_segments(command: str) -> List[tuple]:
     segments: List[tuple] = []
     connector = "start"
     buf: List[str] = []
-    subs: List[tuple] = []          # (kind, text) carried by the current segment
+    subs: List[tuple] = []          # what the current segment carries
     sub_buf: List[str] = []         # the outermost open substitution's text
     sub_kind = ""
-    sub_case = False                # `case` inside the open substitution (see below)
+    sub_case = False                # a `case` statement inside the open substitution
+    # The open `$((`: did its inner parenthesis close right before the outer one, and did a
+    # `#` or a backtick (both of which change where bash closes it) appear inside?
+    arith_closed, arith_clean, arith_tainted = False, False, False
     quote = ""       # active quote character, "" when outside quotes
     # Nesting of $( ), ( ) and ` `. A closer entered from inside double quotes is
     # stored with the quote in front ('")', '"`') so leaving it re-enters the quote.
     depth_stack: List[str] = []
+    # Heredocs waiting for their body after the next newline: (delimiter, quoted,
+    # strip_tabs, depth, segment), the segment being the command that reads the body.
+    heredocs: List[tuple] = []
     i = 0
     n = len(command)
 
     def _put(text: str) -> None:
         (sub_buf if depth_stack else buf).append(text)
 
+    def _last_char() -> str:
+        target = sub_buf if depth_stack else buf
+        for piece in reversed(target):
+            if piece:
+                return piece[-1]
+        return ""
+
     def _open(closer: str, kind: str, opener: str) -> None:
-        nonlocal sub_kind, sub_buf, sub_case
+        nonlocal sub_kind, sub_buf, sub_case, arith_closed, arith_clean, arith_tainted
         if depth_stack:
             sub_buf.append(opener)          # an inner one is part of the outer's text
+            if sub_kind == "arithmetic" and opener == "`":
+                arith_tainted = True
         else:
             sub_kind, sub_buf, sub_case = kind, [], False
-            if kind in ("command", "arithmetic?"):
+            arith_closed, arith_clean, arith_tainted = False, False, False
+            if kind in ("command", "arithmetic"):
                 buf.append(_SUBST_QUOTED if closer.startswith('"') else _SUBST_BARE)
             elif kind in ("process_in", "process_out"):
                 buf.append(_SUBST_PROC)
@@ -351,16 +400,15 @@ def _split_segments(command: str) -> List[tuple]:
 
     def _close(closer_text: str, nxt: str) -> bool:
         """True when the outermost substitution closed."""
-        nonlocal quote, sub_kind
+        nonlocal quote, arith_closed, arith_clean, heredocs
         if depth_stack.pop().startswith('"'):
             quote = '"'
+        if heredocs:
+            heredocs = [h for h in heredocs if h[3] <= len(depth_stack)]
         if depth_stack:
             sub_buf.append(closer_text)
-            # `$((` is arithmetic only when the parenthesis after `$(` closes right before
-            # the outer one, as bash decides it: `$((1+2))`. Otherwise it is a command
-            # substitution holding a subshell, and bash runs it: `$((rm -rf /) ; true)`.
-            if sub_kind == "arithmetic?" and len(depth_stack) == 1:
-                sub_kind = "arithmetic" if nxt == ")" else "command"
+            if sub_kind == "arithmetic" and len(depth_stack) == 1 and not arith_closed:
+                arith_closed, arith_clean = True, nxt == ")"
             return False
         _carry()
         return True
@@ -372,16 +420,67 @@ def _split_segments(command: str) -> List[tuple]:
             # of its branch land outside it. Not read: refused as unreadable.
             subs.append(("unreadable", text))
             return
-        if sub_kind == "arithmetic":
-            # `$((expr))`: the inner `( )` is the expression's, not a subshell.
-            text = text[1:] if text.startswith("(") else text
-            text = (text[:-1] if text.endswith(")") else text).strip()
-        subs.append((sub_kind, text))
+        kind = sub_kind
+        if kind == "arithmetic" and not (arith_clean and not arith_tainted and depth_stack == []
+                                         and text.endswith(")")):
+            kind = "arithmetic*"
+        subs.append((kind, text))
 
     def _flush() -> None:
         nonlocal buf, subs
         segments.append((connector, "".join(buf).strip(), subs))
         buf, subs = [], []
+
+    def _heredoc_word(at: int) -> tuple:
+        """The delimiter after `<<` at `at`: (end, delimiter, quoted, strip_tabs), or None
+        when no word follows that can be one (`1<<2` in arithmetic is a shift)."""
+        j = at + 2
+        strip_tabs = command[j:j + 1] == "-"
+        if strip_tabs:
+            j += 1
+        while j < n and command[j] in " \t":
+            j += 1
+        k, word, quoted = j, [], False
+        while k < n and command[k] not in " \t\n;&|()<>":
+            c = command[k]
+            if c in ("'", '"'):
+                close = command.find(c, k + 1)
+                close = n if close < 0 else close
+                word.append(command[k + 1:close])
+                quoted, k = True, close + 1
+                continue
+            if c == "\\":
+                word.append(command[k + 1:k + 2])
+                quoted, k = True, k + 2
+                continue
+            word.append(c)
+            k += 1
+        delim = "".join(word)
+        if not delim or not (quoted or delim[0].isalpha() or delim[0] == "_"):
+            return None
+        return k, delim, quoted, strip_tabs
+
+    def _bodies(at: int) -> tuple:
+        """Read the waiting heredocs' bodies after the newline at `at`: (end, [(body,
+        quoted, segment)]), `end` at the newline after the last delimiter line (or the end)."""
+        nonlocal heredocs
+        pos, out = at + 1, []
+        for delim, quoted, strip_tabs, _depth, _segment in heredocs:
+            start = pos
+            while True:
+                if pos >= n:
+                    out.append((command[start:n], quoted, _segment))
+                    break
+                e = command.find("\n", pos)
+                end = n if e < 0 else e
+                line = command[pos:end]
+                if (line.lstrip("\t") if strip_tabs else line) == delim:
+                    out.append((command[start:pos], quoted, _segment))
+                    pos = end + 1 if e >= 0 else n
+                    break
+                pos = end + 1 if e >= 0 else n
+        heredocs = []
+        return (pos - 1 if 0 < pos <= n and command[pos - 1:pos] == "\n" else pos), out
 
     while i < n:
         ch = command[i]
@@ -410,6 +509,35 @@ def _split_segments(command: str) -> List[tuple]:
                 _put(ch)
             i += 1
             continue
+        if ch == "#" and _last_char() in ("", " ", "\t", "\n", ";", "&", "|", "(", ")"):
+            # A comment, to the end of the line: its quotes and parentheses are text.
+            end = command.find("\n", i)
+            end = n if end < 0 else end
+            if depth_stack:
+                sub_buf.append(command[i:end])
+                if sub_kind == "arithmetic":
+                    arith_tainted = True
+            i = end
+            continue
+        if ch == "\n" and heredocs:
+            end, bodies = _bodies(i)
+            if depth_stack:
+                sub_buf.append(command[i:end])  # read again where the substitution is read
+            else:
+                for body, quoted, segment in bodies:
+                    # The body belongs to the command that wrote `<<`, also when a pipe
+                    # follows it on that line (`cat <<EOF | bash`).
+                    target = subs if segment >= len(segments) else segments[segment][2]
+                    if quoted:
+                        target.append(("heredoc", body))
+                    else:
+                        found = _heredoc_substitutions(body)
+                        target.extend(found)
+                        target.append(("heredoc_x" if found else "heredoc", body))
+                _flush()
+                connector = "seq"
+            i = end
+            continue
         if ch in ("'", '"'):
             _put(ch)
             quote = ch
@@ -420,6 +548,15 @@ def _split_segments(command: str) -> List[tuple]:
             _put(nxt)
             i += 2
             continue
+        if (ch == "<" and nxt == "<" and command[i + 2:i + 3] != "<"
+                and command[i - 1:i] != "<"):     # `<<<` is a here-string
+            word = _heredoc_word(i)
+            if word is not None:
+                end, delim, quoted, strip_tabs = word
+                heredocs.append((delim, quoted, strip_tabs, len(depth_stack), len(segments)))
+                _put(command[i:end])
+                i = end
+                continue
         if ch == "$" and nxt == "(":
             _open(")", _dollar_kind(command, i), "$(")
             i += 2
@@ -450,9 +587,7 @@ def _split_segments(command: str) -> List[tuple]:
             i += 1
             continue
         if depth_stack:
-            if (ch == "c" and command.startswith("case", i)
-                    and (not sub_buf or sub_buf[-1] in " \t\n;&|(`")
-                    and command[i + 4:i + 5] in (" ", "\t", "\n")):
+            if ch == "c" and _CASE_STATEMENT_RE.match(command, i) and _command_position(sub_buf):
                 sub_case = True
             _put(ch)                    # a separator inside a substitution is its own
             i += 1
@@ -476,10 +611,51 @@ def _split_segments(command: str) -> List[tuple]:
     return [(c, seg, carried) for c, seg, carried in segments if seg or carried]
 
 
+# `case WORD in`, the statement, not the word: `grep case f` and a commit message's "in
+# that case" are no statement.
+_CASE_STATEMENT_RE = re.compile(r"case\s+\S+\s+in(?=[\s;]|$)")
+# Words after which the next word is a command.
+_COMMAND_LEADERS = frozenset({"then", "do", "else", "elif", "{", "!", "time"})
+
+
+def _command_position(sub_buf: List[str]) -> bool:
+    """Whether the next word of a substitution's text stands where a command starts."""
+    tail = "".join(sub_buf[-40:]).rstrip(" \t")
+    if not tail or tail[-1] in ";&|(\n`":
+        return True
+    return tail.split()[-1] in _COMMAND_LEADERS
+
+
+def _heredoc_substitutions(body: str) -> List[tuple]:
+    """The substitutions an unquoted heredoc body runs. The body is read as the inside of
+    double quotes: there too `$( )` and backticks run, a backslash escapes only `$`, a
+    backtick, a backslash and a newline, and every other character is text. A `"` in the
+    body is text, so it is escaped for that reading."""
+    out: List[str] = []
+    k = 0
+    while k < len(body):
+        c = body[k]
+        if c == "\\":
+            nx = body[k + 1:k + 2]
+            if nx in ("$", "`", "\\", "\n") and nx:
+                out.append("\\" + nx)
+                k += 2
+                continue
+            out.append("\\\\")
+            k += 1
+            continue
+        out.append('\\"' if c == '"' else c)
+        k += 1
+    found: List[tuple] = []
+    for _connector, _seg, carried in _split_segments('"' + "".join(out) + '"'):
+        found.extend(carried)
+    return found
+
+
 def _dollar_kind(command: str, i: int) -> str:
-    """`$((` at `i` may open an arithmetic expansion ("arithmetic?", settled when its inner
-    parenthesis closes, see _split_segments), any other `$(` a command substitution."""
-    return "arithmetic?" if command[i + 2:i + 3] == "(" else "command"
+    """`$((` at `i` may open an arithmetic expansion, any other `$(` a command substitution.
+    Whether bash evaluates it or runs it is not decided here: both readings are judged."""
+    return "arithmetic" if command[i + 2:i + 3] == "(" else "command"
 
 
 def _tokens(segment: str) -> List[str]:
@@ -565,8 +741,10 @@ def _reparsed(text: str) -> str:
 
 
 def _attached_call(word: str) -> Optional[str]:
-    """The shell string of npm's `--call=TEXT` or `-cTEXT` written in one word, else None:
-    npm and npx run it through a shell like the spaced `-c TEXT` (measured with an echo)."""
+    """The shell string of npm's `--call=TEXT`, `-c=TEXT` or `-cTEXT` written in one word,
+    else None. npm and npx run `--call=TEXT` and `-c=TEXT` through a shell like the spaced
+    `-c TEXT` (measured with an echo); `-cTEXT` they do not run (npm warns of an unknown
+    config), and reading it too costs nothing."""
     if word.startswith("--call="):
         return word[len("--call="):]
     if word.startswith("-c") and len(word) > 2:
@@ -719,13 +897,27 @@ def _runner_commands(exe: str, args: List[str]) -> List[int]:
         return []
     package = exe in _PACKAGE_RUNNERS
     start = 0
+    # npm reads its options anywhere: a `--call`/`-c` before the verb runs its text too
+    # (`npm --call='...' exec`, `npm -c '...' exec`, measured with an echo).
+    before_verb: List[int] = []
     if gate:
-        maybe_value = False
+        maybe_value = call_due = False
         for pos, tok in enumerate(args):
+            if call_due:
+                before_verb.append(pos)     # the value of `--call` / `-c`
+                call_due = maybe_value = False
+                continue
             if tok in gate:
                 start = pos + 1
                 break
+            if tok in ("--call", "-c"):
+                call_due = True
+                continue
             if tok.startswith("-") and tok != "--":
+                if _attached_call(tok) is not None:
+                    before_verb.append(pos)
+                    maybe_value = False
+                    continue
                 maybe_value = "=" not in tok
                 continue
             if maybe_value and tok != "--":
@@ -734,7 +926,7 @@ def _runner_commands(exe: str, args: List[str]) -> List[int]:
             return []                   # the runner's own subcommand: no command started
         else:
             return []
-    found: List[int] = []
+    found: List[int] = before_verb
     maybe_value = False                 # the word before was an option without `=value`
     for pos in range(start, len(args)):
         tok = args[pos]
@@ -829,7 +1021,7 @@ def _is_protected_target(arg: str) -> bool:
 
 def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
                      _budget: Optional[List[int]] = None,
-                     _stdin_fetch: bool = False) -> CommandVerdict:
+                     _stdin_fetch: bool = False, _arithmetic: bool = False) -> CommandVerdict:
     """Classify a shell command offline. Never raises, never executes anything.
 
     profile="host"   - unsandboxed lane: refuse the catastrophic set.
@@ -841,7 +1033,9 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
     `_budget` (shared by every reading of one top-level call) caps the readings in all
     (MAX_NESTED_COMMANDS) and the text a runner's candidates add up to (the command's own
     length plus _RUNNER_TEXT_SLACK); `_stdin_fetch` says a nested command's input is code fetched
-    from the network (`curl x | uv run bash`).
+    from the network (`curl x | uv run bash`); `_arithmetic` says the text is a `$((...))` bash
+    evaluates, read as a command too: a substitution where a program would stand is its
+    operand there (`$(($(nproc)+1))`), every other check holds.
     """
     verdict = CommandVerdict()
     text = (command or "").strip()
@@ -865,7 +1059,7 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
     verdict.segments = [seg for _, seg, _ in triples if seg]
     cats: List[str] = []
 
-    if _FORK_BOMB_RE.search(text.replace(" ", "")) or _FORK_BOMB_RE.search(text):
+    if _is_fork_bomb(text):
         cats.append("fork_bomb")
 
     # What a nested command found. A refusal inside refuses the whole; a remote command's
@@ -891,19 +1085,27 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
         # what runs. Judged at the program word itself, so a wrapper, a `VAR=` prefix or a
         # runner in front (`env $(echo rm) -rf /`) changes nothing, while one in an argument
         # or a wrapper option's value (`sudo -u $(whoami) ls`) is ordinary.
-        if exe_at >= 0 and "opaque_command" not in cats:
+        if exe_at >= 0 and "opaque_command" not in cats and not _arithmetic:
             word = toks[exe_at]
             if (_SUBST_BARE in word or _SUBST_PROC in word
                     or _SUBST_QUOTED in word.rsplit("/", 1)[-1]):
                 cats.append("opaque_command")
-                opaque_shape = opaque_shape or "program"
-        # A shell or interpreter that runs another command's OUTPUT as its script, through a
-        # process substitution (`source <(pyenv init -)`, `bash < <(...)`): the same as
-        # `eval "$(...)"`, the approved text does not show what runs. A file is read as before.
-        if exe in _SHELL_SINKS and _runs_process_output(args):
-            if "opaque_command" not in cats:
-                cats.append("opaque_command")
-            opaque_shape = "shell_text"
+                opaque_shape = opaque_shape or (
+                    "env_values" if any(_exe_base(t) == "env" for t in toks[:exe_at])
+                    else "program")
+        # A shell or interpreter that runs another command's OUTPUT as its script: through a
+        # process substitution, a here-string or a heredoc holding a substitution, or a
+        # descriptor fed by one (`source <(pyenv init -)`, `bash <<< "$(...)"`,
+        # `. /dev/fd/3 3< <(...)`): the same as `eval "$(...)"`, the approved text does not
+        # show what runs. Literal text fed to a shell is read as shell text, like `bash -c`.
+        # A file is read as before.
+        script_literals: List[str] = []
+        if exe in _SHELL_SINKS:
+            from_output, script_literals = _script_input(exe, args, carried)
+            if from_output:
+                if "opaque_command" not in cats:
+                    cats.append("opaque_command")
+                opaque_shape = "shell_text"
 
         # A local nested command's output is this segment's output: fetched or remote
         # content when it fetches (`uv run curl x | bash`). Applied after this segment's own
@@ -921,18 +1123,27 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
         # and classify one candidate per segment, past the bound the budget sets per call.
         def _carried():
             for kind, inner in carried:
+                if kind in ("heredoc", "heredoc_x"):
+                    continue                # data; its substitutions are carried apart
                 if kind == "unreadable":
                     yield kind, "", inner
                     continue
-                # An arithmetic expression runs nothing but its own substitutions, so it is
-                # read as the arguments of the no-op `:`. One left open could be either, so
-                # both readings are judged, charged like a runner's candidates: each is
-                # nearly the whole text again.
-                if kind == "arithmetic?":
-                    yield "arithmetic", "charged", ": " + inner[1:]
+                # Every `$((` is read as a command as well as arithmetic, charged like a
+                # runner's candidates. One bash evaluates (_split_segments) is read once, as a
+                # command whose substitutions may stand where a program would; any other is
+                # read as arithmetic (its own substitutions, as the arguments of the no-op `:`)
+                # and as the command substitution bash may run instead.
+                if kind == "arithmetic":
+                    yield "arithmetic", "charged", inner[1:-1]
+                elif kind == "arithmetic*":
+                    body = inner[1:]
+                    yield "arithmetic*", "charged", ": " + (body[:-1] if body.endswith(")")
+                                                            else body)
                     yield "command", "charged", inner
                 else:
-                    yield kind, "local", (": " + inner if kind == "arithmetic" else inner)
+                    yield kind, "local", inner
+            for literal in script_literals:
+                yield "", "local", literal
             for where, inner in _nested_commands(exe, args) if exe_at >= 0 else ():
                 yield "", where, inner
 
@@ -941,6 +1152,8 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
         writes_fetched = pipeline_fetch or exe in _NETWORK_FETCHERS or exe == "ssh"
         nested = _carried() if _budget[0] >= 0 else ()
         for kind, where, inner in nested:
+            if not inner.strip():
+                continue                    # `f()`, `$( )`: nothing to read, no reading spent
             if kind == "unreadable":
                 if "opaque_command" not in cats:
                     cats.append("opaque_command")
@@ -960,10 +1173,11 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
                 stdin_fetch = writes_fetched
             else:
                 stdin_fetch = pipeline_fetch and local and kind in (
-                    "", "command", "subshell", "arithmetic")
+                    "", "command", "subshell", "arithmetic", "arithmetic*")
             sub = classify_command(inner, profile=profile if local else "remote",
                                    _depth=_depth + 1, _budget=_budget,
-                                   _stdin_fetch=stdin_fetch)
+                                   _stdin_fetch=stdin_fetch,
+                                   _arithmetic=kind == "arithmetic")
             if kind:
                 verdict.segments.extend(sub.segments)
             target = cats if local else remote_cats
@@ -973,6 +1187,9 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
                 # substitution. Otherwise the inner reading's own shape.
                 opaque_shape = ("shell_text" if where in ("local", "remote") and not kind
                                 and _SUBST_BARE in inner else sub.opaque_shape)
+                if where == "runner" and opaque_shape == "program" and _value_from_substitution(
+                        args):
+                    opaque_shape = "option_value"   # `uv run --with $(cat r) pytest`
             fetched = "network_fetch" in sub.categories or "remote_login" in sub.categories
             if local and fetched:
                 nested_fetch = True
@@ -1045,6 +1262,7 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
         text = CATEGORY_REASONS[first]
         if first == "opaque_command":
             text = _OPAQUE_REASONS.get(verdict.opaque_shape, text)
+        text += _WAY_OUT.get(first, "")
         verdict.reason = f"Command contains a forbidden pattern: it {text}"
     elif nested_refusal:
         verdict.blocked = True
@@ -1052,17 +1270,93 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
     return verdict
 
 
-def _runs_process_output(args: List[str]) -> bool:
-    """Whether a shell's or an interpreter's script is a process substitution: its first
-    argument that is no option (`source <(...)`, `bash -x <(...)`), or its input
-    (`bash < <(...)`)."""
-    for pos, tok in enumerate(args):
-        if tok == "<":
-            return pos + 1 < len(args) and args[pos + 1] == _SUBST_PROC
-        if tok.startswith("-") and tok != "-":
-            continue
-        return tok == _SUBST_PROC
+def _is_fork_bomb(text: str) -> bool:
+    """`:(){ :|:& };:`, with any whitespace between its parts: `:(){`, then `|:&`, then `};:`.
+    Three searches, one after the other, so the work is linear in the text. A regular
+    expression with two unbounded `.*` grew with the cube of the length on text built to
+    provoke it (measured: 8 KB 1.6 s, 16 KB 11 s, on the gate path before anyone is asked)."""
+    flat = _WHITESPACE_RE.sub("", text)
+    start = flat.find(":(){")
+    if start < 0:
+        return False
+    pipe = flat.find("|:&", start + 4)
+    return pipe >= 0 and flat.find("};:", pipe + 3) >= 0
+
+
+def _value_from_substitution(args: List[str]) -> bool:
+    """Whether a runner's option takes its value from a substitution as the next word."""
+    for pos, tok in enumerate(args[1:], start=1):
+        prev = args[pos - 1]
+        if (_SUBST_BARE in tok or _SUBST_QUOTED in tok) and prev.startswith("-") \
+                and "=" not in prev:
+            return True
     return False
+
+
+# Shells that read their script from their input when given none, and the two builtins that
+# run a file in the current shell.
+_STDIN_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "source", "."})
+# A script path that is this process's input or one of its descriptors.
+_DESCRIPTOR_RE = re.compile(r"^(?:-|/dev/stdin|/dev/fd/\d+|/proc/self/fd/\d+)$")
+# A redirection operator standing as a word of its own (`<`, `3<`, `2>`, `>>`, `&>`).
+_REDIRECT_RE = re.compile(r"^\d*(?:<|>|>>|<>|>&|<&|&>|&>>)$")
+
+
+def _script_input(exe: str, args: List[str], carried: List[tuple]) -> tuple:
+    """(runs another command's output, literal script texts) for a shell or an interpreter.
+
+    Its script is its first word that is no option and no redirection. It comes from its
+    input when there is none, when it is `-` or a descriptor path (`/dev/stdin`,
+    `/dev/fd/N`, `/proc/self/fd/N`), or with `-s`. Fed by a process substitution (as the
+    script itself or through `<`, `3<`), by a here-string or a heredoc holding a
+    substitution, it runs another command's output. Fed by a literal here-string or heredoc
+    body, a shell runs that text, returned to be read like `bash -c` text."""
+    shell = exe in _STDIN_SHELLS
+    inline = "c" if shell else "cemr"          # -c CODE, -e/-r CODE, -m MODULE
+    script = None
+    from_stdin = False
+    proc_fed = False
+    here_words: List[str] = []
+    pos = 0
+    while pos < len(args):
+        tok = args[pos]
+        nxt = args[pos + 1] if pos + 1 < len(args) else ""
+        if tok == "<<<":
+            here_words.append(nxt)
+            pos += 2
+            continue
+        if _REDIRECT_RE.match(tok):
+            proc_fed = proc_fed or (tok.endswith("<") and nxt == _SUBST_PROC)
+            pos += 2
+            continue
+        if tok[:1] in "<>" or (tok[:1].isdigit() and tok.lstrip("0123456789")[:1] in ("<", ">")):
+            pos += 1                       # `2>/dev/null`, `<file`: an attached redirection
+            continue
+        if script is None and tok.startswith(("-", "+")) and tok not in ("-", "--"):
+            letters = tok[1:] if not tok.startswith("--") else ""
+            if any(c in inline for c in letters):
+                return False, []            # code given inline: read elsewhere (`bash -c`)
+            from_stdin = from_stdin or (shell and "s" in letters)
+            pos += 2 if tok in ("-o", "+o") else 1
+            continue
+        if script is None:
+            script = tok
+        pos += 1
+    if script == _SUBST_PROC:
+        return True, []
+    if exe in ("source", "."):
+        from_input = script is not None and bool(_DESCRIPTOR_RE.match(script))
+    else:
+        from_input = script is None or from_stdin or bool(_DESCRIPTOR_RE.match(script))
+    if not from_input:
+        return False, []
+    kinds = [kind for kind, _ in carried]
+    if (proc_fed or "heredoc_x" in kinds
+            or any(_SUBST_BARE in w or _SUBST_QUOTED in w for w in here_words)):
+        return True, []
+    if not shell:
+        return False, []
+    return False, here_words + [body for kind, body in carried if kind == "heredoc"]
 
 
 def is_command_safe(command: str, *, profile: str = "host") -> tuple:

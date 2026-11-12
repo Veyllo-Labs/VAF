@@ -923,3 +923,19 @@ def test_the_changed_key_words_next_to_real_output_are_shown_as_they_came(lab):
     out = _tool(command=f"echo did-run; printf '%s\\n' '{line}' >&2; exit 255",
                 login_credential="SERVER_PASS")
     assert "did-run" in out and "REFUSED" not in out and out.rstrip().endswith("Exit 255"), out
+
+
+def test_a_download_whose_command_printed_the_key_words_is_no_key_refusal(lab, tmp_path):
+    """In a download the output goes to the target file, not to the kept output: what was
+    written counts all the same. A command that wrote its output and then OpenSSH's
+    changed-key line and exited 255 ran, and is no key refusal.
+    MUTATION: drop `written == 0` from the key readings - red."""
+    from vaf.core import ssh
+    _tool(command="true", login_credential="SERVER_PASS", _call_confirmed=True)
+    target = ssh.parse_server("tester@127.0.0.1:2222")
+    line = "Host key for [127.0.0.1]:2222 has changed and you have requested strict checking."
+    result = ssh.run(target, f"echo did-run; printf '%s\\n' '{line}' >&2; exit 255",
+                     user_scope_id=ALICE, confirmed=False, password=PASSWORD,
+                     stdout_path=tmp_path / "out.part")
+    assert result.returncode == 255 and result.bytes_out > 0
+    assert not result.host_key_changed and not result.not_confirmed

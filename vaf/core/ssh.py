@@ -583,8 +583,9 @@ def run(target: Target, remote_command: str, *, user_scope_id: Optional[str],
                     too_large=state["too_large"], bytes_out=written)
     lines = stderr.splitlines()
     # OpenSSH refuses a key before any session: exit 255 with nothing come back. Output
-    # means a remote command ran, and what it printed is shown as it is.
-    failed = result.returncode == 255 and not out_chunks and written == 0
+    # means a remote command ran, and what it printed is shown as it is. `written` counts
+    # the output whether it was kept or written to a download target.
+    failed = result.returncode == 255 and written == 0
     # A key that differs from the remembered one comes first: OpenSSH words it the same way
     # under accept-new and yes, and it must never read as anything milder.
     changed = failed and ("REMOTE HOST IDENTIFICATION HAS CHANGED" in stderr

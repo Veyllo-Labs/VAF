@@ -345,7 +345,8 @@ answers it:
 There is no chooser: what you write on VAF goes to the app's agent unless it starts with `@`
 and the handle of your agent's name or `@VAF`. The handle is the first word of the name
 without sentence punctuation at either end: "Mia" for "Mia Lisa", "Mia." or "(Mia)", "Dr" for
-"Dr. Mia", "O'Neil" for "O'Neil". The first word after "@" counts, whole or with sentence
+"Dr. Mia", "O'Neil" for "O'Neil", and at most 80 characters (the limit of every member name).
+The first word after "@" counts, whole or with sentence
 punctuation taken off its end, in any case form: `@Mia.`, `@mia?` and `@MIA, hi` name Mia,
 `@Miami`, `@Mia♥` and `@Mia😊` do not (a symbol or an emoji continues the word), and a space
 between the "@" and the name is allowed (`@ Mia hi`). So put a space after the name, also in a

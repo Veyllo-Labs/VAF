@@ -1104,15 +1104,23 @@ terminal's handle, whatever it presents.
 What a human calls a member is their name, plus a small number when another member could be
 meant by the same mention: `Codex1` and `Codex2`. Two agents joining as "Codex" are otherwise
 indistinguishable in a transcript, and nobody can address one of them. A collision is two
-names with one `name_key` (folded and with sentence endings taken off their end), so "Bob" and
-"bob", "Straße" and "STRASSE", and "Bob" and "Bob." are each one. The members of a collision
-are numbered in the order their handles sort in (stable across restarts, no counter written
-into the room), and a number is skipped when the label it would give could already mean
-somebody: with members "Bob", "bob" and "Bob1" the first two become `Bob2` and `bob3`
-(`Room.labels`). **Every label is unique within the room**, which is what makes every member
-reachable by a mention.
+names with one `name_key` (read as the lookup reads a name: a leading "@" taken off, folded,
+and with sentence endings taken off their end), so "Bob" and "bob", "Straße" and "STRASSE",
+"Bob" and "Bob.", and "Bob" and "@Bob" are each one. The members of a collision are numbered in
+the order their handles sort in (no counter written into the room), and a number is skipped
+when the label it would give could already mean somebody: with members "Bob", "bob" and "Bob1"
+the first two become `Bob2` and `bob3` (`Room.labels`). **Every label is unique within the
+room**, which is what makes every member reachable by a mention. Named boundary: labels are
+stable across restarts, not across a join, a leave or a rename inside one collision. A third
+"Bob" can renumber the other two, and a member can rename itself to a label another member
+had, so a mention typed from an earlier view can reach a different member. A mention only
+decides which member is woken (every member reads every line), and it was so before.
 
-A leading `@Name` addresses one member: `@Codex51 can you look`. Only a mention at the
+A display name is at most 80 characters (`DISPLAY_MAX_CHARS`): `join` and `update_card` cut to
+it, and a longer name stored before is read as cut wherever names are compared, so the cut
+name is the one a mention reaches.
+
+A leading `@Name` addresses one member: `@Codex1 can you look`. Only a mention at the
 START addresses a message - `ask @Bob about it` is a sentence ABOUT Bob said to everyone,
 and turning it into a private aside would hide it from the room. Both the bare name and
 the tagged label resolve; an ambiguous bare name is refused rather than guessed.
@@ -1134,8 +1142,8 @@ the word with one sentence ending after another taken off its end: a punctuation
 script (`.`, `?`, `!`, `,`, `:`, `。`, also `@` and a backslash) or a possessive "'s".
 Punctuation that is part of a name's spelling (exactly these six: `#`, `%`, `&`, `*`, `/`,
 `_`) and symbols (`+`, a heart, an emoji) are not sentence endings, so `@C++.` gives `C++.` and
-`C++`, never `C`. A form longer than 128 characters (`MENTION_MAX_CHARS`; a display name is cut
-to 80) names nobody and is not offered, and the endings are walked by index: a line of `@` and
+`C++`, never `C`. A form longer than 128 characters (`MENTION_MAX_CHARS`; a display name is at
+most 80) names nobody and is not offered, and the endings are walked by index: a line of `@` and
 65,535 full stops costs one pass and no copies. `known(name)` answers with every party the room
 knows by that name, and the mention names a party only when all candidates together give
 exactly ONE: `@Bob.` reaches Bob in a room with only Bob; with members "Bob" and "Bob." in one

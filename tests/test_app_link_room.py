@@ -810,6 +810,50 @@ def test_body_cannot_name_scope_or_device(room_home, monkeypatch):
     assert "Settings" in r.json()["detail"]
 
 
+@pytest.mark.parametrize("place", ["pending_question", "stored_question", "delivered",
+                                   "channel_store"])
+def test_a_line_id_the_account_already_knows_is_replaced(room_home, place):
+    """The page's id is taken only when this account does not know it anywhere a line's id is
+    read back. MUTATIONS, each red: check the room lines only (the previous rule) - the second
+    "@VAF" line overwrote the first's stored copy and reached the app under the same id;
+    drop the delivery record, the waiting turns or the channel store from the check - red for
+    that case."""
+    import uuid as _uuid
+
+    from vaf.core.channel_message_store import append_message
+    from vaf.core.session import TURN_ID_KEY, Message, get_manager
+    client, _pipe, _row = _capable()
+    known = str(_uuid.uuid4())
+    if place == "pending_question":
+        assert room.post(SCOPE_A, "alice", "@VAF erste Frage", client_id=known)["id"] == known
+        # Only the waiting turn knows the id now (the channel store's copy can fail to write).
+        from vaf.core.channel_message_store import delete_message
+        assert delete_message("alice", devices.chat_key(SCOPE_A), known, direction="in",
+                              user_scope_id=SCOPE_A, channel=room.CHANNEL) == 1
+    elif place == "stored_question":
+        session_id = devices.chat_session_id(SCOPE_A)
+        _store(session_id, SCOPE_A, [{"role": "user", "content": "@VAF alt", "timestamp": _at(1),
+                                      "metadata": {TURN_ID_KEY: "t0", "channel_message_id": known}}])
+    elif place == "delivered":
+        assert room.post(SCOPE_A, "alice", "Licht aus", client_id=known)["id"] == known
+        client.send({"t": "ack", "id": known})
+        assert known in devices.room_acked(SCOPE_A)
+        session = get_manager().load(devices.chat_session_id(SCOPE_A), restore_state=False,
+                                     repoint=False)
+        session.messages = [m for m in session.messages if not isinstance(m, Message)
+                            or (m.metadata or {}).get("app_room", {}).get("id") != known]
+        get_manager().save(session, sync_state=False)
+    else:
+        append_message(username="alice", chat_id=devices.chat_key(SCOPE_A), body="x",
+                       direction="in", message_id=known, content_type="text",
+                       channel=room.CHANNEL, user_scope_id=SCOPE_A)
+    again = room.post(SCOPE_A, "alice", "@VAF zweite Frage", client_id=known)
+    assert again["id"] != known
+    client.pump()
+    ids = [f["id"] for f in client.of("room_msg")]
+    assert len(ids) == len(set(ids)), "the app got one id twice"
+
+
 def test_the_route_passes_the_pages_line_id(room_home, monkeypatch):
     """MUTATION: drop `client_id` in the route - red: the page could not recognise its line."""
     import uuid as _uuid
@@ -1185,12 +1229,17 @@ def test_folded_twins_go_to_the_room_and_keep_their_labels(tmp_path, first, seco
     ["Bob", "bob", "Bob1", "BOB2"],
     ["Codex", "Codex", "codex1", "Codex2."],
     ["Bob", "Bob.", "Bob1"],
+    ["Bob", "@Bob"],
+    ["Ab"] * 6 + ["ab"] * 5 + ["Ab1", "Ab1"],
 ])
 def test_every_label_names_exactly_one_member(tmp_path, names):
     """A generated label never equals another member's name or label, also after folding or
     with a sentence ending: with "Bob", "bob" and "Bob1" the twins do not both end up with a
     label "Bob1". MUTATION: number the collision without skipping taken names (the previous
-    rule) - red; MUTATION: skip only exact names, not folded ones - red."""
+    rule) - red; MUTATION: skip only exact names, not folded ones - red; MUTATION: read
+    labels for collisions without taking off a leading "@" (the lookup does) - red for "Bob"
+    and "@Bob"; MUTATION: do not count a label given to one collision as taken for the next -
+    red for eleven "Ab" twins beside two "Ab1" (both would have "Ab11")."""
     agent_room = _members(tmp_path, names)
     labels = agent_room.labels()
     assert len(labels) == len(names)
@@ -1214,28 +1263,55 @@ def test_a_punctuated_twin_is_a_collision_with_labels_of_its_own(tmp_path, plain
     assert agent_room.address_from_mention(f"@{twin} hi") is None
 
 
+def test_one_line_reads_the_room_once(tmp_path, monkeypatch):
+    """One line's mention asks up to 128 forms; the room's member table and labels are read
+    ONCE for all of them (`Room.name_lookup`). Measured with the per-form read: 256 member
+    reads and 128 label computations per line, 10.3 s for "@" and 65,535 full stops in a room
+    of 200. MUTATION: resolve with `peers_named` per form again - red."""
+    from vaf.core.a2a.room import Room
+    agent_room = _members(tmp_path, [f"Agent{i}" for i in range(5)])
+    reads = {"members": 0, "labels": 0}
+    real_members, real_labels = agent_room.store.members, Room.labels
+
+    def _count_members(*a, **k):
+        reads["members"] += 1
+        return real_members(*a, **k)
+
+    def _count_labels(self, *a, **k):
+        reads["labels"] += 1
+        return real_labels(self, *a, **k)
+    monkeypatch.setattr(agent_room.store, "members", _count_members)
+    monkeypatch.setattr(Room, "labels", _count_labels)
+    assert agent_room.addressee("@" + "." * 400 + " hi") == {"room": True}
+    assert reads["labels"] == 1 and reads["members"] <= 2, reads
+    assert agent_room.addressee("@Agent3. hi") == {"peer": "p-3"}
+
+
 def test_a_mention_of_65535_full_stops_costs_one_pass(tmp_path):
-    """A room line may carry 65,536 characters. The candidates of "@" and 65,535 full stops
-    were every shorter copy of the word (about 2 GB, 104 s measured); they are walked by index
-    now and only forms a name can have are kept. MUTATION: keep every shorter form (the
-    previous loop) - red (time and memory); MUTATION: no length bound - red (memory)."""
+    """A room line may carry 65,536 characters. The candidates of "@" and a run of full stops
+    were every shorter copy of the word (65,535 stops: about 2 GB, 104 s measured); they are
+    walked by index now and only forms a name can have are kept. The number of forms is checked
+    first on 5,000 stops, which the old loop answers in well under a second with 5,000 forms, so
+    a returning old loop fails here at once instead of after minutes. MUTATION: keep every
+    shorter form (the previous loop) - red in about a second; MUTATION: no length bound - red."""
     import time
     import tracemalloc
 
     from vaf.core.a2a.room import MENTION_MAX_CHARS, mention_candidates
-    agent_room = _members(tmp_path, ["Bob"])
+    assert len(mention_candidates("@" + "." * 5000 + " hi")) <= MENTION_MAX_CHARS
     line = "@" + "." * 65535 + " hi"
+    candidates = mention_candidates(line)
+    assert len(candidates) <= MENTION_MAX_CHARS
+    assert all(len(c) <= MENTION_MAX_CHARS for c in candidates)
+    agent_room = _members(tmp_path, ["Bob"])
     tracemalloc.start()
     started = time.perf_counter()
-    candidates = mention_candidates(line)
     assert agent_room.address_from_mention(line) is None
     assert agent_room.address_from_mention("@Bob" + "." * 65532) == {"peer": "p-0"}
     elapsed = time.perf_counter() - started
     _now, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
     assert elapsed < 5.0 and peak < 20_000_000, (elapsed, peak)
-    assert all(len(c) <= MENTION_MAX_CHARS for c in candidates)
-    assert len(candidates) <= MENTION_MAX_CHARS
 
 
 @pytest.mark.parametrize("display, line", [("a@b", "@a@b@ hi"), ("x\\y", "@x\\y\\ hi"),
@@ -1246,6 +1322,34 @@ def test_at_and_backslash_end_a_sentence_like_other_punctuation(tmp_path, displa
     taken off. MUTATION: put "@" or the backslash back into the name punctuation - red."""
     agent_room = _members(tmp_path, [display, "Other"])
     assert agent_room.address_from_mention(line) == {"peer": "p-0"}
+
+
+@pytest.mark.parametrize("length", [129, 200])
+def test_a_long_name_is_cut_to_the_display_limit_and_stays_reachable(tmp_path, length):
+    """One limit for names: `join` cuts to 80 like `update_card`, a longer name stored before
+    is read as cut, and the mention of the cut name reaches the member. MUTATION: store the
+    name whole in `join` - red; MUTATION: read stored names uncut - red."""
+    from vaf.core.a2a.room import DISPLAY_MAX_CHARS
+    long_name = "B" * length
+    agent_room = _members(tmp_path, [long_name, "Other"])
+    assert len(agent_room.store.member("p-0")["display"]) == DISPLAY_MAX_CHARS
+    assert agent_room.address_from_mention(f"@{long_name[:80]} hi") == {"peer": "p-0"}
+    record = agent_room.store.member("p-0")
+    record["display"] = long_name
+    agent_room.store.put_member("p-0", record)
+    assert agent_room.labels()["p-0"] == long_name[:80]
+    assert agent_room.address_from_mention(f"@{long_name[:80]} hi") == {"peer": "p-0"}
+
+
+@pytest.mark.parametrize("length", [129, 200])
+def test_a_long_persona_word_gives_a_hint_that_resolves(monkeypatch, length):
+    """The handle is cut to the same 80 characters, so the hint it prints is a mention the
+    rule reads. MUTATION: no cut - red (a 129-letter handle names nobody)."""
+    from vaf.core import app_link
+    monkeypatch.setattr(app_link, "_agent_name_resolver", lambda username: "M" * length + " X")
+    hint = room.handle("alice")
+    assert len(hint) == 80
+    assert room.addressee(f"@{hint} hallo", "alice") == "vaf_agent"
 
 
 def test_a_space_after_the_at_still_names(room_home, monkeypatch):

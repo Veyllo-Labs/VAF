@@ -130,7 +130,10 @@ def fold_name(name: Any) -> str:
 #: never sentence punctuation either, so "@C++." still reaches a member called "C++".
 _NAME_PUNCTUATION = frozenset("#%&*/_")
 _POSSESSIVES = ("'s", "’s")
-#: The longest name a mention can give. A member's display name is cut to 80 characters and a
+#: The longest display name a member has: `join` and `update_card` cut to it, and a longer one
+#: stored before is read as cut to it wherever names are compared (`display_name`).
+DISPLAY_MAX_CHARS = 80
+#: The longest name a mention can give. A display name is at most `DISPLAY_MAX_CHARS` and a
 #: label adds a few digits, so nothing longer can name anybody; the bound keeps the work of one
 #: line linear whatever follows the "@" (a line may carry 65,536 characters).
 MENTION_MAX_CHARS = 128
@@ -176,11 +179,23 @@ def trim_name(word: Any) -> str:
     return text[:_trimmed_end(text)]
 
 
+def display_name(display: Any, peer_id: str = "") -> str:
+    """A member's name as names are read: its display (or its peer id), cut to
+    `DISPLAY_MAX_CHARS` like every name written since `join` cuts it."""
+    return str(display or peer_id)[:DISPLAY_MAX_CHARS]
+
+
+def lookup_key(name: Any) -> str:
+    """A name as the member lookup reads it: leading "@" taken off, folded (`fold_name`)."""
+    return fold_name(str(name or "").strip().lstrip("@"))
+
+
 def name_key(name: Any) -> str:
-    """A name reduced the way a mention reduces it: folded (`fold_name`) and with its sentence
-    endings taken off its end. Two members with one key can be meant by one mention ("Bob" and
-    "bob", "Bob" and "Bob."), so they are told apart by labels (`Room.labels`)."""
-    folded = fold_name(name)
+    """A name reduced the way a mention reduces it: read like the lookup (`lookup_key`) and with
+    its sentence endings taken off its end. Two members with one key can be meant by one mention
+    ("Bob" and "bob", "Bob" and "Bob.", "Bob" and "@Bob"), so they are told apart by labels
+    (`Room.labels`)."""
+    folded = lookup_key(name)
     return folded[:_trimmed_end(folded)]
 
 
@@ -896,7 +911,7 @@ class Room:
         resolved = self.default_role()
         if role and role in CAPABILITIES and self.kind == "chain" and not self.roles():
             resolved = role
-        identity = Identity(peer_id or new_peer_id(), display, scope_id, resolved,
+        identity = Identity(peer_id or new_peer_id(), display_name(display), scope_id, resolved,
                             participant_key=participant_key)
         card = dict(card or {})
         # BESIDE the card, never inside it. A card answers "what can this peer do",
@@ -1225,7 +1240,7 @@ class Room:
         if not self.role_of(identity.peer_id):
             raise NotAMember(f"{identity.peer_id!r} has not joined room {self.room_id!r}")
         if display:
-            record["display"] = str(display)[:80]
+            record["display"] = display_name(display)
         if card:
             record["card"] = dict(card)
         record.setdefault("lease", time.time())
@@ -2814,13 +2829,19 @@ class Room:
         A UNIQUE NAME IS LEFT ALONE. Every name used to carry a tag, which made "Nobel"
         into "Nobel88" for no reason anybody could see. A tag is the answer to a
         COLLISION, and a collision is what a mention cannot tell apart: names with one
-        `name_key` (folded, sentence endings taken off its end), so "Bob" and "bob",
-        "Straße" and "STRASSE", "Bob" and "Bob." are each one collision.
+        `name_key` (read like the lookup, sentence endings taken off its end), so "Bob" and
+        "bob", "Straße" and "STRASSE", "Bob" and "Bob.", "Bob" and "@Bob" are each one
+        collision.
 
-        The members of a collision are numbered in the order their handles sort in
-        (stable: the handles do not move), and a number is skipped when the label it
-        gives could already mean somebody: its fold or its key equals any member's name,
-        name key, or a label given before it. So with "Bob", "bob" and "Bob1" in one room
+        The members of a collision are numbered in the order their handles sort in, and a
+        number is skipped when the label it gives could already mean somebody: its lookup
+        key or its name key equals any member's name, name key, or a label given before it.
+        NAMED BOUNDARY: the labels are stable across restarts (they come from the handles),
+        not across a join, a leave or a rename inside one collision: a third "Bob" can
+        renumber the others, and a member can rename itself to a label another member had,
+        so a mention typed from an earlier view can reach a different member. A mention only
+        decides which member is woken, every member reads every line, and it was so before
+        labels were numbered this way. So with "Bob", "bob" and "Bob1" in one room
         the first two become "Bob2" and "bob3", and every label names exactly one member.
         Small numbers rather than a digest, because a human reads them back to somebody
         else. UNIQUE WITHIN THE ROOM is the property that matters, and the reason this
@@ -2828,13 +2849,13 @@ class Room:
         member a mention cannot reach.
         """
         members = self.store.members()
-        names = {peer: str(rec.get("display") or peer) for peer, rec in members.items()}
+        names = {peer: display_name(rec.get("display"), peer) for peer, rec in members.items()}
         groups: Dict[str, List[str]] = {}
         for peer in sorted(names):
             groups.setdefault(name_key(names[peer]), []).append(peer)
         taken = set()
         for name in names.values():
-            taken.add(fold_name(name))
+            taken.add(lookup_key(name))
             taken.add(name_key(name))
         out = {peer: name for peer, name in names.items()
                if len(groups[name_key(name)]) < 2}
@@ -2846,39 +2867,54 @@ class Room:
                 while True:
                     number += 1
                     label = f"{names[peer]}{number}"
-                    if fold_name(label) not in taken and name_key(label) not in taken:
+                    if lookup_key(label) not in taken and name_key(label) not in taken:
                         break
-                taken.add(fold_name(label))
+                taken.add(lookup_key(label))
                 taken.add(name_key(label))
                 out[peer] = label
         return out
 
+    def name_lookup(self) -> Callable[[str], List[str]]:
+        """``peers_named`` for one moment of the room: the member table, the labels and the
+        roles are read ONCE, and every name asked afterwards is a dict lookup. One line's
+        mention asks up to `MENTION_MAX_CHARS` forms; reading the room per form made one line
+        of "@" and full stops cost seconds in a large room."""
+        members = self.members()
+        labels = self.labels()
+        roles = self.roles()
+        index: Dict[str, List[str]] = {}
+        for peer, record in members.items():
+            index.setdefault(lookup_key(display_name(record.get("display"), peer)), []).append(peer)
+        for peer, label in labels.items():
+            hits = index.setdefault(lookup_key(label), [])
+            if peer not in hits:
+                hits.append(peer)
+
+        def lookup(name: str) -> List[str]:
+            wanted = lookup_key(name)
+            if not wanted:
+                return []
+            hits = index.get(wanted)
+            if hits:
+                return list(hits)
+            return [str(name)] if name in roles else []
+        return lookup
+
     def peers_named(self, name: str) -> List[str]:
-        """Every member a name can mean: by display name or by label, compared folded.
+        """Every member a name can mean: by display name or by label, compared as the lookup
+        reads names (`lookup_key`).
 
         Lives HERE and nowhere else: only the room knows who is in it, and a resolver
         in the CLI or the terminal app would be a second copy of the member table that
         drifts the first time somebody joins while it is cached.
 
         The tagged label resolves as well as the bare display, and it has to: every
-        surface SHOWS the label, so "Codex51" is the name a reader has in front of them
+        surface SHOWS the label, so "Codex1" is the name a reader has in front of them
         when they type a mention. Both are asked together, so a name that is one member's
         display and another member's label answers with both. A peer id addresses itself
         when no name matches, which is what a machine consumer will use.
         """
-        wanted = fold_name(str(name or "").strip().lstrip("@"))
-        if not wanted:
-            return []
-        hits: List[str] = []
-        for peer, record in self.members().items():
-            if fold_name(record.get("display")) == wanted:
-                hits.append(peer)
-        for peer, label in self.labels().items():
-            if fold_name(label) == wanted and peer not in hits:
-                hits.append(peer)
-        if hits:
-            return hits
-        return [str(name)] if name in self.roles() else []
+        return self.name_lookup()(name)
 
     def peer_by_display(self, name: str) -> Optional[str]:
         """The peer behind a display name or label, or None if it is unknown or ambiguous.
@@ -2897,7 +2933,9 @@ class Room:
         at Bob; "ask @Bob about it" is a sentence ABOUT Bob, said to the room, and
         turning that into a private aside would quietly hide it from everyone else.
         """
-        peer = resolve_mention(text, self.peers_named)
+        if not mention_candidates(text):
+            return None
+        peer = resolve_mention(text, self.name_lookup())
         return {"peer": peer} if peer else None
 
     def addressee(self, text: str, *, to_peer: str = "") -> Dict[str, Any]:

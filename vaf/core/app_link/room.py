@@ -118,11 +118,13 @@ def handle(username: str) -> str:
     """The one word after "@" that always reaches VAF's agent and that the hint shows: the
     first word of its name without sentence punctuation at either end or a trailing "'s"
     (a2a.room.trim_name): "Mia Lisa" -> "Mia", "Mia." -> "Mia", "(Mia)" -> "Mia", "Dr. Mia" ->
-    "Dr", "O'Neil" -> "O'Neil", "C++" -> "C++"; or "VAF". "@" + the handle, typed back, is a
-    mention the rule resolves to VAF's agent."""
-    from vaf.core.a2a.room import trim_name
+    "Dr", "O'Neil" -> "O'Neil", "C++" -> "C++"; or "VAF". Cut to the display limit of every
+    member name (a2a.room.DISPLAY_MAX_CHARS), so a long first word still gives a mention short
+    enough to be read: "@" + the handle, typed back, is a mention the rule resolves to VAF's
+    agent."""
+    from vaf.core.a2a.room import DISPLAY_MAX_CHARS, trim_name
     words = agent_label(username).split()
-    first = trim_name(words[0]) if words else ""
+    first = trim_name(words[0])[:DISPLAY_MAX_CHARS] if words else ""
     return first or "VAF"
 
 
@@ -650,6 +652,36 @@ def _client_line_id(client_id: Any) -> str:
         return ""
 
 
+def _line_id_in_use(scope: str, owner: str, line_id: str) -> bool:
+    """Whether this account already knows ``line_id`` anywhere a line's id is read back: a room
+    line or a stored question's message id in the app chat, a question still waiting in the
+    queue, the channel store (either direction), or the delivery record. An id the page sends
+    again would otherwise overwrite the stored copy of an earlier question, read "delivered"
+    at once, reach the app as a repeat it drops, or let the page take the earlier line for the
+    new one. Asked before a page's id is accepted; an id in use is replaced by the server's."""
+    session = _load(devices.chat_session_id(scope))
+    for message in getattr(session, "messages", None) or []:
+        if line_id in (str(_room_meta(message).get("id") or ""),
+                       str(_meta(message).get("channel_message_id") or "")):
+            return True
+    sids = (devices.chat_session_id(scope), devices.ask_session_id(scope))
+    for _sid, task in _pending_turns(sids):
+        if str((getattr(task, "metadata", None) or {}).get("channel_message_id") or "") == line_id:
+            return True
+    if line_id in devices.room_acked(scope):
+        return True
+    try:
+        from vaf.core.channel_message_store import get_message
+        for direction in ("in", "out"):
+            if get_message(owner, devices.chat_key(scope), line_id, direction=direction,
+                           user_scope_id=scope, channel=CHANNEL):
+                return True
+    except Exception:
+        # A store that cannot be read confirms nothing: the server's own id is the safe answer.
+        return True
+    return False
+
+
 def post(user_scope_id: Any, username: str, text: Any,
          resend_of: Optional[str] = None, client_id: Optional[str] = None) -> Dict[str, Any]:
     """A line the person writes in the room on VAF: to the agent in the Veyllo App, or, led
@@ -682,10 +714,10 @@ def post(user_scope_id: Any, username: str, text: Any,
         raise RoomRefused(_no_capable_reason(standing), 409)
     if not bridge._rate_ok((target or standing[0])["device_id"]):
         raise RoomRefused("rate_limited", 429)
-    # The page's own id for the line when it sent one and no room line carries it yet (an id
-    # used twice would make two lines one for the delivery record); a fresh one otherwise.
+    # The page's own id for the line when it sent one this account does not know yet
+    # (`_line_id_in_use`); a fresh one otherwise.
     line_id = _client_line_id(client_id)
-    if not line_id or _line_text(scope, line_id) is not None:
+    if not line_id or _line_id_in_use(scope, owner, line_id):
         line_id = str(uuid.uuid4())
     now = time.time()
     if to == APP_AGENT:

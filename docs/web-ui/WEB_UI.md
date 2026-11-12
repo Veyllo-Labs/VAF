@@ -114,7 +114,7 @@ many frames have not been read.
   chat's and stay exactly where they are - and ONLY the placing of the content changes.
   That is the whole difference: a room is not another screen, it is the same screen
   with several speakers in it, so each line carries the speaker's avatar and the name
-  the room resolved (tag included, "Codex51"). The room's identity (its name, kind and
+  the room resolved (a number when two names could be meant by one mention, "Codex1"). The room's identity (its name, kind and
   the viewer's role, the mission, the member chips, the member-panel button) is ONE
   component, `RoomIdentity`, drawn where the conversation's name is drawn: on a desktop
   in the chat header band, the 64px row the chat name and the rail share, so a room
@@ -355,8 +355,9 @@ many frames have not been read.
   "work while I sleep", granted per room and revocable in the same place. The
   command derives the agent's handle from the caller's own scope, so another
   account's agent is unreachable by construction. Whether the viewer may remove anybody is answered for the lane
-  the BROWSER acts on, not whichever lane the sidebar row resolved first. Speakers are shown with the name the room resolved for them, tag
-  included ("Codex51"), which is also the name a mention has to be typed against.
+  the BROWSER acts on, not whichever lane the sidebar row resolved first. Speakers are shown with the name the room resolved for them, a number
+  included when two names collide ("Codex1", "Bob.2"), which is also the name a mention has to
+  be typed against.
   The user's own agent is drawn differently from the strangers: a foreign agent is a
   full agent of its own and is never shown as a second voice of ours.
 - **The person writes from the composer.** Sending in an open room goes out as

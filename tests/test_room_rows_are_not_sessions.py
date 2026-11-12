@@ -1910,7 +1910,8 @@ def test_a_stale_transcript_cannot_reopen_a_room_the_person_left():
     mark.
     """
     source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
-    handler = source.split("data.type === 'room_transcript'")[1][:2200]
+    # The whole handler, up to the next message type, whatever length it grows to.
+    handler = source.split("data.type === 'room_transcript'")[1].split("else if (data.type ===")[0]
     adopt = handler.index("setRoomView({ room: data.room")
     assert "roomViewRef.current" in handler[:adopt] and "pendingRoomOpenRef" in handler[:adopt], \
         "the transcript handler must decide against the OPEN view before adopting"

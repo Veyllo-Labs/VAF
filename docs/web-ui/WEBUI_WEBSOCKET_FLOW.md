@@ -227,7 +227,8 @@ Key rules:
   tool that started and has not ended, never a prompt), 32 chats (the one written least
   recently goes), and expiry: 10 minutes after a worker said idle or error or after
   `workflow_done`, 10 minutes for a preview place without an update, 30 minutes after any
-  entry's last write. A deleted or hidden chat's record goes with it; a credential the agent
+  entry's last write, except a tool that started and has not ended, and the prompts of a turn
+  that still records events (a turn longer than 30 minutes keeps both). A deleted or hidden chat's record goes with it; a credential the agent
   stored from the chat (`_refresh_after_forget`) drops the chat's kept prompt.
   `load_session` (after its ownership gate) and the connect-time auto-load (the connection's
   own newest chat) send the `history_update` and then exactly one `live_replay`; nothing else

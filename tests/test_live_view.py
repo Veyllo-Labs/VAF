@@ -319,3 +319,17 @@ def test_every_live_view_type_of_vaf_is_kept_beside_the_turn():
         led.record("A", {"type": t, "line": "x", "frame": "f"})
         led.record("A", {"type": "message_complete"})
         assert _types(led.snapshot("A", active=False)) == [t], t
+
+
+def test_a_long_turn_keeps_its_prompt_and_its_running_tool():
+    """MUTATION: let a running tool start expire - red; MUTATION: no prompt renewal - red."""
+    clock = _Clock()
+    led = LiveViewLedger(clock=clock)
+    led.set_prompt("A", "t1", {"role": "user", "content": "long job"})
+    led.record("A", _tool("start", "slow"))
+    for _ in range(4):                       # 40 minutes of a turn that keeps streaming
+        clock.t += 10 * 60
+        led.record("A", _msg("still working"))
+    snap = led.snapshot("A", active=True)
+    assert [p["content"] for p in snap["prompts"]] == ["long job"]
+    assert [e.get("toolId") for e in snap["events"]] == ["slow", None]

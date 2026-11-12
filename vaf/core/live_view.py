@@ -203,6 +203,10 @@ class LiveViewLedger:
         return False
 
     def _apply(self, chat: _Chat, etype: str, event: dict, now: float) -> None:
+        if etype in ("agent_message_update", "tool_update", "file_created") and chat.prompts:
+            # A turn that still produces events is not abandoned: its prompts stay.
+            for prompt in chat.prompts.values():
+                prompt["_expires"] = now + ENTRY_TTL
         if etype in _TURN_END:
             chat.drop_group(TURN)
             chat.last_turn_key = None
@@ -357,7 +361,9 @@ class LiveViewLedger:
                 ring.remove(key)
 
     def _purge(self, chat: _Chat, now: float) -> None:
-        for key in [k for k, e in chat.entries.items() if e.expires <= now]:
+        # A tool that started and has not ended does not expire: it is the step a long turn is
+        # waiting on. An abandoned one is never replayed anyway (the queue says inactive).
+        for key in [k for k, e in chat.entries.items() if e.expires <= now and not e.protected]:
             chat.drop(key)
             if isinstance(key, tuple) and key[0] == "ring":
                 ring = chat.ring_keys.get(key[1])

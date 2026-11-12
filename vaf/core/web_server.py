@@ -21,7 +21,8 @@ from collections import deque
 log("WebServer", "Basic imports done")
 
 from vaf.core.web_interface import get_web_interface
-from vaf.core.session import TURN_ROUNDS_KEY, SessionManager, Session, default_session_id
+from vaf.core.session import (CREATED_FILES_KEY, TURN_ID_KEY, TURN_ROUNDS_KEY, SessionManager, Session,
+                              default_session_id)
 from vaf.cli.autosuggest import autosuggest_for
 import json
 from vaf.core.config import Config, is_admin_identity
@@ -1273,13 +1274,16 @@ def _expand_turn_rounds(out: list, aux: list) -> list:
             number = _round_number(r)
             text = _clean_history_text(str(r.get("text") or ""))
             if text.strip():
-                laid_out.append({
+                round_entry = {
                     "role": "assistant",
                     "content": text,
                     "timestamp": _round_timestamp(entry.get("timestamp"), max(number - 1, 0)),
                     "round": number,
                     "roundAnswer": bool(r.get("answer")),
-                })
+                }
+                if entry.get("turnId"):
+                    round_entry["turnId"] = entry["turnId"]
+                laid_out.append(round_entry)
             for call_id in _round_call_ids(r):
                 laid_out.extend(tools.pop(call_id, []))
         del result[start:]
@@ -1287,6 +1291,69 @@ def _expand_turn_rounds(out: list, aux: list) -> list:
         result.extend(laid_out)
         result_aux.extend({} for _ in laid_out)
     return result
+
+
+def _projected_images(images) -> list:
+    """A user message's stored images as the `{url, name}` entries the chat renders: a file on
+    disk through /api/file (per-user isolation enforced there), a legacy inline one as a data
+    URL. One helper for the transcript, the regenerate repaint and the in-flight prompt."""
+    from urllib.parse import quote as _urlquote
+    out = []
+    for img in images or []:
+        if not isinstance(img, dict):
+            continue
+        if img.get("path"):
+            out.append({"url": f"/api/file?path={_urlquote(str(img['path']))}",
+                        "name": img.get("name", "image")})
+        elif img.get("data"):
+            out.append({"url": f"data:{img.get('mime_type', 'image/jpeg')};base64,{img['data']}",
+                        "name": img.get("name", "image")})
+    return out
+
+
+def _attach_created_files(out: list, created) -> list:
+    """Put each file a chat announced (`runtime_state["created_files"]`) on the answer it came
+    with, as `files` (`[{path, name, purpose?, toolId?}]`).
+
+    A file with a `turnId` goes on the LAST assistant entry of that turn (round entries
+    included), the bubble the live chat put it on. A file whose turn is not in the
+    transcript is left out: its answer was discarded by a regenerate, or its turn still runs
+    and the live replay brings it. A file without a turn (announced outside any turn) goes on
+    the last assistant entry not newer than the file, the rule the live chat applies.
+    """
+    if not created:
+        return out
+    last_of_turn: Dict[str, int] = {}
+    assistants: List[int] = []
+    for i, entry in enumerate(out):
+        if entry.get("role") != "assistant" or entry.get("kind"):
+            continue
+        assistants.append(i)
+        tid = entry.get("turnId")
+        if tid:
+            last_of_turn[str(tid)] = i
+    for f in created:
+        if not isinstance(f, dict) or not f.get("path"):
+            continue
+        tid = f.get("turnId")
+        if tid:
+            idx = last_of_turn.get(str(tid))
+        else:
+            ts = str(f.get("ts") or "")
+            idx = None
+            for i in assistants:
+                if not ts or str(out[i].get("timestamp") or "") <= ts:
+                    idx = i
+        if idx is None:
+            continue
+        chip = {"path": str(f["path"]), "name": str(f.get("name") or Path(str(f["path"])).name)}
+        for key in ("purpose", "toolId"):
+            if f.get(key):
+                chip[key] = str(f[key])
+        files = out[idx].setdefault("files", [])
+        if not any(c.get("path") == chip["path"] for c in files):
+            files.append(chip)
+    return out
 
 
 def _history_projection(loaded, sid) -> list:
@@ -1323,22 +1390,10 @@ def _history_projection(loaded, sid) -> list:
         if _kind:
             entry["kind"] = _kind   # proactive bubble tag drives the avatar animation on reload
         if role == "user" and meta and meta.get("images"):
-            from urllib.parse import quote as _urlquote
-            _img_entries = []
-            for img in meta["images"]:
-                if img.get("path"):
-                    # File on disk -> serve via /api/file (per-user isolation enforced there).
-                    _img_entries.append({
-                        "url": f"/api/file?path={_urlquote(str(img['path']))}",
-                        "name": img.get("name", "image"),
-                    })
-                elif img.get("data"):
-                    # Legacy inline base64 -> data: URL.
-                    _img_entries.append({
-                        "url": f"data:{img.get('mime_type', 'image/jpeg')};base64,{img['data']}",
-                        "name": img.get("name", "image"),
-                    })
-            entry["images"] = _img_entries
+            entry["images"] = _projected_images(meta["images"])
+        if role == "assistant" and isinstance(meta, dict) and meta.get(TURN_ID_KEY):
+            # Which exchange produced this answer: live file events carry the same id.
+            entry["turnId"] = str(meta[TURN_ID_KEY])
         if role == "tool":
             # Metadata dict first, then the top-level keys the backend actually stores.
             tool_name = (meta.get("toolName") if meta else None) or (
@@ -1368,6 +1423,12 @@ def _history_projection(loaded, sid) -> list:
         out = _expand_turn_rounds(out, aux)
     except Exception as exc:
         append_domain_log("webui", f"turn rounds not laid out for {sid}: {type(exc).__name__}: {exc}")
+    # Display only, like the rounds: files that cannot be placed never cost the transcript.
+    try:
+        out = _attach_created_files(
+            out, (getattr(loaded, "runtime_state", None) or {}).get(CREATED_FILES_KEY))
+    except Exception as exc:
+        append_domain_log("webui", f"created files not placed for {sid}: {type(exc).__name__}: {exc}")
 
     if sid and str(sid).startswith("thinking_"):
         try:
@@ -1432,6 +1493,57 @@ def _session_activity(session_id) -> dict:
             "chatWait": _session_chat_wait(sid)}
 
 
+def _unstored_prompts(prompts: list, stored: list) -> list:
+    """The prompts of running or queued turns that the stored transcript does not have yet.
+    The runner writes a turn's prompt with its answer, so between that save and the turn's
+    `message_complete` a prompt is in both; the stored copy wins."""
+    out = []
+    for prompt in prompts or []:
+        content = str(prompt.get("content") or "")
+        ts = str(prompt.get("timestamp") or "")
+        if any(m.get("role") == "user" and str(m.get("content") or "") == content
+               and str(m.get("timestamp") or "") >= ts for m in stored):
+            continue
+        out.append(prompt)
+    return out
+
+
+def _live_history_update(loaded, sid: str, **extra) -> dict:
+    """The `history_update` of a chat a connection opens: the stored transcript, the prompts
+    of its running turns appended (the runner stores them only with the answer, the
+    regenerate repaint's precedent), and `live` when a running turn is on record, whose
+    events the `live_replay` sent right after it brings (`_send_live_view`)."""
+    activity = _session_activity(sid)
+    messages = _history_projection(loaded, sid)
+    snap = manager.live_view.snapshot(sid, active=bool(activity.get("isActive")))
+    messages.extend(_unstored_prompts(snap["prompts"], messages))
+    return {"type": "history_update", "messages": messages, "sessionId": sid,
+            **activity, "live": bool(snap["turn"]), **extra}
+
+
+async def _send_live_view(websocket, sid: str) -> None:
+    """Send the chat's live record as one `live_replay` frame, after its `history_update`.
+
+    Only ever called for a connection that already passed the chat's ownership gate (or opens
+    its own newest chat) and is subscribed to it. The record is read right before the send,
+    with no await in between: an event recorded earlier is in the frame, and an event recorded
+    later is sent to this subscribed connection after the frame, so nothing is lost and no
+    older state lands after a newer one. A turn the queue says is over is not replayed."""
+    snap = manager.live_view.snapshot(sid, active=_session_is_active(sid))
+    if snap["events"]:
+        await websocket.send_json({"type": "live_replay", "sessionId": sid, "events": snap["events"]})
+
+
+def _recording_notify(send, session_id):
+    """`notify` for an upload whose preview events go to the uploading socket only: the chat's
+    record keeps the preview's place too, so a reconnect or another tab shows it."""
+    async def _notify(payload: dict):
+        if session_id and isinstance(payload, dict):
+            manager.record_live(session_id, {**payload, "sessionId": session_id})
+        return await send(payload)
+    return _notify
+
+
 def _session_status_label(session_id) -> str:
     """Status text for an ACTIVE session's history_update.
 
@@ -1460,6 +1572,8 @@ def _refresh_after_forget(session_id=None, transcript_scrubbed=False, **_):
     except Exception:
         return
     sid = str(session_id)
+    # The in-flight prompt is kept as typed; the replaced value must not come back with it.
+    manager.live_view.drop_prompt(sid)
     _send_to_chat_viewers(sid, {"type": "context_checkpoint", "session_id": sid})
     _send_to_chat_viewers(sid, {
         "type": "history_update",
@@ -2785,7 +2899,7 @@ async def receive_workflow_update(update: WorkflowUpdate, _caller: dict = Depend
     if data.get("type") == "file_created" and data.get("filePath") and data.get("sessionId"):
         try:
             from vaf.core.session import record_created_file
-            record_created_file(data["sessionId"], data["filePath"])
+            record_created_file(data["sessionId"], data["filePath"], entry=data)
         except Exception:
             pass
     return {"status": "ok"}
@@ -2919,6 +3033,9 @@ async def receive_subagent_stream(update: SubAgentStreamUpdate, _caller: dict = 
             data.pop("roomId", None)
             room_hint = ""
         if room_hint:
+            # The room lane bypasses broadcast_to_session; the chat's record must not.
+            if update.sessionId:
+                manager.record_live(update.sessionId, data)
             await manager.broadcast_to_user(room_scope, data)
         elif update.sessionId:
             # A room-ordered task that DID run under a session still routes to
@@ -2927,6 +3044,7 @@ async def receive_subagent_stream(update: SubAgentStreamUpdate, _caller: dict = 
             route = manager.room_route_for_session(update.sessionId)
             if route:
                 data["roomId"] = route[0]
+                manager.record_live(update.sessionId, data)
                 await manager.broadcast_to_user(route[1], data)
             else:
                 # Same decision as the in-process push: a terminal event
@@ -5202,14 +5320,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 # Should not happen for newly created session, but safety first
                 loaded = Session(id=sid, name="New Chat")
 
-            frontend_messages = _history_projection(loaded, sid)
-
-            await websocket.send_json({
-                "type": "history_update",
-                "messages": frontend_messages,
-                "sessionId": sid,
-                **_session_activity(sid),
-            })
+            # `autoLoad`: the server picked this chat. A browser that already shows another
+            # one (a reconnect) asks for its own chat again instead of being moved here.
+            await websocket.send_json(_live_history_update(loaded, sid, autoLoad=True))
+            await _send_live_view(websocket, sid)
             artifact_payload = _build_artifact_payload(loaded, sid)
             if artifact_payload:
                 await websocket.send_json(artifact_payload)
@@ -5764,14 +5878,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         
                         # 3. Send history to Frontend
                         # Serialize messages for JSON (include tool metadata so UI shows tool names, not "Unknown Tool")
-                        frontend_messages = _history_projection(loaded, sid)
-
-                        await websocket.send_json({
-                            "type": "history_update",
-                            "messages": frontend_messages,
-                            "sessionId": sid,
-                            **_session_activity(sid),
-                        })
+                        # Then the live record of the chat, right behind it: what the running
+                        # turn and its workers did while this connection was not subscribed.
+                        _history_frame = _live_history_update(loaded, sid)
+                        frontend_messages = _history_frame["messages"]
+                        await websocket.send_json(_history_frame)
+                        await _send_live_view(websocket, sid)
                         artifact_payload = _build_artifact_payload(loaded, sid)
                         if artifact_payload:
                             await websocket.send_json(artifact_payload)
@@ -5901,6 +6013,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             gone = True          # the move IS the removal
                     else:
                         gone = session_mgr.delete(sid)
+                    if gone:
+                        manager.live_view.forget(sid)
                     # The answer goes out BEFORE the list. The browser decides where
                     # to go next from the row it is about to lose - its title, and
                     # whether it was a thinking run - and the broadcast below takes
@@ -5940,6 +6054,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         })
                         continue
                     hidden = bool(session_mgr.hide(sid))
+                    if hidden:
+                        manager.live_view.forget(sid)
                     await websocket.send_json({
                         "type": "session_delete_result",
                         "id": sid, "deleted": hidden, "needsConfirm": False,
@@ -6594,6 +6710,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                 elif type == "chat":
                     content = cmd.get("content")
+                    # As typed, before any document or editor block is added to it: the shape
+                    # the person's own message has on screen (the in-flight prompt below).
+                    typed_content = content if isinstance(content, str) else ""
                     files = cmd.get("files", [])  # List of file objects with {name, data, mimeType}
                     sidebar_docs_payload = cmd.get("sidebarDocuments") or []  # Document Viewer docs to inject into this turn
 
@@ -6921,7 +7040,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                     contents = await process_files_to_sidebar_list(
                                         sidebar_docs_payload, session_id=session_id,
                                         user_scope_id=user_scope_id,
-                                        notify=websocket.send_json)
+                                        notify=_recording_notify(websocket.send_json, session_id))
+                                    manager.record_live(session_id, {"type": "sidebar_documents_set"})
                                     if contents:
                                         _slim = [{k: v for k, v in doc.items() if k != "data"} for doc in contents]
                                         try:
@@ -7008,6 +7128,18 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                        metadata=metadata,
                                        on_wait=_chat_wait_sender(asyncio.get_running_loop(),
                                                                  session_id))
+                        # The prompt of a turn that is not stored yet, for a view that opens
+                        # the chat before the turn ends (vaf/core/live_view.py).
+                        try:
+                            from datetime import datetime as _dt_prompt
+                            _prompt = {"role": "user", "content": typed_content,
+                                       "timestamp": _dt_prompt.now().isoformat()}
+                            if attached_images:
+                                _prompt["images"] = _projected_images(attached_images)
+                            manager.live_view.set_prompt(str(session_id),
+                                                         getattr(_task, "turn_id", None), _prompt)
+                        except Exception as _lp_err:
+                            log("WebServer", f"live prompt not recorded: {_lp_err}")
                         if attached_images:
                             # Surface the stored file(s) to the Web UI so the chat's workspace box
                             # appears (same notify the agent's file-creating tools use). Uploading an
@@ -7216,7 +7348,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             log_attachment("PROCESS_START", session=session_id, doc_count=len(documents))
                             contents = await process_files_to_sidebar_list(
                                 documents, session_id=session_id, user_scope_id=user_scope_id,
-                                notify=websocket.send_json)
+                                notify=_recording_notify(websocket.send_json, session_id))
+                            # The preview is done either way: its place is no longer news.
+                            manager.record_live(session_id, {"type": "sidebar_documents_set"})
                             log_attachment("PROCESS_DONE", session=session_id, results=len(contents),
                                 content_lens=[len(c.get("content","")) for c in contents],
                                 content_types=[
@@ -9811,13 +9945,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                   "timestamp": _dt_regen.now().isoformat()}
                     _regen_imgs = ((getattr(_removed_regen, "metadata", None) or {}).get("images")) or []
                     if _regen_imgs:
-                        from urllib.parse import quote as _q_regen
-                        _regen_ask["images"] = [
-                            {"url": (f"/api/file?path={_q_regen(str(_i['path']))}" if _i.get("path")
-                                     else f"data:{_i.get('mime_type', 'image/jpeg')};base64,{_i.get('data', '')}"),
-                             "name": _i.get("name", "image")}
-                            for _i in _regen_imgs
-                        ]
+                        _regen_ask["images"] = _projected_images(_regen_imgs)
                     _regen_msgs.append(_regen_ask)
                     # Every view of this chat, not only the tab that pressed: a second
                     # window on the same session would otherwise keep showing the reply
@@ -9851,10 +9979,13 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     if _regen_imgs:
                         _regen_meta["images"] = _regen_imgs
                     manager.subscribe_to_session(websocket, str(session_id))
-                    _tq_regen.add(session_id=str(session_id), input_text=_user_text,
-                                  source="web", metadata=_regen_meta,
-                                  on_wait=_chat_wait_sender(asyncio.get_running_loop(),
-                                                            session_id))
+                    _regen_task = _tq_regen.add(session_id=str(session_id), input_text=_user_text,
+                                                source="web", metadata=_regen_meta,
+                                                on_wait=_chat_wait_sender(asyncio.get_running_loop(),
+                                                                          session_id))
+                    # The question is not stored until the turn ends, like a typed one.
+                    manager.live_view.set_prompt(str(session_id), getattr(_regen_task, "turn_id", None),
+                                                 _regen_ask)
                     log("WebServer", f"Regenerate requested for session {session_id}")
 
                 elif type == "browser_interactive_start":

@@ -510,7 +510,7 @@ def _run_one_turn(monkeypatch, world, text, provider, keep_grounding=False, stop
     assert not state["error"], f"the loop raised: {logs[-5:]}"
     from vaf.core.session import SessionManager
     stored = SessionManager()._read_session_file(world.sessions / f"{SESSION}.json")
-    return SimpleNamespace(web=web, stored=stored, sinks=sinks, agent=agent)
+    return SimpleNamespace(web=web, stored=stored, sinks=sinks, agent=agent, task=task)
 
 
 def test_runner_streams_and_stores_a_turn_per_round(runner_world, monkeypatch):
@@ -557,6 +557,21 @@ def test_runner_streams_and_stores_a_turn_per_round(runner_world, monkeypatch):
     turn = shown[next(i for i, e in enumerate(shown) if e["role"] == "user" and e["content"] == ASK):]
     assert [(e["role"], e.get("round"), e.get("toolId")) for e in turn] == [
         ("user", None, None), ("assistant", 1, None), ("tool", None, "c1"), ("assistant", 2, None)]
+
+
+def test_runner_stores_the_turn_id_on_the_answer(runner_world, monkeypatch):
+    """The stored answer names its turn (`TURN_ID_KEY`), the id its live events and its
+    created files carry, so a reloaded chat puts each file on this answer.
+    MUTATION: drop the turn id from the runner's answer metadata - red."""
+    from vaf.core.session import TURN_ID_KEY
+
+    def provider(messages=None, **kw):
+        yield "Erledigt."
+
+    run = _run_one_turn(monkeypatch, runner_world, "Mach es kurz", provider)
+    answer = [m for m in run.stored["messages"] if m["role"] == "assistant"][-1]
+    assert answer["content"] == "Erledigt."
+    assert answer["metadata"][TURN_ID_KEY] == run.task.turn_id
 
 
 def test_runner_stores_a_corrected_turn_whole(runner_world, monkeypatch):

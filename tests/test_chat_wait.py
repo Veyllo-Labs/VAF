@@ -352,7 +352,12 @@ def test_one_activity_helper():
     keeps its literal (its task is queued right after and reports by chat_wait).
     MUTATION: build one of the three by hand again - red."""
     src = WEB_SERVER.read_bytes().decode()
-    assert src.count("**_session_activity(") == 3
+    # The forget repaint, and the load/auto-load builder `_live_history_update`.
+    assert src.count("**_session_activity(") == 1
+    live = src[src.index("def _live_history_update("):src.index("async def _send_live_view(")]
+    assert "activity = _session_activity(sid)" in live and "**activity" in live
+    assert src.count("_live_history_update(loaded, sid)") == 1               # load_session
+    assert src.count("_live_history_update(loaded, sid, autoLoad=True)") == 1  # connect
     helper = src[src.index("def _session_activity("):src.index("def _session_status_label(")]
     # Two in the whole file: the helper's own and the regenerate repaint's literal.
     assert len(re.findall(r'"isActive":\s', src)) == 2

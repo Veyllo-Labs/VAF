@@ -28,7 +28,7 @@ from vaf.core.task_queue import TaskQueue, is_system_command
 from vaf.core.turn_binding import (TurnBinding, TurnRefused, bind_turn, end_turn,
                                    room_turn_marker)
 from vaf.core.subagent_ipc import take_result_notification
-from vaf.core.session import (TURN_ROUNDS_KEY, SessionManager, Session, TurnStatus,
+from vaf.core.session import (TURN_ID_KEY, TURN_ROUNDS_KEY, SessionManager, Session, TurnStatus,
                               failed_turn_meta, stored_turn_copy,
                               turn_context_messages_since_last_user)
 from vaf.core.tray_context import TrayContext
@@ -3338,6 +3338,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             turn=_turn_status)
                         if _rounds_meta:
                             _turn_meta = {**(_turn_meta or {}), TURN_ROUNDS_KEY: _rounds_meta}
+                        # The turn's id on its answer: the files it announced carry the same id
+                        # (created_files), so the transcript puts them on this answer.
+                        if getattr(task, "turn_id", None):
+                            _turn_meta = {**(_turn_meta or {}), TURN_ID_KEY: str(task.turn_id)}
 
                         if _user_input.strip():
                             # Helper to get role/content from Message object or dict

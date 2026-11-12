@@ -183,6 +183,18 @@ class TurnStatus:
 # renders as one answer, as before.
 TURN_ROUNDS_KEY = "rounds"
 
+# The metadata key of a stored assistant message that holds the id of the turn that produced it
+# (`AgentTask.turn_id`). Live events carry the same id as `turnId`, and a created file is recorded
+# with it (`CREATED_FILES_KEY`), so a transcript view can put each file on the answer it came
+# with, also after a reload.
+TURN_ID_KEY = "turn_id"
+
+# The `runtime_state` key of the files announced in a chat (`notify_file_created`): a list of
+# {"path", "name", "turnId", "purpose", "toolId", "ts"}, oldest first, at most
+# CREATED_FILES_MAX. Display only: the transcript projects them onto their answers.
+CREATED_FILES_KEY = "created_files"
+CREATED_FILES_MAX = 300
+
 
 # The metadata key a stored assistant message carries when it stands in for an answer the
 # turn never produced: the backend failed (a provider's `[API Error from ...]`, the engine's
@@ -2048,8 +2060,31 @@ def get_manager() -> SessionManager:
 # PER-CHAT WORKSPACE RESOLUTION
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def record_created_file(session_id: Optional[str], file_path) -> None:
-    """Anchor a session's workspace from a created file (single shared setter).
+def _created_file_entry(file_path, entry: Optional[dict]) -> Dict[str, Any]:
+    """The stored form of one announced file: the chip fields of its `file_created` event."""
+    entry = entry if isinstance(entry, dict) else {}
+    path = str(entry.get("filePath") or entry.get("path") or Path(file_path).resolve().as_posix())
+    out: Dict[str, Any] = {
+        "path": path,
+        "name": str(entry.get("title") or entry.get("name") or Path(path).name),
+        "ts": datetime.now().isoformat(),
+    }
+    for key in ("turnId", "purpose", "toolId"):
+        value = entry.get(key)
+        if isinstance(value, str) and value:
+            out[key] = value
+    return out
+
+
+def record_created_file(session_id: Optional[str], file_path, entry: Optional[dict] = None) -> None:
+    """Anchor a session's workspace from a created file (single shared setter), and remember
+    the file for the transcript.
+
+    Every announced file is appended to ``runtime_state["created_files"]`` (deduplicated by
+    path and turn, at most CREATED_FILES_MAX), also when its folder is not a safe project
+    folder: the chip is shown wherever the file lies, and before this list a chip existed
+    only in the browser that received it, so a chat switch or a reload lost it. ``entry`` is
+    the `file_created` event (its `title`, `turnId`, `purpose`, `toolId`).
 
     Sets ``runtime_state["last_project_path"]`` and - once, never overwritten -
     ``session.project_path`` (VAF_Projects paths only), which arms the
@@ -2065,14 +2100,21 @@ def record_created_file(session_id: Optional[str], file_path) -> None:
             return
         from vaf.core.workspace_guard import is_unsafe_project_dir
         project_dir = str(Path(file_path).parent.resolve())
-        # Never record unsafe dirs (e.g. /home/<user>) as the session's
-        # project - that would poison every later edit-task in this chat.
-        if is_unsafe_project_dir(project_dir):
-            return
         mgr = get_manager()
         loaded = mgr.load(session_id)
         if not getattr(loaded, "runtime_state", None):
             loaded.runtime_state = {}
+        record = _created_file_entry(file_path, entry)
+        files = [f for f in (loaded.runtime_state.get(CREATED_FILES_KEY) or [])
+                 if isinstance(f, dict)
+                 and not (f.get("path") == record["path"] and f.get("turnId") == record.get("turnId"))]
+        files.append(record)
+        loaded.runtime_state[CREATED_FILES_KEY] = files[-CREATED_FILES_MAX:]
+        # Never record unsafe dirs (e.g. /home/<user>) as the session's
+        # project - that would poison every later edit-task in this chat.
+        if is_unsafe_project_dir(project_dir):
+            mgr.save(loaded, sync_state=False)
+            return
         loaded.runtime_state["last_project_path"] = project_dir
         # Anchor session workspace on first "real" project creation
         # (VAF_Projects paths only). session.project_path is stable - set once,

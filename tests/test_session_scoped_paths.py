@@ -73,7 +73,10 @@ def test_record_ignores_unsafe_dirs(fake_home, monkeypatch):
     monkeypatch.setattr(session_mod, "get_manager", lambda: mgr)
     record_created_file("chat1", fake_home / "stray.txt")  # home root = unsafe
     assert mgr.session.project_path == ""
-    assert mgr.saved == 0
+    assert "last_project_path" not in mgr.session.runtime_state
+    # The chip is still remembered for the transcript (created_files), nothing is anchored.
+    assert [f["name"] for f in mgr.session.runtime_state["created_files"]] == ["stray.txt"]
+    assert mgr.saved == 1
 
 
 def test_record_non_vaf_projects_paths_do_not_anchor(fake_home, monkeypatch):
@@ -99,7 +102,7 @@ def test_in_process_notify_calls_shared_setter(monkeypatch):
     import vaf.core.web_interface as wi_mod
     calls = []
     monkeypatch.setattr(session_mod, "record_created_file",
-                        lambda sid, fp: calls.append((sid, str(fp))))
+                        lambda sid, fp, entry=None: calls.append((sid, str(fp), entry)))
     fake_wi = types.SimpleNamespace(
         _server_loop=object(),
         _push_session_update=lambda sid, payload: None,
@@ -107,6 +110,7 @@ def test_in_process_notify_calls_shared_setter(monkeypatch):
     monkeypatch.setattr(wi_mod, "get_web_interface", lambda: fake_wi)
     wi_mod.notify_file_created("chatX", "/tmp/somefile.txt")
     assert calls and calls[0][0] == "chatX"
+    assert calls[0][2]["type"] == "file_created"   # the event is the stored entry
 
 
 # ── source guards: no process-global session resolution in prompt content ────

@@ -160,6 +160,10 @@ class WebInterfaceManager:
         # a tab that loads the chat later.
         self._pending_gates: Dict[str, Dict] = {}
         self._gate_lock = threading.RLock()
+        # What each chat is doing right now, for a browser that comes back to it: every
+        # session-scoped event is recorded where it is delivered (vaf/core/live_view.py).
+        from vaf.core.live_view import LiveViewLedger
+        self.live_view = LiveViewLedger()
 
     def open_gate(self, session_id: str, payload: Optional[dict] = None) -> str:
         """Open the confirmation a session is about to be asked, and return its id.
@@ -415,6 +419,9 @@ class WebInterfaceManager:
             return await self.broadcast(message)
 
         message['sessionId'] = session_id  # Ensure sessionId is always present
+        # Recorded BEFORE it is sent, on the loop that also builds the replay: a live frame
+        # a viewer already got is then always contained in a replay sent after it.
+        self.record_live(session_id, message)
 
         sent_count = 0
         disconnected = []
@@ -468,6 +475,7 @@ class WebInterfaceManager:
         if not session_id:
             return await self.broadcast(message)
         message['sessionId'] = session_id
+        self.record_live(session_id, message)
         owner = str(owner_scope).strip() if owner_scope else ""
         disconnected = []
         for connection in self.active_connections:
@@ -484,6 +492,14 @@ class WebInterfaceManager:
                           f"type={message.get('type')} err={send_err}")
         for conn in disconnected:
             self.disconnect(conn)
+
+    def record_live(self, session_id: Optional[str], message: dict) -> None:
+        """Record one event of a chat for its replay (`live_view`). Never raises: the record
+        is a view aid, and a failure in it must not cost the live event its delivery."""
+        try:
+            self.live_view.record(session_id, message)
+        except Exception as exc:
+            _diag_log(f"[LIVE_VIEW] record failed type={message.get('type')} err={exc}")
 
     def session_event_coroutine(self, session_id: str, data: dict):
         """The coroutine that delivers one session-scoped event.
@@ -1012,6 +1028,8 @@ class WebInterfaceManager:
             if (isinstance(room_turn, dict) and room_turn.get("room_id")
                     and room_scope):
                 data['roomId'] = str(room_turn["room_id"])
+                # The room lane bypasses broadcast_to_session; the chat's record must not.
+                self.record_live(session_id, data)
                 loop = self._get_dispatch_loop()
                 if loop:
                     asyncio.run_coroutine_threadsafe(
@@ -1028,6 +1046,7 @@ class WebInterfaceManager:
             route = self.room_route_for_session(session_id)
             if route:
                 data['roomId'] = route[0]
+                self.record_live(session_id, data)
                 loop = self._get_dispatch_loop()
                 if loop:
                     asyncio.run_coroutine_threadsafe(
@@ -1403,7 +1422,8 @@ def notify_file_created(session_id: Optional[str], file_path, title: Optional[st
         # fired for such chats (live incident).
         try:
             from vaf.core.session import record_created_file
-            record_created_file(session_id, file_path)
+            # The event itself is the entry: the transcript shows the chip as it was sent.
+            record_created_file(session_id, file_path, entry=payload)
         except Exception:
             pass
         wi._push_session_update(session_id, payload)

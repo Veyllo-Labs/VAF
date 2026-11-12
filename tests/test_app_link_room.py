@@ -1386,3 +1386,18 @@ def test_every_load_and_save_of_a_chat_in_the_runner_holds_its_lock():
     loose = [n for n in saves if not any(a <= n <= b for a, b in guarded)
              and not acquire < n < release]
     assert loose == [], f"a chat is saved without its lock at lines {loose}"
+
+
+def test_a_line_sent_again_stops_offering_a_resend(room_home):
+    """MUTATION: drop the resend mark from the projection - red (the old line kept offering
+    "Send again" after it was sent again)."""
+    device = paired_device(SCOPE_A)
+    devices.set_caps(device[0]["device_id"], ["room"])
+    first = room.post(SCOPE_A, "alice", "Licht aus")
+    devices.remove_device(device[0]["device_id"], by="", reason="test")
+    _capable()
+    second = room.post(SCOPE_A, "alice", "Licht aus", resend_of=first["id"])
+    third = room.post(SCOPE_A, "alice", "Noch etwas", resend_of="not-a-line")
+    lines = {l["id"]: l for l in room.transcript(SCOPE_A)}
+    assert lines[first["id"]].get("resent") is True
+    assert not lines[second["id"]].get("resent") and not lines[third["id"]].get("resend_of")

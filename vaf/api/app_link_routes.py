@@ -74,8 +74,10 @@ class RelaySwitch(BaseModel):
 
 
 class RoomLine(BaseModel):
-    # The line only: the account is the caller's, the device the room picks.
+    # The line only: the account is the caller's, the device the room picks. `resend_of`: the
+    # id of one of the caller's own earlier lines this one sends again (room.post checks it).
     text: str = ""
+    resend_of: str = ""
 
 
 def _caller(request: Request) -> Dict[str, Any]:
@@ -275,7 +277,8 @@ async def write_into_room(body: RoomLine, request: Request):
     from vaf.core.app_link import room
     scope, username = _own(request)
     try:
-        answer = await asyncio.to_thread(room.post, scope, username, body.text)
+        answer = await asyncio.to_thread(room.post, scope, username, body.text,
+                                         body.resend_of or None)
     except room.RoomRefused as refused:
         return _no_store({"detail": _ROOM_REFUSALS.get(refused.code, refused.code),
                           "code": refused.code}, refused.status)

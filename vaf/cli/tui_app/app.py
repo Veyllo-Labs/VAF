@@ -886,7 +886,7 @@ class VafApp(App):
             if line.get("code") == "turn_failed":
                 text = f"{line['label']} could not answer this message."
             self._mount_scrolled(PeerMessage(
-                line["label"] or "Veyllo App", text, badge=badge,
+                line["label"] or "VAF", text, badge=badge,
                 kind=line.get("kind") or "say", when=_room_clock(line.get("ts"))))
 
     @on(SessionsPanel.Selected)

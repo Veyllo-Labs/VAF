@@ -441,7 +441,8 @@ def _build(scope: str, username: str, sids: Tuple[str, str],
                 if kind == origin.APP_ROOM_OUT_KIND:
                     state_now, reason = _delivery(scope, lid, acked, room, ts, now)
                     line = _line(lid, PERSON, APP_AGENT, content, ts, state=state_now,
-                                 reason=reason, device=str(room.get("device") or ""))
+                                 reason=reason, device=str(room.get("device") or ""),
+                                 resend_of=str(room.get("resend_of") or ""))
                 elif kind == origin.APP_ROOM_IN_KIND:
                     line = _line(lid, APP_AGENT, PERSON, content, ts)
                 elif kind == origin.APP_TASK_KIND:
@@ -524,6 +525,11 @@ def _build(scope: str, username: str, sids: Tuple[str, str],
         key = (anchor[0], anchor[1], 1, order) if anchor else (ts, seq, 0, 0)
         lines.append((key, line))
     lines.sort(key=lambda item: item[0])
+    # A line the person sent again offers no second resend.
+    resent = {str(line.get("resend_of")) for _key, line in lines if line.get("resend_of")}
+    for _key, line in lines:
+        if line["id"] in resent:
+            line["resent"] = True
     return [line for _key, line in lines]
 
 
@@ -596,11 +602,14 @@ def _deliver(scope: str, target: Dict[str, Any], line_id: str, text: str, ts: fl
     return "kept"
 
 
-def post(user_scope_id: Any, username: str, text: Any) -> Dict[str, Any]:
+def post(user_scope_id: Any, username: str, text: Any,
+         resend_of: Optional[str] = None) -> Dict[str, Any]:
     """A line the person writes in the room on VAF: to the agent in the Veyllo App, or, led
     by "@" and the name of the account's agent, to VAF's agent (``addressee``). The account is
     the caller's; nothing here reads an account or a device from the line. Raises
-    ``RoomRefused`` and then stores and sends nothing. Answers ``{id, to, state, device}``."""
+    ``RoomRefused`` and then stores and sends nothing. Answers ``{id, to, state, device}``.
+    ``resend_of`` names an earlier line of the person to the app's agent that this one sends
+    again; that line then stops offering a resend (an id that is no such line is ignored)."""
     from vaf.core.app_link import bridge
     scope = str(user_scope_id or "").strip()
     body = str(text or "").strip()
@@ -625,9 +634,12 @@ def post(user_scope_id: Any, username: str, text: Any) -> Dict[str, Any]:
     line_id = str(uuid.uuid4())
     now = time.time()
     if to == APP_AGENT:
-        _append(scope, body, role="user", kind=origin.APP_ROOM_OUT_KIND,
-                meta={"id": line_id, "to": APP_AGENT, "device": str(target.get("model") or ""),
-                      "device_id": target["device_id"]})
+        meta = {"id": line_id, "to": APP_AGENT, "device": str(target.get("model") or ""),
+                "device_id": target["device_id"]}
+        if resend_of and _line_text(scope, str(resend_of),
+                                    kinds=(origin.APP_ROOM_OUT_KIND,)) is not None:
+            meta["resend_of"] = str(resend_of)
+        _append(scope, body, role="user", kind=origin.APP_ROOM_OUT_KIND, meta=meta)
     else:
         # A turn of the person, queued exactly as a message from the app queues one, and
         # kept in the channel store as that message is (the app's copy replays from there).

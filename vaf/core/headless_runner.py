@@ -2148,7 +2148,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             with _chat_lock(task.session_id):
                                 session = session_mgr.load(task.session_id)
                                 # Conditional: only stamp the owner scope when the session has NONE yet (a new
-                                # session). Never relabel an already-owned session to the task's scope — that
+                                # session). Never relabel an already-owned session to the task's scope - that
                                 # would let a queued chat take over another user's session. Defense-in-depth
                                 # behind the WS ownership gate (_ws_session_owner_ok).
                                 if meta.get("user_scope_id") is not None and not (session.metadata or {}).get("user_scope_id"):
@@ -2812,7 +2812,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                     + "---\n\n"
                                 )
                                 effective_input = cv_block + effective_input
-                                # Clear after injection — frontend will resend next turn if viewer still open
+                                # Clear after injection - frontend will resend next turn if viewer still open
                                 session_for_cv.runtime_state.pop("code_viewer_file", None)
                                 session_mgr.save(session_for_cv, sync_state=False)
                     except Exception:
@@ -2947,7 +2947,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             if mr_text:
                                 mr_name = mr.get("name") or "image"
                                 mr_block = (
-                                    f"--- MARKED REGION on {mr_name} (the yellow box the user drew) — "
+                                    f"--- MARKED REGION on {mr_name} (the yellow box the user drew) - "
                                     f"vision answer to their question ---\n"
                                     f"{mr_text}\n"
                                     f"---\n\n"

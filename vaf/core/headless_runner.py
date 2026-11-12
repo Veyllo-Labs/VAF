@@ -28,7 +28,7 @@ from vaf.core.task_queue import TaskQueue, is_system_command
 from vaf.core.turn_binding import (TurnBinding, TurnRefused, bind_turn, end_turn,
                                    room_turn_marker)
 from vaf.core.subagent_ipc import take_result_notification
-from vaf.core.session import (TURN_ID_KEY, TURN_ROUNDS_KEY, SessionManager, Session, TurnStatus,
+from vaf.core.session import (ASKED_AT_KEY, TURN_ID_KEY, TURN_ROUNDS_KEY, SessionManager, Session, TurnStatus,
                               failed_turn_meta, stored_turn_copy,
                               turn_context_messages_since_last_user)
 from vaf.core.tray_context import TrayContext
@@ -3369,6 +3369,14 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 f.write(f"{_dt.now().isoformat()} SESSION_SAVE_START session_id={task.session_id}\n")
                     except Exception:
                         pass
+                    # The turn's load, change and save of the chat as ONE step against the
+                    # background lanes (session._append_lock, the lock append_background_message
+                    # holds): a line another lane appended between this load and the save below
+                    # (a Veyllo App room line, a sub-agent result) was overwritten by this older
+                    # copy. Held for the save only, never during the turn.
+                    from vaf.core.session import _append_lock as _chat_append_lock
+                    _chat_save_lock = _chat_append_lock(str(task.session_id or "").strip())
+                    _chat_save_lock.acquire()
                     try:
                         try:
                             session = session_mgr.load(task.session_id)
@@ -3441,6 +3449,11 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 # between recognises the stored copy by it.
                                 if getattr(task, "turn_id", None):
                                     _user_meta[TURN_ID_KEY] = str(task.turn_id)
+                                # When the person asked: the message is stored only now, at the
+                                # turn's end, and a view that orders by time (the Veyllo App room)
+                                # must not put the question after what arrived while it ran.
+                                if getattr(task, "created_at", None):
+                                    _user_meta[ASKED_AT_KEY] = float(task.created_at)
                                 _chan_msg_id = (task.metadata or {}).get("channel_message_id")
                                 if _chan_msg_id:
                                     _user_meta["channel_message_id"] = str(_chan_msg_id)
@@ -3457,6 +3470,9 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                         and not getattr(_binding, "wake", None):
                                     from vaf.core.agent_origin import APP_AGENT_KIND
                                     _msg_kind = APP_AGENT_KIND
+                                elif (getattr(_binding, "wake", None) or ("",))[0] == "confirm":
+                                    from vaf.core.agent_origin import APP_CONFIRM_KIND
+                                    _msg_kind = APP_CONFIRM_KIND
                                 session.add_message(role="user", content=_user_input.strip(),
                                                     metadata=(_user_meta or None), kind=_msg_kind)
                                 # Increment persistent user_turn_count in runtime_state
@@ -3551,6 +3567,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         logging.getLogger(__name__).warning(f"Failed to save session: {e}")
                         _post_chat_ok = False  # Skip memory-intensive operations
                         gc.collect()  # Defensive GC on error
+                    finally:
+                        _chat_save_lock.release()
                     try:
                         if is_debug_logging_enabled():
                             from datetime import datetime as _dt

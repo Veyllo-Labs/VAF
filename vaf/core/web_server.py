@@ -5475,8 +5475,14 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             await websocket.send_json({"type": "error",
                                                        "message": "No Veyllo App is paired"})
                             continue
-                        await asyncio.to_thread(app_room.mark_seen, user_scope_id)
                         await websocket.send_json({"type": "room_transcript", **payload})
+                        # Read up to the newest line of what was SENT, after it went out: a
+                        # line arriving meanwhile stays new. A move tells the account's screens
+                        # (the row's count); the poll that follows moves nothing more.
+                        newest = max((float(m.get("ts") or 0) for m in payload["messages"]),
+                                     default=0.0)
+                        if await asyncio.to_thread(app_room.mark_seen, user_scope_id, newest):
+                            app_room.changed(user_scope_id)
                     except Exception as e:
                         log("API", f"open_app_room failed: {e}", "ERROR")
                         await websocket.send_json({"type": "error",

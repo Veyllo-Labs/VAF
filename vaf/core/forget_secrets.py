@@ -38,6 +38,8 @@ NAMED BOUNDARIES - where the value stays, stated so nobody promises more:
 - the model provider received the turn;
 - WhatsApp and Discord keep the message on the platform (a bot cannot delete a person's
   message there); Telegram can, within 48 hours;
+- the Veyllo App keeps what reached the device: a line the person wrote in the Veyllo App room
+  on VAF, a reply, a message; VAF has no message that takes a delivered line back;
 - the tray log, which a logging handler holds open (it carries voice transcripts, not typed
   text), and a terminal's scrollback; the debug logs of the day and the day before ARE scrubbed
   (`scrub_recent_logs`);

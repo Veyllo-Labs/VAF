@@ -707,7 +707,9 @@ A value the person hands over in a chat is stored for the person the chat belong
 (`store_credential` declares `user_scope_id` and `username`), and its removal from the chat
 touches only that chat and that person's own sinks: the saved chat of THAT session and its live
 record (`vaf/core/live_view.py`), that person's channel store and word-suggestion corpus
-(`vaf/core/forget_secrets.py`).
+(`vaf/core/forget_secrets.py`). A named limit: what already reached the Veyllo App (a line the
+person wrote in the Veyllo App room, a reply, a message) stays on the device, because VAF has no
+message that takes a delivered line back; the stored copies on VAF are scrubbed as above.
 Guarded by `tests/test_user_secrets.py`.
 
 ### A person's SSH identity and servers are theirs alone

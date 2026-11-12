@@ -189,6 +189,11 @@ TURN_ROUNDS_KEY = "rounds"
 # with, also after a reload.
 TURN_ID_KEY = "turn_id"
 
+# The metadata key of a stored user message that holds when the person asked (Unix seconds,
+# `AgentTask.created_at`): the runner stores the message at the turn's end, so its own
+# timestamp is the answer's time.
+ASKED_AT_KEY = "asked_at"
+
 # The `runtime_state` key of the files announced in a chat (`notify_file_created`): a list of
 # {"path", "name", "turnId", "purpose", "toolId", "ts"}, oldest first, at most
 # CREATED_FILES_MAX. Display only: the transcript projects them onto their answers.

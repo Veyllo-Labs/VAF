@@ -555,7 +555,7 @@ def test_ok_runs_the_action_once(e2e, monkeypatch):
     stored = SessionManager()._read_session_file(e2e.sessions / f"{_ask_chat()}.json")
     users = [m for m in stored["messages"] if m["role"] == "user"]
     assert users[-1]["content"].startswith(confirmations.CONFIRM_WAKE_PREFIX)
-    assert users[-1].get("kind") is None
+    assert users[-1].get("kind") == agent_origin.APP_CONFIRM_KIND
     assert any(str(t).startswith(confirmations.CONFIRM_WAKE_PREFIX)
                and "Automation 'Wasser' created (id 7)." in str(t)
                for r in reports for _label, t in r), reports

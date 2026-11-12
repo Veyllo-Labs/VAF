@@ -306,9 +306,12 @@ def set_relay(device_id: str, *, member: Optional[str], cid: Optional[str]) -> N
 
 
 def set_caps(device_id: str, caps: List[str]) -> None:
-    """The FULL list the app reported, replacing the stored one (protocol section 9)."""
+    """The FULL list the app reported, replacing the stored one (protocol section 9).
+    ``caps_known`` marks that the app has said what it supports at least once, so an empty list
+    is an answer and not "never connected since"."""
     def _change(row):
         row["caps"] = [str(c) for c in caps]
+        row["caps_known"] = True
     _update(device_id, _change)
 
 
@@ -597,6 +600,13 @@ def _after_removal(rows: List[Dict[str, Any]], by: str, reason: str) -> None:
                 listener(row["device_id"])
             except Exception:
                 pass
+    # The account's Veyllo App room changed with its devices: its row goes with the last one.
+    for scope in {_scope(row.get("user_scope_id")) for row in rows}:
+        try:
+            from vaf.core.app_link import room
+            room.changed(scope)
+        except Exception:
+            pass
 
 
 def _remove_where(predicate: Callable[[Dict[str, Any]], bool]) -> List[Dict[str, Any]]:

@@ -375,6 +375,13 @@ def _accept(pairing: Pairing, scope: str) -> str:
         raise
     pairing.device_id = device_id
     _finish(pairing, "paired")
+    # The account's chat list gains the Veyllo App room with its first device: its open
+    # screens are told now, not at their next reload.
+    try:
+        from vaf.core.app_link import room
+        room.changed(scope)
+    except Exception:
+        pass
     way = "relay" if session.transport == "relay" else "direct"
     try:
         from vaf.core.security_events import log_security_event

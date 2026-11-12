@@ -140,6 +140,11 @@ APP_ROOM_IN_KIND = "app_room_in"
 APP_TASK_KIND = "app_task"
 APP_TASK_RESULT_KIND = "app_task_result"
 APP_ROOM_KINDS = (APP_ROOM_OUT_KIND, APP_ROOM_IN_KIND, APP_TASK_KIND, APP_TASK_RESULT_KIND)
+#: The ``kind`` of the stored message a confirmation on the Veyllo App wakes a turn with (the
+#: report of the call the person confirmed), so the room shows it as a confirmation by what it
+#: is and not by how its text begins: a request of the app's agent may begin the same way. The
+#: web chat draws a message of this kind as the confirmation row it already draws for one.
+APP_CONFIRM_KIND = "confirm"
 #: The fence around a line the app's agent wrote into the room.
 APP_ROOM_TAG = "app_room_message"
 APP_ROOM_OUT_LABEL = ("In the Veyllo App room your user wrote this to the agent in their "

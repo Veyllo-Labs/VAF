@@ -553,6 +553,17 @@ class TaskQueue:
                 return True
             return bool(self._queued_by_session.get(sid))
 
+    def pending_for_session(self, session_id: str) -> List[AgentTask]:
+        """This chat's turns a worker has taken or that wait in the queue, oldest first (by
+        ``created_at``). For a view that shows a person's question before the runner stores
+        it with the answer (the Veyllo App room, vaf/core/app_link/room.py)."""
+        sid = str(session_id or "")
+        if not sid:
+            return []
+        with self._cv:
+            tasks = [t for t in self._iter_all_tasks() if str(t.session_id) == sid]
+        return sorted(tasks, key=lambda t: float(t.created_at or 0))
+
     def has_queued(self, session_id: str, *, where: Optional[Callable[[AgentTask], bool]] = None,
                    in_flight: bool = False) -> bool:
         """Whether this chat has a turn waiting in the queue (in flight does not count): any,

@@ -193,9 +193,10 @@ def run_task(user_scope_id: Any, username: str, instruction: str, *, context: st
         from vaf.core.app_link import room
         turn_id = _current_turn_id()
         room.record_task(scope, task["id"], instruction, row, turn_id)
-        answer, room_text = _await_result(session, pending, row, scope, username, device,
-                                          timeout_s, should_stop, chat_session_id)
-        room.record_task_result(scope, task["id"], room_text, turn_id)
+        answer, room_text, code = _await_result(session, pending, row, scope, username, device,
+                                                timeout_s, should_stop, chat_session_id)
+        room.record_task_result(scope, task["id"], room_text, turn_id, code=code,
+                                seconds=int(timeout_s) if code == "timeout" else None)
         return answer
     finally:
         with _lock:
@@ -213,28 +214,29 @@ def _current_turn_id() -> Optional[str]:
 def _await_result(session, pending: Pending, row: Dict[str, Any], scope: str, username: str,
                   device: Optional[str], timeout_s: int,
                   should_stop: Optional[Callable[[], bool]],
-                  chat_session_id: Optional[str]) -> Tuple[str, str]:
+                  chat_session_id: Optional[str]) -> Tuple[str, str, str]:
     """Wait for the app's answer to a sent task: (what the tool returns, what the room shows:
-    the app's own text, or the sentence of how the task ended)."""
+    the app's own text or the sentence of how the task ended, and the ending's code from
+    `room.TASK_RESULT_CODES`, which a view words in its own language)."""
     from vaf.core.app_link import bridge
     deadline = time.monotonic() + int(timeout_s)
     while not pending.done.wait(_POLL_SECONDS):
         if should_stop is not None and should_stop():
             session.send_json({"t": "task_cancel", "id": pending.id})
             text = "The task in the Veyllo App was cancelled (the turn was stopped)."
-            return text, text
+            return text, text, "cancelled"
         if session.closed:
             text = "The Veyllo App disconnected before answering."
-            return text, text
+            return text, text, "disconnected"
         if time.monotonic() >= deadline:
             session.send_json({"t": "task_cancel", "id": pending.id})
             text = f"The Veyllo App did not answer within {int(timeout_s)} seconds."
-            return text, text
+            return text, text, "timeout"
     result = pending.result or {}
     model = row.get("model") or "device"
     if not result.get("ok"):
-        text = _ERROR_SENTENCES.get(result.get("error") or "failed", _ERROR_SENTENCES["failed"])
-        return text, text
+        error = result.get("error") if result.get("error") in _ERROR_SENTENCES else "failed"
+        return _ERROR_SENTENCES[error], _ERROR_SENTENCES[error], error
     saved: List[str] = []
     if pending.files:
         sid = chat_session_id or f"{CHANNEL}_task"
@@ -242,14 +244,14 @@ def _await_result(session, pending: Pending, row: Dict[str, Any], scope: str, us
         if out is None:
             text = ("The Veyllo App answered with a file that VAF refused (it is on the "
                     "known-bad list); nothing was saved.")
-            return text, text
+            return text, text, "file_refused"
         saved = out
     prefix = ""
     if len(bridge.connected_devices(scope)) > 1 and not device:
         prefix = f"(Asked {model}, the most recently active device.)\n"
     shown = "\n".join([str(result.get("text") or "").strip()]
                       + [f"[File: {os.path.basename(p)}]" for p in saved]).strip()
-    return prefix + _fence(model, result.get("text") or "", saved), shown
+    return prefix + _fence(model, result.get("text") or "", saved), shown, "answered"
 
 
 def reset() -> None:

@@ -42,6 +42,8 @@ export function refusalKey(code: string): string {
         case 'rate_limited': return 'appRoomRateLimited';
         case 'text_only': return 'appRoomTextOnly';
         case 'already_sent_again': return 'appRoomAlreadySentAgain';
+        // The browser stopped waiting and the room did not show the line: it may still come.
+        case 'timeout': return 'appRoomSendUnconfirmed';
         default: return 'appRoomFailed';
     }
 }
@@ -116,8 +118,45 @@ export function beginSend(current: RoomSend, text: string, resendOf?: string | n
 }
 
 /** How long a line may be on its way before the composer gives up on it (the request is
- *  aborted, the text stays, the general failure sentence shows). */
+ *  aborted and the room is asked once whether the line arrived anyway). */
 export const SEND_TIMEOUT_MS = 30000;
+
+/** How a room send ended: `ok` with the server's answer, `refused` with its code, `timeout`
+ *  when no complete answer came within the time (also when the headers came and the body did
+ *  not), `error` when the request failed outright. */
+export type SendOutcome = { status: 'ok' | 'refused' | 'timeout' | 'error'; data: Record<string, unknown> };
+
+/** One room send with its time limit. The timer covers the whole answer, the body included: a
+ *  body that stalls is aborted too, and an aborted body never reads as a success. */
+export async function sendWithTimeout(fetchFn: typeof fetch, url: string, init: RequestInit,
+    timeoutMs: number = SEND_TIMEOUT_MS): Promise<SendOutcome> {
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), timeoutMs);
+    try {
+        const res = await fetchFn(url, { ...init, signal: abort.signal });
+        let data: Record<string, unknown> = {};
+        try {
+            data = await res.json();
+        } catch {
+            if (abort.signal.aborted) return { status: 'timeout', data: {} };
+        }
+        if (abort.signal.aborted) return { status: 'timeout', data: {} };
+        return res.ok ? { status: 'ok', data } : { status: 'refused', data };
+    } catch {
+        return { status: abort.signal.aborted ? 'timeout' : 'error', data: {} };
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+/** After a send gave up: whether the room now holds the line anyway (stored and sent after the
+ *  browser stopped waiting). It does when a line of the person that was not there before the
+ *  send carries the same text. */
+export function arrivedAfterAll(before: ReadonlySet<string>,
+    lines: ReadonlyArray<{ id: string; peer: string; text: string }>, text: string): boolean {
+    const wanted = text.trim();
+    return lines.some(l => l.peer === 'person' && !before.has(l.id) && (l.text || '').trim() === wanted);
+}
 
 /** Whether the composer is cleared when a line was taken: only while the view it was written in
  *  is still the one on screen and the box still holds that line. Typing the same words in

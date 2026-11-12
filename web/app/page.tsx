@@ -39,8 +39,8 @@ import InboxWindow from '@/components/inbox/InboxWindow';
 import { TurnDrafts, UnplacedDrafts, isWaitingDraft, type HeldSendRow } from '@/components/outbox/HeldSendCard';
 import { useChatDrafts } from '@/components/outbox/useChatDrafts';
 import {
-    APP_ROOM_ID, APP_ROOM_TITLE, ROOM_SEND_IDLE, SEND_TIMEOUT_MS, beginSend, clearAfterSend, deliveryOf, emptyKey,
-    isAppRoom, lineTextKey, placeholderKey, refusalKey, roomOpenCommand, roomStillListed,
+    APP_ROOM_ID, APP_ROOM_TITLE, ROOM_SEND_IDLE, arrivedAfterAll, beginSend, clearAfterSend, deliveryOf, emptyKey,
+    isAppRoom, lineTextKey, placeholderKey, refusalKey, roomOpenCommand, roomStillListed, sendWithTimeout,
     showUnreadDot, toKey, type RoomSend,
 } from '@/components/chat/appRoom';
 import { draftRefOf, isDraftTurnEnd, DRAFT_WAKE_PREFIX, CONFIRM_WAKE_PREFIX } from '@/components/outbox/draftRefs';
@@ -3184,6 +3184,9 @@ function VAFDashboardContent() {
     const [appRoomError, setAppRoomError] = useState('');
     // The line on its way to the room (appRoom.ts `beginSend`): the ref guards, the state draws.
     const appRoomSendRef = useRef<RoomSend>(ROOM_SEND_IDLE);
+    // Set while a send that gave up asks the room once whether its line arrived anyway: the
+    // next Veyllo App room transcript is handed to it, whether or not the room is on screen.
+    const appRoomCheckRef = useRef<((lines: RoomMessage[]) => void) | null>(null);
     const [appRoomSending, setAppRoomSending] = useState<RoomSend>(ROOM_SEND_IDLE);
     useEffect(() => {
         if (!roomOpening) return;
@@ -5170,21 +5173,12 @@ function VAFDashboardContent() {
         setAppRoomSending(next);
         setAppRoomError('');
         const sentFrom = roomViewRef.current?.room.roomId ?? null;
-        // A request that never answers ends after SEND_TIMEOUT_MS with the failure sentence;
-        // the text stays in the box.
-        const abort = new AbortController();
-        const timer = setTimeout(() => abort.abort(), SEND_TIMEOUT_MS);
-        try {
-            const res = await fetch(`${getApiBase()}/api/app-link/room`, {
-                method: 'POST', credentials: 'include', signal: abort.signal,
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text: next.text, ...(next.resendOf ? { resend_of: next.resendOf } : {}) }),
-            });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) {
-                setAppRoomError(String(data.code || 'failed'));
-                return;
-            }
+        // The lines on screen before the send, so a line that arrives after a give-up can be
+        // told from an older line with the same words.
+        const before = new Set((roomViewRef.current?.room.roomId === APP_ROOM_ID
+            ? roomViewRef.current.messages : []).map(m => m.id));
+        // The line was taken: clear the box (only where it was written) and go to the line.
+        const taken = () => {
             setInput(prev => (clearAfterSend(sentFrom, roomViewRef.current?.room.roomId ?? null, text, prev)
                 ? '' : prev));
             // The new line is where the view goes once the room answers, while the room is
@@ -5193,10 +5187,40 @@ function VAFDashboardContent() {
                 pendingScrollRestore.current = 'bottom';
             }
             wsSocketRef.current?.send(JSON.stringify(roomOpenCommand(APP_ROOM_ID)));
-        } catch {
-            setAppRoomError('failed');
+        };
+        try {
+            // A request that never answers ends after SEND_TIMEOUT_MS (appRoom.ts
+            // `sendWithTimeout`, the body included).
+            const outcome = await sendWithTimeout(fetch, `${getApiBase()}/api/app-link/room`, {
+                method: 'POST', credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: next.text, ...(next.resendOf ? { resend_of: next.resendOf } : {}) }),
+            });
+            if (outcome.status === 'ok') {
+                taken();
+            } else if (outcome.status === 'refused') {
+                setAppRoomError(String(outcome.data.code || 'failed'));
+            } else if (outcome.status === 'timeout') {
+                // The browser stopped waiting, the server may not have: ask the room once. A
+                // line that is there was taken after all, and a second Enter would send it twice.
+                const lines = await new Promise<RoomMessage[] | null>(resolve => {
+                    const give = setTimeout(() => { appRoomCheckRef.current = null; resolve(null); }, 5000);
+                    appRoomCheckRef.current = (got) => {
+                        clearTimeout(give);
+                        appRoomCheckRef.current = null;
+                        resolve(got);
+                    };
+                    wsSocketRef.current?.send(JSON.stringify(roomOpenCommand(APP_ROOM_ID)));
+                });
+                if (lines && arrivedAfterAll(before, lines, next.text)) {
+                    taken();
+                } else {
+                    setAppRoomError('timeout');
+                }
+            } else {
+                setAppRoomError('failed');
+            }
         } finally {
-            clearTimeout(timer);
             appRoomSendRef.current = ROOM_SEND_IDLE;
             setAppRoomSending(ROOM_SEND_IDLE);
         }
@@ -6452,6 +6476,10 @@ function VAFDashboardContent() {
                     // every attempt to leave the room bounced straight back.
                     {
                         const rid = data.room?.roomId;
+                        // A send that gave up asked whether its line arrived anyway.
+                        if (rid === APP_ROOM_ID && appRoomCheckRef.current) {
+                            appRoomCheckRef.current(data.messages || []);
+                        }
                         const wanted = (roomViewRef.current && roomViewRef.current.room.roomId === rid)
                             || pendingRoomOpenRef.current === rid;
                         if (wanted) {

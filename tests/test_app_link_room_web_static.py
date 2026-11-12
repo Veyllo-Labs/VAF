@@ -85,8 +85,9 @@ def test_the_composer_posts_the_line_without_a_chooser():
     assert ("body: JSON.stringify({ text: next.text, ...(next.resendOf ? { resend_of: next.resendOf } : {}) }),"
             in sender), "the body carries the line (and the line it sends again) only"
     assert "const sentFrom = roomViewRef.current?.room.roomId ?? null;" in sender
-    refused = _between(sender, "if (!res.ok) {", "}")
-    assert "setAppRoomError(String(data.code || 'failed'));" in refused and "setInput" not in refused
+    refused = _between(sender, "} else if (outcome.status === 'refused') {", "}")
+    assert "setAppRoomError(String(outcome.data.code || 'failed'));" in refused
+    assert "setInput" not in refused
     assert "clearAfterSend(sentFrom, roomViewRef.current?.room.roomId ?? null, text, prev)" in sender
     assert "tMain(placeholderKey(!!roomView?.room.appRoom?.canWrite), appRoomNames)" in PAGE
 
@@ -196,14 +197,31 @@ def test_a_dropped_file_is_refused_in_the_room():
     assert guard < drop.index("addFilesAsAttachments(files)")
 
 
+def _code_only(src):
+    """`src` without its // comments, so a check never matches a line that was commented out."""
+    import re
+    return re.sub(r"(?m)^\s*//.*$|\s//[^'\"`\n]*$", "", src)
+
+
 def test_a_send_gives_up_after_its_timeout_and_scrolls_only_the_room():
-    """MUTATION: drop the abort signal, or set the scroll target whatever is on screen - red."""
-    sender = _between(PAGE, "const sendToAppRoom = async (text: string, resendOf?: string) => {",
-                      "\n    };")
-    assert "const timer = setTimeout(() => abort.abort(), SEND_TIMEOUT_MS);" in sender
-    assert "signal: abort.signal," in sender and "clearTimeout(timer);" in sender
+    """The sender sends through `sendWithTimeout` (its behaviour is run in node, see
+    test_app_link_room_web.py), asks the room once after a give-up before it shows anything,
+    and scrolls only the room. MUTATION: fetch directly again - red; MUTATION: show the
+    give-up before the room was asked - red; MUTATION: set the scroll target whatever is on
+    screen - red."""
+    sender = _code_only(_between(PAGE, "const sendToAppRoom = async (text: string, resendOf?: string) => {",
+                                 "\n    };\n"))
+    assert "await sendWithTimeout(fetch, `${getApiBase()}/api/app-link/room`" in sender
+    assert "await fetch(" not in sender
+    give_up = _between(sender, "} else if (outcome.status === 'timeout') {", "} else {\n                setAppRoomError('failed');")
+    asked = give_up.index("wsSocketRef.current?.send(JSON.stringify(roomOpenCommand(APP_ROOM_ID)));")
+    decided = give_up.index("if (lines && arrivedAfterAll(before, lines, next.text)) {")
+    assert asked < decided < give_up.index("setAppRoomError('timeout');")
     assert ("if (roomViewRef.current?.room.roomId === APP_ROOM_ID) {\n"
             "                pendingScrollRestore.current = 'bottom';") in sender
+    handler = _code_only(_between(PAGE, "else if (data.type === 'room_transcript') {",
+                                  "else if (data.type === 'room_invite_candidates')"))
+    assert "if (rid === APP_ROOM_ID && appRoomCheckRef.current) {" in handler
     view = _between(PAGE, "function RoomConversation(", "function VAFDashboardContent(")
     assert "m.state === 'not_delivered' && !d.quiet ?" in view
 

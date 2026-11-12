@@ -323,8 +323,9 @@ confirmation) shows as a neutral note line, never under your name; the chat's co
 system commands are not shown.
 It appears the moment the pairing is confirmed (no reload) and goes with the last device that
 is removed; pairing again brings its history back, because the room's two sessions belong to
-the account and stay when a device goes; it stays there while a device is paired, also with the Veyllo App switched off for
-your account, and stays at the top of the list however far the list scrolls. It is your
+the account and stay when a device goes. It stays there while a device is paired, also with
+the Veyllo App switched off for your account, and stays at the top of the list however far
+the list scrolls. It is your
 account's only, and another account never sees it. A question you or the app's agent asked
 shows at once, at the time it was asked, while your agent is still answering it. An empty room
 says who is in it and where a line goes.
@@ -342,12 +343,16 @@ answers it:
 | Your agent hands the app a task (`user_phone`) | the agent in your Veyllo App | that agent, with the task's result | none on VAF |
 
 There is no chooser: what you write on VAF goes to the app's agent unless it starts with `@`
-and the handle of your agent's name (the first word of the name without trailing punctuation:
-"Mia" for "Mia Lisa" or "Mia.", "Dr" for "Dr. Mia", "O'Neil" for "O'Neil") or `@VAF`: the
-first word after "@" counts, whole or without trailing punctuation, in any case form ("@Mia.",
-"@mia?", "@MIA, hi" name Mia; "@Miami" does not; in a script written without spaces put a
-space after the name: "@Mia 你好"), the same leading-mention rule as in an agent room ("frag @VAF" in the middle of a line still goes to the app's agent). The
-composer's hint names that word, and `@` completes it.
+and the handle of your agent's name or `@VAF`. The handle is the first word of the name
+without sentence punctuation at either end: "Mia" for "Mia Lisa", "Mia." or "(Mia)", "Dr" for
+"Dr. Mia", "O'Neil" for "O'Neil". The first word after "@" counts, whole or with sentence
+punctuation taken off its end, in any case form: `@Mia.`, `@mia?` and `@MIA, hi` name Mia,
+`@Miami` and `@Mia♥` do not, and a space between the "@" and the name is allowed (`@ Mia hi`).
+In a script written without spaces put a space after the name (`@Mia 你好`). It is the same
+leading-mention rule as in an agent room
+([A2A_PROTOCOL.md](../agents/A2A_PROTOCOL.md#display-names-carry-a-tag)), so `ask @VAF` in
+the middle of a line still goes to the app's agent. The composer's hint names that word, and
+`@` completes it.
 
 **What "your agent is in the room" means.** Your VAF agent reads every room line at its next
 turn in your app chat, where your own turns run: a line you wrote to the app's agent after a
@@ -368,14 +373,23 @@ the line the room shows **delivered** (the device confirmed it; with more than o
 which), **waiting for the Veyllo App** (still queued) or **not delivered** with why: the device
 was removed, the Veyllo App is switched off for your account, the app was away for more than
 seven days, or the app did not take room lines. A line that will not arrive any more can be
-sent again with one click, once: the line sent again stops offering it. One line is on its way
-at a time, so a double Enter never sends it twice. A second device of the account does not get the line.
+sent again with one click, once: the old line then reads "sent again below" in grey and the
+new line carries its own state. A second "Send again" of the same line, from another screen,
+is refused (`already_sent_again`, HTTP 409) and sends nothing. One line is on its way at a
+time, so a double Enter never sends it twice; a question to your VAF agent reads "waiting for
+the answer" until it is answered. A send that gets no answer within 30 seconds gives up on
+the browser's side: the page then asks the room once whether the line arrived anyway. If it
+did, the box is cleared as for any sent line; if not, the text stays in the box and the page
+says that no answer came in time and to send it again if the line does not appear (the server
+may still store it a moment later). A second device of the account does not get the line.
 
 **An older Veyllo App.** A Veyllo App that does not announce the room keeps working as it is.
 The room shows what exists without it, and writing to the app's agent is refused with the
-sentence that a newer Veyllo App is needed (a device that has not connected since its pairing
-is told "open it once" instead, because VAF does not know yet what it supports); a line to your VAF agent (`@` and its name) still
-works and its answer reaches the older app as an ordinary reply. An app that answers a room
+sentence that a newer Veyllo App is needed. A device that has not connected since its pairing
+is told "open it once" instead, because VAF does not know yet what it supports. A line to your
+VAF agent (`@` and its name) still works and its answer reaches the older app as an ordinary
+reply. On an installation with no model set up, such a line stays in the room with the
+reason it got no answer under it. An app that answers a room
 line with "unknown type" is treated as an older app until it announces the room again.
 
 **Where it lives.** The room has no store of its own. Its record is the two sessions that
@@ -406,7 +420,9 @@ working unchanged.
   as its user's words; it answers with `room_say`. `"vaf_agent"`: show it, do not answer; VAF's
   agent's answer arrives as `delta`/`done` to every device. The app acknowledges with
   `{"t": "ack", "id": "<id>"}` once it is stored, acknowledges a repeat again and shows it once.
-  Only one device of the account gets a given `room_msg`.
+  Only one device of the account gets a given `room_msg`. A line the person sends again
+  arrives as a NEW `room_msg` with a new `id` (the earlier one may already be in the app); the
+  app shows both.
 - **The app to VAF: `room_say`**, the app's agent writes into the room:
   `{"t": "room_say", "id": "<uuid chosen by the app>", "text": "<1..65536 characters, not blank>",
   "reply_to": "<optional: the room_msg id it answers>"}`. No attachments in this version

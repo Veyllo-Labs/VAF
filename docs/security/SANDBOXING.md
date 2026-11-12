@@ -946,13 +946,18 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   opens no heredoc (`echo ok # <<X`, also `;#`, `|#`, a tab before it, or after a line
   continuation; a `;` inside the comment does not end it): bash ignores the rest of the
   line and runs the next lines, so they are read as commands. A `#` that starts no comment
-  for bash leaves the heredoc open: inside a word (`a#b`, `$#`, `16#ff`), after an escaped
-  blank (`a\ #b`), inside `${...}`, `$(...)` or a backtick pair, or after `\v`. For an
-  unquoted heredoc whose body is expanded, the refusal also offers quoting the delimiter
-  (`<<'EOF'`) when the heredoc is written as text (`cat > f <<EOF`, `tee f <<EOF`) and the
-  frozen reading lets the command pass; never when a shell, `eval` or `source` reads it
-  (`bash <<EOF`, `sudo sh <<EOF`, `cat <<EOF | bash`), whose quoted body is a script all
-  the same. For a writer's program refusal it comes first. Its accepted cost: a heredoc
+  for bash leaves the heredoc open: inside a word (`a#b`, `$#`, `16#ff`, and after the `)`
+  of `$(...)`, `$((...))`, `<(...)` or an array, where the word goes on: `$(printf x)#`),
+  after an escaped blank (`a\ #b`), inside a `${...}` or `$[...]` bash really opens (a
+  quoted or escaped `${` opens none), inside `$(...)` or a backtick pair, or after `\v`.
+  After the `)` of a subshell a `#` starts a comment. For an unquoted heredoc whose body
+  is expanded, the refusal also offers quoting the delimiter (`<<'EOF'`) only when the
+  heredoc goes into a file and nowhere else: its line starts with `cat` or `tee` and names
+  a file to write, holds no `|` or `&&`, no word anywhere in the command is a shell or
+  interpreter (the ones the check knows as script readers, `csh` and `fish` among them,
+  also spelt `/bin/bash` or `b\ash`), `eval`, `source` or `.`, no variable stands where
+  a command starts (`$SHELL`), and the frozen reading lets the command pass. For a
+  writer's program refusal it comes first. Its accepted cost: a heredoc
   piped into a shell is not checked for substitutions inside its body
   (`cat <<'EOF' | bash` with `eval "$(...)"` in it), as on main; a dangerous command line
   in it is still refused. The rule for any

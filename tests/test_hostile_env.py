@@ -207,27 +207,46 @@ socket.socket.connect = _refuse_at_once
 
 
 @needs_counter
-def test_a_vaf_service_port_is_refused_without_a_dial(tmp_path):
+@pytest.mark.parametrize("setup", ["as found", "no dual-stack", "ipv6 listener fails"])
+def test_a_vaf_service_port_is_refused_without_a_dial(tmp_path, setup):
     """A port on the service list is refused before any SYN leaves, in every spelling of
     a local address: a listener of the test's own on it accepts nothing, blocking,
     through connect_ex or through asyncio. (A free port of the test's own stands in for
     the list; the real ports are never dialed here.) The alias comes from a hosts file of
-    the test's own, so no name is looked up.
+    the test's own, so no name is looked up. The listener is dual-stack only where the
+    host really offers it; the two other setups take that away (the runtime probe says
+    no, or the IPv6 listener fails) and the IPv4 spellings must still be refused.
     MUTATION: drop the forced check in the connect or connect_ex wrapper - red; drop
     the numeric parse of "0"/"127.1", the IPv4-mapped form (judged with the older
-    ipaddress answer), the wildcard, the trailing dot or the hosts-file names - red
-    (that spelling connects, or is looked up)."""
+    ipaddress answer), the wildcard, the trailing dot, the hosts-file names, the host
+    name, the .localhost suffix, "" or bytes - red (that spelling connects, or is looked
+    up); decide the listener by socket.has_ipv6, or let its failure escape - red."""
     hosts = tmp_path / "hosts"
     hosts.write_text("# a comment\n127.0.0.1 vaf-hostile-alias.example\n"
                      "192.0.2.1 vaf-remote.example\n", encoding="utf-8")
-    stdout, lines = _refusal_run(tmp_path, VAF_HOSTILE_HOSTS_FILE=str(hosts), pre=r'''
-server = socket.socket(socket.AF_INET6 if socket.has_ipv6 else socket.AF_INET)
-if socket.has_ipv6:
-    server.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
-    server.bind(("::", 0))
-else:
-    server.bind(("127.0.0.1", 0))
-server.listen(32)
+    stdout, lines = _refusal_run(tmp_path, VAF_HOSTILE_HOSTS_FILE=str(hosts),
+                                 pre=f"SETUP = {setup!r}\n" + r'''
+if SETUP == "no dual-stack":
+    socket.has_dualstack_ipv6 = lambda: False
+elif SETUP == "ipv6 listener fails":
+    _create_server = socket.create_server
+
+    def _no_ipv6(address, *, family=socket.AF_INET, **options):
+        if family == socket.AF_INET6:
+            raise OSError(errno.EAFNOSUPPORT, "Address family not supported by protocol")
+        return _create_server(address, family=family, **options)
+
+    socket.create_server = _no_ipv6
+dual = False
+if socket.has_dualstack_ipv6():
+    try:
+        server = socket.create_server(("::", 0), family=socket.AF_INET6, backlog=32,
+                                      dualstack_ipv6=True)
+        dual = True
+    except OSError:
+        pass
+if not dual:
+    server = socket.create_server(("127.0.0.1", 0), backlog=32)
 server.settimeout(0.5)
 port = server.getsockname()[1]
 os.environ["VAF_HOSTILE_REFUSE_PORTS"] = "1," + str(port)
@@ -237,10 +256,11 @@ import ipaddress
 ipaddress.IPv6Address.is_loopback = property(lambda self: self._ip == 1)
 ''', post=r'''
 spellings = ["127.0.0.1", "localhost", "localhost.", "LOCALHOST", "0", "0.0.0.0", "127.1",
+             "", b"127.0.0.1", socket.gethostname(), "vaf.localhost",
              "vaf-hostile-alias.example", "vaf-hostile-alias.example."]
 for host in spellings:
     assert refused(socket.socket(), (host, port)), host
-v6 = ["::1", "::ffff:127.0.0.1", "::ffff:7f00:1", "::"] if socket.has_ipv6 else []
+v6 = ["::1", "::1%1", "::ffff:127.0.0.1", "::ffff:7f00:1", "::"] if dual else []
 for host in v6:
     assert refused(socket.socket(socket.AF_INET6), (host, port)), host
 assert socket.socket().connect_ex(("localhost", port)) == errno.ECONNREFUSED
@@ -258,10 +278,12 @@ asyncio.run(dial())
 try:
     server.accept()
 except TimeoutError:
-    print("nothing arrived", len(spellings) + len(v6) + 2)
+    print("nothing arrived", len(spellings) + len(v6) + 2, "dual" if dual else "ipv4")
 ''')
-    word1, word2, attempts = stdout.split()
+    word1, word2, attempts, listener = stdout.split()
     assert (word1, word2) == ("nothing", "arrived")
+    if setup != "as found":
+        assert listener == "ipv4"
     assert [cost for _who, _addr, cost in lines] == ["2.0"] * int(attempts)
 
 
@@ -276,8 +298,13 @@ def test_unix_udp_and_remote_refusals_are_not_charged(tmp_path):
     MUTATION: drop the family/type check - red; treat every host as local - red;
     refuse a service port without the local check - red (the remote one gets the forced
     message); count a non-blocking connect_ex - red; charge a remote sock_connect - red;
-    install the wrappers without the log - red."""
-    _stdout, lines = _refusal_run(tmp_path, pre=r'''
+    install the wrappers without the log - red; keep a hosts-file name whatever its
+    address - red (the remote name gets the forced message); read the hosts file
+    without the size limit - red (the name past it is charged)."""
+    hosts = tmp_path / "hosts"
+    hosts.write_text("192.0.2.1 vaf-remote.example\n" + ("#" + "x" * 99 + "\n") * 11000
+                     + "127.0.0.1 vaf-past-the-limit.example\n", encoding="utf-8")
+    _stdout, lines = _refusal_run(tmp_path, VAF_HOSTILE_HOSTS_FILE=str(hosts), pre=r'''
 os.environ["VAF_HOSTILE_REFUSE_PORTS"] = "80"
 
 
@@ -290,6 +317,8 @@ socket.socket.connect_ex = lambda self, address: errno.ECONNREFUSED
 ''', post=r'''
 assert reason(socket.socket(), ("192.0.2.1", 80)) == "[Errno %d] stand-in refusal" % errno.ECONNREFUSED
 assert refused(socket.socket(), ("example.invalid", 81))
+assert reason(socket.socket(), ("vaf-remote.example", 80)) == "[Errno %d] stand-in refusal" % errno.ECONNREFUSED
+assert refused(socket.socket(), ("vaf-past-the-limit.example", 81))
 assert refused(socket.socket(socket.AF_INET, socket.SOCK_DGRAM), ("127.0.0.1", 81))
 if hasattr(socket, "AF_UNIX"):
     assert refused(socket.socket(socket.AF_UNIX), "/nonexistent/vaf.sock")
@@ -324,6 +353,37 @@ print((socket.socket.connect, socket.socket.connect_ex,
     assert stdout.strip() == "True" and lines == []
 
 
+@needs_counter
+def test_the_hosts_file_is_read_only_for_a_name(tmp_path):
+    """Every interpreter of the run loads the snippet, so the hosts file (megabytes on a
+    blocklist machine) is read only when a name that is no literal address is judged.
+    MUTATION: read the hosts file when the snippet installs - red."""
+    hosts = tmp_path / "hosts"
+    hosts.write_text("127.0.0.1 vaf-hostile-alias.example\n", encoding="utf-8")
+    stdout, _lines = _refusal_run(tmp_path, VAF_HOSTILE_HOSTS_FILE=str(hosts), pre=r'''
+import builtins
+opened = []
+_open = builtins.open
+
+
+def _recording_open(file, *args, **kwargs):
+    opened.append(os.fspath(file) if not isinstance(file, int) else file)
+    return _open(file, *args, **kwargs)
+
+
+builtins.open = _recording_open
+socket.socket.connect = lambda self, address: None
+''', post=r'''
+hosts = os.environ["VAF_HOSTILE_HOSTS_FILE"]
+socket.socket().connect(("127.0.0.1", 9))
+socket.socket().connect(("0", 9))
+print(hosts in opened)
+socket.socket().connect(("vaf-hostile-alias.example", 9))
+print(hosts in opened)
+''')
+    assert stdout.split() == ["False", "True"]
+
+
 def test_on_windows_the_axis_installs_nothing(tmp_path):
     """A Windows host pays the real wait, so the generated sitecustomize installs no
     counter there and writes no log; main() then judges an empty log, which passes.
@@ -346,8 +406,18 @@ print((socket.socket.connect, socket.socket.connect_ex,
 def test_every_counter_test_is_skipped_on_windows():
     """A test that needs the counter fails on the Windows runner, where nothing is
     installed, unless it carries needs_counter. Static, so it fails on any OS.
-    MUTATION: remove the mark from one counter test - red."""
-    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    MUTATION: remove the mark from one counter test - red; recognise a counter test
+    only by _refusal_run or "sitecustomize.py" - red (the synthetic one passes)."""
+    assert _unmarked_counter_tests(Path(__file__).read_text(encoding="utf-8")) == []
+    # A test that builds its own child from _blocker() and sets the log is one too.
+    assert _unmarked_counter_tests(
+        "def test_own_child(tmp_path):\n"
+        "    env = {'VAF_HOSTILE_REFUSAL_LOG': str(tmp_path)}\n"
+        "    run(_blocker(), env)\n") == ["test_own_child"]
+
+
+def _unmarked_counter_tests(source):
+    tree = ast.parse(source)
     missing = []
     for node in tree.body:
         if not isinstance(node, ast.FunctionDef) or not node.name.startswith("test_"):
@@ -358,12 +428,14 @@ def test_every_counter_test_is_skipped_on_windows():
         names = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
         texts = {n.value for n in ast.walk(node) if isinstance(n, ast.Constant)
                  and isinstance(n.value, str)}
-        runs_counter = "_refusal_run" in names or "sitecustomize.py" in texts
+        texts |= {k.arg for k in ast.walk(node) if isinstance(k, ast.keyword)}
+        runs_counter = ("_refusal_run" in names or "sitecustomize.py" in texts
+                        or ("_blocker" in names and "VAF_HOSTILE_REFUSAL_LOG" in texts))
         marked = any(isinstance(d, ast.Name) and d.id == "needs_counter"
                      for d in node.decorator_list)
         if runs_counter and not marked:
             missing.append(node.name)
-    assert missing == []
+    return missing
 
 
 @needs_counter

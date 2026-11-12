@@ -119,8 +119,10 @@ locally, in the time the suite already takes:
                   UDP, Unix-socket or remote refusal is not charged, nor is a
                   connect that succeeds. Local means a numeric loopback or
                   wildcard address in any spelling the C library parses ("0",
-                  "127.1", ::ffff:127.0.0.1) or a name the hosts file or the
-                  host name puts on this machine, decided without a lookup.
+                  "127.1", ::ffff:127.0.0.1, a %scope, bytes, and "" for the
+                  wildcard) or a name the hosts file or the host name puts on
+                  this machine, decided without a lookup; the hosts file is
+                  read only for a name, and only its first megabyte.
                   The ports VAF's own services use
                   (3000, 5432, 8001, 8005, 8080, 8443, 9222) are refused
                   without a dial: the runner has none of them, so the count
@@ -330,35 +332,48 @@ if _refusal_log and _os.name != "nt":
             ip = ip.ipv4_mapped
         return ip.is_loopback or ip.is_unspecified
 
-    def _hosts_file_names():
-        """The names the hosts file maps to this machine, read without any lookup."""
-        names = set()
+    # The loopback names of a hosts file sit in its first lines; a blocklist-style
+    # file runs to megabytes, and reading all of it cost 2.3 s per interpreter start.
+    _HOSTS_READ_LIMIT = 1 << 20
+    _local_names = []
+
+    def _names_here():
+        """The names the hosts file or the host name put on this machine, read once,
+        on the first name that is not a literal address, without any lookup."""
+        if _local_names:
+            return _local_names[0]
+        names = set([_socket.gethostname().lower().rstrip("."), "localhost"])
         try:
             with open(_os.environ.get("VAF_HOSTILE_HOSTS_FILE") or "/etc/hosts",
                       encoding="utf-8", errors="replace") as hosts:
-                for row in hosts:
-                    fields = row.split("#", 1)[0].split()
-                    try:
-                        if fields and _local_ip(_ipaddress.ip_address(fields[0].split("%")[0])):
-                            names.update(name.lower().rstrip(".") for name in fields[1:])
-                    except ValueError:
-                        continue
+                text = hosts.read(_HOSTS_READ_LIMIT)
         except OSError:
-            pass
+            text = ""
+        for row in text.splitlines():
+            fields = row.split("#", 1)[0].split()
+            try:
+                if fields and _local_ip(_ipaddress.ip_address(fields[0])):
+                    names.update(name.lower().rstrip(".") for name in fields[1:])
+            except ValueError:
+                continue
+        _local_names.append(names)
         return names
-
-    _LOCAL_NAMES = _hosts_file_names() | set(
-        [_socket.gethostname().lower().rstrip("."), "localhost"])
 
     def _local(address):
         """A TCP address on this machine, decided without a lookup: a numeric address
-        (any spelling the C library accepts, "0" and "127.1" included) that is loopback
-        or the wildcard, or a name the hosts file or the host name puts here."""
+        (any spelling the C library accepts, "0", "127.1", a %scope and bytes included,
+        and "" for the wildcard) that is loopback or the wildcard, or a name the hosts
+        file or the host name puts here."""
         if not isinstance(address, tuple) or len(address) < 2:
             return False
-        host = str(address[0])
+        host = address[0]
+        if isinstance(host, (bytes, bytearray)):
+            host = bytes(host).decode("ascii", "replace")
+        host = str(host)
+        if host == "":
+            return True
         try:
-            return _local_ip(_ipaddress.ip_address(host.split("%")[0]))
+            return _local_ip(_ipaddress.ip_address(host))
         except ValueError:
             pass
         try:
@@ -366,7 +381,7 @@ if _refusal_log and _os.name != "nt":
         except (OSError, ValueError):
             pass
         name = host.lower().rstrip(".")
-        return name in _LOCAL_NAMES or name.endswith(".localhost")
+        return name.endswith(".localhost") or name in _names_here()
 
     def _forced(address):
         return _local(address) and address[1] in _REFUSE_PORTS

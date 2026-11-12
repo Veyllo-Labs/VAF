@@ -36,7 +36,7 @@ def _types(snap):
     return [e["type"] for e in snap["events"]]
 
 
-# ── AC2: coalescing ──────────────────────────────────────────────────────────────
+# ── coalescing ─────────────────────────────────────────────────────────────────────────────
 
 def test_a_round_keeps_its_last_text_at_its_first_place():
     """MUTATION: keep the first content of a round instead of the last - red."""
@@ -246,7 +246,7 @@ def test_the_record_is_a_copy():
     assert led.snapshot("A", active=True)["events"][0] == {"type": "coder_state", "tasks": [{"id": 1}]}
 
 
-# ── AC1 (pure half): isolation ───────────────────────────────────────────────────
+# ── isolation ──────────────────────────────────────────────────────────────────────────────
 
 def test_two_chats_never_share_an_entry():
     """MUTATION: key the record globally (one chat for every session) - red."""
@@ -262,7 +262,7 @@ def test_two_chats_never_share_an_entry():
     assert len(led.snapshot("A", active=True)["events"]) == 1
 
 
-# ── AC3: bounds ──────────────────────────────────────────────────────────────────
+# ── bounds ─────────────────────────────────────────────────────────────────────────────────
 
 def test_a_long_string_is_cut():
     """MUTATION: no cap on string fields - red."""
@@ -489,12 +489,14 @@ def test_a_forgotten_value_is_replaced_in_the_record(monkeypatch):
     assert secret not in out and "[FTP_PASS]" in out
 
 
-# ── round 2: late files, the turn's end, forget timing ───────────────────────────
+# ── late files, the turn's end, forget timing ──────────────────────────────────────────────
 
 def test_a_late_file_of_an_older_turn_never_wipes_the_running_turn():
     """The async coder of turn T1 announces its files with T1's id while T2 runs.
     MUTATION: let file_created move the turn again - red; let any newer id move it - red."""
     led = LiveViewLedger()
+    led.record("A", _msg("first turn", turn="t1"))
+    led.turn_left_queue("A", "t1")                   # T1 is over before T2 runs
     led.set_prompt("A", "t2", {"role": "user", "content": "second question"})
     led.record("A", _msg("streaming t2", turn="t2"))
     led.record("A", dict(_tool("start", "c9"), turnId="t2"))
@@ -519,6 +521,12 @@ def test_an_upload_announced_for_the_queued_turn_never_wipes_the_running_one():
     snap = led.snapshot("A", active=True)
     assert [p["content"] for p in snap["prompts"]] == ["running", "queued with an image"]
     assert _types(snap) == ["agent_message_update", "file_created"]
+    # T1 leaves: only its own entries go; T2's upload stays for a reconnect during T2.
+    # MUTATION: clear every turn entry when a turn leaves - red.
+    led.turn_left_queue("A", "t1")
+    snap = led.snapshot("A", active=True)
+    assert [(e["type"], e.get("turnId")) for e in snap["events"]] == [("file_created", "t2")]
+    assert [p["content"] for p in snap["prompts"]] == ["queued with an image"]
 
 
 def test_a_second_completion_stays_the_last_word():
@@ -611,3 +619,32 @@ def test_a_scrubbed_prompt_is_recounted():
     before = led._chats["A"].prompt_bytes
     led.scrub("A", {"PW": secret})
     assert led._chats["A"].prompt_bytes < before - 4000
+
+
+def test_turns_without_a_prompt_follow_each_other():
+    """Messenger turns record no prompt: M2 must take over from M1 (M1 left the queue, or died),
+    and a turn that left never becomes current again.
+    MUTATION: only a turn with a prompt may take over - red; forget departed turns - red."""
+    led = LiveViewLedger()
+    led.record("A", _msg("m1 text", turn="m1"))
+    led.record("A", dict(_tool("start", "k1"), turnId="m1"))     # never ended
+    led.turn_left_queue("A", "m1")
+    led.record("A", _msg("m2 text", turn="m2"))
+    assert [e["content"] for e in led.snapshot("A", active=True)["events"]] == ["m2 text"]
+    # M3 starts while M2 died without leaving: M2's leftovers go.
+    led.record("A", _msg("m3 text", turn="m3"))
+    assert [e["content"] for e in led.snapshot("A", active=True)["events"]] == ["m3 text"]
+
+
+def test_an_automation_after_a_late_event_of_a_departed_turn():
+    """Between turns the drain sends a summary with the last turn's id; it must not make that
+    turn current, so an automation turn afterwards is shown on its own.
+    MUTATION: adopt any id while no turn is current - red."""
+    led = LiveViewLedger()
+    led.record("A", _msg("answer", turn="t1"))
+    led.turn_left_queue("A", "t1")
+    led.record("A", {"type": "agent_message_update", "content": "drain summary", "turnId": "t1"})
+    led.record("A", _msg("automation runs", turn="auto1"))
+    led.turn_left_queue("A", "auto1")
+    contents = [e.get("content") for e in led.snapshot("A", active=True)["events"]]
+    assert "automation runs" not in contents

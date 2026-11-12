@@ -57,7 +57,7 @@ def _events_for(sid):
     ]
 
 
-# ── AC1: recorded where it is delivered ──────────────────────────────────────────
+# ── recorded where it is delivered ─────────────────────────────────────────────────────────
 
 def test_a_chat_left_behind_is_still_recorded_and_only_for_itself():
     """MUTATION: no record in broadcast_to_session - red."""
@@ -134,7 +134,7 @@ def test_record_failure_never_costs_the_delivery(monkeypatch):
     assert [e["type"] for e in sock.sent] == ["coder_state"]
 
 
-# ── AC12, server half: the preview place ─────────────────────────────────────────
+# ── the preview place ──────────────────────────────────────────────────────────────────────
 
 def test_preview_place_on_the_upload_socket_is_recorded_and_cleared(monkeypatch):
     import vaf.core.web_server as server
@@ -152,7 +152,7 @@ def test_preview_place_on_the_upload_socket_is_recorded_and_cleared(monkeypatch)
     assert [g["position"] for g in got] == [3, 0]       # the socket still gets both
 
 
-# ── AC4, AC5: read after the gate, through the real /ws handler ──────────────────
+# ── read after the gate, through the real /ws handler ──────────────────────────────────────
 
 @pytest.fixture(autouse=True)
 def _fresh_queue():
@@ -424,7 +424,7 @@ def test_a_stored_prompt_is_recognised_by_its_turn_not_its_text():
     assert server._unstored_prompts(prompts, s) == [prompts[1]]
 
 
-# ── round 2: the readers pass the owner, the stream event names its turn ─────────
+# ── the readers pass the owner, the stream event names its turn ────────────────────────────
 
 @pytest.mark.parametrize("reader", ["history", "replay"])
 def test_each_reader_refuses_a_record_kept_for_another_account(monkeypatch, reader, _fresh_queue):
@@ -468,8 +468,9 @@ def test_tool_update_names_its_turn(monkeypatch):
 
 def test_every_exit_of_a_web_turn_tells_the_record(monkeypatch):
     """The runner's queue wrapper: task_done with the task, without it (several exits call it
-    bare), a system command and a non-web task. MUTATION: no call in the wrapper - red;
-    forget the handed-out task - red."""
+    bare), and a messenger turn, which writes to its chat's record like a web turn.
+    MUTATION: no call in the wrapper - red; forget the handed-out task - red; skip messenger
+    turns again - red."""
     import types
     from vaf.core import headless_runner as hr
     from vaf.core.task_queue import AgentTask
@@ -496,8 +497,8 @@ def test_every_exit_of_a_web_turn_tells_the_record(monkeypatch):
     q.get()
     q.task_done(task=web2)              # an exit that names it
     q.get()
-    q.task_done()                       # a messenger turn: not a web chat's record
-    assert left == [("A", web.turn_id), ("B", web2.turn_id)]
+    q.task_done()                       # a messenger turn writes to its chat's record too
+    assert left == [("A", web.turn_id), ("B", web2.turn_id), ("telegram_1", tg.turn_id)]
 
 
 def test_a_refused_turn_stores_its_turn_id(tmp_path, monkeypatch):
@@ -514,3 +515,53 @@ def test_a_refused_turn_stores_its_turn_id(tmp_path, monkeypatch):
     hr.refuse_turn_without_backend(task, "no model", mgr)
     asked = [m for m in mgr.load("green123456").messages if m.role == "user"][0]
     assert asked.metadata[TURN_ID_KEY] == "t5"
+
+
+def test_a_system_command_does_not_touch_the_record(monkeypatch):
+    """MUTATION: drop the system-command check from the wrapper - red."""
+    import types
+    from vaf.core import headless_runner as hr
+    from vaf.core.task_queue import SYSTEM_COMMAND_PREFIX, SYSTEM_SESSION_ID, AgentTask
+    left = []
+    monkeypatch.setattr(hr, "get_web_interface", lambda: types.SimpleNamespace(
+        turn_left_queue=lambda sid, tid: left.append((sid, tid))))
+    monkeypatch.setattr(hr, "is_system_command", lambda task: task.input_text.startswith(SYSTEM_COMMAND_PREFIX))
+
+    class _Q:
+        def get(self):
+            return AgentTask(session_id=SYSTEM_SESSION_ID, input_text=SYSTEM_COMMAND_PREFIX + "LOAD_SESSION:x",
+                             source="web")
+
+        def task_done(self, task=None):
+            pass
+    q = hr._TurnEndingQueue(_Q())
+    q.get()
+    q.task_done()
+    assert left == []
+
+
+def test_no_runner_exit_bypasses_the_queue_wrapper():
+    """Every task_done in the runner goes through `tq` (the wrapper), never around it.
+    MUTATION: call tq._queue.task_done at one exit - red."""
+    import re
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "vaf" / "core" / "headless_runner.py").read_text(encoding="utf-8")
+    cls = src[src.index("class _TurnEndingQueue"):src.index("def run_headless_agent(")]
+    rest = src.replace(cls, "")
+    calls = re.findall(r"([\w.\]\)]+)\.task_done\(", rest)
+    assert calls and set(calls) == {"tq"}, calls
+    assert "tq = _TurnEndingQueue(TaskQueue())" in src
+
+
+# ── the socket says whose it is ──────────────────────────────────────────────────
+
+def test_the_first_frame_names_the_connections_account(world):
+    """A reconnecting page compares this with its first connect and reloads on a change.
+    MUTATION: drop accountId from the frame - red; send it after the initial state - red."""
+    server = world
+    with _connect(server, BOB, "bob") as ws:
+        first = ws.receive_json()
+        assert first["type"] == "auth_state" and first["accountId"] == BOB
+    with _connect(server, ALICE, "alice") as ws:
+        first = ws.receive_json()
+        assert first["type"] == "auth_state" and first["accountId"] == ALICE

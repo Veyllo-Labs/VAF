@@ -22,20 +22,22 @@ Rules, each against its failure mode:
 
 - Groups. The TURN group (streamed text, tool cards, created files and the end of the running
   turn) lives until the turn LEAVES THE QUEUE (`turn_left_queue`, called on every
-  `task_done` of a web turn by the runner's queue wrapper), not until its `message_complete`: the runner sends `message_complete`
-  first and saves the chat afterwards, so a turn dropped at `message_complete` would be in
-  neither the record nor the stored transcript for that window. Its `message_complete` is
-  kept and replayed, so a turn that ended but is not stored yet is drawn as ended.
-  `snapshot(active=False)` never returns the group: when the queue says no turn runs, nothing
-  of a turn is replayed, so a turn that ended while nobody watched can never come back as a
-  spinner. A stream event of a turn that was queued after the one on record (its prompt is on
-  record) drops what the earlier turn left behind (one that died without leaving the queue
-  cleanly); an event of any other turn id never moves the turn, because an async coder
-  announces its files minutes after its own turn, while the chat's next turn runs. The WORKER group (sub-agent window, coder and
-  other `*_state` views, workflow steps) survives the turn, because an async worker outlives
-  the turn that started it; it expires on its own, and a last value moves to the end on each
-  write, so the replay plays the worker's states in the order they happened. The PREVIEW
-  group is the place of an Office document's preview in the converter queue.
+  `task_done` of a chat turn, web and messenger alike, by the runner's queue wrapper), not
+  until its `message_complete`: the runner sends `message_complete` first and saves the chat
+  afterwards, so a turn dropped at `message_complete` would be in neither the record nor the
+  stored transcript for that window. Its `message_complete` is kept and replayed, so a turn
+  that ended but is not stored yet is drawn as ended. A turn that leaves takes only its own
+  entries (an upload the next queued turn announced meanwhile stays). `snapshot(active=False)`
+  never returns the group: when the queue says no turn runs, nothing of a turn is replayed, so
+  a turn that ended while nobody watched can never come back as a spinner. A stream event
+  names the turn that runs now: a turn that left the queue never becomes current again (an
+  async coder announces its files, and the drain its summary, after their turn), and any other
+  new id takes over from the turn on record (one that died without leaving cleanly), prompt
+  or not. The WORKER group (sub-agent window, coder and other `*_state` views, workflow steps)
+  survives the turn, because an async worker outlives the turn that started it; it expires on
+  its own, and a last value moves to the end on each write, so the replay plays the worker's
+  states in the order they happened. The PREVIEW group is the place of an Office document's
+  preview in the converter queue.
 - Prompts. The person's message of each queued or running web turn, by turn id (the runner
   stores it with the answer). At most MAX_PROMPTS per chat; they count toward the chat's entry
   and byte limits and are the last thing dropped.
@@ -73,6 +75,7 @@ MAX_BYTES = 2 * 1024 * 1024
 MAX_STRING = 64 * 1024
 MAX_FRAME = int(1.5 * 1024 * 1024)
 MAX_PROMPTS = 20
+MAX_DEPARTED = 64
 MAX_DEPTH = 12
 TRUNCATED = " [truncated]"
 TOO_DEEP = "[nested too deep]"
@@ -171,7 +174,7 @@ def _scrub_cut_tails(obj: Any, env: Dict[str, str]) -> Any:
 
 
 class _Entry:
-    __slots__ = ("group", "event", "size", "expires", "rank")
+    __slots__ = ("group", "event", "size", "expires", "rank", "turn")
 
     def __init__(self, group: str, event: dict, now: float, ttl: float, rank: int):
         self.group = group
@@ -179,6 +182,9 @@ class _Entry:
         self.size = _size(event)
         self.expires = now + ttl
         self.rank = rank
+        # The turn the event belongs to ("" when it names none): a turn leaving the queue
+        # takes its own entries, never those of the turn queued after it.
+        self.turn = str(event.get("turnId") or "") if isinstance(event, dict) else ""
 
 
 class _Chat:
@@ -191,11 +197,20 @@ class _Chat:
         self.bytes = 0
         self.seq = 0
         self.turn_id: Optional[str] = None
+        # The turns that left the queue (newest last, bounded): such a turn is over and can
+        # never be the current one again, whatever late event of it still arrives.
+        self.departed: "OrderedDict[str, None]" = OrderedDict()
         # The untagged stream (no `round`): a new bubble begins after any other turn event,
         # the way the page starts a new bubble after a tool card.
         self.untagged_seg = 0
         self.last_turn_key: Optional[Hashable] = None
         self.ring_keys: Dict[str, List[Hashable]] = {}
+
+    @property
+    def empty(self) -> bool:
+        """Nothing to show and nothing to remember: the departed turns are kept with the
+        record, so a late event of a turn that left cannot make it current again."""
+        return not self.entries and not self.prompts and not self.departed
 
     @property
     def prompt_bytes(self) -> int:
@@ -223,10 +238,19 @@ class _Chat:
         for key in [k for k, e in self.entries.items() if e.group == group and (pred is None or pred(k))]:
             self.drop(key)
 
-    def clear_turn(self) -> None:
-        self.drop_group(TURN)
+    def clear_turn(self, turn_id: Optional[str] = None) -> None:
+        """Drop a turn's entries (and those that name no turn); every turn's with None."""
+        for key in [k for k, e in self.entries.items() if e.group == TURN
+                    and (turn_id is None or e.turn in ("", turn_id))]:
+            self.drop(key)
         self.last_turn_key = None
         self.untagged_seg += 1
+
+    def depart(self, turn_id: str) -> None:
+        self.departed[turn_id] = None
+        self.departed.move_to_end(turn_id)
+        while len(self.departed) > MAX_DEPARTED:
+            self.departed.popitem(last=False)
 
 
 class LiveViewLedger:
@@ -294,7 +318,7 @@ class LiveViewLedger:
             self._purge(chat, now)
             self._apply(chat, etype, _scrub(event, env), now)
             self._bound(chat)
-            if not chat.entries and not chat.prompts:
+            if chat.empty:
                 self._chats.pop(sid, None)
             if now - self._last_sweep >= SWEEP_EVERY:
                 self._sweep(now)
@@ -315,20 +339,17 @@ class LiveViewLedger:
         return False
 
     def _enter_turn(self, chat: _Chat, event: dict) -> None:
-        """A stream event of a turn that was QUEUED after the one on record (its prompt is on
-        record): what the earlier one left behind (it died without leaving the queue cleanly) is
-        not this turn's. An event of any other turn id never moves the turn: an older turn's
-        late event (a sub-agent's) must not wipe the running one."""
+        """A stream event names the turn that runs now. A turn that left the queue is over and
+        never comes back, whatever late event of it arrives (a sub-agent's, the drain's
+        summary). Any other new id takes over: what the turn on record left behind (it died
+        without leaving the queue cleanly) is not this turn's. This holds for turns that never
+        record a prompt too (messenger turns, automations, wakes)."""
         tid = event.get("turnId")
-        if not isinstance(tid, str) or not tid or tid == chat.turn_id:
+        if not isinstance(tid, str) or not tid or tid == chat.turn_id or tid in chat.departed:
             return
-        if chat.turn_id is None:
-            chat.turn_id = tid
-            return
-        if tid not in chat.prompts:
-            return
-        chat.clear_turn()
-        chat.prompts.pop(chat.turn_id, None)
+        if chat.turn_id is not None:
+            chat.clear_turn(chat.turn_id)
+            chat.prompts.pop(chat.turn_id, None)
         chat.turn_id = tid
 
     def _apply(self, chat: _Chat, etype: str, event: dict, now: float) -> None:
@@ -347,7 +368,8 @@ class LiveViewLedger:
                 # leaves the queue (it may still be stored).
                 for tid in [t for t in chat.prompts if t != chat.turn_id]:
                     chat.prompts.pop(tid, None)
-            if not chat.entries and not chat.prompts:
+            # Nothing of a turn on record, or the end of a turn that already left: no entry.
+            if (not chat.entries and not chat.prompts) or str(event.get("turnId") or "") in chat.departed:
                 return
             tid = event.get("turnId") or chat.turn_id or ""
             # At the end of the record: a second completion of the turn (the guard path sends
@@ -517,7 +539,7 @@ class LiveViewLedger:
         for sid in list(self._chats):
             chat = self._chats[sid]
             self._purge(chat, now)
-            if not chat.entries and not chat.prompts:
+            if chat.empty:
                 self._chats.pop(sid, None)
 
     def set_prompt(self, session_id: Optional[str], turn_id: Optional[str], entry: dict, *,
@@ -554,7 +576,8 @@ class LiveViewLedger:
             self._bound(chat)
 
     def turn_left_queue(self, session_id: Optional[str], turn_id: Optional[str]) -> None:
-        """The turn is out of the queue (the runner calls this right before `task_done`): what
+        """The turn is out of the queue (the runner's queue wrapper calls this on every
+        `task_done` of a chat turn): what
         it showed is in the stored transcript now, or will never be. Its events and its prompt
         go; the prompts of turns still queued stay."""
         if not session_id:
@@ -563,12 +586,18 @@ class LiveViewLedger:
             chat = self._chats.get(str(session_id))
             if chat is None:
                 return
-            if turn_id is None or chat.turn_id in (None, str(turn_id)):
+            if turn_id is None:
                 chat.clear_turn()
                 chat.turn_id = None
-            if turn_id is not None:
+            else:
+                # Only this turn's entries: an upload the next queued turn announced while this
+                # one ran stays for that turn.
+                chat.clear_turn(str(turn_id))
                 chat.prompts.pop(str(turn_id), None)
-            if not chat.entries and not chat.prompts:
+                chat.depart(str(turn_id))
+                if chat.turn_id == str(turn_id):
+                    chat.turn_id = None
+            if chat.empty:
                 self._chats.pop(str(session_id), None)
 
     def scrub(self, session_id: Optional[str], env: Dict[str, str]) -> None:

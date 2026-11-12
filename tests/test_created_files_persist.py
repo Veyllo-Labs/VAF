@@ -38,7 +38,7 @@ def _files(mgr):
     return mgr.load(SID).runtime_state.get(CREATED_FILES_KEY) or []
 
 
-# ── AC6: both notify paths record ────────────────────────────────────────────────
+# ── both notify paths record ───────────────────────────────────────────────────────────────
 
 def test_the_in_process_notify_records_the_chip(store, monkeypatch, tmp_path):
     """MUTATION: drop toolId from the stored entry - red."""
@@ -95,7 +95,7 @@ def test_the_list_is_deduplicated_and_bounded(store, tmp_path):
     assert files[-1]["name"] == f"f{session_mod.CREATED_FILES_MAX + 4}.txt"
 
 
-# ── AC6: the projection ──────────────────────────────────────────────────────────
+# ── the projection ─────────────────────────────────────────────────────────────────────────
 
 def _session(created, *, rounds=True):
     meta = {TURN_ID_KEY: "t1"}

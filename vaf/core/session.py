@@ -333,15 +333,32 @@ def model_text(msg) -> Optional[str]:
     A user message another agent wrote (``kind`` `agent_origin.APP_AGENT_KIND`: a request of
     the agent of the user's Veyllo App) is returned inside its fence
     (`agent_origin.app_agent_request_text`), so no reader of a stored chat takes it for the
-    user's own words: one place instead of one fence per reader."""
+    user's own words: one place instead of one fence per reader. The Veyllo App room's lines
+    (``kind`` in `agent_origin.APP_ROOM_KINDS`) read the same way: a line the person wrote to
+    the agent in their Veyllo App after the label that it was not addressed to this agent
+    (`agent_origin.app_room_out_text`), a line that agent wrote into the room inside its fence
+    (`agent_origin.app_room_text`), and a task line (``app_task``, ``app_task_result``) not at
+    all, since the chat that ran the task holds its call and result already."""
     if is_failed_turn(msg):
         return None
     get = msg.get if isinstance(msg, dict) else (lambda k, d=None: getattr(msg, k, d))
     content = get("content")
     content = content if isinstance(content, str) else str(content or "")
-    from vaf.core.agent_origin import APP_AGENT_KIND, app_agent_request_text
-    if get("role") == "user" and get("kind") == APP_AGENT_KIND:
-        return app_agent_request_text(content)
+    from vaf.core import agent_origin as _origin
+    kind = get("kind")
+    if get("role") == "user" and kind == _origin.APP_AGENT_KIND:
+        return _origin.app_agent_request_text(content)
+    if kind in _origin.APP_ROOM_KINDS:
+        # The Veyllo App room's lines in the app chat: the person's line to the app's agent
+        # carries the label that it was not addressed to this agent, the app agent's line
+        # its fence, and the task lines are display only. Never the agent's own words.
+        if get("role") != "user":
+            return None
+        if kind == _origin.APP_ROOM_OUT_KIND:
+            return _origin.app_room_out_text(content)
+        if kind == _origin.APP_ROOM_IN_KIND:
+            return _origin.app_room_text(content)
+        return None
     meta = get("metadata")
     failure = meta.get(TURN_FAILURE_KEY) if isinstance(meta, dict) else None
     if isinstance(failure, str) and failure:
@@ -860,6 +877,7 @@ class SessionManager:
         create: bool = False,
         name: Optional[str] = None,
         user_scope_id: Optional[Any] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Optional[Session]:
         """Append ONE message to a stored session from a lane that is NOT the live
         turn on it, and leave the note that lets the live agent notice.
@@ -877,7 +895,8 @@ class SessionManager:
         so a reload still knows. `create=True` builds the session when the store
         has none (a messenger session whose first message is outbound), named
         `name` and stamped with `user_scope_id` so the ownership gates let its
-        real owner open it. Returns the saved session, or None when the session
+        real owner open it. `metadata` is stored on the message as it is (the Veyllo App
+        room keeps its line id and addressee there). Returns the saved session, or None when the session
         does not exist and `create` is False - the caller then picks another chat.
         Never touches the state registry: this is a transcript append, not a turn.
         """
@@ -898,7 +917,8 @@ class SessionManager:
                 session = Session(id=sid, name=name or sid)
                 if user_scope_id:
                     session.metadata["user_scope_id"] = str(user_scope_id)
-            session.add_message(role=role, content=content, kind=kind)
+            session.add_message(role=role, content=content, kind=kind,
+                                metadata=dict(metadata) if metadata else None)
             self.save(session, sync_state=False)
             note_transcript_changed(sid)
         return session
@@ -1584,7 +1604,16 @@ class SessionManager:
         # kind="room" and no session id a loader would accept - a surface that treats
         # one as a session is a bug, and tests/test_room_rows_are_not_sessions.py says
         # so out loud.
-        return _room_rows(user_scope_id) + out
+        #
+        # The Veyllo App room comes first of all, while the account has a paired device
+        # (vaf/core/app_link/room.py). Its record is the app chat and the app agent's
+        # request session, both kept off this list by their channel prefix, so the
+        # conversation never shows twice; its id names no session either.
+        #
+        # NAMED BOUNDARY: two hard-wired row sources (rooms, the Veyllo App room) and no
+        # registry of pinned rows. Two sources are not N copies of one thing; a registry
+        # becomes the fix when a third kind of row asks for the top of this list.
+        return _app_room_rows(user_scope_id) + _room_rows(user_scope_id) + out
 
     def claim_unscoped(self, user_scope_id: str) -> int:
         """Stamp every session WITHOUT an owner scope as `user_scope_id`'s.
@@ -1929,6 +1958,17 @@ def session_list_payload(rows: List[Dict]) -> List[Dict]:
             "source": (s.get("metadata") or {}).get("source"),
             "kind": kind,
         }
+        if kind == "app_room":
+            # The Veyllo App room: its state for the row (paired devices, one connected,
+            # whether a line to the app's agent can be written, and why not).
+            room_state = s.get("app_room") or {}
+            item.update({
+                "unread": int(s.get("unread") or 0),
+                "appRoom": {"devices": int(room_state.get("devices") or 0),
+                            "connected": bool(room_state.get("connected")),
+                            "canWrite": bool(room_state.get("can_write")),
+                            "reason": str(room_state.get("reason") or "")},
+            })
         if kind == "room":
             # The room id is deliberately NOT the row id: a surface that handed the
             # row id to the session loader would open, and later SAVE, something that
@@ -1982,6 +2022,8 @@ def session_access_allowed(
     Policy, strict:
     - an id that `check_session_id` refuses is refused for EVERYONE, the admin included:
       no session can live under it, and a path built from it would leave the store;
+    - the Veyllo App room's row id (`is_app_row_id`) is refused for everyone: it names no
+      session;
     - an admin passes (the machine owner must never be locked out of their own store);
     - otherwise the session's recorded `user_scope_id` must be non-empty and equal to the
       caller's - a session with NO scope predates isolation and therefore belongs to the
@@ -2015,6 +2057,10 @@ def session_access_allowed(
     try:
         check_session_id(session_id)
     except InvalidSessionId:
+        return (False, None)
+    if is_app_row_id(session_id):
+        # The Veyllo App room's row: no session lives under it, for nobody, the admin
+        # included. Deleting, renaming or hiding it would act on nothing that exists.
         return (False, None)
     try:
         loaded = manager.load(session_id)
@@ -2640,6 +2686,37 @@ def search_sessions(
     console.print(table)
 
 
+
+
+def is_app_row_id(session_id: Any) -> bool:
+    """Whether an id is the Veyllo App room's row id, which no session loader may take."""
+    return str(session_id or "").startswith("app:")
+
+
+def first_conversation_id(rows: List[Dict]) -> Optional[str]:
+    """The id of the first row of a chat list that is a conversation: never an agent room,
+    never the Veyllo App room. What a surface picks on its own (the connect auto-load) comes
+    from here; ``rows[0]`` is a room for anybody who is in one."""
+    for row in rows or []:
+        if row.get("kind") in ("room", "app_room") or is_app_row_id(row.get("id")):
+            continue
+        sid = str(row.get("id") or "")
+        if sid and not sid.startswith("room:"):
+            return sid
+    return None
+
+
+def _app_room_rows(user_scope_id: Optional[str] = None) -> List[Dict]:
+    """The Veyllo App room's row, for an account with a paired device; none otherwise. Never
+    raises: a damaged device list must not cost the sidebar its conversations."""
+    if not user_scope_id:
+        return []
+    try:
+        from vaf.core.app_link import room
+        row = room.list_row(user_scope_id)
+    except Exception:
+        return []
+    return [row] if row else []
 
 
 def _room_rows(user_scope_id: Optional[str] = None) -> List[Dict]:

@@ -118,6 +118,22 @@ INVITATION_STATES = ("pending", "accepted", "declined", "revoked", "expired")
 PARTICIPANT_LANES = ("agent", "cli", "remote")
 
 
+def leading_mention(text: Any) -> Optional[str]:
+    """The name a message's leading "@Name" gives, or None.
+
+    Only a mention at the START counts: "@Bob can you look" is aimed at Bob, "ask @Bob
+    about it" is a sentence about Bob. The name is the first word after the "@", without
+    a trailing ",", ":" or ";". The one parse of that rule: an agent room resolves the name
+    against its members (`Room.address_from_mention`), the Veyllo App room against the
+    names of the account's agent (vaf/core/app_link/room.py)."""
+    stripped = str(text or "").lstrip()
+    if not stripped.startswith("@"):
+        return None
+    parts = stripped[1:].split(None, 1)
+    name = parts[0].rstrip(",:;") if parts else ""
+    return name or None
+
+
 def participant_key(lane: str, scope_id: Optional[str] = None) -> str:
     """The local identity a room handle is derived from.
 
@@ -2755,11 +2771,8 @@ class Room:
         at Bob; "ask @Bob about it" is a sentence ABOUT Bob, said to the room, and
         turning that into a private aside would quietly hide it from everyone else.
         """
-        stripped = str(text or "").lstrip()
-        if not stripped.startswith("@"):
-            return None
-        name = stripped[1:].split(None, 1)[0].rstrip(",:;")
-        peer = self.peer_by_display(name)
+        name = leading_mention(text)
+        peer = self.peer_by_display(name) if name else None
         return {"peer": peer} if peer else None
 
     def addressee(self, text: str, *, to_peer: str = "") -> Dict[str, Any]:

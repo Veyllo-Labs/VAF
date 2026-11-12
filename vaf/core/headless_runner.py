@@ -3392,8 +3392,14 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             def _msg_content(m):
                                 return m.content if hasattr(m, 'content') else m.get("content", "")
 
+                            # A Veyllo App room line (agent_origin.APP_ROOM_KINDS) is another
+                            # party's line in this chat, never the person's last message: one
+                            # equal to this input must not make it look like a repeat.
+                            from vaf.core.agent_origin import APP_ROOM_KINDS as _room_kinds
                             last_user_msg = None
                             for msg in reversed(session.messages):
+                                if getattr(msg, "kind", None) in _room_kinds:
+                                    continue
                                 if _msg_role(msg) == "user":
                                     last_user_msg = _msg_content(msg)
                                     break
@@ -3531,6 +3537,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             elif _clean_response:
                                 last_assistant_msg = None
                                 for msg in reversed(session.messages):
+                                    if getattr(msg, "kind", None) in _room_kinds:
+                                        continue
                                     if _msg_role(msg) == "assistant":
                                         last_assistant_msg = _msg_content(msg)
                                         break

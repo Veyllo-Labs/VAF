@@ -7,7 +7,9 @@ call, up to its timeout.
 
 A task is never stored and never queued for later (protocol section 9): with no device of
 the account connected, it fails at once and nothing is sent. Only devices of the scope the
-call was made for are ever addressed.
+call was made for are ever addressed. A task that was sent and how it ended are recorded as
+lines of the account's Veyllo App room (room.py), whatever chat called the tool; a task that
+was not sent records nothing.
 
 A model told "not connected" used to probe again and again in the same turn (eight calls in
 one live turn). So a second "not connected" for the same account and chat within
@@ -26,6 +28,7 @@ in the same turn.
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 import uuid
@@ -185,35 +188,68 @@ def run_task(user_scope_id: Any, username: str, instruction: str, *, context: st
             return _not_reachable(scope, username, chat_session_id)
         with _lock:
             _unreachable.pop((scope, str(chat_session_id or "")), None)
-        deadline = time.monotonic() + int(timeout_s)
-        while not pending.done.wait(_POLL_SECONDS):
-            if should_stop is not None and should_stop():
-                session.send_json({"t": "task_cancel", "id": pending.id})
-                return "The task in the Veyllo App was cancelled (the turn was stopped)."
-            if session.closed:
-                return "The Veyllo App disconnected before answering."
-            if time.monotonic() >= deadline:
-                session.send_json({"t": "task_cancel", "id": pending.id})
-                return f"The Veyllo App did not answer within {int(timeout_s)} seconds."
+        # Sent: the task and, below, how it ended are lines of the Veyllo App room, whatever
+        # chat called the tool. Nothing sent, nothing recorded.
+        from vaf.core.app_link import room
+        turn_id = _current_turn_id()
+        room.record_task(scope, task["id"], instruction, row, turn_id)
+        answer, room_text = _await_result(session, pending, row, scope, username, device,
+                                          timeout_s, should_stop, chat_session_id)
+        room.record_task_result(scope, task["id"], room_text, turn_id)
+        return answer
     finally:
         with _lock:
             _pending.pop(pending.id, None)
+
+
+def _current_turn_id() -> Optional[str]:
+    try:
+        from vaf.core.subagent_ipc import get_current_turn_id
+        return get_current_turn_id()
+    except Exception:
+        return None
+
+
+def _await_result(session, pending: Pending, row: Dict[str, Any], scope: str, username: str,
+                  device: Optional[str], timeout_s: int,
+                  should_stop: Optional[Callable[[], bool]],
+                  chat_session_id: Optional[str]) -> Tuple[str, str]:
+    """Wait for the app's answer to a sent task: (what the tool returns, what the room shows:
+    the app's own text, or the sentence of how the task ended)."""
+    from vaf.core.app_link import bridge
+    deadline = time.monotonic() + int(timeout_s)
+    while not pending.done.wait(_POLL_SECONDS):
+        if should_stop is not None and should_stop():
+            session.send_json({"t": "task_cancel", "id": pending.id})
+            text = "The task in the Veyllo App was cancelled (the turn was stopped)."
+            return text, text
+        if session.closed:
+            text = "The Veyllo App disconnected before answering."
+            return text, text
+        if time.monotonic() >= deadline:
+            session.send_json({"t": "task_cancel", "id": pending.id})
+            text = f"The Veyllo App did not answer within {int(timeout_s)} seconds."
+            return text, text
     result = pending.result or {}
     model = row.get("model") or "device"
     if not result.get("ok"):
-        return _ERROR_SENTENCES.get(result.get("error") or "failed", _ERROR_SENTENCES["failed"])
+        text = _ERROR_SENTENCES.get(result.get("error") or "failed", _ERROR_SENTENCES["failed"])
+        return text, text
     saved: List[str] = []
     if pending.files:
         sid = chat_session_id or f"{CHANNEL}_task"
         out = bridge.save_files(scope, username, sid, pending.files, origin=CHANNEL)
         if out is None:
-            return ("The Veyllo App answered with a file that VAF refused (it is on the "
+            text = ("The Veyllo App answered with a file that VAF refused (it is on the "
                     "known-bad list); nothing was saved.")
+            return text, text
         saved = out
     prefix = ""
     if len(bridge.connected_devices(scope)) > 1 and not device:
         prefix = f"(Asked {model}, the most recently active device.)\n"
-    return prefix + _fence(model, result.get("text") or "", saved)
+    shown = "\n".join([str(result.get("text") or "").strip()]
+                      + [f"[File: {os.path.basename(p)}]" for p in saved]).strip()
+    return prefix + _fence(model, result.get("text") or "", saved), shown
 
 
 def reset() -> None:

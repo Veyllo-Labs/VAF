@@ -286,11 +286,12 @@ def on_hello(session, hello: Dict[str, Any]) -> None:
     agent = agent_name(row.get("username") or "")
     # `agent_ask` is always taken (protocol section 10: no switch); the protocol's reserved
     # switch message and refusal code for it are never sent. `confirm`: this VAF sends
-    # confirmation cards (section 12) and takes `confirm_answer`.
+    # confirmation cards (section 12) and takes `confirm_answer`. `room`: this VAF sends
+    # `room_msg` to a device that announced the cap `room` and takes `room_say` (room.py).
     session.send_json({"t": "welcome", "v": pr.PROTOCOL_VERSION,
                        "chat": devices.chat_session_id(scope), "account": row.get("username", ""),
                        "agent": agent or "VAF", "server_time": int(time.time()),
-                       "agent_ask": True, "confirm": True, "unpair": True})
+                       "agent_ask": True, "confirm": True, "unpair": True, "room": True})
     _came_online(did)
     replay(session)
     from vaf.core.app_link import confirmations
@@ -305,7 +306,8 @@ def _dropped_notice(row: Dict[str, Any], count: int) -> str:
 
 
 def replay(session) -> int:
-    """The device's due outbox, in order, as ``msg``; first a notice when entries fell out."""
+    """The device's due outbox, in order, as ``msg`` (a room line as ``room_msg``, room.py);
+    first a notice when entries fell out."""
     from vaf.core import channel_message_store as store
     row = session.device
     did = row["device_id"]
@@ -319,6 +321,14 @@ def replay(session) -> int:
                               "text": _dropped_notice(row, dropped)}):
             devices.take_dropped(did)
     for entry in entries:
+        if entry.get("t") == "room":
+            from vaf.core.app_link import room
+            line = room.replay_message(row, entry)
+            if line is None:
+                devices.outbox_ack(did, entry["id"])
+            elif session.send_json(line):
+                sent += 1
+            continue
         message = store.get_message(row.get("username") or "", key, entry["id"], direction="out",
                                     user_scope_id=scope, channel=CHANNEL)
         if message is None:
@@ -379,17 +389,22 @@ def on_message(session, message: Dict[str, Any], files: List[Dict[str, Any]]) ->
         session.close("removed", bye=True)
         return
     t = message["t"]
-    if t in ("msg", "ack", "agent_ask", "confirm_answer"):
+    if t in ("msg", "ack", "agent_ask", "confirm_answer", "room_say"):
         _touch_now_and_then(did, session)
     if t == "msg":
         _on_msg(session, row, message, files)
+    elif t == "room_say":
+        from vaf.core.app_link import room
+        room.on_room_say(session, row, message)
     elif t == "agent_ask":
         _on_agent_ask(session, row, message)
     elif t == "confirm_answer":
         from vaf.core.app_link import confirmations
         confirmations.on_answer(session, row, message)
     elif t == "ack":
-        devices.outbox_ack(did, message["id"])
+        if devices.outbox_ack(did, message["id"]) == "room":
+            from vaf.core.app_link import room
+            room.on_ack(row, message["id"])
         if devices.spool_get(message["id"]) is not None:
             from vaf.core.app_link import spool
             spool.collect()
@@ -422,6 +437,10 @@ def on_message(session, message: Dict[str, Any], files: List[Dict[str, Any]]) ->
             # this connection is answered as refused (confirmations.refused_by_app).
             from vaf.core.app_link import confirmations
             confirmations.refused_by_app(session)
+        elif message.get("code") == "unknown_type" and message.get("ref") == "room_msg":
+            # An app without the room: it is not sent `room_msg` again until it announces it.
+            from vaf.core.app_link import room
+            room.app_lacks_room(row)
 
 
 def _touch_now_and_then(device_id: str, session) -> None:

@@ -46,7 +46,8 @@ MAX_JSON_DEPTH = 4
 # The message types the app may send in a link session, and in a pairing session. The ONE
 # list: the validator, the dispatcher and the tests read it.
 MESSAGE_TYPES_FROM_APP = ("hello", "msg", "ack", "read", "typing", "cancel", "caps",
-                          "task_result", "error", "bye", "agent_ask", "confirm_answer", "unpair")
+                          "task_result", "error", "bye", "agent_ask", "confirm_answer", "unpair",
+                          "room_say")
 PAIR_TYPES_FROM_APP = ("pair",)
 TASK_ERRORS = ("declined", "unavailable", "timeout", "failed")
 PAIR_ERRORS = ("expired", "used", "denied", "bad_csr", "busy")
@@ -421,6 +422,17 @@ def validate_from_app(obj: Dict[str, Any], allowed: Iterable[str] = MESSAGE_TYPE
             raise ProtocolError("bad_field", "text")
         if obj.get("attachments"):
             raise ProtocolError("bad_field", "attachments")
+        return out
+    if t == "room_say":
+        # The app's agent writes into the Veyllo App room (vaf/core/app_link/room.py): text
+        # only in v1, so an announced attachment is refused before any transfer starts.
+        out = {"t": t, "id": _uuid(obj.get("id")), "text": _text(obj.get("text"))}
+        if not out["text"].strip():
+            raise ProtocolError("bad_field", "text")
+        if obj.get("attachments"):
+            raise ProtocolError("bad_field", "attachments")
+        if obj.get("reply_to") is not None:
+            out["reply_to"] = _uuid(obj.get("reply_to"), "reply_to")
         return out
     if t == "confirm_answer":
         # The user's tap on a confirmation card (section 12): the card's id and a real bool,

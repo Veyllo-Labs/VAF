@@ -13,7 +13,11 @@ key minted once, so no scope id ever goes to the phone; the session id is
 ``veyllo_app_<key>``), the per-device outbox of ids still to be delivered (the text stays
 in the channel message store, the one copy), the relay members still to delete
 (``member_tombstones``), and the records of the files held for a device that was away
-(``spool``: name, type, size and hash per message id; the bytes are in spool.py's store).
+(``spool``: name, type, size and hash per message id; the bytes are in spool.py's store),
+and for the Veyllo App room (vaf/core/app_link/room.py) the ids of the room lines a device
+acknowledged (``room_acks``) and how far the account has read the room (``room_seen``). An
+outbox entry of a room line carries its type (``"t": "room"``) and addressee (``"to"``);
+an entry without a type is a stored message, as every entry was before the room.
 
 Under a thread lock plus a file lock, so the CLI's ``vaf devices remove`` and the running
 VAF never write over each other; ``generation()`` lets the running VAF see a change made by
@@ -37,6 +41,8 @@ logger = logging.getLogger(__name__)
 DEVICES_FORMAT = "applink-devices-1-06c31c"
 OUTBOX_MAX = 200
 OUTBOX_MAX_AGE_SECONDS = 7 * 86400
+ROOM_ACKS_MAX = 500
+ROOM_ACKS_MAX_AGE_SECONDS = 30 * 86400
 _LOCK_TIMEOUT_S = 10
 
 _lock = threading.RLock()
@@ -70,7 +76,7 @@ def _locked() -> Iterator[None]:
 
 def _empty() -> Dict[str, Any]:
     return {"format": DEVICES_FORMAT, "devices": [], "chats": {}, "member_tombstones": [],
-            "spool": {}}
+            "spool": {}, "room_acks": {}, "room_seen": {}}
 
 
 def _load() -> Dict[str, Any]:
@@ -96,6 +102,15 @@ def _load() -> Dict[str, Any]:
     spool = state.get("spool")
     out["spool"] = {str(k): dict(v) for k, v in spool.items()
                     if isinstance(v, dict)} if isinstance(spool, dict) else {}
+    # Additive keys of the room, read the same way: absent in an older file.
+    acks = state.get("room_acks")
+    out["room_acks"] = {str(scope): {str(i): float(ts) for i, ts in ids.items()
+                                     if isinstance(ts, (int, float))}
+                        for scope, ids in acks.items()
+                        if isinstance(ids, dict)} if isinstance(acks, dict) else {}
+    seen = state.get("room_seen")
+    out["room_seen"] = {str(scope): float(ts) for scope, ts in seen.items()
+                        if isinstance(ts, (int, float))} if isinstance(seen, dict) else {}
     return out
 
 
@@ -297,9 +312,14 @@ def set_caps(device_id: str, caps: List[str]) -> None:
     _update(device_id, _change)
 
 
-def _outbox_append(row: Dict[str, Any], message_id: str, ts: Optional[float]) -> None:
+def _outbox_append(row: Dict[str, Any], message_id: str, ts: Optional[float],
+                   extra: Optional[Dict[str, str]] = None) -> None:
     box = [e for e in row.get("outbox") or [] if e.get("id") != message_id]
-    box.append({"id": str(message_id), "ts": float(ts if ts is not None else time.time())})
+    entry: Dict[str, Any] = {"id": str(message_id),
+                             "ts": float(ts if ts is not None else time.time())}
+    if extra:
+        entry.update({str(k): str(v) for k, v in extra.items()})
+    box.append(entry)
     overflow = len(box) - OUTBOX_MAX
     if overflow > 0:
         box = box[overflow:]
@@ -313,7 +333,8 @@ def outbox_add(device_id: str, message_id: str, ts: Optional[float] = None) -> N
 
 def outbox_publish(user_scope_id: Any, device_ids: List[str], message_id: str, *,
                    ts: Optional[float] = None, spool: Optional[Dict[str, Any]] = None,
-                   keep: int = 0) -> List[str]:
+                   keep: int = 0, kind: Optional[str] = None,
+                   to: Optional[str] = None) -> List[str]:
     """A stored message's outbox entry for each of ``device_ids`` and, for a message carrying
     a file, that file's record (``spool``), in ONE write of the device list. A replay reading
     the list in between would otherwise see the entry without its file and send the text
@@ -328,8 +349,10 @@ def outbox_publish(user_scope_id: Any, device_ids: List[str], message_id: str, *
     window that remains is the lock acquisition itself; a row removed in it is caught under
     the lock. When no device row takes an entry, nothing is written: the file is not
     recorded, so it cannot push out another message's pending file, and its own id is
-    returned so its staged bytes go."""
+    returned so its staged bytes go. ``kind`` types the entry (``"room"``: a line of the
+    Veyllo App room, with its addressee ``to``); without it the entry is a stored message."""
     wanted = {str(d) for d in device_ids}
+    extra = {"t": kind, **({"to": to} if to else {})} if kind else None
     ids = {row["device_id"] for row in all_devices()
            if row["device_id"] in wanted and row_stands(row)} if wanted else set()
     with _locked():
@@ -338,19 +361,90 @@ def outbox_publish(user_scope_id: Any, device_ids: List[str], message_id: str, *
         if not rows:
             return [str(message_id)] if spool else []
         for row in rows:
-            _outbox_append(row, message_id, ts)
+            _outbox_append(row, message_id, ts, extra)
         evicted = _spool_record(state, user_scope_id, message_id, spool, keep) if spool else []
         _save(state)
         return evicted
 
 
-def outbox_ack(device_id: str, message_id: str) -> bool:
+def outbox_ack(device_id: str, message_id: str) -> str:
+    """Take an entry out of the device's outbox. The kind of the entry removed (``"msg"`` for
+    a stored message, ``"room"`` for a room line), or ``""`` when the outbox held no such id."""
     def _change(row):
         box = row.get("outbox") or []
-        kept = [e for e in box if e.get("id") != str(message_id)]
-        row["outbox"] = kept
-        return len(kept) != len(box)
-    return bool(_update(device_id, _change))
+        gone = [e for e in box if e.get("id") == str(message_id)]
+        row["outbox"] = [e for e in box if e.get("id") != str(message_id)]
+        return str(gone[0].get("t") or "msg") if gone else ""
+    return str(_update(device_id, _change) or "")
+
+
+def outbox_drop_kind(device_id: str, kind: str) -> int:
+    """Remove every entry of one kind from the device's outbox (an app that turned out not to
+    know that kind). How many."""
+    def _change(row):
+        box = row.get("outbox") or []
+        row["outbox"] = [e for e in box if e.get("t") != kind]
+        return len(box) - len(row["outbox"])
+    return int(_update(device_id, _change) or 0)
+
+
+def held_in_outbox(user_scope_id: Any, message_id: str) -> bool:
+    """Whether a device of the account still holds the id in its outbox."""
+    mid = str(message_id)
+    return any(e.get("id") == mid for row in for_scope(user_scope_id)
+               for e in row.get("outbox") or [])
+
+
+def drop_cap(device_id: str, cap: str) -> None:
+    """Forget one capability of a device until its next ``hello`` or ``caps`` says it again."""
+    def _change(row):
+        row["caps"] = [c for c in row.get("caps") or [] if c != cap]
+    _update(device_id, _change)
+
+
+# ── the Veyllo App room's records (room.py) ──────────────────────────────────
+
+def room_ack_record(user_scope_id: Any, line_id: str, now: Optional[float] = None) -> None:
+    """A device acknowledged a room line of the account: kept ``ROOM_ACKS_MAX_AGE_SECONDS``,
+    at most ``ROOM_ACKS_MAX`` per account, the oldest going first."""
+    scope = _scope(user_scope_id)
+    if not scope:
+        return
+    now = time.time() if now is None else now
+    with _locked():
+        state = _load()
+        mine = {k: v for k, v in state["room_acks"].get(scope, {}).items()
+                if now - v <= ROOM_ACKS_MAX_AGE_SECONDS}
+        mine[str(line_id)] = now
+        if len(mine) > ROOM_ACKS_MAX:
+            mine = dict(sorted(mine.items(), key=lambda kv: kv[1])[-ROOM_ACKS_MAX:])
+        state["room_acks"][scope] = mine
+        _save(state)
+
+
+def room_acked(user_scope_id: Any) -> Dict[str, float]:
+    """The account's acknowledged room lines (id -> when)."""
+    with _lock:
+        return dict(_load()["room_acks"].get(_scope(user_scope_id), {}))
+
+
+def room_seen(user_scope_id: Any) -> float:
+    """How far the account has read the room (the time of the newest line it saw)."""
+    with _lock:
+        return float(_load()["room_seen"].get(_scope(user_scope_id), 0.0))
+
+
+def set_room_seen(user_scope_id: Any, ts: float) -> None:
+    """Move the account's read position in the room forward (never back)."""
+    scope = _scope(user_scope_id)
+    if not scope:
+        return
+    with _locked():
+        state = _load()
+        if float(state["room_seen"].get(scope, 0.0)) >= float(ts):
+            return
+        state["room_seen"][scope] = float(ts)
+        _save(state)
 
 
 def outbox_due(device_id: str, now: Optional[float] = None) -> Tuple[List[Dict[str, Any]], int]:

@@ -60,11 +60,22 @@ command's output (`eval "$(...)"`, `source <(...)`, `bash <<< "$(...)"`, a descr
 by one or opened by an earlier command, _script_input) is `opaque_command` too, a literal
 here-string fed to a shell is read as shell text, and every opaque refusal names the way
 out for its shape (_OPAQUE_REASONS). Every `$((` is read both ways, as arithmetic and as a
-command, since a `#` comment or a backtick moves where bash closes it. An array
-assignment's elements (`arr=($(ls))`) are words, not a program. Every reading spends from one budget per call (MAX_NESTED_COMMANDS), and a runner's
-candidates and the readings of a `$((`, each nearly the whole text again, from a second
-one in characters (_RUNNER_TEXT_SLACK); the fork-bomb search is three plain searches. The
-work stays linear in the command's length.
+command, since a `#` comment or a backtick moves where bash closes it; so is an arithmetic
+command `(( ... ))`. An array assignment's elements (`arr=($(ls))`) are words, not a
+program. Every reading spends from one budget per call (MAX_NESTED_COMMANDS), and a
+runner's candidates and the readings of a `$((`, each nearly the whole text again, from a
+second one in characters (_RUNNER_TEXT_SLACK); the fork-bomb search is three plain
+searches. The readings stay linear in the command's length; shlex's own tokenizer is not
+on one word of hundreds of kilobytes (`x=` repeated: 20 s at 1 MB, the same before), so a
+command over _MAX_COMMAND_BYTES (128 KB) is refused as unreadable before it is read.
+
+Every verdict is joined with the FROZEN reading (vaf/core/command_reading_frozen.py, the
+check as it read commands before substitutions were carried): the command is refused
+whenever either reading refuses, with both readings' categories
+(_join_the_frozen_reading). This reading may therefore only add refusals; every other
+construction of a new reading lost some that bash runs, one corner at a time, each found
+by generated commands. Its price: what the frozen reading over-refused stays refused
+(`echo 'a; $(x)'`, words after a closed substitution such as `echo $(true) rm -rf /`).
 
 NAMED BOUNDARY: the shell's compound grammar is not read at the top level: brace groups
 (`curl x | { bash; }`), `if`/`for`/`while`/`case`, variables and `${...}` as the program,
@@ -76,9 +87,12 @@ here-string or a substitution is not read: a literal piped in (`echo '...' | bas
 earlier command wrote and a later one runs. Arithmetic evaluates an array subscript held in
 a variable as code (`x='a[$(...)]'; echo $((x))`, `printf -v 'a[$(...)]' v`), which the
 text does not show. The reserved word `case` where a command starts inside a substitution
-refuses the command, since a pattern's `)` would close the substitution early, whatever
-follows; the word elsewhere does not (also not a line of a heredoc body that starts with
-it inside a substitution: that line is refused, see below).
+refuses the command, since a pattern's `)` would close the substitution early: `case`, one
+shell word (quote-aware) and `in`. The word elsewhere, also at the start of a line of prose
+("case 2 is covered"), does not. Carriers the check does not step over (`flock`, `strace`,
+`chroot`, `busybox`, `runuser`, `coproc`, `find -exec`, `watch`) hide the command they run,
+also behind a substitution (`flock f $(true) cmd`), as their plain forms did before; a
+descriptor named through a variable (`exec {fd}< ...; bash /dev/fd/$fd`) is not followed.
 
 NAMED BOUNDARY, comments and heredocs: a `#` is not read as a comment and `<<` opens no
 heredoc, so nothing is ever hidden from the check by either: every line of a heredoc body
@@ -86,9 +100,10 @@ is read as a command line, and dangerous-looking prose in a body is refused
 (`cat <<'EOF'` with "rm -rf /" in its text). The other side of that: an apostrophe in a
 comment or in a heredoc body opens a quote that swallows every later line (`echo hi #
 it's` then a second line), and a comment that ends in a backslash joins the next line to it
-(`echo hi #\\` then a second line). Design rule for any reading of these: a new reading of the
-shell's grammar may only ADD refusals to the existing reading, never remove one; classify
-both readings, and refuse if either refuses. A lexer that hid comments and heredoc bodies
+(`echo hi #\\` then a second line). A heredoc line is refused when it STARTS with what
+reads as a command (`rm -rf / was the bug`), not when it only mentions one. Design rule for
+any reading of these, now held by the frozen reading: a new reading may only ADD refusals
+to the existing reading, never remove one. A lexer that hid comments and heredoc bodies
 from the check was measured to lose refusals that bash runs.
 
 Python that moves files over FTP is the same `ftp_transfer` as an FTP client
@@ -115,6 +130,7 @@ Stdlib-only on purpose - it is imported on the dispatch hot path.
 """
 from __future__ import annotations
 
+import posixpath
 import re
 import shlex
 from dataclasses import dataclass, field
@@ -226,9 +242,6 @@ _PROTECTED_ROOTS = ("/", "/*", "/bin", "/boot", "/dev", "/etc", "/home", "/lib",
                     "/usr", "/var", "~", "~/", "$HOME", "${HOME}", "c:\\", "c:/")
 
 _WHITESPACE_RE = re.compile(r"\s+")
-# A substitution where a command starts, read over the raw text, line by line (the reading
-# this check had before substitutions were carried; _substitution_starts_a_command).
-_SUBST_AT_COMMAND_RE = re.compile(r"(?:^|[;&|\n])[ \t]*(\$\(|`)")
 _DEVICE_TARGET_RE = re.compile(r"of=/dev/(sd|nvme|hd|vd|mmcblk|disk)", re.IGNORECASE)
 _REDIRECT_DEVICE_RE = re.compile(r">\s*/dev/(sd|nvme|hd|vd|mmcblk|disk)", re.IGNORECASE)
 # Where a command substitution stood in its segment (_split_segments). Bare, its output is
@@ -244,6 +257,14 @@ _SUBST_PROC = "\x02"
 # positions in full made `npx --x y --x y ...` cost 64 readings of the whole command
 # (measured: 100 KB in 10 s, 1 MB in 78 s).
 _RUNNER_TEXT_SLACK = 64 * 1024
+# The frozen reading's readings, scaled to the text's length: as many as fit into this much
+# text read in all, at least _FROZEN_MIN_READINGS, at most MAX_NESTED_COMMANDS.
+_FROZEN_TEXT_BUDGET = 256 * 1024
+# The longest command the check reads at all. A person approving a command cannot read more
+# than this either, and both readings together, with shlex's own tokenizer quadratic on one
+# long word, took up to 44 s at 1 MB (measured); a longer command is refused as unreadable.
+_MAX_COMMAND_BYTES = 128 * 1024
+_FROZEN_MIN_READINGS = 2
 
 CATEGORY_REASONS = {
     "pipe_to_shell": "downloads code from the network and pipes it into a shell",
@@ -260,6 +281,8 @@ CATEGORY_REASONS = {
                       "plain `python3 -V`)",
     "nested_too_deep": "carries more nested commands than anyone can review, or nests them "
                        "too deep; split it into several commands",
+    "too_long": "is longer than anyone can review before it runs; write the text to a file "
+                "with the file tool and run the file",
     "remote_login": "logs in to another machine with this computer's own SSH setup; use the "
                     "ssh tool, which keeps each account's key and servers apart and answers "
                     "the password prompt",
@@ -283,16 +306,21 @@ _OPAQUE_REASONS = {
     "descriptor": "runs a script from a descriptor an earlier command opened, so the text being "
                   "approved does not show what runs; save the script to a file, read it, then "
                   "run the file",
-    "option_value": "hands a runner option a value from a command substitution, a word the "
+    "option_value": "hands a runner option a value from a command substitution, words the "
                     "runner may also start as its program; write a long option's value with "
-                    "`=` (`--with=$(cat r)`, `--directory=$(pwd)`), or run the substitution "
-                    "first and write the value in",
+                    "`=` and in double quotes (`--with=\"$(cat r)\"`, "
+                    "`--directory=\"$(pwd)\"`), or run the substitution first and write the "
+                    "value in",
     "env_values": "takes its variables and program from a command substitution, so the text "
                   "being approved is not the text that will run; load a .env file with "
                   "`set -a; . ./.env; set +a; make`",
     "arith_backtick": "uses a backtick inside `$(( ))`, where bash may run the text as a command "
                       "instead of evaluating it; write `$(...)` instead of the backticks "
                       "(`echo $(( $(date +%s) - 10 ))`)",
+    "lines": "takes its program name from a command substitution at the start of a line or "
+             "after a separator, so the text being approved is not the text that will run; "
+             "if it is text spanning lines (a continued line, quoted text, a heredoc or a "
+             "code block), join the lines, or write the text to a file",
     "unreadable": "has a `case` statement inside a substitution, which this check cannot "
                   "read; write the case as a command of its own",
 }
@@ -307,14 +335,14 @@ _WAY_OUT = {
 # What each profile refuses outright. Everything else in CATEGORY_REASONS is a note.
 _BLOCKING = {
     "host": ("fork_bomb", "device_write", "destructive_removal", "pipe_to_shell",
-             "opaque_command", "nested_too_deep", "remote_login", "ftp_transfer"),
+             "opaque_command", "nested_too_deep", "remote_login", "ftp_transfer", "too_long"),
     # The jail has no network and its workspace is disposable; only what reaches the
     # machine or the jail root is refused.
     "jailed": ("fork_bomb", "device_write", "destructive_removal", "opaque_command",
-               "nested_too_deep"),
+               "nested_too_deep", "too_long"),
     # Another machine: see the module docstring for why the fetch-into-shell is only named.
     "remote": ("fork_bomb", "device_write", "destructive_removal", "opaque_command",
-               "nested_too_deep"),
+               "nested_too_deep", "too_long"),
 }
 
 
@@ -404,7 +432,7 @@ def _split_segments(command: str) -> List[tuple]:
         else:
             sub_kind, sub_buf, sub_case = kind, [], False
             arith_closed, arith_clean, arith_tainted = False, False, False
-            if kind in ("command", "arithmetic"):
+            if kind in ("command", "arithmetic") and opener != "(":
                 buf.append(_SUBST_QUOTED if closer.startswith('"') else _SUBST_BARE)
             elif kind in ("process_in", "process_out"):
                 buf.append(_SUBST_PROC)
@@ -496,6 +524,8 @@ def _split_segments(command: str) -> List[tuple]:
                 kind = "process_in" if buf.pop() == "<" else "process_out"
             elif not depth_stack and _ARRAY_ASSIGNMENT_RE.search("".join(buf[-80:])):
                 kind = "array"              # `arr=(...)`: its elements are words
+            elif not depth_stack and nxt == "(" and _starts_a_command("".join(buf[-80:])):
+                kind = "arithmetic"         # `(( ... ))`, the arithmetic command
             _open(")", kind, "(")
             i += 1
             continue
@@ -510,7 +540,7 @@ def _split_segments(command: str) -> List[tuple]:
             i += 1
             continue
         if depth_stack:
-            if ch == "c" and _CASE_WORD_RE.match(command, i) and _command_position(sub_buf):
+            if ch == "c" and _is_case_statement(command, i) and _command_position(sub_buf):
                 sub_case = True
             elif ch == "#" and sub_kind == "arithmetic":
                 arith_tainted = True        # a comment moves where bash closes `$((`
@@ -544,9 +574,38 @@ def _split_segments(command: str) -> List[tuple]:
     return [(c, seg, carried) for c, seg, carried in segments if seg or carried]
 
 
-# The reserved word `case` as a word of its own; where a command starts (_command_position)
-# it opens a statement whose pattern's `)` closes a substitution early, whatever follows.
-_CASE_WORD_RE = re.compile(r"case(?=[\s;]|$)")
+def _is_case_statement(command: str, i: int) -> bool:
+    """`case WORD in` at `i`: the reserved word, exactly one shell word (quote-aware, so
+    `"a b"` is one), and `in`, blanks and newlines between. Where a command starts
+    (_command_position) such a statement's pattern `)` closes a substitution early. A line
+    that merely starts with the word ("case 2 is covered") is no statement."""
+    n = len(command)
+    if not command.startswith("case", i):
+        return False
+    k = i + 4
+    if k < n and not command[k].isspace():
+        return False
+    while k < n and command[k].isspace():
+        k += 1
+    start = k
+    while k < n and not command[k].isspace() and command[k] not in ";&|()<>":
+        if command[k] in ("'", '"'):
+            close = command.find(command[k], k + 1)
+            k = n if close < 0 else close + 1
+            continue
+        k += 2 if command[k] == "\\" else 1
+    if k == start:
+        return False
+    while k < n and command[k].isspace():
+        k += 1
+    return command.startswith("in", k) and (k + 2 >= n or command[k + 2].isspace()
+                                             or command[k + 2] == ";")
+
+
+def _starts_a_command(tail: str) -> bool:
+    """Whether the next word after `tail` (text before it on the same level) is a command."""
+    tail = tail.rstrip(" \t")
+    return not tail or tail[-1] in ";&|(\n`" or tail.split()[-1] in _COMMAND_LEADERS
 # Words after which the next word is a command.
 _COMMAND_LEADERS = frozenset({"if", "elif", "while", "until", "then", "else", "do", "{", "!",
                               "time"})
@@ -557,10 +616,7 @@ _ARRAY_ASSIGNMENT_RE = re.compile(r"(?:^|[\s;&|(])[A-Za-z_][A-Za-z0-9_]*(?:\[[^\
 
 def _command_position(sub_buf: List[str]) -> bool:
     """Whether the next word of a substitution's text stands where a command starts."""
-    tail = "".join(sub_buf[-40:]).rstrip(" \t")
-    if not tail or tail[-1] in ";&|(\n`":
-        return True
-    return tail.split()[-1] in _COMMAND_LEADERS
+    return _starts_a_command("".join(sub_buf[-40:]))
 
 
 def _dollar_kind(command: str, i: int) -> str:
@@ -1016,6 +1072,12 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
     if not text:
         return verdict
     if _budget is None:
+        if len(text) > _MAX_COMMAND_BYTES:
+            verdict.blocked = True
+            verdict.categories = ["too_long"]
+            verdict.reason = ("Command contains a forbidden pattern: it "
+                              + CATEGORY_REASONS["too_long"])
+            return verdict
         _budget = [MAX_NESTED_COMMANDS, len(text) + _RUNNER_TEXT_SLACK]
     # Every call spends from the budget, a refused one too: a refusal that cost nothing
     # let a runner at the depth limit try each of its value positions, each one joined
@@ -1035,9 +1097,6 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
 
     if _is_fork_bomb(text):
         cats.append("fork_bomb")
-    if not _arithmetic and _substitution_starts_a_command(text):
-        cats.append("opaque_command")
-        opaque_shape = "program"
 
     # What a nested command found. A refusal inside refuses the whole; a remote command's
     # categories are shown but judged by the remote profile, not by this one.
@@ -1062,7 +1121,11 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
         # what runs. Judged at the program word itself, so a wrapper, a `VAR=` prefix or a
         # runner in front (`env $(echo rm) -rf /`) changes nothing, while one in an argument
         # or a wrapper option's value (`sudo -u $(whoami) ls`) is ordinary.
-        if exe_at >= 0 and "opaque_command" not in cats and not _arithmetic:
+        # A line that starts with `-` and no wrapper (a Markdown bullet in a heredoc body,
+        # ``- `parse()` returns None``): bash runs `-`, which no system has; the word after it
+        # is no program. The other checks still read past it, as they did before.
+        if (exe_at >= 0 and "opaque_command" not in cats and not _arithmetic
+                and not toks[0].startswith("-")):
             word = toks[exe_at]
             if (_SUBST_BARE in word or _SUBST_PROC in word
                     or _SUBST_QUOTED in word.rsplit("/", 1)[-1]):
@@ -1070,6 +1133,16 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
                 opaque_shape = opaque_shape or (
                     "env_values" if any(_exe_base(t) == "env" for t in toks[:exe_at])
                     else "program")
+        # A runner's own option with an unquoted substitution as its value (`uv run
+        # --with=$(cat r) pytest`): the value is split into words, and the runner reads the
+        # words after the first as more of its arguments, a command among them. Quoted
+        # (`--with="$(cat r)"`) it is one value.
+        if exe_at >= 0 and "opaque_command" not in cats and not _arithmetic:
+            candidates = _runner_commands(exe, args)
+            if candidates and any(t.startswith("-") and _SUBST_BARE in t
+                                  for t in args[:max(candidates)]):
+                cats.append("opaque_command")
+                opaque_shape = opaque_shape or "option_value"
         # A shell or interpreter that runs another command's OUTPUT as its script: through a
         # process substitution or a here-string holding a substitution, or a descriptor fed
         # by one (`source <(pyenv init -)`, `bash <<< "$(...)"`, `. /dev/fd/3 3< <(...)`), or
@@ -1241,54 +1314,57 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
         verdict.opaque_shape = opaque_shape or "program"
     if blocking:
         verdict.blocked = True
-        first = blocking[0]
-        text = CATEGORY_REASONS[first]
-        if first == "opaque_command":
-            text = _OPAQUE_REASONS.get(verdict.opaque_shape, text)
-        text += _WAY_OUT.get(first, "")
-        verdict.reason = f"Command contains a forbidden pattern: it {text}"
+        verdict.reason = _refusal(blocking[0], verdict.opaque_shape, text)
     elif nested_refusal:
         verdict.blocked = True
         verdict.reason = nested_refusal
+    if _depth == 0:
+        _join_the_frozen_reading(verdict, text, profile)
     return verdict
 
 
-def _substitution_starts_a_command(text: str) -> bool:
-    """A substitution where a command starts (at the start of the text, of a line, or after
-    `;`, `&`, `|`), read over the raw text with the quotes of its own line only.
+def _refusal(category: str, opaque_shape: str, text: str) -> str:
+    """The refusal sentence for `category`, with the way out where one exists."""
+    sentence = CATEGORY_REASONS[category]
+    if category == "opaque_command":
+        if opaque_shape == "program" and "\n" in text:
+            opaque_shape = "lines"          # a code fence or a continued line, not a program
+        sentence = _OPAQUE_REASONS.get(opaque_shape, sentence)
+    sentence += _WAY_OUT.get(category, "")
+    if "<<" in text.replace("<<<", ""):
+        # A heredoc's lines are read as command lines: the check reads no heredoc.
+        sentence += ("; this check reads every line of a heredoc as a command line, so to "
+                     "write such text into a file use the file tool or "
+                     "`echo '...' >> FILE`")
+    return f"Command contains a forbidden pattern: it {sentence}"
 
-    This is the reading the check had before substitutions were carried, kept as a SECOND
-    reading that can only add a refusal: the carried reading follows the quotes over the
-    whole text, so an apostrophe in a comment or a heredoc body (`echo hi # it's` on one
-    line, `$(echo rm) -rf /` on the next) hid the next line's substitution from it, while
-    bash runs it. A substitution inside a quote that opens and closes on its own line is text
-    (`echo 'a; $(x)'`). One pass over the text."""
-    if "$(" not in text and "`" not in text:
-        return False
-    # Positions inside a quote that opens and closes on the same line.
-    quoted = bytearray(len(text))
-    line_start = 0
-    while line_start <= len(text):
-        end = text.find("\n", line_start)
-        end = len(text) if end < 0 else end
-        k, quote, opened = line_start, "", -1
-        while k < end:
-            ch = text[k]
-            if quote:
-                if ch == "\\" and quote == '"':
-                    k += 2
-                    continue
-                if ch == quote:
-                    quoted[opened:k + 1] = b"\x01" * (k + 1 - opened)
-                    quote = ""
-            elif ch == "\\":
-                k += 2
-                continue
-            elif ch in ("'", '"'):
-                quote, opened = ch, k
-            k += 1
-        line_start = end + 1
-    return any(not quoted[m.start(1)] for m in _SUBST_AT_COMMAND_RE.finditer(text))
+
+def _join_the_frozen_reading(verdict: CommandVerdict, text: str, profile: str) -> None:
+    """Refuse whenever the frozen reading (vaf/core/command_reading_frozen.py, the check as
+    it read commands before substitutions were carried) refuses, with its categories.
+    This reading may only add refusals to it, never lose one: every reading that cut a
+    command differently lost some, and only a union makes that impossible by construction."""
+    from vaf.core import command_reading_frozen
+    # Its nested readings each read the rest of the text again (a runner's candidates); its
+    # own bound counts readings only, so a long command gets fewer of them. A spent budget
+    # refuses (nested_too_deep), so a smaller one can only add refusals.
+    budget = max(_FROZEN_MIN_READINGS,
+                 min(MAX_NESTED_COMMANDS, _FROZEN_TEXT_BUDGET // max(1, len(text))))
+    frozen = command_reading_frozen.classify_command(text, profile=profile, _budget=[budget])
+    verdict.categories.extend(c for c in frozen.categories if c not in verdict.categories)
+    if verdict.blocked or not frozen.blocked:
+        return
+    verdict.blocked = True
+    first = next((c for c in frozen.categories
+                  if c in _BLOCKING.get(profile, _BLOCKING["host"])), "")
+    if not first:
+        verdict.reason = frozen.reason
+        return
+    if first == "opaque_command":
+        # The frozen reading refuses a substitution at the start of a line or after a
+        # separator, also in text that spans lines.
+        verdict.opaque_shape = verdict.opaque_shape or "program"
+    verdict.reason = _refusal(first, verdict.opaque_shape, text)
 
 
 def _is_fork_bomb(text: str) -> bool:
@@ -1318,7 +1394,7 @@ def _value_from_substitution(args: List[str]) -> bool:
 # run a file in the current shell.
 _STDIN_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "source", "."})
 # A script path that is this process's input or one of its descriptors.
-_DESCRIPTOR_RE = re.compile(r"^(?:-|/dev/stdin|/dev/fd/\d+|/proc/self/fd/\d+)$")
+_DESCRIPTOR_RE = re.compile(r"^(?:-|/dev/stdin|/dev/fd/\d+|/proc/[^/]+/fd/\d+)$")
 # A redirection operator standing as a word of its own (`<`, `3<`, `2>`, `>>`, `&>`).
 _REDIRECT_RE = re.compile(r"^\d*(?:<|>|>>|<>|>&|<&|&>|&>>)$")
 
@@ -1341,6 +1417,7 @@ def _script_input(exe: str, args: List[str]) -> tuple:
     script = None
     from_stdin = False
     proc_fed = False
+    stdin_fd = ""                           # `<&3`: the input is descriptor 3
     opened = set()
     here_words: List[str] = []
     pos = 0
@@ -1352,31 +1429,46 @@ def _script_input(exe: str, args: List[str]) -> tuple:
             pos += 2
             continue
         if _REDIRECT_RE.match(tok):
-            if tok.endswith("<") or tok.endswith("<>"):
+            if tok.endswith("<&") and tok[:-2] in ("", "0"):
+                stdin_fd = nxt
+            elif tok.endswith("<") or tok.endswith("<>"):
                 opened.add(tok.rstrip("<>") or "0")
                 proc_fed = proc_fed or nxt == _SUBST_PROC
             pos += 2
             continue
         if tok[:1] in "<>" or (tok[:1].isdigit() and tok.lstrip("0123456789")[:1] in ("<", ">")):
-            if tok[:1].isdigit() and "<" in tok:
+            dup = _STDIN_DUP_RE.match(tok)
+            if dup:
+                stdin_fd = dup.group(1)
+            elif tok[:1].isdigit() and "<" in tok:
                 opened.add(tok[:len(tok) - len(tok.lstrip("0123456789"))])
             pos += 1                       # `2>/dev/null`, `<file`: an attached redirection
             continue
-        if script is None and tok.startswith(("-", "+")) and tok not in ("-", "--"):
+        # `--` is no script (`bash -- <<< ...` reads its input); an option-looking word after
+        # it is still read as an option, the side that reads the input.
+        if script is None and tok.startswith(("-", "+")) and tok != "-":
             letters = tok[1:] if not tok.startswith("--") else ""
             if any(c in inline for c in letters):
                 return "", []               # code given inline: read elsewhere (`bash -c`)
             from_stdin = from_stdin or (shell and "s" in letters)
-            pos += 2 if tok in _SHELL_VALUE_OPTIONS else 1
+            # A value option never takes a redirection or a here-string as its value.
+            takes_value = (tok in _SHELL_VALUE_OPTIONS and not _HERE_OPERATOR_RE.match(nxt)
+                           and not _REDIRECT_RE.match(nxt) and nxt[:1] not in ("<", ">"))
+            pos += 2 if takes_value else 1
             continue
         if script is None:
             script = tok
         pos += 1
     if script == _SUBST_PROC:
         return "output", []
-    fd = _FD_PATH_RE.match(script or "")
+    path = posixpath.normpath(script) if script and script.startswith("/") else (script or "")
+    fd = _FD_PATH_RE.match(path)
     if fd and int(fd.group(1)) > 2 and fd.group(1) not in opened:
         return "descriptor", []
+    if (script is None or from_stdin or path in ("/dev/stdin", "-")) and stdin_fd.isdigit() \
+            and int(stdin_fd) > 2 and stdin_fd not in opened:
+        return "descriptor", []             # `bash <&3`: descriptor 3, opened earlier
+    script = path or script
     if exe in ("source", "."):
         from_input = script is not None and bool(_DESCRIPTOR_RE.match(script))
     else:
@@ -1391,7 +1483,9 @@ def _script_input(exe: str, args: List[str]) -> tuple:
 # The here-string operator, with its descriptor (`<<<`, `0<<<`).
 _HERE_OPERATOR_RE = re.compile(r"^\d*<<<$")
 # A descriptor path and its number.
-_FD_PATH_RE = re.compile(r"^/(?:dev|proc/self)/fd/(\d+)$")
+_FD_PATH_RE = re.compile(r"^/(?:dev|proc/[^/]+)/fd/(\d+)$")
+# Input taken from another descriptor (`<&3`, `0<&3`).
+_STDIN_DUP_RE = re.compile(r"^0?<&(\d+)$")
 # A shell's options that take the next word as their value (`bash -O extglob`).
 _SHELL_VALUE_OPTIONS = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
 # The tools whose shell setup is commonly run through `eval "$(...)"` or `source <(...)`;

@@ -132,11 +132,17 @@ def test_web_server_history_update_consumes_the_primitive() -> None:
     assert re.search(r"active\s*=\s*_session_is_active\(", helper), (
         "the history_update activity helper no longer takes isActive from _session_is_active"
     )
-    sites = src.count("**_session_activity(")
-    assert sites == 3, (
-        f"expected the three history_update sites built from the stored transcript to use "
-        f"_session_activity, found {sites}"
+    # Every history_update built from the stored transcript takes its activity from that
+    # helper: the forget repaint directly, load_session and the connect-time auto-load through
+    # _live_history_update, which also hands the queue's answer to the live record.
+    assert src.count("**_session_activity(") == 1, "the forget repaint"
+    live = src[src.index("def _live_history_update("):src.index("async def _send_live_view(")]
+    assert "activity = _session_activity(sid)" in live and "**activity" in live, (
+        "the load/auto-load history_update no longer takes isActive from _session_activity"
     )
+    assert '"isActive":' not in live, "the load/auto-load builder computes isActive by hand"
+    assert src.count("_live_history_update(loaded, sid)") == 1, "load_session"
+    assert src.count("_live_history_update(loaded, sid, autoLoad=True)") == 1, "the auto-load"
     assert not re.search(
         r"latest_state\.get\(\"status\"\)\s*!=\s*\"idle\"", src
     ), (

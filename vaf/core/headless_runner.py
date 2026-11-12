@@ -1280,9 +1280,11 @@ def refuse_turn_without_backend(task, why: str, session_mgr) -> None:
         if text:
             # With its turn id, like every stored question: the live record keeps the prompt
             # until the turn leaves the queue and recognises the stored copy by it.
+            # The metadata only when there is a turn id, so the question and the refusal are
+            # stored whatever add_message a session object offers.
             _tid = getattr(task, "turn_id", None)
             session.add_message(role="user", content=text,
-                                metadata=({TURN_ID_KEY: str(_tid)} if _tid else None))
+                                **({"metadata": {TURN_ID_KEY: str(_tid)}} if _tid else {}))
         session.add_message(role="assistant", content=why)
         session_mgr.save(session, sync_state=False)
     except Exception as e:
@@ -1614,7 +1616,7 @@ def worker_status():
 
 
 class _TurnEndingQueue:
-    """The task queue as the runner loop uses it, plus one duty: every way a web turn leaves the
+    """The task queue as the runner loop uses it, plus one duty: every way a chat turn leaves the
     queue tells the chat's live record (`vaf/core/live_view.py`), whichever exit calls
     `task_done` (the normal end, a revoked account, a failed load, a refused or dropped turn).
     Before this, only the normal end did, and the other exits left the prompt on record, where a
@@ -1638,8 +1640,8 @@ class _TurnEndingQueue:
     def task_done(self, *args, **kwargs):
         task = kwargs.get("task") or (args[0] if args else None) or self._task
         try:
-            if (task is not None and getattr(task, "source", None) == "web"
-                    and not is_system_command(task)):
+            # Every chat turn, web and messenger alike: both write to the chat's record.
+            if task is not None and not is_system_command(task):
                 get_web_interface().turn_left_queue(getattr(task, "session_id", None),
                                                     getattr(task, "turn_id", None))
         except Exception:

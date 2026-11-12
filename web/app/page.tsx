@@ -5176,6 +5176,10 @@ function VAFDashboardContent() {
         const next = beginSend(appRoomSendRef.current, text, resendOf);
         if (!next) return;
         appRoomSendRef.current = next;
+        // Sending is "take me to my line", as in a chat: the view follows the sending row from
+        // here, wherever the person was reading. Scrolling up DURING the send still holds the
+        // view (the scroll listener, and `goToTakenLine` at the answer).
+        isAtBottomRef.current = true;
         setAppRoomSending(next);
         setAppRoomError('');
         const sentFrom = roomViewRef.current?.room.roomId ?? null;

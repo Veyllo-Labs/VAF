@@ -477,9 +477,10 @@ agent in their Veyllo App and the VAF agent; its rules are in
   the socket is open). If one holds that id the box clears; otherwise the text stays and the
   page says that no answer came in time and to send it again if the line does not appear.
   The page keeps watching after that: when the line still turns up the notice goes, and the
-  box clears too if it still holds exactly the line's text (`lateLine`, `lateEffect`). When the
-  room takes a line, the view goes to it only if it was at the bottom; a reader who scrolled up
-  meanwhile stays where they are (`goToTakenLine`). A question to the VAF agent reads
+  box clears too if it still holds exactly the line's text (`lateLine`, `lateEffect`). Sending is
+  "take me to my line", as in a chat: the view follows the sending row from wherever the person
+  was reading. When the room takes the line, the view goes to it only if it is still at the
+  bottom; a reader who scrolled up during the send stays where they are (`goToTakenLine`). A question to the VAF agent reads
   "waiting for the answer" until it is answered. A file dropped on the room is refused with the
   sentence that the room carries text only. A turn nobody typed is never shown under the
   person's name: a fired timer, a finished background command, a sent draft and a

@@ -286,6 +286,17 @@ def test_the_give_up_listeners_see_every_veyllo_app_transcript():
     assert "lateLine(" in listeners
 
 
+def test_a_room_send_rearms_the_follow_like_a_chat_send():
+    """Sending in the room is "take me to my line", as a chat send is (pinned for the chat in
+    tests/test_chat_autoscroll_guard.py): a reader who scrolled up BEFORE typing sees their
+    line and the sending row. The anchor is re-armed in the same block that puts the line on
+    its way, before the sending state renders. MUTATION: drop the re-arm - red."""
+    sender = _code_only(_between(PAGE, "const sendToAppRoom = async (text: string, resendOf?: string) => {",
+                                 "\n    };\n"))
+    rearm = sender.index("isAtBottomRef.current = true;")
+    assert sender.index("appRoomSendRef.current = next;") < rearm < sender.index("setAppRoomSending(next);")
+
+
 def test_the_room_details_read_on_a_phone():
     """MUTATION: let "Send again" wrap or shrink its hit area on a phone, drop the word or the
     status role of a waiting question, or put the draft cards back into the chat's gutter -

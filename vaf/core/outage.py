@@ -17,9 +17,10 @@ heartbeat reports into the same instance).
 
 Named boundary: not on the public facade (vaf/__init__.py). Both users are VAF's own
 services on fixed local ports, and an embedder never dials either; no embedder-facing code
-has been measured hand-rolling such a pause, and docs/EMBEDDING.md names no hot path that
-dials a local service. Promote it when a facade primitive (a tool, a channel, a provider)
-is shown to repeat the same local connect per call.
+has been measured hand-rolling such a pause, and docs/EMBEDDING.md names no path that dials
+VAF's web API or its account store (the one local service it does name, the model server
+on port 8080, is started or reused by the backend before a call). Promote it when a facade
+primitive (a tool, a channel, a provider) is shown to repeat the same local connect per call.
 """
 from __future__ import annotations
 

@@ -647,7 +647,8 @@ def test_unread_counts_the_other_parties_and_looking_clears_it(room_home):
 
 def test_tui_app_room_row_and_replay(monkeypatch, tmp_path):
     """MUTATION: post `Selected` for the app room row (treat it like a chat) - red: the
-    panel would load the row id as a session instead of replaying the room."""
+    panel would load the row id as a session instead of replaying the room. MUTATION: replay
+    without the account's name - red (VAF's agent would show as "VAF", not its persona)."""
     import asyncio
 
     from textual.widgets import ListView
@@ -664,7 +665,11 @@ def test_tui_app_room_row_and_replay(monkeypatch, tmp_path):
          "app_room": {"connected": True}, "last": {"text": "Der Wecker steht."}},
         {"id": "aaa111", "name": "a talk", "updated_at": "2026-08-01 10:00",
          "message_count": 4}]
-    monkeypatch.setattr(room, "transcript", lambda scope, username="", limit=0: [
+    import vaf.core.config as config_module
+    monkeypatch.setattr(config_module, "get_local_admin_username", lambda: "alice")
+    asked = []
+    monkeypatch.setattr(room, "transcript", lambda scope, username="", limit=0: asked.append(
+        username) or [
         {"id": "l1", "peer": "person", "label": "You", "to": {"peer": "app_agent"},
          "toLabel": "Veyllo App", "kind": "say", "text": "Wecker auf 7", "ts": 1767225600,
          "state": "delivered"},
@@ -687,7 +692,7 @@ def test_tui_app_room_row_and_replay(monkeypatch, tmp_path):
             heads = [str(w.query_one(".msg-head").render()) for w in app.query(PeerMessage)]
             assert "You" in heads[0] and "to Veyllo App" in heads[0]
             assert "Veyllo App" in heads[1]
-            assert loaded == []
+            assert loaded == [] and asked == ["alice"]
 
     asyncio.run(_drive())
     tui.shutdown()

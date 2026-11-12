@@ -794,7 +794,9 @@ def test_a_room_that_leaves_the_list_closes_its_view():
     block = source.split("else if (data.type === 'session_list') {")[1][:2200]
 
     assert "setRoomView(prev =>" in block
-    assert "s.roomId === prev.room.roomId" in block
+    # The rule itself (an agent room by its id, the Veyllo App room by its row) is a plain
+    # function the node test of web/components/chat/appRoom.ts runs.
+    assert "roomStillListed(prev.room.roomId, data.sessions as Session[])" in block
     assert "setRoomMembersOpen(false)" in block, "the members panel outlives its room"
 
 
@@ -900,7 +902,9 @@ def test_an_open_room_refetches_itself_while_it_is_on_screen():
     source = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
     block = source.split("const roomPollRef")[1].split("const handleSessionSwitch")[0]
 
-    assert "setInterval" in block and "type: 'open_room'" in block
+    # The frame is `roomOpenCommand` (web/components/chat/appRoom.ts): `open_room` for an
+    # agent room, as the node test of that module pins.
+    assert "setInterval" in block and "roomOpenCommand(roomId)" in block
     assert "clearInterval" in block, "the poll outlives the view it belongs to"
     assert "roomView?.room.closed" in block, "a closed room is still being polled"
     assert "wsSocketRef.current" in block, (
@@ -923,7 +927,7 @@ def test_a_room_scrolls_with_the_chat_s_own_autoscroll():
     assert anchor_at > branch_end, "the scroll anchor is inside the chat branch again"
 
     # and the effect fires for a room's messages too
-    assert "}, [messages, loading, roomView?.messages.length]);" in source, (
+    assert "}, [messages, loading, roomView?.messages.length, appRoomDrafts.length]);" in source, (
         "new room messages do not trigger the scroll")
 
 

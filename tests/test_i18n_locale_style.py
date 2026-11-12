@@ -668,7 +668,7 @@ _TRANSLATED_SURFACES = ("web/app/login/page.tsx", "web/components/SoulWizard.tsx
 _HARDCODED_COPY_DEBT = {
     "web/app/memory/page.tsx": 17,
     "web/app/not-found.tsx": 3,
-    "web/app/page.tsx": 45,
+    "web/app/page.tsx": 44,
     "web/app/settings/page.tsx": 1,
     "web/components/ActiveToolsPanel.tsx": 1,
     "web/components/BrowserLiveTile.tsx": 1,

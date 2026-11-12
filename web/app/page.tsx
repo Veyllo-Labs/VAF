@@ -38,6 +38,10 @@ import AutomationCalendarModal from '@/components/AutomationCalendarModal';
 import InboxWindow from '@/components/inbox/InboxWindow';
 import { TurnDrafts, UnplacedDrafts, isWaitingDraft, type HeldSendRow } from '@/components/outbox/HeldSendCard';
 import { useChatDrafts } from '@/components/outbox/useChatDrafts';
+import {
+    APP_ROOM_ID, APP_ROOM_TITLE, clearAfterSend, deliveryOf, isAppRoom, lineTextKey,
+    placeholderKey, refusalKey, roomOpenCommand, roomStillListed, showUnreadDot, toKey,
+} from '@/components/chat/appRoom';
 import { draftRefOf, isDraftTurnEnd, DRAFT_WAKE_PREFIX, CONFIRM_WAKE_PREFIX } from '@/components/outbox/draftRefs';
 import AskChoices from '@/components/chat/AskChoices';
 import { asksOf, withoutOptions } from '@/components/chat/askContract';
@@ -198,19 +202,17 @@ type Session = {
  * (first load, after a delete, after the list changes) all filter through here.
  */
 const isRoom = (s: Session) => s.kind === 'room';
-/** The Veyllo App room: pinned first while a Veyllo App is paired. Its id names no session
- *  either, so it stays out of every self-pick, like a room. */
-const isAppRoom = (s: Session) => s.kind === 'app_room';
-/** The room id the Veyllo App room travels under in the room view. */
-const APP_ROOM_ID = 'app:veyllo_app';
-/** Its visible name: the product's name, the same in every language. */
-const APP_ROOM_TITLE = 'Veyllo App';
+// The Veyllo App room (pinned first while a Veyllo App is paired; its id names no session
+// either, so it stays out of every self-pick, like a room): its rules are plain functions in
+// web/components/chat/appRoom.ts, which a node test runs.
 type AppRoomState = {
     devices?: number; connected?: boolean; canWrite?: boolean;
     /** Why a line to the app's agent cannot be written: channel_off, no_device,
-     *  needs_newer_app; empty when it can. */
+     *  not_connected_yet, needs_newer_app; empty when it can. */
     reason?: string;
     agentName?: string;
+    /** The one word after "@" that always reaches the VAF agent. */
+    handle?: string;
     /** The two sessions behind the room, for the drafts waiting in them. */
     sessions?: string[];
 };
@@ -234,6 +236,14 @@ type RoomMessage = {
      *  got (delivered, waiting, not_delivered). */
     toLabel?: string;
     state?: string;
+    /** Why a line was not delivered, and the device a line went to. */
+    reason?: string;
+    device?: string;
+    /** How a task ended, or `turn_failed`: the view words it (appRoom.ts `lineTextKey`). */
+    code?: string;
+    seconds?: number;
+    /** A question whose turn runs or waits; the runner stores it with the answer. */
+    pending?: boolean;
     /** What a reader may conclude about who wrote this: "unsigned" (nobody claimed,
      *  the ordinary case), "valid", "foreign_key", "invalid" or "unreadable". The
      *  verdict, never the signature - the browser has no use for key material. */
@@ -2104,6 +2114,7 @@ function RoomIdentity({ room, connected, onMembers, membersTitle, invitedNote, a
     appRoomLine?: string;
 }) {
     const appRoom = room.roomKind === 'veyllo_app';
+    const tMain = useTranslations('main');
     return (
         <>
             <div className="w-8 h-8 rounded-xl bg-gray-900 dark:bg-[#e6e6e6] flex items-center justify-center shrink-0">
@@ -2123,7 +2134,7 @@ function RoomIdentity({ room, connected, onMembers, membersTitle, invitedNote, a
                         or frozen. */}
                     {!connected ? (
                         <span className="text-amber-600 dark:text-amber-400">
-                            Verbindung wird wiederhergestellt&hellip;
+                            {tMain('roomReconnecting')}
                         </span>
                     ) : invitedNote ? (
                         <span className="text-amber-700 dark:text-amber-400">{invitedNote}</span>
@@ -2184,8 +2195,11 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
     view: { room: RoomView; messages: RoomMessage[] };
     /** The Veyllo App room's words: the person's own name, the line under the header, "to
      *  <name>" and the delivery state of a line to the app's agent. Set only for that room. */
-    appRoom?: { you: string; line: string; to: (name: string) => string;
-        state: (state: string) => string; confirmed: string };
+    appRoom?: { you: string; line: string; to: (peer: string, name: string) => string;
+        delivery: (state: string, reason?: string, device?: string) => { text: string; resend: boolean };
+        lineText: (code?: string, seconds?: number) => string | null;
+        sendAgain: string; onSendAgain: (text: string) => void;
+        empty: string; confirmed: string };
     onMembers: () => void;
     closedNote: string;
     membersTitle: string;
@@ -2430,11 +2444,19 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                 who, on what, how far. Only OUR workers: a foreign agent's workers
                 run on its machine, and a card we cannot verify is a card we do not
                 draw. */}
-            {view.messages.length === 0 && (
+            {view.messages.length === 0 && (appRoom ? (
+                /* The Veyllo App room before its first line: who is in it and where a line
+                   goes, the one place that says it in full. */
+                <div className="min-h-[40vh] flex items-center justify-center" data-app-room-empty>
+                    <p className="max-w-md text-center text-sm leading-relaxed text-gray-500 dark:text-[#9a9a9a]">
+                        {appRoom.empty}
+                    </p>
+                </div>
+            ) : (
                 <div className="min-h-[40vh] flex items-center justify-center text-sm text-gray-400">
                     Nothing said yet.
                 </div>
-            )}
+            ))}
             {view.room.closed && (
                 <div className="flex justify-center py-2">
                     <span className="text-[11px] text-gray-400 dark:text-[#6a6a6a]">
@@ -2550,7 +2572,7 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                                 )}
                                 {m.to?.peer && (appRoom ? (
                                     <span className="text-[10px] text-gray-400">
-                                        {appRoom.to(m.to.peer === 'person' ? appRoom.you : (m.toLabel || ''))}
+                                        {appRoom.to(m.to.peer, m.toLabel || '')}
                                     </span>
                                 ) : (
                                     <span className="text-[10px] text-gray-400">to one peer</span>
@@ -2564,18 +2586,34 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                                     </span>
                                 )}
                             </div>
-                            <div className="text-[15px] leading-relaxed text-gray-700 dark:text-[#c8c8c8] whitespace-pre-wrap break-words">
-                                {m.text}
+                            <div className={cn("text-[15px] leading-relaxed whitespace-pre-wrap break-words",
+                                appRoom && m.code && m.code !== 'answered'
+                                    ? "text-gray-500 dark:text-[#9a9a9a] italic"
+                                    : "text-gray-700 dark:text-[#c8c8c8]")}>
+                                {(appRoom && appRoom.lineText(m.code, m.seconds)) || m.text}
                             </div>
                             {/* How far a line to the agent in the Veyllo App got: delivered once
-                                the device acknowledged it, waiting while its outbox holds it, not
-                                delivered when neither (the device was removed). */}
-                            {appRoom && m.state && (
-                                <div data-delivery={m.state} className={cn("text-[10px] mt-0.5",
-                                    m.state === 'not_delivered' ? "text-amber-600 dark:text-amber-400"
-                                        : "text-gray-400 dark:text-[#7a7a7a]")}>
-                                    {appRoom.state(m.state)}
-                                </div>
+                                the device acknowledged it (to which device, when there are more),
+                                waiting while its queue holds it, not delivered with why, and the
+                                offer to send a line again that will not arrive any more. */}
+                            {appRoom && m.state && (() => {
+                                const d = appRoom.delivery(m.state, m.reason, m.device);
+                                return (
+                                    <div data-delivery={m.state} className={cn("text-[10px] mt-0.5 flex items-center gap-2",
+                                        m.state === 'not_delivered' ? "text-amber-600 dark:text-amber-400"
+                                            : "text-gray-400 dark:text-[#7a7a7a]")}>
+                                        <span>{d.text}</span>
+                                        {d.resend && (
+                                            <button type="button" onClick={() => appRoom.onSendAgain(m.text)}
+                                                className="underline underline-offset-2 hover:text-gray-900 dark:hover:text-[#e6e6e6]">
+                                                {appRoom.sendAgain}
+                                            </button>
+                                        )}
+                                    </div>
+                                );
+                            })()}
+                            {appRoom && m.pending && (
+                                <div className="text-[10px] mt-0.5 text-gray-400 dark:text-[#7a7a7a] vaf-pulse-note">…</div>
                             )}
                             {/* What was left in the room's shared folder with this
                                 message. A chip per file, because a filename inside a
@@ -4025,21 +4063,28 @@ function VAFDashboardContent() {
     // The words of the Veyllo App room view, in the viewer's language; undefined for every
     // other room, which keeps the agent room's view exactly as it was.
     const appRoomAgentName = roomView?.room.appRoom?.agentName || 'VAF';
+    const appRoomHandle = roomView?.room.appRoom?.handle || 'VAF';
+    const appRoomNames = { name: appRoomAgentName, handle: appRoomHandle };
     const appRoomWords = roomView?.room.roomKind === 'veyllo_app' ? {
         you: tMain('appRoomYou'),
         line: roomView.room.appRoom?.connected ? tMain('appRoomConnected') : tMain('appRoomNotConnected'),
-        to: (name: string) => tMain('appRoomTo', { name }),
-        state: (state: string) => state === 'delivered' ? tMain('appRoomDelivered')
-            : state === 'waiting' ? tMain('appRoomWaiting') : tMain('appRoomNotDelivered'),
+        to: (peer: string, name: string) => tMain(toKey(peer), { name }),
+        delivery: (state: string, reason?: string, device?: string) => {
+            const d = deliveryOf(state, reason, roomView.room.appRoom?.devices, device);
+            return { text: tMain(d.key, d.values || {}), resend: d.resend };
+        },
+        lineText: (code?: string, seconds?: number) => {
+            const key = lineTextKey(code);
+            return key ? tMain(key, { name: appRoomAgentName, seconds: seconds ?? 0 }) : null;
+        },
+        sendAgain: tMain('appRoomSendAgain'),
+        onSendAgain: (text: string) => { void sendToAppRoom(text); },
+        empty: tMain('appRoomEmpty', appRoomNames),
         confirmed: tMain('appRoomConfirmed'),
     } : undefined;
     // Why a line to the agent in the Veyllo App cannot be written, as the room says it
-    // (stands above the input) or as the last refusal said it (stands under it).
-    const appRoomRefusal = (code: string) => code === 'needs_newer_app'
-        ? tMain('appRoomNeedsNewerApp', { name: appRoomAgentName })
-        : code === 'channel_off' ? tMain('appRoomChannelOff')
-            : code === 'no_device' ? tMain('appRoomNoDevice')
-                : code === 'rate_limited' ? tMain('appRoomRateLimited') : tMain('appRoomFailed');
+    // (stands above the input) or as the last refusal said it.
+    const appRoomRefusal = (code: string) => tMain(refusalKey(code), appRoomNames);
     const draftsOfTools = useCallback((tools: { content: string }[]): HeldSendRow[] => tools
         .map(m => draftRefOf(m.content))
         .map(ref => (ref ? chatDrafts.byRef.get(ref) : undefined))
@@ -4578,7 +4623,12 @@ function VAFDashboardContent() {
                         && (roomView.room.roomKind !== 'veyllo_app' || m.peer === roomView.room.agentPeer)
                         && m.label.toLowerCase().includes(query))
                     .slice(0, 10)
-                    .map(m => ({ name: m.label, description: m.card?.skills || m.role }));
+                    // In the Veyllo App room the completion inserts the handle, the one word
+                    // after "@" that is sure to reach the VAF agent (a name of several words
+                    // is matched by its first word).
+                    .map(m => ({ name: roomView.room.roomKind === 'veyllo_app'
+                        ? (roomView.room.appRoom?.handle || m.label) : m.label,
+                        description: m.card?.skills || m.role }));
                 setSuggestionList(members);
                 setSuggestionType('member');
                 setSelectedSuggestionIndex(0);
@@ -5079,8 +5129,7 @@ function VAFDashboardContent() {
             // from the render that started the interval, which is null on a reconnect.
             // The Veyllo App room has its own command, which names no room: the server
             // answers for the connection's own account.
-            wsSocketRef.current?.send(JSON.stringify(roomId === APP_ROOM_ID
-                ? { type: 'open_app_room' } : { type: 'open_room', room_id: roomId }));
+            wsSocketRef.current?.send(JSON.stringify(roomOpenCommand(roomId)));
         }, 3000);
         return () => {
             if (roomPollRef.current) { clearInterval(roomPollRef.current); roomPollRef.current = null; }
@@ -5094,7 +5143,7 @@ function VAFDashboardContent() {
             setRoomOpening({ roomId: APP_ROOM_ID, name: APP_ROOM_TITLE });
         }
         setAppRoomError('');
-        wsSocketRef.current?.send(JSON.stringify({ type: 'open_app_room' }));
+        wsSocketRef.current?.send(JSON.stringify(roomOpenCommand(APP_ROOM_ID)));
     };
 
     // A line in the Veyllo App room: to the agent in the Veyllo App, or, led by "@" and the
@@ -5102,6 +5151,7 @@ function VAFDashboardContent() {
     // clears only when the line was taken; a refusal keeps it and says why under the input.
     const sendToAppRoom = async (text: string) => {
         setAppRoomError('');
+        const sentFrom = roomViewRef.current?.room.roomId ?? null;
         try {
             const res = await fetch(`${getApiBase()}/api/app-link/room`, {
                 method: 'POST', credentials: 'include',
@@ -5113,8 +5163,9 @@ function VAFDashboardContent() {
                 setAppRoomError(String(data.code || 'failed'));
                 return;
             }
-            setInput(prev => (prev.trim() === text ? '' : prev));
-            wsSocketRef.current?.send(JSON.stringify({ type: 'open_app_room' }));
+            setInput(prev => (clearAfterSend(sentFrom, roomViewRef.current?.room.roomId ?? null, text, prev)
+                ? '' : prev));
+            wsSocketRef.current?.send(JSON.stringify(roomOpenCommand(APP_ROOM_ID)));
         } catch {
             setAppRoomError('failed');
         }
@@ -6290,9 +6341,7 @@ function VAFDashboardContent() {
                     // room went away.
                     setRoomView(prev => {
                         if (!prev) return prev;
-                        const stillThere = (data.sessions as Session[]).some(
-                            s => (isRoom(s) && s.roomId === prev.room.roomId)
-                                || (isAppRoom(s) && prev.room.roomId === APP_ROOM_ID));
+                        const stillThere = roomStillListed(prev.room.roomId, data.sessions as Session[]);
                         if (!stillThere) setRoomMembersOpen(false);
                         return stillThere ? prev : null;
                     });
@@ -6326,7 +6375,7 @@ function VAFDashboardContent() {
                     // view fetches itself at once instead of at the next poll.
                     wsSocketRef.current?.send(JSON.stringify({ type: 'get_sessions' }));
                     if (roomViewRef.current?.room.roomId === APP_ROOM_ID) {
-                        wsSocketRef.current?.send(JSON.stringify({ type: 'open_app_room' }));
+                        wsSocketRef.current?.send(JSON.stringify(roomOpenCommand(APP_ROOM_ID)));
                     }
                 }
                 else if (data.type === 'rooms_changed') {
@@ -8069,7 +8118,7 @@ function VAFDashboardContent() {
             // intent; see its comment for why both halves are needed.
             requestAnimationFrame(() => setChatScroll(containerRef.current?.scrollHeight ?? 0));
         }
-    }, [messages, loading, roomView?.messages.length]);
+    }, [messages, loading, roomView?.messages.length, appRoomDrafts.length]);
 
     // Run the prompt navigator's parked jump once the widened window has been
     // committed and laid out. Parked rather than timed: the previous version
@@ -9689,16 +9738,23 @@ function VAFDashboardContent() {
                                 has neither a rename nor a bin. */}
                             {sessions.filter(isAppRoom).map(s => {
                                 const open = roomView?.room.roomId === APP_ROOM_ID;
+                                const dot = showUnreadDot(s.unread, open);
                                 return (
-                                <div key={s.id} data-app-room="veyllo_app"
+                                /* Sticky: the row stays at the top of the list however far it
+                                   scrolls, on the list's own surface tone so the rows passing
+                                   under it do not show through. A button, so the keyboard
+                                   reaches it like any other control. */
+                                <div key={s.id} className="sticky top-0 z-10 -mx-2 px-2"
+                                    style={{ background: 'rgb(var(--chat-fog))' }}>
+                                <button type="button" data-app-room="veyllo_app"
                                     onClick={() => { setDrawerOpen(false); openAppRoom(); }}
-                                    className={cn("flex items-center gap-3 p-2 pl-3.5 max-md:min-h-[44px] rounded-lg cursor-pointer group/item relative",
+                                    className={cn("w-full text-left flex items-center gap-3 p-2 pl-3.5 max-md:min-h-[44px] rounded-lg cursor-pointer group/item relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400",
                                         open ? 'bg-transparent' : 'hover:bg-gray-100')}>
                                     {open && (
                                         <div className="absolute left-1 top-1/2 -translate-y-1/2 w-1 h-1 bg-black rounded-full opacity-0 group-hover:opacity-100 group-data-[editing=true]:opacity-100 max-md:opacity-100 transition-opacity" />
                                     )}
-                                    {(s.unread || 0) > 0 && !open && (
-                                        <div className="absolute right-2 top-1/2 -translate-y-1/2 w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+                                    {dot && (
+                                        <div data-app-room-unread className="absolute right-2 top-1/2 -translate-y-1/2 w-2 h-2 bg-red-500 rounded-full animate-pulse" />
                                     )}
                                     <span className="relative shrink-0" title={tMain('appRoomRowTitle')}>
                                         <Smartphone size={16} className={cn("shrink-0",
@@ -9712,10 +9768,11 @@ function VAFDashboardContent() {
                                             open ? "font-medium text-gray-900" : "text-gray-600")}>
                                             {APP_ROOM_TITLE}
                                         </span>
-                                        {(s.unread || 0) > 0 && !open && (
+                                        {dot && (
                                             <span className="text-[10px] text-gray-400 tabular-nums shrink-0 pl-2 pr-3">{s.unread}</span>
                                         )}
                                     </div>
+                                </button>
                                 </div>
                                 );
                             })}
@@ -11199,6 +11256,21 @@ function VAFDashboardContent() {
                                     above makes room for it (the padding below) rather than being
                                     covered by it. */}
                                 <div ref={dockRef}>
+                                {/* The Veyllo App room: why a line to the agent in the Veyllo App
+                                    cannot go (an older Veyllo App, the lane off, no device), or why
+                                    the last one did not. Above the box, where the person looks
+                                    before and after sending. Inside the dock, so the transcript's padding
+                                    makes room for it and it never covers the last card. */}
+                                {appRoomWords && (appRoomError || roomView?.room.appRoom?.reason) && (
+                                    <div className={cn(chatWidthClass, "mb-2 flex items-center gap-2")}>
+                                        <div className="w-9 shrink-0" aria-hidden="true" />
+                                        <div role="status" data-app-room-notice
+                                            className="flex-1 min-w-0 text-xs px-3 py-2 rounded-xl border border-amber-200 bg-amber-50 text-amber-800 dark:border-[#564529] dark:bg-[#292114] dark:text-amber-300">
+                                            {appRoomRefusal(appRoomError || roomView?.room.appRoom?.reason || '')}
+                                        </div>
+                                    </div>
+                                )}
+
                                     {voteDockOpen && (
                                         <RoomVoteDock votes={voteDock.votes} leaving={voteDock.leaving}
                                             widthClass={chatWidthClass}
@@ -11228,20 +11300,6 @@ function VAFDashboardContent() {
                                     the box where the '/' or '@' is being typed) - it used to be
                                     fixed to the screen's center, which put it nowhere near the
                                     text it completes once a sidebar shifted the input. */}
-
-                                {/* The Veyllo App room: why a line to the agent in the Veyllo App
-                                    cannot go (an older Veyllo App, the lane off, no device), or why
-                                    the last one did not. Above the box, where the person looks
-                                    before and after sending. */}
-                                {appRoomWords && (appRoomError || roomView?.room.appRoom?.reason) && (
-                                    <div className={cn(chatWidthClass, "mb-2 flex items-center gap-2")}>
-                                        <div className="w-9 shrink-0" aria-hidden="true" />
-                                        <div role="status" data-app-room-notice
-                                            className="flex-1 min-w-0 text-xs px-3 py-2 rounded-xl border border-amber-200 bg-amber-50 text-amber-800 dark:border-[#564529] dark:bg-[#292114] dark:text-amber-300">
-                                            {appRoomRefusal(appRoomError || roomView?.room.appRoom?.reason || '')}
-                                        </div>
-                                    </div>
-                                )}
 
                                 {/* Memory Learning Banner */}
                                 {memoryLearning && (
@@ -11789,6 +11847,8 @@ function VAFDashboardContent() {
                                             multiple
                                             accept={ACCEPT_ATTACHMENTS}
                                         />
+                                        {/* The Veyllo App room carries text only: no attachment, no call. */}
+                                        {!appRoomWords && (
                                         <button
                                             type="button"
                                             onClick={() => fileInputRef.current?.click()}
@@ -11800,6 +11860,7 @@ function VAFDashboardContent() {
                                         >
                                             <Paperclip size={19} />
                                         </button>
+                                        )}
                                         <div className="flex-1 relative flex flex-col min-w-0">
                                             {attachedImages.length > 0 && (
                                                 <div className="flex flex-wrap gap-2 px-2 pt-2 pb-1 border-b border-gray-100">
@@ -11870,7 +11931,7 @@ function VAFDashboardContent() {
                                                     onChange={handleInputChange}
                                                     onScroll={(e) => { if (ghostRef.current) ghostRef.current.scrollTop = e.currentTarget.scrollTop; }}
                                                     onKeyDown={handleKeyDown}
-                                                    placeholder={isIndexing ? tMain('indexingAttachments', { count: activeAttachmentIndexCount || 1 }) : roomView?.room.invited ? tMain('roomInviteComposer') : input ? "" : appRoomWords ? tMain('appRoomPlaceholder', { name: appRoomAgentName }) : "Ask anything..."}
+                                                    placeholder={isIndexing ? tMain('indexingAttachments', { count: activeAttachmentIndexCount || 1 }) : roomView?.room.invited ? tMain('roomInviteComposer') : input ? "" : appRoomWords ? tMain(placeholderKey(!!roomView?.room.appRoom?.canWrite), appRoomNames) : "Ask anything..."}
                                                     className="w-full min-h-[2.5rem] max-md:min-h-[3.25rem] max-h-[12.5rem] py-4 px-1 bg-transparent border-none focus:ring-0 focus:outline-none text-sm relative z-10 resize-none overflow-y-auto"
                                                     // Chat-while-subagent-runs: never lock typing while a sub-agent is
                                                     // active — a lingering isGenerating (delegation turn / late events)
@@ -11908,6 +11969,7 @@ function VAFDashboardContent() {
                                         {/* Live-Call: the voice-agent first layer (bar morphs red, agent window top-left).
                                             Without a voice profile the first click OFFERS the guided enrollment
                                             (voice-gated delegation needs a profile); a skip is remembered. */}
+                                        {!appRoomWords && (
                                         <button
                                             type="button"
                                             onClick={() => {
@@ -11925,6 +11987,7 @@ function VAFDashboardContent() {
                                                 <path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.2-1.2a2 2 0 0 1 2.1-.5c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.7 2z" />
                                             </svg>
                                         </button>
+                                        )}
                                         {/* Mobile-only Send button (40px square, primary) — desktop submits via Enter */}
                                         <button
                                             type="submit"

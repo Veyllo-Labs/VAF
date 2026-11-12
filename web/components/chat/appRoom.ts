@@ -52,8 +52,31 @@ export function refusalKey(code: string): string {
  *  possible (asking the VAF agent with its handle). */
 export const emptyKey = (canWrite: boolean) => (canWrite ? 'appRoomEmpty' : 'appRoomEmptyAgentOnly');
 
-/** The composer's hint: while no line can reach the app's agent, only the VAF agent's form. */
+/** The composer's hint: while no line can reach the app's agent, it names the VAF agent. */
 export const placeholderKey = (canWrite: boolean) => (canWrite ? 'appRoomPlaceholder' : 'appRoomPlaceholderAgentOnly');
+
+/** How many characters of the agent's name the composer's hint may carry. */
+export const HINT_NAME_MAX = 12;
+
+/** The agent's name as the composer's hint names it ("Ask Bartholomäus…"). The name is not
+ *  length-capped and a placeholder cannot wrap or end in an ellipsis (Chromium clips a
+ *  textarea's placeholder hard and a second line scrolls the box), and at 390 px the box leaves
+ *  about 164 px of text width: "Frag Bartholomäus …" measures 132 px, a 16-character name in
+ *  the Turkish form 193 px. So the hint keeps the whole name when it fits, otherwise the
+ *  leading whole words that fit ("Dr. Mia Schmidt" -> "Dr. Mia"), otherwise the first `max`
+ *  characters, counted in code points so a cut never splits a surrogate pair. */
+export function hintName(name: string, max: number = HINT_NAME_MAX): string {
+    const whole = (name || '').trim();
+    if (!whole) return 'VAF';
+    if (Array.from(whole).length <= max) return whole;
+    let kept = '';
+    for (const word of whole.split(/\s+/)) {
+        const next = kept ? `${kept} ${word}` : word;
+        if (Array.from(next).length > max) break;
+        kept = next;
+    }
+    return kept || Array.from(whole).slice(0, max).join('');
+}
 
 /** "to <name>" under a line: the person addressed gets their own form ("an dich", "sana"). */
 export const toKey = (peer: string) => (peer === 'person' ? 'appRoomToYou' : 'appRoomTo');

@@ -23,7 +23,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   to the agent in the Veyllo App needs a Veyllo App version that supports it, which today's
   store version does not yet; until then the room says so and `@` still reaches your VAF agent.
   In the terminal, `vaf devices say "..."` writes into the room and the session panel shows
-  it.
+  it. Its message box is the chat's own, with the same look, size and microphone; only the hint
+  differs ("Ask the Veyllo App…").
 
 - **DeepSeek reads images.** With `deepseek-flash` as the model, VAF now sends images to
   DeepSeek itself instead of needing a separate vision provider. `deepseek-v4-pro` and

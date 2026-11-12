@@ -353,8 +353,8 @@ between the "@" and the name is allowed (`@ Mia hi`). So put a space after the n
 script written without spaces (`@Mia 你好`); the empty room says so in every language. It is the same
 leading-mention rule as in an agent room
 ([A2A_PROTOCOL.md](../agents/A2A_PROTOCOL.md#display-names-carry-a-number-when-they-collide)), so `ask @VAF` in
-the middle of a line still goes to the app's agent. The composer's hint names that word, and
-`@` completes it.
+the middle of a line still goes to the app's agent. The empty room and the notices name that
+word, and `@` completes it.
 
 **What "your agent is in the room" means.** Your VAF agent reads every room line at its next
 turn in your app chat, where your own turns run: a line you wrote to the app's agent after a

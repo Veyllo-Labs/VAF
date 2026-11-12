@@ -40,7 +40,7 @@ import { TurnDrafts, UnplacedDrafts, isWaitingDraft, type HeldSendRow } from '@/
 import { useChatDrafts } from '@/components/outbox/useChatDrafts';
 import {
     APP_ROOM_ID, APP_ROOM_TITLE, ROOM_SEND_IDLE, beginSend, clearAfterSend, confirmAfterGiveUp, deliveryOf, emptyKey,
-    goToTakenLine, isAppRoom, lateEffect, lateLine, lineTextKey, newLineId, placeholderKey, refusalKey, roomOpenCommand, roomStillListed, sendWithTimeout,
+    goToTakenLine, hintName, isAppRoom, lateEffect, lateLine, lineTextKey, newLineId, placeholderKey, refusalKey, roomOpenCommand, roomStillListed, sendWithTimeout,
     showUnreadDot, toKey, type RoomSend,
 } from '@/components/chat/appRoom';
 import { draftRefOf, isDraftTurnEnd, DRAFT_WAKE_PREFIX, CONFIRM_WAKE_PREFIX } from '@/components/outbox/draftRefs';
@@ -1807,6 +1807,11 @@ type RoomHistoryRow = {
     id: string; title: string; status: string; assignee: string; requester: string;
     result: string; reports: number; started?: number; ts?: number;
 };
+
+/** The look of a chip on the strip above the message box (the chat's workspace folder, the
+ *  Veyllo App room's label), so the room's label cannot drift from the chat's chip. A
+ *  clickable chip adds its pointer and hover classes itself. */
+const STRIP_CHIP = "inline-flex items-center gap-1 text-[10px] font-mono text-gray-400 opacity-80 px-2 py-0.5 rounded border border-gray-200 leading-none select-none";
 
 const ROOM_TASK_ACTIVE = ['submitted', 'working', 'input_required'];
 
@@ -11668,8 +11673,9 @@ function VAFDashboardContent() {
                                         while typing into a room. A room says what it is instead. */}
                                     {roomView ? (appRoomWords ? (
                                         // The Veyllo App room has no shared folder: the strip only
-                                        // says which room is open.
-                                        <span className="mr-auto inline-flex items-center gap-1.5 text-[10px] text-gray-400 px-2 py-0.5 leading-none select-none" data-app-room-strip>
+                                        // says which room is open, in the chat's workspace chip's
+                                        // look and place. Not clickable, so no pointer and no hover.
+                                        <span className={cn(STRIP_CHIP, "mr-auto")} data-app-room-strip>
                                             <Smartphone size={10} className="shrink-0" />
                                             <span>{APP_ROOM_TITLE}</span>
                                         </span>
@@ -11705,7 +11711,8 @@ function VAFDashboardContent() {
                                     {workspaceInfo?.path && (
                                         <span
                                             className={cn(
-                                                "inline-flex items-center gap-1 text-[10px] font-mono text-gray-400 opacity-80 px-2 py-0.5 rounded cursor-pointer border border-gray-200 leading-none hover:text-violet-600 hover:opacity-100 hover:bg-violet-50 hover:border-violet-200 transition-all select-none",
+                                                STRIP_CHIP,
+                                                "cursor-pointer hover:text-violet-600 hover:opacity-100 hover:bg-violet-50 hover:border-violet-200 transition-all",
                                                 // mr-auto belongs on the LAST chip of the left group, not simply
                                                 // on this one: the row is justify-end, so the auto margin is
                                                 // what splits "left group" from the right-aligned rest. With the
@@ -11952,20 +11959,25 @@ function VAFDashboardContent() {
                                             multiple
                                             accept={ACCEPT_ATTACHMENTS}
                                         />
-                                        {/* The Veyllo App room carries text only: no attachment, no call. */}
-                                        {!appRoomWords && (
+                                        {/* The Veyllo App room carries text only, so it offers no
+                                            attachment and no call. Both buttons keep their slots there,
+                                            hidden, so the box, the text start and the microphone stand
+                                            exactly where they stand in a chat. */}
                                         <button
                                             type="button"
-                                            onClick={() => fileInputRef.current?.click()}
+                                            onClick={() => { if (!appRoomWords) fileInputRef.current?.click(); }}
+                                            disabled={!!appRoomWords}
+                                            tabIndex={appRoomWords ? -1 : undefined}
+                                            aria-hidden={appRoomWords ? true : undefined}
                                             className={cn(
                                                 "shrink-0 ml-2 mb-1.5 h-10 w-10 flex items-center justify-center rounded-xl transition-colors",
-                                                attachedImages.length > 0 ? "text-violet-600 hover:bg-violet-50" : documentViewerState.isOpen ? "text-blue-600 hover:bg-blue-50" : "text-gray-400 hover:text-gray-700 hover:bg-gray-100"
+                                                attachedImages.length > 0 ? "text-violet-600 hover:bg-violet-50" : documentViewerState.isOpen ? "text-blue-600 hover:bg-blue-50" : "text-gray-400 hover:text-gray-700 hover:bg-gray-100",
+                                                appRoomWords && "invisible"
                                             )}
                                             title={tMain('attachmentsDocumentViewer')}
                                         >
                                             <Paperclip size={19} />
                                         </button>
-                                        )}
                                         <div className="flex-1 relative flex flex-col min-w-0">
                                             {attachedImages.length > 0 && (
                                                 <div className="flex flex-wrap gap-2 px-2 pt-2 pb-1 border-b border-gray-100">
@@ -12036,7 +12048,7 @@ function VAFDashboardContent() {
                                                     onChange={handleInputChange}
                                                     onScroll={(e) => { if (ghostRef.current) ghostRef.current.scrollTop = e.currentTarget.scrollTop; }}
                                                     onKeyDown={handleKeyDown}
-                                                    placeholder={isIndexing ? tMain('indexingAttachments', { count: activeAttachmentIndexCount || 1 }) : roomView?.room.invited ? tMain('roomInviteComposer') : input ? "" : appRoomWords ? tMain(placeholderKey(!!roomView?.room.appRoom?.canWrite), appRoomNames) : "Ask anything..."}
+                                                    placeholder={isIndexing ? tMain('indexingAttachments', { count: activeAttachmentIndexCount || 1 }) : roomView?.room.invited ? tMain('roomInviteComposer') : input ? "" : appRoomWords ? tMain(placeholderKey(!!roomView?.room.appRoom?.canWrite), { name: hintName(appRoomAgentName) }) : "Ask anything..."}
                                                     className="w-full min-h-[2.5rem] max-md:min-h-[3.25rem] max-h-[12.5rem] py-4 px-1 bg-transparent border-none focus:ring-0 focus:outline-none text-sm relative z-10 resize-none overflow-y-auto"
                                                     // Chat-while-subagent-runs: never lock typing while a sub-agent is
                                                     // active — a lingering isGenerating (delegation turn / late events)
@@ -12073,26 +12085,33 @@ function VAFDashboardContent() {
                                         </button>
                                         {/* Live-Call: the voice-agent first layer (bar morphs red, agent window top-left).
                                             Without a voice profile the first click OFFERS the guided enrollment
-                                            (voice-gated delegation needs a profile); a skip is remembered. */}
-                                        {!appRoomWords && (
+                                            (voice-gated delegation needs a profile); a skip is remembered.
+                                            Hidden in its slot in the Veyllo App room: a call starts with
+                                            the session of the chat behind the room and would talk into
+                                            that conversation, not the room. */}
                                         <button
                                             type="button"
                                             onClick={() => {
+                                                if (appRoomWords) return;
                                                 if (!speakerProfile && !localStorage.getItem('vaf_voice_enroll_skipped')) {
                                                     setShowEnrollOffer(true);
                                                 } else {
                                                     useVoiceCallStore.getState().start();
                                                 }
                                             }}
-                                            disabled={isRecording || isProcessingAudio}
-                                            className="shrink-0 mb-1.5 mr-2 h-10 w-10 flex items-center justify-center rounded-xl transition-colors text-gray-500 hover:text-gray-900 hover:bg-gray-100 disabled:text-gray-300"
+                                            disabled={isRecording || isProcessingAudio || !!appRoomWords}
+                                            tabIndex={appRoomWords ? -1 : undefined}
+                                            aria-hidden={appRoomWords ? true : undefined}
+                                            className={cn(
+                                                "shrink-0 mb-1.5 mr-2 h-10 w-10 flex items-center justify-center rounded-xl transition-colors text-gray-500 hover:text-gray-900 hover:bg-gray-100 disabled:text-gray-300",
+                                                appRoomWords && "invisible"
+                                            )}
                                             title="Live-Call"
                                         >
                                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                                                 <path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.2-1.2a2 2 0 0 1 2.1-.5c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.7 2z" />
                                             </svg>
                                         </button>
-                                        )}
                                         {/* Mobile-only Send button (40px square, primary) — desktop submits via Enter */}
                                         <button
                                             type="submit"

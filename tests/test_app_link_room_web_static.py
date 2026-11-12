@@ -20,6 +20,13 @@ def _between(text: str, start: str, end: str) -> str:
     return body.split(end, 1)[0]
 
 
+def _button(marker: str) -> str:
+    """The whole `<button ...>` opening tag around a marker of the composer."""
+    at = PAGE.index(marker)
+    start = PAGE.rindex("<button", 0, at)
+    return PAGE[start:PAGE.index("\n                                        >", at)]
+
+
 def _row() -> str:
     return _between(PAGE, "{sessions.filter(isAppRoom).map(s => {",
                     "{sessions.filter(s => !isAppRoom(s)).map(s => isRoom(s) ? (")
@@ -90,7 +97,12 @@ def test_the_composer_posts_the_line_without_a_chooser():
     assert "setAppRoomError(String(outcome.data.code || 'failed'));" in refused
     assert "setInput" not in refused
     assert "clearAfterSend(sentFrom, roomViewRef.current?.room.roomId ?? null, text, prev)" in sender
-    assert "tMain(placeholderKey(!!roomView?.room.appRoom?.canWrite), appRoomNames)" in PAGE
+    # The hint names the shortened agent name, never the handle, and the chat's own hint stays.
+    # MUTATION: pass `appRoomNames` again, or change the chat's hint - red.
+    hint = _between(PAGE, "placeholder={isIndexing ?", "\n")
+    assert ("appRoomWords ? tMain(placeholderKey(!!roomView?.room.appRoom?.canWrite),"
+            " { name: hintName(appRoomAgentName) }) : \"Ask anything...\"}" in hint)
+    assert hint.rstrip().endswith(': "Ask anything..."}')
 
 
 def test_the_refusal_and_the_older_app_notice_sit_in_the_dock():
@@ -112,13 +124,37 @@ def test_what_an_agent_room_offers_is_hidden_in_the_veyllo_app_room():
     assert "onReact={roomView.room.me && !roomView.room.closed && !appRoomWords ?" in PAGE
     assert "{roomView ? (appRoomWords ? (" in PAGE and "data-app-room-strip" in PAGE
     assert "&& roomView.room.roomKind !== 'veyllo_app'" in PAGE
-    attach = PAGE.index("onClick={() => fileInputRef.current?.click()}")
-    assert PAGE.rindex("{!appRoomWords && (", 0, attach) > attach - 400
-    call = PAGE.index('title="Live-Call"')
-    assert PAGE.rindex("{!appRoomWords && (", 0, call) > call - 1200
+    # The attachment and the call button keep their slots in the room, hidden and out of the
+    # keyboard's way, so the box looks and measures as in a chat. MUTATION: unmount either one
+    # in the room again, or drop `invisible` - red.
+    for button in (_button("onClick={() => { if (!appRoomWords) fileInputRef.current?.click(); }}"),
+                   _button('title="Live-Call"')):
+        start = PAGE.index(button)
+        assert "{!appRoomWords && (" not in PAGE[start - 900:start], button[:60]
+        classes = _between(button, "className={cn(", ")}")
+        assert 'appRoomWords && "invisible"' in classes, button[:60]
+        assert "tabIndex={appRoomWords ? -1 : undefined}" in button
+        assert "aria-hidden={appRoomWords ? true : undefined}" in button
+    call = _button('title="Live-Call"')
+    assert "if (appRoomWords) return;" in call and "|| !!appRoomWords}" in call
+    assert "disabled={!!appRoomWords}" in _button("fileInputRef.current?.click()")
     # "@" completes the VAF agent only, with the handle that is sure to reach it.
     assert "(roomView.room.roomKind !== 'veyllo_app' || m.peer === roomView.room.agentPeer)" in PAGE
     assert "(roomView.room.appRoom?.handle || m.label) : m.label," in PAGE
+
+
+def test_the_room_label_is_the_workspace_chip():
+    """The room's label on the strip above the box has the chat's workspace chip's look, from
+    one constant, and is not clickable. MUTATION: write the room's span by hand again, or give
+    it `cursor-pointer` - red."""
+    assert PAGE.count("const STRIP_CHIP = ") == 1
+    label = _between(PAGE, "{roomView ? (appRoomWords ? (", "</span>\n")
+    assert '<span className={cn(STRIP_CHIP, "mr-auto")} data-app-room-strip>' in label
+    assert "cursor-pointer" not in label and "hover:" not in label and "onClick" not in label
+    assert "<Smartphone size={10}" in label
+    chip = _between(PAGE, "{workspaceInfo?.path && (", "<Folder size={10}")
+    assert "className={cn(\n                                                STRIP_CHIP," in chip
+    assert "cursor-pointer" in chip
 
 
 def test_a_line_shows_its_speaker_addressee_delivery_and_its_words():

@@ -137,16 +137,42 @@ def test_a_line_sent_again_offers_no_second_resend_and_reads_quietly():
                                           ("th", "เว้นวรรค")])
 def test_scripts_without_spaces_are_told_to_put_one_after_the_name(lang, marker):
     """"@Mia你好" is no mention of Mia: where a script is written without spaces, the empty
-    room says to put a space after the name, and the hint shows the handle followed by one
-    (no particle glued to it). MUTATION: drop the clause from one of the texts, or glue a
-    particle to the handle in the hint - red."""
+    room says to put a space after the name. MUTATION: drop the clause from one of the texts -
+    red."""
     main = json.loads((ROOT / "web" / "messages" / f"{lang}.json").read_text(
         encoding="utf-8"))["main"]
     for key in ("appRoomEmpty", "appRoomEmptyAgentOnly"):
         assert marker in main[key], (lang, key)
-    assert "@{handle} " in main["appRoomPlaceholder"], lang
-    agent_only = main["appRoomPlaceholderAgentOnly"]
-    assert agent_only.endswith("@{handle}") or "@{handle} " in agent_only, lang
+
+
+@pytest.mark.parametrize("lang", LANGS)
+def test_the_mention_is_still_taught(lang):
+    """The composer's hint names no handle, so the empty room and the two notices that say what
+    is still possible are where the person learns the "@" form. MUTATION: delete `@{handle}`
+    from one of those texts in one language - red."""
+    main = json.loads((ROOT / "web" / "messages" / f"{lang}.json").read_text(
+        encoding="utf-8"))["main"]
+    for key in ("appRoomEmpty", "appRoomEmptyAgentOnly", "appRoomNotConnectedYet",
+                "appRoomNeedsNewerApp"):
+        assert "@{handle}" in main[key], (lang, key)
+
+
+def test_the_hint_name_fits_one_line():
+    """The hint carries the agent's name, which is not length-capped: whole when it fits, else
+    the leading whole words, else a cut by code points. MUTATION: return the name unchanged,
+    cut by UTF-16 units, or drop the word step - red."""
+    assert _call("m.HINT_NAME_MAX") == 12
+    assert _call("m.hintName('Mia')") == "Mia"
+    assert _call("m.hintName('  Nobel ')") == "Nobel"
+    assert _call("m.hintName('Bartholom\u00e4us Wiedenbr\u00fcck')") == "Bartholom\u00e4us"
+    assert _call("m.hintName('Dr. Mia Schmidt')") == "Dr. Mia"
+    assert _call("m.hintName('Hubertus-Maximilian')") == "Hubertus-Max"
+    assert _call("m.hintName('')") == "VAF"
+    assert _call("m.hintName('   ')") == "VAF"
+    # Thirteen emoji: twelve whole ones, no half of a surrogate pair at the end.
+    cut = _call("m.hintName('\\u{1F600}'.repeat(13))")
+    assert cut == "\U0001F600" * 12
+    assert not any(0xD800 <= ord(c) <= 0xDFFF for c in cut)
 
 
 def test_wake_notes_and_the_empty_room_are_worded():

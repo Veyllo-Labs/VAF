@@ -322,6 +322,9 @@ def test_create_refuses_without_writing(run, tmp_path):
     ("npm --prefix web install", True), ("npm --prefix web run build", False),
     ("pnpm --dir web add x", True), ("pip --cache-dir /tmp/c install x", True),
     ("git -C repo status", False), ("git --git-dir .git fetch", True),
+    # a substitution is a command of its own, read whole: its download counts
+    ("echo $(pip install x)", True), ("ls $(git rev-parse --show-toplevel)", False),
+    ("cd \"$(npm ci)\"", True),
 ])
 def test_command_needs_network(command, downloads):
     from vaf.tools.bash import command_needs_network

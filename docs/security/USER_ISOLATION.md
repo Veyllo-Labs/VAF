@@ -948,7 +948,11 @@ partition:
   jar and one holder entry (the first run to end releases it, so other processes see
   the browser free while the second run still drives it), and a second VAF
   installation under another OS account that drives the same container keeps a
-  record of its own - the pool is the answer to both.
+  record of its own - the pool is the answer to both. A run's end cuts only its own
+  waits: a stopped run's handover and DevTools waits are armed with that run's own
+  end, never with the browser's run counter, so one run ending never cuts another
+  run's handover mid-wipe. A stopped cross-user handover is refused like a failed one:
+  the owner record is already cleared, so the next holder wipes first.
   Downloads are not a residual: finished ones are swept to their owner's
   `VAF_Projects/<uid8>/Downloads`
   through the threat funnel (origin `browser_download`), only while that folder is an

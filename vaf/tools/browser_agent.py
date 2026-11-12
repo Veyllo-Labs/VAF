@@ -1362,14 +1362,27 @@ class BrowserAgentTool(BaseTool):
         # because a Stop does not wait for the executor thread, and a claim that
         # lands after this run's own end must not take the browser.
         _run_gen = run_generation(container_name=container_name)
-        await asyncio.get_running_loop().run_in_executor(
-            None,
-            lambda: hand_jar_to_run(user_scope_id=user_scope_id,
-                                    persistent=persistent,
-                                    container_name=container_name,
-                                    continuing=_handover is not None,
-                                    run_generation=_run_gen),
-        )
+        # The executor threads below outlive a Stop: the cancel lands at the
+        # await, not in the thread. Each wait in them (the handover's drain,
+        # mutex and probe wait, every CDP resolve) asks the thread's cancel flag,
+        # armed here with THIS run's end: its task is done before run() returns.
+        # Not the generation: every run's end moves that, so with
+        # VAF_BROWSER_MAX_PARALLEL above 1 one run's normal end would cut a
+        # second run's wait. Measured before: a stopped run's thread dialed a
+        # browser that was not answering for 29.1 s and held the handover mutex
+        # as long.
+        from vaf.core.bounded_run import cancel_when
+        _this_run_over = _outer_task.done
+
+        def _hand_jar_for_this_run():
+            with cancel_when(_this_run_over):
+                hand_jar_to_run(user_scope_id=user_scope_id,
+                                persistent=persistent,
+                                container_name=container_name,
+                                continuing=_handover is not None,
+                                run_generation=_run_gen)
+
+        await asyncio.get_running_loop().run_in_executor(None, _hand_jar_for_this_run)
         # Grant the run's own chat window a watch-only live stream of this run
         # (the window then shows the real streamed Chromium instead of the 1.5s
         # screenshot view; the screenshots keep streaming as the fallback and as
@@ -1414,14 +1427,11 @@ class BrowserAgentTool(BaseTool):
         # In the executor, not inline: the resolver polls with sleeps for up to
         # 30s, and run inside the coroutine that starves the loop - the stop
         # watchdog's cancel could not land during exactly the phase the user is
-        # most likely to abort (a browser that will not come up). The cancel
-        # lands at this await, not in the executor thread, so the resolve is
-        # armed with the run's generation: once the run has ended it stops
-        # dialing within 0.1 s instead of for the rest of its 30 s deadline.
-        from vaf.core.bounded_run import cancel_when
-
+        # most likely to abort (a browser that will not come up). Armed with this
+        # run's end like the handover above, so a stopped run stops dialing
+        # within 0.1 s instead of for the rest of the 30 s deadline.
         def _resolve_for_this_run():
-            with cancel_when(lambda: run_generation(container_name=container_name) != _run_gen):
+            with cancel_when(_this_run_over):
                 return self._resolve_cdp_url(
                     cdp_base or os.environ.get("VAF_BROWSER_CDP_URL", "http://localhost:9222")
                 )

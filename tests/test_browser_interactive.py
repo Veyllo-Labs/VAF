@@ -916,16 +916,17 @@ def _in_thread(fn):
     return t, result
 
 
-def _claim_as_another_process(scope):
+def _claim_as_another_process(scope, kind=None):
     """A claim on the shared browser's holder record, as a second VAF process
-    makes it (the record tells processes apart by pid and start time)."""
+    makes it (the record tells processes apart by pid and start time). A lease
+    unless `kind` says otherwise."""
     import os
     from vaf.core import browser_jar
     other = os.getppid()
     real = browser_jar._own_identity
     browser_jar._own_identity = lambda: (other, float(browser_jar._process_started(other) or 0.0))
     try:
-        return browser_jar.record_for("vaf-browser").claim(browser_jar.KIND_LEASE, scope)
+        return browser_jar.record_for("vaf-browser").claim(kind or browser_jar.KIND_LEASE, scope)
     finally:
         browser_jar._own_identity = real
 
@@ -1662,6 +1663,8 @@ def test_run_hook_evicts_lease_and_clears_flag_on_spawn(monkeypatch, tmp_path):
     monkeypatch.setattr(bi, "resolve_cdp_ws_url", lambda base: "ws://stub")
     monkeypatch.setattr(bi, "park_browser_idle", lambda base: None)
     monkeypatch.setattr(bi, "_cookie_op", lambda *a, **k: None)
+    # The eviction reads the person's page over the DevTools port; no test dials it.
+    monkeypatch.setattr(bi, "_current_page", lambda base: None)
     _no_ipc_tasks(monkeypatch)
     # A fresh singleton for this test; run() reaches it via get_interactive_manager.
     mgr = bi.InteractiveBrowserManager()
@@ -2810,3 +2813,175 @@ def test_a_refused_start_never_releases_an_entry_whose_release_is_waiting(mgr, m
     from vaf.core import browser_jar
     browser_jar.record_for("vaf-browser").release(token)
     assert mgr._release_when_drained == []
+
+
+# -- a handover whose run has ended stops waiting ------------------------------
+# The run's handover runs in an executor thread a Stop does not wait for. The run
+# arms bounded_run.cancel_when with its own end around it; every wait inside then
+# ends within about 0.1 s. Each test pins one wait, what the cut leaves behind
+# (no claim, owner record untouched, nothing wiped), and that the next holder of
+# another scope still wipes first.
+
+def _owned_by_scope_a(mgr):
+    """A finished run of scope-a: the record names scope-a as the profile's owner."""
+    from vaf.core import browser_jar
+    mgr.stop_for_agent_run()
+    mgr.hand_jar_to_run(user_scope_id="scope-a")
+    mgr.agent_run_ended()
+    instance = browser_jar.container_instance("vaf-browser")
+    assert browser_jar.record_for("vaf-browser").owner_is("scope-a", instance)
+    return instance
+
+
+def _stopped_handover(mgr, stop_after_s=0.3):
+    """scope-b's run starts its handover in a thread, armed with its own end, and
+    ends after `stop_after_s`. Returns (seconds the thread stayed after the end,
+    the exception it raised)."""
+    from vaf.core.bounded_run import cancel_when
+    mgr.stop_for_agent_run()
+    generation = mgr.run_generation()
+    ended = threading.Event()
+    box = {}
+
+    def _handover():
+        try:
+            with cancel_when(ended.is_set):
+                mgr.hand_jar_to_run(user_scope_id="scope-b", run_generation=generation)
+        except BaseException as e:  # noqa: BLE001 - asserted by the caller
+            box["error"] = e
+        box["left"] = time.monotonic()
+
+    t = threading.Thread(target=_handover, daemon=True)
+    t.start()
+    time.sleep(stop_after_s)
+    ended.set()
+    stop = time.monotonic()
+    t.join(2.0)
+    assert not t.is_alive(), "the stopped run's handover thread is still waiting"
+    mgr.agent_run_ended()
+    return box["left"] - stop, box.get("error")
+
+
+def _cut_left_nothing_and_the_next_holder_wipes(mgr, instance, wipes_before):
+    from vaf.core import browser_jar
+    assert mgr._handover_mutex.acquire(timeout=0.5), "the stopped handover still holds the mutex"
+    mgr._handover_mutex.release()
+    assert len(mgr._test_wipes) == wipes_before, "the stopped handover wiped"
+    assert browser_jar.record_for("vaf-browser").owner_is("scope-a", instance), \
+        "the stopped handover changed the owner record"
+    token, other = _claim_as_another_process("scope-x")
+    assert token is not None, f"the stopped handover left a claim in the record: {other}"
+    browser_jar.record_for("vaf-browser").release(token)
+    # The next holder of another scope still goes through the verified wipe first.
+    cookies_before = len(mgr._test_cookie_calls)
+    mgr.stop_for_agent_run()
+    mgr.hand_jar_to_run(user_scope_id="scope-c")
+    mgr.agent_run_ended()
+    assert len(mgr._test_wipes) == wipes_before + 1
+    assert "clear_cookies" in [op for op, _ in mgr._test_cookie_calls[cookies_before:]]
+    assert browser_jar.record_for("vaf-browser").owner_is("scope-c", instance)
+
+
+def test_a_stopped_handover_leaves_the_probe_wait_without_a_claim(mgr, monkeypatch):
+    """MUTATION: drop the cancel check from the wait loop of `_claim_shared` (the
+    thread waits out the probe, 60 s, holding the mutex). MUTATION: drop the
+    caller's `token is None and cancel_requested()` branch (the stop reads as
+    "held elsewhere")."""
+    from vaf.core import browser_jar
+    _no_ipc_tasks(monkeypatch)
+    instance = _owned_by_scope_a(mgr)
+    wipes = len(mgr._test_wipes)
+    probe, _ = _claim_as_another_process("scope-p", browser_jar.KIND_PROBE)
+    assert probe is not None
+    try:
+        stayed, error = _stopped_handover(mgr)
+    finally:
+        browser_jar.record_for("vaf-browser").release(probe)
+    assert stayed < 0.5, f"the handover sat in the probe wait {stayed:.2f} s after its run ended"
+    assert isinstance(error, bi.BrowserHandoverError) and "ended" in str(error), error
+    _cut_left_nothing_and_the_next_holder_wipes(mgr, instance, wipes)
+
+
+def test_a_stopped_handover_stops_waiting_for_the_previous_holders_transfer(mgr, monkeypatch):
+    """MUTATION: drop the cancel check from `_transfers_drained` (the thread waits
+    the full HANDOVER_WAIT_S, 30 s)."""
+    _no_ipc_tasks(monkeypatch)
+    instance = _owned_by_scope_a(mgr)
+    wipes = len(mgr._test_wipes)
+    with mgr._lock:
+        mgr._xfers += 1           # the previous holder's file transfer, still running
+    try:
+        stayed, error = _stopped_handover(mgr)
+    finally:
+        mgr._transfer_done()
+    assert stayed < 0.5, f"the handover waited for the transfer {stayed:.2f} s after its run ended"
+    assert isinstance(error, bi.BrowserHandoverError), error
+    _cut_left_nothing_and_the_next_holder_wipes(mgr, instance, wipes)
+
+
+def test_a_stopped_handover_does_not_queue_for_the_mutex(mgr, monkeypatch):
+    """MUTATION: acquire the handover mutex with a plain blocking `with` again (the
+    thread queues for the holder's whole turn)."""
+    _no_ipc_tasks(monkeypatch)
+    instance = _owned_by_scope_a(mgr)
+    wipes = len(mgr._test_wipes)
+    release = threading.Event()
+
+    def _another_handover():
+        with mgr._handover_mutex:
+            release.wait(5.0)
+
+    holder = threading.Thread(target=_another_handover, daemon=True)
+    holder.start()
+    time.sleep(0.05)
+    try:
+        stayed, error = _stopped_handover(mgr)
+    finally:
+        release.set()
+        holder.join(5.0)
+    assert stayed < 0.5, f"the handover queued for the mutex {stayed:.2f} s after its run ended"
+    assert isinstance(error, bi.BrowserHandoverError), error
+    _cut_left_nothing_and_the_next_holder_wipes(mgr, instance, wipes)
+
+
+def test_a_handover_whose_run_already_ended_starts_nothing(mgr, monkeypatch):
+    """The run's own end, not the generation, decides: the generation is still
+    current here (nothing moved it), only the run's end signal is set.
+    MUTATION: drop the cancel check on entry of `_handover_unless_cancelled`."""
+    from vaf.core.bounded_run import cancel_when
+    _no_ipc_tasks(monkeypatch)
+    instance = _owned_by_scope_a(mgr)
+    wipes = len(mgr._test_wipes)
+    mgr.stop_for_agent_run()
+    with cancel_when(lambda: True):
+        with pytest.raises(bi.BrowserHandoverError):
+            mgr.hand_jar_to_run(user_scope_id="scope-b", run_generation=mgr.run_generation())
+    mgr.agent_run_ended()
+    _cut_left_nothing_and_the_next_holder_wipes(mgr, instance, wipes)
+
+
+def test_a_stopped_cross_user_handover_says_so_in_the_security_log(mgr, monkeypatch):
+    """The refusal stays a security event, but its detail names the stop instead of
+    a browser failure. MUTATION: log `str(e)` as the detail again."""
+    from vaf.core.bounded_run import cancel_when
+    _no_ipc_tasks(monkeypatch)
+    _owned_by_scope_a(mgr)
+    events = []
+    import vaf.core.security_events as se
+    monkeypatch.setattr(se, "log_security_event",
+                        lambda kind, **kw: events.append((kind, kw.get("detail"))))
+    stopped = threading.Event()
+
+    def _cookie_op_of_a_run_that_is_stopped(base, op, cookies=None):
+        if op == "clear_cookies":
+            stopped.set()
+            raise RuntimeError(bi._CDP_WAIT_ABANDONED)
+
+    monkeypatch.setattr(bi, "_cookie_op", _cookie_op_of_a_run_that_is_stopped)
+    mgr.stop_for_agent_run()
+    with cancel_when(stopped.is_set):
+        with pytest.raises(bi.BrowserHandoverError):
+            mgr.hand_jar_to_run(user_scope_id="scope-b", run_generation=mgr.run_generation())
+    mgr.agent_run_ended()
+    assert events == [("browser_handover_failed", bi._HANDOVER_STOPPED_DETAIL)], events
+    assert "stopped by its owner" in bi._HANDOVER_STOPPED_DETAIL

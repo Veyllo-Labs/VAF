@@ -58,6 +58,7 @@ import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
+from vaf.core.bounded_run import cancel_requested
 from vaf.core.log_helper import append_domain_log
 
 
@@ -66,6 +67,8 @@ from vaf.core.log_helper import append_domain_log
 # ---------------------------------------------------------------------------
 
 _CDP_WAIT_ABANDONED = "Browser CDP wait abandoned: the run that asked for it has ended"
+_HANDOVER_STOPPED_DETAIL = ("the run was stopped by its owner during the user change; the "
+                            "browser stays unclaimed and is wiped before its next use")
 
 
 def resolve_cdp_ws_url(base: str) -> str:
@@ -82,8 +85,6 @@ def resolve_cdp_ws_url(base: str) -> str:
     of the pause, and a set flag raises without a further dial.
     """
     import urllib.request as _urlreq
-
-    from vaf.core.bounded_run import cancel_requested
 
     http_base = base.replace("ws://", "http://").replace("wss://", "https://")
     url = http_base.rstrip("/") + "/json/version"
@@ -1351,7 +1352,7 @@ class InteractiveBrowserManager:
         as they always have, and one holder entry: the first run to end releases
         it, so other processes see the browser free while the second run still
         drives it (and that end also retires a second run still waiting for a
-        probe, and cuts its CDP wait short). The pool is the answer to that, since a per-user instance is only
+        probe). The pool is the answer to that, since a per-user instance is only
         ever driven by that user's runs.
 
         `run_generation` is what run_generation() answered after the run passed
@@ -1366,14 +1367,22 @@ class InteractiveBrowserManager:
         the record for the life of the process and every other process saw the
         browser busy (measured: a coder's render_check busy until a restart). A
         run that is no longer current when its claim lands releases it and
-        raises BrowserHandoverError before it touches the jar. The same
-        generation arms bounded_run.cancel_when around the whole handover, so a
-        CDP wait that is under way when the run ends gives up within 0.1 s and
-        the mutex is free again: a cross-scope handover then refuses as before
-        (BrowserHandoverError, logged), a same-scope scrub or download policy is
-        logged as failed. Measured before: the stopped run's thread kept dialing
-        a browser that was not answering for 29.1 s and held the mutex as long.
-        Without the argument the generation is read here, on entry.
+        raises BrowserHandoverError before it touches the jar. Without the
+        argument the generation is read here, on entry.
+
+        The caller arms bounded_run.cancel_when with its OWN end around this
+        call (BrowserAgentTool._run_browser: the run's task is done), never with
+        the generation, which every run's end moves, a parallel run's too. Inside
+        that scope every wait here ends within about 0.1 s of the run's end: the
+        drain of the previous holder's transfers and the mutex (nothing held or
+        written yet), the wait for another process's probe (no claim taken), and
+        each CDP wait (resolve_cdp_ws_url). A cross-scope handover then refuses
+        as before (BrowserHandoverError, logged, owner left unknown); a same-scope
+        scrub or download policy is logged as failed. Measured before: a stopped
+        run's thread dialed a browser that was not answering for 29.1 s, or sat
+        in the probe wait for up to 60 s, holding the mutex as long. Not cut: the
+        container commands (the download purge, the wipe's marker poll), see
+        BROWSER_AGENT.md "Stopping a run".
 
         A SCOPE CHANGE is fail-closed: the verified profile wipe either
         confirms, or this raises BrowserHandoverError and the run must not
@@ -1383,46 +1392,64 @@ class InteractiveBrowserManager:
         scope = resolve_browser_scope(user_scope_id)
         with self._lock:
             generation = self._run_generation if run_generation is None else run_generation
-        # Every CDP wait below (the cookie ops, the download policy, the CDP step
-        # of the profile wipe) ends within 0.1 s once this run is no longer the
-        # current one: a Stop does not wait for this executor thread, and it
-        # used to dial a browser that was not answering for the rest of the
-        # 30 s deadline, twice on the same-scope path, holding the mutex.
-        from vaf.core.bounded_run import cancel_when
-        with cancel_when(lambda: self.run_generation() != generation):
-            self._wait_for_previous_holder(scope)
-            with self._handover_mutex:
+        self._wait_for_previous_holder(scope)
+        with self._handover_unless_cancelled():
+            with self._lock:
+                claimed = self._run_token is not None
+                current = self._run_generation == generation
+            if not current:
+                raise BrowserHandoverError("the run ended before it held the browser")
+            if self._dedicated_scope is None and not claimed:
+                # The run is claimed in the cross-process record before it takes
+                # the jar: a probe of another process is waited out, a lease or a
+                # run there refuses this one (BrowserHeldElsewhere). Released by
+                # agent_run_ended, like the in-process flag.
+                from vaf.core.browser_jar import KIND_RUN
+                token, other = self._claim_shared(KIND_RUN, scope, wait_s=self.PROBE_WAIT_S)
+                if token is None and cancel_requested():
+                    # Stopped while a probe of another process held the browser:
+                    # no claim was taken and nothing was written.
+                    append_domain_log("webui", "[browser_interactive] the run ended while it "
+                                               "waited for the shared browser; nothing claimed")
+                    raise BrowserHandoverError("the run ended while it waited for the browser")
+                if token is None:
+                    append_domain_log("webui", "[browser_interactive] shared browser held by "
+                                               f"another VAF process ({(other or {}).get('kind')}); "
+                                               "run refused")
+                    raise BrowserHeldElsewhere(
+                        f"shared browser in use by another VAF process ({(other or {}).get('kind')})")
                 with self._lock:
-                    claimed = self._run_token is not None
                     current = self._run_generation == generation
+                    if current:
+                        self._run_token = token
                 if not current:
-                    raise BrowserHandoverError("the run ended before it held the browser")
-                if self._dedicated_scope is None and not claimed:
-                    # The run is claimed in the cross-process record before it takes
-                    # the jar: a probe of another process is waited out, a lease or a
-                    # run there refuses this one (BrowserHeldElsewhere). Released by
-                    # agent_run_ended, like the in-process flag.
-                    from vaf.core.browser_jar import KIND_RUN
-                    token, other = self._claim_shared(KIND_RUN, scope, wait_s=self.PROBE_WAIT_S)
-                    if token is None:
-                        append_domain_log("webui", "[browser_interactive] shared browser held by "
-                                                   f"another VAF process ({(other or {}).get('kind')}); "
-                                                   "run refused")
-                        raise BrowserHeldElsewhere(
-                            f"shared browser in use by another VAF process ({(other or {}).get('kind')})")
-                    with self._lock:
-                        current = self._run_generation == generation
-                        if current:
-                            self._run_token = token
-                    if not current:
-                        self._release_shared(token)
-                        append_domain_log("webui", "[browser_interactive] the run ended while it "
-                                                   "waited for the shared browser; claim released")
-                        raise BrowserHandoverError("the run ended while it waited for the browser")
-                self._hand_jar_locked(scope, persistent=persistent, continuing=continuing)
-                with self._lock:
-                    if self._run_generation == generation:
-                        self._xfer_scope = scope
+                    self._release_shared(token)
+                    append_domain_log("webui", "[browser_interactive] the run ended while it "
+                                               "waited for the shared browser; claim released")
+                    raise BrowserHandoverError("the run ended while it waited for the browser")
+            self._hand_jar_locked(scope, persistent=persistent, continuing=continuing)
+            with self._lock:
+                if self._run_generation == generation:
+                    self._xfer_scope = scope
+
+    @contextlib.contextmanager
+    def _handover_unless_cancelled(self):
+        """Hold the handover mutex, unless the run asking for it ends first.
+
+        The mutex is acquired in 0.1 s steps and the thread's cancel flag is
+        asked between them and once more on entry, so a stopped run's handover
+        thread neither queues behind another holder for that holder's whole
+        turn nor starts a handover for a run that is over. A thread outside a
+        cancel_when scope waits exactly as a plain `with mutex` would."""
+        while not self._handover_mutex.acquire(timeout=0.1):
+            if cancel_requested():
+                raise BrowserHandoverError("the run ended before it held the browser")
+        try:
+            if cancel_requested():
+                raise BrowserHandoverError("the run ended before it held the browser")
+            yield
+        finally:
+            self._handover_mutex.release()
 
     @contextlib.contextmanager
     def hold_for_probe(self, user_scope_id: Optional[str] = None):
@@ -1589,11 +1616,14 @@ class InteractiveBrowserManager:
             self._workspace_wiped()
             append_domain_log(
                 "webui", f"[browser_interactive] {lane} cross-scope handover refused: {e}")
+            # A run stopped mid-handover is refused the same fail-closed way, but
+            # its detail must not read like a browser failure in the security log.
+            detail = (_HANDOVER_STOPPED_DETAIL if cancel_requested() else str(e))[:200]
             try:
                 from vaf.core.security_events import log_security_event
                 log_security_event("browser_handover_failed",
                                    username=str(scope or "")[:32],
-                                   detail=str(e)[:200], channel="browser")
+                                   detail=detail, channel="browser")
             except Exception:
                 pass
             if isinstance(e, BrowserHandoverError):
@@ -1626,6 +1656,11 @@ class InteractiveBrowserManager:
                 return token, None
             if (other or {}).get("kind") != browser_jar.KIND_PROBE or time.time() >= deadline:
                 return None, other or {"kind": "unknown"}
+            # A run that ended while it waited takes no claim (the caller asks
+            # cancel_requested() and refuses); outside a cancel_when scope the
+            # flag never answers True, so a lease waits as before.
+            if cancel_requested():
+                return None, other
             time.sleep(0.25)
 
     def _release_shared(self, token: Optional[str]) -> None:
@@ -1712,7 +1747,11 @@ class InteractiveBrowserManager:
                 left = deadline - time.monotonic()
                 if left <= 0:
                     return False
-                self._xfers_idle.wait(left)
+                # A handover whose run has ended stops waiting (see
+                # _handover_unless_cancelled): it holds nothing yet.
+                if cancel_requested():
+                    return False
+                self._xfers_idle.wait(min(left, 0.1))
             return True
 
     def _release_after_transfers(self, token: Optional[str]) -> None:

@@ -446,8 +446,7 @@ def _no_give_back_parker():
     The parker sleeps UNCLAIMED_PARK_S (20 s) and then parks the browser through its
     DevTools port. In a test it fires inside whatever test runs 20 s later: measured over
     the browser test files, 12 tests left one behind, each dialing 9222 twice after its
-    test had ended. The tests about parking call `_park_if_unclaimed` directly; the real
-    arming stays reachable as `_real_arm_unclaimed_parker`.
+    test had ended. The tests about parking call `_park_if_unclaimed` directly.
 
     Named boundary, the class rather than this instance: a generic "no thread a test
     started is alive at its teardown" guard was measured (402 tests of the browser,
@@ -462,7 +461,6 @@ def _no_give_back_parker():
     from vaf.core.browser_interactive import InteractiveBrowserManager as manager
 
     previous = manager._arm_unclaimed_parker
-    manager._real_arm_unclaimed_parker = previous
     manager._arm_unclaimed_parker = lambda self: None
     try:
         yield

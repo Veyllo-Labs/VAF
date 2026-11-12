@@ -131,10 +131,13 @@ rather than being abandoned, in one of two ways:
   arms the same thread-local flag for a worker `run_bounded` did not start, such as a loop executor
   thread. Inside the block `cancel_requested()` and `cancel_check()` also answer True once
   `check()` does; an outer `run_bounded` flag keeps working, the previous flag is restored on exit,
-  and a `check` that raises counts as False. The browser run arms it with its run generation around
-  the jar handover and its own CDP resolve, and `resolve_cdp_ws_url` honours the flag, so a stopped
-  run no longer leaves a thread dialing the DevTools port until the 30 s deadline. Internal, not
-  on the facade: two sites use it, both in the browser lane.
+  and a `check` that raises counts as False. The check must belong to the work that waits: the
+  browser run arms it with its own end (its task is done) around the jar handover and its own CDP
+  resolve, not with a counter another run's end also moves. `resolve_cdp_ws_url` and the
+  handover's waits (previous holder's transfer, the handover mutex, another process's page check)
+  honour the flag, so a stopped run no longer leaves a thread dialing the DevTools port until the
+  30 s deadline or holding the handover. Internal, not on the facade: two sites use it, both in the
+  browser lane.
 
 ## Background host commands (`vaf/core/processes.py`)
 

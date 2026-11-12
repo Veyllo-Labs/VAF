@@ -189,7 +189,7 @@ def test_stop_ends_a_run_hung_in_browser_startup(monkeypatch):
     """MUTATION 1: resolve the session id inside the browser thread again.
     MUTATION 2: start the stop watchdog only after the browser is up.
     MUTATION 3: drop the cancel checks from resolve_cdp_ws_url's retry loop.
-    MUTATION 4: drop the cancel_when around the body of hand_jar_to_run.
+    MUTATION 4: drop the cancel_when around hand_jar_to_run in _run_browser.
 
     The live incident: the run hung inside startup, produced nothing, and ten
     Stop presses did nothing. Two defects stacked - the run executes on a fresh
@@ -237,6 +237,71 @@ def test_stop_ends_the_runs_own_cdp_wait(monkeypatch):
     assert result == "Browser task stopped by user.", result
     assert took < 10.0, f"stop took {took:.1f}s - the watchdog never fired"
     _assert_no_worker_keeps_dialing(devtools, join_s=1.0)
+
+
+def _another_run_ends_while_this_one_waits(monkeypatch, sid):
+    """Run A of another account drives the same browser in parallel and ends
+    normally while run B (this test's, session `sid`) waits for the browser's
+    DevTools port. A is its run hooks around B's wait: the eviction at its start
+    and agent_run_ended at its end, which is what moves the browser's run
+    generation. B must go on waiting; then B is stopped and ends."""
+    import threading
+    import time as _time
+    import urllib.request as _req
+
+    import vaf.core.browser_interactive as bi
+    from vaf.core.subagent_ipc import session_context
+
+    _stub_browser_use(monkeypatch)
+    devtools = _RefusingDevTools()
+    monkeypatch.setattr(_req, "urlopen", devtools)
+    monkeypatch.setenv("VAF_BROWSER_CDP_WAIT_S", "8")
+    tq = TaskQueue()
+    tq.clear_stop(sid)
+    box = {}
+
+    def _run_b():
+        with session_context(sid):
+            box["result"] = BrowserAgentTool().run(task="probe")
+
+    bi.stop_for_agent_run()                     # A starts first
+    run_b = threading.Thread(target=_run_b, daemon=True)
+    try:
+        run_b.start()
+        deadline = _time.monotonic() + 5.0
+        while devtools.calls < 2 and _time.monotonic() < deadline:
+            _time.sleep(0.05)
+        assert devtools.calls >= 2, "run B never waited for the browser"
+        bi.agent_run_ended()                    # A ends normally
+        at_a_end = devtools.calls
+        _time.sleep(1.0)
+        assert run_b.is_alive(), f"run B ended when run A did: {box.get('result')}"
+        assert devtools.calls > at_a_end, "run B stopped waiting when run A ended"
+        tq.request_stop(sid)                    # now B is stopped
+        run_b.join(5.0)
+    finally:
+        tq.clear_stop(sid)
+    assert not run_b.is_alive(), "the stop did not end run B"
+    assert box.get("result") == "Browser task stopped by user.", box.get("result")
+    _assert_no_worker_keeps_dialing(devtools, join_s=3.0)
+
+
+def test_another_runs_end_does_not_cut_this_runs_handover(monkeypatch):
+    """MUTATION: arm the handover with the shared run generation again
+    (`run_generation(...) != _run_gen`): every run's end moves it, so with
+    VAF_BROWSER_MAX_PARALLEL above 1 one account's normal end cut another
+    account's handover, which then refused the run."""
+    _another_run_ends_while_this_one_waits(monkeypatch, "browseragent-parallel-handover")
+
+
+def test_another_runs_end_does_not_cut_this_runs_own_cdp_wait(monkeypatch):
+    """MUTATION: arm the run's own CDP resolve with the shared run generation again."""
+    import vaf.core.browser_interactive as bi
+
+    monkeypatch.setattr(bi, "hand_jar_to_run", lambda **kwargs: None)
+    monkeypatch.setattr(bi, "agent_stream_started", lambda *a, **k: None)
+    monkeypatch.setattr(bi, "sync_workspace_for_run", lambda **kwargs: [])
+    _another_run_ends_while_this_one_waits(monkeypatch, "browseragent-parallel-resolve")
 
 
 def test_a_finished_run_parks_the_browser_on_a_blank_tab(monkeypatch):

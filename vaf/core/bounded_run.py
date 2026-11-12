@@ -96,9 +96,10 @@ def cancel_when(check: Callable[[], bool]):
     answer True once ``check()`` does, and the code below polls them unchanged. Measured: a
     stopped browser run left its jar handover on a loop executor thread, dialing the closed
     DevTools port for the rest of the 30 s CDP deadline (40 refused connects, the handover
-    mutex held 29.1 s); armed with the run's generation, the wait ends at its next check. An
-    outer flag (an abandoned ``run_bounded`` worker) keeps working inside, and the previous
-    flag is put back on exit, an exception included.
+    mutex held 29.1 s); armed with that run's own end, the wait ends at its next check. The
+    check must belong to the work that waits: a counter that other work's end also moves cuts
+    that other work's waits too. An outer flag (an abandoned ``run_bounded`` worker) keeps
+    working inside, and the previous flag is put back on exit, an exception included.
 
     Named boundary: internal to VAF's own lanes, not on the facade. Two sites need it, both
     in the browser lane (the jar handover and the run's own CDP resolve), and ``bounded_run``

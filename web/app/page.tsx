@@ -3192,7 +3192,7 @@ function VAFDashboardContent() {
     const appRoomListenersRef = useRef(new Set<(lines: RoomMessage[]) => void>());
     // A line the page gave up on and showed the notice for: when it still turns up and the box
     // holds exactly its text, the box and the notice clear (appRoom.ts `lateLine`).
-    const appRoomLateRef = useRef<{ lineId: string; text: string } | null>(null);
+    const appRoomLateRef = useRef<{ lineId: string; text: string; sentFrom: string | null } | null>(null);
     const [appRoomSending, setAppRoomSending] = useState<RoomSend>(ROOM_SEND_IDLE);
     useEffect(() => {
         if (!roomOpening) return;
@@ -5224,7 +5224,7 @@ function VAFDashboardContent() {
                     taken();
                 } else {
                     setAppRoomError('timeout');
-                    if (lineId) appRoomLateRef.current = { lineId, text: next.text };
+                    if (lineId) appRoomLateRef.current = { lineId, text: next.text, sentFrom };
                 }
             } else {
                 setAppRoomError('failed');
@@ -6509,7 +6509,8 @@ function VAFDashboardContent() {
                             // box and the notice while the box still holds exactly its text.
                             const late = appRoomLateRef.current;
                             if (late) {
-                                const verdict = lateLine(lines, late.lineId, late.text, inputValueRef.current || '');
+                                const verdict = lateLine(lines, late.lineId, late.sentFrom,
+                                    roomViewRef.current?.room.roomId ?? null, late.text, inputValueRef.current || '');
                                 if (verdict !== 'wait') appRoomLateRef.current = null;
                                 if (verdict === 'clear') {
                                     setInput('');

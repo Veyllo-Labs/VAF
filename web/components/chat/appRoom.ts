@@ -150,15 +150,16 @@ export async function sendWithTimeout(fetchFn: typeof fetch, url: string, init: 
 }
 
 /** The id the page gives a line it sends (`client_id`), so it can recognise the line in the
- *  room if it stops waiting for the answer. "" where the browser has no `randomUUID`: the
- *  server then picks the id and a give-up cannot be confirmed. */
+ *  room if it stops waiting for the answer: a version 4 UUID. `randomUUID` exists only in a
+ *  secure context (HTTPS or localhost); on a plain-HTTP address in the local network the id is
+ *  built from `getRandomValues`, which every context has. */
 export function newLineId(): string {
-    try {
-        return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-            ? crypto.randomUUID() : '';
-    } catch {
-        return '';
-    }
+    if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+    const b = crypto.getRandomValues(new Uint8Array(16));
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    const h = Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
 
 /** A line of the room as the check reads it: the person's line keeps the page's id as its
@@ -215,13 +216,16 @@ export function confirmAfterGiveUp(socket: CheckSocket, listen: TranscriptListen
 }
 
 /** What a transcript means for a line the page gave up on and showed the notice for: `clear`
- *  when the line has arrived and the box still holds exactly its text (clear the box and the
- *  notice: a second Enter would send it twice), `drop` when it arrived but the box holds
- *  something else (stop watching, leave the box), `wait` otherwise. */
-export function lateLine(lines: ReadonlyArray<CheckedLine>, lineId: string, text: string,
-    box: string): 'clear' | 'drop' | 'wait' {
+ *  when the line has arrived, the view it was written in is still on screen and the box still
+ *  holds exactly its text (`clearAfterSend`; clear the box and the notice: a second Enter would
+ *  send it twice); `wait` while another view owns the box (its draft is not this line, even
+ *  with the same words); `drop` when the line arrived but the box holds something else (stop
+ *  watching, leave the box); `wait` before the line arrived. */
+export function lateLine(lines: ReadonlyArray<CheckedLine>, lineId: string, sentFrom: string | null,
+    onScreen: string | null, text: string, box: string): 'clear' | 'drop' | 'wait' {
     if (!holdsLine(lines, lineId)) return 'wait';
-    return box.trim() === text.trim() ? 'clear' : 'drop';
+    if (clearAfterSend(sentFrom, onScreen, text, box)) return 'clear';
+    return sentFrom !== onScreen ? 'wait' : 'drop';
 }
 
 /** Whether the composer is cleared when a line was taken: only while the view it was written in

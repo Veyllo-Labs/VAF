@@ -309,20 +309,54 @@ def test_the_give_up_check(script, expected):
     assert _run_async(_CHECK + script) == expected
 
 
-@pytest.mark.parametrize("box, verdict", [("Licht aus", "clear"), (" Licht aus ", "clear"),
-                                          ("Licht an", "drop")])
-def test_a_line_that_turns_up_after_the_notice_clears_the_box(box, verdict):
-    """After the notice the page keeps watching: the line turning up with the box still holding
-    exactly its text clears both (a second Enter would send it twice); with other text in the
-    box it stops watching and leaves the box. MUTATION: clear whatever the box holds - red."""
+@pytest.mark.parametrize("on_screen, box, verdict", [
+    ("app:veyllo_app", "Licht aus", "clear"), ("app:veyllo_app", " Licht aus ", "clear"),
+    ("app:veyllo_app", "Licht an", "drop"),
+    ("green123456", "Licht aus", "wait"),
+])
+def test_a_line_that_turns_up_after_the_notice_clears_the_box(on_screen, box, verdict):
+    """After the notice the page keeps watching: the line turning up while the room still owns
+    the box and the box holds exactly its text clears both (a second Enter would send it twice);
+    with other text it stops watching. Another chat on screen keeps its draft, even with the
+    same words: the page waits. MUTATION: clear whatever the box holds - red; MUTATION: drop the
+    view guard (`clearAfterSend`) - red (another chat's draft was deleted)."""
     lines = "[{id: 'L1', peer: 'person'}]"
-    assert _call(f"m.lateLine({lines}, 'L1', 'Licht aus', {json.dumps(box)})") == verdict
-    assert _call("m.lateLine([{id: 'x', peer: 'person'}], 'L1', 'Licht aus', 'Licht aus')") == "wait"
+    assert _call(f"m.lateLine({lines}, 'L1', m.APP_ROOM_ID, {json.dumps(on_screen)}, 'Licht aus', "
+                 f"{json.dumps(box)})") == verdict
+    assert _call("m.lateLine([{id: 'x', peer: 'person'}], 'L1', m.APP_ROOM_ID, m.APP_ROOM_ID, "
+                 "'Licht aus', 'Licht aus')") == "wait"
 
 
-def test_a_give_up_without_the_line_says_it_may_still_come():
-    """MUTATION: word a give-up as the plain failure - red."""
-    assert _call("m.refusalKey('timeout')") == "appRoomSendUnconfirmed"
+def test_a_line_id_is_a_uuid_also_without_random_uuid():
+    """`randomUUID` exists only in a secure context; on a plain-HTTP address in the local network
+    the id comes from `getRandomValues`. Never empty, a version 4 UUID either way. MUTATION:
+    return "" without `randomUUID` (the previous rule) - red."""
+    out = _run_async("""
+        const real = globalThis.crypto;
+        const a = m.newLineId();
+        // An insecure context: a crypto object without randomUUID.
+        Object.defineProperty(globalThis, 'crypto', {configurable: true,
+            value: {getRandomValues: arr => real.getRandomValues(arr)}});
+        const lacking = typeof globalThis.crypto.randomUUID;
+        const b = m.newLineId(), c = m.newLineId();
+        Object.defineProperty(globalThis, 'crypto', {configurable: true, value: real});
+        if (lacking !== 'undefined') throw new Error('randomUUID still there');
+        return [a, b, c];
+    """)
+    import re
+    uuid4 = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+    assert all(uuid4.match(x) for x in out), out
+    assert out[1] != out[2]
+
+
+def test_the_give_up_waits_five_seconds_by_default():
+    """The page calls the check without a wait of its own. MUTATION: `CONFIRM_WAIT_MS` 0 - red."""
+    assert _run_async(_CHECK + """
+        const p = m.confirmAfterGiveUp(open, listen, 'L1', undefined, timers);
+        fire();
+        await p;
+        return [m.CONFIRM_WAIT_MS, waited];
+    """) == [5000, 5000]
 
 
 @pytest.mark.parametrize("lang", ["de", "en", "ko", "tr"])

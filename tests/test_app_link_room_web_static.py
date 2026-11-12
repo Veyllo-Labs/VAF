@@ -236,15 +236,18 @@ def test_a_send_gives_up_after_its_timeout_and_scrolls_only_the_room():
     asked = give_up.index("await confirmAfterGiveUp(wsSocketRef.current, cb => {")
     decided = give_up.index("if (found) {")
     assert asked < decided < give_up.index("setAppRoomError('timeout');")
-    assert "appRoomLateRef.current = { lineId, text: next.text };" in give_up
+    assert "appRoomLateRef.current = { lineId, text: next.text, sentFrom };" in give_up
     assert "if (socket && socket.readyState === WebSocket.OPEN) {" in sender
     assert ("if (roomViewRef.current?.room.roomId === APP_ROOM_ID) {\n"
             "                pendingScrollRestore.current = 'bottom';") in sender
     handler = _code_only(_between(PAGE, "else if (data.type === 'room_transcript') {",
                                   "else if (data.type === 'room_invite_candidates')"))
     assert "appRoomListenersRef.current.forEach(cb => cb(lines));" in handler
-    assert ("const verdict = lateLine(lines, late.lineId, late.text, inputValueRef.current || '');"
+    assert ("const verdict = lateLine(lines, late.lineId, late.sentFrom,\n"
+            "                                    roomViewRef.current?.room.roomId ?? null, late.text, inputValueRef.current || '');"
             in handler)
+    # The check runs with the page's default wait (appRoom.ts `CONFIRM_WAIT_MS`).
+    assert "return () => { appRoomListenersRef.current.delete(cb); };\n                }, lineId);" in give_up
     view = _between(PAGE, "function RoomConversation(", "function VAFDashboardContent(")
     assert "m.state === 'not_delivered' && !d.quiet ?" in view
 

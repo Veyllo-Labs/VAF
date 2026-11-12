@@ -5165,9 +5165,11 @@ function VAFDashboardContent() {
             // one the panel belongs to.
             setTimeout(() => { requestWorkflowRunStateRef.current?.(); }, 1200);
         };
-        socket.onmessage = (event) => {
+        // ONE dispatch for a frame, whoever hands it over: the socket below, and the
+        // `live_replay` branch, which feeds a chat's recorded live events through the very
+        // same handlers so a replayed event is drawn exactly like a live one.
+        const handleFrame = (data: any) => {
             try {
-                const data = JSON.parse(event.data);
 
                 // CRITICAL: Filter by session to prevent cross-contamination!
                 const activeSessionId = currentSessionIdRef.current;
@@ -7576,6 +7578,11 @@ function VAFDashboardContent() {
                     }
                 }
             } catch (e) { console.error(e); }
+        };
+        socket.onmessage = (event) => {
+            let data: any;
+            try { data = JSON.parse(event.data); } catch (e) { console.error(e); return; }
+            handleFrame(data);
         };
         const scheduleReconnect = () => {
             if (cancelled) return;

@@ -18,6 +18,7 @@ import re
 from typing import List, Dict, Any, Optional, Tuple
 from rich import print
 from rich.markup import escape
+from vaf.core.terminal_text import terminal_text
 from pathlib import Path
 
 # Dependency imports are handled at setup / assumed present when requirements are installed.
@@ -11616,8 +11617,9 @@ class Agent:
                                 # Pass RAW chunk so <think> tags can be parsed by the TUI
                                 stream_callback(chunk)
                             else:
-                                # Fallback for standalone usage: Print directly
-                                print(escape(chunk), end="")
+                                # Fallback for standalone usage: Print directly, without the
+                                # chunk's control characters (a steered reply may carry them).
+                                print(escape(terminal_text(chunk)), end="")
                                 sys.stdout.flush()
                             
                             # Also populate full_content for downstream checks

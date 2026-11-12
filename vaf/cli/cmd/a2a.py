@@ -33,6 +33,8 @@ from typing import List, Optional
 
 import typer
 
+from vaf.core.terminal_text import terminal_json, terminal_text
+
 app = typer.Typer(help="Agent-to-agent rooms: join, talk, read")
 
 # Exit codes, so a script or an agent can branch without parsing text.
@@ -44,6 +46,14 @@ EXIT_TIMEOUT = 4        # `wait` ran out of time: NOT an error, just nothing arr
 EXIT_CLOSED = 5         # `wait` ended because the room was closed
 
 _stop = False
+
+
+def _echo(message, **kwargs) -> None:
+    """Every human line of this CLI. Room text is written by other agents, some not on this
+    machine, so its control characters are removed before it reaches the terminal: an escape
+    sequence in a peer's message must not set the title, clear the screen or write the
+    clipboard of whoever reads the room. A file written with `--out` keeps the text as stored."""
+    typer.echo(terminal_text(message), **kwargs)
 
 
 def _install_stop_handler() -> None:
@@ -137,11 +147,11 @@ def _hint(message: str) -> None:
     peer parsing that stream would break on a sentence. stderr reaches a human or
     an agent reading its own tool output, and is invisible to a pipe.
     """
-    typer.echo(message, err=True)
+    _echo(message, err=True)
 
 
 def _fail(message: str, code: int) -> None:
-    typer.echo(message, err=True)
+    _echo(message, err=True)
     raise typer.Exit(code)
 
 
@@ -531,8 +541,10 @@ def _me(room, *, required: bool = True, as_peer: str = ""):
 
 
 def _emit(row: dict) -> None:
-    """One frame, one line, flushed. A reader on the other end is blocking on it."""
-    sys.stdout.write(json.dumps(row, ensure_ascii=False) + "\n")
+    """One frame, one line, flushed. A reader on the other end is blocking on it. The
+    control characters json.dumps leaves raw are escaped, so the line parses to the same
+    row and a terminal showing it obeys none of them."""
+    sys.stdout.write(terminal_json(row) + "\n")
     sys.stdout.flush()
 
 
@@ -1054,14 +1066,14 @@ def skill(room_id: str = typer.Argument(...),
         if record is None:
             _fail(f"There is no room '{room_id}' on this machine.", EXIT_NO_ROOM)
         packet = record.get("welcome") or {}
-        typer.echo(client_skill(
+        _echo(client_skill(
             room_id=room_id, role=str(record.get("role") or "peer"),
             room_kind=str(packet.get("kind") or "round"),
             workspace=str(packet.get("workspace") or "") or None))
         return
     identity = _me(room, as_peer=as_peer)
-    typer.echo(client_skill(room_id=room_id, role=identity.role, room_kind=room.kind,
-                            workspace=room.workspace_dir(create=False)))
+    _echo(client_skill(room_id=room_id, role=identity.role, room_kind=room.kind,
+                       workspace=room.workspace_dir(create=False)))
 
 
 @app.command()
@@ -1249,7 +1261,7 @@ def howto(room_id: str = typer.Argument(...),
         if record is None:
             _fail(f"There is no room '{room_id}' on this machine.", EXIT_NO_ROOM)
         packet = record.get("welcome") or {}
-        typer.echo(briefing(
+        _echo(briefing(
             room_id=room_id, ticket="", role=str(record.get("role") or "peer"),
             display=str((packet.get("you") or {}).get("display") or "guest"),
             room_kind=str(packet.get("kind") or "round"),
@@ -1263,7 +1275,7 @@ def howto(room_id: str = typer.Argument(...),
     # escaped inside a JSON string is a briefing nobody follows. No lane for other
     # machines: a member's briefing (`already_in`) is the command reference and shows
     # neither the lane nor why there is none, so choosing it was a lookup for nothing.
-    typer.echo(briefing(
+    _echo(briefing(
         room_id=room_id, ticket="", role=identity.role, display=identity.display,
         room_kind=room.kind, topic=str(room.manifest.get("topic") or ""),
         workspace=room.workspace_dir(create=False), already_in=identity.peer_id,
@@ -1732,7 +1744,7 @@ def log(room_id: str = typer.Argument(...),
             if frame.kind != "say":
                 label += f" ({frame.kind})"
             text = str((frame.body or {}).get("text") or "").strip()
-            typer.echo(f"{label}: {text}".rstrip())
+            _echo(f"{label}: {text}".rstrip())
         return
     _me(room, required=False)
     shown = 0
@@ -1749,7 +1761,7 @@ def log(room_id: str = typer.Argument(...),
             aimed = str((entry.get("to") or {}).get("peer") or "")
             if aimed:
                 label += f" -> {members.get(aimed, aimed)}"
-            typer.echo(f"{label}: {describe(entry)}".rstrip())
+            _echo(f"{label}: {describe(entry)}".rstrip())
         return len(rows)
 
     rows = room.transcript()
@@ -1788,16 +1800,16 @@ def audit(room_id: str = typer.Argument(...),
         return
 
     if not rows:
-        typer.echo(f"{room_id}: nothing has happened yet.")
+        _echo(f"{room_id}: nothing has happened yet.")
         return
-    typer.echo(f"{room_id} ({room.kind}{', closed' if room.closed else ''}) - "
-               f"{len(rows)} events")
+    _echo(f"{room_id} ({room.kind}{', closed' if room.closed else ''}) - "
+          f"{len(rows)} events")
     for row in rows:
         when = frame_clock(row.get("ts"))
         line = f"{when} {row['label']} [{row['role']}] {row['event']}"
         if row.get("detail"):
             line += f" ({row['detail']})"
-        typer.echo(line)
+        _echo(line)
 
 
 @app.command()
@@ -1861,6 +1873,6 @@ def export(room_id: str = typer.Argument(...),
     if output:
         from pathlib import Path
         Path(output).write_text(text, encoding="utf-8")
-        typer.echo(f"Written to {output}")
+        _echo(f"Written to {output}")
     else:
-        typer.echo(text)
+        _echo(text)

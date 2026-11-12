@@ -5,7 +5,6 @@ import typer
 import inquirer
 from rich.table import Table
 from rich.text import Text
-from rich.console import Console
 from rich.terminal_theme import TerminalTheme
 from huggingface_hub import HfApi, hf_hub_download
 from vaf.core.config import (
@@ -15,6 +14,7 @@ from vaf.core.config import (
 )
 from vaf.core.provider_registry import PROVIDER_SPECS, api_provider_names
 from vaf.cli.ui import UI
+from vaf.core.terminal_text import TerminalConsole
 import os
 import sys
 import time
@@ -430,7 +430,7 @@ def _get_color_box(color: str) -> str:
     """Create a small color box by rendering with Rich and extracting ANSI codes."""
     # Use Rich to render the color box, then extract the ANSI string
     # This ensures compatibility with inquirer
-    console = Console(force_terminal=True, color_system="truecolor", file=StringIO())
+    console = TerminalConsole(force_terminal=True, color_system="truecolor", file=StringIO())
     console.print(f"[{color} on {color}]██[/{color} on {color}]", end="")
     ansi_string = console.file.getvalue()
     console.file.close()

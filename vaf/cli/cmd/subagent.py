@@ -32,6 +32,18 @@ app = typer.Typer()
 # The child owns its terminal window: closes on success, holds on failure or with
 # --no-auto-close. Single implementation, shared with the workflow runner.
 from vaf.cli.autoclose import AUTO_CLOSE_DELAY, finish_terminal  # noqa: F401
+from vaf.core.terminal_text import terminal_text
+
+
+def _safe_print(*args, **kwargs):
+    """Print that handles pipe/encoding errors (WebUI piped stdout). Every argument goes out
+    without its control characters: what this terminal shows is the task's result, model
+    text that a web page or a mail it read can steer."""
+    try:
+        print(*(terminal_text(arg) for arg in args), **kwargs)
+        sys.stdout.flush()
+    except (BrokenPipeError, OSError, IOError):
+        pass
 
 
 @app.command(name="run")
@@ -129,14 +141,6 @@ def run_subagent(
         except: pass
     
     success = False
-
-    def _safe_print(*args, **kwargs):
-        """Print that handles pipe/encoding errors (WebUI piped stdout)."""
-        try:
-            print(*args, **kwargs)
-            sys.stdout.flush()
-        except (BrokenPipeError, OSError, IOError):
-            pass
 
     try:
         result = None

@@ -19,13 +19,13 @@ queued on the task queue of the process that runs the chats, and this command is
 its own with a queue nobody drains. The agent hears about the send at that chat's next turn
 instead (`outbound_hold.decision_notes`), the same way it hears about a discard.
 """
-import json
 import sys
 from typing import Optional
 
 import typer
 
 from vaf.cli.ui import UI
+from vaf.core.terminal_text import terminal_json
 
 app = typer.Typer(help="Messages your agent prepared and has not sent.")
 
@@ -94,7 +94,7 @@ def list_pending(
     rows = pending(username, scope, limit=max(1, int(limit)))
     if json_out:
         for row in rows:
-            sys.stdout.write(json.dumps(row, ensure_ascii=False) + "\n")
+            sys.stdout.write(terminal_json(row) + "\n")
         return
     UI.console.print(f"[bold]{len(rows)} waiting to be sent[/bold]")
     if not rows:

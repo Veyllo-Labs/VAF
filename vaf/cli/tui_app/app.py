@@ -21,6 +21,7 @@ from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
+from textual.filter import LineFilter
 
 from vaf.cli.commands import parse, suggest
 from vaf.cli.history import append_history, load_history
@@ -66,6 +67,27 @@ from vaf.cli.tui_app.widgets import (
     UserMessage,
     WakeMessage,
 )
+from vaf.core.terminal_text import terminal_segments
+
+
+class TerminalTextFilter(LineFilter):
+    """Removes control characters from every rendered line of the app.
+
+    Room peers, the Veyllo App, contacts, sub-agents and the model all reach the transcript
+    and the overlays, and Textual removes only BEL, BS, VT, FF and CR from what it shows: an
+    ESC or a C1 byte in a peer's line went to the terminal and set its title or cleared the
+    screen. Textual applies an app's line filters to every strip of every widget, toast and
+    overlay, so this one filter covers the more than 110 places that put text on screen,
+    including the next one. The removed characters have cell width 0, so a line keeps its
+    layout. One definition with the Rich consoles: `vaf.core.terminal_text`.
+    """
+
+    def apply(self, segments, background):
+        return list(terminal_segments(segments))
+
+
+# One instance: Textual caches each filtered strip per filter object.
+_TERMINAL_TEXT_FILTER = TerminalTextFilter()
 
 
 def _vaf_version() -> str:
@@ -442,6 +464,9 @@ class VafApp(App):
         self._tasks_stop = threading.Event()
         from vaf.cli.autosuggest import create_autosuggest
         self._suggester = create_autosuggest()
+
+    def get_line_filters(self):
+        return [*super().get_line_filters(), _TERMINAL_TEXT_FILTER]
 
     # theme plumbing -----------------------------------------------------------------
     def get_css_variables(self):

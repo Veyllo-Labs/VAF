@@ -87,8 +87,11 @@ every agent on the machine; see [VLLM_ENGINE.md](llm/VLLM_ENGINE.md).
 ### Streaming
 
 ```python
+import vaf
+
 agent = Agent(config={"provider": "anthropic"})
-agent.run("Explain async/await.", on_token=lambda s: print(s, end="", flush=True))
+agent.run("Explain async/await.",
+          on_token=lambda s: print(vaf.terminal_text(s), end="", flush=True))
 ```
 
 `on_token` receives text deltas as they arrive. For reasoning models the deltas
@@ -833,6 +836,39 @@ What an embedded agent can and cannot do on the host - the short version of
   stranger on your behalf runs under YOUR identity. Bound it by what it may
   do instead: `Agent.set_allowed_tools(...)` (its own section below) holds
   for offering and execution, with no identity exempt.
+
+---
+
+## Showing text on a terminal: `vaf.terminal_text`
+
+A terminal obeys what it is sent. A model reply, a room entry or any message another party
+wrote can carry escape sequences: `ESC ] 0 ;` sets the window title, `ESC [ 2J` clears the
+screen, OSC 8 plants a link with a label of the sender's choosing and OSC 52 writes the
+clipboard where the emulator allows it. The model counts as another party here, because a
+web page or a mail it reads can steer what it writes. `print()` passes all of it through,
+and Rich and Textual remove only BEL, BS, VT, FF and CR.
+
+```python
+import vaf
+
+print(vaf.terminal_text(answer))
+```
+
+`vaf.terminal_text(value) -> str` removes every C0 control character except tab and
+newline, DEL, every C1 character, and the twelve bidirectional controls (U+061C, U+200E,
+U+200F, U+202A-U+202E, U+2066-U+2069), which reorder how a line reads. Everything else is
+kept: umlauts, Arabic, CJK, emoji with their joiners, and zero-width characters, which drive
+no terminal. Only the characters go, never the rest of a sequence, so `ESC ] 0 ; title BEL`
+shows as `]0;title`; that also makes it safe per chunk of a stream, since no sequence has to
+be seen whole. `None` gives `""` and anything else is `str()`-ed.
+
+Use it on whatever reaches a terminal and was not written by you: streamed tokens and
+`run()`'s answer, room entries and labels, a tool's output, an event's arguments. It is for
+terminals only: store, send and return the original text, and put text into HTML as text.
+VAF's own terminals apply this same definition at their sinks (the full-screen app's line
+filter, every Rich console it builds, its JSON lines and its last-resort log handler); see
+"Text from others on a terminal" in
+[USER_ISOLATION.md](security/USER_ISOLATION.md#text-from-others-on-a-terminal).
 
 ---
 
@@ -2319,8 +2355,9 @@ room.say(me, "anyone looked at the logs?")
 text = "@Bob the logs, please"                 # a leading @Name wakes ONE member and the
 room.say(me, text, to=room.addressee(text))   # others read along; to_peer=<handle> when known
 room.react(me, frame.id, "+1")                # an emoji on one message; wakes nobody
-for entry in room.transcript():
-    print(entry["label"], vaf.describe_room_entry(entry))
+for entry in room.transcript():                # other agents wrote this: print it clean
+    print(vaf.terminal_text(entry["label"]),
+          vaf.terminal_text(vaf.describe_room_entry(entry)))
 ```
 
 Everything an agent writes into a room is read by every member and kept. When your agent's
@@ -3025,6 +3062,10 @@ Stable public surface (safe to build on):
   `[Error] ` status or a provider's `[API Error from` sentinel anywhere in it, also
   after text an earlier round streamed. A reply that quotes either marker counts as a
   failure, the safe side. Never raises; anything but a non-empty string is False.
+- `vaf.terminal_text(value) -> str` - text as a terminal may show it. The promise is the
+  removed set (every C0 character but tab and newline, DEL, every C1 character, the twelve
+  bidirectional controls), that every other character is kept, that only the characters of
+  a sequence are removed, and that `None` gives `""`. See "Showing text on a terminal".
 - `last_turn` on both `Agent` and `CoreAgent`, a frozen `vaf.TurnStatus(failed, failure,
   rounds)` with `rounds` a tuple of frozen `vaf.TurnRound(round, tool_call_ids, answer)`
   (outside equality, see "Streaming"),
@@ -3048,7 +3089,7 @@ façade, and no embedder has asked for one. If you need it, say so - the export 
 one lazy branch away, and it is not being added on speculation.
 `vaf.ToolCaller`, `vaf.ToolCallOutcome`, `vaf.advise_tools`, `vaf.ToolRequest`, `vaf.set_account_allowlist_resolver`,
 `vaf.extract_pdf_markdown`, `vaf.install_thread_excepthook`, `vaf.is_error_reply`,
-`vaf.TurnStatus`, `vaf.TurnRound`, `vaf.stored_turn_copy` and `vaf.model_text`
+`vaf.terminal_text`, `vaf.TurnStatus`, `vaf.TurnRound`, `vaf.stored_turn_copy` and `vaf.model_text`
 are the deliberate exceptions: they live in `vaf.core` but are re-exported on the façade, and the
 façade names are the ones to import.
 

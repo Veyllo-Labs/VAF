@@ -2559,10 +2559,10 @@ def list_sessions(
     limit: int = typer.Option(20, "--limit", "-n", help="Maximum sessions to show")
 ):
     """List all saved sessions."""
-    from rich.console import Console
+    from vaf.core.terminal_text import TerminalConsole
     from rich.table import Table
     
-    console = Console()
+    console = TerminalConsole()
     manager = get_manager()
     sessions = manager.list(limit=limit)
     
@@ -2595,9 +2595,9 @@ def load_session(
     session_id: str = typer.Argument(..., help="Session ID to load")
 ):
     """Load a saved session."""
-    from rich.console import Console
+    from vaf.core.terminal_text import TerminalConsole
     
-    console = Console()
+    console = TerminalConsole()
     manager = get_manager()
     
     try:
@@ -2614,9 +2614,9 @@ def delete_session(
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation")
 ):
     """Delete a saved session."""
-    from rich.console import Console
+    from vaf.core.terminal_text import TerminalConsole
     
-    console = Console()
+    console = TerminalConsole()
     manager = get_manager()
     
     if not force:
@@ -2638,9 +2638,9 @@ def export_session(
     output: str = typer.Option(None, "--output", "-o", help="Output file path")
 ):
     """Export a session to file."""
-    from rich.console import Console
+    from vaf.core.terminal_text import TerminalConsole
     
-    console = Console()
+    console = TerminalConsole()
     manager = get_manager()
     
     try:
@@ -2665,11 +2665,11 @@ def search_sessions(
     limit: int = typer.Option(10, "--limit", "-n", help="Maximum results")
 ):
     """Search your own sessions by content."""
-    from rich.console import Console
+    from vaf.core.terminal_text import TerminalConsole
     from rich.table import Table
     from vaf.core.identity_binding import resolve_owner_identity
 
-    console = Console()
+    console = TerminalConsole()
     manager = get_manager()
 
     # The CLI has no authentication: the local user is the machine owner, so the

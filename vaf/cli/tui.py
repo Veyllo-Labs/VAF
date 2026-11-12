@@ -9,7 +9,7 @@ import os
 import sys
 import time
 import threading
-from rich.console import Console, Group
+from rich.console import Group
 from rich.panel import Panel
 from rich.text import Text
 from rich.align import Align
@@ -39,6 +39,7 @@ from typing import Optional, Callable
 from datetime import datetime
 
 from vaf.cli.themes import ThemeManager
+from vaf.core.terminal_text import TerminalConsole, terminal_text
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # BOX STYLES (using built-in Rich boxes)
@@ -94,7 +95,7 @@ class TUI:
     def __init__(self, theme: str = None):
         self.theme_name = theme or ThemeManager.current()
         self.theme = ThemeManager.get_theme(self.theme_name)
-        self.console = Console(
+        self.console = TerminalConsole(
             force_terminal=True,
             color_system="truecolor"
         )
@@ -318,6 +319,9 @@ O))         O))       O))))))))
             # prompt_toolkit doesn't support raw ANSI in FormattedText easily
             import re
             status = re.sub(r'\x1b\[[0-9;]*m', '', status)
+            # Then every other control character: the status carries workflow and task names,
+            # and prompt_toolkit replaces ESC with "?" but writes a C1 byte as it is.
+            status = terminal_text(status)
             
             # CRITICAL: Check for pending sub-agent results while waiting for input
             # If results are ready, auto-exit the prompt to process them
@@ -1106,7 +1110,7 @@ class UI:
         "highlight": "bold magenta",
         "normal": "white"
     })
-    console = Console(theme=theme)
+    console = TerminalConsole(theme=theme)
 
     @staticmethod
     def print(text: str = "", style: str = None, end: str = "\n"):

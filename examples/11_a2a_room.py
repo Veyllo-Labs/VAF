@@ -82,9 +82,11 @@ def main() -> None:
     # ── read it back ────────────────────────────────────────────────────────
     # Canonical order is (lamport, sender, seq) and never the wall clock, so every
     # reader computes the same sequence with nothing to agree on first.
+    # Other agents wrote these lines, some maybe on another machine: terminal_text removes
+    # the control characters, so an escape sequence in a message cannot drive your terminal.
     print("\ntranscript:")
     for entry in room.transcript():
-        print(f"   {entry['label']:<12} {vaf.describe_room_entry(entry)}")
+        print(vaf.terminal_text(f"   {entry['label']:<12} {vaf.describe_room_entry(entry)}"))
 
     # ── the task board, derived from the same transcript ────────────────────
     # A task is born when a report answers the message that asked for the work

@@ -484,10 +484,10 @@ def run_workflow(
 @app.command(name="list")
 def list_workflows():
     """List all available workflows."""
-    from rich.console import Console
+    from vaf.core.terminal_text import TerminalConsole
     from vaf.workflows.templates import WORKFLOW_TEMPLATES
 
-    console = Console()
+    console = TerminalConsole()
     console.print("\n[bold cyan]Available Workflows[/bold cyan]\n")
 
     for wf_id, template in WORKFLOW_TEMPLATES.items():

@@ -205,6 +205,12 @@ Constructed example (a run that lists a directory):
   Usage errors (missing `--prompt`, bad `--output-format`) go to stderr with
   exit code 2. Unhandled exceptions print a traceback to stderr and exit
   non-zero.
+- Nothing on stdout carries a terminal control character, since the answer can be
+  steered by what the model read. The `text` answer is printed without them
+  (`vaf.terminal_text`: C0 except tab and newline, DEL, C1, the bidirectional
+  controls). The JSON lines write the ones `json.dumps` leaves raw (DEL, C1, the
+  bidirectional controls) as `\uXXXX` escapes, so a parser gets exactly the
+  strings the turn produced; a consumer that needs the exact text reads `json`.
 - In `json`/`stream-json` mode the common UI printers are silenced, but not
   every residual line is guaranteed suppressed; a strict consumer should
   ignore stdout lines that do not parse as JSON.

@@ -350,9 +350,9 @@ def create_snapshot(
     message: str = typer.Option(None, "--message", "-m", help="Snapshot message")
 ):
     """Create a new snapshot of current state."""
-    from rich.console import Console
+    from vaf.core.terminal_text import TerminalConsole
     
-    console = Console()
+    console = TerminalConsole()
     snap = get_snapshot()
     
     with console.status("Creating snapshot..."):
@@ -369,10 +369,10 @@ def list_snapshots(
     limit: int = typer.Option(20, "--limit", "-n", help="Maximum snapshots to show")
 ):
     """List available snapshots."""
-    from rich.console import Console
+    from vaf.core.terminal_text import TerminalConsole
     from rich.table import Table
     
-    console = Console()
+    console = TerminalConsole()
     snap = get_snapshot()
     snapshots = snap.list(limit=limit)
     
@@ -404,9 +404,9 @@ def restore_snapshot(
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation")
 ):
     """Restore to a previous snapshot."""
-    from rich.console import Console
+    from vaf.core.terminal_text import TerminalConsole
     
-    console = Console()
+    console = TerminalConsole()
     snap = get_snapshot()
     
     if not force:
@@ -427,9 +427,9 @@ def restore_snapshot(
 @snapshot_app.command("undo")
 def undo_changes():
     """Undo to the last snapshot (shortcut for restore)."""
-    from rich.console import Console
+    from vaf.core.terminal_text import TerminalConsole
     
-    console = Console()
+    console = TerminalConsole()
     snap = get_snapshot()
     
     with console.status("Undoing changes..."):
@@ -446,10 +446,10 @@ def show_diff(
     snapshot_id: str = typer.Argument(None, help="Snapshot ID to diff against")
 ):
     """Show diff from snapshot to current state."""
-    from rich.console import Console
+    from vaf.core.terminal_text import TerminalConsole
     from rich.syntax import Syntax
     
-    console = Console()
+    console = TerminalConsole()
     snap = get_snapshot()
     
     diff_output = snap.diff(snapshot_id)
@@ -466,9 +466,9 @@ def clean_snapshots(
     keep: int = typer.Option(50, "--keep", "-k", help="Number of snapshots to keep")
 ):
     """Remove old snapshots."""
-    from rich.console import Console
+    from vaf.core.terminal_text import TerminalConsole
     
-    console = Console()
+    console = TerminalConsole()
     snap = get_snapshot()
     
     removed = snap.clear_old(keep=keep)

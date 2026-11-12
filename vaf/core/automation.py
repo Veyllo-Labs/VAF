@@ -2853,10 +2853,10 @@ def refresh_scheduler_from_disk(origin: str = "unknown") -> bool:
 @automation_app.command("list")
 def list_automations():
     """List all automation tasks."""
-    from rich.console import Console
+    from vaf.core.terminal_text import TerminalConsole
     from rich.table import Table
     
-    console = Console()
+    console = TerminalConsole()
     manager = get_manager()
     tasks = manager.list()
     
@@ -2903,9 +2903,9 @@ def create_automation(
     on_frame: str = typer.Option("", "--on-frame", help="With --on-reaction: only a reaction on this message id"),
 ):
     """Create a new automation task."""
-    from rich.console import Console
+    from vaf.core.terminal_text import TerminalConsole
     
-    console = Console()
+    console = TerminalConsole()
     manager = get_manager()
     
     # Extract and clarify parameters
@@ -2961,9 +2961,9 @@ def run_automation(
     task_id: str = typer.Argument(..., help="Task ID to run")
 ):
     """Manually run an automation task."""
-    from rich.console import Console
+    from vaf.core.terminal_text import TerminalConsole
     
-    console = Console()
+    console = TerminalConsole()
     manager = get_manager()
     
     # This command is ALSO what run_task spawns into a terminal window (new_terminal=True
@@ -2999,9 +2999,9 @@ def delete_automation(
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation")
 ):
     """Delete an automation task."""
-    from rich.console import Console
+    from vaf.core.terminal_text import TerminalConsole
     
-    console = Console()
+    console = TerminalConsole()
     manager = get_manager()
     
     task = manager.get(task_id)
@@ -3022,12 +3022,12 @@ def delete_automation(
 @automation_app.command("start")
 def start_scheduler():
     """Start the automation scheduler daemon."""
-    from rich.console import Console
+    from vaf.core.terminal_text import TerminalConsole
     from rich.live import Live
     from rich.panel import Panel
     from rich.text import Text
     
-    console = Console()
+    console = TerminalConsole()
     
     manager = get_manager()
     tasks = manager.list(enabled_only=True)
@@ -3081,9 +3081,9 @@ def disable_automation(task_id: str = typer.Argument(..., help="Task ID")):
 @automation_app.command("reload")
 def reload_automations():
     """Reload all automations from disk (useful after manual file edits)."""
-    from rich.console import Console
+    from vaf.core.terminal_text import TerminalConsole
     
-    console = Console()
+    console = TerminalConsole()
     manager = get_manager()
     
     console.print("[cyan]Reloading automations...[/cyan]")

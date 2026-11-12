@@ -9,12 +9,17 @@
   tool_start / tool_end / gate_required / gate_decision.
 
 Full channel contract: docs/OBSERVABILITY.md.
+
+Everything printed here passes vaf.terminal_text first: the model's text can be steered by
+a web page or a mail it read, and an escape sequence in it would otherwise reach your
+terminal as a command (set the title, clear the screen, write the clipboard).
 """
+import vaf
 from vaf import Agent
 
 
 def on_token(delta: str) -> None:
-    print(delta, end="", flush=True)
+    print(vaf.terminal_text(delta), end="", flush=True)
 
 
 def on_event(evt: dict) -> None:
@@ -22,13 +27,13 @@ def on_event(evt: dict) -> None:
     # by the engine, so you would lose events silently.
     kind = evt.get("type")
     if kind == "tool_start":
-        print(f"\n[event] tool_start: {evt.get('tool')} args={evt.get('args')}")
+        print(vaf.terminal_text(f"\n[event] tool_start: {evt.get('tool')} args={evt.get('args')}"))
     elif kind == "tool_end":
-        print(f"\n[event] tool_end:   {evt.get('tool')}")
+        print(vaf.terminal_text(f"\n[event] tool_end:   {evt.get('tool')}"))
     else:
         # gate_required / gate_decision (gate_decision never fires in
         # non-interactive mode; gated tools return an error string instead).
-        print(f"\n[event] {kind}: {evt}")
+        print(vaf.terminal_text(f"\n[event] {kind}: {evt}"))
 
 
 def main() -> None:
@@ -42,7 +47,7 @@ def main() -> None:
         on_token=on_token,
     )
     print("\n--- final (cleaned) answer ---")
-    print(answer)
+    print(vaf.terminal_text(answer))
 
 
 if __name__ == "__main__":

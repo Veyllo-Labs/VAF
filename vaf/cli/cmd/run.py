@@ -12,7 +12,6 @@ import requests
 import platform
 import subprocess
 from datetime import datetime
-from rich.console import Console
 from rich.panel import Panel
 from vaf.core.agent import Agent
 from vaf.core.session import failed_turn_meta, stored_turn_copy
@@ -20,6 +19,7 @@ from vaf.core.channel_ingress_policy import CHANNEL_TASK_SOURCES, MAIL_CHANNEL
 from vaf.core.channels import channel_label
 from vaf.cli.ui import UI
 from vaf.core.log_helper import append_crash_log, get_dated_log_path
+from vaf.core.terminal_text import TerminalConsole, terminal_json, terminal_text
 import threading
 
 
@@ -189,7 +189,7 @@ class _RunGroup(TyperGroup):
 
 
 app = typer.Typer(cls=_RunGroup)
-console = Console()
+console = TerminalConsole()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -866,7 +866,6 @@ def prompt_once(prompt: str, output_format: str = "text", session: str = None,
     `vaf run prompt` (scripting and subprocess integration, docs/OBSERVABILITY.md). Binds the
     local-admin identity like every other CLI lane (_make_cli_agent), never plays audio, and
     keeps the HTTP client logs out of the output."""
-    import json
     from vaf.cli.ui import UI
     from vaf.core.session import SessionManager
 
@@ -909,7 +908,7 @@ def prompt_once(prompt: str, output_format: str = "text", session: str = None,
             agent.history.append({"role": m.get("role", "user"), "content": m.get("content", "")})
 
     def ndjson_emit(evt: dict):
-        line = json.dumps(evt, ensure_ascii=False)
+        line = terminal_json(evt)
         sys.stdout.write(line + "\n")
         sys.stdout.flush()
 
@@ -929,12 +928,12 @@ def prompt_once(prompt: str, output_format: str = "text", session: str = None,
 
         if fmt == "text":
             if result_text:
-                print(result_text)
+                print(terminal_text(result_text))
             raise typer.Exit(0)
 
         if fmt == "json":
             payload = {"ok": True, "output": result_text or ""}
-            print(json.dumps(payload, ensure_ascii=False))
+            print(terminal_json(payload))
             if save_session:
                 s = mgr.new(model=agent.config.get("model", ""), project_path=os.getcwd())
                 s.add_message("user", prompt)
@@ -1042,21 +1041,13 @@ def _declined_queue_task(task):
             "service: vaf start (or vaf tray).")
 
 
-#: The bidirectional marks, embeddings, overrides and isolates: they reorder how a line reads.
-_BIDI_CONTROLS = frozenset("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e"
-                           "\u2066\u2067\u2068\u2069")
-
-
 def _terminal_echo(text) -> str:
     """Queued text as this terminal may print it: Rich markup escaped, so "[/]" or "[link=...]"
-    is printed as written instead of raising or styling, and control characters removed (all
-    but newline and tab, and the bidirectional controls), so no escape sequence the sender
-    wrote reaches the terminal (clearing the screen, setting the title, moving the cursor)."""
-    import unicodedata
+    is printed as written instead of raising or styling, and control characters removed
+    (`terminal_text`), so no escape sequence the sender wrote reaches the terminal (clearing
+    the screen, setting the title, moving the cursor)."""
     from rich.markup import escape
-    kept = "".join(ch for ch in str(text or "")
-                   if ch in "\n\t" or (unicodedata.category(ch) != "Cc" and ch not in _BIDI_CONTROLS))
-    return escape(kept)
+    return escape(terminal_text(text or ""))
 
 
 def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None, web_enabled: bool = False):

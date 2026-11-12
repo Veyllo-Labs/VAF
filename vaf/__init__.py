@@ -24,6 +24,7 @@ if TYPE_CHECKING:
                                   restore_account, revoke_account, stop_account_work,
                                   stop_session)
     from .core.system_prompt import SOUL_CONTINUITY_ADDENDUM, build_capability_addendum
+    from .core.terminal_text import terminal_text
     from .core.threat_db import UploadVerdict, inspect_upload, record_threat
     from .core.trust import (list_standing_grants, mark_trusted_dir, revoke_standing_grants,
                              set_tool_policy)
@@ -68,7 +69,7 @@ __all__ = ["__version__", "Agent", "AuditFinding", "AuditReport", "BOOKKEEPING_K
            "run_project_git", "safe_entry_name", "set_account_allowlist_resolver",
            "set_account_directory_resolver",
            "set_confirmation_bypass_resolver", "set_tool_policy", "stop_account_work",
-           "stop_session", "stored_turn_copy", "unread_counts", "user_jail"]
+           "stop_session", "stored_turn_copy", "terminal_text", "unread_counts", "user_jail"]
 
 
 def __getattr__(name):
@@ -188,6 +189,16 @@ def __getattr__(name):
         # module level. See docs/EMBEDDING.md.
         from .core.completion import is_error_reply
         return is_error_reply
+    if name == "terminal_text":
+        # Text from somebody else as a terminal may show it: control characters removed, so a
+        # model reply, a room entry or a peer's message cannot set the window title, clear
+        # the screen, plant a link or write the clipboard of whoever reads it. Exported because
+        # the facade's own examples print model output and remote room text to a terminal,
+        # and VAF's own terminal lanes (the CLI, the full-screen app, the engine's fallback
+        # print) apply this same definition. Rich is a base dependency, so the slim base is
+        # unaffected. See docs/EMBEDDING.md, "Showing text on a terminal".
+        from .core.terminal_text import terminal_text
+        return terminal_text
     if name in ("TurnRound", "TurnStatus", "model_text", "stored_turn_copy"):
         # How a turn ended, beside its text, and the rule for keeping its failure out of
         # what a model reads later. `Agent.last_turn` / `CoreAgent.last_turn` hand out the

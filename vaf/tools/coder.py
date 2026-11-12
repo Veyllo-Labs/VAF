@@ -35,6 +35,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 from rich.align import Align
 
 from vaf.core.progress import StatePublisher, resolve_ui_session_id, set_run_progress
+from vaf.core.terminal_text import TerminalConsole
 from vaf.cli.tui import AnimatedHeader
 
 from vaf.cli.ui import UI
@@ -3978,7 +3979,7 @@ Thumbs.db
         task_mgr = TaskManager()
         
         # Create a fresh console for the Coder to avoid conflicts
-        local_console = Console(force_terminal=True)
+        local_console = TerminalConsole(force_terminal=True)
 
         from vaf.cli.tui import UI as _UI
 

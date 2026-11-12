@@ -1259,6 +1259,47 @@ keeps ("counts only, never a scope or a container name"); the shared browser's q
 listed, since that is where people meet. The browser's busy text, which reaches the model,
 names its place and wait and never another person or a container.
 
+### Text from others on a terminal
+
+A terminal obeys what it is sent, and much of what VAF's terminals show was written by
+somebody other than the person reading it: a room peer (possibly on another machine), the
+Veyllo App, a mail or messenger contact, a sub-agent's result, and the model, whose reply a
+web page or a mail it read can steer. An escape sequence in such text can set the window
+title, clear the screen, plant an OSC 8 link with a misleading label, or write the
+clipboard through OSC 52 where the emulator allows it; a right-to-left override reorders
+how a line reads. Rich and Textual remove only BEL, BS, VT, FF and CR. Measured before the
+fix, every other case (title, clear, OSC 8, OSC 52, the C1 forms of CSI and OSC, NUL, DEL,
+U+202E) reached the output of every widget of the full-screen app and of every Rich console.
+
+Where it is stopped, each time at a renderer's sink and on one definition,
+`vaf.terminal_text` (`vaf/core/terminal_text.py`), which removes every C0 character except
+newline and tab, DEL, every C1 character and the twelve bidirectional controls:
+
+- the full-screen app: one line filter on every rendered line (see "Control characters
+  never reach the terminal" in [TUI.md](../platform/TUI.md));
+- every Rich console in VAF (the classic and modern lanes, the CLI commands, the coder's
+  live view, the session, automation and snapshot commands): `TerminalConsole`;
+- the bare output lines: `vaf a2a`'s human lines, `vaf run -p` with `--output-format text`,
+  the sub-agent terminal, the modern lane's toolbar and the engine's own print when nobody
+  streams;
+- the JSON lines (`vaf a2a`, `vaf inbox --json`, `vaf outbox --json`, `vaf run -p` json and
+  stream-json): the characters json.dumps leaves raw (DEL, C1, bidi) are written as
+  `\uXXXX`, so a line parses to the same value and a terminal showing it obeys nothing;
+- Python's last-resort log handler, which writes a command's WARNING and ERROR records to
+  stderr, formats without them (`TerminalLogFormatter`, set at the CLI entry point).
+
+Why not at ingress: refusing a message drops a person's whole text over a stray form feed
+or NEL from pasted text, stripping it there silently changes what is stored, and no ingress
+covers the model's own output, the largest lane. The browser renders text as DOM text,
+where these characters do nothing. The Veyllo App protocol still refuses them in labels
+(device, platform, app version, chat), which are names and not messages.
+
+Named boundaries: `vaf env exec` and `vaf env logs` print a container program's standard
+output byte for byte, the way `docker exec` and `docker logs` do. Rich markup in other
+parties' text is a separate open class: text printed with markup on (the classic lane's
+model chunks, some table cells) turns `[link=...]` into an OSC 8 link without any control
+character in it; fixing it needs VAF's own markup separated from model text.
+
 ## 7. Watchdog and Admin Security APIs
 
 ### Sub-agent watchdog (`vaf/api/supervisor_routes.py`)

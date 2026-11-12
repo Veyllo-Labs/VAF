@@ -290,6 +290,17 @@ bootstrap()
 from vaf.core.log_helper import install_thread_excepthook
 install_thread_excepthook()
 
+# A process lane that installs no log handler of its own (`vaf run` and most commands) has
+# its WARNING and ERROR records written to stderr by Python's last-resort handler, and a
+# record's arguments are often somebody else's text (a sender, a subject, a URL). Its lines
+# go out without control characters. After bootstrap(), which may still be installing the
+# dependency that module imports.
+import logging
+
+from vaf.core.terminal_text import TerminalLogFormatter
+if logging.lastResort is not None:
+    logging.lastResort.setFormatter(TerminalLogFormatter())
+
 # The harness's account-allowlist resolvers (tools AND saved workflows), registered on
 # EVERY process lane that passes through this module: the console script (pyproject
 # [project.scripts] vaf = "vaf.main:main"), tray/web (tray_command below; systemd and
@@ -771,10 +782,10 @@ def theme_command(
     """
     from vaf.cli.themes import ThemeManager
     from vaf.cli.tui import TUI
-    from rich.console import Console
+    from vaf.core.terminal_text import TerminalConsole
     from rich.table import Table
     
-    console = Console()
+    console = TerminalConsole()
     
     if list_themes or not name:
         themes = ThemeManager.list_themes()

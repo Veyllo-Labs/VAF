@@ -109,6 +109,40 @@ second turn implementation:
   and only "allow once" and "cancel" when `offer_standing` is false (the other
   keys do nothing there). The plain terminal prompt lists the same choices.
 
+### Control characters never reach the terminal
+
+Most of what the transcript and the overlays show was written by somebody else: a room
+peer, the Veyllo App, a mail or messenger contact, a sub-agent's result, and the model,
+whose output a web page or a mail can steer. Textual removes only BEL, BS, VT, FF and CR
+from what it prints, so an ESC or a C1 byte in such text went to the terminal as a command:
+measured before this existed, a window-title sequence, a screen clear, an OSC 8 link, an
+OSC 52 clipboard write, the C1 forms of CSI and OSC, NUL, DEL and U+202E reached the
+output of every transcript widget.
+
+Every line of the app now passes one line filter (`TerminalTextFilter` in `app.py`,
+installed through `VafApp.get_line_filters`), which removes every C0 character except
+newline and tab, DEL, every C1 character and the twelve bidirectional controls. It sits at
+the sink rather than at the widgets because the app has more than 110 places that put text
+on screen (`Static(` 73 times, `.update(` 23, `notify(` 20); Textual applies the filter to
+every strip of every widget, toast and overlay, so the next widget is covered too. Only
+the characters are removed, never the rest of a sequence: a title sequence shows as
+`]0;...`, which is honest, and the removed characters have cell width 0, so the layout does
+not move. Zero-width and other format characters (U+200B, the joiners, U+2060, U+FEFF)
+stay: they drive no terminal, and ZWJ is part of emoji and of Persian and Indic text.
+The definition is the framework's, `vaf.terminal_text` (`vaf/core/terminal_text.py`).
+
+The classic and modern lanes print through `TerminalConsole`, a Rich console that applies
+the same definition to every segment it renders; every Rich console in VAF is one (pinned
+by an AST scan in `tests/test_terminal_text.py`). Rich's own colours, cursor moves and
+clears pass, since they come from styles and control segments rather than from text.
+
+Named boundaries: `vaf env exec` and `vaf env logs` print a container program's standard
+output byte for byte, as `docker exec` and `docker logs` do, because removing its control
+characters would break that program's colours and progress bars. And Rich MARKUP in text
+from others is an open class of its own: the classic lane prints model chunks with markup
+on (the engine puts its own `[link=file://...]` into them), and `[link=...]` in such text
+becomes an OSC 8 link without any control character in the input.
+
 ## Keys and commands
 
 Enter sends, Ctrl+J inserts a newline. Commands come from one shared registry
@@ -340,8 +374,8 @@ What it can change is decided by where a key is READ, not by how it looks:
   an `@file` reference, all of which act on the operator's terminal and disk
   and stay with typed input. A frame with no text (only files) is no turn.
   Its terminal echo has Rich markup escaped and control characters removed
-  (`_terminal_echo`), so `[/]` cannot break the prompt into the fallback and
-  an escape sequence never reaches the terminal. Every task the loop takes
+  (`_terminal_echo`, on `vaf.terminal_text`), so `[/]` cannot break the prompt
+  into the fallback and an escape sequence never reaches the terminal. Every task the loop takes
   is marked done when its turn ends, however it ends, so its chat does not
   read as busy (`TaskQueue.is_busy_for_session`); it counts as taken from
   the moment the loop has it, so a session load or save that fails before

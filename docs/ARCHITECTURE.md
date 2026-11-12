@@ -142,6 +142,9 @@ This is the contract. Treat it as a stable API.
   path that arrived from outside inside the directory it may touch, decided on
   RESOLVED paths so a symlink cannot lead out of the root
   (contract in [EMBEDDING.md](EMBEDDING.md))
+- `vaf.terminal_text` - text from a model or another party as a terminal may
+  show it, its control characters removed; the definition VAF's own terminal
+  sinks apply (contract in [EMBEDDING.md](EMBEDDING.md))
 - the `vaf.tools` entry-point group
 - documented config keys
 
@@ -156,7 +159,7 @@ The authoritative list is `vaf.__all__` plus that page; this one is a summary.
   `extract_pdf_markdown`, `set_account_allowlist_resolver`,
   `account_allows_tool`, `contained_path`, `safe_entry_name`,
   `PathEscape`, `is_error_reply`, `TurnStatus`, `stored_turn_copy`,
-  `model_text`) are the deliberate
+  `model_text`, `terminal_text`) are the deliberate
   exceptions - import them from `vaf`, not from `vaf.core`.
 - private methods and attributes (leading underscore)
 

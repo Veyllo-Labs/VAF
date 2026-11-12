@@ -15,13 +15,13 @@ has no button. A `vaf inbox read` would be one call to that same primitive, so t
 surfaces could not disagree; it is left out until a headless install asks for it, which is
 the measurement that earns the command.
 """
-import json
 import sys
 from typing import Optional
 
 import typer
 
 from vaf.cli.ui import UI
+from vaf.core.terminal_text import terminal_json
 
 app = typer.Typer(help="Your conversations across every channel.")
 
@@ -77,7 +77,7 @@ def list_conversations(
     rows = result["rows"]
     if json_out:
         for row in rows:
-            sys.stdout.write(json.dumps(row, ensure_ascii=False) + "\n")
+            sys.stdout.write(terminal_json(row) + "\n")
         return
     counts = result["counts"]
     UI.console.print(f"[bold]{counts['all']} conversations[/bold]  {counts['waits']} wait for you  "

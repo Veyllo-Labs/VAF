@@ -19,7 +19,7 @@ agent runs the person's turns: it reads the room there, as other parties' words
 One line, one addressee. A line the person writes on VAF goes to the agent in the Veyllo App
 (``room_msg`` with ``"to": "app_agent"``) unless it starts with "@" and the name of the
 account's agent (or "@VAF"), the leading-mention rule of the agent rooms
-(a2a.room.leading_mention); then it is a turn of VAF's agent in the app chat and the app only
+(a2a.room.resolve_mention); then it is a turn of VAF's agent in the app chat and the app only
 shows it (``"to": "vaf_agent"``). What the app's agent writes into the room (``room_say``)
 starts no turn of VAF's agent, also when it names it: the app's agent asks VAF's agent through
 ``agent_ask``, which carries that lane's limits. So a line addressed to somebody else costs no
@@ -115,23 +115,24 @@ def agent_label(username: str) -> str:
 
 
 def handle(username: str) -> str:
-    """The one word after "@" that always reaches VAF's agent: the first run of letters and
-    digits (of any script) of its name ("Mia Lisa" -> "Mia", "Dr. Mia" -> "Dr", "Mia." ->
-    "Mia"), or "VAF"."""
-    import re
-    found = re.search(r"[^\W_]+", agent_label(username))
-    return found.group(0) if found else "VAF"
+    """The one word after "@" that always reaches VAF's agent and that the hint shows: the
+    first word of its name without trailing punctuation or symbols (a2a.room.trim_name):
+    "Mia Lisa" -> "Mia", "Mia." -> "Mia", "Dr. Mia" -> "Dr", "O'Neil" -> "O'Neil"; or "VAF"."""
+    from vaf.core.a2a.room import trim_name
+    words = agent_label(username).split()
+    first = trim_name(words[0]) if words else ""
+    return first or "VAF"
 
 
 def addressee(text: Any, username: str) -> str:
-    """Who a line the person writes on VAF is for: VAF's agent when it starts with "@" and the
-    ``handle`` of that agent's name (a name of several words written out begins with it too)
-    or "VAF", case-insensitive, followed by the end of the line or anything that is not a
-    letter or digit ("@Miami" does not name Mia, "@Mia." and "@Mia：" do); the agent in the
-    Veyllo App otherwise: the agent rooms' leading-mention rule for a known name
-    (a2a.room.mentions_at_start)."""
-    from vaf.core.a2a.room import mentions_at_start
-    if mentions_at_start(text, handle(username)) or mentions_at_start(text, "VAF"):
+    """Who a line the person writes on VAF is for: VAF's agent when its leading "@" names the
+    agent's ``handle`` or "VAF", by the agent rooms' one rule (a2a.room.resolve_mention: the
+    first word after "@", whole or without trailing punctuation, compared case-folded), so
+    "@Mia.", "@mia?" and "@MIA, hi" name Mia and "@Miami" does not; the agent in the Veyllo App
+    otherwise."""
+    from vaf.core.a2a.room import fold_name, resolve_mention
+    known = {fold_name(handle(username)), fold_name("VAF")}
+    if resolve_mention(text, lambda name: fold_name(name) in known):
         return VAF_AGENT
     return APP_AGENT
 
@@ -228,14 +229,32 @@ def _room_meta(message) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _append(scope: str, content: str, *, role: str, kind: str, meta: Dict[str, Any]) -> bool:
+def _append(scope: str, content: str, *, role: str, kind: str, meta: Dict[str, Any],
+            only_if=None) -> bool:
     """One room line into the account's app chat (created when it has none yet), through the
-    background writer and its per-session lock, which the runner's save of a turn holds too."""
+    background writer and its per-session lock, which the runner's save of a turn holds too.
+    ``only_if(session)`` is asked under that lock (the writer's ``only_if``)."""
     sid = devices.chat_session_id(scope)
     saved = _manager().append_background_message(
         sid, content, role=role, kind=kind, create=True, name=TITLE, user_scope_id=scope,
-        metadata={"app_room": meta})
+        metadata={"app_room": meta}, only_if=only_if)
     return saved is not None
+
+
+def _not_sent_again_yet(line_id: str):
+    """The check that makes a resend once only: the line exists as one of the person's lines
+    to the app's agent, and no stored line sends it again yet. Asked under the chat's lock."""
+    def _check(session) -> bool:
+        found = False
+        for message in getattr(session, "messages", None) or []:
+            if getattr(message, "kind", None) != origin.APP_ROOM_OUT_KIND:
+                continue
+            room = _room_meta(message)
+            if str(room.get("resend_of") or "") == line_id:
+                return False
+            found = found or str(room.get("id") or "") == line_id
+        return found
+    return _check
 
 
 def _line_text(scope: str, line_id: str, kinds=origin.APP_ROOM_KINDS) -> Optional[str]:
@@ -304,12 +323,15 @@ def _legacy_wake_prefixes() -> Tuple[Tuple[str, str], ...]:
             ("draft", DRAFT_WAKE_PREFIX), ("confirm", CONFIRM_WAKE_PREFIX))
 
 
-def _stored_wake(kind: Any, content: str) -> Optional[str]:
+def _stored_wake(kind: Any, content: str, meta: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """The wake kind of a stored user line: its stored kind, or, for a line stored before
     wakes carried one and only when it has no kind, how its text begins (the web chat's rule
-    for the same lines)."""
+    for the same lines). Never for a line that carries the message id of a person's message
+    (the app's or the room's): the person wrote it, whatever it begins with."""
     if kind in WAKE_NOTES:
         return str(kind)
+    if (meta or {}).get("channel_message_id"):
+        return None
     if kind is None:
         for wake, prefix in _legacy_wake_prefixes():
             if content.startswith(prefix):
@@ -324,10 +346,12 @@ def _pending_author(sid: str, sids: Tuple[str, str], task: Any) -> Optional[str]
     session, ``app_agent_ask``), a wake kind (a note), or None for anything else (the
     compaction, a system command, a turn some other lane queued), which the room does not
     show."""
-    from vaf.core.task_queue import is_system_command, wake_kind
+    # No separate check for a system command or the compaction: a system command is queued
+    # under the system session, which is never one of the room's, and the compaction comes
+    # from the web lane (headless_runner queues it with source "web"), which the source check
+    # below refuses.
+    from vaf.core.task_queue import wake_kind
     meta = getattr(task, "metadata", None) or {}
-    if is_system_command(task) or meta.get("compaction"):
-        return None
     wake = wake_kind(meta)
     if wake:
         return wake if wake in WAKE_NOTES else None
@@ -356,8 +380,8 @@ def _cache_key(scope: str, username: str, sids: Tuple[str, str],
     return (agent_label(username), _file_signature(sids[0]), _file_signature(sids[1]),
             devices.generation(), lane_on(scope),
             tuple(str(getattr(t, "turn_id", "")) for _sid, t in pending),
-            # A credential forgotten in the chat changes what a waiting question shows.
-            hash(tuple(sorted(_forgotten(sids[0]).items()))))
+            # A credential forgotten in either session changes what a waiting line shows.
+            hash(tuple(tuple(sorted(_forgotten(sid).items())) for sid in sids)))
 
 
 def _projection(scope: str, username: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
@@ -470,7 +494,7 @@ def _build(scope: str, username: str, sids: Tuple[str, str],
                 # nobody's words: a neutral note, by its stored kind, or for a line stored
                 # before the kind by how its text begins and only without a kind. A request of
                 # the app's agent is that agent's text, whatever it begins with.
-                wake = _stored_wake(kind, content)
+                wake = _stored_wake(kind, content, meta)
                 if wake:
                     line = _note(lid, wake, ts)
                 elif ask or kind == origin.APP_AGENT_KIND:
@@ -499,7 +523,7 @@ def _build(scope: str, username: str, sids: Tuple[str, str],
     # else (the compaction, a system command) is not shown. Its text is shown with the
     # chat's forgotten credentials replaced, like every other copy of the chat.
     from vaf.core.forget_secrets import scrub_text
-    forgotten = _forgotten(sids[0])
+    forgotten = {sid: _forgotten(sid) for sid in sids}
     for order, (sid, task) in enumerate(pending):
         turn = str(getattr(task, "turn_id", "") or "")
         text = str(getattr(task, "input_text", "") or "").strip()
@@ -513,11 +537,11 @@ def _build(scope: str, username: str, sids: Tuple[str, str],
         if author in WAKE_NOTES:
             line = _note(f"turn:{turn}", author, ts)
         elif author == APP_AGENT:
-            line = _line(f"turn:{turn}", APP_AGENT, VAF_AGENT, scrub_text(text, forgotten), ts,
-                         pending=True)
+            line = _line(f"turn:{turn}", APP_AGENT, VAF_AGENT,
+                         scrub_text(text, forgotten.get(sid) or {}), ts, pending=True)
         else:
-            line = _line(f"turn:{turn}", PERSON, VAF_AGENT, scrub_text(text, forgotten), ts,
-                         pending=True)
+            line = _line(f"turn:{turn}", PERSON, VAF_AGENT,
+                         scrub_text(text, forgotten.get(sid) or {}), ts, pending=True)
             turn_anchor.setdefault(turn, (ts, seq))
         lines.append(((ts, seq, 0, 0), line))
     for turn, seq, ts, order, line in deferred:
@@ -636,10 +660,19 @@ def post(user_scope_id: Any, username: str, text: Any,
     if to == APP_AGENT:
         meta = {"id": line_id, "to": APP_AGENT, "device": str(target.get("model") or ""),
                 "device_id": target["device_id"]}
+        guard = None
         if resend_of and _line_text(scope, str(resend_of),
                                     kinds=(origin.APP_ROOM_OUT_KIND,)) is not None:
             meta["resend_of"] = str(resend_of)
-        _append(scope, body, role="user", kind=origin.APP_ROOM_OUT_KIND, meta=meta)
+            guard = _not_sent_again_yet(str(resend_of))
+        if not _append(scope, body, role="user", kind=origin.APP_ROOM_OUT_KIND, meta=meta,
+                       only_if=guard):
+            # Not stored (the chat cannot be written, or the line was sent again meanwhile from
+            # another screen): nothing is delivered, so the app never holds a line the room
+            # does not show.
+            if guard is not None and not guard(_load(devices.chat_session_id(scope))):
+                raise RoomRefused("already_sent_again", 409)
+            raise RoomRefused("failed", 500)
     else:
         # A turn of the person, queued exactly as a message from the app queues one, and
         # kept in the channel store as that message is (the app's copy replays from there).

@@ -877,6 +877,11 @@ class VafApp(App):
         self.add_system_note(f"Veyllo App - {len(lines)} lines. Write with "
                              "`vaf devices say \"...\"`.")
         for line in lines[-self.REPLAY_CAP:]:
+            if line.get("kind") == "note":
+                # A timer, a background command, a sent draft, a confirmation: nobody's words,
+                # so a system note and never a line under a speaker.
+                self.add_system_note(f"Veyllo App: {line['text']} ({_room_clock(line.get('ts'))})")
+                continue
             badge = f"to {line['toLabel']}" if line.get("toLabel") else ""
             if line.get("state"):
                 badge += f" · {line['state'].replace('_', ' ')}"

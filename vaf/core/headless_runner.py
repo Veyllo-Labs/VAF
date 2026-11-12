@@ -1262,7 +1262,21 @@ def _chat_lock(session_id):
     return _append_lock(str(session_id or "").strip())
 
 
-def refuse_turn_without_backend(task, why: str, session_mgr) -> None:
+def _refused_kind(task) -> "str | None":
+    """The kind a refused turn's question is stored with, as the turn's own save would give
+    it: the wake's kind for a wake, the app agent's for its request, none for a person's."""
+    from vaf.core.task_queue import wake_kind
+    meta = getattr(task, "metadata", None) or {}
+    wake = wake_kind(meta)
+    if wake in WAKE_KINDS:
+        return wake
+    if meta.get("app_agent_ask"):
+        from vaf.core.agent_origin import APP_AGENT_KIND
+        return APP_AGENT_KIND
+    return None
+
+
+def refuse_turn_without_backend(task, why: str, session_mgr, text: "str | None" = None) -> None:
     """Close a turn that has no backend on this installation (inference_profile = api and
     no provider yet): the reason goes to the chat and the turn ends. The exchange is
     stored like any turn's, so a reload shows the message and why it got no answer
@@ -1271,7 +1285,11 @@ def refuse_turn_without_backend(task, why: str, session_mgr) -> None:
     A messenger turn (WhatsApp, Telegram, Discord, Slack) ends without a reply and is only
     logged: the reason is the admin's setup, not something to tell whoever wrote in, and
     running the turn anyway sent them "[Error] No response was produced ... try closing the
-    Document Editor" (measured through _prepare_channel_outbound, which lets it pass)."""
+    Document Editor" (measured through _prepare_channel_outbound, which lets it pass).
+
+    ``text`` is what the turn would have read (a confirmed action's report instead of the
+    queued text); the question is stored under the same author kind the turn's own save
+    gives it: a request of the app's agent as that agent's, a wake with its kind."""
     from vaf.core.channels import CHANNEL_LABELS
     if getattr(task, "source", None) in CHANNEL_LABELS:
         append_domain_log_always("headless", f"{task.source} turn closed without a reply, no "
@@ -1288,7 +1306,7 @@ def refuse_turn_without_backend(task, why: str, session_mgr) -> None:
                 session = session_mgr.load(task.session_id)
             except FileNotFoundError:
                 session = new_session_for_task(task)
-            text = str(getattr(task, "input_text", "") or "").strip()
+            text = str(text if text is not None else getattr(task, "input_text", "") or "").strip()
             if text:
                 # With its turn id, like every stored question: the live record keeps the prompt
                 # until the turn leaves the queue and recognises the stored copy by it. And
@@ -1300,7 +1318,8 @@ def refuse_turn_without_backend(task, why: str, session_mgr) -> None:
                 if _tid and getattr(task, "created_at", None):
                     _qmeta[ASKED_AT_KEY] = float(task.created_at)
                 session.add_message(role="user", content=text,
-                                    **({"metadata": _qmeta} if _qmeta else {}))
+                                    **({"metadata": _qmeta} if _qmeta else {}),
+                                    **({"kind": _refused_kind(task)} if _refused_kind(task) else {}))
             session.add_message(role="assistant", content=why)
             session_mgr.save(session, sync_state=False)
     except Exception as e:
@@ -2324,7 +2343,9 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             # terminal) left the in-process models of this one loaded.
                             from vaf.core.agent import release_disallowed_local_backends
                             release_disallowed_local_backends()
-                        refuse_turn_without_backend(task, _why, session_mgr)
+                        # What the turn would have read: a confirmed action's report, not the
+                        # queued text.
+                        refuse_turn_without_backend(task, _why, session_mgr, text=input_text)
                         tq.task_done()
                         continue
                     if not _no_local and agent.provider == "local" and not agent.api_backend and not agent.llm and not agent.use_server:
@@ -3439,8 +3460,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             # turn runs), not a repeat of the stored one.
                             if (last_user_msg == _user_input.strip()
                                     and getattr(task, "source", None) == "veyllo_app"
-                                    and getattr(task, "turn_id", None) and _last_user_turn
-                                    and str(_last_user_turn) != str(task.turn_id)):
+                                    and getattr(task, "turn_id", None)
+                                    and str(_last_user_turn or "") != str(task.turn_id)):
                                 last_user_msg = None
 
                             # What became of the chat's drafts (vaf/core/outbound_hold.py): the

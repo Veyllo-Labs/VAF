@@ -883,6 +883,7 @@ class SessionManager:
         name: Optional[str] = None,
         user_scope_id: Optional[Any] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        only_if: Optional[Callable[[Session], bool]] = None,
     ) -> Optional[Session]:
         """Append ONE message to a stored session from a lane that is NOT the live
         turn on it, and leave the note that lets the live agent notice.
@@ -901,7 +902,10 @@ class SessionManager:
         has none (a messenger session whose first message is outbound), named
         `name` and stamped with `user_scope_id` so the ownership gates let its
         real owner open it. `metadata` is stored on the message as it is (the Veyllo App
-        room keeps its line id and addressee there). Returns the saved session, or None when the session
+        room keeps its line id and addressee there). `only_if(session)` is asked under the
+        session's lock with the session as loaded: when it says no, nothing is appended and
+        None is returned, so a check of what the chat holds and the append are one step (the
+        room's "this line was not sent again yet"). Returns the saved session, or None when the session
         does not exist and `create` is False - the caller then picks another chat.
         Never touches the state registry: this is a transcript append, not a turn.
         """
@@ -922,6 +926,8 @@ class SessionManager:
                 session = Session(id=sid, name=name or sid)
                 if user_scope_id:
                     session.metadata["user_scope_id"] = str(user_scope_id)
+            if only_if is not None and not only_if(session):
+                return None
             session.add_message(role=role, content=content, kind=kind,
                                 metadata=dict(metadata) if metadata else None)
             self.save(session, sync_state=False)

@@ -40,7 +40,7 @@ import hashlib
 import secrets
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from vaf.core.a2a.frame import (KINDS, REPORT_STATUSES, Frame, MalformedFrame,
                                 canonical_sort_key, object_field, read_deadline,
@@ -118,39 +118,73 @@ INVITATION_STATES = ("pending", "accepted", "declined", "revoked", "expired")
 PARTICIPANT_LANES = ("agent", "cli", "remote")
 
 
-def leading_mention(text: Any) -> Optional[str]:
-    """The name a message's leading "@Name" gives, or None.
+def fold_name(name: Any) -> str:
+    """A name as names are compared: NFC-normalised and case-folded ("Straße" == "STRASSE")."""
+    import unicodedata
+    return unicodedata.normalize("NFC", str(name or "").strip()).casefold()
+
+
+def trim_name(word: Any) -> str:
+    """``word`` without what follows a name in a sentence: trailing punctuation and symbols of
+    any script (Unicode categories P and S: ".", "?", "!", ",", "：", "。", a heart) and a
+    trailing possessive "'s". Marks stay with their letter."""
+    import unicodedata
+    text = str(word or "")
+    while True:
+        before = text
+        while text and unicodedata.category(text[-1])[0] in "PS":
+            text = text[:-1]
+        for ending in ("'s", "\u2019s"):
+            if text.lower().endswith(ending) and len(text) > len(ending):
+                text = text[:-len(ending)]
+        if text == before:
+            return text
+
+
+def mention_candidates(text: Any) -> List[str]:
+    """The names a message's leading "@" may give, longest first, or [] without one.
 
     Only a mention at the START counts: "@Bob can you look" is aimed at Bob, "ask @Bob
-    about it" is a sentence about Bob. The name is the run right after the "@" of letters and
-    digits of any script, with "-", "_" and "." inside it (a peer id like "p-bob", a tag like
-    "Codex51"), ending at the first other character and without a trailing "-", "_" or ".":
-    "@Bob, look", "@Bob. look", "@Bob? look", "@Bob：look" and "@Bob's idea" all give "Bob";
-    "@Bobby" gives "Bobby", never "Bob". The one parse of that rule: an agent room resolves
-    the name against its members (`Room.address_from_mention`), the Veyllo App room against
-    the handle of the account's agent (vaf/core/app_link/room.py)."""
+    about it" is a sentence about Bob. The mention is the first whitespace-delimited word after
+    the "@" as it stands ("@O'Brien", "@C++", "@a2a:bob", "@राम"), then that word without a
+    trailing ",", ":" or ";", then without any trailing punctuation or symbol (`trim_name`).
+    The caller resolves them in this order against the names it KNOWS, so the longest known
+    name wins: "@Bob." names Bob, "@O'Brien" names O'Brien (and never O), "@Bobby" never
+    names Bob. A letter of a script written without spaces continues the word: "@Mia你好" is
+    no mention of Mia (the person puts a space after the name)."""
     stripped = str(text or "").lstrip()
     if not stripped.startswith("@"):
+        return []
+    parts = stripped[1:].split(None, 1)
+    raw = parts[0] if parts else ""
+    out: List[str] = []
+    for candidate in (raw, raw.rstrip(",:;"), trim_name(raw)):
+        if candidate and candidate not in out:
+            out.append(candidate)
+    return out
+
+
+def leading_mention(text: Any) -> Optional[str]:
+    """The name a message's leading "@Name" gives as typed (the first word, without a trailing
+    ",", ":" or ";"), or None. For resolving it, use `resolve_mention`, which also tries the
+    whole word and the word without trailing punctuation."""
+    candidates = mention_candidates(text)
+    if not candidates:
         return None
-    end = 1
-    while end < len(stripped) and (stripped[end].isalnum() or stripped[end] in "-_."):
-        end += 1
-    name = stripped[1:end].rstrip("-_.")
-    return name or None
+    raw = candidates[0]
+    return raw.rstrip(",:;") or None
 
 
-def mentions_at_start(text: Any, name: str) -> bool:
-    """Whether a message starts with "@" and the KNOWN ``name`` (case-insensitive), followed by
-    its end or by any character that is not a letter or digit: the leading-mention rule of
-    `leading_mention` for a caller that already knows the one name it listens for (the
-    Veyllo App room's agent), so "@Mia.", "@Mia：", "@Mia-" name Mia and "@Miami" does not."""
-    wanted = str(name or "")
-    stripped = str(text or "").lstrip()
-    if not wanted or not stripped.startswith("@"):
-        return False
-    head = stripped[1:1 + len(wanted)]
-    after = stripped[1 + len(wanted):2 + len(wanted)]
-    return head.lower() == wanted.lower() and not (after and after.isalnum())
+def resolve_mention(text: Any, known: Callable[[str], Any]) -> Any:
+    """The first non-empty answer of ``known(name)`` over `mention_candidates`, longest name
+    first, or None. ONE rule for every room: an agent room asks its member table
+    (`Room.peer_by_display`), the Veyllo App room its agent's handle and "VAF"
+    (vaf/core/app_link/room.py)."""
+    for candidate in mention_candidates(text):
+        hit = known(candidate)
+        if hit:
+            return hit
+    return None
 
 
 def participant_key(lane: str, scope_id: Optional[str] = None) -> str:
@@ -2767,11 +2801,11 @@ class Room:
         message addressed at one of them is a message that must not be delivered to a
         coin toss.
         """
-        wanted = str(name or "").strip().lstrip("@").lower()
+        wanted = fold_name(str(name or "").strip().lstrip("@"))
         if not wanted:
             return None
         hits = [peer for peer, record in self.members().items()
-                if str(record.get("display") or "").strip().lower() == wanted]
+                if fold_name(record.get("display")) == wanted]
         if len(hits) == 1:
             return hits[0]
         # The tagged label resolves too, and it has to: every surface SHOWS the label,
@@ -2781,7 +2815,7 @@ class Room:
         # rather than an error. Labels are unique within the room by construction, so
         # a hit here is never the coin toss the paragraph above refuses.
         for peer, label in self.labels().items():
-            if str(label).strip().lower() == wanted:
+            if fold_name(label) == wanted:
                 return peer
         # A peer id addresses itself, which is what a machine consumer will use.
         return name if name in self.roles() else None
@@ -2793,8 +2827,7 @@ class Room:
         at Bob; "ask @Bob about it" is a sentence ABOUT Bob, said to the room, and
         turning that into a private aside would quietly hide it from everyone else.
         """
-        name = leading_mention(text)
-        peer = self.peer_by_display(name) if name else None
+        peer = resolve_mention(text, self.peer_by_display)
         return {"peer": peer} if peer else None
 
     def addressee(self, text: str, *, to_peer: str = "") -> Dict[str, Any]:

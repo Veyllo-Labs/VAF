@@ -339,11 +339,13 @@ def test_leading_mention_is_the_one_parse():
     import inspect
 
     from vaf.core.a2a.room import Room, leading_mention
+    from vaf.core.app_link import room as app_room
     assert leading_mention("@Bob, can you look") == "Bob"
     assert leading_mention("  @Bob: the logs") == "Bob"
     assert leading_mention("ask @Bob") is None and leading_mention("@") is None
     source = inspect.getsource(Room.address_from_mention)
-    assert "leading_mention(" in source and "startswith" not in source
+    assert "resolve_mention(" in source and "startswith" not in source
+    assert "resolve_mention(" in inspect.getsource(app_room.addressee)
 
 
 # ── the mirror: a line from the app goes to VAF's agent only ──────────────────
@@ -676,7 +678,12 @@ def test_tui_app_room_row_and_replay(monkeypatch, tmp_path):
          "toLabel": "Veyllo App", "kind": "say", "text": "Wecker auf 7", "ts": 1767225600,
          "state": "delivered"},
         {"id": "l2", "peer": "app_agent", "label": "Veyllo App", "to": {"peer": "person"},
-         "toLabel": "You", "kind": "say", "text": "Der Wecker steht.", "ts": 1767225660}])
+         "toLabel": "You", "kind": "say", "text": "Der Wecker steht.", "ts": 1767225660},
+        {"id": "n1", "peer": "", "label": "", "to": {"room": True}, "toLabel": "",
+         "kind": "note", "code": "timer", "text": "A timer fired.", "ts": 1767225700}])
+    notes = []
+    real_note = app.add_system_note
+    monkeypatch.setattr(app, "add_system_note", lambda text: notes.append(text) or real_note(text))
     assert len(_APP_ROOM_MARK) == 1 and ord(_APP_ROOM_MARK) < 0x1F000
 
     async def _drive():
@@ -695,6 +702,8 @@ def test_tui_app_room_row_and_replay(monkeypatch, tmp_path):
             assert "You" in heads[0] and "to Veyllo App" in heads[0]
             assert "Veyllo App" in heads[1]
             assert loaded == [] and asked == ["alice"]
+            # A wake note is a system note, not a line under a speaker.
+            assert any("A timer fired." in note for note in notes)
 
     asyncio.run(_drive())
     tui.shutdown()
@@ -876,51 +885,108 @@ def test_pairing_and_removal_tell_the_accounts_screens(room_home, monkeypatch):
 @pytest.mark.parametrize("persona, line, to", [
     ("Mia", "@Mia wie spät?", "vaf_agent"),
     ("Mia", "@mia: wie spät?", "vaf_agent"),
-    ("Mia", "@Miami ist schön", "app_agent"),
-    ("Mia Lisa", "@Mia Lisa, wie spät?", "vaf_agent"),
-    ("Mia Lisa", "@Mia wie spät?", "vaf_agent"),
-    ("Mia Lisa", "@Mias Freund fragt", "app_agent"),
-    ("Anna Maria Berg", "@anna maria berg; hallo", "vaf_agent"),
-    ("Anna Maria Berg", "@Anna, hallo", "vaf_agent"),
-    ("Anna Maria Berg", "@VAF hallo", "vaf_agent"),
-    ("Anna Maria Berg", "@Maria hallo", "app_agent"),
-    ("Anna Maria Berg", "frag @Anna", "app_agent"),
+    ("Mia", "@MIA, hi", "vaf_agent"),
     ("Mia", "@Mia. hi", "vaf_agent"),
     ("Mia", "@Mia? hi", "vaf_agent"),
-    ("Mia", "@Mia：你好", "vaf_agent"),
-    ("Mia", "@Mia.Lisa hi", "vaf_agent"),
+    ("Mia", "@Mia's idea", "vaf_agent"),
+    ("Mia", "@Miami ist schön", "app_agent"),
+    ("Mia", "@Miä hallo", "app_agent"),
+    ("Mia", "@Miaさん こんにちは", "app_agent"),
+    ("Mia", "@Mia님 안녕", "app_agent"),
     ("Mia", "@Mia你好", "app_agent"),
+    ("Mia", "@Mia 你好", "vaf_agent"),
+    ("Mia Lisa", "@Mia Lisa, wie spät?", "vaf_agent"),
+    ("Mia Lisa", "@Mias Freund fragt", "app_agent"),
+    ("Anna Maria Berg", "frag @Anna", "app_agent"),
+    ("Anna Maria Berg", "@VAF hallo", "vaf_agent"),
     ("Al", "@Al.", "vaf_agent"),
     ("Mia.", "@Mia hallo", "vaf_agent"),
     ("Dr. Mia", "@Dr hallo", "vaf_agent"),
     ("Dr. Mia", "@Dr. hallo", "vaf_agent"),
     ("Dr. Mia", "@Mia hallo", "app_agent"),
+    ("O'Neil", "@O'Neil hallo", "vaf_agent"),
+    ("O'Neil", "@O hallo", "app_agent"),
+    ("Straße", "@STRASSE hello", "vaf_agent"),
+    ("राम", "@राम नमस्ते", "vaf_agent"),
+    ("राम", "@र नमस्ते", "app_agent"),
+    ("สมชาย", "@สมชาย สวัสดี", "vaf_agent"),
 ])
-def test_the_agent_is_named_by_its_name_its_first_word_or_vaf(monkeypatch, persona, line, to):
-    """MUTATION: compare the one parsed word with the whole name only - red for the names of
-    several words; MUTATION: match the name without the boundary - red for "@Miami";
-    MUTATION: take the first word of the name (with its punctuation) as the handle - red for
-    "Mia." and "Dr. Mia"; "@Mia你好" goes to the app's agent: the CJK letters continue the
-    word."""
-    import re
+def test_the_agent_is_named_by_its_handle_or_vaf(monkeypatch, persona, line, to):
+    """The app room asks the agent rooms' one rule (`resolve_mention`) for its two known names.
+    MUTATION: compare with `lower()` instead of case folding - red for "Straße"; MUTATION: cut
+    the handle at the first non-letter (the previous rule) - red for "O'Neil" and the
+    Devanagari name."""
     from vaf.core import app_link
     monkeypatch.setattr(app_link, "_agent_name_resolver", lambda username: persona)
     assert room.addressee(line, "alice") == to
-    assert room.handle("alice") == re.search(r"[^\W_]+", persona).group(0)
     assert room.addressee(f"@{room.handle('alice')} hallo", "alice") == "vaf_agent"
 
 
-@pytest.mark.parametrize("line, name", [
-    ("@Bob can you look", "Bob"), ("@Bob, look", "Bob"), ("@Bob. look", "Bob"),
-    ("@Bob? look", "Bob"), ("@Bob：look", "Bob"), ("@Bob's idea", "Bob"),
-    ("@p-bob hello", "p-bob"), ("@Codex51 look", "Codex51"), ("@Bobby", "Bobby"),
-    ("ask @Bob", None), ("@", None), ("@.", None),
+@pytest.mark.parametrize("display, line, addressed", [
+    ("O'Brien", "@O'Brien can you look", True),
+    ("C++", "@C++ hello", True),
+    ("Mia♥", "@Mia♥ hi", True),
+    ("Mia", "@Mia♥ hi", True),
+    ("a2a:bob", "@a2a:bob look", True),
+    ("राम", "@राम नमस्ते", True),
+    ("สมชาย", "@สมชาย สวัสดี", True),
+    ("Straße", "@STRASSE hello", True),
+    ("Bob", "@Bob. look", True),
+    ("Bob", "@Bob? look", True),
+    ("Bob", "@Bob's idea", True),
+    ("Bob", "@Bobby look", False),
+    ("Mia", "@Miä hi", False),
+    ("Bob", "ask @Bob", False),
 ])
-def test_the_leading_mention_of_the_agent_rooms(line, name):
-    """The shared parse the agent rooms resolve against their members. MUTATION: cut the
-    name at whitespace only (the old rule) - red for "@Bob." and "@Bob？"."""
-    from vaf.core.a2a.room import leading_mention
-    assert leading_mention(line) == name
+def test_an_agent_room_resolves_the_mention_against_its_members(tmp_path, display, line,
+                                                                 addressed):
+    """MUTATION: parse the mention as the first run of letters (the previous rule) - red for
+    "O'Brien", "C++", "a2a:bob" and the Devanagari name; MUTATION: drop the trimmed candidate
+    - red for "@Bob." and "@Mia♥" against "Mia"; MUTATION: try only the trimmed word - red
+    for "@C++"."""
+    from vaf.core.a2a.room import Room
+    agent_room = Room.create(kind="round", owner_scope="s", base=tmp_path, room_id="room-names")
+    agent_room.join(display=display, scope_id="s", peer_id="p-one")
+    agent_room.join(display="Someone Else", scope_id="s", peer_id="p-two")
+    assert (agent_room.address_from_mention(line) == {"peer": "p-one"}) is addressed
+
+
+_NAMES_BEFORE = ["Bob", "bob2", "Codex51", "p-bob", "Mia", "Anna-Lena", "Dr.Who", "J.R.",
+                 "x_y", "Ünal", "李雷", "a2a:bob", "C++", "O'Brien", "Zoë"]
+
+
+def _resolved_before(line, names):
+    """How the agent rooms resolved a mention at de707d3f: the first word without a trailing
+    ",", ":" or ";", compared lower-cased with each display name."""
+    stripped = str(line or "").lstrip()
+    if not stripped.startswith("@"):
+        return None
+    parts = stripped[1:].split(None, 1)
+    word = (parts[0] if parts else "").rstrip(",:;").lower()
+    hits = [n for n in names if n.strip().lower() == word]
+    return hits[0] if len(hits) == 1 else None
+
+
+def test_every_name_that_was_addressed_before_still_is():
+    """A differential against the parse of de707d3f: for every name and every way of writing
+    it that resolved then, the rule resolves the same name now. MUTATION: the previous
+    letters-only run - red."""
+    from vaf.core.a2a.room import fold_name, resolve_mention
+    lines = []
+    for name in _NAMES_BEFORE:
+        for form in ("@{} hi", "@{}, hi", "@{}: hi", "@{}; hi", "  @{} look", "@{}"):
+            lines.append(form.format(name))
+            lines.append(form.format(name.upper()))
+    checked = 0
+    for line in lines:
+        before = _resolved_before(line, _NAMES_BEFORE)
+        if before is None:
+            continue
+        now = resolve_mention(line, lambda n: next(
+            (x for x in _NAMES_BEFORE if fold_name(x) == fold_name(n)), None))
+        assert now == before, (line, before, now)
+        checked += 1
+    assert checked >= 120
 
 
 def test_a_device_not_connected_yet_is_not_an_older_app(room_home):
@@ -1160,8 +1226,20 @@ def test_how_a_task_ended_is_coded_and_a_failed_answer_shows(room_home):
 
 def test_the_runner_skips_room_lines_when_it_looks_for_its_last_answer(runner_world, monkeypatch):
     """MUTATION: drop the room-kind skip from the runner's last-assistant loop - red: a repeated
-    question's unchanged answer is stored a second time behind a task result."""
+    question's unchanged answer is stored a second time behind a task result. Run as a turn
+    of another channel's chat: in a Veyllo App chat the repeat is a second question of its
+    own (`test_the_same_question_asked_again_is_a_second_question`)."""
+    from vaf.core import task_queue
+    from vaf.core.app_link import CHANNEL
+    from vaf.core.channels import CHAT_CHANNELS
     from vaf.core.session import Message, get_manager
+    other = next(c for c in CHAT_CHANNELS if c != CHANNEL)
+
+    class _Other(task_queue.AgentTask):
+        def __post_init__(self):
+            super().__post_init__()
+            self.source = other
+    monkeypatch.setattr(task_queue, "AgentTask", _Other)
     session = get_manager().load(RUNNER_CHAT, restore_state=False, repoint=False)
     session.messages += [Message(role="user", content="Morgen frei?"),
                          Message(role="assistant", content="Morgen ist frei."),
@@ -1361,31 +1439,58 @@ def test_the_same_question_asked_again_is_a_second_question(runner_world, monkey
 
 
 def test_every_load_and_save_of_a_chat_in_the_runner_holds_its_lock():
-    """MUTATION: drop the `with _chat_lock(...)` around any of the runner's load-and-save pairs
-    (the turn-start stamp, the drain's two stores, the per-turn context pops, the refused turn)
-    - red. The turn-end store holds the same lock by acquire and release."""
+    """Every chat the runner saves was loaded under the same lock it is saved under, and no
+    save goes through another name. MUTATION: drop the `with _chat_lock(...)` of any pair (the
+    turn-start stamp, the drain's two stores, the per-turn context pops, the refused turn) -
+    red; move a load in front of its lock - red; save through an alias - red. The turn-end
+    store holds the same lock by acquire and release."""
     import ast
     import vaf.core.headless_runner as hr
     source = Path(hr.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source)
-    guarded = []
+    lines = source.splitlines()
+    acquire = next(i for i, t in enumerate(lines, 1) if "_chat_save_lock.acquire()" in t)
+    release = next(i for i, t in enumerate(lines, 1) if "_chat_save_lock.release()" in t)
+    guards = [(acquire, release)]
     for node in ast.walk(tree):
         if isinstance(node, ast.With) and any(
                 isinstance(item.context_expr, ast.Call)
                 and getattr(item.context_expr.func, "id", "") == "_chat_lock"
                 for item in node.items):
-            guarded.append((node.lineno, node.end_lineno))
-    lines = source.splitlines()
-    acquire = next(i for i, t in enumerate(lines, 1) if "_chat_save_lock.acquire()" in t)
-    release = next(i for i, t in enumerate(lines, 1) if "_chat_save_lock.release()" in t)
-    saves = [node.lineno for node in ast.walk(tree)
-             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-             and node.func.attr == "save"
-             and getattr(node.func.value, "id", "") == "session_mgr"]
+            guards.append((node.lineno, node.end_lineno))
+
+    def _guard_of(line):
+        inside = [g for g in guards if g[0] <= line <= g[1]]
+        return min(inside, key=lambda g: g[1] - g[0]) if inside else None
+
+    loads = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call) \
+                and isinstance(node.value.func, ast.Attribute) and node.value.func.attr == "load" \
+                and getattr(node.value.func.value, "id", "") == "session_mgr":
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    loads.setdefault(target.id, []).append(node.lineno)
+    saves = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                and node.func.attr == "save" and isinstance(node.func.value, ast.Name):
+            saves.append((node.lineno, node.func.value.id,
+                          node.args[0].id if node.args and isinstance(node.args[0], ast.Name)
+                          else ""))
     assert len(saves) >= 11
-    loose = [n for n in saves if not any(a <= n <= b for a, b in guarded)
-             and not acquire < n < release]
+    aliases = [(n, who) for n, who, _what in saves if who != "session_mgr"]
+    assert aliases == [], f"a chat is saved through another name: {aliases}"
+    loose, stale = [], []
+    for line, _who, what in saves:
+        guard = _guard_of(line)
+        if guard is None:
+            loose.append(line)
+            continue
+        if not any(guard[0] <= load <= line for load in loads.get(what, [])):
+            stale.append(line)
     assert loose == [], f"a chat is saved without its lock at lines {loose}"
+    assert stale == [], f"a chat is saved under a lock it was not loaded under at lines {stale}"
 
 
 def test_a_line_sent_again_stops_offering_a_resend(room_home):
@@ -1401,3 +1506,159 @@ def test_a_line_sent_again_stops_offering_a_resend(room_home):
     lines = {l["id"]: l for l in room.transcript(SCOPE_A)}
     assert lines[first["id"]].get("resent") is True
     assert not lines[second["id"]].get("resent") and not lines[third["id"]].get("resend_of")
+
+
+# ── storing and delivering ────────────────────────────────────────────────────
+
+def test_a_line_that_could_not_be_stored_is_not_delivered(room_home, monkeypatch):
+    """MUTATION: deliver the line whatever the store answered - red (the app got a line the
+    room does not show)."""
+    client, _pipe, _row = _capable()
+    monkeypatch.setattr(room, "_append", lambda *a, **k: False)
+    with pytest.raises(room.RoomRefused) as refused:
+        room.post(SCOPE_A, "alice", "Hallo")
+    client.pump()
+    assert refused.value.code == "failed" and client.of("room_msg") == []
+
+
+def test_two_resends_of_one_line_deliver_once(room_home):
+    """Two screens send the same line again at the same moment. MUTATION: check for an earlier
+    resend outside the chat's lock (before the append) - red (both are delivered)."""
+    device = paired_device(SCOPE_A)
+    devices.set_caps(device[0]["device_id"], ["room"])
+    first = room.post(SCOPE_A, "alice", "Licht aus")
+    devices.remove_device(device[0]["device_id"], by="", reason="test")
+    client, _pipe, _row = _capable()
+    barrier = threading.Barrier(2)
+    real_line_text = room._line_text
+    outcomes = []
+
+    def _slow_line_text(*a, **k):
+        found = real_line_text(*a, **k)
+        try:
+            barrier.wait(2)
+        except threading.BrokenBarrierError:
+            pass
+        return found
+
+    room._line_text = _slow_line_text
+    try:
+        def _send():
+            try:
+                outcomes.append(room.post(SCOPE_A, "alice", "Licht aus", resend_of=first["id"])["to"])
+            except room.RoomRefused as refused:
+                outcomes.append(refused.code)
+        threads = [threading.Thread(target=_send) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(10)
+    finally:
+        room._line_text = real_line_text
+    client.pump()
+    assert sorted(outcomes) == ["already_sent_again", "app_agent"]
+    assert len(client.of("room_msg")) == 1
+
+
+@pytest.mark.parametrize("meta, kind", [
+    ({"app_agent_ask": True, "app_ask_id": "a1"}, agent_origin.APP_AGENT_KIND),
+    ({"wake": "timer"}, "timer"),
+])
+def test_a_refused_turn_keeps_who_wrote_it(runner_world, meta, kind):
+    """A request of the app's agent and a wake, each refused for a missing backend, keep their
+    kind, so they read under their author and fenced. MUTATION: store the refused question
+    without a kind - red."""
+    import vaf.core.headless_runner as hr
+    from vaf.core.session import get_manager, model_text
+    from vaf.core.task_queue import AgentTask
+    task = AgentTask(session_id=RUNNER_CHAT, input_text="Mach etwas", source="web",
+                     metadata={"user_scope_id": "x", **meta})
+    hr.refuse_turn_without_backend(task, "No model is set up.", get_manager())
+    stored = get_manager().load(RUNNER_CHAT, restore_state=False, repoint=False)
+    question = [m for m in stored.messages if m.role == "user"][-1]
+    assert question.kind == kind
+    if kind == agent_origin.APP_AGENT_KIND:
+        assert agent_origin.is_app_agent_request_text(model_text(question))
+
+
+def test_a_refused_confirmation_stores_the_report(runner_world):
+    """MUTATION: store the queued text instead of the text the turn would have read - red."""
+    import vaf.core.headless_runner as hr
+    from vaf.core.session import get_manager
+    from vaf.core.task_queue import AgentTask
+    task = AgentTask(session_id=RUNNER_CHAT, input_text="queued", source="web",
+                     metadata={"user_scope_id": "x", "wake": "confirm"})
+    hr.refuse_turn_without_backend(task, "No model.", get_manager(), text="✔ the report")
+    stored = get_manager().load(RUNNER_CHAT, restore_state=False, repoint=False)
+    assert [m.content for m in stored.messages if m.role == "user"][-1] == "✔ the report"
+    source = Path(hr.__file__).read_text(encoding="utf-8")
+    assert "refuse_turn_without_backend(task, _why, session_mgr, text=input_text)" in source
+
+
+def test_a_repeat_after_an_older_question_without_a_turn_id_is_stored(runner_world, monkeypatch):
+    """MUTATION: count a missing earlier turn id as the same turn - red."""
+    from vaf.core.session import Message, get_manager
+    session = get_manager().load(RUNNER_CHAT, restore_state=False, repoint=False)
+    session.messages += [Message(role="user", content="Morgen frei?"),
+                         Message(role="assistant", content="Ja.")]
+    get_manager().save(session, sync_state=False)
+    world = _run_app_turn(monkeypatch, runner_world, "Morgen frei?")
+    users = [m for m in world.stored["messages"] if m["role"] == "user"]
+    assert [u["content"] for u in users] == ["Morgen frei?", "Morgen frei?"]
+
+
+def test_a_repeat_in_another_chat_stays_one_question(runner_world, monkeypatch):
+    """The second-question exception is the Veyllo App chat's only. MUTATION: drop its
+    source condition - red (a repeat in another channel's chat is stored twice)."""
+    from vaf.core.app_link import CHANNEL
+    from vaf.core.channels import CHAT_CHANNELS
+    from vaf.core.session import TURN_ID_KEY, Message, get_manager
+    other = next(c for c in CHAT_CHANNELS if c != CHANNEL)
+    session = get_manager().load(RUNNER_CHAT, restore_state=False, repoint=False)
+    session.messages += [Message(role="user", content="Morgen frei?",
+                                 metadata={TURN_ID_KEY: "an-earlier-turn"}),
+                         Message(role="assistant", content="Ja.")]
+    get_manager().save(session, sync_state=False)
+    from vaf.core import task_queue
+
+    class _Other(task_queue.AgentTask):
+        def __post_init__(self):
+            super().__post_init__()
+            self.source = other
+    monkeypatch.setattr(task_queue, "AgentTask", _Other)
+    world = _run_app_turn(monkeypatch, runner_world, "Morgen frei?")
+    users = [m for m in world.stored["messages"] if m["role"] == "user"]
+    assert [u["content"] for u in users] == ["Morgen frei?"]
+
+
+def test_a_persons_line_that_begins_like_a_wake_is_theirs(room_home):
+    """MUTATION: apply the older lines' prefix rule to a line with the person's message id -
+    red (the person's own words were drawn as a timer note)."""
+    paired_device(SCOPE_A)
+    _store(devices.chat_session_id(SCOPE_A), SCOPE_A, [
+        {"role": "user", "content": "⏰ Timer fired, sagt mein Wecker", "timestamp": _at(1),
+         "metadata": {"channel_message_id": "m1"}}])
+    [line] = room.transcript(SCOPE_A)
+    assert (line["peer"], line["kind"]) == ("person", "say")
+
+
+def test_a_turn_of_another_lane_with_a_message_id_is_not_the_persons(room_home):
+    """MUTATION: drop the source check of `_pending_author` - red (a turn another lane queued in
+    the app chat, even with a message id, was drawn as the person's)."""
+    paired_device(SCOPE_A)
+    _queue(devices.chat_session_id(SCOPE_A), "not the person's", source="web",
+           channel_message_id="m9")
+    assert room.transcript(SCOPE_A) == []
+
+
+def test_a_forgotten_credential_leaves_a_waiting_request_of_the_app_agent(room_home):
+    """MUTATION: scrub every waiting line with the app chat's forgotten values only - red."""
+    from vaf.core import forget_secrets
+    paired_device(SCOPE_A)
+    _queue(devices.ask_session_id(SCOPE_A), "Mein Code ist zugang98765", app_agent_ask=True)
+    assert "zugang98765" in room.transcript(SCOPE_A)[0]["text"]
+    forget_secrets.remember(devices.ask_session_id(SCOPE_A), {"CODE": "zugang98765"})
+    try:
+        assert "zugang98765" not in json.dumps(room.transcript(SCOPE_A))
+    finally:
+        forget_secrets._by_session.clear()

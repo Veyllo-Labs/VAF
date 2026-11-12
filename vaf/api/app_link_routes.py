@@ -267,6 +267,8 @@ _ROOM_REFUSALS = {
                        "Veyllo App. You can still ask your VAF agent: start the line with @ "
                        "and its name.",
     "rate_limited": "Too many lines in a minute. Wait a moment and write again.",
+    "already_sent_again": "This line was already sent again.",
+    "failed": "The line could not be stored, so it was not sent. Try again.",
 }
 
 

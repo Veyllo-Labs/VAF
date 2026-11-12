@@ -355,3 +355,42 @@ def test_open_for_write_refuses_vafs_own_data(tmp_path, monkeypatch):
     with pytest.raises(vaf.WriteRefused):
         vaf.open_for_write(tmp_path / "data" / "vaf" / "custom_tools" / "x.py")
     assert not (tmp_path / "data" / "vaf" / "custom_tools" / "x.py").exists()
+
+
+@pytest.mark.parametrize("asked, subject, now, now_subject, refused", [
+    (None, None, "First connection to h2", None, False),   # not consulted: nothing to compare
+    ("", None, None, None, False),                         # nothing asked, nothing asked now
+    ("First connection to h1", None, "First connection to h1", None, False),
+    ("First connection to h1", None, "First connection to h2", None, True),
+    ("", None, "First connection to h2", None, True),     # a server forgotten since the gate
+    ("", "h1", None, "h1", False),
+    ("", "h1", None, "h2", True),                          # a stored value changed since
+])
+def test_changed_since_asked_refuses_exactly_when_the_question_or_its_subject_moved(
+        asked, subject, now, now_subject, refused):
+    """EMBEDDING.md: `self.changed_since_asked(kwargs, now, subject)` returns a refusal text
+    when the question the funnel put (`_call_question`) or what it covered (`_call_subject`)
+    differs from the one `run` computes, else None, and None when nothing was asked."""
+    kwargs = {"_call_question": asked}
+    if subject is not None:
+        kwargs["_call_subject"] = subject
+    out = ZzContractProbeTool().changed_since_asked(kwargs, now, now_subject)
+    assert (out is not None) is refused
+    if refused:
+        assert out.startswith("Error:") and "h2" not in out, "the refusal names no value"
+
+
+@pytest.mark.parametrize("kwargs, may", [
+    ({"_call_confirmed": True, "_call_question": "First connection to h"}, True),
+    ({"_call_confirmed": True}, True),
+    ({"_call_confirmed": True, "_call_question": None}, True),
+    ({"_call_confirmed": True, "_call_question": ""}, False),
+    ({"_call_confirmed": False, "_call_question": "First connection to h"}, False),
+    ({}, False),
+])
+def test_first_contact_confirmed_is_the_documented_truth_table(kwargs, may):
+    """EMBEDDING.md: `self.first_contact_confirmed(kwargs)` is True when the call is confirmed
+    and the question put was the tool's own, or no question was consulted (a direct call or
+    an authorizer's allow()); False when nothing of its own was asked ("") or the call is not
+    confirmed."""
+    assert ZzContractProbeTool().first_contact_confirmed(kwargs) is may

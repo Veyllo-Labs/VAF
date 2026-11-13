@@ -181,4 +181,8 @@ def test_python_m_wrapper_with_relative_import_restarts_into_itself(tmp_path):
     report = _line(second.stdout, "REPORT")
     assert report == {"spec": "restartwrap.__main__", "argv": ["run"],
                       "package_dir_on_path": False}, second.stdout + second.stderr
-    assert call[1:] == [sys.executable, "-m", "restartwrap", "run"]
+    # A venv launcher (Windows) or a framework build (macOS) can name the same interpreter
+    # by another path, so the executable is compared as a file.
+    assert os.path.samefile(call[0], sys.executable), call
+    assert os.path.samefile(call[1], sys.executable), call
+    assert call[2:] == ["-m", "restartwrap", "run"], call

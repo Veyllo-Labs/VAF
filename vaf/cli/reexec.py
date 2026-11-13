@@ -15,7 +15,10 @@ How the program was started decides how it is started again:
   Running that module's file as a script instead would lose its package, so a relative
   import in it fails after the exec, where nothing can report it any more. Script mode also
   puts the module's own directory first on sys.path, where `vaf/github` shadows the
-  `github` package (PyGithub) and the GitHub tools load without it.
+  `github` package (PyGithub) and the GitHub tools load without it. A module found only
+  through the working directory cannot be started again if the process changed directory
+  before the restart; VAF's launchers export PYTHONPATH and the installers run
+  `pip install -e .`, so `vaf.main` does not depend on the working directory.
 - Everything else runs argv[0] again as a script with the same interpreter: the console
   script, a script file, a directory or zip archive with a `__main__` module (its spec name
   is the bare `__main__`, which `-m` cannot start).

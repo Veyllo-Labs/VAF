@@ -182,8 +182,9 @@ unbound in the loop's per-iteration `finally`). The decider receives the call's 
 the tool's own question as the funnel computed them (the `args` and `question` keywords of
 `decide`), puts VAF's text of the whole call on a card for that device, and waits for the tap
 at most five minutes; Stop, a revoked account and a device that no longer stands end the wait
-at once. After a No, an expiry or a Stop the same turn shows no further card (`GATE_HELD`),
-so one turn waits once at most. A refusal replaces the gate's `[CANCELLED]` text with the
+at once. A No, an expiry or a Stop ends the waiting for the rest of the turn: it shows no
+further card (`GATE_HELD`), so a turn waits at most once without a Yes (a turn whose cards are
+each answered Yes waits once per card). A refusal replaces the gate's `[CANCELLED]` text with the
 card's own sentence (`[VEYLLO APP] '<tool>' did NOT run: ...`). A wake turn (a timer, a background command) is not
 the person's and keeps the channel's rules.
 

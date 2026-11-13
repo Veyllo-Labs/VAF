@@ -236,9 +236,12 @@ differences (`vaf/core/app_link/bridge.py`, `vaf/core/agent_origin.py`):
   environment and deploy target, an automation's output path and triggers, an id) show their
   whole first line there, because their tail is their meaning. Below that block, each value
   continues under its own name, every line indented, with runs of empty lines counted. A tab
-  shows as `⟨U+0009⟩`, and a run of more than eight spaces as its count, `⟨300 spaces⟩`, so no
-  wall of blanks can push a second command out of sight; the call itself keeps every
-  character. Invisible characters (direction overrides, zero-width and control characters, blank
+  shows as `⟨U+0009⟩`, and a run of more than eight ordinary spaces as its count,
+  `⟨300 spaces⟩`. Every other space character (a no-break space, an em space, an ideographic
+  space) shows by its code point, `⟨U+00A0⟩`, and a run of more than eight of the same one as
+  its count and code point, `⟨9 x U+2003⟩`, so two calls that differ only in their spaces never
+  look alike. No wall of blanks can push a second command out of sight; the call itself keeps
+  every character. A recipient's name on a message card is shown the same way. Invisible characters (direction overrides, zero-width and control characters, blank
   fillers, combining marks with no letter before them or stacked beyond two, and the
   combining marks that draw as nothing at all, such as the variation selectors) appear as
   `⟨U+XXXX⟩`; a mark after a space of any kind (the no-break and the wide ones too), a tab
@@ -581,10 +584,11 @@ links that page instead of quoting amounts, which an installed VAF could not kee
   Python, SSH and FTP off a paired Veyllo App while keeping the device: the card is the
   condition, and unpairing (or the account allowlist for a regular account) is the off switch.
   No installation has asked for such a switch; it is measured again when one does.
-- **A turn of yours waits for a card at most once.** While a card of your own turn waits, the
-  turn holds one of VAF's workers, up to five minutes, as the web UI's dialog does; with the
-  local model that is the one worker. After a No, an expiry or a Stop the same turn shows no
-  further card, so one turn holds a worker for one wait at most. A request of the app's agent
+- **A turn of yours waits at most once without a Yes.** While a card of your own turn waits,
+  the turn holds one of VAF's workers, up to five minutes, as the web UI's dialog does; with
+  the local model that is the one worker. A No, an expiry or a Stop ends the waiting for the
+  rest of the turn, so a turn holds a worker for at most one wait that does not end in a Yes;
+  a turn whose cards are each answered Yes waits once per card. A request of the app's agent
   holds no worker: its call is parked.
 - **A turn nobody started through the app asks nobody on the device.** A timer that fires or a
   background command that ends wakes the app chat with the rules of every messaging channel;

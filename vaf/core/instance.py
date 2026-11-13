@@ -12,11 +12,11 @@ and how to start it again so it comes back the way it was.
 WHICH process is answered by locate_processes(): the owner of the tray's
 singleton port (an identity no command line can fake), or failing that every
 process running `-m vaf.main tray`, with `tray` the argv element directly after
-the module. This is the one
-implementation of that rule; the CLI's finder reads through it. It is the
-answer for "what to stop", deliberately wide. "Is VAF up?" is a different
-question with a strict answer, find_service(): only the singleton port counts,
-because argv cannot tell the service from a terminal dashboard watching it.
+the module. This is the one implementation of that rule; the CLI's finder
+reads through it. It is the answer for "what to stop", deliberately wide.
+"Is VAF up?" is a different question with a strict answer, find_service():
+only the singleton port counts, because argv cannot tell the service from a
+terminal dashboard watching it.
 
 HOW it was started is answered by the record the instance writes for itself
 in `<vaf dir>/instance.json` once its singleton check passes: pid, mode,
@@ -319,7 +319,9 @@ def is_tray_entry(argv) -> bool:
     Positions matter because the words alone prove nothing: `pytest <checkout
     named VAF> -k tray`, `vaf run -p tray` (a chat whose prompt is the word) and
     a sub-agent whose `--task` is `tray` all carry both words. Anything after
-    `tray` is free (`--no-top`). The process-table scan in locate_processes()
+    `tray` is free (`--no-top`). An interpreter option before the script
+    (`python -u <bin>/vaf tray`) does not match; no launcher starts the
+    console script that way. The process-table scan in locate_processes()
     applies the module form only."""
     try:
         parts = [str(a) for a in (argv or [])]

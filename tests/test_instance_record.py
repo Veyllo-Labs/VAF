@@ -197,6 +197,8 @@ def test_live_check_wants_a_tray_entry_point(monkeypatch):
     (["C:\\Python313\\python.exe", "-m", "pytest", "C:\\Users\\user\\VAF", "-k", "tray"], False),
     (["/venv/bin/python", "-c", "import time; time.sleep(1)", "/home/user/VAF", "tray"], False),
     (["/bin/bash", "-c", "sleep 1", "bash", "/home/user/VAF", "tray"], False),
+    (["C:\\VAF\\venv\\Scripts\\vaf.exe", "run", "-p", "tray"], False),    # vaf as the program
+    (["/usr/local/bin/vaf", "run", "-p", "tray"], False),
     (["/usr/bin/vim", "/venv/bin/vaf", "tray"], False),                       # argv[0] no interpreter
     (["/venv/bin/python", "/venv/bin/vaf", "run", "-p", "tray"], False),      # a chat about trays
     (["/venv/bin/python", "-m", "vaf.main", "run", "-p", "tray"], False),

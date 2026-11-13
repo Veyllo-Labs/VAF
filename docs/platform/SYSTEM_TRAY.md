@@ -240,10 +240,10 @@ not `build_app.sh`.
   program (argv[0], or argv[1] after a Python interpreter) directly followed by
   `tray`. Both words elsewhere in a command line prove nothing: `pytest` in a
   checkout named VAF with `-k tray`, `vaf run -p tray` or a sub-agent whose task
-  is `tray` is not VAF, and `vaf stop` leaves it alone. "Is VAF up?" has a strict one,
-  `find_service()`: only the singleton port accepting a connection counts
-  (a connect, since listing a port's owner needs root on macOS). A process is
-  named only with evidence that it is the listener: its OWN sockets (readable
+  is `tray` is not VAF, and `vaf stop` leaves it alone. "Is VAF up?" has a
+  strict one, `find_service()`: only the singleton port accepting a connection
+  counts (a connect, since listing a port's owner needs root on macOS). A process
+  is named only with evidence that it is the listener: its OWN sockets (readable
   without root on macOS too) include the port, and it runs a tray entry point.
   The record, a command line or a pid alone prove nothing; another program on
   the port is not VAF, and the terminal start then says the port is taken

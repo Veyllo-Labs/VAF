@@ -68,7 +68,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   tray when its arguments contained the word `tray` anywhere, and either a folder named VAF
   or the `vaf.main` module. A test run in a checkout folder called VAF with `-k tray`, a chat
   started with the prompt `tray`, or a sub-agent whose task was that word could be stopped by
-  `vaf stop` or block the CI web build. Only an actual start of the tray matches now:
+  `vaf stop`. Only an actual start of the tray matches now:
   `vaf tray` or `python -m vaf.main tray`.
 - **A mention in an agent room reaches the member when punctuation follows the name.**
   `@Bob.`, `@Bob?` and `@Bob's idea` now address Bob, a name that ends in a symbol is reached

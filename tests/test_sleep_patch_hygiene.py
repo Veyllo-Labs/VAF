@@ -18,9 +18,10 @@ Three harms, each measured with one foreign `while True: time.sleep(0.01)` alive
 1. spin: 309,772,696 loop turns in 67.6 s where a real sleeper makes about 6,800, and the
    files took 67.6 s and 97 s instead of 41.3 s, because the spinning loop holds the GIL;
 2. a recording fake takes the foreign thread's values into the list the test asserts on;
-3. a raising fake ends the test early: the tray poll test raised its stop exception on the
-   foreign thread's sleeps and never reached the poll (`('local_engine', 'vllm', 'llama')
-   in []`), and the foreign loop died of an exception that was not its own.
+3. a raising fake ends the test early: two foreign sleeps filled the tray poll test's list,
+   so it raised its stop exception on its own first sleep and never reached the poll
+   (`('local_engine', 'vllm', 'llama') in []`), and the foreign thread died of that
+   exception, which was not its own.
 
 A ban would be wrong: a test needs a fast sleep on its own thread. So every process-wide
 replacement goes through `fake_clock.only_on_thread(fake)`, or a clock's

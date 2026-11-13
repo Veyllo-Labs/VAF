@@ -195,6 +195,28 @@ def test_the_proactor_loop_dials_through_the_guard(monkeypatch):
     assert dialed == [("127.0.0.1", 5)]
 
 
+def test_the_windows_loops_inherit_the_guarded_sock_connect():
+    """windows_events cannot be imported on Linux, so this reads the running Python's own
+    asyncio/windows_events.py: its loops (ProactorEventLoop, the selector one) must take
+    sock_connect from the wrapped base classes. A Python that defines one of its own there
+    fails here instead of escaping the guard on Windows.
+    MUTATION: a `def sock_connect` in a class of that file - red (the second assertion
+    applies it to the text and must see it)."""
+    source = Path(asyncio.__file__).with_name("windows_events.py").read_text(encoding="utf-8")
+    assert "class ProactorEventLoop(proactor_events.BaseProactorEventLoop)" in source
+    assert _own_sock_connects(source) == []
+    overriding = source + "\n\nclass Later:\n    async def sock_connect(self, sock, address):\n        pass\n"
+    assert _own_sock_connects(overriding) == ["Later"]
+
+
+def _own_sock_connects(source):
+    import ast
+
+    return [node.name for node in ast.walk(ast.parse(source)) if isinstance(node, ast.ClassDef)
+            and any(isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and item.name == "sock_connect" for item in node.body)]
+
+
 @plain_run_only
 def test_udp_to_a_listed_port_is_not_refused(monkeypatch):
     """No handshake, nothing a VAF service answers on: only TCP is refused.
@@ -337,19 +359,23 @@ def test_the_hostile_run_counts_what_the_guard_would_refuse(tmp_path):
     assert ("tests/_home_witness.py::test_witness (call)", "127.0.0.1:8001") in charged, charged
 
 
-@pytest.mark.parametrize("setup", ["variable only", "counter refusing nothing"])
+@pytest.mark.parametrize("setup", ["variable only", "counter refusing nothing",
+                                   "counter refusing only port 80"])
 def test_a_hostile_variable_alone_does_not_switch_the_guard_off(tmp_path, setup):
     """The guard steps aside only for wrappers that refuse every listed port themselves: an
     inherited VAF_HOSTILE_REFUSAL_LOG without the sitecustomize loaded, or a counter told to
-    refuse nothing, leaves the guard in place and a dial to 8001 refused by it. Safe under
-    mutation: the witness checks the installed wrapper refuses 8001 before it dials.
-    MUTATION: step aside whenever the variable is set (the old condition) - red."""
-    if setup == "counter refusing nothing" and os.name == "nt":
+    refuse nothing or only part of the list, leaves the guard in place and a dial to 8001
+    refused by it. Safe under mutation: the witness checks the installed wrapper refuses
+    8001 before it dials.
+    MUTATION: step aside whenever the variable is set (the old condition) - red; step aside
+    for any counter that refuses something, not the whole list - red (port 80 only)."""
+    if setup != "variable only" and os.name == "nt":
         pytest.skip("the refusal counter is not installed on a Windows host")
     site_source = _hostile().sitecustomize_source(set()) if setup != "variable only" else None
     out = _witness_child(
         tmp_path, site_source=site_source,
-        VAF_HOSTILE_REFUSAL_LOG=str(tmp_path / "refusals.log"), VAF_HOSTILE_REFUSE_PORTS="",
+        VAF_HOSTILE_REFUSAL_LOG=str(tmp_path / "refusals.log"),
+        VAF_HOSTILE_REFUSE_PORTS="80" if setup == "counter refusing only port 80" else "",
         VAF_HOME_WITNESS_REFUSER="(tests/conftest.py)")
     assert out.returncode == 0, out.stdout[-3000:] + out.stderr[-3000:]
     assert "service ports: refused (tests/conftest.py)" in out.stdout

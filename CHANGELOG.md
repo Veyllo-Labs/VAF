@@ -70,6 +70,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   started with the prompt `tray`, or a sub-agent whose task was that word could be stopped by
   `vaf stop`. Only an actual start of the tray matches now:
   `vaf tray` or `python -m vaf.main tray`.
+- **Tool cards and the action timeline speak the page's language.** A finished tool card
+  showed the German "Fertig" and "N Zeilen" on every page, and the action count, the thinking
+  block, the sub-agent watchdog row and the workflow badges were English on every page, with
+  a German tooltip on the stop button. All of them now come from the language catalogues in
+  all seven languages, and numbers use the language's decimal separator.
 - **A mention in an agent room reaches the member when punctuation follows the name.**
   `@Bob.`, `@Bob?` and `@Bob's idea` now address Bob, a name that ends in a symbol is reached
   before a full stop (`@C++.` reaches "C++"), names are matched in any case form (`@STRASSE`

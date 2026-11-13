@@ -6,10 +6,11 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Check, AlertCircle, Terminal, ChevronRight, Activity, Skull, Loader2 } from 'lucide-react';
-import { useTranslations } from 'next-intl';
+import { useFormatter, useTranslations } from 'next-intl';
 import { cn, getApiBase } from '@/lib/utils';
+import { durationText, toolResultStat } from '@/components/chat/toolCardText';
 
-/** A sub-agent (librarian/research/document/coding/browser) — these run as supervised units. */
+/** A sub-agent (librarian/research/document/coding/browser): these run as supervised units. */
 const SUBAGENT_RE = /(?:^|[^a-z])(librarian|research|document|coding|browser)_agent(?:$|[^a-z])/;
 
 interface SupervisorUnit {
@@ -19,23 +20,6 @@ interface SupervisorUnit {
     runtime_s?: number | null;
     heartbeat_age_s?: number | null;
     stale?: boolean;
-}
-
-function fmtDuration(s?: number | null): string {
-    if (s == null) return '—';
-    if (s < 60) return `${Math.round(s)}s`;
-    const m = Math.floor(s / 60);
-    const sec = Math.round(s % 60);
-    return `${m}m ${sec}s`;
-}
-
-/** Short right-aligned result counter (mockup ".stat"): line count, else KB, else a neutral label. */
-function resultStat(result?: string): string {
-    if (!result || !result.trim()) return 'Fertig';
-    const lines = result.trim().split('\n').filter(l => l.trim()).length;
-    if (lines > 1) return `${lines} Zeilen`;
-    if (result.length >= 1024) return `${(result.length / 1024).toFixed(1)} KB`;
-    return 'Fertig';
 }
 
 export interface ToolMessageProps {
@@ -60,17 +44,18 @@ const INPUT_PRIORITY = [
 ];
 
 /** Compact one-value rendering for the structured-args fallback. Arrays/objects are summarized so a
- *  big payload never floods the card; strings are truncated. */
-function compactValue(v: unknown): string {
+ *  big payload never floods the card; strings are truncated. `items` words an array's length in
+ *  the page's language. */
+function compactValue(v: unknown, items: (n: number) => string): string {
     if (v === null || v === undefined) return '';
     if (typeof v === 'string') return v.length > 80 ? v.slice(0, 80) + '…' : v;
     if (typeof v === 'number' || typeof v === 'boolean') return String(v);
-    if (Array.isArray(v)) return `[${v.length} item${v.length === 1 ? '' : 's'}]`;
+    if (Array.isArray(v)) return items(v.length);
     if (typeof v === 'object') return '{…}';
     return '';
 }
 
-function extractMainInput(argsJson: string | undefined): string {
+function extractMainInput(argsJson: string | undefined, items: (n: number) => string): string {
     if (!argsJson) return '';
     try {
         const obj = JSON.parse(argsJson) as Record<string, unknown>;
@@ -85,7 +70,7 @@ function extractMainInput(argsJson: string | undefined): string {
         // Show a compact key: value summary so the call's input is still visible instead of blank.
         const summary = Object.entries(obj)
             .filter(([, v]) => v !== null && v !== undefined)
-            .map(([k, v]) => `${k}: ${compactValue(v)}`)
+            .map(([k, v]) => `${k}: ${compactValue(v, items)}`)
             .filter(s => !s.endsWith(': '))
             .join(', ');
         if (summary) return summary;
@@ -93,7 +78,7 @@ function extractMainInput(argsJson: string | undefined): string {
     return '';
 }
 
-/** Typewriter text — no dot, just characters typing in, black text */
+/** Typewriter text: no dot, just characters typing in, black text */
 function TypewriterText({ input }: { input: string }) {
     const [typedLen, setTypedLen] = useState(0);
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -125,16 +110,17 @@ function TypewriterText({ input }: { input: string }) {
     );
 }
 
-function workflowBadge(args: string | undefined): { label: string; color: string } | null {
+/** The create_agent_workflow badge: a catalogue key (`main.*`, or `common.delete`) and its colour. */
+function workflowBadge(args: string | undefined): { key: 'toolWfTemporary' | 'toolWfPersistent' | 'delete' | 'toolWfList'; color: string } | null {
     if (!args) return null;
     try {
         const obj = JSON.parse(args) as Record<string, unknown>;
         if (!('action' in obj)) return null;
         switch (obj.action) {
-            case 'run_temp':  return { label: 'Temporary',            color: 'bg-blue-100 text-blue-700 border-blue-200' };
-            case 'create':    return { label: 'Persistent Workflow',  color: 'bg-green-100 text-green-700 border-green-200' };
-            case 'delete':    return { label: 'Delete',               color: 'bg-red-100 text-red-700 border-red-200' };
-            case 'list':      return { label: 'List',                 color: 'bg-gray-100 text-gray-600 border-gray-200' };
+            case 'run_temp':  return { key: 'toolWfTemporary',  color: 'bg-blue-100 text-blue-700 border-blue-200' };
+            case 'create':    return { key: 'toolWfPersistent', color: 'bg-green-100 text-green-700 border-green-200' };
+            case 'delete':    return { key: 'delete',           color: 'bg-red-100 text-red-700 border-red-200' };
+            case 'list':      return { key: 'toolWfList',       color: 'bg-gray-100 text-gray-600 border-gray-200' };
             default:          return null;
         }
     } catch { return null; }
@@ -150,13 +136,33 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
     onToggle,
     onToggleScroll
 }) => {
+    const tMain = useTranslations('main');
+    const tCommon = useTranslations('common');
+    const format = useFormatter();
     const [isExpanded, setIsExpanded] = useState(false);
-    const animInput = extractMainInput(args);
+    const animInput = extractMainInput(args, n => tMain('toolArgItems', { count: n }));
     const wfBadge = name === 'create_agent_workflow' ? workflowBadge(args) : null;
+    const wfBadgeLabel = wfBadge == null ? ''
+        : wfBadge.key === 'delete' ? tCommon('delete') : tMain(wfBadge.key);
+    const durationLabel = (s: number) => {
+        const d = durationText(s);
+        return d.key === 'durationSeconds'
+            ? tMain('durationSeconds', { seconds: d.seconds })
+            : tMain('durationMinutesSeconds', { minutes: d.minutes, seconds: d.seconds });
+    };
+    const statLabel = (text?: string) => {
+        const stat = toolResultStat(text);
+        if (stat.key === 'toolStatLines') return tMain('toolStatLines', { count: stat.count });
+        // Grouping off, so a result above 1000 KB keeps reading "1536.0 KB" as it always did.
+        if (stat.key === 'toolStatKb') return tMain('toolStatKb', {
+            kb: format.number(stat.kb, { minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: false }),
+        });
+        return tMain('toolStatDone');
+    };
 
     // ── Live watchdog: surface a running sub-agent's supervised unit (heartbeat, runtime, kill)
     //    INSIDE its own tool bubble. A spawned sub-agent delegates immediately, so this bubble
-    //    flips to "completed" while the subprocess keeps running — therefore this is gated on a
+    //    flips to "completed" while the subprocess keeps running, therefore this is gated on a
     //    LIVE supervisor unit existing, NOT on the bubble's own status. Matched by task id (from
     //    the delegation marker in the result) when available, else by agent type.
     const isSubAgent = SUBAGENT_RE.test(name.toLowerCase());
@@ -169,7 +175,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
     const [killing, setKilling] = useState(false);
     // An async sub-agent delegates instantly, so the tool call's own duration is ~0.0s.
     // Capture the supervised unit's real runtime while it is alive, then keep showing it
-    // after the unit is gone — otherwise the bubble would read a misleading "(0.0s)".
+    // after the unit is gone, otherwise the bubble would read a misleading "(0.0s)".
     const lastRuntimeRef = useRef<number | null>(null);
     useEffect(() => {
         if (liveUnit?.runtime_s != null) lastRuntimeRef.current = liveUnit.runtime_s;
@@ -190,7 +196,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                 const d = await r.json();
                 const units: SupervisorUnit[] = Array.isArray(d.units) ? d.units : [];
                 // Match precisely by task id (from an async delegation marker) when present.
-                // The agent-type fallback is for SYNC sub-agents that block this tool call —
+                // The agent-type fallback is for SYNC sub-agents that block this tool call,
                 // so only apply it while THIS bubble is still running. Otherwise a completed
                 // call (e.g. one bounced by the plan gate, which carries no task id) would
                 // adopt a concurrently-running unit of the same type and falsely show as
@@ -206,7 +212,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                 else if (sawUnit) finish();      // unit was live and is now gone → sub-agent finished
                 else if (polls >= 6) finish();    // never appeared (~12 s) → not a tracked unit
             } catch {
-                /* transient — keep last */
+                /* transient, keep last */
             }
         };
         poll();
@@ -233,7 +239,6 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
 
     // visualStatus lags behind the real status by 450ms on completion so the
     // cursor return-to-avatar animation finishes before the green checkmark appears
-    const tMain = useTranslations('main');
     const [visualStatus, setVisualStatus] = useState<'running' | 'completed' | 'error' | 'unknown'>(status);
 
     useEffect(() => {
@@ -265,10 +270,10 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
     // like the mockup instead of a "(0.0s)" subtitle.
     const rt = liveUnit?.runtime_s ?? lastRuntimeRef.current ?? (endTime && startTime ? (endTime - startTime) / 1000 : null);
     const statText =
-        headerStatus === 'running'   ? (rt != null ? `running… ${fmtDuration(rt)}` : 'running…')
-        : headerStatus === 'error'   ? 'Error'
+        headerStatus === 'running'   ? (rt != null ? tMain('toolRunningFor', { duration: durationLabel(rt) }) : tMain('toolRunning'))
+        : headerStatus === 'error'   ? tMain('toolStatError')
         : headerStatus === 'unknown' ? tMain('toolOutcomeUnknown')
-        : (isSubAgent && rt != null  ? fmtDuration(rt) : resultStat(result));
+        : (isSubAgent && rt != null  ? durationLabel(rt) : statLabel(result));
 
     return (
         <div className="w-full">
@@ -299,7 +304,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                     />
                 )}
 
-                {/* Header — single row: dot · name · arg · result-counter (mockup .th) */}
+                {/* Header, a single row: dot · name · arg · result-counter (mockup .th) */}
                 <div
                     className="flex items-center gap-[9px] px-[11px] py-2 cursor-pointer hover:bg-accent/40 transition-colors"
                     onClick={() => {
@@ -333,7 +338,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                     <span className="shrink-0 text-[12.5px] font-semibold leading-none text-[#2b303b] dark:text-gray-100">{name}</span>
                     {wfBadge && (
                         <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium leading-none ${wfBadge.color}`}>
-                            {wfBadge.label}
+                            {wfBadgeLabel}
                         </span>
                     )}
                     {animInput && (
@@ -393,7 +398,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                                     <div className="mb-2">
                                         <div className="flex items-center gap-1 opacity-70 mb-1 font-semibold">
                                             <Activity className="h-3 w-3" />
-                                            <span>Watchdog</span>
+                                            <span>{tMain('toolWatchdog')}</span>
                                         </div>
                                         <div className="flex items-center gap-2 rounded border border-border/40 bg-background/60 px-2 py-1.5">
                                             <span
@@ -407,22 +412,21 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                                                 )}
                                             />
                                             <span className="text-[11px] text-foreground">
-                                                {liveUnit.stale ? 'No heartbeat — may be stuck' : 'Active'}
+                                                {liveUnit.stale ? tMain('toolWatchdogStale') : tCommon('active')}
                                                 {liveUnit.runtime_s != null && (
-                                                    <span className="text-muted-foreground"> · {fmtDuration(liveUnit.runtime_s)}</span>
+                                                    <span className="text-muted-foreground"> · {durationLabel(liveUnit.runtime_s)}</span>
                                                 )}
                                                 {liveUnit.heartbeat_age_s != null && (
-                                                    <span className="text-muted-foreground"> · ♥ {fmtDuration(liveUnit.heartbeat_age_s)}</span>
+                                                    <span className="text-muted-foreground"> · ♥ {durationLabel(liveUnit.heartbeat_age_s)}</span>
                                                 )}
                                             </span>
                                             <button
                                                 onClick={(e) => { e.stopPropagation(); killUnit(); }}
                                                 disabled={killing}
-                                                title="Diesen Sub-Agent killen"
+                                                title={tMain('toolKillTitle')}
                                                 className="ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-40 transition-colors"
                                             >
-                                                {killing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Skull className="h-3 w-3" />}
-                                                Kill
+                                                {killing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Skull className="h-3 w-3" />}{tMain('toolKill')}
                                             </button>
                                         </div>
                                     </div>
@@ -431,14 +435,14 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                                 {/* Output */}
                                 <div className="flex items-center gap-1 opacity-70 mb-1 font-semibold">
                                     <Terminal className="h-3 w-3" />
-                                    <span>Output</span>
+                                    <span>{tMain('toolOutput')}</span>
                                 </div>
                                 {result ? (
                                     <div className="max-h-60 overflow-y-auto whitespace-pre-wrap rounded bg-background p-2 border">
                                         {result}
                                     </div>
                                 ) : (
-                                    <span className="italic">Waiting for output…</span>
+                                    <span className="italic">{tMain('toolWaitingForOutput')}</span>
                                 )}
                             </div>
                         </motion.div>

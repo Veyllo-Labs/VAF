@@ -6,7 +6,7 @@
 import React, { useCallback, useEffect, useMemo, useState, useRef, Fragment, Suspense } from 'react';
 import { createPortal } from 'react-dom';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useTranslations } from 'next-intl';
+import { useFormatter, useTranslations } from 'next-intl';
 import { toWav16k } from '@/lib/wav';
 import {
     Send, Menu, Plus, MessageSquare, Brain, Bot, ChevronLeft, User, Trash2, Edit2, Paperclip,
@@ -872,6 +872,8 @@ const ChatMarkdown = ({ children, dark = false }: { children: string; dark?: boo
 // survives the inline→timeline remount of the first thinking block (else it would lose its time).
 const thinkDurationCache = new Map<string | number, number>();
 const ThinkingDetails = ({ thought, isComplete = true, durationKey }: { thought: string; isComplete?: boolean; durationKey?: string | number }) => {
+    const tMain = useTranslations('main');
+    const format = useFormatter();
     const [isOpen, setIsOpen] = useState(!isComplete);
     const openedAtRef = useRef<number>(Date.now());
     const closeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -879,7 +881,7 @@ const ThinkingDetails = ({ thought, isComplete = true, durationKey }: { thought:
     const MIN_OPEN_MS = 800;
     const CLOSE_DELAY_MS = 400;
     // Measured think duration: captured once when streaming finishes (only when we saw it live,
-    // so history-loaded turns — mounted already complete — show no bogus time).
+    // so history-loaded turns, mounted already complete, show no bogus time).
     const startRef = useRef<number>(Date.now());
     const wasLiveRef = useRef<boolean>(!isComplete);
     const [durationSec, setDurationSec] = useState<number | null>(
@@ -899,7 +901,7 @@ const ThinkingDetails = ({ thought, isComplete = true, durationKey }: { thought:
             return;
         }
 
-        // streaming just finished — record how long the thinking ran (and cache it so the value
+        // streaming just finished: record how long the thinking ran (and cache it so the value
         // survives the remount when this block moves from inline into the grouped timeline)
         setDurationSec(prev => {
             if (prev !== null) return prev;
@@ -958,14 +960,14 @@ const ThinkingDetails = ({ thought, isComplete = true, durationKey }: { thought:
             >
                 {!isComplete ? (
                     <>
-                        <span>Thinking</span>
+                        <span>{tMain('thinkingLive')}</span>
                         <span className="chat-think-dots" style={{ color: '#7c3aed' }} aria-hidden><span /><span /><span /></span>
                     </>
                 ) : (
                     <>
-                        <span>Thinking Process</span>
+                        <span>{tMain('thinkingDone')}</span>
                         {durationSec !== null && (
-                            <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-semibold text-violet-600">{durationSec.toFixed(1)}s</span>
+                            <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-semibold text-violet-600">{tMain('durationSeconds', { seconds: format.number(durationSec, { minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: false }) })}</span>
                         )}
                     </>
                 )}
@@ -984,9 +986,10 @@ const ThinkingDetails = ({ thought, isComplete = true, durationKey }: { thought:
     );
 };
 
-// Component: Action Accordion — same collapse behaviour as ThinkingDetails, amber accent.
+// Component: Action Accordion, same collapse behaviour as ThinkingDetails, amber accent.
 // Open while streaming, auto-collapses when the stream completes.
 const ActionDetails = ({ action, isComplete = true }: { action: string; isComplete?: boolean }) => {
+    const tMain = useTranslations('main');
     const [isOpen, setIsOpen] = useState(!isComplete);
     const openedAtRef = useRef<number>(Date.now());
     const closeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -1041,7 +1044,7 @@ const ActionDetails = ({ action, isComplete = true }: { action: string; isComple
                     ) : (
                         <Zap size={14} />
                     )}
-                    {!isComplete ? "Action..." : "Action"}
+                    {!isComplete ? tMain('actionLive') : tMain('actionDone')}
                 </span>
                 <ChevronRight size={14} className={cn("text-amber-400 transition-transform duration-200", isOpen && "rotate-90")} />
             </button>
@@ -10672,7 +10675,7 @@ function VAFDashboardContent() {
                                                                             <ToolMessage
                                                                                 key={`tool-${trueIndex}`}
                                                                                 id={msg.toolId || `tool-${trueIndex}`}
-                                                                                name={msg.toolName || 'Unknown Tool'}
+                                                                                name={msg.toolName || tMain('toolNameUnknown')}
                                                                                 status={msg.toolStatus || 'completed'}
                                                                                 result={msg.content}
                                                                                 args={msg.toolArgs}
@@ -10876,7 +10879,7 @@ function VAFDashboardContent() {
                                                                 <div className={cn("max-w-[95%] rounded-lg transition-[outline] duration-150", stopHovered && m.toolStatus === 'running' ? "outline outline-2 outline-red-400/60" : "")}>
                                                                     <ToolMessage
                                                                         id={m.toolId || `tool-${mIdx}`}
-                                                                        name={m.toolName || 'Unknown Tool'}
+                                                                        name={m.toolName || tMain('toolNameUnknown')}
                                                                         status={m.toolStatus || 'completed'}
                                                                         result={m.content}
                                                                         args={m.toolArgs}

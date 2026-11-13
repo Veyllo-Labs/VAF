@@ -668,7 +668,7 @@ _TRANSLATED_SURFACES = ("web/app/login/page.tsx", "web/components/SoulWizard.tsx
 _HARDCODED_COPY_DEBT = {
     "web/app/memory/page.tsx": 17,
     "web/app/not-found.tsx": 3,
-    "web/app/page.tsx": 44,
+    "web/app/page.tsx": 43,
     "web/app/settings/page.tsx": 1,
     "web/components/ActiveToolsPanel.tsx": 1,
     "web/components/BrowserLiveTile.tsx": 1,
@@ -682,7 +682,6 @@ _HARDCODED_COPY_DEBT = {
     "web/components/PdfWithHighlights.tsx": 2,
     "web/components/SettingsModal.tsx": 29,
     "web/components/SubAgentWindow.tsx": 47,
-    "web/components/ToolMessage.tsx": 2,
     "web/components/TrainingDashboard.tsx": 6,
     "web/components/connections/CalendarSetupWizard.tsx": 5,
     "web/components/connections/CloudDashboard.tsx": 15,

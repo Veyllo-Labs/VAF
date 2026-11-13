@@ -5,6 +5,7 @@
 
 import { Fragment, ReactNode, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronRight } from 'lucide-react';
+import { useTranslations } from 'next-intl';
 import { AgentAvatar, type AvatarMode } from '@/components/AgentAvatar';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { cn } from '@/lib/utils';
@@ -12,7 +13,7 @@ import { cn } from '@/lib/utils';
 // One entry on the timeline: the turn's thinking (first) followed by each tool call. `state`
 // drives the rail dot colour (pending → gray, done → green, error → red) and which item the
 // avatar "walks" to (the last pending one). `node` is the fully-wired card rendered by the parent
-// (a ThinkingDetails for `think`, a ToolMessage for `tool`) — this component only owns layout +
+// (a ThinkingDetails for `think`, a ToolMessage for `tool`); this component only owns layout +
 // the rail + the avatar walk, never the card internals.
 export interface TimelineAction {
     key: string;
@@ -25,7 +26,7 @@ interface Props {
     actions: TimelineAction[];
     avatarMode: AvatarMode;
     avatarDim?: boolean;
-    /** latest turn while still generating — only then does the avatar walk the rail */
+    /** latest turn while still generating; only then does the avatar walk the rail */
     isLive: boolean;
     expanded: boolean;
     onToggle: () => void;
@@ -48,6 +49,7 @@ const SCENE_ROOM_PX = 80;
 
 export function TurnActionsTimeline({ actions, avatarMode, avatarDim, isLive, expanded, onToggle, children }: Props) {
     const isMobile = useIsMobile();
+    const tMain = useTranslations('main');
     const [roomForScene, setRoomForScene] = useState(false);
     const rowRef = useRef<HTMLDivElement | null>(null);
     const avaRef = useRef<HTMLDivElement | null>(null);
@@ -56,7 +58,7 @@ export function TurnActionsTimeline({ actions, avatarMode, avatarDim, isLive, ex
 
     // The avatar walks to the active action = the last not-yet-done item (the run is sequential),
     // only on the live turn while expanded. BETWEEN steps (a tool just finished, the next think/tool
-    // not added yet) nothing is pending — keep the avatar at the LAST point instead of snapping back
+    // not added yet) nothing is pending, so keep the avatar at the LAST point instead of snapping back
     // up. It only returns to the top when collapsed or on a finished/historical turn.
     let activeIdx = -1;
     if (isLive && expanded && actions.length) {
@@ -107,11 +109,11 @@ export function TurnActionsTimeline({ actions, avatarMode, avatarDim, isLive, ex
     }, [expanded, activeIdx, actions.length]);
 
     // Black/white circle scheme: thinking = solid black; a tool is a hollow ring while running or on
-    // error, and fills solid gray once it completes successfully. An intermediate spoken line ('say' —
+    // error, and fills solid gray once it completes successfully. An intermediate spoken line ('say',
     // the agent talks between tool calls) is a hollow black ring: in the agent's own "black" voice
     // family like think, but distinct from think (solid) and from a running tool (gray ring).
     // Dark mode: gray-900 (#111827) and bg-white (flips to #202020) both vanish on the #181818
-    // page, so the step dots get explicit dark: variants — active/content steps go BRIGHT, done
+    // page, so the step dots get explicit dark: variants. Active/content steps go BRIGHT, done
     // stays a clear mid-gray, pending is a faint near-bg ring.
     const circleClass = (a: TimelineAction) =>
         a.kind === 'think' ? 'bg-gray-900 border-gray-900 dark:bg-[#e6e6e6] dark:border-[#e6e6e6]'
@@ -119,7 +121,7 @@ export function TurnActionsTimeline({ actions, avatarMode, avatarDim, isLive, ex
                 : a.state === 'done' ? 'bg-gray-400 border-gray-400 dark:bg-[#6b6b6b] dark:border-[#6b6b6b]'
                     : 'bg-transparent border-gray-400 dark:border-[#4a4a4a]';
 
-    const label = `${actions.length} ${actions.length === 1 ? 'action' : 'actions'}`;
+    const label = tMain('turnActions', { count: actions.length });
 
     // The collapsed row is one dot per step and a long agentic turn has no natural
     // ceiling, so at ~90 steps it ran to ~1350px, overflowed the bubble and put the
@@ -151,7 +153,7 @@ export function TurnActionsTimeline({ actions, avatarMode, avatarDim, isLive, ex
             </div>
 
             <div className="flex min-w-0 flex-1 flex-col">
-                {/* toggle — ALWAYS present so an expanded turn can be collapsed again. Collapsed: the
+                {/* toggle, ALWAYS present so an expanded turn can be collapsed again. Collapsed: the
                     circle-row (black = thinking, gray = done tool, ring = running/error). Expanded: a
                     compact header with a down chevron. */}
                 <button
@@ -165,8 +167,8 @@ export function TurnActionsTimeline({ actions, avatarMode, avatarDim, isLive, ex
                                 <Fragment key={a.key}>
                                     {elided && i === HEAD && (
                                         <span
-                                            aria-label={`${hiddenCount} more`}
-                                            title={`${hiddenCount} more`}
+                                            aria-label={tMain('turnActionsMore', { count: hiddenCount })}
+                                            title={tMain('turnActionsMore', { count: hiddenCount })}
                                             className="px-0.5 text-[11px] leading-none text-gray-400 dark:text-[#6b6b6b]"
                                         >
                                             &hellip;
@@ -184,7 +186,7 @@ export function TurnActionsTimeline({ actions, avatarMode, avatarDim, isLive, ex
                 </button>
 
                 {/* expanded: the actions with a left rail that grows down to the active dot. The
-                    open/close uses ONE smooth animation — a grid-rows fold (1fr⇄0fr) animating the
+                    open/close uses ONE smooth animation, a grid-rows fold (1fr⇄0fr) animating the
                     real content height (no max-height guesswork, no second easing). */}
                 <div
                     className="grid transition-[grid-template-rows] duration-300 ease-out"
@@ -224,7 +226,7 @@ export function TurnActionsTimeline({ actions, avatarMode, avatarDim, isLive, ex
                 {!isMobile && children}
             </div>
         </div>
-        {/* mobile: the answer drops below the avatar row at full width — no left gutter and no
+        {/* mobile: the answer drops below the avatar row at full width, no left gutter and no
             negative-margin hack (the −ml hack clipped the avatar's top). */}
         {isMobile && children}
         </div>

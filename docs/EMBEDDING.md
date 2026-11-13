@@ -2939,7 +2939,8 @@ Stable public surface (safe to build on):
   exported for tools that need the boundary around something other than a whole `run()`.
   Entering the write-mode jail needs no pre-provisioned per-user directories - the
   boundary is computed, not created, so a fresh tenant costs nothing to confine.
-- `vaf.jail_allows(path, *, user_scope_id, user_role=None, mode="read") -> bool` - the
+- `vaf.jail_allows(path, *, user_scope_id, user_role=None, mode="read") -> bool` - False
+  first, for every caller, for a network share or device path (`vaf.is_remote_path`). Then the
   same boundary asked from outside a tool run, for a route or a UI that serves or stores
   a file on an account's behalf. It answers exactly what `user_jail` enforces for that
   identity and mode, fail-closed, on the RESOLVED path, so a link is judged by its
@@ -2972,7 +2973,8 @@ Stable public surface (safe to build on):
   reading.
 - `vaf.project_dir_refusal(path, *, user_scope_id, user_role=None) -> str | None` - why
   this caller may not use a folder as a project, workspace or shell root, or None when it
-  may: the folder is not the home directory, a standard folder itself, VAF's own data, the
+  may: the folder is not a network share or a device path (asked first, before anything
+  resolves it), not the home directory, a standard folder itself, VAF's own data, the
   home directory's configuration or VAF's code, and it lies where the caller's file jail
   lets it write (`jail_allows(..., mode="write")`; an admin or an empty scope reaches every
   tree). Ask it for a folder a stored record names before you serve it or hand it to a run:

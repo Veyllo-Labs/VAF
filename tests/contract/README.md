@@ -20,6 +20,7 @@ One file per contract module:
 | `test_contract_tool_caller.py` | `ToolCaller.execute()` pipeline, return prefixes, events, gate, the allowed set |
 | `test_contract_allowlist.py` | `set_account_allowlist_resolver` contract, and `account_allows_tool` (its read side, for surfaces that list tools) |
 | `test_contract_basetool_and_jail.py` | `BaseTool` declarations, `file_access` TypeError, `self.log`, `changed_since_asked`, `first_contact_confirmed`, `user_jail`, `jail_allows`, `is_vaf_state`, `open_for_write` |
+| `test_contract_path_jail.py` | `contained_path`, `safe_entry_name`, `PathEscape`: a symlink inside the root does not lead out, a missing path still gets an answer, one exception type; `is_remote_path`: share and device spellings in either separator convention |
 | `test_contract_markers_and_slim_import.py` | `vaf.markers` values, `import vaf` stays cheap |
 | `test_contract_error_reply.py` | `is_error_reply`: the two failure shapes `run()` and `chat_step` hand back as text, anywhere in the text, and a real answer |
 | `test_contract_terminal_text.py` | `terminal_text`: what it removes (a complete escape sequence as a whole; then C0 but tab and newline, DEL, C1, the bidi controls, lone surrogates) and keeps (printable text, zero-width characters), an unterminated sequence losing only its control characters, `None` and non-strings |

@@ -1,14 +1,16 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-"""Contract: vaf.contained_path, vaf.safe_entry_name, vaf.PathEscape.
+"""Contract: vaf.contained_path, vaf.safe_entry_name, vaf.PathEscape, vaf.is_remote_path.
 
 docs/EMBEDDING.md promises an embedder that a tool taking a path from a model,
 a request body or a peer can decide containment with a supported primitive
 instead of hand-rolling it. Pinned here: the containment holds against a
 SYMLINK inside the root (the case a prefix comparison cannot see, and the one
 that made this a primitive), a path that does not exist yet still gets an
-answer, and the refusal is one exception type an embedder can catch.
+answer, and the refusal is one exception type an embedder can catch. And an
+absolute path from outside can be refused while it is still text when it names a
+network share or a device path, which resolving it on Windows already contacts.
 """
 import os
 
@@ -108,3 +110,18 @@ def test_one_exception_type_covers_both_helpers(tmp_path):
                  lambda: vaf.safe_entry_name("a/b")):
         with pytest.raises(ValueError):
             call()
+
+
+@pytest.mark.parametrize("spelled", [
+    "\\\\host\\share\\x.png", "//host/share/x.png", "\\\\?\\UNC\\host\\share",
+    "\\\\.\\pipe\\x", "\\??\\UNC\\host\\share", "\\\\wsl$\\Ubuntu\\home",
+])
+def test_a_share_or_device_path_is_named_before_anything_touches_it(spelled):
+    # Lexical, in either separator convention, whatever the host: the answer is the same here
+    # as on Windows, where resolving any of these opens a connection or a device.
+    assert vaf.is_remote_path(spelled) is True
+
+
+@pytest.mark.parametrize("spelled", ["C:\\Users\\a\\x.png", "/home/user/x.png", "relative/x", "", "~/x"])
+def test_a_local_path_is_not_remote(spelled):
+    assert vaf.is_remote_path(spelled) is False

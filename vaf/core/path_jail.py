@@ -92,9 +92,13 @@ def is_remote_path(spelled: str) -> bool:
     leading ``//`` is an implementation-defined spelling of ``/`` that nothing needs, so
     refusing it only ever errs towards refusing.
 
-    Asked first by every lane that takes an absolute path from outside: the web file routes
-    (``_allowed_file_path``), the file tools' screen (``is_safe_path``) and the two tools that
-    touch their path before that screen (``codesearch``, ``download_file``). On the facade as
+    Asked first by the web file routes (``_allowed_file_path``), the file tools' screen
+    (``is_safe_path``), the two tools that touch their path before that screen
+    (``codesearch``, ``download_file``), the project-folder check (``is_unsafe_project_dir``
+    and ``project_dir_refusal``, behind the coder's project path, ``run_project_git`` and the
+    workspace runners) and ``jail_allows``. A lane that resolves an outside path without one
+    of these is not covered; ``tests/test_remote_path_refused.py`` scans the functions that
+    screen with ``is_safe_path`` for a disk call on that same argument. On the facade as
     ``vaf.is_remote_path``, because the route recipe in docs/EMBEDDING.md asks primitives that
     resolve the path (``vaf.is_vaf_state``), so a surface built to it would reach out as well.
     A relative fragment through ``vaf.contained_path`` needs no extra question: ``is_rooted``
@@ -107,7 +111,9 @@ def is_remote_path(spelled: str) -> bool:
     Documents and Downloads are then share paths, so the web file routes refuse them (every
     file chip and picture of such an account answers 403) and the file tools refuse a path
     written that way. A path the tools build from a folder name (``Documents``) goes through,
-    because the caller did not spell the share.
+    because the caller did not spell the share. The WSL file shares typed as a path
+    (``\\\\wsl$\\...``, ``\\\\wsl.localhost\\...``) are UNC paths as well and are refused on
+    Windows; a Linux distribution's files are reached from Linux, not through them.
     """
     text = str(spelled or "").lstrip()
     norm = text.replace("\\", "/")

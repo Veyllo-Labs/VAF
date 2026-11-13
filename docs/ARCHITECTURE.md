@@ -140,7 +140,9 @@ This is the contract. Treat it as a stable API.
   [EMBEDDING.md](EMBEDDING.md))
 - `vaf.contained_path`, `vaf.safe_entry_name` and `vaf.PathEscape` - keeping a
   path that arrived from outside inside the directory it may touch, decided on
-  RESOLVED paths so a symlink cannot lead out of the root
+  RESOLVED paths so a symlink cannot lead out of the root, and
+  `vaf.is_remote_path`, asked before anything resolves an absolute path from
+  outside: on Windows resolving a network share already contacts it
   (contract in [EMBEDDING.md](EMBEDDING.md))
 - `vaf.terminal_text` - text from a model or another party as a terminal may
   show it, its control characters removed; the definition VAF's own terminal
@@ -158,7 +160,7 @@ The authoritative list is `vaf.__all__` plus that page; this one is a summary.
   (`CoreAgent`, `ToolCaller`, `ToolRequest`, `VoiceTurnEngine`, `TurnOutcome`,
   `extract_pdf_markdown`, `set_account_allowlist_resolver`,
   `account_allows_tool`, `contained_path`, `safe_entry_name`,
-  `PathEscape`, `is_error_reply`, `TurnStatus`, `stored_turn_copy`,
+  `PathEscape`, `is_remote_path`, `is_error_reply`, `TurnStatus`, `stored_turn_copy`,
   `model_text`, `terminal_text`) are the deliberate
   exceptions - import them from `vaf`, not from `vaf.core`.
 - private methods and attributes (leading underscore)

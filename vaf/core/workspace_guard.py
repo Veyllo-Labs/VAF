@@ -101,7 +101,14 @@ def is_unsafe_project_dir(path: str) -> bool:
     Also used by web_server/headless_runner to refuse persisting or re-injecting
     poisoned last_project_path values (self-heal for sessions that recorded
     /home/<user> as a project before this guard existed).
+
+    A network share or device path is unsafe before anything resolves it
+    (`vaf.is_remote_path`): on Windows resolving it already opens an SMB connection to
+    that host with the account's NTLM login attempt, and the path is often the model's.
     """
+    from vaf.core.path_jail import is_remote_path
+    if is_remote_path(str(path or "")):
+        return True
     try:
         p = Path(path).expanduser().resolve()
     except Exception:
@@ -138,6 +145,10 @@ def is_unsafe_project_dir(path: str) -> bool:
 OUTSIDE_ACCOUNT = "it is outside the folders this account may write"
 
 
+#: The reason `project_dir_refusal` gives for a network share or a device path.
+REMOTE_PROJECT_DIR = "it is a network share or a device path, which VAF does not open"
+
+
 def project_dir_refusal(path, *, user_scope_id, user_role=None):
     """Why this caller may not use ``path`` as a project folder, or None when it may.
 
@@ -154,6 +165,9 @@ def project_dir_refusal(path, *, user_scope_id, user_role=None):
     `OUTSIDE_ACCOUNT` names the account half.
     """
     try:
+        from vaf.core.path_jail import is_remote_path
+        if is_remote_path(str(path or "")):
+            return REMOTE_PROJECT_DIR
         if is_unsafe_project_dir(str(path)):
             return ("it is the home directory, a standard folder itself, VAF's own data, "
                     "the home directory's configuration or VAF's code, not a project folder")

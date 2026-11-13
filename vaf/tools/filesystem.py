@@ -335,8 +335,14 @@ def jail_allows(path, *, user_scope_id, user_role=None, mode="read") -> bool:
     admin is served the credential stores) and, before storing, `vaf.is_host_config(path)`
     for the home directory's configuration. It neither reads nor
     changes the jail of the run it is called from. ``path`` is resolved, so a link inside an
-    allowed folder is judged by where it points. Fail-closed: any error is False."""
+    allowed folder is judged by where it points. Fail-closed: any error is False.
+
+    A network share or device path is False first, for every caller (`vaf.is_remote_path`):
+    resolving it on Windows already contacts that host."""
     try:
+        from vaf.core.path_jail import is_remote_path
+        if is_remote_path(str(path or "")):
+            return False
         if not str(user_scope_id or ""):
             return True
         info = compute_user_jail(user_scope_id, user_role, mode=mode)
@@ -495,7 +501,10 @@ def _resolve_folder_alias(path_str: str) -> str:
         if '\\' in path_str or '/' in path_str:
             parts = path_str.replace('\\', '/').split('/')
             if parts[0].lower() == alias:
-                remaining = '/'.join(parts[1:])
+                # Relative, like the branch above: a rooted rest (`DOCUMENTS///host/share`)
+                # would replace the folder when joined, and on Windows `//host/share` is a
+                # network share that resolving already contacts.
+                remaining = '/'.join(parts[1:]).lstrip('/')
                 
                 # Special handling for Desktop: check if writable, fallback to Documents
                 if alias.lower() == "desktop":

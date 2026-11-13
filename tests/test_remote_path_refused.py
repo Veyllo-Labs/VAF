@@ -26,7 +26,11 @@ MUTATIONS, each turns the named test red:
   -> test_the_file_tools_refuse_before_they_touch_the_disk;
 - drop it from `codesearch` or `download_file`
   -> test_the_two_tools_that_touch_their_path_first_refuse_too,
-     test_no_tool_touches_its_path_before_the_screen.
+     test_no_tool_touches_its_path_before_the_screen;
+- take the folder alias's rest as it stands (`'/'.join(parts[1:])`, no `.lstrip('/')`)
+  -> test_a_folder_alias_never_joins_a_share_path;
+- drop the check at the top of `is_unsafe_project_dir`, `project_dir_refusal` or `jail_allows`
+  -> test_the_project_folder_check_and_the_jail_refuse_before_they_resolve.
 """
 import ntpath
 import re
@@ -50,6 +54,8 @@ REMOTE = [
     "\\??\\UNC\\evil.example\\share\\x.png",
     "/??/UNC/evil.example/share/x.png",
     "  \\\\evil.example\\share\\x.png",
+    "\\\\wsl$\\Ubuntu\\home\\user\\x",
+    "\\\\wsl.localhost\\Ubuntu\\home\\user\\x",
 ]
 LOCAL = [
     "C:\\Users\\a\\Documents\\x.png", "C:/Users/a/x.png", "/home/user/Documents/x.png",
@@ -185,8 +191,10 @@ def _name(call):
 
 def test_no_tool_touches_its_path_before_the_screen():
     """In every function that screens a path with `is_safe_path`, nothing reaches the disk with
-    that path before the screen, unless `is_remote_path` was asked even earlier. The two places
-    this found (`codesearch` resolving, `download_file` probing a folder) ask it now."""
+    that path DIRECTLY before the screen, unless `is_remote_path` was asked even earlier. The
+    path is followed by the variable names in the screen's argument, not through a value
+    copied into another name first. The two places this found (`codesearch` resolving,
+    `download_file` probing a folder) ask it now."""
     import ast
 
     bad = []
@@ -217,3 +225,50 @@ def test_is_safe_path_asks_first():
     src = _source(ROOT / "vaf" / "tools" / "filesystem.py")
     body = src[src.index("def is_safe_path("):]
     assert body.index("if is_remote_path(str(path or \"\")):") < body.index("_resolve_folder_alias(path)")
+
+
+ALIAS_SPELLINGS = [
+    "DOCUMENTS///evil.example/share/x",
+    "documents//evil.example/share/x",
+    "Documents///evil.example/share/x",
+    "DOCUMENTS\\\\\\evil.example\\share\\x",
+    "DOWNLOADS/\\evil.example\\share\\x",
+    "Desktop///evil.example/share/x",
+]
+
+
+def test_a_folder_alias_never_joins_a_share_path(tmp_path, monkeypatch):
+    """`DOCUMENTS///host/share` passed the text check, and the alias joined its rooted rest,
+    which replaced the folder: `//host/share` here, `\\\\host\\share` on Windows."""
+    from vaf.core.path_jail import is_remote_path
+    from vaf.tools.filesystem import _resolve_folder_alias, is_safe_path
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    for name in ("Documents", "Downloads", "Desktop"):
+        (tmp_path / name).mkdir()
+    for spelled in ALIAS_SPELLINGS:
+        joined = _resolve_folder_alias(spelled)
+        assert not is_remote_path(joined), (spelled, joined)
+        assert Path(joined).is_relative_to(tmp_path), (spelled, joined)
+    seen = _touches(monkeypatch)
+    for spelled in ALIAS_SPELLINGS:
+        is_safe_path(spelled, read_only=True)
+        is_safe_path(spelled)
+    remote = [s for s in seen if is_remote_path(s[1])]
+    assert remote == [], f"a share path reached the disk: {remote}"
+
+
+def test_the_project_folder_check_and_the_jail_refuse_before_they_resolve(monkeypatch):
+    from vaf.core.workspace_guard import REMOTE_PROJECT_DIR, is_unsafe_project_dir, project_dir_refusal
+    from vaf.tools.filesystem import jail_allows
+
+    seen = _touches(monkeypatch)
+    for spelled in REMOTE:
+        assert is_unsafe_project_dir(spelled) is True, spelled
+        assert project_dir_refusal(spelled, user_scope_id="ab12cd34-0000-0000-0000-000000000000",
+                                   user_role="user") == REMOTE_PROJECT_DIR, spelled
+        # An empty scope and an admin reach everything else; a share path not even then.
+        for scope, role in (("", None), ("ab12cd34-0000-0000-0000-000000000000", "admin")):
+            assert jail_allows(spelled, user_scope_id=scope, user_role=role) is False, (spelled, role)
+    assert seen == [], f"touched before the refusal: {seen}"

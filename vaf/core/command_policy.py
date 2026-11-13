@@ -473,6 +473,7 @@ def _split_segments(command: str) -> List[tuple]:
     subs: List[tuple] = []          # what the current segment carries
     sub_buf: List[str] = []         # the outermost open substitution's text
     sub_kind = ""
+    sub_opener = ""                 # what opened it: `$(`, `(` or a backtick
     sub_case = False                # a `case` statement inside the open substitution
     # The open `$((`: did its inner parenthesis close right before the outer one, and did a
     # `#` or a backtick (both of which change where bash closes it) appear inside?
@@ -488,13 +489,14 @@ def _split_segments(command: str) -> List[tuple]:
         (sub_buf if depth_stack else buf).append(text)
 
     def _open(closer: str, kind: str, opener: str) -> None:
-        nonlocal sub_kind, sub_buf, sub_case, arith_closed, arith_clean, arith_tainted
+        nonlocal sub_kind, sub_buf, sub_case, sub_opener
+        nonlocal arith_closed, arith_clean, arith_tainted
         if depth_stack:
             sub_buf.append(opener)          # an inner one is part of the outer's text
             if sub_kind == "arithmetic" and opener == "`":
                 arith_tainted = True
         else:
-            sub_kind, sub_buf, sub_case = kind, [], False
+            sub_kind, sub_buf, sub_case, sub_opener = kind, [], False, opener
             arith_closed, arith_clean, arith_tainted = False, False, False
             if kind in ("command", "arithmetic") and opener != "(":
                 buf.append(_SUBST_QUOTED if closer.startswith('"') else _SUBST_BARE)
@@ -547,7 +549,7 @@ def _split_segments(command: str) -> List[tuple]:
     # as the text goes, so a quoted or escaped `${` opens none (a tail search was blind to
     # quotes, and a `}` in a comment then let a fake heredoc open).
     expansions: List[str] = []
-    subshell_end = -1                   # where the last subshell at this level closed
+    word_paren = -1                     # the last `)` at this level that continues a word
 
     while i < n:
         ch = command[i]
@@ -579,14 +581,14 @@ def _split_segments(command: str) -> List[tuple]:
             i += 1
             continue
         if not depth_stack and not comment:
-            if ch == "$" and nxt in ("{", "["):
+            if ch == "$" and nxt in ("{", "[") and _opens_expansion(command, i):
                 expansions.append("}" if nxt == "{" else "]")
-            elif expansions and ch == "[" and expansions[-1] == "]":
+            elif expansions and ch == "[" and expansions[-1] == "]" and command[i - 1] != "$":
                 expansions.append("]")      # `$[ a[1] ]`: a subscript inside
             elif expansions and ch == expansions[-1]:
                 expansions.pop()
         if ch == "#" and not depth_stack and not expansions \
-                and _comment_starts_at(command, i, subshell_end):
+                and _comment_starts_at(command, i, word_paren):
             comment = True
         if (ch == "<" and nxt == "<" and not depth_stack and command[i + 2:i + 3] != "<"
                 and command[i - 1:i] != "<" and len(pending) < 8 and not comment
@@ -656,14 +658,16 @@ def _split_segments(command: str) -> List[tuple]:
             i += 1
             continue
         if ch == ")" and depth_stack and depth_stack[-1] in (")", '")'):
-            kind = sub_kind
-            if _close(")", nxt) and kind == "subshell":
+            kind, opener = sub_kind, sub_opener
+            closed = _close(")", nxt)
+            if closed and (opener == "$(" or kind in ("process_in", "process_out", "array")):
+                word_paren = i              # `$(x)#`, `<(x)#`, `x=(a)#`: the word goes on
+            if closed and kind == "subshell":
                 # bash takes no words after a subshell, only a separator or a redirection:
                 # what follows is read as a command of its own, never as the data of the
                 # command in front (`echo (a) rm -rf /`).
                 _flush()
                 connector = "seq"
-                subshell_end = i
             i += 1
             continue
         if depth_stack:
@@ -854,22 +858,37 @@ def _heredoc_supplied(body: str) -> str:
     return "".join(out)
 
 
-def _comment_starts_at(command: str, i: int, subshell_end: int = -1) -> bool:
+def _comment_starts_at(command: str, i: int, word_paren: int = -1) -> bool:
     """Whether the `#` at `i` starts a comment for bash: it starts a word, at the start of the
     text or after an unescaped blank, newline or operator character. A backslash-newline in
     front of it is joined away first, as bash does (`a \\` NL `#b` is a comment, `a\\` NL
     `#b` is the word `a#b`); `a\\ #b`, `$#`, `${#x}` and `16#ff` start none. A `)` ends a
-    word only where it closes a subshell (`subshell_end`): after `$( )`, `$(( ))`, `<( )` or
-    an array `x=( )` the `#` continues the word (`$(printf x)#`)."""
+    word, except the one that closes `$( )`, `$(( ))`, `<( )`, `>( )` or an array `x=( )`
+    (`word_paren`), after which the word goes on (`$(printf x)#`); a subshell's, an
+    arithmetic command's `(( ))` and a `case` pattern's `)` end it."""
     j = i
     while j >= 2 and command[j - 1] == "\n" and _escaped(command, j - 1):
         j -= 2                              # a line continuation: bash removes it
     if j == 0:
         return True
     if command[j - 1] == ")":
-        return j - 1 == subshell_end
+        return j - 1 != word_paren and not _escaped(command, j - 1)
     # No `(`: here it always opens a nested level, where no comment mark is set.
     return command[j - 1] in " \t\n;&|<>" and not _escaped(command, j - 1)
+
+
+def _opens_expansion(command: str, i: int) -> bool:
+    """Whether the `$` at `i` (before `{` or `[`) opens `${` or `$[` for bash: `$$` is the
+    process id, so only an odd run of unescaped `$` ending here opens one (`$${` is the pid
+    and a literal `{`). Named boundary: a `$`, a backslash-newline and a `{` is no expansion
+    here, though bash joins the lines first; that only keeps a `#` after it a comment, so
+    the new reading refuses more, never less."""
+    run = 1
+    while i - run >= 0 and command[i - run] == "$":
+        run += 1
+    if _escaped(command, i - run + 1):
+        run -= 1                            # `\$` is a literal dollar sign
+    return run % 2 == 1
 
 
 def _escaped(command: str, k: int) -> bool:
@@ -1652,9 +1671,14 @@ def _heredoc_writes_text(text: str) -> bool:
     is a script reader (_SHELL_SINKS, `eval`; `b\\ash` and `/bin/bash` counted) nor a
     variable where a command starts (`$SHELL`). Only then does quoting the delimiter leave
     the body plain text; any other way it may reach a shell and run all the same."""
+    # The command lines only: a heredoc body is text (a README that says `source`).
+    triples = _split_segments(text)
+    lines = "\n".join([seg for _, seg, _ in triples] + [
+        body for _, _, carried in triples for kind, body in carried
+        if kind not in ("heredoc_q", "heredoc_u")])
     words = {w.replace("\\", "").rsplit("/", 1)[-1]
-             for w in re.split(r"[\s;&|()<>`'\"{}:=]+", text) if w}
-    if words & _HEREDOC_SCRIPT_READERS or _VARIABLE_COMMAND_RE.search(text):
+             for w in re.split(r"[\s;&|()<>`'\"{}:=]+", lines) if w}
+    if words & _HEREDOC_SCRIPT_READERS or _VARIABLE_COMMAND_RE.search(lines):
         return False
     found = False
     for m in _UNQUOTED_HEREDOC_RE.finditer(text):
@@ -1664,7 +1688,9 @@ def _heredoc_writes_text(text: str) -> bool:
         line = text[start:end if end >= 0 else len(text)]
         if "|" in line or "&&" in line:
             return False
-        toks = line[:m.start() - start].split()
+        # The command that receives the heredoc, not the first one on its line
+        # (`cat > f; at now <<EOF`).
+        toks = re.split(r"[;&|]", line[:m.start() - start])[-1].split()
         if not toks or toks[0] not in _HEREDOC_FILE_WRITERS:
             return False
         has_file = any(t.startswith((">", "1>")) for t in toks[1:]) or (
@@ -1675,9 +1701,9 @@ def _heredoc_writes_text(text: str) -> bool:
 # Commands that write a heredoc into a file as it is (the search for an existing set of
 # writers came back empty).
 _HEREDOC_FILE_WRITERS = frozenset({"cat", "tee"})
-# A variable where a command starts (`| $SHELL`, `; ${SH:-bash} f`); a substitution is
-# not one.
-_VARIABLE_COMMAND_RE = re.compile(r"(?:^|[;&|\n(`])\s*\$[A-Za-z_{0-9]")
+# A variable where a command starts (`| $SHELL`, `; ${SH:-bash} f`, also in double quotes:
+# `"$SHELL" f`); a substitution is not one, nor `'$X'`, which is literal.
+_VARIABLE_COMMAND_RE = re.compile(r"(?:^|[;&|\n(`])\s*\"?\$[A-Za-z_{0-9]")
 # The reasons the heredoc sentence fits: a command line or a substitution in the text.
 _HEREDOC_LINE_CATEGORIES = frozenset({"destructive_removal", "device_write", "fork_bomb"})
 _HEREDOC_LINE_SHAPES = frozenset({"", "program", "frozen", "lines", "unreadable", "shell_text"})

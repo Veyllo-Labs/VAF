@@ -61,6 +61,10 @@ MUTATIONS, each turns the named test red:
 - drop the percent-decoding (`spelledPath` returning its input; Markdown hands over `C:%5C...`)
   -> test_a_file_link_goes_to_the_file_lane, test_a_windows_or_encoded_picture_path_loads_from_the_file_lane;
 - map a protocol-relative `//host/x` to the file lane -> test_safe_links_are_unchanged;
+- decode twice (`decodeURIComponent(decodeURIComponent(value))`)
+  -> test_the_chat_uses_the_wrapper_and_the_moved_link_rule;
+- encode the fragment into the path (split nothing at `#`), or drop the fragment
+  -> test_a_file_link_goes_to_the_file_lane, test_the_chat_uses_the_wrapper_and_the_moved_link_rule;
 - render a picture link without its icon (`if (true) return <Anchor ...>` in the wrapper)
   -> test_a_remote_image_in_a_bubble_is_a_link_not_an_image;
 - try the http base first (`//host/x` then reads as http)
@@ -410,6 +414,16 @@ NORMALIZE_CASES = [
     ("C:%5Cx%5Cr.pdf", "/api/file?path=C%3A%5Cx%5Cr.pdf"),
     ("/home/user/B%C3%BCcher/My%20File.csv", "/api/file?path=%2Fhome%2Fuser%2FB%C3%BCcher%2FMy%20File.csv"),
     ("/home/user/100%.csv", "/api/file?path=%2Fhome%2Fuser%2F100%25.csv"),
+    # Decoded exactly once: an escaped escape reaches a file whose name holds `%20` literally.
+    ("/home/user/a%2520b.csv", "/api/file?path=%2Fhome%2Fuser%2Fa%2520b.csv"),
+    ("sandbox:/out/a%2520b.csv", "/api/file?path=%2Fout%2Fa%2520b.csv"),
+    # The first `#` starts the fragment, which stays after the file lane's address; `%23` is a
+    # `#` inside the file name.
+    ("/home/user/report.pdf#page=2", "/api/file?path=%2Fhome%2Fuser%2Freport.pdf#page=2"),
+    ("sandbox:/out/r.pdf#page=3", "/api/file?path=%2Fout%2Fr.pdf#page=3"),
+    ("C:\\x\\r.pdf#page=4", "/api/file?path=C%3A%5Cx%5Cr.pdf#page=4"),
+    ("/home/user/C%23.md#intro", "/api/file?path=%2Fhome%2Fuser%2FC%23.md#intro"),
+    ("//host.example/x#y", "//host.example/x#y"),
     ("https://x.example/r", "https://x.example/r"),
     # A browser reads these as another host: a web link, not a file.
     ("//host.example/x", "//host.example/x"),
@@ -469,6 +483,9 @@ FILE_LINKS = [
     ("sandbox:/C:/Users/a/out.csv", "/api/file?path=C%3A%2FUsers%2Fa%2Fout.csv"),
     ("/home/user/B\u00fccher/out.csv", "/api/file?path=%2Fhome%2Fuser%2FB%C3%BCcher%2Fout.csv"),
     ("</home/user/My Files/out.csv>", "/api/file?path=%2Fhome%2Fuser%2FMy%20Files%2Fout.csv"),
+    ("/home/user/report.pdf#page=2", "/api/file?path=%2Fhome%2Fuser%2Freport.pdf#page=2"),
+    ("sandbox:/home/user/r.pdf#page=3", "/api/file?path=%2Fhome%2Fuser%2Fr.pdf#page=3"),
+    ("/home/user/C%23.md", "/api/file?path=%2Fhome%2Fuser%2FC%23.md"),
 ]
 
 

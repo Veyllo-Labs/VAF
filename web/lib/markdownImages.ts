@@ -47,8 +47,12 @@ function spelledPath(value: string): string {
 
 /**
  * The file lane's address for a link or picture that names a file on this machine, or the input
- * unchanged. The result is either the input itself or `${base}/api/file?path=<encoded path>`:
+ * unchanged. The result is either the input itself or `${base}/api/file?path=<encoded path>`,
+ * followed by the input's fragment:
  * - already the file lane (`/api/file?...`): unchanged, so nothing is wrapped twice;
+ * - the first `#` starts the fragment, as in any address (`report.pdf#page=2`), and stays after
+ *   the file lane's address instead of becoming part of the file name; both Markdown libraries
+ *   hand a `#` over as written and keep `%23`, which is how a `#` inside a file name is spelled;
  * - a sandbox path (`sandbox:/...`, the prefix case-sensitive): the path, kept absolute with
  *   exactly one leading slash (relative, the server would resolve it against its own working
  *   directory), or a drive path when it is one (`sandbox:/C:/x`). Never spelled as a share
@@ -61,15 +65,18 @@ export const normalizeDownloadHref = (rawHref: string): string => {
     if (!rawHref) return rawHref;
     const base = getApiBase();
     if (rawHref.startsWith(`${base}/api/file?`)) return rawHref;
-    const toFileLane = (path: string) => `${base}/api/file?path=${encodeURIComponent(path)}`;
-    if (rawHref.startsWith('sandbox:/')) {
-        const path = spelledPath(rawHref.slice('sandbox:'.length)).replace(/^[\\/]+/, '');
+    const hashAt = rawHref.indexOf('#');
+    const address = hashAt === -1 ? rawHref : rawHref.slice(0, hashAt);
+    const fragment = hashAt === -1 ? '' : rawHref.slice(hashAt);
+    const toFileLane = (path: string) => `${base}/api/file?path=${encodeURIComponent(path)}${fragment}`;
+    if (address.startsWith('sandbox:/')) {
+        const path = spelledPath(address.slice('sandbox:'.length)).replace(/^[\\/]+/, '');
         return toFileLane(WINDOWS_DRIVE_PATH.test(path) ? path : `/${path}`);
     }
 
-    const path = spelledPath(rawHref);
+    const path = spelledPath(address);
     if (WINDOWS_DRIVE_PATH.test(path)) return toFileLane(path);
-    if (rawHref.startsWith('/') && !/^\/[\\/]/.test(path)) return toFileLane(path);
+    if (address.startsWith('/') && !/^\/[\\/]/.test(path)) return toFileLane(path);
     return rawHref;
 };
 

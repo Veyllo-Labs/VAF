@@ -4,7 +4,8 @@
 """The file lanes refuse a network share or a device path while it is still text
 (`vaf.is_remote_path`, `vaf/core/path_jail.py`): asked first by `_allowed_file_path` in
 `vaf/core/web_server.py`, by the file tools' screen `is_safe_path`, and by the two tools that touch
-their path before that screen (`codesearch`, `download_file`).
+their path before that screen (`codesearch`, `download_file`). The coding agent's lanes too:
+`git_add_commit`'s files, the git tools' folder, and the loop's own checks on a file tool's path.
 
 On Windows, `_allowed_file_path` used to resolve the caller's path before comparing it with the
 served roots, and resolving `\\\\host\\share\\x` opens that share: an SMB connection to a foreign
@@ -39,7 +40,25 @@ MUTATIONS, each turns the named test red:
   ordering in `_resolve_project`);
 - the Windows simulation calling `ntpath.abspath` at call time instead of the function captured
   before the patch -> test_the_windows_simulation_holds_where_os_path_is_ntpath
-  (RecursionError, as on a Windows host, where os.path is ntpath).
+  (RecursionError, as on a Windows host, where os.path is ntpath); the same for `ntpath.join`
+  in `_windows_paths` -> test_the_path_simulation_holds_where_os_path_is_ntpath;
+- `git_add_commit` taking a file as `os.path.join(base_dir, f) if not os.path.isabs(f) else f`
+  again -> test_git_add_commit_refuses_a_share_file_before_touching_it;
+- `contained_path` replaced by a plain join (normalized and resolved)
+  -> test_git_add_commit_adds_only_files_inside_the_project (an absolute in-project path is
+  committed); dropping the `isinstance(files, str)` coercion -> the same test (`git add -- .`
+  from the name's characters commits every file);
+- `_git_tool_folder` never refusing -> test_the_git_tools_refuse_a_share_folder_on_the_chat_lane;
+- `edit_file` or `read_file` dropped from `_LOOP_PATH_TOOLS`, or `content` judged as well
+  -> test_the_coder_loop_refusal_names_only_share_paths;
+- `or _remote_path_refusal(fn_name, fn_args)` dropped from the local-tool chain, or asked below
+  the edit_file block -> test_the_coder_loop_refuses_a_share_before_its_own_checks;
+- `_identical_rewrite` without its `is_remote_path` answer, or `os.path.exists(full_path)` back
+  in the loop's regex fallback -> test_the_duplicate_write_check_never_probes_a_share;
+- the allowlist compared with `fn.name` instead of the qualified name
+  -> test_no_tool_touches_its_path_before_the_screen, test_the_exemption_is_keyed_on_the_class;
+  the entry keyed on the bare `run` -> test_no_tool_touches_its_path_before_the_screen,
+  test_every_exemption_is_still_needed.
 """
 import ast
 import ntpath
@@ -233,13 +252,50 @@ def _settled_line(fn, call, parents):
 
 
 # (file, function, variable) whose disk calls come before a LATER screen in the same function
-# because an earlier one, in another function, already screened the value.
+# because an earlier one, in another function, already screened the value. The function is
+# named with its class (`CodingAgentTool.run`): coder.py alone defines seven run() methods, and
+# a bare `run` would exempt every one of them.
+#
+# NAMED BOUNDARY: `contained_path` is not one of `_SCREENS`. It refuses every rooted fragment
+# (a share spelling included) before it resolves anything, so a fragment passed through it is
+# screened by construction, and its first argument is the caller's own root. Adding it to
+# `_SCREENS` finds nothing on the current tree.
 _SCREENED_ELSEWHERE = {
     # base_dir is `_choose_base_dir`'s answer, which asked project_dir_refusal for it; the
     # is_unsafe_project_dir near the end of run() is a second question about the finished
     # project, not the first screen of base_dir.
-    ("vaf/tools/coder.py", "run", "base_dir"),
+    ("vaf/tools/coder.py", "CodingAgentTool.run", "base_dir"),
 }
+
+
+def _violations(rel, source, allow):
+    """Every disk call on a screened path before its screen's answer is acted on, in one file.
+    ``allow`` holds (file, qualified function, variable) entries that are exempt."""
+    bad = []
+    tree = ast.parse(source)
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) or fn.name in _SCREENS:
+            continue
+        calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call)]
+        screens = [c for c in calls if _name(c) in _SCREENS]
+        if not screens:
+            continue
+        owner = parents.get(fn)
+        qual = f"{owner.name}.{fn.name}" if isinstance(owner, ast.ClassDef) else fn.name
+        asked = [c.lineno for c in calls if _name(c) == "is_remote_path"]
+        first_ask = min(asked) if asked else None
+        for screen in screens:
+            settled = _settled_line(fn, screen, parents)
+            names = {n.id for a in screen.args[:1] for n in ast.walk(a) if isinstance(n, ast.Name)}
+            for c in calls:
+                if _name(c) in _DISK and c.lineno < settled:
+                    used = {n.id for n in ast.walk(c) if isinstance(n, ast.Name)} & names
+                    used = {u for u in used if (rel, qual, u) not in allow}
+                    if used and (first_ask is None or first_ask > c.lineno):
+                        bad.append(f"{rel}:{c.lineno} {qual}: "
+                                   f"{_name(c)}() on {sorted(used)} before {_name(screen)} is acted on")
+    return bad
 
 
 def test_no_tool_touches_its_path_before_the_screen():
@@ -253,30 +309,39 @@ def test_no_tool_touches_its_path_before_the_screen():
     its account answer acted on. All three now ask or act first."""
     bad = []
     for path in sorted((ROOT / "vaf").rglob("*.py")):
-        tree = ast.parse(_source(path))
-        parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
-        for fn in ast.walk(tree):
-            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) or fn.name in _SCREENS:
-                continue
-            calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call)]
-            screens = [c for c in calls if _name(c) in _SCREENS]
-            if not screens:
-                continue
-            asked = [c.lineno for c in calls if _name(c) == "is_remote_path"]
-            first_ask = min(asked) if asked else None
-            for screen in screens:
-                settled = _settled_line(fn, screen, parents)
-                names = {n.id for a in screen.args[:1] for n in ast.walk(a) if isinstance(n, ast.Name)}
-                for c in calls:
-                    if _name(c) in _DISK and c.lineno < settled:
-                        used = {n.id for n in ast.walk(c) if isinstance(n, ast.Name)} & names
-                        rel = path.relative_to(ROOT).as_posix()
-                        used = {u for u in used if (rel, fn.name, u) not in _SCREENED_ELSEWHERE}
-                        if used and (first_ask is None or first_ask > c.lineno):
-                            bad.append(f"{rel}:{c.lineno} {fn.name}: "
-                                       f"{_name(c)}() on {sorted(used)} before {_name(screen)} is acted on")
+        bad += _violations(path.relative_to(ROOT).as_posix(), _source(path), _SCREENED_ELSEWHERE)
     assert not bad, ("a path from outside reaches the disk before its screen is acted on; ask "
                      "vaf.core.path_jail.is_remote_path first:\n" + "\n".join(sorted(set(bad))))
+
+
+_TWO_RUNS = """
+class CodingAgentTool:
+    def run(self, base_dir):
+        os.path.exists(base_dir)
+        if is_unsafe_project_dir(base_dir):
+            return
+class Other:
+    def run(self, base_dir):
+        os.path.exists(base_dir)
+        if is_unsafe_project_dir(base_dir):
+            return
+"""
+
+
+def test_the_exemption_is_keyed_on_the_class():
+    """The exemption for `CodingAgentTool.run` does not cover another class's run() in the
+    same file."""
+    bad = _violations("vaf/tools/coder.py", _TWO_RUNS, _SCREENED_ELSEWHERE)
+    assert [b.split(" ", 2)[1] for b in bad] == ["Other.run:"], bad
+
+
+def test_every_exemption_is_still_needed():
+    """An entry that suppresses nothing is stale (or keyed so that it matches nothing) and
+    would hide the next real finding in a function of that name."""
+    for entry in sorted(_SCREENED_ELSEWHERE):
+        rel, qual, var = entry
+        found = _violations(rel, _source(ROOT / rel), _SCREENED_ELSEWHERE - {entry})
+        assert [b for b in found if f" {qual}: " in b and f"'{var}'" in b], entry
 
 
 def test_is_safe_path_asks_first():
@@ -397,3 +462,219 @@ def test_the_project_lanes_refuse_a_share_before_touching_it(tmp_path, monkeypat
             EnvironmentManager._safe_mount_path(spelled)
     touched = [s for s in seen if is_remote_path(s[1])]
     assert touched == [], f"a share path reached the disk: {touched}"
+
+
+# ── the coding agent: git_add_commit's files, the git tools' folder, the loop's own checks ──
+
+def _windows_paths(monkeypatch):
+    """Windows' reading of a share spelling in `os.path.isabs` and `os.path.join` (and abspath),
+    on any host: there a UNC path is absolute and joining it to a folder returns the share path
+    itself, so a lane that joins before it screens reaches the share."""
+    import os
+
+    from vaf.core.path_jail import is_remote_path
+
+    _windows_abspath(monkeypatch)
+    # Captured before the patch, for the reason given in _windows_abspath.
+    real_isabs, real_join = os.path.isabs, os.path.join
+    nt_isabs, nt_join = ntpath.isabs, ntpath.join
+    monkeypatch.setattr(os.path, "isabs",
+                        lambda p: nt_isabs(p) if is_remote_path(str(p)) else real_isabs(p))
+    monkeypatch.setattr(os.path, "join",
+                        lambda a, *p: nt_join(a, *p) if any(is_remote_path(str(x)) for x in (a, *p))
+                        else real_join(a, *p))
+
+
+def test_the_path_simulation_holds_where_os_path_is_ntpath(monkeypatch):
+    import os
+
+    monkeypatch.setattr(os, "path", ntpath)
+    _windows_paths(monkeypatch)
+    assert os.path.isabs("//evil.example/share/x") is True
+    assert os.path.join("C:\\p", "\\\\evil.example\\share\\x") == "\\\\evil.example\\share\\x"
+    assert os.path.join("C:\\p", "a") == "C:\\p\\a"
+
+
+# What a disk call on one of the REMOTE spellings carries, also after a join onto a folder.
+_SHARE_MARKS = ("evil.example", "pipe", "C:\\Users", "Ubuntu")
+
+
+def _share_touches(seen):
+    return [s for s in seen if any(m in s[1] for m in _SHARE_MARKS)]
+
+
+def _record_git(monkeypatch):
+    import subprocess
+
+    import vaf.core.git_runner as git_runner
+
+    steps = []
+
+    def fake(args, cwd, **_k):
+        steps.append(list(args))
+        return subprocess.CompletedProcess(["git", *args], 0, "", "")
+
+    monkeypatch.setattr(git_runner, "run_project_git", fake)
+    return steps
+
+
+def test_git_add_commit_refuses_a_share_file_before_touching_it(tmp_path, monkeypatch):
+    import os
+
+    from vaf.tools.coder import GitAddCommitTool, _base_dir_tool
+
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    _windows_paths(monkeypatch)
+    steps = _record_git(monkeypatch)
+    seen = _touches(monkeypatch)
+    for spelled in REMOTE:
+        answer = GitAddCommitTool().run(base_dir=str(repo), message="m", files=[spelled])
+        assert answer.startswith("❌ Not committed:"), (spelled, answer)
+    # Only the repository probe in the run folder, nothing on any file name.
+    assert {s[1] for s in seen} <= {os.path.join(str(repo), ".git")}, seen
+    wrapped = _base_dir_tool(GitAddCommitTool, str(repo), owner_scope=None, owner_role=None)
+    for spelled in REMOTE:
+        answer = wrapped.run(message="m", files=["index.html", spelled])
+        assert answer.startswith("❌ Not committed:"), (spelled, answer)
+    assert _share_touches(seen) == [], _share_touches(seen)
+    assert steps == [], f"a git step ran: {steps}"
+
+
+def _git(*args, cwd):
+    import subprocess
+
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True)
+
+
+def test_git_add_commit_adds_only_files_inside_the_project(tmp_path):
+    import os
+    import shutil
+
+    from vaf.tools.coder import GitAddCommitTool
+
+    if not shutil.which("git"):
+        pytest.skip("git is not installed")
+    repo = tmp_path / "repo"
+    (repo / "sub").mkdir(parents=True)
+    _git("init", "-q", cwd=repo)
+    _git("config", "user.name", "T", cwd=repo)
+    _git("config", "user.email", "t@example.invalid", cwd=repo)
+    for name in ("a.txt", "sub/b.txt", "c.txt", "d.txt", "e.txt", "f.txt"):
+        (repo / name).write_text(name, encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+    tool = GitAddCommitTool()
+
+    def committed():
+        return _git("show", "--name-only", "--format=", "HEAD", cwd=repo).stdout.split()
+
+    def staged():
+        return _git("diff", "--cached", "--name-only", cwd=repo).stdout.split()
+
+    assert tool.run(base_dir=str(repo), message="one", files=["a.txt"]).startswith("✅")
+    assert committed() == ["a.txt"]
+    assert tool.run(base_dir=str(repo), message="two", files=["sub\\b.txt"]).startswith("✅")
+    assert committed() == ["sub/b.txt"]
+    # One name as a string is that file, not its characters.
+    assert tool.run(base_dir=str(repo), message="three", files="c.txt").startswith("✅")
+    assert committed() == ["c.txt"]
+    # A missing file is skipped, the rest is committed.
+    assert tool.run(base_dir=str(repo), message="four", files=["nope.txt", "d.txt"]).startswith("✅")
+    assert committed() == ["d.txt"]
+
+    head = _git("rev-parse", "HEAD", cwd=repo).stdout
+    refused = [str(repo / "e.txt"), "../outside.txt", str(outside), os.path.join("..", "repo", "e.txt")]
+    link = repo / "link.txt"
+    try:
+        os.symlink(outside, link)
+        refused.append("link.txt")
+    except (OSError, NotImplementedError):
+        pass  # Windows without the privilege to create a link
+    for entry in refused:
+        # A good name next to the refused one is not staged either.
+        answer = tool.run(base_dir=str(repo), message="no", files=["e.txt", entry])
+        assert answer.startswith("❌ Not committed:") and entry in answer, (entry, answer)
+        assert staged() == [], entry
+        assert _git("rev-parse", "HEAD", cwd=repo).stdout == head, entry
+
+
+def test_the_git_tools_refuse_a_share_folder_on_the_chat_lane(monkeypatch):
+    """On the main agent the git tools are registered too, and `base_dir` is what the model
+    wrote. Driven through the framework's funnel, as the chat lane calls them."""
+    from vaf.core.tool_dispatch import ToolCaller
+    from vaf.tools.coder import GitAddCommitTool, GitInitTool, GitLogTool, GitStatusTool
+
+    caller = ToolCaller({t.name: t for t in (GitInitTool(), GitAddCommitTool(), GitStatusTool(),
+                                             GitLogTool())},
+                        gate_enabled=False, max_result_chars=None)
+    _windows_paths(monkeypatch)
+    steps = _record_git(monkeypatch)
+    seen = _touches(monkeypatch)
+    for spelled in REMOTE:
+        for name in ("git_init", "git_add_commit", "git_status", "git_log"):
+            answer = caller.execute(name, {"base_dir": spelled, "message": "m"})
+            assert answer.startswith("❌ Refused:") and "network share" in answer, (name, spelled, answer)
+    assert _share_touches(seen) == [], _share_touches(seen)
+    assert steps == [], f"a git step ran: {steps}"
+
+
+def test_the_coder_loop_refusal_names_only_share_paths():
+    from vaf.tools.coder import _remote_path_refusal
+    from vaf.tools.filesystem import REMOTE_PATH_REFUSAL
+
+    for name in ("write_file", "edit_file", "read_file"):
+        for spelled in REMOTE:
+            assert _remote_path_refusal(name, {"path": spelled, "content": "x"}) == REMOTE_PATH_REFUSAL, (
+                name, spelled)
+        for spelled in LOCAL:
+            assert _remote_path_refusal(name, {"path": spelled}) is None, (name, spelled)
+    # The content is the file's text, not a path.
+    assert _remote_path_refusal("write_file", {"path": "app.js", "content": "// comment\n"}) is None
+    assert _remote_path_refusal("write_file", {"path": "app.js", "content": "//evil.example/s"}) is None
+    # Other tools screen their own path.
+    for name in ("render_check", "list_files", "bash"):
+        assert _remote_path_refusal(name, {"path": REMOTE[0]}) is None, name
+    assert _remote_path_refusal("write_file", "not a dict") is None
+
+
+def _run_source():
+    import inspect
+
+    from vaf.tools.coder import CodingAgentTool
+
+    return inspect.getsource(CodingAgentTool.run)
+
+
+def test_the_coder_loop_refuses_a_share_before_its_own_checks():
+    src = _run_source()
+    site = src.index("elif fn_name in self.local_tools:")
+    block_start = src.index("_refusal = _coder_dispatch_refusal(", site)
+    ask = src.index("or _remote_path_refusal(fn_name, fn_args)", site)
+    answered = src.index("\n                        continue\n", block_start)
+    assert block_start < ask < answered, "the refusal is part of the local-tool chain"
+    for later in ("_unread_edit_reason(", "_sibling_file_note(", "# Generate Diff or Content Preview",
+                  "_coder_funnel("):
+        assert ask < src.index(later, site), later
+
+
+def test_the_duplicate_write_check_never_probes_a_share(tmp_path, monkeypatch):
+    from vaf.tools.coder import _identical_rewrite
+
+    (tmp_path / "a.txt").write_text("hello\n", encoding="utf-8")
+    assert _identical_rewrite("a.txt", "hello", str(tmp_path)) == str(tmp_path / "a.txt")
+    assert _identical_rewrite(str(tmp_path / "a.txt"), " hello ", str(tmp_path)) == str(tmp_path / "a.txt")
+    assert _identical_rewrite("a.txt", "other", str(tmp_path)) is None
+    assert _identical_rewrite("b.txt", "hello", str(tmp_path)) is None
+
+    _windows_paths(monkeypatch)
+    seen = _touches(monkeypatch)
+    for spelled in REMOTE:
+        assert _identical_rewrite(spelled, "hello", str(tmp_path)) is None, spelled
+    assert seen == [], f"touched a share path: {seen}"
+
+    src = _run_source()
+    start = src.index('if "path" in extracted_args and "content" in extracted_args:')
+    block = src[start:src.index("fn_args = extracted_args", start)]
+    assert "_identical_rewrite(" in block
+    assert "os.path.exists(full_path)" not in block

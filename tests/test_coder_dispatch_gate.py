@@ -255,7 +255,8 @@ def test_a_refusal_answers_the_call_and_nothing_else_runs():
     sites = src.split("_refusal = _coder_dispatch_refusal(")[1:]
     assert len(sites) == 3, "web_fetch, web_deep_search and the local tools each ask"
     for site in sites:
-        block = site[:1100]
+        # 1400: the local-tool chain also asks the remote-path refusal before its answer.
+        block = site[:1400]
         assert "history.append(" in block and "\n                        continue\n" in block, block[:500]
 
 

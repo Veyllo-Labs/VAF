@@ -263,7 +263,7 @@ that woke it. The gate is `_room_mode_gate_decision` in
 | Tool | Perm | What it does |
 |------|------|--------------|
 | `git_init` | write | Initialize a Git repo in the project dir. |
-| `git_add_commit` | write | Stage files and commit (irreversible). |
+| `git_add_commit` | write | Stage files (relative to the project folder) and commit (irreversible). |
 | `git_status` | read | Show working-tree status. |
 | `git_log` | read | Show commit history. |
 | `set_git_coauthor` | write | Turn the `Co-authored-by: VAF Agent` trailer on or off for the commits VAF creates itself. |

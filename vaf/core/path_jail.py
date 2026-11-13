@@ -98,16 +98,31 @@ def is_remote_path(spelled: str) -> bool:
     ``project_dir_refusal``) and the lanes that probed a folder before acting on them (the
     coder's ``project_path``, a folder named in its task text and its stored last project,
     ``run_project_git``'s ``_resolve_project``, ``run_in_workspace``, a sandbox environment's
-    mount); and ``jail_allows``. ``tests/test_remote_path_refused.py`` drives those lanes with
-    share paths and records every disk call, and scans every function that screens with one
-    of these four for a disk call on the screened argument (by name, directly) before the
-    screen's answer is acted on. NOT covered: a lane that resolves an outside path without
-    any of them, and the host shell (``host_bash``), whose commands reach whatever the
-    machine reaches; that is a question of its own, not a path screen. On the facade as
-    ``vaf.is_remote_path``, because the route recipe in docs/EMBEDDING.md asks primitives that
-    resolve the path (``vaf.is_vaf_state``), so a surface built to it would reach out as well.
-    A relative fragment through ``vaf.contained_path`` needs no extra question: ``is_rooted``
-    refuses every fragment that starts with a separator.
+    mount); ``jail_allows``; and the coding agent's own checks on a file tool's path
+    (``_remote_path_refusal``, the duplicate-write check ``_identical_rewrite``) and the git
+    tools' folder (``_git_tool_folder``), while ``git_add_commit``'s files go through
+    ``contained_path``. ``tests/test_remote_path_refused.py`` drives those lanes with share
+    paths and records every disk call, and scans every function that screens with one of the
+    four screens above (``is_safe_path``, ``project_dir_refusal``, ``is_unsafe_project_dir``,
+    ``jail_allows``) for a disk call on the screened argument (by name, directly) before the
+    screen's answer is acted on. The scan sees only functions that call one of those four: a
+    lane that touches an outside path without calling any of them (the coding agent's own
+    checks and ``git_add_commit`` were such lanes) is pinned by the behavioral tests in the
+    same file, not by the scan. The host shell (``host_bash``) stays outside: its commands
+    reach whatever the machine reaches, which is a question of its own, not a path screen.
+
+    NAMED BOUNDARY: ``run_project_git`` probes its ``cwd`` (``os.path.isdir``) without asking
+    here, because its ``cwd`` is a folder its caller chose and screened, never a fragment the
+    model wrote: the coder's run folder (``_choose_base_dir``, ``_base_dir_tool``), the git
+    tools' folder (``_git_tool_folder``), ``project_git``'s ``_resolve_project`` (which the
+    code audit tool asks too, before ``jail_allows``), the folder a person typed for ``vaf
+    audit``, and the snapshots' own working folder. Measured: no caller hands it a folder the
+    model wrote without one of those screens.
+
+    On the facade as ``vaf.is_remote_path``, because the route recipe in docs/EMBEDDING.md asks
+    primitives that resolve the path (``vaf.is_vaf_state``), so a surface built to it would
+    reach out as well. A relative fragment through ``vaf.contained_path`` needs no extra
+    question: ``is_rooted`` refuses every fragment that starts with a separator.
 
     NAMED BOUNDARY: a drive letter mapped to a share (``Z:\\x``) and a link or junction
     inside a served root that points at a share are not seen here; both are set up on the

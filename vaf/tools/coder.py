@@ -40,7 +40,9 @@ from vaf.cli.tui import AnimatedHeader
 
 from vaf.cli.ui import UI
 from vaf.tools.base import BaseTool
-from vaf.tools.filesystem import WriteFileTool, EditFileTool, ReadFileTool, ListFilesTool, MoveFileTool
+from vaf.tools.filesystem import (
+    REMOTE_PATH_REFUSAL, WriteFileTool, EditFileTool, ReadFileTool, ListFilesTool, MoveFileTool,
+)
 from vaf.tools.python_sandbox import PythonSandboxTool
 from vaf.tools.coder_templates import TemplateManager
 from vaf.core.persistence import PersistenceManager, ProjectState, Task, coerce_task_title
@@ -2667,6 +2669,22 @@ class ContextState:
 # Git Tools for Coding Agent
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _git_tool_folder(kwargs) -> tuple:
+    """``(base_dir, "")`` for a git tool call, or ``("", refusal)`` for a share or device path.
+
+    The coder's wrapper (`_base_dir_tool`) hands these tools a run folder that was screened
+    when it was chosen. The same four tools are registered for the main agent too, where
+    ``base_dir`` is whatever the model wrote, and each probes ``<base_dir>/.git`` first: on
+    Windows that probe opens ``\\\\host\\share`` and sends the account's NTLM login attempt.
+    """
+    base_dir = kwargs.get('base_dir', '.')
+    from vaf.core.path_jail import is_remote_path
+    if is_remote_path(str(base_dir or "")):
+        return "", (f"❌ Refused: '{base_dir}' is a network share or device path; the git tools "
+                    "work only in a local project folder.")
+    return base_dir, ""
+
+
 class GitInitTool(BaseTool):
     """Initialize a Git repository in the project directory."""
     name = "git_init"
@@ -2686,7 +2704,9 @@ class GitInitTool(BaseTool):
     
     def run(self, **kwargs) -> str:
         # base_dir will be passed from the CodingAgentTool context
-        base_dir = kwargs.get('base_dir', '.')
+        base_dir, refusal = _git_tool_folder(kwargs)
+        if refusal:
+            return refusal
         # lexists: a dangling .git link would otherwise make git init create the repository
         # at its target (the runner refuses that too).
         if os.path.lexists(os.path.join(base_dir, '.git')):
@@ -2718,28 +2738,49 @@ class GitAddCommitTool(BaseTool):
             "files": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Optional: Specific files to add (default: all files)"
+                "description": "Optional: files to add, relative to the project folder (default: all files)"
             }
         },
         "required": ["message"]
     }
-    
+
     def run(self, **kwargs) -> str:
-        base_dir = kwargs.get('base_dir', '.')
+        base_dir, refusal = _git_tool_folder(kwargs)
+        if refusal:
+            return refusal
         message = kwargs.get('message', 'Update')
         files = kwargs.get('files', [])
-        
+        if isinstance(files, str):
+            # One name, not a list of its characters.
+            files = [files]
+
         if not os.path.exists(os.path.join(base_dir, '.git')):
             return "❌ Git repository not initialized. Call git_init first."
         from vaf.core.git_runner import run_project_git
+        from vaf.core.path_jail import PathEscape, contained_path
 
         steps = []
         if files:
-            for f in files:
-                file_path = os.path.join(base_dir, f) if not os.path.isabs(f) else f
-                if os.path.exists(file_path):
+            # Every name is judged as text before any of them is probed or staged: contained_path
+            # refuses an absolute path, '..' and a share spelling (on Windows probing
+            # \\host\share already contacts that host) before it resolves, and after resolving a
+            # link that leads outside. One refusal and nothing is staged.
+            targets = []
+            for entry in files:
+                entry = str(entry)
+                try:
+                    targets.append(contained_path(base_dir, entry))
+                except PathEscape:
+                    return (f"❌ Not committed: '{entry}' is not a file inside the project "
+                            "folder. Name files relative to the project folder (for example "
+                            "index.html); an absolute path, '..', a network share or a link that "
+                            "leads outside is refused. Nothing was added.")
+            root = Path(base_dir).resolve()
+            for target in targets:
+                if target.exists():
+                    rel = "." if target == root else target.relative_to(root).as_posix()
                     # "--": a path is never read as an option.
-                    steps.append(["add", "--", file_path])
+                    steps.append(["add", "--", rel])
         else:
             steps.append(["add", "."])
         steps.append(["commit", "-m", message])
@@ -2765,7 +2806,9 @@ class GitStatusTool(BaseTool):
     }
     
     def run(self, **kwargs) -> str:
-        base_dir = kwargs.get('base_dir', '.')
+        base_dir, refusal = _git_tool_folder(kwargs)
+        if refusal:
+            return refusal
         if not os.path.exists(os.path.join(base_dir, '.git')):
             return "❌ Git repository not initialized. Call git_init first."
         from vaf.core.git_runner import run_project_git
@@ -2798,7 +2841,9 @@ class GitLogTool(BaseTool):
     }
     
     def run(self, **kwargs) -> str:
-        base_dir = kwargs.get('base_dir', '.')
+        base_dir, refusal = _git_tool_folder(kwargs)
+        if refusal:
+            return refusal
         limit = kwargs.get('limit', 10)
         
         if not os.path.exists(os.path.join(base_dir, '.git')):
@@ -3134,6 +3179,48 @@ def _ftp_deploy_target(text: str, user_scope_id):
                       f"with ftp(server=\"{target}\", action=\"list\") so the user confirms it, "
                       "then start the coder again with deploy_to")
     return DeployTarget(target, root, kind="ftp"), None
+
+
+# The file tools whose `path` the agentic loop touches ITSELF before the tool's own screen
+# (`is_safe_path`) runs: read-before-edit, search-before-build, the diff preview, the
+# duplicate-write check, and after the call the live-editor mirror and the write and guard
+# tracking. Every other tool screens its own path.
+_LOOP_PATH_TOOLS = ("write_file", "edit_file", "read_file")
+
+
+def _remote_path_refusal(fn_name: str, fn_args) -> Optional[str]:
+    """`REMOTE_PATH_REFUSAL` for a loop file tool whose path is a share or device path, or None.
+
+    On Windows each of the loop's own checks on ``\\\\host\\share\\x`` opens an SMB connection
+    to that host carrying the account's NTLM login attempt, before the tool would refuse it.
+    Only ``path`` is judged, never ``content``: a file that starts with ``// comment`` is
+    ordinary work."""
+    if fn_name not in _LOOP_PATH_TOOLS or not isinstance(fn_args, dict):
+        return None
+    from vaf.core.path_jail import is_remote_path
+    if is_remote_path(str(fn_args.get("path") or "")):
+        return REMOTE_PATH_REFUSAL
+    return None
+
+
+def _identical_rewrite(path: str, content: str, base_dir: str) -> Optional[str]:
+    """The full path of a file that already holds exactly ``content`` (whitespace at the ends
+    ignored), or None.
+
+    A share or device path is answered None from its text, with no disk call: the write then
+    continues to the dispatch, where `_remote_path_refusal` answers it."""
+    from vaf.core.path_jail import is_remote_path
+    if is_remote_path(str(path or "")):
+        return None
+    full_path = path if os.path.isabs(path) else os.path.join(base_dir, path)
+    try:
+        if not os.path.exists(full_path):
+            return None
+        with open(full_path, 'r', encoding='utf-8-sig') as f:  # Handle BOM
+            existing_content = f.read()
+    except (OSError, ValueError):
+        return None
+    return full_path if content.strip() == existing_content.strip() else None
 
 
 def _deploy_refusal(fn_name: str, fn_args, deploy, base_dir: Optional[str] = None) -> Optional[str]:
@@ -6661,7 +6748,7 @@ Task {task_idx + 1}: {current_task}
                             "type": "object",
                             "properties": {
                                 "message": {"type": "string", "description": "Commit message describing the changes"},
-                                "files": {"type": "array", "items": {"type": "string"}, "description": "Optional: Specific files to add (default: all files)"}
+                                "files": {"type": "array", "items": {"type": "string"}, "description": "Optional: files to add, relative to the project folder (default: all files)"}
                             },
                             "required": ["message"]
                         }
@@ -9407,19 +9494,11 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                             # CRITICAL: Check if we are just rewriting the same content
                             path = extracted_args["path"]
                             content = extracted_args["content"]
-                            full_path = path if os.path.isabs(path) else os.path.join(base_dir, path)
-                            
-                            is_duplicate_write = False
-                            if os.path.exists(full_path):
-                                try:
-                                    with open(full_path, 'r', encoding='utf-8-sig') as f: # Handle BOM
-                                        existing_content = f.read()
-                                    # Compare stripped content to ignore whitespace differences
-                                    if content.strip() == existing_content.strip():
-                                        is_duplicate_write = True
-                                except:
-                                    pass
-                            
+                            # None for a share path, from its text alone: the dispatch below
+                            # answers it with the remote-path refusal.
+                            full_path = _identical_rewrite(path, content, base_dir)
+                            is_duplicate_write = full_path is not None
+
                             if is_duplicate_write:
                                 tui.append_stream(f"[INFO] Skipping duplicate write for {path} (content identical)")
                                 
@@ -10431,7 +10510,8 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                     )
                     if _refusal is None:
                         _refusal = (_environment_browser_refusal(fn_name, fn_args, _env_binding)
-                                    or _deploy_refusal(fn_name, fn_args, _deploy, base_dir))
+                                    or _deploy_refusal(fn_name, fn_args, _deploy, base_dir)
+                                    or _remote_path_refusal(fn_name, fn_args))
                     if _refusal is not None:
                         # Answered here and nothing else runs: the file handling further down
                         # judges a result by its wording, and a refused write_file must never

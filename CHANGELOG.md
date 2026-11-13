@@ -267,11 +267,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   in a new tab and look like links.
 - **On Windows, VAF no longer contacts a network share named in a file address.** Opening a
   file through VAF with a share path (`\\server\share\...`), in the web interface, through
-  the agent's file tools, or as a project folder for the coding agent, its version history,
+  the agent's file tools, the coding agent's commits and its checks before it writes or reads
+  a file, or as a project folder for the coding agent, its version history, its git tools,
   its workspace shell or a sandbox environment, used to make VAF connect to that server and
   offer it your Windows login before the request was refused; such paths are now refused
-  straight away. Commands the agent runs in the host shell are not covered by this. Needs a
-  restart of VAF.
+  straight away. The coding agent's commit tool now takes file names relative to the project
+  folder. Commands the agent runs in the host shell are not covered by this. Needs a restart
+  of VAF.
 - **The agent's file tools stay out of VAF's own data and your shell start files.** Reading
   VAF's data and settings folders (messages, mail, contacts, key files, the MCP server list,
   tool permissions, and in Docker mode the configuration folder) is now refused for every

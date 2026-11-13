@@ -132,7 +132,7 @@ def test_ssh_is_registered_and_advertised_only_with_a_target():
     assert 'self.local_tools.pop("ftp", None)' in src
     reg_at = src.index('self.local_tools["ftp"] = FtpTool()')
     assert '_deploy.kind == "ftp"' in src[reg_at - 150:reg_at], "ftp registered without its target"
-    assert "or _deploy_refusal(fn_name, fn_args, _deploy, base_dir))" in src
+    assert "or _deploy_refusal(fn_name, fn_args, _deploy, base_dir)" in src
     from vaf.core.coder_tools import CODER_ALLOWED_TOOLS
     assert "ssh" in CODER_ALLOWED_TOOLS and "ftp" in CODER_ALLOWED_TOOLS
 

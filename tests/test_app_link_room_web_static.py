@@ -97,11 +97,12 @@ def test_the_composer_posts_the_line_without_a_chooser():
     assert "setAppRoomError(String(outcome.data.code || 'failed'));" in refused
     assert "setInput" not in refused
     assert "clearAfterSend(sentFrom, roomViewRef.current?.room.roomId ?? null, text, prev)" in sender
-    # The hint names the shortened agent name, never the handle, and the chat's own hint stays.
-    # MUTATION: pass `appRoomNames` again, or change the chat's hint - red.
+    # The hint shows the handle only as `hintHandle` lets it (whole, or "VAF"), and the chat's
+    # own hint stays. MUTATION: pass the raw handle or `appRoomNames` again, or change the
+    # chat's hint - red.
     hint = _between(PAGE, "placeholder={isIndexing ?", "\n")
     assert ("appRoomWords ? tMain(placeholderKey(!!roomView?.room.appRoom?.canWrite),"
-            " { name: hintName(appRoomAgentName) }) : \"Ask anything...\"}" in hint)
+            " { handle: hintHandle(appRoomHandle) }) : \"Ask anything...\"}" in hint)
     assert hint.rstrip().endswith(': "Ask anything..."}')
 
 
@@ -124,20 +125,26 @@ def test_what_an_agent_room_offers_is_hidden_in_the_veyllo_app_room():
     assert "onReact={roomView.room.me && !roomView.room.closed && !appRoomWords ?" in PAGE
     assert "{roomView ? (appRoomWords ? (" in PAGE and "data-app-room-strip" in PAGE
     assert "&& roomView.room.roomKind !== 'veyllo_app'" in PAGE
-    # The attachment and the call button keep their slots in the room, hidden and out of the
-    # keyboard's way, so the box looks and measures as in a chat. MUTATION: unmount either one
-    # in the room again, or drop `invisible` - red.
-    for button in (_button("onClick={() => { if (!appRoomWords) fileInputRef.current?.click(); }}"),
-                   _button('title="Live-Call"')):
+    # The attachment and the call button stay in their places in the room, visible but
+    # switched off (the page's disabled look, no hover), out of the keyboard's way and saying
+    # why, so the box is the chat's own box with two controls off. MUTATION: unmount either one
+    # in the room again, hide it, drop the disabled look, or drop the reason - red.
+    attach = _button("onClick={() => { if (!appRoomWords) fileInputRef.current?.click(); }}")
+    call = _button("useVoiceCallStore.getState().start();")
+    for button in (attach, call):
         start = PAGE.index(button)
         assert "{!appRoomWords && (" not in PAGE[start - 900:start], button[:60]
         classes = _between(button, "className={cn(", ")}")
-        assert 'appRoomWords && "invisible"' in classes, button[:60]
+        assert "appRoomWords && OFF_IN_APP_ROOM" in classes, button[:60]
+        assert "invisible" not in button and "aria-hidden" not in button
         assert "tabIndex={appRoomWords ? -1 : undefined}" in button
-        assert "aria-hidden={appRoomWords ? true : undefined}" in button
-    call = _button('title="Live-Call"')
+    off = _between(PAGE, "const OFF_IN_APP_ROOM = \"", "\";")
+    for cls in ("disabled:opacity-40", "disabled:cursor-not-allowed", "disabled:hover:bg-transparent"):
+        assert cls in off.split(), cls
     assert "if (appRoomWords) return;" in call and "|| !!appRoomWords}" in call
-    assert "disabled={!!appRoomWords}" in _button("fileInputRef.current?.click()")
+    assert "disabled={!!appRoomWords}" in attach
+    assert "title={appRoomWords ? tMain('appRoomTextOnly') : tMain('attachmentsDocumentViewer')}" in attach
+    assert "title={appRoomWords ? tMain('appRoomNoCalls') : \"Live-Call\"}" in call
     # "@" completes the VAF agent only, with the handle that is sure to reach it.
     assert "(roomView.room.roomKind !== 'veyllo_app' || m.peer === roomView.room.agentPeer)" in PAGE
     assert "(roomView.room.appRoom?.handle || m.label) : m.label," in PAGE
@@ -155,6 +162,13 @@ def test_the_room_label_is_the_workspace_chip():
     chip = _between(PAGE, "{workspaceInfo?.path && (", "<Folder size={10}")
     assert "className={cn(\n                                                STRIP_CHIP," in chip
     assert "cursor-pointer" in chip
+    # The agent room's folder chip beside it takes the same look, plus its dark border.
+    # MUTATION: write the agent room's chip by hand again - red.
+    title = PAGE.index("title={tMain('roomWorkspaceTitle')}")
+    agent_room = PAGE[PAGE.rindex("<span", 0, title):title]
+    assert ('className={cn(STRIP_CHIP, "mr-auto cursor-pointer dark:border-[#2a2a2a] '
+            in agent_room), agent_room
+    assert "text-[10px] font-mono text-gray-400 opacity-80 px-2 py-0.5 rounded cursor-pointer" not in PAGE
 
 
 def test_a_line_shows_its_speaker_addressee_delivery_and_its_words():

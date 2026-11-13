@@ -52,30 +52,40 @@ export function refusalKey(code: string): string {
  *  possible (asking the VAF agent with its handle). */
 export const emptyKey = (canWrite: boolean) => (canWrite ? 'appRoomEmpty' : 'appRoomEmptyAgentOnly');
 
-/** The composer's hint: while no line can reach the app's agent, it names the VAF agent. */
+/** The composer's hint: while no line can reach the app's agent, it shows the mention that
+ *  reaches the VAF agent, because a line without it goes to the app's agent and is refused. */
 export const placeholderKey = (canWrite: boolean) => (canWrite ? 'appRoomPlaceholder' : 'appRoomPlaceholderAgentOnly');
 
-/** How many characters of the agent's name the composer's hint may carry. */
-export const HINT_NAME_MAX = 12;
+/** How wide, in Latin letters (`hintWidth`), the handle in the composer's hint may be. */
+export const HINT_HANDLE_MAX = 12;
 
-/** The agent's name as the composer's hint names it ("Ask Bartholomäus…"). The name is not
- *  length-capped and a placeholder cannot wrap or end in an ellipsis (Chromium clips a
- *  textarea's placeholder hard and a second line scrolls the box), and at 390 px the box leaves
- *  about 164 px of text width: "Frag Bartholomäus …" measures 132 px, a 16-character name in
- *  the Turkish form 193 px. So the hint keeps the whole name when it fits, otherwise the
- *  leading whole words that fit ("Dr. Mia Schmidt" -> "Dr. Mia"), otherwise the first `max`
- *  characters, counted in code points so a cut never splits a surrogate pair. */
-export function hintName(name: string, max: number = HINT_NAME_MAX): string {
-    const whole = (name || '').trim();
-    if (!whole) return 'VAF';
-    if (Array.from(whole).length <= max) return whole;
-    let kept = '';
-    for (const word of whole.split(/\s+/)) {
-        const next = kept ? `${kept} ${word}` : word;
-        if (Array.from(next).length > max) break;
-        kept = next;
+/** A grapheme a font draws about twice as wide as a Latin letter: Han, kana, Hangul, the
+ *  full-width forms and CJK punctuation, an emoji, a flag. */
+const WIDE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Extended_Pictographic}\p{Regional_Indicator}\u3000-\u303f\uff01-\uff60\uffe0-\uffe6]/u;
+
+/** What a reader sees as one character: a grapheme (a family emoji, a Thai consonant with its
+ *  vowel and tone marks), or a code point where the browser has no `Intl.Segmenter`. */
+function graphemes(text: string): string[] {
+    if (typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function') {
+        return Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text), s => s.segment);
     }
-    return kept || Array.from(whole).slice(0, max).join('');
+    return Array.from(text);
+}
+
+/** A text's width in Latin letters: one per grapheme, two for a wide one (`WIDE`). */
+export function hintWidth(text: string): number {
+    return graphemes(text).reduce((sum, g) => sum + (WIDE.test(g) ? 2 : 1), 0);
+}
+
+/** The handle the composer's hint shows after "@" ("Frag @Nobel …"). A textarea's placeholder
+ *  can neither wrap nor end in an ellipsis (Chromium clips it hard, and a second line scrolls
+ *  the box), and at 390 px the box leaves about 159 px of text: "@Bartholomäus ile sor…"
+ *  measures 150 px, "Frag @MMMMMMMMMMMM …" 203 px. A handle wider than `max` is not cut, because
+ *  a cut handle is no mention ("@Hubertus-Max" reaches nobody): the hint shows "VAF" then, which
+ *  the server always takes for the VAF agent (`room.addressee`). */
+export function hintHandle(handle: string, max: number = HINT_HANDLE_MAX): string {
+    const h = (handle || '').trim();
+    return h && hintWidth(h) <= max ? h : 'VAF';
 }
 
 /** "to <name>" under a line: the person addressed gets their own form ("an dich", "sana"). */

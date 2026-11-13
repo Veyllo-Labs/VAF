@@ -354,7 +354,8 @@ script written without spaces (`@Mia 你好`); the empty room says so in every l
 leading-mention rule as in an agent room
 ([A2A_PROTOCOL.md](../agents/A2A_PROTOCOL.md#display-names-carry-a-number-when-they-collide)), so `ask @VAF` in
 the middle of a line still goes to the app's agent. The empty room and the notices name that
-word, and `@` completes it.
+word, the composer's hint shows it while no line can reach the app's agent, and `@` completes
+it.
 
 **What "your agent is in the room" means.** Your VAF agent reads every room line at its next
 turn in your app chat, where your own turns run: a line you wrote to the app's agent after a

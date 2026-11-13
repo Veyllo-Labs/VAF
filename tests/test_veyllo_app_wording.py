@@ -130,21 +130,22 @@ def test_the_veyllo_app_room_is_worded_in_every_language_and_never_a_phone():
     assert not found, found
     room = (ROOT / "vaf" / "core" / "app_link" / "room.py").read_text(encoding="utf-8")
     assert 'TITLE = "Veyllo App"' in room
-    # The composer's hint reads like the chat's own, with no "@" form in it: "Ask the Veyllo
-    # App...", or "Ask <name>..." while no line can reach the app's agent (the page shortens the
-    # name, `hintName`). The empty room and the notices teach the handle. MUTATION: put
-    # `@{handle}` back into one catalogue, or drop {name} from one - red.
+    # The composer's hint reads like the chat's own: "Ask the Veyllo App..." with no "@" form
+    # while lines reach the app's agent. While none can, a line without the mention would go to
+    # the app's agent and be refused, so the hint shows the mention itself: "Ask @<handle>...".
+    # MUTATION: put `@{handle}` back into one writable hint, or drop it from one agent-only
+    # hint - red.
     for lang in LANGS:
         main = json.loads((ROOT / "web" / "messages" / f"{lang}.json").read_text(
             encoding="utf-8"))["main"]
         writable, agent_only = main["appRoomPlaceholder"], main["appRoomPlaceholderAgentOnly"]
-        for hint in (writable, agent_only):
-            assert "@" not in hint and "{handle}" not in hint, (lang, hint)
+        assert "@" not in writable and "{handle}" not in writable, (lang, writable)
         assert "{name}" not in writable and "Veyllo App" in writable, lang
-        assert "{name}" in agent_only, lang
+        assert "@{handle}" in agent_only and "{name}" not in agent_only, (lang, agent_only)
+        assert agent_only.count("@") == 1, (lang, agent_only)
     de = json.loads((ROOT / "web" / "messages" / "de.json").read_text(encoding="utf-8"))["main"]
     en = json.loads((ROOT / "web" / "messages" / "en.json").read_text(encoding="utf-8"))["main"]
     assert de["appRoomPlaceholder"] == "Frag die Veyllo App \u2026"
-    assert de["appRoomPlaceholderAgentOnly"] == "Frag {name} \u2026"
+    assert de["appRoomPlaceholderAgentOnly"] == "Frag @{handle} \u2026"
     assert en["appRoomPlaceholder"] == "Ask the Veyllo App\u2026"
-    assert en["appRoomPlaceholderAgentOnly"] == "Ask {name}\u2026"
+    assert en["appRoomPlaceholderAgentOnly"] == "Ask @{handle}\u2026"

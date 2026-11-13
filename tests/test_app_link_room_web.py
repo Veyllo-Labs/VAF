@@ -137,12 +137,15 @@ def test_a_line_sent_again_offers_no_second_resend_and_reads_quietly():
                                           ("th", "เว้นวรรค")])
 def test_scripts_without_spaces_are_told_to_put_one_after_the_name(lang, marker):
     """"@Mia你好" is no mention of Mia: where a script is written without spaces, the empty
-    room says to put a space after the name. MUTATION: drop the clause from one of the texts -
-    red."""
+    room says to put a space after the name, and the agent-only hint shows the handle followed
+    by one (no particle glued to it). MUTATION: drop the clause from one of the texts, or glue
+    a particle to the handle in the hint - red."""
     main = json.loads((ROOT / "web" / "messages" / f"{lang}.json").read_text(
         encoding="utf-8"))["main"]
     for key in ("appRoomEmpty", "appRoomEmptyAgentOnly"):
         assert marker in main[key], (lang, key)
+    agent_only = main["appRoomPlaceholderAgentOnly"]
+    assert agent_only.endswith("@{handle}") or "@{handle} " in agent_only, lang
 
 
 @pytest.mark.parametrize("lang", LANGS)
@@ -157,22 +160,32 @@ def test_the_mention_is_still_taught(lang):
         assert "@{handle}" in main[key], (lang, key)
 
 
-def test_the_hint_name_fits_one_line():
-    """The hint carries the agent's name, which is not length-capped: whole when it fits, else
-    the leading whole words, else a cut by code points. MUTATION: return the name unchanged,
-    cut by UTF-16 units, or drop the word step - red."""
-    assert _call("m.HINT_NAME_MAX") == 12
-    assert _call("m.hintName('Mia')") == "Mia"
-    assert _call("m.hintName('  Nobel ')") == "Nobel"
-    assert _call("m.hintName('Bartholom\u00e4us Wiedenbr\u00fcck')") == "Bartholom\u00e4us"
-    assert _call("m.hintName('Dr. Mia Schmidt')") == "Dr. Mia"
-    assert _call("m.hintName('Hubertus-Maximilian')") == "Hubertus-Max"
-    assert _call("m.hintName('')") == "VAF"
-    assert _call("m.hintName('   ')") == "VAF"
-    # Thirteen emoji: twelve whole ones, no half of a surrogate pair at the end.
-    cut = _call("m.hintName('\\u{1F600}'.repeat(13))")
-    assert cut == "\U0001F600" * 12
-    assert not any(0xD800 <= ord(c) <= 0xDFFF for c in cut)
+def test_the_hint_shows_a_handle_that_reaches_the_agent_and_fits_one_line():
+    """While no line can reach the app's agent the hint shows "@" and the handle, the one form
+    the server takes. A handle wider than 12 Latin letters is not cut (a cut handle is no
+    mention) but becomes "VAF", which always reaches the VAF agent. Width counts what a reader
+    sees as one character (a family emoji, a Thai consonant with its marks) and counts a wide
+    one (Han, kana, Hangul, emoji) double. MUTATION: cut the handle instead of "VAF", count
+    code points instead of graphemes, or count wide characters single - red."""
+    assert _call("m.HINT_HANDLE_MAX") == 12
+    assert _call("m.hintHandle('Nobel')") == "Nobel"
+    assert _call("m.hintHandle(' Nobel ')") == "Nobel"
+    assert _call("m.hintHandle('Bartholom\u00e4us')") == "Bartholom\u00e4us"
+    assert _call("m.hintHandle('Bartholom\u00e4uss')") == "VAF"
+    assert _call("m.hintHandle('')") == "VAF"
+    assert _call("m.hintHandle('   ')") == "VAF"
+    # Han: two letters wide each; six fit, seven do not.
+    assert _call("m.hintWidth('\u7f8e\u54b2')") == 4
+    assert _call("m.hintHandle('\u7f8e\u54b2'.repeat(3))") == "\u7f8e\u54b2" * 3
+    assert _call("m.hintHandle('\u7f8e\u54b2'.repeat(3) + '\u7f8e')") == "VAF"
+    # One family emoji (four people joined by ZWJ) is one wide grapheme; a Thai consonant
+    # with its vowel and tone marks is one.
+    family = "'\\u{1F468}\\u200d\\u{1F469}\\u200d\\u{1F467}\\u200d\\u{1F466}'"
+    assert _call(f"m.hintWidth({family})") == 2
+    assert _call("m.hintWidth('\u0e19\u0e49\u0e33')") == 1
+    assert _call("m.hintWidth('\u0e2a\u0e21\u0e28\u0e31\u0e01\u0e14\u0e34\u0e4c')") == 5
+    # Without Intl.Segmenter the width falls back to code points instead of failing.
+    assert _run(MODULE, f"m.hintWidth({family})", setup="delete Intl.Segmenter;") == 11
 
 
 def test_wake_notes_and_the_empty_room_are_worded():

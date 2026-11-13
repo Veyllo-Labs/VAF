@@ -40,7 +40,7 @@ import { TurnDrafts, UnplacedDrafts, isWaitingDraft, type HeldSendRow } from '@/
 import { useChatDrafts } from '@/components/outbox/useChatDrafts';
 import {
     APP_ROOM_ID, APP_ROOM_TITLE, ROOM_SEND_IDLE, beginSend, clearAfterSend, confirmAfterGiveUp, deliveryOf, emptyKey,
-    goToTakenLine, hintName, isAppRoom, lateEffect, lateLine, lineTextKey, newLineId, placeholderKey, refusalKey, roomOpenCommand, roomStillListed, sendWithTimeout,
+    goToTakenLine, hintHandle, isAppRoom, lateEffect, lateLine, lineTextKey, newLineId, placeholderKey, refusalKey, roomOpenCommand, roomStillListed, sendWithTimeout,
     showUnreadDot, toKey, type RoomSend,
 } from '@/components/chat/appRoom';
 import { draftRefOf, isDraftTurnEnd, DRAFT_WAKE_PREFIX, CONFIRM_WAKE_PREFIX } from '@/components/outbox/draftRefs';
@@ -1808,10 +1808,16 @@ type RoomHistoryRow = {
     result: string; reports: number; started?: number; ts?: number;
 };
 
-/** The look of a chip on the strip above the message box (the chat's workspace folder, the
- *  Veyllo App room's label), so the room's label cannot drift from the chat's chip. A
- *  clickable chip adds its pointer and hover classes itself. */
+/** The look of a chip on the strip above the message box (the chat's workspace folder, an
+ *  agent room's folder, the Veyllo App room's label), so the rooms' chips cannot drift from the
+ *  chat's. A clickable chip adds its pointer and hover classes itself. */
 const STRIP_CHIP = "inline-flex items-center gap-1 text-[10px] font-mono text-gray-400 opacity-80 px-2 py-0.5 rounded border border-gray-200 leading-none select-none";
+
+/** The attachment and call buttons in the Veyllo App room, where both stay in place but are
+ *  switched off: the page's disabled look for an icon button, with the hover cancelled so the
+ *  button does not light up as if it worked. Only in the room, because the chat's call button
+ *  is disabled while a recording runs and keeps its own look there. */
+const OFF_IN_APP_ROOM = "disabled:opacity-40 disabled:cursor-not-allowed disabled:text-gray-400 disabled:hover:bg-transparent disabled:hover:text-gray-400";
 
 const ROOM_TASK_ACTIVE = ['submitted', 'working', 'input_required'];
 
@@ -11685,7 +11691,7 @@ function VAFDashboardContent() {
                                         // (the room id rides in the sessionId slot; the server knows
                                         // which one it is), so this opens the same browser window.
                                         <span
-                                            className="mr-auto inline-flex items-center gap-1 text-[10px] font-mono text-gray-400 opacity-80 px-2 py-0.5 rounded cursor-pointer border border-gray-200 dark:border-[#2a2a2a] leading-none select-none hover:text-violet-600 hover:opacity-100 hover:bg-violet-50 hover:border-violet-200 transition-all"
+                                            className={cn(STRIP_CHIP, "mr-auto cursor-pointer dark:border-[#2a2a2a] hover:text-violet-600 hover:opacity-100 hover:bg-violet-50 hover:border-violet-200 transition-all")}
                                             title={tMain('roomWorkspaceTitle')}
                                             onClick={() => {
                                                 workspaceSubpathRef.current = '';
@@ -11960,21 +11966,20 @@ function VAFDashboardContent() {
                                             accept={ACCEPT_ATTACHMENTS}
                                         />
                                         {/* The Veyllo App room carries text only, so it offers no
-                                            attachment and no call. Both buttons keep their slots there,
-                                            hidden, so the box, the text start and the microphone stand
-                                            exactly where they stand in a chat. */}
+                                            attachment and no call. Both buttons stay in their places
+                                            there, switched off and saying why, so the box is the chat's
+                                            own box with two controls off. */}
                                         <button
                                             type="button"
                                             onClick={() => { if (!appRoomWords) fileInputRef.current?.click(); }}
                                             disabled={!!appRoomWords}
                                             tabIndex={appRoomWords ? -1 : undefined}
-                                            aria-hidden={appRoomWords ? true : undefined}
                                             className={cn(
                                                 "shrink-0 ml-2 mb-1.5 h-10 w-10 flex items-center justify-center rounded-xl transition-colors",
                                                 attachedImages.length > 0 ? "text-violet-600 hover:bg-violet-50" : documentViewerState.isOpen ? "text-blue-600 hover:bg-blue-50" : "text-gray-400 hover:text-gray-700 hover:bg-gray-100",
-                                                appRoomWords && "invisible"
+                                                appRoomWords && OFF_IN_APP_ROOM
                                             )}
-                                            title={tMain('attachmentsDocumentViewer')}
+                                            title={appRoomWords ? tMain('appRoomTextOnly') : tMain('attachmentsDocumentViewer')}
                                         >
                                             <Paperclip size={19} />
                                         </button>
@@ -12048,7 +12053,7 @@ function VAFDashboardContent() {
                                                     onChange={handleInputChange}
                                                     onScroll={(e) => { if (ghostRef.current) ghostRef.current.scrollTop = e.currentTarget.scrollTop; }}
                                                     onKeyDown={handleKeyDown}
-                                                    placeholder={isIndexing ? tMain('indexingAttachments', { count: activeAttachmentIndexCount || 1 }) : roomView?.room.invited ? tMain('roomInviteComposer') : input ? "" : appRoomWords ? tMain(placeholderKey(!!roomView?.room.appRoom?.canWrite), { name: hintName(appRoomAgentName) }) : "Ask anything..."}
+                                                    placeholder={isIndexing ? tMain('indexingAttachments', { count: activeAttachmentIndexCount || 1 }) : roomView?.room.invited ? tMain('roomInviteComposer') : input ? "" : appRoomWords ? tMain(placeholderKey(!!roomView?.room.appRoom?.canWrite), { handle: hintHandle(appRoomHandle) }) : "Ask anything..."}
                                                     className="w-full min-h-[2.5rem] max-md:min-h-[3.25rem] max-h-[12.5rem] py-4 px-1 bg-transparent border-none focus:ring-0 focus:outline-none text-sm relative z-10 resize-none overflow-y-auto"
                                                     // Chat-while-subagent-runs: never lock typing while a sub-agent is
                                                     // active — a lingering isGenerating (delegation turn / late events)
@@ -12086,9 +12091,9 @@ function VAFDashboardContent() {
                                         {/* Live-Call: the voice-agent first layer (bar morphs red, agent window top-left).
                                             Without a voice profile the first click OFFERS the guided enrollment
                                             (voice-gated delegation needs a profile); a skip is remembered.
-                                            Hidden in its slot in the Veyllo App room: a call starts with
-                                            the session of the chat behind the room and would talk into
-                                            that conversation, not the room. */}
+                                            Switched off in the Veyllo App room: a call starts with the
+                                            session of the chat behind the room and would talk into that
+                                            conversation, not the room. */}
                                         <button
                                             type="button"
                                             onClick={() => {
@@ -12101,12 +12106,11 @@ function VAFDashboardContent() {
                                             }}
                                             disabled={isRecording || isProcessingAudio || !!appRoomWords}
                                             tabIndex={appRoomWords ? -1 : undefined}
-                                            aria-hidden={appRoomWords ? true : undefined}
                                             className={cn(
                                                 "shrink-0 mb-1.5 mr-2 h-10 w-10 flex items-center justify-center rounded-xl transition-colors text-gray-500 hover:text-gray-900 hover:bg-gray-100 disabled:text-gray-300",
-                                                appRoomWords && "invisible"
+                                                appRoomWords && OFF_IN_APP_ROOM
                                             )}
-                                            title="Live-Call"
+                                            title={appRoomWords ? tMain('appRoomNoCalls') : "Live-Call"}
                                         >
                                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                                                 <path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 2 .7 2.9a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.2-1.2a2 2 0 0 1 2.1-.5c.9.3 1.9.6 2.9.7a2 2 0 0 1 1.7 2z" />

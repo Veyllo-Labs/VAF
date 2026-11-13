@@ -488,17 +488,21 @@ agent in their Veyllo App and the VAF agent; its rules are in
   commands are not shown. The empty room explains who is in it and where a line goes. What the room does not have stays hidden: member chips, the member panel, reactions,
   the shared folder, the task board, votes and the typing signal of a keypress. The composer is
   the chat's own, with the same box, buttons and microphone; the attachment and call buttons
-  keep their places but are hidden (`invisible`, out of the Tab order), because the room carries
-  text only and a call would run in the chat behind it. The strip above the box shows the room's
-  label "Veyllo App" in the chat workspace chip's look (`STRIP_CHIP` in `page.tsx`); it is not
-  clickable, because the room has no folder. Its rules are plain functions in
+  stay in their places but are switched off (greyed, no hover, out of the Tab order;
+  `OFF_IN_APP_ROOM` in `page.tsx`), and their tooltip says why: the room carries text only, and a
+  call would run in the chat behind it. The strip above the box shows the room's label "Veyllo
+  App" in the chat workspace chip's look (`STRIP_CHIP` in `page.tsx`, which an agent room's
+  folder chip shares); it is not clickable, because the room has no folder. Its rules are plain functions in
   `web/components/chat/appRoom.ts`, run in node by `tests/test_app_link_room_web.py`.
 - **The composer has no chooser.** It posts the line (`POST /api/app-link/room`) and the server
   decides the addressee: the app's agent, or the VAF agent when the line starts with `@` and the
   handle (the first word of the agent's name without trailing punctuation). The hint reads "Ask
-  the Veyllo App…", or "Ask <name>…" while no line can reach the app's agent; the name is
-  shortened to 12 characters at a word boundary (`hintName`), so the hint stays on one line at
-  390 px. The empty room and the notices teach the handle, and `@` completes only that handle.
+  the Veyllo App…". While no line can reach the app's agent it reads "Ask @<handle>…", because a
+  line without the mention would go to the app's agent and be refused; a handle wider than 12
+  Latin letters (counted by grapheme, a wide CJK character or an emoji as two; `hintHandle`)
+  shows as "@VAF", which always reaches the VAF agent, so the hint stays on one line at 390 px
+  and is never a cut, wrong mention. The empty room and the notices teach the handle too, and `@`
+  completes only that handle.
   The box clears when
   the line was taken, and only in the view it was written in; a refusal keeps the text and says
   why above the box (an older Veyllo App, a device not connected since pairing, the Veyllo App

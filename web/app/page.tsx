@@ -68,8 +68,8 @@ import BrowserLiveTile from '@/components/BrowserLiveTile';
 import type { VAFWorkflow } from '@/components/workflows/stores/workflowStore';
 import { useWorkflowStore, forgetWorkflowState } from '@/components/workflows/stores/workflowStore';
 import { WorkflowChatElement } from '@/components/workflows/WorkflowChatElement';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { Markdown } from '@/components/Markdown';
+import { normalizeDownloadHref } from '@/lib/markdownImages';
 
 // Types
 type Message = {
@@ -769,70 +769,14 @@ function parseWorkflowAsync(answer: string): { taskId: string; workflowId: strin
     return { taskId: m[1], workflowId: m[2], name: m[3], rest: m[4].trim() };
 }
 
-const normalizeDownloadHref = (rawHref: string): string => {
-    if (!rawHref) return rawHref;
-    const base = getApiBase();
-    if (rawHref.startsWith('sandbox:/')) {
-        const path = rawHref.replace(/^sandbox:\/*/, '');
-        return `${base}/api/file?path=${encodeURIComponent(path)}`;
-    }
-
-    const looksLikeWindowsPath = /^[a-zA-Z]:[\\/]/.test(rawHref);
-    const looksLikeUnixPath = rawHref.startsWith('/');
-    if (looksLikeWindowsPath || looksLikeUnixPath) {
-        return `${base}/api/file?path=${encodeURIComponent(rawHref)}`;
-    }
-
-    return rawHref;
-};
-
-const renderMarkdownLinks = (text: string): React.ReactNode[] => {
-    const nodes: React.ReactNode[] = [];
-    if (!text) return nodes;
-
-    const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
-    let lastIndex = 0;
-    let match: RegExpExecArray | null;
-
-    while ((match = linkRegex.exec(text)) !== null) {
-        if (match.index > lastIndex) {
-            nodes.push(text.slice(lastIndex, match.index));
-        }
-
-        const label = match[1];
-        const rawHref = match[2];
-        const href = normalizeDownloadHref(rawHref);
-        nodes.push(
-            <a
-                key={`link-${match.index}`}
-                href={href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-gray-700 underline break-all hover:text-gray-900"
-            >
-                {label}
-            </a>
-        );
-
-        lastIndex = match.index + match[0].length;
-    }
-
-    if (lastIndex < text.length) {
-        nodes.push(text.slice(lastIndex));
-    }
-
-    return nodes.length > 0 ? nodes : [text];
-};
-
-/** Renders markdown in chat bubbles (headings, lists, bold, links, code). Links use normalizeDownloadHref for sandbox/local paths. User messages (dark): single line breaks are preserved as sent. */
+/** Renders markdown in chat bubbles (headings, lists, bold, links, code). Links use normalizeDownloadHref for sandbox/local paths; images follow the rule of web/lib/markdownImages.ts (only this server's file lane loads). User messages (dark): single line breaks are preserved as sent. */
 const ChatMarkdown = ({ children, dark = false }: { children: string; dark?: boolean }) => {
     const text = dark ? children.replace(/\n/g, "  \n") : children;
     const linkClass = dark
         ? 'text-indigo-200 underline break-all hover:text-white'
         : 'text-gray-700 underline break-all hover:text-gray-900';
     return (
-        <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
+        <Markdown
             components={{
                 a: ({ href, children: linkChildren }) => (
                     <a href={href ? normalizeDownloadHref(href) : href} target="_blank" rel="noopener noreferrer" className={linkClass}>
@@ -862,7 +806,7 @@ const ChatMarkdown = ({ children, dark = false }: { children: string; dark?: boo
             }}
         >
             {text}
-        </ReactMarkdown>
+        </Markdown>
     );
 };
 

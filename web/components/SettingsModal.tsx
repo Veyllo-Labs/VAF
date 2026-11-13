@@ -85,8 +85,7 @@ import AutomationCalendarModal from './AutomationCalendarModal';
 import TrainingDashboard from './TrainingDashboard';
 import CreateAutomationPopup, { type EditAutomationTask } from './CreateAutomationPopup';
 import { vafLicenseText, thirdPartyLicenses } from '@/lib/licenses_data';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { Markdown } from '@/components/Markdown';
 
 /** Where the inbox sends the person: a chat in a channel window, or a mail thread in the mail client. */
 export type SettingsChatJump =
@@ -6275,7 +6274,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             <div>
                                                 <h4 className="text-sm font-medium text-gray-700 mb-2">{tAi('downloadModelCardLabel')}</h4>
                                                 <div className="prose prose-sm max-w-none max-h-48 overflow-y-auto rounded-lg border border-gray-100 bg-gray-50/50 p-4 text-gray-800">
-                                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{modelPreviewData.card_content}</ReactMarkdown>
+                                                    <Markdown>{modelPreviewData.card_content}</Markdown>
                                                 </div>
                                             </div>
                                         )}

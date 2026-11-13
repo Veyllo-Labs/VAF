@@ -5,8 +5,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import dynamic from 'next/dynamic';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { Markdown } from '@/components/Markdown';
 import { useTranslations } from 'next-intl';
 import { useEditShortcuts } from '@/hooks/useEditShortcuts';
 import type { editor as monacoEditor } from 'monaco-editor';
@@ -16,12 +15,12 @@ import { saveEditorFile, type SaveConflict } from '@/lib/editorFile';
 // Monaco is heavy — load it only on client side
 const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
 
-// Dark-theme markdown preview (inline styles so no tailwind-typography dependency).
+// Dark-theme markdown preview (inline styles so no tailwind-typography dependency). Images load
+// only from this server's file lane (web/lib/markdownImages.ts), so the img style sees only those.
 function MarkdownPreview({ source }: { source: string }) {
   return (
     <div className="h-full overflow-auto px-6 py-5 text-[13.5px] leading-relaxed text-gray-200">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+      <Markdown
         components={{
           h1: (p) => <h1 className="text-2xl font-bold text-white mt-5 mb-3 first:mt-0" {...p} />,
           h2: (p) => <h2 className="text-xl font-semibold text-white mt-5 mb-2.5 border-b border-[#3e3e3e] pb-1" {...p} />,
@@ -47,7 +46,7 @@ function MarkdownPreview({ source }: { source: string }) {
         }}
       >
         {source}
-      </ReactMarkdown>
+      </Markdown>
     </div>
   );
 }

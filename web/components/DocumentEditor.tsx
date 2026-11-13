@@ -9,6 +9,7 @@ import { useTranslations } from 'next-intl';
 import { useEditShortcuts } from '@/hooks/useEditShortcuts';
 import { X, Download, FileText, Save, Loader2, CheckCircle2, Circle, Plus, Trash2, ChevronDown, Bold, Italic, Underline, List, ListOrdered, AlignLeft, AlignCenter, AlignRight, Highlighter, Eraser, Printer, Undo2, Redo2 } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
+import { markdownFramePolicy, renderMarkdownForEditor } from '@/lib/markdownImages';
 import { downloadText } from '@/lib/download';
 import { sanitizeDocumentCopy } from '@/lib/sanitize';
 import { CHIP_BG_CLASSES, INSERTION_COLOR_CLASSES } from '@/components/DocumentViewer';
@@ -621,9 +622,13 @@ function LegacyDocumentEditor({
         let lateTimers: number[] = [];
         if (!contentFromIframe) {
             const { bodyInner, headInjectHtml } = extractEditorBodyAndHeadStyles(content);
+            // A Markdown file loads images only from this server's file lane
+            // (web/lib/markdownImages.ts). The policy stays with the frame across
+            // document.open(); that is safe because the editor is mounted once per file.
+            const framePolicy = isMarkdownPath(filePath) ? markdownFramePolicy(window.location.origin) : '';
             doc.open();
             doc.write(
-                `<!DOCTYPE html><html><head><meta charset="utf-8"/>${headInjectHtml}</head><body></body></html>`
+                `<!DOCTYPE html><html><head>${framePolicy}<meta charset="utf-8"/>${headInjectHtml}</head><body></body></html>`
             );
             doc.close();
             // The body itself IS the continuous, editable A4-width sheet, no JS pagination.
@@ -758,9 +763,9 @@ function LegacyDocumentEditor({
             if (isMarkdownPath(filePath)) {
                 // Render Markdown (research/document reports) instead of showing raw
                 // source text; saving converts the edited HTML back to Markdown on
-                // the backend (/api/file/save).
-                const { marked } = await import('marked');
-                text = await marked.parse(text, { gfm: true, breaks: false });
+                // the backend (/api/file/save). The markup is not rewritten (it is
+                // saved back into the file); the frame's policy keeps its images local.
+                text = await renderMarkdownForEditor(text);
             }
             savedContentRef.current = text;
             setContent(text);

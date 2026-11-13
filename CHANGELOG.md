@@ -251,6 +251,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **Pictures in replies no longer load from other servers.** A picture in a reply, a Markdown
+  file's preview, an attached Markdown document or a model card now loads only when it is a
+  file on your VAF; a picture from anywhere else shows as a link with a picture icon that you
+  can open yourself, so merely viewing a reply can no longer send anything to a foreign
+  server. In the Document Editor such a picture shows as a blocked placeholder, and the file
+  is saved as it was. Model card links now open in a new tab.
 - **The agent's file tools stay out of VAF's own data and your shell start files.** Reading
   VAF's data and settings folders (messages, mail, contacts, key files, the MCP server list,
   tool permissions, and in Docker mode the configuration folder) is now refused for every

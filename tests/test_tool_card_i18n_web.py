@@ -69,7 +69,9 @@ def _needs_node():
 
 
 def _source(path):
-    return path.read_bytes().decode("utf-8")
+    # A Windows checkout (core.autocrlf) holds the sources with CRLF; every search below, and
+    # the AST walk fed from here, expects LF. The node-side reads only transpile.
+    return path.read_bytes().decode("utf-8").replace("\r\n", "\n")
 
 
 def _strip_comments(source):

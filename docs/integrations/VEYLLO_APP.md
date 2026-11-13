@@ -241,16 +241,20 @@ differences (`vaf/core/app_link/bridge.py`, `vaf/core/agent_origin.py`):
   space) shows by its code point, `⟨U+00A0⟩`, and a run of more than eight of the same one as
   its count and code point, `⟨9 x U+2003⟩`, so two calls that differ only in their spaces never
   look alike. No wall of blanks can push a second command out of sight; the call itself keeps
-  every character. A recipient's name on a message card is shown the same way. Invisible characters (direction overrides, zero-width and control characters, blank
-  fillers, combining marks with no letter before them or stacked beyond two, and the
-  combining marks that draw as nothing at all, such as the variation selectors) appear as
+  every character. A recipient's name on a message card is shown the same way. Invisible
+  characters (direction overrides, zero-width and control characters, blank fillers, combining
+  marks with no letter before them or stacked beyond two, and the combining marks that draw
+  as nothing at all, such as the variation selectors) appear as
   `⟨U+XXXX⟩`; a mark after a space of any kind (the no-break and the wide ones too), a tab
   or another such escape counts as having no letter, because a space with a combining slash
   draws as a slash. The emoji selector U+FE0F is kept in free text right after a symbol
   (`❤️`), and marked in a value shown whole. The two brackets `⟨` and `⟩`
-  themselves are escaped too, so every `⟨U+XXXX⟩` on a card is VAF's own. A Windows line
-  break is just a line break. An argument name shows every character outside plain ASCII,
-  and any space or colon, as `⟨U+XXXX⟩`. A call with an argument the tool does not declare is
+  themselves are escaped too, so every `⟨U+XXXX⟩` on a card is VAF's own. Only a line feed
+  breaks a line: a carriage return, alone or in a Windows line break, shows as `⟨U+000D⟩`,
+  because a shell reads it as part of a word, so `cd /x` with a Windows line break before the
+  next command never looks like `cd /x` with a plain one. An argument name shows every
+  character outside plain ASCII, and any space or colon, as `⟨U+XXXX⟩`. A call with an
+  argument the tool does not declare is
   not parked at all: the app's agent is told to call again without it. A message card is
   laid out the same way, the recipient first and the text last. Every recipient, Cc and Bcc
   reads address or number first and whole, then the name (at most 40 characters, ending in

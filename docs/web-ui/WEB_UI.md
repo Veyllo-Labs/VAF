@@ -383,7 +383,9 @@ and every file that leaves with it, and the text. The recipients are the server'
 (the rows' `to_shown`, `cc_shown`, `bcc_shown` and `name_shown`, `vaf/core/shown_text.py`):
 the number or address under the name is shown whole, every Cc and Bcc address comes first
 with its name after it, and the name is cut at 40 characters with an `@` (and its full-width
-and small look-alikes) in it marked. Every
+and small look-alikes) in it marked; a tab in a name shows as `⟨U+0009⟩`, a run of more than
+eight spaces as its count (`⟨12 spaces⟩`), and any other space character by its code point
+(`⟨U+00A0⟩`, a run of one as `⟨9 x U+2003⟩`), all drawn as marks. Every
 character of an address outside plain ASCII is shown as a mark (`⟨U+0430⟩` for a Cyrillic a),
 a domain with such characters gets its punycode beside it in square brackets, and the marks
 are drawn in the card's amber (`text-amber-700`, `dark:text-[#e0b866]`, in monospace); the

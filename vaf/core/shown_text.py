@@ -76,8 +76,8 @@ OPEN, CLOSE = "\u27e8", "\u27e9"
 NAME_MAX = 40
 ELLIPSIS = "\u2026"
 # Characters a renderer draws as nothing although their category is a letter or a symbol:
-# the Hangul fillers and the Braille blank.
-_FILLERS = frozenset((0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800))
+# the Hangul fillers, the Braille blank and the musical null notehead.
+_FILLERS = frozenset((0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800, 0x1D159))
 # Combining marks stacked on one base character beyond this are shown escaped.
 _MARKS_ON_ONE_BASE = 2
 # Combining marks that are default-ignorable: a renderer draws them as nothing at all, so
@@ -101,7 +101,9 @@ _ADDRESS_KEEP = frozenset(
 # What the WhatsApp lane drops from a number without changing what it dials.
 _PHONE_SEPARATORS = frozenset(" -./()")
 _ASCII_DIGITS = frozenset("0123456789")
-_MARK_RE = re.compile("(" + OPEN + r"U\+[0-9A-F]{4,6}" + CLOSE + ")")
+# A mark: one escaped character, or a counted run of blanks (`blanks_counted`).
+_MARK_RE = re.compile("(" + OPEN + r"(?:U\+[0-9A-F]{4,6}|\d+ spaces|\d+ x U\+[0-9A-F]{4,6})"
+                      + CLOSE + ")")
 
 
 class Shown(str):
@@ -179,24 +181,35 @@ SPACE_RUN_MAX = 8
 
 
 def blanks_counted(tokens: List[str]) -> List[str]:
-    """Shown tokens (`shown_tokens`) as a CARD lays them out: a tab as its mark ``⟨U+0009⟩``
-    (a tab is as wide as the renderer decides), and a run of more than ``SPACE_RUN_MAX``
-    spaces of any kind (category Zs) as one token that names how many there are,
-    ``⟨300 spaces⟩``. Display only: the call that runs keeps every character. Every bracket
-    on a card stays VAF's own, because a value's own brackets are escaped by `shown_char`.
-    Not for the draft rows and the terminal, which show a tab as it is."""
+    """Shown tokens (`shown_tokens`) as a card and a name lay them out: a tab as its mark
+    ``⟨U+0009⟩`` (a tab is as wide as the renderer decides); a run of more than
+    ``SPACE_RUN_MAX`` ordinary spaces (U+0020) as one token that names how many there are,
+    ``⟨300 spaces⟩``; and every other space character (a no-break space, an em space, an
+    ideographic space) by its code point, one mark each, or, for a run of more than
+    ``SPACE_RUN_MAX`` of the same one, one mark that names the count and the code point,
+    ``⟨9 x U+2003⟩``. So no wall of blanks can push the rest of a line out of sight, and two
+    calls that differ only in which space they hold never look alike (a shell splits words at
+    U+0020 only). Display only: the call that runs keeps every character. Every bracket stays
+    VAF's own, because a value's own brackets are escaped by `shown_char`."""
     out: List[str] = []
     run: List[str] = []
 
     def _flush() -> None:
-        if len(run) > SPACE_RUN_MAX:
-            out.append(f"{OPEN}{len(run)} spaces{CLOSE}")
+        if not run:
+            return
+        char, count = run[0], len(run)
+        if char == " ":
+            out.extend(run if count <= SPACE_RUN_MAX else [f"{OPEN}{count} spaces{CLOSE}"])
+        elif count > SPACE_RUN_MAX:
+            out.append(f"{OPEN}{count} x U+{ord(char):04X}{CLOSE}")
         else:
-            out.extend(run)
+            out.extend(escaped(char) for _ in run)
         run.clear()
 
     for token in tokens:
         if len(token) == 1 and unicodedata.category(token) == "Zs":
+            if run and run[0] != token:
+                _flush()
             run.append(token)
             continue
         _flush()
@@ -299,8 +312,9 @@ def person_name(name: Any, limit: int = NAME_MAX) -> Shown:
     """A name as a decision surface shows it: every character as `shown_tokens` shows it,
     an ``@`` and its look-alikes (`AT_SIGNS`) marked too (a name is never an address, and
     every address on a card carries one), cut so that the shown text with its
-    ``…`` is at most ``limit`` code points, never inside a mark. An empty name is ""."""
-    tokens = shown_tokens(str(name or "").strip(), also=AT_SIGNS)
+    ``…`` is at most ``limit`` code points, never inside a mark. Tabs and runs of blanks
+    as `blanks_counted` shows them, as in every other value on a card. An empty name is ""."""
+    tokens = blanks_counted(shown_tokens(str(name or "").strip(), also=AT_SIGNS))
     if sum(len(t) for t in tokens) <= limit:
         return Shown("".join(tokens))
     head: List[str] = []

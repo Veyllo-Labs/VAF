@@ -215,3 +215,44 @@ def test_a_mark_after_an_escaped_mark_has_no_base():
     assert st.shown_tokens("a\u034f\u0338b") == ["a", m("034F"), m("0338"), "b"]
     assert st.shown_tokens("a\u0301\u0301\u0301\u0301") == ["a", "\u0301", "\u0301", m("0301"), m("0301")]
     assert st.shown_tokens("❤\u034f\ufe0f") == ["❤", m("034F"), m("FE0F")]
+
+
+# ── blanks on a card and in a name ────────────────────────────────────────────────────────
+
+def test_two_kinds_of_space_never_look_alike():
+    """Nine ordinary spaces and nine em spaces are two different calls (a shell splits words
+    at U+0020 only), so they never show the same. A single other space is marked too, and a
+    long run of one counts it by its code point. MUTATION: count every space category as
+    "spaces", or keep a short run of em spaces as it is - red."""
+    plain = "".join(st.blanks_counted(st.shown_tokens("a" + " " * 9 + "b")))
+    em = "".join(st.blanks_counted(st.shown_tokens("a" + "\u2003" * 9 + "b")))
+    assert plain == "a\u27e89 spaces\u27e9b"
+    assert em == "a\u27e89 x U+2003\u27e9b"
+    assert plain != em
+    assert "".join(st.blanks_counted(st.shown_tokens("rm a\u00a0b"))) == "rm a\u27e8U+00A0\u27e9b"
+    assert "".join(st.blanks_counted(st.shown_tokens("a" + "\u3000" * 3 + "b"))) \
+        == "a" + "\u27e8U+3000\u27e9" * 3 + "b"
+    # Ordinary text keeps its spaces, and a mixed run is counted per kind.
+    assert "".join(st.blanks_counted(st.shown_tokens("one two"))) == "one two"
+    mixed = "".join(st.blanks_counted(st.shown_tokens("a" + " " * 9 + "\u2003" * 9 + "b")))
+    assert mixed == "a\u27e89 spaces\u27e9\u27e89 x U+2003\u27e9b"
+    # Every counted mark is one token again, and stays a mark on a terminal.
+    assert st.tokens_of(st.Shown(mixed)) == ["a", "\u27e89 spaces\u27e9", "\u27e89 x U+2003\u27e9", "b"]
+    assert st.ascii_marks(mixed) == "a<9 spaces><9 x U+2003>b"
+
+
+def test_a_name_shows_its_tabs_and_blank_runs():
+    """A recipient's name on the send card is laid out as it is (`Shown`), so it gets the
+    blank marks itself. MUTATION: drop `blanks_counted` from `person_name` - red."""
+    name = st.person_name("x" + "\t" * 37 + "y")
+    assert "\t" not in name and name.startswith("x\u27e8U+0009\u27e9")
+    line = st.recipients_line(st.mail_recipients('"x' + "\t" * 3 + 'y" <a@example.test>'))
+    assert line == "a@example.test (x" + "\u27e8U+0009\u27e9" * 3 + "y)"
+    assert st.person_name("Anna" + " " * 12 + "Maria") == "Anna\u27e812 spaces\u27e9Maria"
+
+
+def test_the_null_notehead_is_a_filler():
+    """U+1D159 (a symbol a font draws as nothing) shows as its mark, like the Braille blank.
+    MUTATION: drop it from `_FILLERS` - red."""
+    assert st.shown_char("\U0001d159") == "\u27e8U+1D159\u27e9"
+    assert st.shown_char("\u2800") == "\u27e8U+2800\u27e9"

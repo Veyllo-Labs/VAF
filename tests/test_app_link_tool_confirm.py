@@ -1218,9 +1218,11 @@ def test_a_wall_of_blanks_cannot_hide_a_second_command(value, shown):
         "host_bash", {"command": shown})
 
 
-def test_a_declined_card_holds_the_rest_of_its_turn(world, monkeypatch):
-    """After a No (or an expiry, or a Stop) the same turn shows no further card and waits no
-    second time; the next turn asks again. MUTATION: drop the hold - red."""
+@pytest.mark.parametrize("end", ["no", "expired", "stop"])
+def test_a_declined_card_holds_the_rest_of_its_turn(world, monkeypatch, end):
+    """After a No, an expiry or a Stop the same turn shows no further card and waits no
+    second time; the next turn asks again. MUTATION: drop the hold, or take "expired" or
+    "stopped" out of `_HOLDS_THE_TURN` - red."""
     agent = world.make()
     runs = _host_bash(agent, monkeypatch)
     client, row = _device()
@@ -1240,7 +1242,12 @@ def test_a_declined_card_holds_the_rest_of_its_turn(world, monkeypatch):
     thread = threading.Thread(target=_turn, daemon=True)
     thread.start()
     card = _card_out()
-    client.send({"t": "confirm_answer", "id": card.id, "ok": False})
+    if end == "no":
+        client.send({"t": "confirm_answer", "id": card.id, "ok": False})
+    elif end == "expired":
+        card.exp = time.time() - 1
+    else:
+        TaskQueue().request_stop(world.chat)
     thread.join(WAIT)
     if thread.is_alive():
         for c in list(confirmations._cards.values()):
@@ -1251,6 +1258,8 @@ def test_a_declined_card_holds_the_rest_of_its_turn(world, monkeypatch):
     assert box["second_took"] < 2 and len(confirmations._cards) == 1 and runs == []
     client.pump()
     assert len(client.of("confirm")) == 1
+    if end == "stop":
+        TaskQueue().clear_stop(world.chat)
     # The next turn asks again.
     nxt = _Call(agent, "host_bash", {"command": "uname -r"}, device_id=row["device_id"],
                 reply_id=str(uuid.uuid4()))

@@ -17,6 +17,7 @@ Install (once, after pip install -r requirements.txt):
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import os
@@ -440,16 +441,31 @@ _STEP_LOG_SKIP = (
 )
 
 
+#: Which browser run the code that logs belongs to. browser-use logs every run to the one
+#: process-wide "browser_use" logger, and every run's handler hangs on it: without this,
+#: two runs that overlap in one process (the per-user pool, the web server serving several
+#: accounts) each received the other's step lines and sent them to their own session.
+#: Set in the run's own task before its agent task is created, so every task and
+#: `asyncio.to_thread` call of that run carries it; a record from anywhere else (an
+#: executor thread without the run's context) belongs to no run and is shown to none.
+_STEP_RUN: "contextvars.ContextVar[Optional[object]]" = contextvars.ContextVar(
+    "vaf_browser_step_run", default=None)
+
+
 class _BrowserStepLogger(logging.Handler):
     """
-    Captures browser-use agent INFO+ log lines into a queue.
+    Captures browser-use agent INFO+ log lines of ONE run into a queue.
     The screenshot loop drains the queue and emits each line to the WebUI console.
     Using a queue avoids calling async code from a sync logging context.
     """
 
-    def __init__(self, q: _queue.Queue) -> None:
+    def __init__(self, q: _queue.Queue, run: object = None) -> None:
         super().__init__(level=logging.INFO)
         self._q = q
+        self._run = run
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return _STEP_RUN.get() is self._run and super().filter(record)
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -469,8 +485,14 @@ def _attach_step_logger(q: _queue.Queue) -> "_BrowserStepLogger":
     browser-use sets its logger to INFO only when it configures logging itself on import,
     which it skips when the root logger already has a handler (the CLI entry point installs
     one, see `vaf.core.terminal_text.install_terminal_logging`; the tray's log file is
-    another). Without the level its INFO step lines would never reach this handler."""
-    handler = _BrowserStepLogger(q)
+    another). Without the level its INFO step lines would never reach this handler.
+
+    Call it in the run's own task, before the run's agent task is created: it marks the
+    current context as this run (`_STEP_RUN`), and the handler takes only records logged
+    in that context, so a run that overlaps it in the same process never sees its lines."""
+    run = object()
+    _STEP_RUN.set(run)
+    handler = _BrowserStepLogger(q, run)
     bu_logger = logging.getLogger("browser_use")
     if bu_logger.getEffectiveLevel() > logging.INFO:
         bu_logger.setLevel(logging.INFO)

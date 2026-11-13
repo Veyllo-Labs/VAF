@@ -48,7 +48,7 @@ def main() -> None:
         if kind == "text_delta":
             text_parts.append(evt.get("text", ""))
         elif kind == "tool_start":
-            tools_used.append(evt.get("tool", "?"))
+            tools_used.append(evt.get("tool") or "?")
         elif kind == "gate_required":
             # Non-interactive runs never get a gate_decision; the tool comes
             # back as an "[ERROR] ... requires confirmation" result instead.

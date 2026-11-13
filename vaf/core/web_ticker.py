@@ -34,6 +34,8 @@ import time
 from collections import deque
 from typing import Callable, Optional
 
+# Narrower on purpose: the full definition is vaf.core.terminal_text.ESCAPE_SEQUENCE_RE, which
+# this module cannot use because it stays stdlib-only and that one imports Rich.
 # ANSI/VT escape sequences: CSI colors and cursor moves, OSC titles, charset selects.
 # Rich Live animations are made of these; the web ticker must never see them (they rendered
 # as literal garbage in the browser and their sheer volume froze the tray).

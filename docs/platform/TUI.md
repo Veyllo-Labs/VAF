@@ -138,14 +138,17 @@ framework's, `vaf.terminal_text` (`vaf/core/terminal_text.py`):
   body (`0;...`) as text; it no longer reaches the terminal as a command.
 - A style's link target that holds such a character loses the link: Textual writes the
   target raw into its OSC 8 sequence, so a target with an ESC or a BEL in it could reset the
-  terminal or write the clipboard. A segment that lost printable characters with a sequence
-  is padded with spaces, so a line keeps the width Textual laid it out with.
+  terminal or write the clipboard. A sequence is matched on the line's joined text, so it
+  goes whole even where styles split it into several segments, and the width it took comes
+  back as spaces at the end of that run, so a line keeps the width Textual laid it out with.
 - Zero-width and other format characters (U+200B, the joiners, U+2060, U+FEFF) stay: they
   drive no terminal, and ZWJ is part of emoji and of Persian and Indic text.
 
 The classic and modern lanes print through `TerminalConsole`, a Rich console that cleans
-every string before Rich lays it out and every segment it renders, link targets included;
-every Rich console in VAF is one (pinned by an AST scan in `tests/test_terminal_text.py`,
+every line it renders, link targets included, and a string printed with markup off already
+before Rich lays it out. A string printed with markup ON goes to Rich's markup parser
+unchanged: cleaning it first would rebuild a tag that `rich.markup.escape` left alone
+because a control character stood in it (`[` NUL `link=...]`). Every Rich console in VAF is one (pinned by an AST scan in `tests/test_terminal_text.py`,
 which also refuses importing `Console` from Rich anywhere else). Rich's own colours, cursor
 moves and clears pass, since they come from styles and control segments rather than from
 text.

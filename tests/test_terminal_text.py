@@ -147,12 +147,20 @@ def test_an_unterminated_sequence_never_swallows_the_text_after_it():
     assert terminal_text("x\x1b]0;" + long_body + "\x07z") == "x0;" + long_body + "z"
 
 
-def test_cleaning_stays_cheap_on_a_megabyte():
-    """Bounded patterns, so a hostile megabyte costs milliseconds, not quadratic time."""
-    spam = ("\x1b]0;" + "a" * 3000) * 300 + ("\x1b[" + "1;" * 40) * 5000
+@pytest.mark.parametrize("spam", [
+    ("\x1b]0;" + "a" * 3000) * 300 + ("\x1b[" + "1;" * 40) * 5000,
+    "\x9d" * 200_000,
+    "\x90" * 200_000,
+    ("\x1b]" + "\x9d" * 2000) * 100,
+], ids=["long-osc-and-csi", "c1-osc-run", "c1-dcs-run", "osc-of-c1"])
+def test_cleaning_stays_linear_on_hostile_input(spam):
+    """Bounded patterns, and a string sequence's body holds no control character, so a run
+    of introducers is not retried 2048 characters at every position. Measured with the
+    body that admitted C1 introducers: 2.5 s for 100 KB of U+009D, about 5 s here.
+    MUTATION: let the string body admit the C1 introducers again - red."""
     started = time.perf_counter()
     cleaned = terminal_text(spam)
-    assert time.perf_counter() - started < 5.0
+    assert time.perf_counter() - started < 1.0
     assert not _unsafe_in(cleaned)
 
 
@@ -236,26 +244,51 @@ def _rendered(console_kwargs, *renderables, **print_kwargs) -> str:
 
 def test_the_console_cleans_str_markdown_panel_and_table():
     """No colour system, so every control character in the output would be the sender's.
-    A string loses its sequences whole. A `Text` or `Markdown` object was built by Rich,
-    which already dropped the BEL that ended a title sequence, so that body stays readable
-    as text there; no control character does.
+    With markup off a string loses every sequence whole before layout. With markup on, and
+    in a `Text` or `Markdown` object, Rich has already dropped the BEL that ended a title
+    sequence before the console sees it, so that body stays readable as text; a sequence
+    ended by ST still goes whole, also where the highlighter split it into several segments;
+    no control character survives anywhere.
     MUTATION: let `render` pass segments unchanged (and `render_str` too) - red."""
     from rich.markdown import Markdown
     from rich.panel import Panel
     from rich.table import Table
     from rich.text import Text
 
-    table = Table()
-    table.add_column("c")
-    table.add_row(HOSTILE)
-    strings = _rendered({"force_terminal": False, "color_system": None},
-                        HOSTILE, Panel(HOSTILE), table)
-    objects = _rendered({"force_terminal": False, "color_system": None},
-                        Text(HOSTILE), Markdown(HOSTILE))
-    for out in (strings, objects):
+    def table():
+        grid = Table()
+        grid.add_column("c")
+        grid.add_row(HOSTILE)
+        return grid
+
+    plain = _rendered({"force_terminal": False, "color_system": None, "markup": False},
+                      HOSTILE, Panel(HOSTILE), table())
+    marked = _rendered({"force_terminal": False, "color_system": None},
+                       HOSTILE, Panel(HOSTILE), table(), Text(HOSTILE), Markdown(HOSTILE))
+    for out in (plain, marked):
         assert not _unsafe_in(out)
         assert all(word in out for word in VISIBLE)
-    assert not [word for word in GONE if word in strings]
+    assert not [word for word in GONE if word in plain]
+    assert "evil.test" not in marked
+
+
+def test_a_sequence_the_highlighter_split_still_goes_whole():
+    """Rich's highlighter gives the `31` of a colour code its own segment, so a sequence is
+    matched on the line's joined text, and the width it took comes back at the end of the
+    run, before the next border. MUTATION: clean each segment on its own again - red."""
+    from rich.table import Table
+
+    out = _rendered({"force_terminal": False, "color_system": None},
+                    "a\x1b[31mred\x1b[0m b")
+    assert out.startswith("ared b"), repr(out)
+    grid = Table()
+    grid.add_column("a")
+    grid.add_column("b")
+    grid.add_row("x \x1b[31m42\x1b[0m y", "p \x1b[1m7\x1b[0m q")
+    lines = [line for line in _rendered({"force_terminal": False, "color_system": None},
+                                        grid).splitlines() if line]
+    assert "[31m" not in "".join(lines) and "x 42 y" in lines[3] and "p 7 q" in lines[3]
+    assert len({len(line) for line in lines}) == 1, lines
 
 
 def test_the_console_strips_a_text_object_and_keeps_its_width():
@@ -272,15 +305,45 @@ def test_the_console_strips_a_text_object_and_keeps_its_width():
     assert len({len(line) for line in lines}) == 1, lines
 
 
-def test_the_console_cleans_a_string_before_layout():
-    """A string loses its sequences before Rich measures it, so no gap is left where they
-    stood. MUTATION: drop the `render_str` override - red (the panel is laid out on the raw
-    width and padded)."""
+def test_the_console_cleans_a_string_before_layout_when_markup_is_off():
+    """With markup off a string loses its sequences before Rich measures it, so no gap is
+    left where they stood. MUTATION: drop the `render_str` override - red (the panel is laid
+    out on the raw width and padded)."""
     from rich.panel import Panel
 
-    out = _rendered({"force_terminal": False, "color_system": None},
+    out = _rendered({"force_terminal": False, "color_system": None, "markup": False},
                     Panel.fit("a\x1b[31mred\x1b[0m b"))
     assert "│ ared b │" in out
+    out = _rendered({"force_terminal": False, "color_system": None}, "a\x1b[31mred\x1b[0m b",
+                    markup=False)
+    assert out == "ared b\n"
+
+
+@pytest.mark.parametrize("sent", [
+    "see [\x00link=http://evil.test/]click here",
+    "see [\x1b[0mlink=http://evil.test/]click here",
+    "a [\x00/] b",
+    "[\x00/bold] after",
+])
+def test_markup_escaped_text_stays_text_with_markup_on(sent):
+    """VAF prints a peer's text escaped (`rich.markup.escape`) into markup. escape() leaves a
+    bracket followed by a control character alone, so cleaning BEFORE the markup parser
+    rebuilt a live `[link=...]` tag or an unbalanced closing tag. With markup on the string
+    goes to the parser as it is and the segments are cleaned after; the width is kept, so
+    the panel border still lines up. MUTATION: pre-clean in `render_str` with markup on too -
+    red (a link to evil.test, or a MarkupError)."""
+    from rich.markup import escape
+    from rich.panel import Panel
+
+    out = _rendered({"force_terminal": True, "color_system": "truecolor"},
+                    "[bold]peer:[/bold] " + escape(sent), end="")
+    outside, targets = _foreign(out)
+    assert not outside and not [t for t in targets if "evil" in t], (outside, targets)
+    framed = _rendered({"force_terminal": False, "color_system": None},
+                       Panel.fit(escape(sent)))
+    lines = [line for line in framed.splitlines() if line]
+    assert len({len(line) for line in lines}) == 1, lines
+    assert not _unsafe_in(framed)
 
 
 def test_the_console_keeps_its_own_styles_and_control_codes():
@@ -316,6 +379,24 @@ def test_the_console_writes_no_control_character_into_a_link_target():
         assert "LINK" in out
     own = _rendered({"force_terminal": True, "color_system": "truecolor"},
                     "[link=file:///tmp/project]project[/link]", markup=True)
+    assert _foreign(own)[1][0] == "file:///tmp/project"
+
+
+def test_a_link_in_the_print_style_carries_no_control_character():
+    """`print(..., style=...)` applies its style to the segments after `render`, so the link
+    in it never reached the segment cleaning: an ST in the target ended the hyperlink early
+    and the OSC after it set the title. VAF's own `file://` link in a style still goes out.
+    MUTATION: drop the `print` override - red."""
+    from rich.style import Style
+
+    for style in (Style(link="http://a/\x1b\\\x1b]0;PWN\x07"), "bold link http://a/\x07"):
+        out = _rendered({"force_terminal": True, "color_system": "truecolor"}, "click",
+                        style=style)
+        outside, targets = _foreign(out)
+        assert not outside and not [t for t in targets if _unsafe_in(t)], (style, out)
+        assert "click" in out and "PWN" not in out
+    own = _rendered({"force_terminal": True, "color_system": "truecolor"}, "project",
+                    style=Style(link="file:///tmp/project"))
     assert _foreign(own)[1][0] == "file:///tmp/project"
 
 
@@ -772,6 +853,57 @@ def test_a_lane_with_its_own_root_handler_keeps_its_output():
         "logging.getLogger('lib').warning('only in the lane log')\n")
     assert proc.returncode == 0, proc.stderr[-800:]
     assert b"only in the lane log" not in proc.stderr
+
+
+def test_two_overlapping_browser_runs_each_capture_only_their_own_steps():
+    """Every run's step handler hangs on the one process-wide `browser_use` logger, and each
+    run's window shows what its queue holds. Two runs that overlap in one process (the
+    per-user pool, a server for several accounts) each received the other's step lines.
+    Here two runs on their own loops, the way the tool runs them, log while both are
+    attached, from their task and from `asyncio.to_thread`; a record from a thread of no
+    run is logged in between. MUTATION: drop `_BrowserStepLogger.filter` - red."""
+    import logging
+    import queue
+    import threading
+
+    from vaf.core.bounded_run import run_coroutine_on_new_loop
+    from vaf.tools.browser_agent import _attach_step_logger
+
+    bu_logger = logging.getLogger("browser_use")
+    level = bu_logger.level
+    log = logging.getLogger("browser_use.agent")
+    attached, logged = threading.Barrier(3, timeout=10), threading.Barrier(3, timeout=10)
+    captured = {}
+
+    async def run(name):
+        q = queue.Queue()
+        handler = _attach_step_logger(q)
+        try:
+            attached.wait()
+
+            async def step():
+                log.info("Next goal of %s", name)
+            await asyncio.create_task(step())
+            await asyncio.to_thread(log.info, "action of %s", name)
+            logged.wait()
+        finally:
+            bu_logger.removeHandler(handler)
+        captured[name] = list(q.queue)
+
+    runs = [threading.Thread(target=run_coroutine_on_new_loop, args=(run(name),))
+            for name in ("alice", "bob")]
+    try:
+        for thread in runs:
+            thread.start()
+        attached.wait()
+        log.info("a line of no run")
+        logged.wait()
+        for thread in runs:
+            thread.join(10)
+    finally:
+        bu_logger.setLevel(level)
+    assert captured == {"alice": ["Next goal of alice", "action of alice"],
+                        "bob": ["Next goal of bob", "action of bob"]}, captured
 
 
 def test_browser_use_leaves_the_logging_alone_and_its_steps_still_reach_vaf():

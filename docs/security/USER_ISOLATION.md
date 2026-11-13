@@ -828,6 +828,14 @@ account's working directory and copy files out of it through `export_files`. See
 
 The persistent cookie/login store for the browser agent is keyed by user scope at `~/.vaf/browser_sessions/<scope_seg>/<session>.json` (not the old flat shared path), so one user's saved logins are never readable by another even on the same OS account. The files are encrypted at rest (`vaf/core/data_files`, see [ENCRYPTION_AT_REST.md](ENCRYPTION_AT_REST.md)); the agent lane stages a decrypted owner-only temp beside the store for the duration of a run, because browser_use reads and auto-saves the handed path itself, and folds it back encrypted afterwards. The agent injects the caller's `user_scope_id` for `browser_agent` calls and propagates it to the killable child process via the `VAF_USER_SCOPE_ID` environment variable, so the child writes and reads under the correct per-user store. See [BROWSER_AGENT.md](../agents/BROWSER_AGENT.md).
 
+The run's step lines (browser-use's "Next goal" and actions, which name what the page shows)
+reach only that run's browser window. browser-use logs every run to one process-wide logger
+and every run's capture hangs on it, so two runs that overlapped in one process (the per-user
+pool, the server serving several accounts) each sent the other's lines to their own session.
+Each capture now takes only the records logged in its own run's context (`_STEP_RUN`, set in
+the run's task before the agent task starts; a record from a thread outside any run goes to
+nobody). Guard: `tests/test_terminal_text.py`, two overlapping runs.
+
 ### Interactive browser (`vaf/core/browser_interactive.py`)
 
 **The default is a partition.** `browser_pool_max` (default `"auto"`, admin-only: as
@@ -1302,7 +1310,11 @@ raw C1 bytes):
   installs a raw handler: browser_use did on import, and from then on wrote every record,
   its model-steered "Next goal" lines included, to stderr unformatted. Its step lines still
   reach the browser window through VAF's own capture. Records written before the entry
-  point runs, and in a process that does not start through it, are not covered.
+  point runs, and in a process that does not start through it, are not covered. Nor are
+  records that do not reach the root logger while VAF's handler is its only handler: a
+  handler a library attaches to its own logger (with `propagate=False`, or beside VAF's),
+  a root handler a library adds later (which silences VAF's by design), and
+  `logging.basicConfig(force=True)` write raw.
 
 Why not at ingress: refusing a message drops a person's whole text over a stray form feed
 or NEL from pasted text, stripping it there silently changes what is stored, and no ingress

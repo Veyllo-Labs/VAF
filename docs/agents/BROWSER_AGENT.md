@@ -119,6 +119,7 @@ Once the agent calls `browser_agent`, the following happens:
    │
 4. Screenshot loop starts (parallel task):
    │   Every 1.5 s: take_screenshot() → emit browser_frame_update → WebUI live view
+   │   and drain browser-use's step lines ("Next goal", actions) → browser window console
    │
 5. browser-use Agent loop starts (vision tier decided from the lane model):
    │
@@ -141,6 +142,16 @@ Once the agent calls `browser_agent`, the following happens:
    │
 8. Return result string to VAF agent
 ```
+
+The step lines show in the browser window only. The plain terminal modes no longer print
+them on stderr: browser-use installed a raw stderr handler of its own when it was imported,
+and the CLI's cleaning log handler now keeps that from happening (see "Text from others on a
+terminal" in [USER_ISOLATION.md](../security/USER_ISOLATION.md#text-from-others-on-a-terminal)).
+The capture sets browser-use's logger to INFO itself, so the tray, whose log file (with
+debug logs on, the default) used to keep browser-use from configuring itself, now receives
+the step lines too. Each run's capture takes only the lines logged in its own run, so two runs
+at once in one process never show each other's steps (see "Browser agent session store" in
+[USER_ISOLATION.md](../security/USER_ISOLATION.md)).
 
 ### Stopping a run
 

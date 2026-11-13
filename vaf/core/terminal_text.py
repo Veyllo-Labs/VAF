@@ -40,13 +40,16 @@ each renderer writes:
 1. Textual: one line filter on the app (`vaf.cli.tui_app.app.TerminalTextFilter`, through
    `App.get_line_filters`), applied to every strip of every widget, toast and overlay.
 2. Rich: `TerminalConsole`, which every console in `vaf/` is (pinned by an AST scan in
-   tests/test_terminal_text.py). Its strings are cleaned before layout (`render_str`), and
-   every rendered segment again.
-   Both use `terminal_segments`, which also drops a style's LINK target when it holds an
-   unsafe character (Rich and Textual write that target raw into the OSC 8 sequence), and
-   pads a segment that lost the printable rest of a sequence with spaces, so a line keeps
-   its width and a panel its border. Rich's and Textual's own cursor, clear and colour codes
-   are control segments or styles and pass.
+   tests/test_terminal_text.py). It cleans every rendered line, and a string printed with
+   markup OFF already before layout (`render_str`); a string printed with markup ON is
+   parsed as it is, because cleaning it first rebuilds tags that `rich.markup.escape` left
+   alone (`[` NUL `link=...]`).
+   Both use `terminal_segments`, which matches sequences on a line's joined text (a renderer
+   splits text by style, Rich's highlighter even inside a colour code), drops a style's LINK
+   target when it holds an unsafe character (Rich and Textual write that target raw into
+   the OSC 8 sequence), and gives the width a run of segments lost back as spaces at the end
+   of the run, so a line keeps its width and a panel its border. Rich's and Textual's own
+   cursor, clear and colour codes are control segments or styles and pass.
 3. Bare stdout: `vaf a2a`, `vaf run -p`, `vaf audit`, `vaf env` (but exec and logs), the
    sub-agent terminal, the research progress lines and the engine's own no-callback print
    call `terminal_text`; the JSON lines (`vaf a2a`, `vaf inbox --json`, `vaf outbox --json`,
@@ -62,7 +65,11 @@ Named boundaries: the Rich console class and `terminal_json` stay internal; the 
 examples print with `print`, which is what `vaf.terminal_text` serves, and no embedder lane
 has shown a Rich console or a JSON writer of its own. Log records written before
 `vaf.main.main` runs (the dependency bootstrap, module imports) and in a process that does
-not start through it are formatted by whatever handler Python has then. The engine's other
+not start through it are formatted by whatever handler Python has then. The cleaning covers
+the records that reach the root logger while VAF's handler is its only handler: a handler a
+library attaches to its own logger (with `propagate=False`, or beside VAF's), a root
+handler a library adds later (which also silences VAF's, by design), and
+`logging.basicConfig(force=True)` write raw. The engine's other
 `rich.print` lines (the process scan, the server stop) print VAF's own strings and local
 command lines. `vaf env exec` and `vaf env logs` print a container program's output byte for
 byte, as `docker exec` and `docker logs` do. Rich MARKUP in other parties' text is a
@@ -111,12 +118,15 @@ _UNSAFE_RE = re.compile(_char_class(_UNSAFE_CODES))
 _STRING_SEQUENCE_MAX = 2048
 
 #: A complete escape sequence: CSI, a string sequence ended by BEL or ST, or any other
-#: escape sequence (ESC, intermediates, one final byte). Bounded, so the search stays linear.
-#: `vaf.core.web_ticker.ANSI_RE` is a narrower copy kept on purpose: that module is stdlib-only
-#: so that vaf.cli, vaf.tools and vaf.core.platform can import it without a cycle.
+#: escape sequence (ESC, intermediates, one final byte). Bounded, and a string sequence's
+#: body holds no control character at all (C0, DEL, C1): a nested introducer means the first
+#: one is unterminated anyway, and an introducer in the body made a run of them retry 2048
+#: characters at every position (measured: 2.5 s for 100 KB of U+009D, linear now).
+#: `vaf.core.web_ticker.ANSI_RE` is a narrower copy kept on purpose: that module promises to
+#: stay stdlib-only, and this one imports Rich.
 ESCAPE_SEQUENCE_RE = re.compile(
     "(?:\x1b\\[|\x9b)[\x30-\x3f]{0,64}[\x20-\x2f]{0,8}[\x40-\x7e]"
-    "|(?:\x1b[\\]PX^_]|[\x90\x98\x9d\x9e\x9f])[^\x07\x1b\x9c\n]{0,%d}(?:\x07|\x1b\\\\|\x9c)"
+    "|(?:\x1b[\\]PX^_]|[\x90\x98\x9d\x9e\x9f])[^\x00-\x1f\x7f-\x9f]{0,%d}(?:\x07|\x1b\\\\|\x9c)"
     "|\x1b[\x20-\x2f]{0,8}[\x30-\x7e]" % _STRING_SEQUENCE_MAX)
 
 
@@ -162,52 +172,130 @@ def terminal_json(obj: Any, *, indent: Optional[int] = None) -> str:
 def terminal_segments(segments: Iterable[Segment]) -> Iterator[Segment]:
     """Rendered segments as a terminal may receive them.
 
-    A segment's text is cleaned like `terminal_text`; when a whole sequence took printable
-    characters with it, the segment is padded with spaces to its old cell width, so the line
-    keeps its layout (the removed control characters themselves are zero-width). A style
-    whose LINK target holds an unsafe character loses the link: Rich and Textual write the
-    target raw into the OSC 8 sequence, and a URL never legitimately holds one. A control
-    segment (the renderer's own cursor, clear and title codes) passes unchanged; a segment
-    left with no text is dropped, since an empty text segment is invalid to Textual. Shared
-    by `TerminalConsole` and the full-screen app's line filter, so both renderers apply one
-    definition."""
-    search = _UNSAFE_RE.search
+    The text of a LINE of segments (up to a newline or a control segment) is cleaned like
+    `terminal_text`, across the segment boundaries: a renderer splits text into segments by
+    style, and Rich's highlighter puts the `31` of a colour code into a segment of its own,
+    so a sequence is matched on the line's joined text and each segment loses its part of
+    it. A run of segments that lost printable characters gets the lost width back as spaces at
+    its end, so the line keeps its layout (the removed control characters themselves are
+    zero-width). A style whose LINK target holds an unsafe character loses the link: Rich and
+    Textual write the target raw into the OSC 8 sequence, and a URL never legitimately holds
+    one. A control segment (the renderer's own cursor, clear and title codes) passes
+    unchanged; a segment left with no text is dropped, since an empty text segment is
+    invalid to Textual. Shared by `TerminalConsole` and the full-screen app's line filter,
+    so both renderers apply one definition."""
+    line: list = []
     for segment in segments:
         if segment.control:
+            yield from _clean_line(line)
+            line = []
             yield segment
             continue
-        text, style = segment.text, segment.style
-        link = style.link if style is not None else None
-        hostile_link = bool(link) and search(link) is not None
-        hostile_text = bool(text) and search(text) is not None
-        if not (hostile_link or hostile_text):
-            yield segment
-            continue
-        if hostile_link:
+        line.append(segment)
+        if "\n" in segment.text:
+            yield from _clean_line(line)
+            line = []
+    yield from _clean_line(line)
+
+
+def _hostile_link(style) -> bool:
+    link = style.link if style is not None else None
+    return bool(link) and _UNSAFE_RE.search(link) is not None
+
+
+def _clean_line(line: list) -> Iterator[Segment]:
+    if not line:
+        return
+    texts = [segment.text for segment in line]
+    joined = "".join(texts)
+    if not _UNSAFE_RE.search(joined) and not any(_hostile_link(seg.style) for seg in line):
+        yield from line
+        return
+    # Whole sequences on the joined text; a sequence never crosses a newline, and a line
+    # ends at the first segment that holds one.
+    spans = [match.span() for match in ESCAPE_SEQUENCE_RE.finditer(joined)]
+    first, offset = 0, 0
+    held, pad = None, 0          # the last cleaned segment, and the width its run lost
+    for segment, text in zip(line, texts):
+        start, end = offset, offset + len(text)
+        offset = end
+        style = segment.style
+        if _hostile_link(style):
             style = style.update_link(None)
-        if hostile_text:
-            cleaned = _clean(text)
-            missing = cell_len(text) - cell_len(cleaned)
-            text = cleaned + " " * missing if missing > 0 else cleaned
-        if text:
-            yield Segment(text, style, None)
+        while first < len(spans) and spans[first][1] <= start:
+            first += 1
+        pieces, pos, index = [], start, first
+        while index < len(spans) and spans[index][0] < end:
+            span_start, span_end = spans[index]
+            if span_start > pos:
+                pieces.append(joined[pos:span_start])
+            pos = max(pos, span_end)
+            index += 1
+        if pos < end:
+            pieces.append(joined[pos:end])
+        cleaned = "".join(pieces).translate(_REMOVE)
+        if cleaned == text and style is segment.style:
+            if held is not None:
+                yield _padded(held, pad)
+                held, pad = None, 0
+            yield segment
+            continue
+        if held is not None and held.text:
+            yield held
+        held = Segment(cleaned, style, None)
+        pad += cell_len(text) - cell_len(cleaned)
+    if held is not None:
+        yield _padded(held, pad)
+
+
+def _padded(segment: Segment, pad: int) -> Segment:
+    """A run of cleaned segments gives back the width it lost at its end, so the gap sits at
+    the end of the cell (before a border, which is a segment of its own) and not mid-text."""
+    if pad > 0:
+        return Segment(segment.text + " " * pad, segment.style, None)
+    return segment
 
 
 class TerminalConsole(Console):
     """A Rich console that removes escape sequences and control characters from what it
     prints.
 
-    Strings are cleaned before Rich lays them out (`render_str`, which `print`, `log`,
-    `input` and every renderable built from a string go through), so a removed sequence
-    never leaves a gap. Every rendered segment is cleaned again (`render`, which every output
-    path renders through), which covers `Text` objects, Markdown and link targets. Rich's own
+    Every rendered segment is cleaned (`render`, which every output path renders through:
+    print, log, input prompts, status and Live updates, `Text` objects, Markdown, link
+    targets), padded back to its width where a sequence took printable characters with it.
+    A string printed with markup OFF is also cleaned before Rich lays it out (`render_str`),
+    so no gap is left. With markup ON it is not: cleaning before the markup parser would
+    rebuild a tag that `rich.markup.escape` left alone because a control character stood
+    in it (`[` NUL `link=...]` became a live link, `[` NUL `/]` a MarkupError). Rich's own
     control codes (`Control.clear()`, cursor moves) are control segments and pass; its colours
-    and VAF's own `[link=file://...]` come from styles and are untouched. A CR in `end` is
-    removed like any other, which no caller relies on. Constructed exactly like
-    `rich.console.Console`."""
+    and VAF's own `[link=file://...]` come from styles and are untouched. The one style
+    Rich applies after `render`, the `style` argument of `print` (and so of `out`), has an
+    unsafe link target dropped before Rich sees it. A CR in `end` is removed like any other,
+    which no caller relies on. Constructed exactly like
+    `rich.console.Console` (whose arguments are all keywords)."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._markup_default = bool(kwargs.get("markup", True))
+
+    def print(self, *objects: Any, style: Any = None, **kwargs: Any) -> None:
+        # `print` applies its `style` to the segments AFTER `render`, so a link in it would
+        # skip `terminal_segments`; one holding an unsafe character is dropped here instead.
+        # A style Rich cannot resolve is passed on unchanged, so Rich reports it as before.
+        if style is not None:
+            try:
+                resolved = self.get_style(style)
+            except Exception:
+                resolved = None
+            if resolved is not None and _hostile_link(resolved):
+                style = resolved.update_link(None)
+        super().print(*objects, style=style, **kwargs)
 
     def render_str(self, text: str, **kwargs: Any) -> Text:
-        return super().render_str(terminal_text(text), **kwargs)
+        markup = kwargs.get("markup")
+        if not (self._markup_default if markup is None else markup):
+            text = terminal_text(text)
+        return super().render_str(text, **kwargs)
 
     def render(self, renderable: RenderableType,
                options: Optional[ConsoleOptions] = None) -> Iterable[Segment]:

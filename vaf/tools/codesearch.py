@@ -120,6 +120,11 @@ Examples:
         # who constructed the tool.
         root = Path(self.base_dir).resolve() if getattr(self, "base_dir", None) else None
         raw_path = kwargs.get("path") or self.base_dir or "."
+        # Refused before the resolve below, which on Windows would already contact a share.
+        from vaf.core.path_jail import is_remote_path
+        if is_remote_path(str(raw_path)):
+            from vaf.tools.filesystem import REMOTE_PATH_REFUSAL
+            return f"[ERROR] {REMOTE_PATH_REFUSAL}"
         search_path = Path(raw_path)
         if root is not None and not search_path.is_absolute():
             search_path = root / raw_path

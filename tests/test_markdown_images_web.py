@@ -134,7 +134,7 @@ const preview = load(files.preview, stubs);
     else if (op === 'global') out.push(req('marked').marked.parse(arg, {gfm: true, breaks: false}));
     else if (op === 'policy') out.push(lib.markdownFramePolicy(arg));
     else if (op === 'strip') out.push(lib.stripRawEmbeds(arg));
-    else if (op === 'keep') out.push(sanitize.keepsOwnSourcesOnly(arg[0], arg[1], arg[2]));
+    else if (op === 'keep') out.push(sanitize.ownSourceValue(arg[0], arg[1], arg[2]));
     else if (op === 'isHtml') out.push(viewer.isHtmlDocument(arg));
     else throw new Error('unknown op ' + op);
   }
@@ -305,13 +305,13 @@ def test_an_attached_markdown_document_shows_remote_images_as_links():
     imgs = re.findall(r"<img\b[^>]*>", doc)
     assert imgs == ['<img src="/api/file?path=c.png" alt="c">'], doc
     secret = SECRET.replace("&", "&amp;")
-    link = re.search(r'<a href="([^"]*)" target="_blank" rel="noopener noreferrer" title="([^"]*)">(<svg\b.*?</svg>)p</a>', doc)
+    link = re.search(r'<a href="([^"]*)" target="_blank" rel="noopener noreferrer" title="([^"]*)"><span style="white-space:nowrap">(<svg\b.*?</svg>)p</span></a>', doc)
     assert link and link.group(1) == link.group(2) == secret, doc
     # The picture cue of the UI, drawn inline: the frame loads nothing.
     assert 'aria-hidden="true"' in link.group(3) and "http://www.w3.org/2000/svg" in link.group(3)
     assert re.search(r"<svg\b", link.group(3)) and "href=" not in link.group(3) and "url(" not in link.group(3)
     assert '<a href="https://x.example">b</a>' in doc, doc
-    assert "</svg>https://a.example/y.png</a>" in doc, doc
+    assert "</svg>h</span>ttps://a.example/y.png</a>" in doc, doc
     assert "data:" not in doc, doc
     # The editor keeps every picture as written (its markup is saved), and the shared instance is
     # untouched by the document renderer.
@@ -470,7 +470,7 @@ def test_the_editor_saves_the_same_markdown_without_the_embeds():
 
 def test_an_entity_in_alt_text_is_escaped_once():
     doc, = _run([["doc", "![a &amp; b <i>](https://r.example/i.png) ![c &amp; d](/api/file?path=c.png)"]])
-    assert "a &amp; b &lt;i&gt;</a>" in doc and "&amp;amp;" not in doc, doc
+    assert "</svg>a</span> &amp; b &lt;i&gt;</a>" in doc and "&amp;amp;" not in doc, doc
     assert 'alt="c &amp; d"' in doc, doc
 
 
@@ -489,32 +489,55 @@ def test_a_markdown_file_holding_an_html_document_stays_markdown():
     assert viewer.count("extractHtmlContent(") == 4  # the definition, isHtmlDocument, the two modes
 
 
+DROP = None
 KEEP_CASES = [
-    (("img", "src", "/api/file?path=c.png"), True),
-    (("img", "src", "https://evil.example/x.png"), False),
-    (("img", "src", "/api/file?path=%5C%5Cevil%5Cs"), False),
-    (("img", "srcset", "/api/file?path=c.png 1x"), False),
-    (("video", "poster", "/api/file?path=c.png"), False),
-    (("td", "background", "https://evil.example/b.png"), False),
-    (("source", "src", "https://evil.example/v.mp4"), False),
-    (("image", "href", "https://evil.example/s.png"), False),
-    (("use", "xlink:href", "https://evil.example/s.svg#a"), False),
-    (("a", "href", "https://example.org/doc"), True),
-    (("span", "style", "background-color: #ff0"), True),
-    (("span", "style", "background: URL(https://evil.example/b.png)"), False),
-    (("span", "style", "background: u\\72l(https://evil.example/b.png)"), False),
-    (("div", "style", "background-image: image-set('x.png' 1x)"), False),
-    (("p", "align", "center"), True),
+    # A src keeps the file lane's own address, never the raw value.
+    (("img", "src", "/api/file?path=c.png"), "/api/file?path=c.png"),
+    (("img", "src", "sandbox:/out/c.png"), "/api/file?path=out%2Fc.png"),
+    (("img", "src", "/api/config"), "/api/file?path=%2Fapi%2Fconfig"),
+    (("img", "src", "https://evil.example/x.png"), DROP),
+    (("img", "src", "/api/file?path=%5C%5Cevil%5Cs"), DROP),
+    # An inline picture fetches nothing and stays in the PDF; only on an img.
+    (("img", "src", "data:image/png;base64,iVBORw0KGgo="), "data:image/png;base64,iVBORw0KGgo="),
+    (("iframe", "src", "data:text/html,<p>x</p>"), DROP),
+    (("img", "srcset", "/api/file?path=c.png 1x"), DROP),
+    (("video", "poster", "/api/file?path=c.png"), DROP),
+    (("td", "background", "https://evil.example/b.png"), DROP),
+    (("source", "src", "https://evil.example/v.mp4"), DROP),
+    (("image", "href", "https://evil.example/s.png"), DROP),
+    (("use", "xlink:href", "https://evil.example/s.svg#a"), DROP),
+    (("use", "href", "#shape"), "#shape"),
+    (("a", "href", "https://example.org/doc"), "https://example.org/doc"),
+    # SVG presentation attributes are CSS: a url() fetches unless it points inside the document.
+    (("rect", "mask", "url(http://evil.example/c1.svg#m)"), DROP),
+    (("rect", "clip-path", "url( 'http://evil.example/c2.svg#c' )"), DROP),
+    (("rect", "fill", "url(http://evil.example/c4.svg#g) red"), DROP),
+    (("path", "marker-end", "url(http://evil.example/m.svg#a)"), DROP),
+    (("rect", "filter", "url(#blur) url(http://evil.example/f.svg#x)"), DROP),
+    (("svg", "cursor", "url(http://evil.example/c.cur), auto"), DROP),
+    (("rect", "fill", "u\\72l(http://evil.example/c.svg#g)"), DROP),
+    (("rect", "mask", "url(#local-mask)"), "url(#local-mask)"),
+    (("rect", "fill", "url( \"#grad\" )"), "url( \"#grad\" )"),
+    (("rect", "fill", "#ff0000"), "#ff0000"),
+    (("span", "style", "background-color: #ff0"), "background-color: #ff0"),
+    (("span", "style", "background: URL(https://evil.example/b.png)"), DROP),
+    (("span", "style", "background: u\\72l(https://evil.example/b.png)"), DROP),
+    (("div", "style", "background-image: image-set('x.png' 1x)"), DROP),
+    (("p", "align", "center"), "center"),
+    (("span", "title", "C:\\Users\\a"), "C:\\Users\\a"),
 ]
 
 
 def test_a_markdown_files_pdf_copy_keeps_only_own_sources():
     outs = _run([["keep", list(args)] for args, _ in KEEP_CASES])
     for (args, want), got in zip(KEEP_CASES, outs):
-        assert got is want, (args, got)
+        assert got == want, (args, got)
     sanitize = _source(SANITIZE)
-    assert "DOMPurify.addHook('uponSanitizeAttribute', dropForeignSource);" in sanitize
-    assert "DOMPurify.removeHook('uponSanitizeAttribute', dropForeignSource);" in sanitize
+    assert "DOMPurify.addHook('uponSanitizeAttribute', keepOwnSource);" in sanitize
+    assert "DOMPurify.removeHook('uponSanitizeAttribute', keepOwnSource);" in sanitize
+    hook = _slice(SANITIZE, "function keepOwnSource(", "\n}\n")
+    # The kept value is written back, so the canonical address is what the copy fetches.
+    assert "if (kept === null) event.keepAttr = false;" in hook and "else event.attrValue = kept;" in hook
     own = sanitize.split("const OWN_SOURCES_COPY", 1)[1].split("};", 1)[0]
     for tag in ("'iframe'", "'object'", "'embed'", "'link'", "'meta'", "'base'"):
         assert tag in own, tag
@@ -554,3 +577,15 @@ def test_the_icon_never_ends_a_line_alone():
     # A combining mark stays with its letter (one grapheme), Thai here.
     thai = re.search(r'<span class="whitespace-nowrap"><svg[^>]*></svg>([^<]*)</span>', outs[1])
     assert thai and thai.group(1) == "กิ", outs[1]
+
+
+def test_the_document_viewers_icon_stays_with_its_label():
+    """Kept on one line with the label's first character, as in the chat; a leading character
+    reference is one unit, so it is never cut into `&` and `amp;`."""
+    plain, entity, thai = _run([["doc", "![Figure A](https://f.example/a.png)"],
+                                ["doc", "![&amp; more](https://f.example/b.png)"],
+                                ["doc", "![\u0e01\u0e34\u0e19](https://f.example/c.png)"]])
+    nowrap = r'<span style="white-space:nowrap"><svg\b[^>]*>.*?</svg>([^<]*)</span>([^<]*)</a>'
+    assert re.search(nowrap, plain).groups() == ("F", "igure A"), plain
+    assert re.search(nowrap, entity).groups() == ("&amp;", " more"), entity
+    assert re.search(nowrap, thai).group(1) == "\u0e01\u0e34", thai

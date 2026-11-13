@@ -1299,7 +1299,11 @@ Hard limits you must respect (they are architecture, not fine print):
   major version. `identity_kwargs` is the surface that is kept.
 - **A surface of your own that serves or stores a file for an account asks the same
   boundary.** A download link, a preview or an editor's save button reaches whatever
-  files you let it, unless it asks the rule the account's tools obey. Ask it with
+  files you let it, unless it asks the rule the account's tools obey. First, while the path is
+  still text, ask `vaf.is_remote_path(path)` and refuse on True: the questions below resolve
+  the path, and on Windows resolving a share path (`\\host\share`, `//host/share`, `\\?\`,
+  `\\.\`, `\??\`) already opens an SMB connection to that host with the account's NTLM login
+  attempt. VAF's own file routes and file tools ask it first for that reason. Then ask
   `vaf.jail_allows(path, user_scope_id=..., user_role=..., mode="read")` (or
   `mode="write"` before you store). VAF's own web file routes are why this is a
   primitive and not an example: they carried a hand copy that knew the account's folder
@@ -3032,6 +3036,12 @@ Stable public surface (safe to build on):
   "missing"); the reaper's own pass (`reap_once`) never raises. The kinds (`temporary`, `project`), the network profiles
   (`none`, `registries`, `open`), the refusal type `vaf.core.environments.EnvironmentRefused`
   and its subclass `EnvironmentsUnlisted` are part of the contract. See "Sandbox environments" above.
+- `vaf.is_remote_path(spelled) -> bool` - True when a path names a network share or a
+  Windows device namespace (`\\host\share`, `//host/share`, `\\?\`, `\\.\`, `\??\`), in
+  either separator convention on every host. Lexical, so it touches nothing: ask it for an
+  absolute path from outside (a request, a tool argument) before anything resolves, stats or
+  opens it, because on Windows that already contacts the share. A relative fragment through
+  `vaf.contained_path` needs no extra question; it refuses every rooted fragment.
 - `vaf.contained_path(root, relative="", *, must_exist=False)` /
   `vaf.safe_entry_name(name, *, allow_hidden=False)` / `vaf.PathEscape` - keeping a
   path that came from OUTSIDE inside the directory it may touch. The jail above

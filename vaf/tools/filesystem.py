@@ -526,6 +526,9 @@ VAF_SETTINGS_WRITE_REFUSAL = (
     "commands")
 _STATE_CONTENT_FOLDERS = frozenset({"custom_tools", "skills", "workflows"})
 VAF_STATE_READ_REFUSAL = "Access denied: VAF's own data directory"
+REMOTE_PATH_REFUSAL = (
+    "Access denied: a network share or device path (\\\\server\\share, //server/share, "
+    "\\\\?\\, \\\\.\\) is not opened by the file tools")
 HOST_CONFIG_WRITE_REFUSAL = (
     "Access denied: the home directory's configuration (dot files and folders such as "
     "~/.bashrc, ~/.config or ~/.local, autostart entries) runs or steers programs outside VAF "
@@ -551,6 +554,12 @@ def is_safe_path(path, *, read_only=False):
     refusal). ``read_only=True`` says the caller only reads; the default is the write rule,
     so a caller that forgets the flag can only lose access to VAF's state, never gain a
     write into it."""
+    # Before anything below touches the disk (the state check already resolves): on Windows
+    # resolving a share path opens an SMB connection to that host with the account's NTLM
+    # login attempt, and the path comes from the model, which a page or a mail can steer.
+    from vaf.core.path_jail import is_remote_path
+    if is_remote_path(str(path or "")):
+        return False, REMOTE_PATH_REFUSAL
     try:
         # First resolve folder aliases
         resolved = _resolve_folder_alias(path)

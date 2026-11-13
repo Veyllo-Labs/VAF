@@ -73,6 +73,11 @@ class DownloadFileTool(BaseTool):
             timeout = 60
 
         save_to = str(kwargs.get("save_to") or "").strip()
+        # Refused before the folder probe below, which on Windows would already contact a share.
+        from vaf.core.path_jail import is_remote_path
+        if is_remote_path(save_to):
+            from vaf.tools.filesystem import REMOTE_PATH_REFUSAL
+            return REMOTE_PATH_REFUSAL
         session_id = get_current_session_id()
         target = Path(os.path.expanduser(save_to)) if save_to else Path("")
         if not save_to or not target.is_absolute():

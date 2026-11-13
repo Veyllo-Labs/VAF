@@ -92,14 +92,22 @@ def is_remote_path(spelled: str) -> bool:
     leading ``//`` is an implementation-defined spelling of ``/`` that nothing needs, so
     refusing it only ever errs towards refusing.
 
+    Asked first by every lane that takes an absolute path from outside: the web file routes
+    (``_allowed_file_path``), the file tools' screen (``is_safe_path``) and the two tools that
+    touch their path before that screen (``codesearch``, ``download_file``). On the facade as
+    ``vaf.is_remote_path``, because the route recipe in docs/EMBEDDING.md asks primitives that
+    resolve the path (``vaf.is_vaf_state``), so a surface built to it would reach out as well.
+    A relative fragment through ``vaf.contained_path`` needs no extra question: ``is_rooted``
+    refuses every fragment that starts with a separator.
+
     NAMED BOUNDARY: a drive letter mapped to a share (``Z:\\x``) and a link or junction
     inside a served root that points at a share are not seen here; both are set up on the
-    machine by its owner, not spelled by a caller.
-
-    NAMED BOUNDARY, facade: not exported as ``vaf.is_remote_path`` yet. It has one caller that
-    takes an absolute path from outside (the web file lane, ``_allowed_file_path``), and an
-    embedder resolving a relative fragment through ``vaf.contained_path`` is covered already,
-    because ``is_rooted`` refuses every fragment that starts with a separator.
+    machine by its owner, not spelled by a caller. The same holds for a home folder that is
+    itself a share (a roaming profile whose ``Path.home()`` is ``\\\\server\\...``): its
+    Documents and Downloads are then share paths, so the web file routes refuse them (every
+    file chip and picture of such an account answers 403) and the file tools refuse a path
+    written that way. A path the tools build from a folder name (``Documents``) goes through,
+    because the caller did not spell the share.
     """
     text = str(spelled or "").lstrip()
     norm = text.replace("\\", "/")

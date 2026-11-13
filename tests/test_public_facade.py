@@ -64,7 +64,7 @@ def test_facade_exports_exactly_the_documented_surface():
         "fold_room_owners", "fold_room_tasks", "fold_room_votes", "get_environment_manager",
         "inspect_upload",
         "install_thread_excepthook", "invited_rooms", "is_error_reply", "is_host_config",
-        "is_vaf_state", "jail_allows", "joined_rooms",
+        "is_remote_path", "is_vaf_state", "jail_allows", "joined_rooms",
         "list_standing_grants", "mark_trusted_dir",
         "markers", "model_text", "open_for_write", "participant_key", "project_dir_refusal",
         "queue_metrics", "record_threat",
@@ -99,6 +99,7 @@ def test_the_newly_public_names_actually_resolve():
     assert callable(vaf.account_allows_tool)
     assert callable(vaf.contained_path)
     assert callable(vaf.safe_entry_name)
+    assert vaf.is_remote_path("\\\\host\\share\\x") and not vaf.is_remote_path("C:\\Users\\a\\x")
     assert issubclass(vaf.PathEscape, ValueError)
     assert callable(vaf.set_account_allowlist_resolver)
     assert callable(vaf.set_confirmation_bypass_resolver)

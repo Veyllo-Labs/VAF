@@ -60,24 +60,54 @@ const OWN_SOURCES_COPY: Config = {
 const FETCHING_ATTRS = new Set(['srcset', 'imagesrcset', 'poster', 'background', 'data', 'codebase',
     'lowsrc', 'dynsrc', 'longdesc', 'ping', 'action', 'formaction', 'manifest']);
 
-/**
- * Whether an attribute may stay in an own-sources copy: a `src` only when it is the file lane
- * (`ownImageSrc`), a link target only on a link (it navigates on a click, it does not fetch),
- * inline style only without a URL or a CSS escape that could spell one, and no other
- * attribute that fetches. Pure, so it is tested without a DOM.
- */
-export function keepsOwnSourcesOnly(tagName: string, attrName: string, value: string): boolean {
-    const tag = tagName.toLowerCase();
-    const attr = attrName.toLowerCase();
-    if (FETCHING_ATTRS.has(attr)) return false;
-    if (attr === 'src') return ownImageSrc(value) !== null;
-    if (attr === 'href' || attr === 'xlink:href') return tag === 'a';
-    if (attr === 'style') return !/url\s*\(|image-set|image\(|@import|\\/i.test(value);
-    return true;
+// CSS functions that fetch what they name. `url()` and `src()` may point inside the document
+// (`url(#mask)`), which fetches nothing; the others are refused whatever they hold.
+const FETCHING_CSS = /@import|image-set\s*\(|\bimage\s*\(|cross-fade\s*\(|\belement\s*\(/i;
+const CSS_REFERENCE = /\b(?:url|src)\s*\(\s*(['"]?)\s*([^'")]*)/gi;
+
+function fetchesInCss(value: string): boolean {
+    if (FETCHING_CSS.test(value)) return true;
+    for (const match of value.matchAll(CSS_REFERENCE)) {
+        if (!match[2].trim().startsWith('#')) return true;
+    }
+    return false;
 }
 
-function dropForeignSource(node: Element, event: UponSanitizeAttributeHookEvent): void {
-    if (!keepsOwnSourcesOnly(node.nodeName, event.attrName, event.attrValue)) event.keepAttr = false;
+/**
+ * The value an attribute keeps in an own-sources copy, or null to drop it. Any attribute may
+ * carry a CSS reference, not only `style`: SVG presentation attributes (`mask`, `clip-path`,
+ * `fill`, `stroke`, `filter`, `marker-*`, `cursor`) are read as CSS and fetch a `url()` (measured
+ * in Chromium for mask, clip-path and fill). So:
+ * - a `src` becomes the file lane's own address (`ownImageSrc`), never the raw value, so a path
+ *   such as `/api/config` cannot reach another route of this server; an `img` keeps an inline
+ *   `data:image/` picture, which fetches nothing;
+ * - a link target stays on a link (a click navigates, nothing is fetched) and elsewhere only when
+ *   it points inside the document (`#id`);
+ * - a value with a CSS reference stays only when every reference points inside the document,
+ *   and a value with a CSS escape (a backslash) that could spell one is dropped;
+ * - every other attribute that fetches (`srcset`, `poster`, `background`, ...) is dropped.
+ * Pure, so it is tested without a DOM.
+ */
+export function ownSourceValue(tagName: string, attrName: string, value: string): string | null {
+    const tag = tagName.toLowerCase();
+    const attr = attrName.toLowerCase();
+    if (FETCHING_ATTRS.has(attr)) return null;
+    if (attr === 'src') {
+        if (tag === 'img' && /^data:image\//i.test(value.trim())) return value;
+        return ownImageSrc(value);
+    }
+    if (attr === 'href' || attr === 'xlink:href') {
+        return tag === 'a' || value.trim().startsWith('#') ? value : null;
+    }
+    if (value.includes('\\') && (attr === 'style' || value.includes('('))) return null;
+    if (fetchesInCss(value)) return null;
+    return value;
+}
+
+function keepOwnSource(node: Element, event: UponSanitizeAttributeHookEvent): void {
+    const kept = ownSourceValue(node.nodeName, event.attrName, event.attrValue);
+    if (kept === null) event.keepAttr = false;
+    else event.attrValue = kept;
 }
 
 export function sanitizeDocumentCopy(html: string, options: { ownSourcesOnly?: boolean } = {}): string {
@@ -85,10 +115,10 @@ export function sanitizeDocumentCopy(html: string, options: { ownSourcesOnly?: b
     if (!DOMPurify.isSupported) return '';
     if (!options.ownSourcesOnly) return String(DOMPurify.sanitize(html, DOCUMENT_COPY));
     // The hook is the shared instance's; it lives exactly as long as this one call.
-    DOMPurify.addHook('uponSanitizeAttribute', dropForeignSource);
+    DOMPurify.addHook('uponSanitizeAttribute', keepOwnSource);
     try {
         return String(DOMPurify.sanitize(html, OWN_SOURCES_COPY));
     } finally {
-        DOMPurify.removeHook('uponSanitizeAttribute', dropForeignSource);
+        DOMPurify.removeHook('uponSanitizeAttribute', keepOwnSource);
     }
 }

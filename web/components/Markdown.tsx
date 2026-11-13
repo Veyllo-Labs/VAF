@@ -12,7 +12,7 @@ import { useTranslations } from 'next-intl';
 import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Image as ImageIcon } from 'lucide-react';
-import { rehypeOwnImagesOnly } from '@/lib/markdownImages';
+import { rehypeOwnImagesOnly, splitFirstGrapheme } from '@/lib/markdownImages';
 
 type AnchorProps = React.ComponentProps<'a'> & ExtraProps;
 type ImgProps = React.ComponentProps<'img'> & ExtraProps;
@@ -26,24 +26,12 @@ function DefaultAnchor({ node: _node, ...rest }: AnchorProps) {
     return <a className="underline break-all" target="_blank" rel="noopener noreferrer" {...rest} />;
 }
 
-/**
- * The label's first character (grapheme), and the rest. The icon is kept on one line with the
- * first character, so it never ends a line on its own, while the rest still wraps anywhere.
- */
+/** The label's first character and the rest (`splitFirstGrapheme`), when the label is plain text. */
 function splitFirstCharacter(children: React.ReactNode): [string, string] | null {
     const text = typeof children === 'string' ? children
         : Array.isArray(children) && children.length === 1 && typeof children[0] === 'string' ? children[0]
             : null;
-    if (!text) return null;
-    let first = Array.from(text)[0];
-    const Segmenter = (Intl as unknown as { Segmenter?: new (l?: string, o?: { granularity: string }) => { segment(s: string): Iterable<{ segment: string }> } }).Segmenter;
-    if (Segmenter) {
-        for (const part of new Segmenter(undefined, { granularity: 'grapheme' }).segment(text)) {
-            first = part.segment;
-            break;
-        }
-    }
-    return [first, text.slice(first.length)];
+    return text ? splitFirstGrapheme(text) : null;
 }
 
 function DefaultImage({ node: _node, alt, ...rest }: ImgProps) {

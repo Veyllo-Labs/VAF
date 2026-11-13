@@ -1,9 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-"""The file lane refuses a network share or a device path while it is still text
-(`vaf.core.path_jail.is_remote_path`, asked first by `_allowed_file_path` in
-`vaf/core/web_server.py`).
+"""The file lanes refuse a network share or a device path while it is still text
+(`vaf.is_remote_path`, `vaf/core/path_jail.py`): asked first by `_allowed_file_path` in
+`vaf/core/web_server.py`, by the file tools' screen `is_safe_path`, and by the two tools that touch
+their path before that screen (`codesearch`, `download_file`).
 
 On Windows, `_allowed_file_path` used to resolve the caller's path before comparing it with the
 served roots, and resolving `\\\\host\\share\\x` opens that share: an SMB connection to a foreign
@@ -20,7 +21,12 @@ MUTATIONS, each turns the named test red:
 - move the `is_remote_path` check below `Platform.normalize_path` in `_allowed_file_path`
   -> test_the_file_lane_refuses_before_it_resolves, test_the_check_comes_before_any_resolve;
 - a new `Platform.normalize_path(` call anywhere else in `vaf/`
-  -> test_normalize_path_has_no_new_caller.
+  -> test_normalize_path_has_no_new_caller;
+- drop the `is_remote_path` check at the top of `is_safe_path`
+  -> test_the_file_tools_refuse_before_they_touch_the_disk;
+- drop it from `codesearch` or `download_file`
+  -> test_the_two_tools_that_touch_their_path_first_refuse_too,
+     test_no_tool_touches_its_path_before_the_screen.
 """
 import ntpath
 import re
@@ -120,3 +126,94 @@ def test_normalize_path_has_no_new_caller():
     assert found == _NORMALIZE_CALLERS, (
         "a new caller of Platform.normalize_path: a path from a request or a tool argument must "
         f"pass vaf.core.path_jail.is_remote_path before it is resolved. Found {found}")
+
+
+def _touches(monkeypatch):
+    """Record every call that would reach the disk (and on Windows a share) for a path."""
+    import os
+    import pathlib
+
+    import vaf.core.data_stores as data_stores
+
+    seen = []
+
+    def record(name, real):
+        def wrapper(*a, **k):
+            seen.append((name, str(a[0]) if a else ""))
+            return real(*a, **k)
+        return wrapper
+
+    monkeypatch.setattr(pathlib.Path, "resolve", record("resolve", pathlib.Path.resolve))
+    monkeypatch.setattr(pathlib.Path, "exists", record("exists", pathlib.Path.exists))
+    monkeypatch.setattr(pathlib.Path, "is_dir", record("is_dir", pathlib.Path.is_dir))
+    monkeypatch.setattr(os.path, "realpath", record("realpath", os.path.realpath))
+    monkeypatch.setattr(os.path, "exists", record("os.exists", os.path.exists))
+    monkeypatch.setattr(data_stores, "_spellings", record("_spellings", data_stores._spellings))
+    return seen
+
+
+def test_the_file_tools_refuse_before_they_touch_the_disk(monkeypatch):
+    from vaf.tools.filesystem import REMOTE_PATH_REFUSAL, is_safe_path
+
+    seen = _touches(monkeypatch)
+    for spelled in REMOTE:
+        for read_only in (True, False):
+            assert is_safe_path(spelled, read_only=read_only) == (False, REMOTE_PATH_REFUSAL), spelled
+    assert seen == [], f"touched before the refusal: {seen}"
+
+
+def test_the_two_tools_that_touch_their_path_first_refuse_too(monkeypatch):
+    from vaf.tools.codesearch import CodeSearchTool
+    from vaf.tools.download_file import DownloadFileTool
+    from vaf.tools.filesystem import REMOTE_PATH_REFUSAL
+
+    seen = _touches(monkeypatch)
+    for spelled in REMOTE:
+        assert CodeSearchTool().run(query="x", path=spelled) == f"[ERROR] {REMOTE_PATH_REFUSAL}", spelled
+        assert DownloadFileTool().run(url="https://example.invalid/x.png", save_to=spelled) == REMOTE_PATH_REFUSAL
+    assert [s for s in seen if "evil.example" in s[1] or "pipe" in s[1] or "C:" in s[1]] == []
+
+
+# Calls that reach the disk for a path; on Windows each of them opens a share path.
+_DISK = {"resolve", "exists", "is_file", "is_dir", "stat", "lstat", "realpath", "isfile", "isdir",
+         "open", "read_text", "read_bytes", "iterdir", "glob", "samefile"}
+
+
+def _name(call):
+    return getattr(call.func, "attr", getattr(call.func, "id", ""))
+
+
+def test_no_tool_touches_its_path_before_the_screen():
+    """In every function that screens a path with `is_safe_path`, nothing reaches the disk with
+    that path before the screen, unless `is_remote_path` was asked even earlier. The two places
+    this found (`codesearch` resolving, `download_file` probing a folder) ask it now."""
+    import ast
+
+    bad = []
+    for path in sorted((ROOT / "vaf").rglob("*.py")):
+        tree = ast.parse(_source(path))
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) or fn.name == "is_safe_path":
+                continue
+            calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call)]
+            screens = [c for c in calls if _name(c) == "is_safe_path"]
+            if not screens:
+                continue
+            first_screen = min(c.lineno for c in screens)
+            asked = [c.lineno for c in calls if _name(c) == "is_remote_path"]
+            first_ask = min(asked) if asked else None
+            names = {n.id for c in screens for a in c.args[:1] for n in ast.walk(a) if isinstance(n, ast.Name)}
+            for c in calls:
+                if _name(c) in _DISK and c.lineno < first_screen:
+                    used = {n.id for n in ast.walk(c) if isinstance(n, ast.Name)} & names
+                    if used and (first_ask is None or first_ask > c.lineno):
+                        bad.append(f"{path.relative_to(ROOT).as_posix()}:{c.lineno} {fn.name}: "
+                                   f"{_name(c)}() on {sorted(used)} before is_safe_path")
+    assert not bad, ("a path from a tool argument reaches the disk before the screen; ask "
+                     "vaf.core.path_jail.is_remote_path first:\n" + "\n".join(bad))
+
+
+def test_is_safe_path_asks_first():
+    src = _source(ROOT / "vaf" / "tools" / "filesystem.py")
+    body = src[src.index("def is_safe_path("):]
+    assert body.index("if is_remote_path(str(path or \"\")):") < body.index("_resolve_folder_alias(path)")

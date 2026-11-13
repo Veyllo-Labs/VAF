@@ -213,6 +213,35 @@ export function stripRawEmbeds(html: string): string {
     return out;
 }
 
+type GraphemeSegmenter = new (locale?: string, options?: { granularity: string }) => {
+    segment(text: string): Iterable<{ segment: string }>;
+};
+
+/**
+ * The first character as a reader sees it (a grapheme: a letter with its combining marks, an
+ * emoji with its modifiers) and the rest. A picture link keeps its icon on one line with that
+ * first character, so the icon never ends a line on its own while the rest still wraps.
+ */
+export function splitFirstGrapheme(text: string): [string, string] {
+    if (!text) return ['', ''];
+    let first = Array.from(text)[0];
+    const Segmenter = (Intl as unknown as { Segmenter?: GraphemeSegmenter }).Segmenter;
+    if (Segmenter) {
+        for (const part of new Segmenter(undefined, { granularity: 'grapheme' }).segment(text)) {
+            first = part.segment;
+            break;
+        }
+    }
+    return [first, text.slice(first.length)];
+}
+
+/** The same split for text that is already escaped HTML: a leading character reference is one unit. */
+function splitFirstEscaped(html: string): [string, string] {
+    const reference = /^&#?[a-zA-Z0-9]+;/.exec(html);
+    if (reference) return [reference[0], html.slice(reference[0].length)];
+    return splitFirstGrapheme(html);
+}
+
 // The picture icon of the UI (lucide's image), inline because a document frame loads nothing.
 const IMAGE_GLYPH = '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="none" '
     + 'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" '
@@ -234,8 +263,9 @@ const documentMarked = new Marked({
             if (own !== null) return `<img src="${escapeHtml(own)}" alt="${label}">`;
             const link = imageLinkHref(href);
             if (link !== null) {
+                const [first, rest] = splitFirstEscaped(label || escapeHtml(link));
                 return `<a href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(link)}">`
-                    + `${IMAGE_GLYPH}${label || escapeHtml(link)}</a>`;
+                    + `<span style="white-space:nowrap">${IMAGE_GLYPH}${first}</span>${rest}</a>`;
             }
             return label;
         },

@@ -412,7 +412,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                                                 )}
                                             />
                                             <span className="text-[11px] text-foreground">
-                                                {liveUnit.stale ? tMain('toolWatchdogStale') : tCommon('active')}
+                                                {liveUnit.stale ? tMain('toolWatchdogStale') : tMain('toolWatchdogAlive')}
                                                 {liveUnit.runtime_s != null && (
                                                     <span className="text-muted-foreground"> · {durationLabel(liveUnit.runtime_s)}</span>
                                                 )}
@@ -424,7 +424,7 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                                                 onClick={(e) => { e.stopPropagation(); killUnit(); }}
                                                 disabled={killing}
                                                 title={tMain('toolKillTitle')}
-                                                className="ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-40 transition-colors"
+                                                className="ml-auto inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium text-red-600 hover:bg-red-50 disabled:opacity-40 transition-colors"
                                             >
                                                 {killing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Skull className="h-3 w-3" />}{tMain('toolKill')}
                                             </button>

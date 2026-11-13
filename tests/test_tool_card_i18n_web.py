@@ -29,7 +29,15 @@ MUTATIONS, each turns the named test red:
   -> test_the_card_renders_in_the_page_language;
 - a hardcoded `${n} actions` label -> test_the_timeline_counts_in_the_page_language;
 - restore the em-dash return in the duration helper, or the stale-label dash
-  -> test_no_em_dash_in_the_tool_card_files.
+  -> test_no_em_dash_in_the_tool_card_files;
+- `#` instead of `{count}` in de `toolStatLines`, or in en `turnActions` (ICU groups `#`, so
+  1536 read "1.536 Zeilen") -> test_the_card_renders_in_the_page_language and
+  test_the_timeline_counts_in_the_page_language;
+- `tCommon('active')` back on the live watchdog row -> test_the_measured_literals_are_gone;
+- en `toolKillTitle` back to "Stop this sub-agent" -> test_the_kill_button_and_its_tooltip_agree;
+- en `actionLive` back to "Action..." -> test_no_three_dot_ellipsis_in_the_new_keys;
+- a plain space in de `durationSeconds` -> test_german_durations_never_break;
+- drop `whitespace-nowrap` from the kill button -> test_the_kill_button_never_wraps.
 """
 import json
 import re
@@ -91,6 +99,8 @@ _GONE = {
         "'Fertig'", "Zeilen", "'running…'", "`running… ", "'Error'", "<span>Watchdog</span>",
         "No heartbeat", "'Active'", "Diesen Sub-Agent", "<span>Output</span>", "Waiting for output",
         "'Temporary'", "Persistent Workflow", "'Delete'", "'List'", "item${", "toFixed(1)} KB",
+        # common.active reads "enabled" in Chinese; a live heartbeat has its own word.
+        "tCommon('active')",
     ),
     TIMELINE: ("'action'", "'actions'", "more`"),
     HELPERS: ("'Fertig'", "Zeilen", "\u2014"),
@@ -164,7 +174,7 @@ _NEW_KEYS = (
     "durationSeconds", "durationMinutesSeconds", "toolArgItems", "toolWfTemporary", "toolWfPersistent",
     "toolWfList", "toolWatchdog", "toolWatchdogStale", "toolKill", "toolKillTitle", "toolOutput",
     "toolWaitingForOutput", "toolNameUnknown", "turnActions", "turnActionsMore", "thinkingLive",
-    "thinkingDone", "actionLive", "actionDone",
+    "thinkingDone", "actionLive", "actionDone", "toolWatchdogAlive",
 )
 
 
@@ -178,13 +188,45 @@ def test_the_new_keys_are_in_every_catalogue(locale):
 def test_english_says_done_and_german_fertig():
     en, de = _catalogue("en")["main"], _catalogue("de")["main"]
     assert en["toolStatDone"] == "Done" and de["toolStatDone"] == "Fertig"
-    assert en["toolStatLines"] == "{count, plural, one {# line} other {# lines}}"
-    assert de["toolStatLines"] == "{count, plural, one {# Zeile} other {# Zeilen}}"
+    assert en["toolStatLines"] == "{count, plural, one {{count} line} other {{count} lines}}"
+    assert de["toolStatLines"] == "{count, plural, one {{count} Zeile} other {{count} Zeilen}}"
     assert (en["toolRunning"], de["toolRunning"]) == ("running…", "läuft…")
-    assert en["turnActions"] == "{count, plural, one {# action} other {# actions}}"
-    assert de["turnActions"] == "{count, plural, one {# Aktion} other {# Aktionen}}"
+    assert en["turnActions"] == "{count, plural, one {{count} action} other {{count} actions}}"
+    assert de["turnActions"] == "{count, plural, one {{count} Aktion} other {{count} Aktionen}}"
     assert (en["thinkingDone"], de["thinkingDone"]) == ("Thinking Process", "Denkprozess")
-    assert (en["durationSeconds"], de["durationSeconds"]) == ("{seconds}s", "{seconds} s")
+    assert (en["durationSeconds"], de["durationSeconds"]) == ("{seconds}s", "{seconds}\u00a0s")
+    assert _catalogue("zh")["main"]["toolWatchdogAlive"] == "运行中"
+
+
+@pytest.mark.parametrize("locale", _LOCALES)
+def test_the_kill_button_and_its_tooltip_agree(locale):
+    """The button and its hover text name the same act, so neither promises a gentler stop."""
+    main = _catalogue(locale)["main"]
+    assert main["toolKill"].casefold() in main["toolKillTitle"].casefold(), (
+        f"{locale}: button {main['toolKill']!r}, tooltip {main['toolKillTitle']!r}")
+
+
+@pytest.mark.parametrize("locale", _LOCALES)
+def test_no_three_dot_ellipsis_in_the_new_keys(locale):
+    main = _catalogue(locale)["main"]
+    dotted = [key for key in _NEW_KEYS if "..." in main[key]]
+    assert not dotted, f"{locale}: three dots instead of U+2026 in {dotted}"
+
+
+def test_german_durations_never_break():
+    """A number and its unit stay on one line: every gap in a German duration is U+00A0."""
+    de = _catalogue("de")["main"]
+    for key in ("durationSeconds", "durationMinutesSeconds"):
+        assert " " not in de[key] and "\u00a0" in de[key], f"de.{key}: {de[key]!r}"
+
+
+def test_the_kill_button_never_wraps():
+    """On a phone the watchdog row is narrow; a shrinking button broke its label mid-word."""
+    code = _source(TOOL_MESSAGE)
+    start = code.rindex("<button", 0, code.index("killUnit(); }}"))
+    tag = code[start:code.index(">", code.index("className=", start))]
+    classes = re.search(r'className="([^"]*)"', tag).group(1).split()
+    assert "shrink-0" in classes and "whitespace-nowrap" in classes, classes
 
 
 # --------------------------------------------------------------------------
@@ -311,6 +353,8 @@ def test_every_call_passes_the_message_arguments():
     assert not wrong, "translation call and message disagree on their arguments:\n" + "\n".join(wrong)
 
 
+# use-intl is not a direct dependency: it comes in through next-intl, whose hooks wrap its
+# createTranslator and createFormatter, and package-lock.json pins the version both use.
 _RENDER_SCRIPT = r"""
 const path = require('path'), fs = require('fs');
 const W = process.argv[1];
@@ -381,16 +425,21 @@ _CARDS = [
     {"id": "8", "name": "create_agent_workflow", "status": "completed", "args": '{"action": "create"}'},
     {"id": "9", "name": "create_agent_workflow", "status": "completed", "args": '{"action": "delete"}'},
     {"id": "10", "name": "update_working_memory", "status": "completed", "args": '{"items": [1, 2, 3]}'},
+    {"id": "11", "name": "read_file", "status": "completed", "result": "\n".join(["l"] * 1000)},
+    {"id": "12", "name": "read_file", "status": "completed", "result": "\n".join(["l"] * 1536)},
+    {"id": "13", "name": "update_working_memory", "status": "completed", "args": json.dumps({"items": [0] * 1536})},
 ]
 
 # What each card shows, per locale, in the order of _CARDS.
 _EXPECTED = {
     "en": ["Done", "3 lines", "1.5 KB", "1536.0 KB", "running…", "running… 1m 5s", "Error",
-           "Persistent Workflow", "Delete", "items: [3 items]"],
-    "de": ["Fertig", "3 Zeilen", "1,5 KB", "1536,0 KB", "läuft…", "läuft… 1 min 5 s", "Fehler",
-           "Dauerhafter Workflow", "Entfernen", "items: [3 Einträge]"],
+           "Persistent Workflow", "Delete", "items: [3 items]", "1000 lines", "1536 lines",
+           "items: [1536 items]"],
+    "de": ["Fertig", "3 Zeilen", "1,5 KB", "1536,0 KB", "läuft…", "läuft… 1\u00a0min\u00a05\u00a0s", "Fehler",
+           "Dauerhafter Workflow", "Entfernen", "items: [3 Einträge]", "1000 Zeilen", "1536 Zeilen",
+           "items: [1536 Einträge]"],
     "ja": ["完了", "3行", "1.5 KB", "1536.0 KB", "実行中…", "実行中…1分5秒", "エラー",
-           "永続ワークフロー", "削除", "items: [3件]"],
+           "永続ワークフロー", "削除", "items: [3件]", "1000行", "1536行", "items: [1536件]"],
 }
 
 
@@ -405,16 +454,19 @@ def test_the_card_renders_in_the_page_language(locale):
     assert not leaked, f"{locale} card shows another language: {leaked}"
 
 
-@pytest.mark.parametrize("locale,one,many,more", [
-    ("en", "1 action", "15 actions", "2 more"),
-    ("de", "1 Aktion", "15 Aktionen", "2 weitere"),
-    ("ja", "1件の操作", "15件の操作", "他2件"),
+@pytest.mark.parametrize("locale,one,many,more,lots", [
+    ("en", "1 action", "15 actions", "2 more", "1536 actions"),
+    ("de", "1 Aktion", "15 Aktionen", "2 weitere", "1536 Aktionen"),
+    ("ja", "1件の操作", "15件の操作", "他2件", "1536件の操作"),
 ])
-def test_the_timeline_counts_in_the_page_language(locale, one, many, more):
-    single, elided = _render("components/TurnActionsTimeline.tsx", "TurnActionsTimeline", locale, [
+def test_the_timeline_counts_in_the_page_language(locale, one, many, more, lots):
+    single, elided, long_turn = _render("components/TurnActionsTimeline.tsx", "TurnActionsTimeline", locale, [
         {"actionsCount": 1, "isLive": False, "expanded": False},
         {"actionsCount": 15, "isLive": False, "expanded": False},
+        {"actionsCount": 1536, "isLive": False, "expanded": False},
     ])
     assert one in _text(single)
     assert many in _text(elided)
     assert f'aria-label="{more}"' in elided and f'title="{more}"' in elided
+    # ICU groups a `#`, which turned 1536 into "1,536" and "1.536"; the plain argument does not.
+    assert lots in _text(long_turn)

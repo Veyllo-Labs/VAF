@@ -286,6 +286,8 @@ def test_an_ordinary_project_is_still_accepted(roots):
 READ_ONLY_CALLERS = {
     ("vaf/tools/cloud_storage.py", "_action_save", "True"): "the local file it copies from",
     ("vaf/tools/codesearch.py", "CodeSearchTool.run", "True"): "searches",
+    ("vaf/tools/coder.py", "_live_view_target", "True"):
+        "the live editor shows a file the read tool just read",
     ("vaf/tools/document_viewer.py", "DocumentViewerTool.run", "True"): "shows a file",
     ("vaf/tools/environments.py", "SandboxTransferTool.run", "action == 'copy_in'"):
         "copy_in reads host_path, copy_out writes it",

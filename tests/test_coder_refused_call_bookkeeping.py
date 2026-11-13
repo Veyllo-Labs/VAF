@@ -35,6 +35,13 @@ MUTATIONS, each turns the named test red:
   preview opening the path itself -> test_the_write_preview_never_opens_a_refused_file;
 - the duplicate-write shortcut without the dispatch refusal in front of it
   -> test_the_duplicate_write_shortcut_asks_the_dispatch_first;
+- ReadFileTool answering a read the OS refused with the bare exception text again, or
+  "Tool Error:" dropped from `_READ_FAILURE_OPENERS`
+  -> test_every_failed_read_opens_with_an_opener;
+- the call site's `if fn_name == "read_file" and fn_args.get("path"):` turned off
+  -> test_a_relative_read_is_the_projects_file;
+- `_live_view_target` without its size cap or its binary-suffix check
+  -> test_the_live_view_shows_only_small_text_files;
 - the `abort_kind` check dropped -> test_funnel_and_abort_answers_are_failures;
 - the `is_error_result = (` list restored in `run()`, the guard's write check back to
   `.startswith("error")`, `and not is_error_result` dropped from the mirror, or the refusal
@@ -412,6 +419,12 @@ def test_a_relative_read_is_the_projects_file(linked):
     assert _project_read_path("~/x.txt", str(w.proj)) == "~/x.txt"
     src = _run_source()
     assert 'fn_args["path"] = _project_read_path(str(fn_args["path"]), base_dir)' in src
+    # The join runs for every read_file call that has a path, and only for those.
+    site = [n for n in ast.walk(_run_tree()) if isinstance(n, ast.If)
+            and "_project_read_path(" in ast.unparse(n.body[0])
+            and not any(isinstance(b, ast.If) for b in n.body)]
+    assert len(site) == 1
+    assert ast.unparse(site[0].test) == "fn_name == 'read_file' and fn_args.get('path')"
     # Before the tool runs, so the tool, the mirror and files_known judge the same file.
     assert src.index("_project_read_path(str(fn_args") < src.index("# THE FUNNEL, like every")
 
@@ -486,3 +499,41 @@ def test_the_duplicate_write_shortcut_asks_the_dispatch_first(world):
     cond = [n for n in ast.walk(block) if isinstance(n, ast.IfExp)
             and any(c is rewrite[0] for c in ast.walk(n.orelse))]
     assert cond and "is not None" in ast.unparse(cond[0].test), "rewrite asked regardless"
+
+
+def test_every_failed_read_opens_with_an_opener(world, monkeypatch):
+    p = world.proj
+    target = str(p / "index.html")
+    real_open = builtins.open
+
+    def refusing_open(file, *a, **k):
+        if os.path.abspath(str(file)) == target:
+            raise PermissionError(13, "Permission denied", target)
+        return real_open(file, *a, **k)
+
+    # A read the operating system refuses after every screen passed (a mode-000 file in the
+    # account's own project): the tool's answer must open like its other failures.
+    monkeypatch.setattr(builtins, "open", refusing_open)
+    out = world.run("read_file", {"path": target})
+    monkeypatch.setattr(builtins, "open", real_open)
+    assert "Permission denied" in out, out
+    assert _failed(world, "read_file", out), out
+
+    # The funnel's own answer for a call without its required argument.
+    out = world.run("read_file", {})
+    assert out.startswith("Tool Error:"), out
+    assert _failed(world, "read_file", out), out
+
+
+def test_the_live_view_shows_only_small_text_files(world):
+    from vaf.tools.coder import _LIVE_VIEW_MAX_BYTES, _live_view_target
+    p = world.proj
+    big = p / "big.txt"
+    big.write_bytes(b"a" * (_LIVE_VIEW_MAX_BYTES + 1))
+    assert _live_view_target(str(big), scope=None, role=None) is None
+    fits = p / "fits.txt"
+    fits.write_bytes(b"a" * _LIVE_VIEW_MAX_BYTES)
+    assert _live_view_target(str(fits), scope=None, role=None) == str(fits)
+    picture = p / "logo.png"
+    picture.write_bytes(b"\x89PNG\r\n\x1a\n")
+    assert _live_view_target(str(picture), scope=None, role=None) is None

@@ -267,7 +267,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   successful write to a file whose name contains "locked", "blocked" or "failed", and a read of a
   file that starts with a word like "Failed" or "Cannot", are no longer counted as errors. A
   relative path the coding agent reads now means a file in its project, as it already did for
-  writes. Needs a restart of VAF for coding runs inside VAF's own process.
+  writes. A file the operating system refuses to open now answers as a failed read everywhere,
+  instead of a bare system message the agents took for the file's text. Needs a restart of VAF
+  for coding runs inside VAF's own process.
 - **Pictures in replies no longer load from other servers.** A picture in a reply, a Markdown
   file's preview, an attached Markdown document or a model card now loads only when it is a
   file on your VAF; a picture from anywhere else shows as a link with a picture icon that you

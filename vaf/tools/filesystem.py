@@ -1179,7 +1179,11 @@ For semantic analysis across many files, consider librarian_agent instead."""
                 index = self._structure_index(lines)
                 return header + (index + "\n" if index else "") + "".join(window)
 
-        except Exception as e: return str(e)
+        except Exception as e:
+            # Opened like every other failure here, so a caller that judges the answer by its
+            # start (the coder's read-before-edit, the chat lane's status) sees a failed read,
+            # not a file whose text is an OS message.
+            return f"Error: could not read {path}: {e}"
 
     def _structure_index(self, lines: list) -> str:
         """Markdown heading index with line numbers, for jumping with start_line.

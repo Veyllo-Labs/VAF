@@ -197,18 +197,20 @@ if [ -n "$WEB_CHANGED" ]; then
     # (v<version>)") and on exact argv elements for the tray, never on the joined
     # command line: a shell that only waited for or grepped for a server carried
     # the words in its -c payload and failed a whole run here with no server up.
-    # The helper names every PID it matched, and refuses when it cannot read the
-    # process table.
+    # The helper names every PID it matched (exit 1). Any other non-zero code
+    # (2 unreadable process table, 3 the helper's own error, 127 no python, a
+    # signal) means the answer is unknown, and that refuses too.
     RUNNING_APP=0
     python scripts/running_app.py || RUNNING_APP=$?
-    if [ "$RUNNING_APP" -eq 2 ]; then
-        echo "ERROR: cannot tell whether VAF is running (reason above), so the" >&2
-        echo "web build is refused rather than risked against a live app." >&2
-        exit 1
-    elif [ "$RUNNING_APP" -ne 0 ]; then
+    if [ "$RUNNING_APP" -eq 1 ]; then
         echo "ERROR: VAF is running - stop it before the web build (rebuilding" >&2
         echo ".next under the live app breaks the session it is serving)." >&2
         echo "The process(es) listed above matched a Next server or the VAF tray." >&2
+        exit 1
+    elif [ "$RUNNING_APP" -ne 0 ]; then
+        echo "ERROR: cannot tell whether VAF is running (the check exited" >&2
+        echo "$RUNNING_APP, reason above), so the web build is refused rather than" >&2
+        echo "risked against a live app." >&2
         exit 1
     fi
     # A build against a STALE node_modules is the green that is not earned:

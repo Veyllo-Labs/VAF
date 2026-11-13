@@ -77,21 +77,29 @@ def _guard_block() -> str:
     return "\n".join(lines[start:end + 1])
 
 
+_FOUND = "VAF is running - stop it"
+_UNKNOWN = "cannot tell whether VAF is running"
+
+
 @posix_only
 @pytest.mark.parametrize("helper_exit, gate_exit, words", [
     (0, 0, None),
-    (1, 1, "VAF is running"),
-    (2, 1, "cannot tell whether VAF is running"),
-    (137, 1, None),  # the helper killed by a signal
+    (1, 1, _FOUND),
+    (2, 1, _UNKNOWN),    # process table unreadable
+    (3, 1, _UNKNOWN),    # the helper's own error
+    (127, 1, _UNKNOWN),  # no python on PATH
+    (137, 1, _UNKNOWN),  # the helper killed by a signal
 ])
 def test_the_stage_refuses_on_every_non_zero_answer(helper_exit, gate_exit, words):
-    """The helper's exit 2 (table unreadable) must refuse as firmly as exit 1, and
-    so must any other non-zero code: a crashed helper is not a green light."""
+    """Every non-zero answer refuses, and only exit 1 claims a running app: a
+    crashed or missing helper listed nothing, so "listed above" would be false."""
     script = f"set -e\npython() {{ return {helper_exit}; }}\n{_guard_block()}\nexit 0\n"
     run = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30)
     assert run.returncode == gate_exit, run.stderr
     if words:
         assert words in run.stderr
+    for other in {_FOUND, _UNKNOWN} - {words}:
+        assert other not in run.stderr
 
 
 # ── criteria 2 and 3: the title, not the words ───────────────────────────────
@@ -244,6 +252,46 @@ def test_unreadable_table_refuses(monkeypatch, capsys):
     assert "cannot read the process table" in capsys.readouterr().err
 
 
+def test_an_internal_error_is_not_a_match(monkeypatch, capsys):
+    """A bug in the check must not read as "found" (exit 1) nor as "unreadable
+    table" (exit 2): it gets its own code and its traceback."""
+    import psutil
+    from vaf.core import instance
+
+    def broken(argv):
+        raise ValueError("matcher bug")
+
+    table = [_Proc(info={"pid": 4242, "name": "python", "cmdline": ["python", "-m", "vaf.main", "tray"]})]
+    monkeypatch.setattr(psutil, "process_iter", lambda *_a, **_k: iter(table))
+    monkeypatch.setattr(instance, "is_tray_entry", broken)
+    assert _module().main() == 3
+    err = capsys.readouterr().err
+    assert "the running-app check failed" in err
+    assert "ValueError: matcher bug" in err
+    assert "PID 4242" not in err
+
+
+def test_a_failure_midway_prints_no_partial_list(monkeypatch, capsys):
+    """The refusal must not list half the matches and then die: either every
+    match is named (exit 1) or none is (exit 3)."""
+    import psutil
+
+    mod = _module()
+    table = [_Proc(info={"pid": pid, "name": _FULL_TITLE, "cmdline": [_FULL_TITLE]}) for pid in (11, 12)]
+    monkeypatch.setattr(psutil, "process_iter", lambda *_a, **_k: iter(table))
+    real, calls = mod._command, []
+
+    def flaky(match):
+        calls.append(match.pid)
+        if len(calls) > 1:
+            raise RuntimeError("second line")
+        return real(match)
+
+    monkeypatch.setattr(mod, "_command", flaky)
+    assert mod.main() == 3
+    assert "PID 11" not in capsys.readouterr().err
+
+
 def test_missing_psutil_refuses(monkeypatch, capsys):
     monkeypatch.setitem(sys.modules, "psutil", None)
     assert _module().main() == 2
@@ -275,12 +323,26 @@ def test_vanished_process_is_skipped(monkeypatch, error_name):
     assert [(m.pid, m.kind) for m in hits] == [(4242, "next-server")]
 
 
-def test_the_scripts_own_tree_is_imported_first():
+@pytest.mark.parametrize("other_checkout_first", [False, True])
+def test_the_scripts_own_tree_is_imported_first(tmp_path, other_checkout_first):
     """A worktree's gate must use that worktree's matcher, not the editable
-    install's, so the script puts its own tree first on sys.path."""
+    install's and not another checkout listed ahead of it on PYTHONPATH: the
+    script moves its own tree to the front of sys.path."""
     env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
-    code = f"import runpy, sys; runpy.run_path({str(_SCRIPT)!r}); print(sys.path[0])"
+    if other_checkout_first:
+        other = tmp_path / "other"
+        (other / "vaf" / "core").mkdir(parents=True)
+        (other / "vaf" / "__init__.py").write_text("", encoding="utf-8")
+        (other / "vaf" / "core" / "__init__.py").write_text("", encoding="utf-8")
+        (other / "vaf" / "core" / "instance.py").write_text("", encoding="utf-8")
+        env["PYTHONPATH"] = os.pathsep.join([str(other), str(_REPO)])
+    code = (f"import runpy, sys; runpy.run_path({str(_SCRIPT)!r}); "
+            "import vaf.core.instance as i; print(sys.path[0]); print(i.__file__); "
+            "print(sum(1 for p in sys.path if p == sys.path[0]))")
     run = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
-                         env=env, cwd=str(_SCRIPT.parent), timeout=60)
+                         env=env, cwd=str(tmp_path), timeout=60)
     assert run.returncode == 0, run.stderr
-    assert Path(run.stdout.strip()) == _REPO
+    first, instance_file, copies = run.stdout.split()
+    assert Path(first) == _REPO
+    assert Path(instance_file).resolve().is_relative_to(_REPO)
+    assert copies == "1", "the tree's entry is moved to the front, not duplicated"

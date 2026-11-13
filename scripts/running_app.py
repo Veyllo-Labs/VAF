@@ -6,8 +6,10 @@ scripts/ci_check.sh asks this before it rebuilds `.next`, because a build under 
 live app corrupts the pages it is serving.
 
 Exit 0: nothing found. Exit 1: something found; every match is written to stderr
-as `PID <pid> (<kind>): <command>`. Exit 2: the process table could not be read,
-and the gate refuses rather than guess.
+as `PID <pid> (<kind>): <command>`. Exit 2: the process table could not be read.
+Exit 3: the check itself failed (its traceback goes to stderr), so a crash is
+never mistaken for a match. The gate refuses on every code but 0 rather than
+guess.
 
 The match is on the process TITLE and on exact argv ELEMENTS, never on the joined
 command line. The gate used to run `pgrep -f "next-server|vaf.main tray"`, which
@@ -39,14 +41,26 @@ from __future__ import annotations
 
 import os
 import sys
+import traceback
 from pathlib import Path
 from typing import Iterable, NamedTuple
 
-# The tree this script lives in, ahead of an installed vaf: the gate checks a
-# worktree with that worktree's own matcher, not the editable install's.
+# The tree this script lives in, ahead of an installed vaf and of any other
+# checkout on PYTHONPATH: the gate checks a worktree with that worktree's own
+# matcher. An entry already on the path is moved to the front, not left behind
+# whatever precedes it.
 _ROOT = str(Path(__file__).resolve().parent.parent)
-if _ROOT not in sys.path:
-    sys.path.insert(0, _ROOT)
+
+
+def _is_root(entry) -> bool:
+    try:
+        return str(Path(entry).resolve()) == _ROOT
+    except Exception:
+        return False
+
+
+sys.path[:] = [entry for entry in sys.path if not _is_root(entry)]
+sys.path.insert(0, _ROOT)
 
 NEXT_TITLE = "next-server"
 _COMMAND_LIMIT = 300
@@ -125,12 +139,19 @@ def main() -> int:
         print(f"  cannot read the process table: psutil is unavailable ({exc})", file=sys.stderr)
         return 2
     try:
-        found = find_running_app()
+        table = list(_process_table())
     except Exception as exc:
         print(f"  cannot read the process table: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
-    for match in found:
-        print(f"  PID {match.pid} ({match.kind}): {_command(match)}", file=sys.stderr)
+    try:
+        found = find_running_app(table)
+        lines = [f"  PID {match.pid} ({match.kind}): {_command(match)}" for match in found]
+    except Exception:
+        print("  the running-app check failed:", file=sys.stderr)
+        print(traceback.format_exc().rstrip(), file=sys.stderr)
+        return 3
+    for line in lines:
+        print(line, file=sys.stderr)
     return 1 if found else 0
 
 

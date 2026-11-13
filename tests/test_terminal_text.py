@@ -921,7 +921,53 @@ def test_a_step_handler_cannot_be_built_without_its_run():
     assert q.empty()
 
 
-def test_two_overlapping_browser_runs_each_capture_only_their_own_steps():
+@pytest.fixture
+def browser_use_logger():
+    """The process-wide `browser_use` logger, put back as it was after the test: the step
+    capture changes its level, its propagation and its handlers for the whole process."""
+    import logging
+
+    logger = logging.getLogger("browser_use")
+    saved = (logger.level, logger.propagate, list(logger.handlers))
+    yield logger
+    logger.setLevel(saved[0])
+    logger.propagate = saved[1]
+    logger.handlers[:] = saved[2]
+
+
+def test_a_runs_step_lines_reach_its_window_and_not_the_tray_log(browser_use_logger):
+    """With debug logs on, the tray puts its log file on the root logger and browser-use
+    leaves its own logging alone. The capture needs the logger at INFO, and a propagating
+    logger at INFO handed every account's "Next goal" and action lines to that shared file
+    (measured: absent at the base of this branch, present before this fix). The step line
+    reaches the run's window only; a WARNING still reaches the root's handlers once, as it
+    did with the logger at WARNING. MUTATION: keep the logger propagating - red (the INFO
+    line in the file); drop the relay - red (no WARNING in the file)."""
+    import logging
+    import queue
+
+    from vaf.tools.browser_agent import _attach_step_logger
+
+    stream = io.StringIO()
+    tray_log = logging.StreamHandler(stream)
+    tray_log.setLevel(logging.DEBUG)
+    root = logging.getLogger()
+    root.addHandler(tray_log)
+    try:
+        q = queue.Queue()
+        handler = _attach_step_logger(q)
+        log = logging.getLogger("browser_use.agent")
+        log.info("Next goal: the info line")
+        log.warning("the warning line")
+        browser_use_logger.removeHandler(handler)
+    finally:
+        root.removeHandler(tray_log)
+    assert list(q.queue) == ["Next goal: the info line", "the warning line"]
+    assert "the info line" not in stream.getvalue()
+    assert stream.getvalue().count("the warning line") == 1
+
+
+def test_two_overlapping_browser_runs_each_capture_only_their_own_steps(browser_use_logger):
     """Every run's step handler hangs on the one process-wide `browser_use` logger, and each
     run's window shows what its queue holds. Two runs that overlap in one process (the
     per-user pool, a server for several accounts) each received the other's step lines.
@@ -935,8 +981,7 @@ def test_two_overlapping_browser_runs_each_capture_only_their_own_steps():
     from vaf.core.bounded_run import run_coroutine_on_new_loop
     from vaf.tools.browser_agent import _attach_step_logger
 
-    bu_logger = logging.getLogger("browser_use")
-    level = bu_logger.level
+    bu_logger = browser_use_logger
     log = logging.getLogger("browser_use.agent")
     attached, logged = threading.Barrier(3, timeout=10), threading.Barrier(3, timeout=10)
     captured = {}
@@ -958,16 +1003,13 @@ def test_two_overlapping_browser_runs_each_capture_only_their_own_steps():
 
     runs = [threading.Thread(target=run_coroutine_on_new_loop, args=(run(name),))
             for name in ("alice", "bob")]
-    try:
-        for thread in runs:
-            thread.start()
-        attached.wait()
-        log.info("a line of no run")
-        logged.wait()
-        for thread in runs:
-            thread.join(10)
-    finally:
-        bu_logger.setLevel(level)
+    for thread in runs:
+        thread.start()
+    attached.wait()
+    log.info("a line of no run")
+    logged.wait()
+    for thread in runs:
+        thread.join(10)
     assert captured == {"alice": ["Next goal of alice", "action of alice"],
                         "bob": ["Next goal of bob", "action of bob"]}, captured
 

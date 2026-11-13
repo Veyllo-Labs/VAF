@@ -481,13 +481,44 @@ class _BrowserStepLogger(logging.Handler):
             pass
 
 
-def _attach_step_logger(q: _queue.Queue) -> "_BrowserStepLogger":
-    """Capture browser-use's step lines into `q`, and make sure they are emitted at all.
+class _WarningsToRoot(logging.Handler):
+    """What the `browser_use` logger passes on to the root logger once it stops propagating:
+    WARNING and above, exactly the records that reached the root's handlers (the terminal,
+    the tray's debug log) while the logger sat at WARNING."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.WARNING)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        logging.getLogger().handle(record)
+
+
+_STEP_ROUTING_LOCK = threading.Lock()
+
+
+def _route_step_lines() -> None:
+    """Let browser-use's INFO step lines reach the step capture and nothing else.
 
     browser-use sets its logger to INFO only when it configures logging itself on import,
     which it skips when the root logger already has a handler (the CLI entry point installs
     one, see `vaf.core.terminal_text.install_terminal_logging`; the tray's log file is
-    another). Without the level its INFO step lines would never reach this handler.
+    another). The capture needs INFO, but a logger at INFO that propagates hands every
+    account's "Next goal" and action lines to the root's handlers, the tray's shared debug
+    log among them (measured: absent there before, present after). So the logger stops
+    propagating and passes WARNING and above on to the root itself, as before. A logger
+    browser-use configured itself (its own handler, no propagation) is left as it is."""
+    bu_logger = logging.getLogger("browser_use")
+    with _STEP_ROUTING_LOCK:
+        if bu_logger.propagate:
+            bu_logger.addHandler(_WarningsToRoot())
+            bu_logger.propagate = False
+        if bu_logger.getEffectiveLevel() > logging.INFO:
+            bu_logger.setLevel(logging.INFO)
+
+
+def _attach_step_logger(q: _queue.Queue) -> "_BrowserStepLogger":
+    """Capture browser-use's step lines into `q`, and make sure they are emitted at all, to
+    the capture only (`_route_step_lines`).
 
     Call it in the run's own task, before the run's agent task is created: it marks the
     current context as this run (`_STEP_RUN`), and the handler takes only records logged
@@ -495,10 +526,8 @@ def _attach_step_logger(q: _queue.Queue) -> "_BrowserStepLogger":
     run = object()
     _STEP_RUN.set(run)
     handler = _BrowserStepLogger(q, run)
-    bu_logger = logging.getLogger("browser_use")
-    if bu_logger.getEffectiveLevel() > logging.INFO:
-        bu_logger.setLevel(logging.INFO)
-    bu_logger.addHandler(handler)
+    _route_step_lines()
+    logging.getLogger("browser_use").addHandler(handler)
     return handler
 
 

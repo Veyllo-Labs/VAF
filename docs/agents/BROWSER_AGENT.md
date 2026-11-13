@@ -148,9 +148,13 @@ them on stderr: browser-use installed a raw stderr handler of its own when it wa
 and the CLI's cleaning log handler now keeps that from happening (see "Text from others on a
 terminal" in [USER_ISOLATION.md](../security/USER_ISOLATION.md#text-from-others-on-a-terminal)).
 The capture sets browser-use's logger to INFO itself, so the tray, whose log file (with
-debug logs on, the default) used to keep browser-use from configuring itself, now receives
-the step lines too. Each run's capture takes only the lines logged in its own run, so two runs
-at once in one process never show each other's steps (see "Browser agent session store" in
+debug logs on, the default) used to keep browser-use from configuring itself, now shows the
+step lines in the browser window too. They go to the run's own window and nowhere else: not to
+the terminal and not to the tray's debug log (`tray_debug_*.log`), which every account's runs
+share. The logger stops propagating and passes only WARNING and above on to the root logger,
+the records that reached the terminal and that log before. Each run's capture takes only the
+lines logged in its own run, so two runs at once in one process never show each other's
+steps (see "Browser agent session store" in
 [USER_ISOLATION.md](../security/USER_ISOLATION.md)).
 
 ### Stopping a run

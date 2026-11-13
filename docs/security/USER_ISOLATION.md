@@ -834,7 +834,9 @@ and every run's capture hangs on it, so two runs that overlapped in one process 
 pool, the server serving several accounts) each sent the other's lines to their own session.
 Each capture now takes only the records logged in its own run's context (`_STEP_RUN`, set in
 the run's task before the agent task starts; a record from a thread outside any run goes to
-nobody). Guard: `tests/test_terminal_text.py`, two overlapping runs.
+nobody). They do not reach the tray's debug log, which every account's runs share: the
+`browser_use` logger passes only WARNING and above on to the root logger. Guard:
+`tests/test_terminal_text.py`, two overlapping runs and the tray log.
 
 ### Interactive browser (`vaf/core/browser_interactive.py`)
 

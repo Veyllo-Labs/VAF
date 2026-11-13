@@ -65,6 +65,9 @@ MUTATIONS, each turns the named test red:
   -> test_the_chat_uses_the_wrapper_and_the_moved_link_rule;
 - encode the fragment into the path (split nothing at `#`), or drop the fragment
   -> test_a_file_link_goes_to_the_file_lane, test_the_chat_uses_the_wrapper_and_the_moved_link_rule;
+- split at the last `#` (`lastIndexOf`) -> test_the_chat_uses_the_wrapper_and_the_moved_link_rule;
+- split after decoding (a `%23` in the name then cuts it) -> test_the_chat_uses_the_wrapper_and_the_moved_link_rule,
+  test_a_file_link_goes_to_the_file_lane, test_the_decision_over_hostile_and_own_sources;
 - render a picture link without its icon (`if (true) return <Anchor ...>` in the wrapper)
   -> test_a_remote_image_in_a_bubble_is_a_link_not_an_image;
 - try the http base first (`//host/x` then reads as http)
@@ -282,7 +285,7 @@ HOSTILE = [
 
 def test_the_decision_over_hostile_and_own_sources():
     srcs = HOSTILE + ["/api/file/../config", "/api/file?path=a.png#frag", "api/file?path=a", "C:\\Users\\a\\c.png",
-                      "sandbox:/a b.png", "/home/user/c.png"]
+                      "sandbox:/a b.png", "/home/user/c.png", "/home/user/C%23.png#x", "/home/user/C#.png"]
     outs = _run([["own", s] for s in srcs])
     got = dict(zip(srcs, outs))
     for s in HOSTILE:
@@ -298,6 +301,9 @@ def test_the_decision_over_hostile_and_own_sources():
     assert got["C:\\Users\\a\\c.png"] == "/api/file?path=C%3A%5CUsers%5Ca%5Cc.png"
     assert got["sandbox:/a b.png"] == "/api/file?path=%2Fa%20b.png"
     assert got["/home/user/c.png"] == "/api/file?path=%2Fhome%2Fuser%2Fc.png"
+    # A picture keeps path and query only: `%23` is a `#` in the name, a bare `#` starts a fragment.
+    assert got["/home/user/C%23.png#x"] == "/api/file?path=%2Fhome%2Fuser%2FC%23.png"
+    assert got["/home/user/C#.png"] == "/api/file?path=%2Fhome%2Fuser%2FC"
     for s, value in got.items():
         assert value is None or value.startswith("/api/file?"), (s, value)
 
@@ -423,6 +429,10 @@ NORMALIZE_CASES = [
     ("sandbox:/out/r.pdf#page=3", "/api/file?path=%2Fout%2Fr.pdf#page=3"),
     ("C:\\x\\r.pdf#page=4", "/api/file?path=C%3A%5Cx%5Cr.pdf#page=4"),
     ("/home/user/C%23.md#intro", "/api/file?path=%2Fhome%2Fuser%2FC%23.md#intro"),
+    # Split at the FIRST `#`, and before decoding: the `%23` after an escape stays in the name.
+    ("/home/user/a.pdf#x#y", "/api/file?path=%2Fhome%2Fuser%2Fa.pdf#x#y"),
+    ("/home/user/B%C3%BCcher/C%23.md#i", "/api/file?path=%2Fhome%2Fuser%2FB%C3%BCcher%2FC%23.md#i"),
+    ("/api/file?path=a#x", "/api/file?path=a#x"),
     ("//host.example/x#y", "//host.example/x#y"),
     ("https://x.example/r", "https://x.example/r"),
     # A browser reads these as another host: a web link, not a file.

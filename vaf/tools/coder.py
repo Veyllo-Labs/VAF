@@ -49,7 +49,7 @@ from vaf.core.persistence import PersistenceManager, ProjectState, Task, coerce_
 # Project directory safety lives in core (vaf/core/workspace_guard.py): the session store,
 # the web server and the headless runner ask the same question.
 from vaf.core.workspace_guard import (  # noqa: E402
-    OUTSIDE_ACCOUNT, is_unsafe_project_dir, project_dir_refusal,
+    OUTSIDE_ACCOUNT, REMOTE_PROJECT_DIR, is_unsafe_project_dir, project_dir_refusal,
 )
 from vaf.core.local_engine import reasoning_text  # noqa: E402
 
@@ -86,15 +86,19 @@ def _looks_like_file_path(path) -> bool:
     An existing filesystem entry decides directly (isfile/isdir). A path that
     does not exist yet counts as a file only when its basename carries a known
     file extension (_FILE_TARGET_EXTENSIONS) - dot-directories (".vaf") split to
-    ("", ".vaf") in splitext and stay directories.
+    ("", ".vaf") in splitext and stay directories. A network share or device path is
+    answered from the text alone: on Windows isfile/isdir already contact the share, and
+    every caller refuses that path afterwards (`REMOTE_PROJECT_DIR`).
     """
     p = str(path or "").strip()
     if not p:
         return False
-    if os.path.isfile(p):
-        return True
-    if os.path.isdir(p):
-        return False
+    from vaf.core.path_jail import is_remote_path
+    if not is_remote_path(p):
+        if os.path.isfile(p):
+            return True
+        if os.path.isdir(p):
+            return False
     mod = _path_module_for(p)
     ext = mod.splitext(mod.basename(p.rstrip("/\\")))[1].lower()
     return ext in _FILE_TARGET_EXTENSIONS
@@ -2840,6 +2844,9 @@ def _project_path_refusal(project_path, scope, role):
     if not project_path:
         return None
     given = os.path.abspath(os.path.expanduser(str(project_path)))
+    from vaf.core.path_jail import is_remote_path
+    if is_remote_path(str(project_path)) or is_remote_path(given):
+        return f"Error: cannot work in '{given}': {REMOTE_PROJECT_DIR}."
     try:
         folder, _hint = _split_explicit_path(given)
         from vaf.tools.filesystem import jail_allows
@@ -2897,7 +2904,7 @@ def _choose_base_dir(tool, task, project_path, *, scope, role, content_only):
         project_path = _pp_abs
     if project_path:
         reason = project_dir_refusal(project_path, user_scope_id=scope, user_role=role)
-        if reason == OUTSIDE_ACCOUNT:
+        if reason in (OUTSIDE_ACCOUNT, REMOTE_PROJECT_DIR):
             return _BaseDirChoice("", hint, notes,
                                   f"Error: cannot work in '{project_path}': {reason}.",
                                   "project_path")
@@ -3454,8 +3461,10 @@ class CodingAgentTool(BaseTool):
             _sm = _SM()
             _sess = _sm.load(_sid)
             _last = (getattr(_sess, "runtime_state", None) or {}).get("last_project_path", "")
-            if (_last and os.path.isdir(_last)
-                    and project_dir_refusal(_last, user_scope_id=scope, user_role=role) is None):
+            # The screen before the existence probe: a stored path can be a share path,
+            # which on Windows the probe already contacts.
+            if (_last and project_dir_refusal(_last, user_scope_id=scope, user_role=role) is None
+                    and os.path.isdir(_last)):
                 return _last
         except Exception:
             pass

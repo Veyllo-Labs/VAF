@@ -66,7 +66,12 @@ directory in this order (normal mode):
     '<path>' is outside the folders this account may write ... Leave project_path out to
     start a new project in this account's own folder." (the path as given, so the answer does
     not depend on whether it exists). The spawned child runs the same check with the
-    identity from its environment; the check in `_choose_base_dir` is the backstop.
+    identity from its environment; the check in `_choose_base_dir` is the backstop. A
+    network share or device path (`vaf.is_remote_path`) is refused the same way with
+    `REMOTE_PROJECT_DIR`, before anything probes it: the file-vs-directory rule answers it
+    from its text alone, because on Windows probing a share already contacts that host. A
+    share named in the task text is never used, and the chat's stored last project is
+    screened before it is probed.
 2.  **Explicit path in the task text** - `_extract_explicit_task_path()` matches phrase forms
     ("im Verzeichnis /x", "in directory /x", "path: /x") and bare absolute paths
     (`/home|/tmp|/mnt|/root/...` or Windows drive paths). Dots are part of the match (filenames
@@ -156,7 +161,7 @@ The coder owns each project's version history (built up by the final commit on e
 
 Rollback safety (`ProjectRollbackTool`): uncommitted work is committed as a backup first, then the target state is restored via `git revert` as a NEW commit - history is never rewritten and every rollback can itself be rolled back. Unsafe directories and non-git folders are refused.
 
-Whose folder: both tools declare `identity_kwargs = ("user_scope_id", "user_role")`, and the shortcut passes the caller's pair (which also covers a call without `project_path`, where the tools fall back to the chat's stored folder). `_resolve_project` asks `project_dir_refusal` and refuses a folder the caller may not write with "Refused: <path> is outside the folders this account may write.", BEFORE the existence and git checks, so "does not exist" and "not a git repository" reveal nothing about another account's tree. No identity (a direct consumer) keeps the unsafe check alone.
+Whose folder: both tools declare `identity_kwargs = ("user_scope_id", "user_role")`, and the shortcut passes the caller's pair (which also covers a call without `project_path`, where the tools fall back to the chat's stored folder). `_resolve_project` asks `project_dir_refusal` and acts on every refusal BEFORE the existence and git checks: a folder the caller may not write with "Refused: <path> is outside the folders this account may write.", a share path with its own reason, an unsafe folder as not a valid project directory, so "does not exist" and "not a git repository" reveal nothing about another account's tree. No identity (a direct consumer) keeps the unsafe check alone.
 
 Inside the agentic loop the same two tools are registered as base_dir-wrapped local tools (`project_history`, `project_rollback`, wrapped by `_base_dir_tool`), so the coder can also restore a known-good state at its own discretion after breaking something. The wrapper shows the wrapped tool's `identity_kwargs` to the coder's funnel, so a `project_path` the model writes is judged for the caller as well. `_base_dir_tool(tool_class, base_dir, *, owner_scope, owner_role)` takes the run's caller as required keywords, and every wrapped call (the git tools, `update_codex`, `add_memory`, the history tools) first asks `project_dir_refusal` for `base_dir` against that caller and answers `Error: cannot work in '<folder>': <reason>.` on a refusal.
 

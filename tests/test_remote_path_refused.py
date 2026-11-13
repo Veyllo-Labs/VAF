@@ -30,8 +30,15 @@ MUTATIONS, each turns the named test red:
 - take the folder alias's rest as it stands (`'/'.join(parts[1:])`, no `.lstrip('/')`)
   -> test_a_folder_alias_never_joins_a_share_path;
 - drop the check at the top of `is_unsafe_project_dir`, `project_dir_refusal` or `jail_allows`
-  -> test_the_project_folder_check_and_the_jail_refuse_before_they_resolve.
+  -> test_the_project_folder_check_and_the_jail_refuse_before_they_resolve;
+- `_resolve_project` probing the folder before acting on every refusal (the old order: only
+  OUTSIDE_ACCOUNT before `os.path.isdir`), the coder's `_looks_like_file_path` probing a share
+  path, `_project_path_refusal` or `_choose_base_dir` without their share answer,
+  `run_in_workspace` or `_safe_mount_path` without the check
+  -> test_the_project_lanes_refuse_a_share_before_touching_it (and the static guard for the
+  ordering in `_resolve_project`).
 """
+import ast
 import ntpath
 import re
 from pathlib import Path
@@ -154,6 +161,10 @@ def _touches(monkeypatch):
     monkeypatch.setattr(pathlib.Path, "is_dir", record("is_dir", pathlib.Path.is_dir))
     monkeypatch.setattr(os.path, "realpath", record("realpath", os.path.realpath))
     monkeypatch.setattr(os.path, "exists", record("os.exists", os.path.exists))
+    monkeypatch.setattr(os.path, "isfile", record("isfile", os.path.isfile))
+    monkeypatch.setattr(os.path, "isdir", record("isdir", os.path.isdir))
+    monkeypatch.setattr(os.path, "lexists", record("lexists", os.path.lexists))
+    monkeypatch.setattr(pathlib.Path, "is_file", record("is_file", pathlib.Path.is_file))
     monkeypatch.setattr(data_stores, "_spellings", record("_spellings", data_stores._spellings))
     return seen
 
@@ -189,36 +200,80 @@ def _name(call):
     return getattr(call.func, "attr", getattr(call.func, "id", ""))
 
 
-def test_no_tool_touches_its_path_before_the_screen():
-    """In every function that screens a path with `is_safe_path`, nothing reaches the disk with
-    that path DIRECTLY before the screen, unless `is_remote_path` was asked even earlier. The
-    path is followed by the variable names in the screen's argument, not through a value
-    copied into another name first. The two places this found (`codesearch` resolving,
-    `download_file` probing a folder) ask it now."""
-    import ast
+# The screens a path from outside passes before a lane acts on it. Each refuses a share or
+# device path first, before anything of its own resolves it.
+_SCREENS = {"is_safe_path", "project_dir_refusal", "is_unsafe_project_dir", "jail_allows"}
 
+
+def _bare_test(test, var):
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        test = test.operand
+    return isinstance(test, ast.Name) and test.id == var
+
+
+def _settled_line(fn, call, parents):
+    """The line from which a screen's answer has been acted on as a whole: the `if` that tests
+    the call itself, or the first `if refusal:` / `if not allowed:` on the name it was assigned
+    to. A comparison (`if refusal == OUTSIDE_ACCOUNT:`) acts on one answer only."""
+    node, parent = call, parents.get(call)
+    if isinstance(parent, ast.UnaryOp) and isinstance(parent.op, ast.Not):
+        node, parent = parent, parents.get(parent)
+    if isinstance(parent, ast.If) and parent.test is node:
+        return parent.lineno
+    if isinstance(parent, ast.Assign) and len(parent.targets) == 1 and isinstance(parent.targets[0], ast.Name):
+        var = parent.targets[0].id
+        tests = [n.lineno for n in ast.walk(fn) if isinstance(n, ast.If) and n.lineno > call.lineno
+                 and _bare_test(n.test, var)]
+        if tests:
+            return min(tests)
+    return call.lineno
+
+
+# (file, function, variable) whose disk calls come before a LATER screen in the same function
+# because an earlier one, in another function, already screened the value.
+_SCREENED_ELSEWHERE = {
+    # base_dir is `_choose_base_dir`'s answer, which asked project_dir_refusal for it; the
+    # is_unsafe_project_dir near the end of run() is a second question about the finished
+    # project, not the first screen of base_dir.
+    ("vaf/tools/coder.py", "run", "base_dir"),
+}
+
+
+def test_no_tool_touches_its_path_before_the_screen():
+    """In every function that screens a path (`is_safe_path`, `project_dir_refusal`,
+    `is_unsafe_project_dir`, `jail_allows`), nothing reaches the disk with that path DIRECTLY
+    before the screen's answer has been acted on as a whole, unless `is_remote_path` was asked
+    even earlier. The path is followed by the variable names in the screen's argument, not
+    through a value copied into another name first. What this found: `codesearch` resolving
+    and `download_file` probing a folder before `is_safe_path`, and `run_project_git`'s
+    `_resolve_project` probing the folder after `project_dir_refusal` had been asked but only
+    its account answer acted on. All three now ask or act first."""
     bad = []
     for path in sorted((ROOT / "vaf").rglob("*.py")):
         tree = ast.parse(_source(path))
+        parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
         for fn in ast.walk(tree):
-            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) or fn.name == "is_safe_path":
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) or fn.name in _SCREENS:
                 continue
             calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call)]
-            screens = [c for c in calls if _name(c) == "is_safe_path"]
+            screens = [c for c in calls if _name(c) in _SCREENS]
             if not screens:
                 continue
-            first_screen = min(c.lineno for c in screens)
             asked = [c.lineno for c in calls if _name(c) == "is_remote_path"]
             first_ask = min(asked) if asked else None
-            names = {n.id for c in screens for a in c.args[:1] for n in ast.walk(a) if isinstance(n, ast.Name)}
-            for c in calls:
-                if _name(c) in _DISK and c.lineno < first_screen:
-                    used = {n.id for n in ast.walk(c) if isinstance(n, ast.Name)} & names
-                    if used and (first_ask is None or first_ask > c.lineno):
-                        bad.append(f"{path.relative_to(ROOT).as_posix()}:{c.lineno} {fn.name}: "
-                                   f"{_name(c)}() on {sorted(used)} before is_safe_path")
-    assert not bad, ("a path from a tool argument reaches the disk before the screen; ask "
-                     "vaf.core.path_jail.is_remote_path first:\n" + "\n".join(bad))
+            for screen in screens:
+                settled = _settled_line(fn, screen, parents)
+                names = {n.id for a in screen.args[:1] for n in ast.walk(a) if isinstance(n, ast.Name)}
+                for c in calls:
+                    if _name(c) in _DISK and c.lineno < settled:
+                        used = {n.id for n in ast.walk(c) if isinstance(n, ast.Name)} & names
+                        rel = path.relative_to(ROOT).as_posix()
+                        used = {u for u in used if (rel, fn.name, u) not in _SCREENED_ELSEWHERE}
+                        if used and (first_ask is None or first_ask > c.lineno):
+                            bad.append(f"{rel}:{c.lineno} {fn.name}: "
+                                       f"{_name(c)}() on {sorted(used)} before {_name(screen)} is acted on")
+    assert not bad, ("a path from outside reaches the disk before its screen is acted on; ask "
+                     "vaf.core.path_jail.is_remote_path first:\n" + "\n".join(sorted(set(bad))))
 
 
 def test_is_safe_path_asks_first():
@@ -272,3 +327,56 @@ def test_the_project_folder_check_and_the_jail_refuse_before_they_resolve(monkey
         for scope, role in (("", None), ("ab12cd34-0000-0000-0000-000000000000", "admin")):
             assert jail_allows(spelled, user_scope_id=scope, user_role=role) is False, (spelled, role)
     assert seen == [], f"touched before the refusal: {seen}"
+
+
+# A project folder written as a share, in both conventions. On a Linux host os.path.abspath
+# reads a backslash spelling as a relative name; Windows keeps it a UNC path, which is what
+# the simulation below (ntpath.abspath for these spellings) makes the real lanes see.
+PROJECT_SHARES = ["//evil.example/share/proj", "\\\\evil.example\\share\\proj",
+                  "//evil.example/share/proj/index.html", "\\\\evil.example\\share\\proj\\index.html"]
+SCOPE = "ab12cd34-0000-0000-0000-000000000000"
+
+
+def _windows_abspath(monkeypatch):
+    import os
+
+    from vaf.core.path_jail import is_remote_path
+
+    real = os.path.abspath
+    monkeypatch.setattr(os.path, "abspath",
+                        lambda p: ntpath.abspath(p) if is_remote_path(str(p)) else real(p))
+
+
+def test_the_project_lanes_refuse_a_share_before_touching_it(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from vaf.core.environments import EnvironmentManager, EnvironmentRefused
+    from vaf.core.path_jail import is_remote_path
+    from vaf.core.workspace_guard import REMOTE_PROJECT_DIR
+    from vaf.tools import coder
+    from vaf.tools.project_git import _resolve_project
+    from vaf.tools.workspace_exec import run_in_workspace
+
+    _windows_abspath(monkeypatch)
+    own = tmp_path / "VAF_Projects" / "new"
+    tool = SimpleNamespace(_get_session_project_path=lambda *a, **k: "",
+                           _determine_base_dir=lambda *a, **k: str(own))
+    seen = _touches(monkeypatch)
+    for spelled in PROJECT_SHARES:
+        for scope, role in (("", None), (SCOPE, "user"), (SCOPE, "admin")):
+            path, error = _resolve_project(spelled, user_scope_id=scope or None, user_role=role)
+            assert path == "" and REMOTE_PROJECT_DIR in error, (spelled, error)
+            assert REMOTE_PROJECT_DIR in coder._project_path_refusal(spelled, scope, role), spelled
+            choice = coder._choose_base_dir(tool, "build it", spelled, scope=scope, role=role,
+                                            content_only=False)
+            assert REMOTE_PROJECT_DIR in choice.refusal, (spelled, choice)
+            # A share in the task text is never the project; the run goes to its own folder.
+            task = f"build a page in directory {spelled}"
+            choice = coder._choose_base_dir(tool, task, None, scope=scope, role=role, content_only=False)
+            assert choice.base_dir == str(own) and not is_remote_path(choice.base_dir), (spelled, choice)
+        rc, _out, err, mode = run_in_workspace(spelled, "true", user_scope_id=None, user_role=None)
+        assert (rc, mode) == (-2, "refused") and REMOTE_PROJECT_DIR in err, (spelled, err)
+        with pytest.raises(EnvironmentRefused, match="network share"):
+            EnvironmentManager._safe_mount_path(spelled)
+    touched = [s for s in seen if is_remote_path(s[1])]
+    assert touched == [], f"a share path reached the disk: {touched}"

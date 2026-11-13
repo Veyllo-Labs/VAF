@@ -92,13 +92,18 @@ def is_remote_path(spelled: str) -> bool:
     leading ``//`` is an implementation-defined spelling of ``/`` that nothing needs, so
     refusing it only ever errs towards refusing.
 
-    Asked first by the web file routes (``_allowed_file_path``), the file tools' screen
-    (``is_safe_path``), the two tools that touch their path before that screen
-    (``codesearch``, ``download_file``), the project-folder check (``is_unsafe_project_dir``
-    and ``project_dir_refusal``, behind the coder's project path, ``run_project_git`` and the
-    workspace runners) and ``jail_allows``. A lane that resolves an outside path without one
-    of these is not covered; ``tests/test_remote_path_refused.py`` scans the functions that
-    screen with ``is_safe_path`` for a disk call on that same argument. On the facade as
+    Asked first by: the web file routes (``_allowed_file_path``); the file tools' screen
+    (``is_safe_path``) and the two tools that touched their path before it (``codesearch``,
+    ``download_file``); the project-folder checks (``is_unsafe_project_dir``,
+    ``project_dir_refusal``) and the lanes that probed a folder before acting on them (the
+    coder's ``project_path``, a folder named in its task text and its stored last project,
+    ``run_project_git``'s ``_resolve_project``, ``run_in_workspace``, a sandbox environment's
+    mount); and ``jail_allows``. ``tests/test_remote_path_refused.py`` drives those lanes with
+    share paths and records every disk call, and scans every function that screens with one
+    of these four for a disk call on the screened argument (by name, directly) before the
+    screen's answer is acted on. NOT covered: a lane that resolves an outside path without
+    any of them, and the host shell (``host_bash``), whose commands reach whatever the
+    machine reaches; that is a question of its own, not a path screen. On the facade as
     ``vaf.is_remote_path``, because the route recipe in docs/EMBEDDING.md asks primitives that
     resolve the path (``vaf.is_vaf_state``), so a surface built to it would reach out as well.
     A relative fragment through ``vaf.contained_path`` needs no extra question: ``is_rooted``

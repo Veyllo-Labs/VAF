@@ -143,6 +143,11 @@ def run_in_workspace(base_dir: str, command: str, timeout: int = 180, *, user_sc
     account half is skipped for it, but only when the folder lies inside the system temp
     folder.
     """
+    from vaf.core.path_jail import is_remote_path
+    if base_dir and is_remote_path(str(base_dir)):
+        # Before the existence probe: on Windows it already contacts the share.
+        from vaf.core.workspace_guard import REMOTE_PROJECT_DIR
+        return -2, "", f"Refused: cannot run in {base_dir}: {REMOTE_PROJECT_DIR}.", "refused"
     if not base_dir or not os.path.isdir(base_dir):
         return -2, "", f"Workspace not found: {base_dir!r}", "refused"
     ws = os.path.realpath(base_dir)

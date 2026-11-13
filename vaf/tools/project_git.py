@@ -154,14 +154,18 @@ def _resolve_project(provided: str, *, user_scope_id=None, user_role=None) -> "t
             "No project found. This chat has no session workspace yet — "
             "pass project_path explicitly."
         )
-    from vaf.core.workspace_guard import OUTSIDE_ACCOUNT, project_dir_refusal
+    from vaf.core.workspace_guard import OUTSIDE_ACCOUNT, REMOTE_PROJECT_DIR, project_dir_refusal
     refusal = project_dir_refusal(path, user_scope_id=user_scope_id, user_role=user_role)
+    # Every refusal before the existence probe: on Windows probing a share path already
+    # contacts that host.
     if refusal == OUTSIDE_ACCOUNT:
         return "", f"Refused: {path} is outside the folders this account may write."
-    if not os.path.isdir(path):
-        return "", f"Project directory does not exist: {path}"
+    if refusal == REMOTE_PROJECT_DIR:
+        return "", f"Refused: {path}: {refusal}."
     if refusal:
         return "", f"Refused: {path} is not a valid project directory."
+    if not os.path.isdir(path):
+        return "", f"Project directory does not exist: {path}"
     if not os.path.lexists(os.path.join(path, ".git")):
         return "", (
             f"No version history: {path} is not a git repository. "

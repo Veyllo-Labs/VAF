@@ -644,8 +644,13 @@ class EnvironmentManager:
         """The resolved directory, when it may be mounted at /workspace at all: not the home
         directory or a folder above it, not VAF's own data, the home directory's
         configuration or VAF's code (the `:z` relabel must
-        never reach those). Raises EnvironmentRefused."""
-        from vaf.core.workspace_guard import assert_safe_workspace, is_unsafe_project_dir
+        never reach those), and not a network share or device path, refused before anything
+        resolves it (on Windows that already contacts the share). Raises EnvironmentRefused."""
+        from vaf.core.path_jail import is_remote_path
+        from vaf.core.workspace_guard import (REMOTE_PROJECT_DIR, assert_safe_workspace,
+                                              is_unsafe_project_dir)
+        if is_remote_path(str(project_path)):
+            raise EnvironmentRefused(f"{project_path} cannot be mounted: {REMOTE_PROJECT_DIR}")
         p = os.path.realpath(os.path.expanduser(str(project_path)))
         if not os.path.isdir(p):
             raise EnvironmentRefused(f"{project_path} is not a directory")

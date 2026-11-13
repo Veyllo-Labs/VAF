@@ -190,13 +190,13 @@ def __getattr__(name):
         from .core.completion import is_error_reply
         return is_error_reply
     if name == "terminal_text":
-        # Text from somebody else as a terminal may show it: control characters removed, so a
-        # model reply, a room entry or a peer's message cannot set the window title, clear
-        # the screen, plant a link or write the clipboard of whoever reads it. Exported because
-        # the facade's own examples print model output and remote room text to a terminal,
-        # and VAF's own terminal lanes (the CLI, the full-screen app, the engine's fallback
-        # print) apply this same definition. Rich is a base dependency, so the slim base is
-        # unaffected. See docs/EMBEDDING.md, "Showing text on a terminal".
+        # Text from somebody else as a terminal may show it: escape sequences and control
+        # characters removed, so a model reply, a room entry or a peer's message cannot set the
+        # window title, clear the screen, plant a link or write the clipboard of whoever reads
+        # it. Exported because the facade's own examples print model output and remote room
+        # text to a terminal, and VAF's own terminal lanes (the CLI, the full-screen app, the
+        # engine's fallback print) apply this same definition. Rich is a base dependency, so
+        # the slim base is unaffected. See docs/EMBEDDING.md, "Showing text on a terminal".
         from .core.terminal_text import terminal_text
         return terminal_text
     if name in ("TurnRound", "TurnStatus", "model_text", "stored_turn_copy"):

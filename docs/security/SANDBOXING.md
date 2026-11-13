@@ -412,6 +412,12 @@ From the terminal, `vaf env` does the same as the machine owner, behind the term
 `preview ID TARGET`, `stop`, `delete` and `prune`. `exec` keeps each word of `CMD` whole
 (`-- python3 -c "print('a b')"`); a single quoted word is taken as a shell line, so pipes
 and `&&` work (`-- "pip install -r requirements.txt && pytest"`).
+`exec` and `logs` print the program's standard output byte for byte, escape sequences
+included, as `docker exec` and `docker logs` do, so its colours and progress bars work. For
+`logs` that program may be one the agent started (`sandbox_exec(background=true)`), whose
+output the model can steer: read it in a terminal you would let that program write to.
+`list`, `ps` and `preview` print without escape sequences (`vaf.terminal_text`), since they
+show names, commands and page text the agent or a page chose.
 
 Background processes (`sandbox_exec(background=true)`, `python_sandbox(background=true)`) are
 listed, read and stopped with `host_process` (ids `e-<environment>-<process>`), next to the

@@ -507,7 +507,8 @@ def test_the_echo_shows_markup_as_written_and_drops_control_characters():
     from rich.console import Console
     out = io.StringIO()
     Console(file=out, force_terminal=False, color_system=None).print(echo)
-    assert out.getvalue().startswith("[/] [bold]x[/bold] [2J abc\n"), out.getvalue()
+    # The screen clear goes as a whole sequence, so no "[2J" is left behind.
+    assert out.getvalue().startswith("[/] [bold]x[/bold]  abc\n"), out.getvalue()
     assert not {"\x1b", "\x07", "\u202e"} & set(echo)
     assert "\n\tok" in echo, "newline and tab are kept"
 

@@ -9,6 +9,7 @@ findings (or a failed check in error mode), 2 the audit did not complete - a run
 not review everything never exits 0.
 """
 import contextlib
+import json
 import os
 import sys
 from typing import List, Optional
@@ -16,6 +17,7 @@ from typing import List, Optional
 import typer
 
 from vaf.cli.ui import UI
+from vaf.core.terminal_text import terminal_json, terminal_text
 
 app = typer.Typer(help="Review a code change: findings, proven, with a fix prompt each.")
 
@@ -92,12 +94,15 @@ def run(
                             progress=lambda line: sys.stderr.write(f"  {line}\n"),
                             verify_steps=VERIFY_STEPS if verify_steps is None else verify_steps,
                             linked_worktree=linked_worktree)
+    # The report is model text about code that is often somebody else's: what reaches the
+    # terminal carries no escape sequence from it. The JSON keeps every value (the escapes
+    # parse back to the same text); the stored report is left as it is.
     if fmt == "json":
-        sys.stdout.write(report.to_json() + "\n")
+        sys.stdout.write(terminal_json(json.loads(report.to_json()), indent=2) + "\n")
     elif fmt == "prompt":
-        sys.stdout.write(report.to_prompt() + "\n")
+        sys.stdout.write(terminal_text(report.to_prompt()) + "\n")
     else:
-        sys.stdout.write(report.to_text() + "\n")
+        sys.stdout.write(terminal_text(report.to_text()) + "\n")
     raise typer.Exit(report.exit_code(fail_on))
 
 
@@ -114,7 +119,7 @@ def show(path: str = typer.Argument(".", help="The repository"),
     if not text:
         UI.info("No audit of this repository yet: run `vaf audit run`.")
         raise typer.Exit(1)
-    sys.stdout.write(text + "\n")
+    sys.stdout.write(terminal_text(text) + "\n")
 
 
 @app.command("dismiss")

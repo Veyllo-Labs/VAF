@@ -18,6 +18,7 @@ from typing import Optional
 import typer
 
 from vaf.cli.ui import UI
+from vaf.core.terminal_text import terminal_text
 
 app = typer.Typer(help="Your sandbox environments: containers to run, install and test code in.")
 
@@ -72,7 +73,8 @@ def list_envs(all_owners: bool = typer.Option(False, "--all", help="Everybody's 
         return
     for env in envs:
         owner = f"  owner {env.owner}" if all_owners else ""
-        print(env.describe() + owner)
+        # The name and description were chosen by whoever created it, often the agent.
+        print(terminal_text(env.describe() + owner))
 
 
 @app.command("create")
@@ -180,7 +182,9 @@ def ps():
         UI.info("No background processes.")
         return
     for row in rows:
-        print(f"{row['handle']}: {row['state']} - {(row.get('label') or row['command'])[:120]}")
+        # The command and label are what the agent started, so they print cleaned.
+        print(terminal_text(
+            f"{row['handle']}: {row['state']} - {(row.get('label') or row['command'])[:120]}"))
 
 
 @app.command("logs")
@@ -220,11 +224,13 @@ def preview(env_id: str = typer.Argument(..., help="The environment's id"),
         _fail("the preview came back without a screenshot")
     Path(out).write_bytes(base64.b64decode(shot))
     UI.success(f"Saved {out}")
+    # A page's title, console and text are the page author's: printed cleaned. Unlike
+    # `exec` and `logs`, this is a report about the page, not a program's own output stream.
     if r.get("title"):
-        print(f"Title: {r['title']}")
+        print(terminal_text(f"Title: {r['title']}"))
     for line in (r.get("page_errors") or []) + (r.get("console") or []):
-        print(f"  {line}")
-    text = (r.get("text") or "").strip()
+        print(terminal_text(f"  {line}"))
+    text = terminal_text((r.get("text") or "").strip())
     print("\nRendered text:\n" + text if text else "\nRendered text: none")
 
 

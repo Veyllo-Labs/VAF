@@ -7,7 +7,11 @@ Runs one prompt against your configured backend and shows that repeated
 run() calls continue the same conversation. Uses whatever provider your
 ~/.vaf/config.json selects; pass config={...} to override per instance
 (nothing is written to disk). Docs: docs/EMBEDDING.md.
+
+Model text is printed through vaf.terminal_text: a web page or a mail the model read can
+steer what it writes, and a terminal obeys the escape sequences in it.
 """
+import vaf
 from vaf import Agent
 
 
@@ -19,17 +23,17 @@ def main() -> None:
     agent = Agent()
 
     answer = agent.run("In one short sentence, what is Python?")
-    print("Answer:", answer)
+    print("Answer:", vaf.terminal_text(answer))
 
     # A one-shot on the side: complete() never enters the conversation - no
     # history, no tools, no memory. Returns text or None (never an exception).
     aside = agent.complete("Name one Python web framework, one word only.", max_tokens=20)
-    print("Aside:", aside)
+    print("Aside:", vaf.terminal_text(aside))
 
     # One Agent instance = one conversation: this follow-up sees the first turn
     # (and nothing of the complete() call above).
     follow_up = agent.run("And in one sentence: who created it?")
-    print("Follow-up:", follow_up)
+    print("Follow-up:", vaf.terminal_text(follow_up))
 
 
 if __name__ == "__main__":

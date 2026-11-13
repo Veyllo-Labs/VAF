@@ -22,7 +22,7 @@ One file per contract module:
 | `test_contract_basetool_and_jail.py` | `BaseTool` declarations, `file_access` TypeError, `self.log`, `changed_since_asked`, `first_contact_confirmed`, `user_jail`, `jail_allows`, `is_vaf_state`, `open_for_write` |
 | `test_contract_markers_and_slim_import.py` | `vaf.markers` values, `import vaf` stays cheap |
 | `test_contract_error_reply.py` | `is_error_reply`: the two failure shapes `run()` and `chat_step` hand back as text, anywhere in the text, and a real answer |
-| `test_contract_terminal_text.py` | `terminal_text`: what it removes (C0 but tab and newline, DEL, C1, the bidi controls) and keeps (printable text, zero-width characters), only the characters of a sequence, `None` and non-strings |
+| `test_contract_terminal_text.py` | `terminal_text`: what it removes (a complete escape sequence as a whole; then C0 but tab and newline, DEL, C1, the bidi controls, lone surrogates) and keeps (printable text, zero-width characters), an unterminated sequence losing only its control characters, `None` and non-strings |
 | `test_contract_turn_status.py` | `last_turn` on `Agent` and `CoreAgent`, `TurnStatus`, `stored_turn_copy`, `model_text`: a clean turn, a failed turn, a stop that never streamed, a turn that answered before a later round failed, the caller's own cleanup, and `run()`'s return value holding no failure |
 | `test_contract_pdf_extract.py` | `extract_pdf_markdown` signature, result dict, missing-extra ImportError |
 | `test_contract_session_turn_context.py` | session/turn context API (`vaf.core.subagent_ipc`) |

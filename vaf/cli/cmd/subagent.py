@@ -40,7 +40,7 @@ def _safe_print(*args, **kwargs):
     without its control characters: what this terminal shows is the task's result, model
     text that a web page or a mail it read can steer."""
     try:
-        print(*(terminal_text(arg) for arg in args), **kwargs)
+        print(*(terminal_text(str(arg)) for arg in args), **kwargs)
         sys.stdout.flush()
     except (BrokenPipeError, OSError, IOError):
         pass

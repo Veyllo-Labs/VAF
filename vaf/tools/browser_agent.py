@@ -463,6 +463,21 @@ class _BrowserStepLogger(logging.Handler):
             pass
 
 
+def _attach_step_logger(q: _queue.Queue) -> "_BrowserStepLogger":
+    """Capture browser-use's step lines into `q`, and make sure they are emitted at all.
+
+    browser-use sets its logger to INFO only when it configures logging itself on import,
+    which it skips when the root logger already has a handler (the CLI entry point installs
+    one, see `vaf.core.terminal_text.install_terminal_logging`; the tray's log file is
+    another). Without the level its INFO step lines would never reach this handler."""
+    handler = _BrowserStepLogger(q)
+    bu_logger = logging.getLogger("browser_use")
+    if bu_logger.getEffectiveLevel() > logging.INFO:
+        bu_logger.setLevel(logging.INFO)
+    bu_logger.addHandler(handler)
+    return handler
+
+
 # ── 3. VAFLLMBridge ───────────────────────────────────────────────────────────
 
 class VAFLLMBridge:
@@ -1552,9 +1567,7 @@ class BrowserAgentTool(BaseTool):
 
         # ── Browser-use log capture ────────────────────────────────────────────
         log_queue: _queue.Queue = _queue.Queue()
-        log_handler = _BrowserStepLogger(log_queue)
-        _bu_logger = logging.getLogger("browser_use")
-        _bu_logger.addHandler(log_handler)
+        log_handler = _attach_step_logger(log_queue)
 
         # ── Wrap agent.run() as a cancellable task ─────────────────────────────
         # on_step_start runs before the step builds its prompt, which is the
@@ -1582,7 +1595,7 @@ class BrowserAgentTool(BaseTool):
             _run_ended.set()
             stop_screenshots.set()
             stop_monitor_task.cancel()
-            _bu_logger.removeHandler(log_handler)
+            logging.getLogger("browser_use").removeHandler(log_handler)
             try:
                 await asyncio.wait_for(screenshot_task, timeout=3.0)
             except Exception:

@@ -290,17 +290,6 @@ bootstrap()
 from vaf.core.log_helper import install_thread_excepthook
 install_thread_excepthook()
 
-# A process lane that installs no log handler of its own (`vaf run` and most commands) has
-# its WARNING and ERROR records written to stderr by Python's last-resort handler, and a
-# record's arguments are often somebody else's text (a sender, a subject, a URL). Its lines
-# go out without control characters. After bootstrap(), which may still be installing the
-# dependency that module imports.
-import logging
-
-from vaf.core.terminal_text import TerminalLogFormatter
-if logging.lastResort is not None:
-    logging.lastResort.setFormatter(TerminalLogFormatter())
-
 # The harness's account-allowlist resolvers (tools AND saved workflows), registered on
 # EVERY process lane that passes through this module: the console script (pyproject
 # [project.scripts] vaf = "vaf.main:main"), tray/web (tray_command below; systemd and
@@ -1157,6 +1146,14 @@ def callback(
 
 def main():
     """Entry point for console script."""
+    # Log lines on this terminal carry no escape sequences: a record's arguments are often
+    # somebody else's text (a sender, a subject, a URL, the browser agent's next goal). Here
+    # and not at import: it is a decision for the process this entry point starts, and it
+    # puts a handler on the root logger, which a module import must not do to its importer.
+    # Every lane VAF starts passes through here (console script, `-m vaf.main tray`, the
+    # sub-agent children, the frozen bundle).
+    from vaf.core.terminal_text import install_terminal_logging
+    install_terminal_logging()
     # Check if we are running in a Py2App bundle (Frozen)
     if getattr(sys, "frozen", False):
         tray_command()

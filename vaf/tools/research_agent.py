@@ -38,12 +38,19 @@ from vaf.core.subagent_ipc import get_current_session_id
 from vaf.core.trust_map import filter_results_by_quality, find_optimal_threshold, rate_url_quality
 from vaf.tools.base import BaseTool
 from vaf.tools.search import WebSearchTool
+from vaf.core.terminal_text import terminal_text
 
 # Rich UI primitives (optional but expected in VAF)
 from rich.align import Align
 from rich.console import Group
 from rich.panel import Panel
 from rich.text import Text
+
+
+def _progress_line(message: str) -> str:
+    """A progress line for a terminal or the piped sub-agent stream. The message names the
+    section titles the model chose, so it carries no escape sequence."""
+    return f"[Research] {terminal_text(message)}"
 
 
 @dataclass(frozen=True)
@@ -803,13 +810,13 @@ class ResearchAgentTool(BaseTool):
                     pass
             if _is_piped_subprocess:
                 try:
-                    print(f"[Research] {message}", flush=True)
+                    print(_progress_line(message), flush=True)
                 except (BrokenPipeError, OSError):
                     pass
                 return
             try:
                 if noninteractive:
-                    print(f"[Research] {message}", flush=True)
+                    print(_progress_line(message), flush=True)
                 else:
                     UI.event("Research", message, style=style)
             except (BrokenPipeError, OSError):

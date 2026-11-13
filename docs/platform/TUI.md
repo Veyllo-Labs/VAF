@@ -120,28 +120,43 @@ OSC 52 clipboard write, the C1 forms of CSI and OSC, NUL, DEL and U+202E reached
 output of every transcript widget.
 
 Every line of the app now passes one line filter (`TerminalTextFilter` in `app.py`,
-installed through `VafApp.get_line_filters`), which removes every C0 character except
-newline and tab, DEL, every C1 character and the twelve bidirectional controls. It sits at
-the sink rather than at the widgets because the app has more than 110 places that put text
-on screen (`Static(` 73 times, `.update(` 23, `notify(` 20); Textual applies the filter to
-every strip of every widget, toast and overlay, so the next widget is covered too. Only
-the characters are removed, never the rest of a sequence: a title sequence shows as
-`]0;...`, which is honest, and the removed characters have cell width 0, so the layout does
-not move. Zero-width and other format characters (U+200B, the joiners, U+2060, U+FEFF)
-stay: they drive no terminal, and ZWJ is part of emoji and of Persian and Indic text.
-The definition is the framework's, `vaf.terminal_text` (`vaf/core/terminal_text.py`).
+installed through `VafApp.get_line_filters`). It sits at the sink rather than at the
+widgets because the app has more than 110 places that put text on screen (`Static(` 73
+times, `.update(` 23, `notify(` 20); Textual applies the filter to every strip of every
+widget, toast and overlay, so the next widget is covered too. The definition is the
+framework's, `vaf.terminal_text` (`vaf/core/terminal_text.py`):
 
-The classic and modern lanes print through `TerminalConsole`, a Rich console that applies
-the same definition to every segment it renders; every Rich console in VAF is one (pinned
-by an AST scan in `tests/test_terminal_text.py`). Rich's own colours, cursor moves and
-clears pass, since they come from styles and control segments rather than from text.
+- A complete escape sequence goes as a whole: a CSI (colours, cursor moves, a screen
+  clear), a string sequence ended by BEL or ST (a title, OSC 8, OSC 52), and every other
+  escape sequence (ESC c, a terminal reset). A tool's coloured output therefore reads as its
+  text, without `[31m` fragments. A string sequence is sought only up to 2048 characters
+  and never across a newline, so an unterminated one cannot swallow the text after it.
+- Then every remaining C0 character except newline and tab, DEL, every C1 character, the
+  twelve bidirectional controls and any lone surrogate. A malformed sequence therefore loses
+  its control characters and shows the rest as text. Textual itself drops the BEL that ends
+  a title sequence before the filter sees the line, so in the app such a title shows its
+  body (`0;...`) as text; it no longer reaches the terminal as a command.
+- A style's link target that holds such a character loses the link: Textual writes the
+  target raw into its OSC 8 sequence, so a target with an ESC or a BEL in it could reset the
+  terminal or write the clipboard. A segment that lost printable characters with a sequence
+  is padded with spaces, so a line keeps the width Textual laid it out with.
+- Zero-width and other format characters (U+200B, the joiners, U+2060, U+FEFF) stay: they
+  drive no terminal, and ZWJ is part of emoji and of Persian and Indic text.
+
+The classic and modern lanes print through `TerminalConsole`, a Rich console that cleans
+every string before Rich lays it out and every segment it renders, link targets included;
+every Rich console in VAF is one (pinned by an AST scan in `tests/test_terminal_text.py`,
+which also refuses importing `Console` from Rich anywhere else). Rich's own colours, cursor
+moves and clears pass, since they come from styles and control segments rather than from
+text.
 
 Named boundaries: `vaf env exec` and `vaf env logs` print a container program's standard
 output byte for byte, as `docker exec` and `docker logs` do, because removing its control
 characters would break that program's colours and progress bars. And Rich MARKUP in text
 from others is an open class of its own: the classic lane prints model chunks with markup
-on (the engine puts its own `[link=file://...]` into them), and `[link=...]` in such text
-becomes an OSC 8 link without any control character in the input.
+on (the engine puts its own `[link=file://...]` into them), so `[link=...]` written with
+clean characters in such text still becomes an OSC 8 link whose label and target the
+sender chose. It can no longer carry a control character into the terminal.
 
 ## Keys and commands
 

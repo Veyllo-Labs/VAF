@@ -53,11 +53,12 @@ unavailable until you install the extra); the agent still runs.
 ## Quickstart
 
 ```python
+import vaf
 from vaf import Agent
 
 agent = Agent(config={"provider": "deepseek"})
 answer = agent.run("In one short sentence, what is Python?")
-print(answer)
+print(vaf.terminal_text(answer))   # model text: see "Showing text on a terminal"
 ```
 
 `Agent` here is the stable façade. The full internal engine remains available as
@@ -69,7 +70,7 @@ The same code works with a local GGUF model - it is provider-agnostic:
 
 ```python
 agent = Agent(config={"provider": "local"})   # downloads/starts a local model
-print(agent.run("Hello!"))
+print(vaf.terminal_text(agent.run("Hello!")))
 ```
 
 In local mode the first `run()` may take a while: it downloads the model on
@@ -854,19 +855,28 @@ import vaf
 print(vaf.terminal_text(answer))
 ```
 
-`vaf.terminal_text(value) -> str` removes every C0 control character except tab and
-newline, DEL, every C1 character, and the twelve bidirectional controls (U+061C, U+200E,
-U+200F, U+202A-U+202E, U+2066-U+2069), which reorder how a line reads. Everything else is
-kept: umlauts, Arabic, CJK, emoji with their joiners, and zero-width characters, which drive
-no terminal. Only the characters go, never the rest of a sequence, so `ESC ] 0 ; title BEL`
-shows as `]0;title`; that also makes it safe per chunk of a stream, since no sequence has to
-be seen whole. `None` gives `""` and anything else is `str()`-ed.
+`vaf.terminal_text(value) -> str` first removes every complete escape sequence as a whole:
+a CSI (`ESC [` or 0x9B, parameters, one final byte: colours, cursor moves, a clear), a string
+sequence (OSC, DCS, SOS, PM, APC) up to its BEL or ST, and every other escape sequence (`ESC
+c`, a terminal reset). So a program's colour codes leave no `[31m` behind and a title
+sequence leaves nothing. A string sequence is sought only up to 2048 characters and never
+across a newline, so an unterminated one cannot swallow the text after it. Then it removes
+every remaining C0 control character except tab and newline, DEL, every C1 character, the
+twelve bidirectional controls (U+061C, U+200E, U+200F, U+202A-U+202E, U+2066-U+2069), which
+reorder how a line reads, and any lone surrogate (U+D800-U+DFFF, which a surrogateescape
+stream writes as raw bytes). A malformed or unterminated sequence therefore loses its control
+characters and shows the rest as text. Everything else is kept: umlauts, Arabic, CJK, emoji
+with their joiners, and zero-width characters, which drive no terminal. `None` gives `""`
+and anything else is `str()`-ed.
+
+It is safe per chunk of a stream: whatever a chunk holds, no control character survives. A
+sequence split between two chunks is not seen whole, so its printable rest shows as text.
 
 Use it on whatever reaches a terminal and was not written by you: streamed tokens and
 `run()`'s answer, room entries and labels, a tool's output, an event's arguments. It is for
 terminals only: store, send and return the original text, and put text into HTML as text.
 VAF's own terminals apply this same definition at their sinks (the full-screen app's line
-filter, every Rich console it builds, its JSON lines and its last-resort log handler); see
+filter, every Rich console it builds, its JSON lines and its log handler); see
 "Text from others on a terminal" in
 [USER_ISOLATION.md](security/USER_ISOLATION.md#text-from-others-on-a-terminal).
 
@@ -3063,9 +3073,10 @@ Stable public surface (safe to build on):
   after text an earlier round streamed. A reply that quotes either marker counts as a
   failure, the safe side. Never raises; anything but a non-empty string is False.
 - `vaf.terminal_text(value) -> str` - text as a terminal may show it. The promise is the
-  removed set (every C0 character but tab and newline, DEL, every C1 character, the twelve
-  bidirectional controls), that every other character is kept, that only the characters of
-  a sequence are removed, and that `None` gives `""`. See "Showing text on a terminal".
+  removed set (every complete escape sequence as a whole; then every C0 character but tab
+  and newline, DEL, every C1 character, the twelve bidirectional controls and lone
+  surrogates), that every other character is kept, that an unterminated sequence loses only
+  its control characters, and that `None` gives `""`. See "Showing text on a terminal".
 - `last_turn` on both `Agent` and `CoreAgent`, a frozen `vaf.TurnStatus(failed, failure,
   rounds)` with `rounds` a tuple of frozen `vaf.TurnRound(round, tool_call_ids, answer)`
   (outside equality, see "Streaming"),

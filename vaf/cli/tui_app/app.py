@@ -71,15 +71,17 @@ from vaf.core.terminal_text import terminal_segments
 
 
 class TerminalTextFilter(LineFilter):
-    """Removes control characters from every rendered line of the app.
+    """Removes escape sequences and control characters from every rendered line of the app.
 
     Room peers, the Veyllo App, contacts, sub-agents and the model all reach the transcript
     and the overlays, and Textual removes only BEL, BS, VT, FF and CR from what it shows: an
     ESC or a C1 byte in a peer's line went to the terminal and set its title or cleared the
-    screen. Textual applies an app's line filters to every strip of every widget, toast and
-    overlay, so this one filter covers the more than 110 places that put text on screen,
-    including the next one. The removed characters have cell width 0, so a line keeps its
-    layout. One definition with the Rich consoles: `vaf.core.terminal_text`.
+    screen, and a link target in a style went out raw inside Textual's own OSC 8. Textual
+    applies an app's line filters to every strip of every widget, toast and overlay, so this
+    one filter covers the more than 110 places that put text on screen, including the next
+    one. A whole sequence that took printable characters with it (a tool's colour codes) is
+    padded back with spaces, so a line keeps the width Textual laid it out with. One
+    definition with the Rich consoles: `vaf.core.terminal_text`.
     """
 
     def apply(self, segments, background):

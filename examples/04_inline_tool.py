@@ -10,6 +10,7 @@ instance. For distribution, prefer the entry-point package lane
 """
 import datetime
 
+import vaf
 from vaf import Agent
 from vaf.tools.base import BaseTool
 
@@ -32,7 +33,7 @@ def main() -> None:
     agent.add_tool(UtcTimeTool())  # must happen before the first run()
 
     answer = agent.run("What time is it in UTC right now? Use your tool.")
-    print(answer)
+    print(vaf.terminal_text(answer))   # model text: no escape sequence reaches the terminal
 
 
 if __name__ == "__main__":

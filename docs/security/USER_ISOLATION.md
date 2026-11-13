@@ -1272,21 +1272,37 @@ fix, every other case (title, clear, OSC 8, OSC 52, the C1 forms of CSI and OSC,
 U+202E) reached the output of every widget of the full-screen app and of every Rich console.
 
 Where it is stopped, each time at a renderer's sink and on one definition,
-`vaf.terminal_text` (`vaf/core/terminal_text.py`), which removes every C0 character except
-newline and tab, DEL, every C1 character and the twelve bidirectional controls:
+`vaf.terminal_text` (`vaf/core/terminal_text.py`). It removes every complete escape sequence
+as a whole (CSI, OSC and the other string sequences up to BEL or ST, ESC c and the other
+two-character ones), then every remaining C0 character except newline and tab, DEL, every
+C1 character, the twelve bidirectional controls and any lone surrogate (under a
+surrogateescape stream, which Python's UTF-8 mode uses, U+DC80-U+DC9F are written as the
+raw C1 bytes):
 
 - the full-screen app: one line filter on every rendered line (see "Control characters
   never reach the terminal" in [TUI.md](../platform/TUI.md));
 - every Rich console in VAF (the classic and modern lanes, the CLI commands, the coder's
   live view, the session, automation and snapshot commands): `TerminalConsole`;
+- in both, a style's link target: Rich and Textual write it raw into their own OSC 8
+  sequence, so `[link=...]` markup in a model chunk or a link style on a Rich object could
+  carry an ESC c (terminal reset) or an OSC 52 clipboard write. A target holding an unsafe
+  character loses the link;
 - the bare output lines: `vaf a2a`'s human lines, `vaf run -p` with `--output-format text`,
-  the sub-agent terminal, the modern lane's toolbar and the engine's own print when nobody
-  streams;
+  `vaf audit run` and `vaf audit show` (the report is model text about code that is often
+  somebody else's), `vaf env list`, `ps` and `preview` (names and commands the agent chose,
+  a page's title, console and text), the sub-agent terminal, the research progress lines,
+  the modern lane's toolbar and the engine's own print when nobody streams;
 - the JSON lines (`vaf a2a`, `vaf inbox --json`, `vaf outbox --json`, `vaf run -p` json and
-  stream-json): the characters json.dumps leaves raw (DEL, C1, bidi) are written as
-  `\uXXXX`, so a line parses to the same value and a terminal showing it obeys nothing;
-- Python's last-resort log handler, which writes a command's WARNING and ERROR records to
-  stderr, formats without them (`TerminalLogFormatter`, set at the CLI entry point).
+  stream-json, `vaf audit --format json`): the characters json.dumps leaves raw (DEL, C1,
+  bidi, lone surrogates) are written as `\uXXXX`, so a line parses to the same value and a
+  terminal showing it obeys nothing;
+- the log lines: the CLI entry point (`vaf.main.main`) puts a stderr handler with
+  `TerminalLogFormatter` on the root logger and the same formatter on Python's last-resort
+  handler. A library that configures logging only when the root logger has none no longer
+  installs a raw handler: browser_use did on import, and from then on wrote every record,
+  its model-steered "Next goal" lines included, to stderr unformatted. Its step lines still
+  reach the browser window through VAF's own capture. Records written before the entry
+  point runs, and in a process that does not start through it, are not covered.
 
 Why not at ingress: refusing a message drops a person's whole text over a stray form feed
 or NEL from pasted text, stripping it there silently changes what is stored, and no ingress
@@ -1295,10 +1311,11 @@ where these characters do nothing. The Veyllo App protocol still refuses them in
 (device, platform, app version, chat), which are names and not messages.
 
 Named boundaries: `vaf env exec` and `vaf env logs` print a container program's standard
-output byte for byte, the way `docker exec` and `docker logs` do. Rich markup in other
-parties' text is a separate open class: text printed with markup on (the classic lane's
-model chunks, some table cells) turns `[link=...]` into an OSC 8 link without any control
-character in it; fixing it needs VAF's own markup separated from model text.
+output byte for byte, the way `docker exec` and `docker logs` do (see
+[SANDBOXING.md](SANDBOXING.md)). Rich markup in other parties' text is a separate open
+class: text printed with markup on (the classic lane's model chunks, some table cells)
+still turns `[link=...]` written with clean characters into an OSC 8 link whose label and
+target the sender chose; fixing it needs VAF's own markup separated from model text.
 
 ## 7. Watchdog and Admin Security APIs
 

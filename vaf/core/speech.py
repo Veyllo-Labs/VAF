@@ -1009,6 +1009,8 @@ $player.Close()
                 # 1. Calibration
                 _tell("calibrating")
                 if on_state is None:
+                    # UI's console removes the CR of end="\r" like every control character;
+                    # the recording line below starts with its own "\r\033[K" anyway.
                     UI.print(f"[dim]Calibrating noise...[/dim]", end="\r")
                 self.stt_recognizer.adjust_for_ambient_noise(source, duration=1.0)
                 threshold = self.stt_recognizer.energy_threshold

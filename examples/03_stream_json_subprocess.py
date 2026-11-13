@@ -7,12 +7,17 @@ This is the integration pattern for non-Python applications: spawn
 `vaf prompt --output-format stream-json` and read one JSON object per
 stdout line. Event schema: docs/OBSERVABILITY.md. The same parsing works
 from Node, Go, Rust, ... - Python here is just the demonstration language.
+
+The parsed strings are the model's own text again (the JSON escapes are undone), so what
+is printed goes through vaf.terminal_text; another language needs the same filter.
 """
 import json
 import re
 import shutil
 import subprocess
 import sys
+
+import vaf
 
 THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
 
@@ -47,15 +52,15 @@ def main() -> None:
         elif kind == "gate_required":
             # Non-interactive runs never get a gate_decision; the tool comes
             # back as an "[ERROR] ... requires confirmation" result instead.
-            print(f"[gated] {evt.get('tool')}: {evt.get('reason')}")
+            print(vaf.terminal_text(f"[gated] {evt.get('tool')}: {evt.get('reason')}"))
 
     proc.wait()
 
     # There is no aggregated-result event: reconstruct the answer from the
     # deltas and strip reasoning blocks.
     answer = THINK_BLOCK.sub("", "".join(text_parts)).strip()
-    print("Tools used:", tools_used or "none")
-    print("Answer:", answer)
+    print("Tools used:", vaf.terminal_text(", ".join(tools_used) or "none"))
+    print("Answer:", vaf.terminal_text(answer))
     print("Exit code:", proc.returncode)
 
 

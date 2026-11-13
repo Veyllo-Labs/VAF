@@ -21,6 +21,7 @@ import io
 import struct
 import wave
 
+import vaf
 from vaf import VoiceTurnEngine
 
 
@@ -71,12 +72,12 @@ def main() -> None:
 
     # TTS is YOURS: outcome.reply in outcome.tts_lang. VAF's handler uses
     # per-variant timeouts here (30 s short lines, 60 s chime, 130 s reply).
-    print(f"AGENT ({outcome.tts_lang}): {outcome.reply}")
+    print(vaf.terminal_text(f"AGENT ({outcome.tts_lang}): {outcome.reply}"))
 
     if outcome.delegate:
         # The engine DECIDED real work is needed; enqueueing it is the
         # caller's job (VAF's handler feeds its TaskQueue at this point).
-        print(f"[delegate to your worker: {outcome.delegate!r}]")
+        print(vaf.terminal_text(f"[delegate to your worker: {outcome.delegate!r}]"))
 
     engine.end()   # call over: clears the rolling transcript
 

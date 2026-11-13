@@ -217,12 +217,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   person who started the workflow, in every way a workflow is started.
 
 - **Text from others can no longer send commands to your terminal.** Messages in agent
-  rooms, from the Veyllo App, from contacts, results of sub-agents, and model replies steered
-  by a web page or a mail could carry escape sequences that a terminal obeys. The terminal
-  app, the plain terminal modes, `vaf a2a`, `vaf run -p` and the JSON outputs now remove or
-  escape these control characters, so such text cannot change the window title, clear the
-  screen, plant a link or write to your clipboard. The text itself is kept as it was sent.
-  New for developers who build on VAF: `vaf.terminal_text`.
+  rooms, from the Veyllo App, from contacts, results of sub-agents, code audit reports, and
+  model replies steered by a web page or a mail could carry escape sequences that a terminal
+  obeys. The terminal app, the plain terminal modes, `vaf a2a`, `vaf run -p`, `vaf audit`,
+  `vaf env`, the log lines and the JSON outputs now remove or escape them, so such text
+  cannot change the window title, clear the screen, reset the terminal or write to your
+  clipboard. A tool's coloured output shows as plain text instead of colour codes. One case
+  stays open: a link written as `[link=...]` in a model reply still shows as a link in the
+  plain terminal mode, with a label and address the sender chose. The text itself is kept
+  as it was sent. New for developers who build on VAF: `vaf.terminal_text`.
 
 ## [0.1.0a36] - 2026-11-09
 

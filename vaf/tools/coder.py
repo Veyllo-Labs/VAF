@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, NamedTuple
 from dataclasses import asdict
 
-from rich.console import Console, Group
+from rich.console import Group
 from rich.table import Table
 from rich.panel import Panel
 from rich.layout import Layout
@@ -936,7 +936,7 @@ class CoderTUI:
     # Number of lines to show in live stream (scrolling view)
     STREAM_LINES = 10
     
-    def __init__(self, console: Console, task: str, task_mgr=None, animate: bool = True, simple_mode: bool = False):
+    def __init__(self, console: TerminalConsole, task: str, task_mgr=None, animate: bool = True, simple_mode: bool = False):
         # simple_mode=True: no Rich Live display; just print progress lines.
         # Used when the coding agent runs inside a workflow terminal so the
         # workflow's display is not replaced by the full-screen coder TUI.

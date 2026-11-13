@@ -1,25 +1,33 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-"""Text from other parties reaches the terminal without its control characters.
+"""Text from other parties reaches the terminal without its escape sequences.
 
 MEASURED BEFORE THE FIX (Textual 8.2.8, Rich 14.3.3, headless): a window-title sequence, a
 screen clear, an OSC 8 link, an OSC 52 clipboard write, the C1 forms of CSI and OSC, NUL, DEL
 and U+202E all reached the output of every transcript widget of the full-screen app and of
 `Console.print` with `str`, `Markdown`, `Panel` and `Table`. Only the modern lane's queued web
-input was cleaned, by a hand copy in run.py.
+input was cleaned, by a hand copy in run.py. Measured after the first version of the fix: a
+style's LINK target (`[link=...]` markup, `Text(style=Style(link=...))`) still went out raw
+inside the renderer's own OSC 8, browser_use replaced the logging setup with a raw stderr
+handler on import, and `vaf audit`, `vaf env` and the research progress printed model text
+raw.
 
 The fix sits at each renderer's sink (one Textual line filter, one Rich console class, the
-bare-stdout and JSON lines, the last-resort log formatter), all on one definition,
-`vaf.core.terminal_text`. Every test input is built from escapes in this source, never from
-literal control bytes, and no test prints one.
+bare-stdout and JSON lines, the logging setup of the CLI entry point), all on one
+definition, `vaf.core.terminal_text`. Every test input is built from escapes in this source,
+never from literal control bytes, and no test prints one.
 """
 import ast
 import asyncio
+import base64
 import inspect
 import io
 import json
-import logging
+import os
+import re
+import subprocess
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -50,26 +58,47 @@ CASES = [
     "abc\u202exe.fdp",
 ]
 HOSTILE = " ".join(CASES)
+#: What a reader still sees of HOSTILE, and what goes with the sequences.
+VISIBLE = ("click", "xe.fdp")
+GONE = ("PWNEDTITLE", "aGk=", "evil.test")
+
+#: Link targets a sender can put into a style: an early BEL plus ESC c (a terminal reset),
+#: and an OSC 52 clipboard write.
+LINK_MARKUP = "[link=http://a/\x07\x1bcz]LINKA[/link]"
+LINK_TARGET = "http://a/\x1b]52;c;aGk=\x07"
+_OSC8 = re.compile("\x1b\\]8;([^;\x1b]*);([^\x1b]*)\x1b\\\\")
 
 
 def _unsafe(ch: str) -> bool:
     code = ord(ch)
-    return (code < 0x20 and ch not in "\n\t") or 0x7F <= code <= 0x9F or ch in BIDI
+    return ((code < 0x20 and ch not in "\n\t") or 0x7F <= code <= 0x9F or ch in BIDI
+            or 0xD800 <= code <= 0xDFFF)
 
 
 def _unsafe_in(text: str) -> list:
     return sorted({hex(ord(ch)) for ch in text if _unsafe(ch)})
 
 
+def _foreign(out: str) -> tuple:
+    """A terminal output split into what the renderer wrote itself and what came from the
+    text: its own SGR codes and OSC 8 framing are taken out, and the link targets are
+    returned apart. Returns (unsafe characters outside, the link targets)."""
+    targets = [m.group(2) for m in _OSC8.finditer(out)]
+    rest = re.sub("\x1b\\[[0-9;]*m", "", _OSC8.sub("", out))
+    return _unsafe_in(rest), targets
+
+
 # ── the definition ──────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("ch", [chr(c) for c in (0x00, 0x01, 0x07, 0x08, 0x0B, 0x0C, 0x0D,
                                                 0x1B, 0x1F, 0x7F, 0x80, 0x85, 0x9B, 0x9D,
-                                                0x9F)] + BIDI)
+                                                0x9F, 0xD800, 0xDC9D, 0xDFFF)] + BIDI,
+                         ids=lambda ch: hex(ord(ch)))
 def test_every_control_class_is_removed(ch):
-    """C0 but tab and newline, DEL, C1 and the twelve bidirectional controls.
-    MUTATION: drop 0x7F-0x9F from the table, or the bidi set - red."""
-    assert terminal_text(f"ab{ch}cd") == "abcd"
+    """C0 but tab and newline, DEL, C1, the twelve bidirectional controls and lone
+    surrogates. A non-ASCII letter follows, so no escape sequence can end there.
+    MUTATION: drop 0x7F-0x9F, the bidi set or the surrogate range - red."""
+    assert terminal_text(f"ab{ch}äcd") == "abäcd"
 
 
 @pytest.mark.parametrize("text", [
@@ -79,10 +108,11 @@ def test_every_control_class_is_removed(ch):
     "漢字かな",
     "\U0001F468\u200d\U0001F469\u200d\U0001F467",
     "zero\u200bwidth \u200cjoiner \u2060word \ufeffmark",
+    "brackets [31m and ]0; stay when nothing escapes them",
 ])
 def test_printable_text_and_format_characters_are_kept(text):
-    """Umlauts, Arabic, CJK, an emoji with ZWJ, and the zero-width characters, which drive no
-    terminal and belong to real text. MUTATION: add U+200D to the table - red."""
+    """Umlauts, Arabic, CJK, an emoji with ZWJ, the zero-width characters, and the printable
+    look of a sequence without its ESC. MUTATION: add U+200D to the table - red."""
     assert terminal_text(text) == text
 
 
@@ -92,21 +122,63 @@ def test_none_is_empty_and_anything_else_is_its_str():
     assert terminal_text("") == ""
 
 
-def test_only_the_characters_go_never_the_rest_of_a_sequence():
-    """The visible remainder stays on screen: honest, and no malformed sequence can make a
-    parser swallow the wrong amount of text."""
-    cleaned = terminal_text(HOSTILE)
+@pytest.mark.parametrize("raw, shown", [
+    ("x\x1b]0;PWNEDTITLE\x07y", "xy"),                      # OSC title, BEL
+    ("x\x1b]52;c;aGk=\x1b\\y", "xy"),                        # OSC 52, ST
+    ("x\x9d0;T\x9cy", "xy"),                                 # C1 OSC, C1 ST
+    ("a\x1b[31mred\x1b[0m b", "ared b"),                     # a program's colours
+    ("x\x9b2Jy", "xy"),                                      # C1 CSI
+    ("x\x1bcz", "xz"),                                       # ESC c, terminal reset
+    ("x\x1b(Bz", "xz"),                                      # charset select
+    ("x\x1bP1$r\x1b\\z", "xz"),                              # DCS
+])
+def test_a_complete_escape_sequence_goes_as_a_whole(raw, shown):
+    """No fragments: a coloured tool output reads as its text, a title leaves no `]0;...`.
+    MUTATION: drop the sequence pass from `_clean` - red."""
+    assert terminal_text(raw) == shown
+
+
+def test_an_unterminated_sequence_never_swallows_the_text_after_it():
+    """A string sequence ends at BEL or ST and is never sought across a newline nor beyond
+    2048 characters, so a missing terminator costs its ESC and nothing else.
+    MUTATION: let the string body cross a newline - red."""
+    assert terminal_text("x\x1b]0;tail\nnext\x07z") == "x0;tail\nnextz"
+    long_body = "a" * 3000
+    assert terminal_text("x\x1b]0;" + long_body + "\x07z") == "x0;" + long_body + "z"
+
+
+def test_cleaning_stays_cheap_on_a_megabyte():
+    """Bounded patterns, so a hostile megabyte costs milliseconds, not quadratic time."""
+    spam = ("\x1b]0;" + "a" * 3000) * 300 + ("\x1b[" + "1;" * 40) * 5000
+    started = time.perf_counter()
+    cleaned = terminal_text(spam)
+    assert time.perf_counter() - started < 5.0
     assert not _unsafe_in(cleaned)
-    assert "]0;PWNEDTITLE" in cleaned and "xe.fdp" in cleaned and "]52;c;aGk=" in cleaned
 
 
 def test_a_json_line_escapes_what_json_dumps_leaves_raw_and_parses_back_unchanged():
-    row = {"text": HOSTILE, "who": "Bob\u202e", "n": 1, "list": ["\x85", "ä"]}
+    """MUTATION: return plain json.dumps - red."""
+    row = {"text": HOSTILE, "who": "Bob\u202e", "n": 1, "list": ["\x85", "ä", "\udc9d"]}
     line = terminal_json(row)
     assert not _unsafe_in(line)
     assert json.loads(line) == row
     assert "ä" in line, "non-ASCII text stays readable"
     assert terminal_json({"a": "plain"}) == json.dumps({"a": "plain"}, ensure_ascii=False)
+    assert json.loads(terminal_json(row, indent=2)) == row
+
+
+def test_a_surrogateescape_stream_receives_no_c1_byte():
+    """Under Python's UTF-8 mode (a C or POSIX locale switches it on) stdout writes a lone
+    U+DC80-U+DC9F as the raw byte 0x80-0x9F, a C1 control. MUTATION: drop the surrogate
+    range from the unsafe set - red."""
+    code = ("from vaf.core.terminal_text import terminal_text\n"
+            "print(terminal_text('A\\udc9d0;PWN\\udc9cB\\udc9b2J'))\n")
+    env = dict(os.environ, PYTHONUTF8="1", LC_ALL="C", PYTHONPATH=str(ROOT))
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, env=env,
+                          timeout=120)
+    assert proc.returncode == 0, proc.stderr[-500:]
+    assert not [b for b in proc.stdout if 0x80 <= b <= 0x9F]
+    assert b"0;PWN" in proc.stdout
 
 
 # ── the modern lane's echo now uses the one definition ──────────────────────
@@ -122,47 +194,93 @@ def test_the_echo_keeps_no_copy_of_its_own():
 
 # ── Rich: every console in vaf/ is a TerminalConsole ───────────────────────
 
-def test_no_plain_rich_console_is_constructed_in_vaf():
-    """A console built from `rich.console.Console` prints other parties' text with its
-    control characters. MUTATION: change one site back to `Console(` - red."""
-    offenders = []
+def _vaf_trees():
     for path in sorted((ROOT / "vaf").rglob("*.py")):
         if "vendor" in path.relative_to(ROOT).parts:
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        yield path, ast.parse(path.read_text(encoding="utf-8"))
+
+
+def test_no_plain_rich_console_is_constructed_or_imported_in_vaf():
+    """A console built from `rich.console.Console` prints other parties' text with its
+    escape sequences. A call named `Console` is refused, and so is the import that makes an
+    alias or a later construction possible, and `rich.get_console()`. The one module that
+    imports it is the one that subclasses it. MUTATION: change one site back to `Console(`,
+    or import `Console` from rich.console in coder.py again - red."""
+    allowed = {"vaf/core/terminal_text.py"}
+    offenders = []
+    for path, tree in _vaf_trees():
+        rel = path.relative_to(ROOT).as_posix()
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            func = node.func
-            name = func.id if isinstance(func, ast.Name) else (
-                func.attr if isinstance(func, ast.Attribute) else "")
-            if name == "Console":
-                offenders.append(f"{path.relative_to(ROOT).as_posix()}:{node.lineno}")
+            if isinstance(node, ast.Call):
+                func = node.func
+                name = func.id if isinstance(func, ast.Name) else (
+                    func.attr if isinstance(func, ast.Attribute) else "")
+                if name in ("Console", "get_console"):
+                    offenders.append(f"{rel}:{node.lineno} {name}()")
+            elif isinstance(node, ast.ImportFrom) and rel not in allowed:
+                if node.module == "rich.console" and any(a.name == "Console" for a in node.names):
+                    offenders.append(f"{rel}:{node.lineno} imports Console")
+                if node.module == "rich" and any(a.name == "get_console" for a in node.names):
+                    offenders.append(f"{rel}:{node.lineno} imports get_console")
     assert not offenders, "use vaf.core.terminal_text.TerminalConsole: " + ", ".join(offenders)
 
 
-def _rendered(console_kwargs, *renderables) -> str:
+def _rendered(console_kwargs, *renderables, **print_kwargs) -> str:
     out = io.StringIO()
     console = TerminalConsole(file=out, width=200, **console_kwargs)
     for renderable in renderables:
-        console.print(renderable)
+        console.print(renderable, **print_kwargs)
     return out.getvalue()
 
 
 def test_the_console_cleans_str_markdown_panel_and_table():
     """No colour system, so every control character in the output would be the sender's.
-    MUTATION: let `render` pass segments unchanged - red."""
+    A string loses its sequences whole. A `Text` or `Markdown` object was built by Rich,
+    which already dropped the BEL that ended a title sequence, so that body stays readable
+    as text there; no control character does.
+    MUTATION: let `render` pass segments unchanged (and `render_str` too) - red."""
     from rich.markdown import Markdown
     from rich.panel import Panel
     from rich.table import Table
+    from rich.text import Text
 
     table = Table()
     table.add_column("c")
     table.add_row(HOSTILE)
+    strings = _rendered({"force_terminal": False, "color_system": None},
+                        HOSTILE, Panel(HOSTILE), table)
+    objects = _rendered({"force_terminal": False, "color_system": None},
+                        Text(HOSTILE), Markdown(HOSTILE))
+    for out in (strings, objects):
+        assert not _unsafe_in(out)
+        assert all(word in out for word in VISIBLE)
+    assert not [word for word in GONE if word in strings]
+
+
+def test_the_console_strips_a_text_object_and_keeps_its_width():
+    """A `Text` object is not a string, so it is cleaned at the segments; a sequence that took
+    printable characters with it is padded back, so a panel keeps its right border in place.
+    MUTATION: drop the padding in `terminal_segments` - red."""
+    from rich.panel import Panel
+    from rich.text import Text
+
     out = _rendered({"force_terminal": False, "color_system": None},
-                    HOSTILE, Markdown(HOSTILE), Panel(HOSTILE), table)
-    assert not _unsafe_in(out)
-    assert "]0;PWNEDTITLE" in out and "xe.fdp" in out
+                    Panel.fit(Text("a\x1b[31mred\x1b[0m b")))
+    lines = [line for line in out.splitlines() if line]
+    assert "[31m" not in out and "ared b" in out
+    assert len({len(line) for line in lines}) == 1, lines
+
+
+def test_the_console_cleans_a_string_before_layout():
+    """A string loses its sequences before Rich measures it, so no gap is left where they
+    stood. MUTATION: drop the `render_str` override - red (the panel is laid out on the raw
+    width and padded)."""
+    from rich.panel import Panel
+
+    out = _rendered({"force_terminal": False, "color_system": None},
+                    Panel.fit("a\x1b[31mred\x1b[0m b"))
+    assert "│ ared b │" in out
 
 
 def test_the_console_keeps_its_own_styles_and_control_codes():
@@ -177,6 +295,28 @@ def test_the_console_keeps_its_own_styles_and_control_codes():
     # The only ESC left starts the console's own CSI codes; no OSC, no C1, no bidi.
     assert "\x1b]" not in out
     assert not [c for c in _unsafe_in(out) if c != "0x1b"]
+
+
+def test_the_console_writes_no_control_character_into_a_link_target():
+    """Rich writes a style's link target raw into its OSC 8. Two senders' forms: markup in a
+    model chunk (the classic stream prints with markup on) and a `Text` with a link style.
+    VAF's own `file://` link still goes out. MUTATION: drop the link handling in
+    `terminal_segments` - red (the Text form); drop `render_str` as well - red (markup)."""
+    from rich.style import Style
+    from rich.text import Text
+
+    for renderable, kwargs in ((LINK_MARKUP, {"markup": True}),
+                               (Text("LINKB", style=Style(link=LINK_TARGET)), {}),
+                               (Text.from_markup(LINK_MARKUP), {})):
+        out = _rendered({"force_terminal": True, "color_system": "truecolor"}, renderable,
+                        end="", **kwargs)
+        outside, targets = _foreign(out)
+        assert not outside, (renderable, outside)
+        assert not [t for t in targets if _unsafe_in(t)], (renderable, targets)
+        assert "LINK" in out
+    own = _rendered({"force_terminal": True, "color_system": "truecolor"},
+                    "[link=file:///tmp/project]project[/link]", markup=True)
+    assert _foreign(own)[1][0] == "file:///tmp/project"
 
 
 def test_the_console_still_takes_the_rich_console_arguments():
@@ -202,28 +342,38 @@ async def _settle(pilot, pred, timeout=6.0):
 
 def test_the_app_shows_no_control_character_in_any_widget_toast_or_overlay(smoke_app):
     """Every transcript widget, a toast and a modal, with the probe text as message, speaker,
-    badge, tool name, arguments and output. Scanned twice: each widget's own rendered lines
-    (scrolled out or not), and the compositor's full update of the screen on top.
-    MUTATION: delete `VafApp.get_line_filters`, or let the filter return its segments
-    unchanged - red."""
+    badge, tool name, arguments and output; a tool's coloured output; and two link styles a
+    sender can plant (a Rich renderable the drain mounts). Scanned twice: each widget's own
+    rendered lines (scrolled out or not), segment texts and link targets, and the
+    compositor's full update of the screen on top.
+    MUTATION: delete `VafApp.get_line_filters`, let the filter return its segments
+    unchanged, or drop the link handling in `terminal_segments` - red."""
+    from rich.style import Style
+    from rich.text import Text
     from textual.geometry import Region
 
     from vaf.cli.tui_app.screens import ConfirmScreen
-    from vaf.cli.tui_app.widgets import (AgentMessage, EventNote, PeerMessage, SystemNote,
-                                         ToolCard, UserMessage, WakeMessage)
+    from vaf.cli.tui_app.widgets import (AgentMessage, EventNote, PeerMessage, RenderableNote,
+                                         SystemNote, ToolCard, UserMessage, WakeMessage)
     app, bridge = smoke_app.app, smoke_app.bridge
     found = {}
 
     async def _drive():
-        async with app.run_test(size=(220, 120)) as pilot:
+        async with app.run_test(size=(220, 140)) as pilot:
             transcript = app.query_one("#transcript")
             card = ToolCard("tool " + HOSTILE, HOSTILE)
+            colours = ToolCard("ls", "--color")
             await transcript.mount_all([
                 UserMessage(HOSTILE), PeerMessage(HOSTILE, HOSTILE, badge=HOSTILE),
                 AgentMessage(static_text=HOSTILE), SystemNote(HOSTILE),
-                EventNote(HOSTILE, HOSTILE), WakeMessage(HOSTILE), card])
+                EventNote(HOSTILE, HOSTILE), WakeMessage(HOSTILE), card, colours,
+                RenderableNote(Text("LINKB", style=Style(link=LINK_TARGET))),
+                RenderableNote(Text.from_markup(LINK_MARKUP))])
             card.set_output(HOSTILE)
             card.finish(True, "1s")
+            colours.set_output("\x1b[31mredfile\x1b[0m \x1b[1;34mbluedir\x1b[0m")
+            colours.finish(True, "1s")
+            colours.on_click(None)          # unfold its output
             app.notify(HOSTILE)
             await app.push_screen(ConfirmScreen(HOSTILE))
             assert await _settle(pilot, lambda: isinstance(app.screen, ConfirmScreen))
@@ -239,9 +389,14 @@ def test_the_app_shows_no_control_character_in_any_widget_toast_or_overlay(smoke
                     widgets += 1
                     for strip in widget.render_lines(Region(0, 0, width, height)):
                         for seg in strip:
-                            if not seg.control and _unsafe_in(seg.text):
-                                found.setdefault(type(widget).__name__, set()).update(
-                                    _unsafe_in(seg.text))
+                            if seg.control:
+                                continue
+                            bad = set(_unsafe_in(seg.text))
+                            link = seg.style.link if seg.style is not None else None
+                            if link and _unsafe_in(link):
+                                bad.add("link:" + ",".join(_unsafe_in(link)))
+                            if bad:
+                                found.setdefault(type(widget).__name__, set()).update(bad)
             assert widgets > 20, "the scan reached no widgets"
 
             update = app.screen._compositor.render_full_update()
@@ -249,13 +404,33 @@ def test_the_app_shows_no_control_character_in_any_widget_toast_or_overlay(smoke
                                   for seg in strip if not seg.control)
             if _unsafe_in(screen_text):
                 found["compositor"] = set(_unsafe_in(screen_text))
-            found["_visible"] = ("]0;PWNEDTITLE" in screen_text, "xe.fdp" in screen_text)
+            found["_visible"] = (all(word in screen_text for word in VISIBLE),
+                                 "redfile" in screen_text and "bluedir" in screen_text,
+                                 "[31m" not in screen_text and "[0m" not in screen_text)
 
     asyncio.run(_drive())
     bridge.shutdown()
     visible = found.pop("_visible")
     assert not found, f"control characters reached the screen: {found}"
-    assert visible == (True, True), "the text around a removed character is still shown"
+    assert visible == (True, True, True), visible
+
+
+def test_the_line_filter_keeps_the_width_textual_laid_out():
+    """A strip that lost the printable rest of a sequence is padded to its cell length.
+    MUTATION: drop the padding in `terminal_segments` - red."""
+    from rich.cells import cell_len
+    from rich.segment import Segment
+    from rich.style import Style
+    from textual.color import Color
+    from textual.strip import Strip
+
+    from vaf.cli.tui_app.app import TerminalTextFilter
+
+    raw = "a\x1b[31mred\x1b[0m b"
+    strip = Strip([Segment(raw, Style())], cell_len(raw)).apply_filter(
+        TerminalTextFilter(), Color(0, 0, 0))
+    text = "".join(seg.text for seg in strip)
+    assert text.startswith("ared b") and cell_len(text) == cell_len(raw)
 
 
 # ── vaf a2a ─────────────────────────────────────────────────────────────────
@@ -279,7 +454,7 @@ def test_a2a_read_log_and_export_print_a_peer_text_without_control_characters(ro
         result = runner.invoke(a2a_cmd.app, argv)
         assert result.exit_code == 0, (argv, result.output)
         assert not _unsafe_in(result.stdout), (argv, _unsafe_in(result.stdout))
-        assert "]0;PWNEDTITLE" in result.stdout and "xe.fdp" in result.stdout, argv
+        assert all(word in result.stdout for word in VISIBLE), argv
 
 
 def test_a2a_export_to_a_file_keeps_the_text_as_stored(rooms, tmp_path):
@@ -293,6 +468,131 @@ def test_a2a_export_to_a_file_keeps_the_text_as_stored(rooms, tmp_path):
     target = tmp_path / "room.md"
     assert runner.invoke(a2a_cmd.app, ["export", room_id, "--out", str(target)]).exit_code == 0
     assert HOSTILE in target.read_text(encoding="utf-8")
+
+
+# ── vaf inbox and vaf outbox --json ─────────────────────────────────────────
+
+def _json_lines_are_clean_and_equal(result, rows):
+    assert result.exit_code == 0, result.output
+    assert not _unsafe_in(result.stdout), _unsafe_in(result.stdout)
+    assert [json.loads(line) for line in result.stdout.splitlines() if line.strip()] == rows
+
+
+def test_vaf_inbox_json_escapes_a_contacts_name_and_preview(monkeypatch):
+    """A contact chose the name and wrote the preview. MUTATION: plain json.dumps in
+    inbox.py - red."""
+    import vaf.core.inbox as inbox_core
+    from vaf.cli.cmd import inbox as inbox_cmd
+
+    rows = [{"id": "c1", "channel": "telegram", "name": "Bob\x9b2J\u202e", "preview": HOSTILE,
+             "unread": 1, "waits": False, "waits_reason": "", "mode": "agent", "last_ts": 0}]
+    monkeypatch.setattr(inbox_cmd, "_identity", lambda: ("alice", "scope-a"))
+    monkeypatch.setattr(inbox_core, "list_conversations", lambda *a, **k: {
+        "rows": rows, "counts": {"all": 1, "waits": 0, "unread": 1, "agent": 1}})
+    result = CliRunner().invoke(inbox_cmd.app, ["list", "--json"])
+    _json_lines_are_clean_and_equal(result, rows)
+
+
+def test_vaf_outbox_json_escapes_a_held_message(monkeypatch):
+    """The held message is model text addressed to somebody else. MUTATION: plain
+    json.dumps in outbox.py - red."""
+    import vaf.core.outbound_hold as hold
+    from vaf.cli.cmd import outbox as outbox_cmd
+
+    rows = [{"id": 7, "tool": "send_email", "to": "bob@example.org\x85", "text": HOSTILE}]
+    monkeypatch.setattr(outbox_cmd, "_identity", lambda: ("alice", "scope-a"))
+    monkeypatch.setattr(hold, "pending", lambda *a, **k: rows)
+    result = CliRunner().invoke(outbox_cmd.app, ["list", "--json"])
+    _json_lines_are_clean_and_equal(result, rows)
+
+
+# ── vaf audit ───────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def hostile_audit(monkeypatch, tmp_path):
+    """A finished audit whose model-written parts carry the probe text: what a review of
+    somebody else's code can produce."""
+    import vaf.core.code_audit as ca
+
+    finding = ca.AuditFinding(file="a.py", start_line=1, end_line=1, type="issue",
+                              severity="major", category="bug", title=HOSTILE,
+                              explanation=HOSTILE, verified=True, id="f1")
+    report = ca.AuditReport(root=str(tmp_path), scope="uncommitted", summary=HOSTILE,
+                            status_reason=HOSTILE, file_summaries={"a.py": HOSTILE},
+                            findings=[finding])
+    monkeypatch.setattr(ca, "code_audit", lambda *a, **k: report)
+    monkeypatch.setattr(ca, "last_report", lambda *a, **k: report.to_text())
+    return report
+
+
+@pytest.mark.parametrize("fmt", ["text", "prompt", "json"])
+def test_vaf_audit_prints_a_model_written_report_without_escape_sequences(hostile_audit,
+                                                                         tmp_path, fmt):
+    """MUTATION: write the report as it is, in any of the three forms - red."""
+    from vaf.cli.cmd import audit as audit_cmd
+
+    result = CliRunner().invoke(audit_cmd.app, ["run", str(tmp_path), "--no-llm",
+                                                "--format", fmt])
+    assert result.stdout.strip(), result.output
+    assert not _unsafe_in(result.stdout), _unsafe_in(result.stdout)
+    if fmt == "json":
+        assert json.loads(result.stdout) == json.loads(hostile_audit.to_json())
+    else:
+        assert "xe.fdp" in result.stdout
+
+
+def test_vaf_audit_show_prints_the_stored_report_cleaned(hostile_audit, tmp_path):
+    """MUTATION: write the stored text as it is - red."""
+    from vaf.cli.cmd import audit as audit_cmd
+
+    result = CliRunner().invoke(audit_cmd.app, ["show", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert not _unsafe_in(result.stdout) and "xe.fdp" in result.stdout
+
+
+# ── vaf env and the research progress ───────────────────────────────────────
+
+class _FakeEnvs:
+    def list(self, scope, everyone=False):
+        return [SimpleNamespace(describe=lambda: "env-1 " + HOSTILE, owner="alice")]
+
+    def processes(self, scope):
+        return [{"handle": "p1", "state": "running", "label": "", "command": HOSTILE}]
+
+    def render(self, scope, env_id, target):
+        return {"ok": True, "screenshot_b64": base64.b64encode(b"png").decode(),
+                "title": HOSTILE, "page_errors": [HOSTILE], "console": [HOSTILE],
+                "text": HOSTILE}
+
+
+@pytest.mark.parametrize("argv", [["list"], ["ps"], ["preview", "env-1", "http://localhost/"]])
+def test_vaf_env_prints_agent_and_page_text_without_escape_sequences(monkeypatch, tmp_path,
+                                                                    capfd, argv):
+    """Names and commands the agent chose and a page's title, console and text. `exec` and
+    `logs` stay byte for byte (named boundary). MUTATION: drop `terminal_text` at the list,
+    ps or preview print - red."""
+    from vaf.cli.cmd import env as env_cmd
+
+    monkeypatch.setattr(env_cmd, "_manager", lambda: _FakeEnvs())
+    monkeypatch.setattr(env_cmd, "_scope", lambda: "scope-a")
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(env_cmd.app, argv)
+    out = result.stdout + capfd.readouterr().out
+    assert result.exit_code == 0, result.output
+    assert not _unsafe_in(out), _unsafe_in(out)
+    assert "xe.fdp" in out
+
+
+def test_the_research_progress_line_carries_no_escape_sequence():
+    """The section titles are the model's. MUTATION: build the line without `terminal_text`,
+    or print the message directly again - red."""
+    import vaf.tools.research_agent as research
+
+    line = research._progress_line("[1/3] " + HOSTILE)
+    assert line.startswith("[Research] [1/3] ") and not _unsafe_in(line)
+    source = inspect.getsource(research)
+    assert source.count("print(_progress_line(message), flush=True)") == 2
+    assert 'print(f"[Research] {message}"' not in source
 
 
 # ── vaf run -p ──────────────────────────────────────────────────────────────
@@ -353,7 +653,7 @@ def test_vaf_run_p_prints_a_steered_answer_without_control_characters(hostile_pr
     out = capsys.readouterr().out
     assert not _unsafe_in(out), _unsafe_in(out)
     if fmt == "text":
-        assert "]0;PWNEDTITLE" in out
+        assert all(word in out for word in VISIBLE)
     elif fmt == "json":
         assert json.loads(out) == {"ok": True, "output": HOSTILE}
     else:
@@ -367,10 +667,10 @@ def test_the_sub_agent_terminal_prints_a_result_without_control_characters(capsy
     """MUTATION: print the arguments as they are - red."""
     from vaf.cli.cmd.subagent import _safe_print
 
-    _safe_print(HOSTILE, 42, sep=" | ")
+    _safe_print(HOSTILE, 42, None, sep=" | ")
     out = capsys.readouterr().out
     assert not _unsafe_in(out)
-    assert out.endswith(" | 42\n") and "]0;PWNEDTITLE" in out
+    assert out.endswith(" | 42 | None\n") and "xe.fdp" in out
 
 
 def test_the_modern_toolbar_shows_a_task_name_without_control_characters(monkeypatch):
@@ -408,7 +708,7 @@ def test_the_modern_toolbar_shows_a_task_name_without_control_characters(monkeyp
     monkeypatch.setattr(tui, "_print_input_header", lambda prompt: None)
     assert tui.input_box() == "typed"
     shown = "".join(text for _style, text in captured["rprompt"]())
-    assert "Workflow:" in shown and "]0;PWNEDTITLE" in shown
+    assert "Workflow:" in shown and "xe.fdp" in shown
     assert not _unsafe_in(shown), _unsafe_in(shown)
 
 
@@ -420,7 +720,7 @@ class _NullContext:
         return False
 
 
-# ── the engine's own print and the last-resort log handler ──────────────────
+# ── the engine's own print and the log lines ────────────────────────────────
 
 def test_the_engine_prints_a_chunk_without_control_characters_when_nobody_streams():
     """Reaching the fallback needs a live backend, so its line is pinned by source.
@@ -432,13 +732,85 @@ def test_the_engine_prints_a_chunk_without_control_characters_when_nobody_stream
     assert "print(escape(chunk)" not in source
 
 
-def test_the_last_resort_log_handler_writes_no_control_characters():
-    """MUTATION: delete the `setFormatter` line in vaf/main.py - red."""
-    import vaf.main  # noqa: F401 - installs the formatter
-    from vaf.core.terminal_text import TerminalLogFormatter
+def _cli_process(body: str) -> subprocess.CompletedProcess:
+    """`body` run after the CLI entry point set the process up (`vaf.main.main` with a
+    command that does nothing), in a fresh interpreter: the logging setup is per process."""
+    code = ("import logging\n"
+            "import vaf.main as entry\n"
+            "entry.app = lambda: None\n"
+            "entry.main()\n" + body)
+    env = dict(os.environ, PYTHONPATH=str(ROOT), VAF_SKIP_DEP_CHECK="1")
+    return subprocess.run([sys.executable, "-c", code], capture_output=True, env=env,
+                          timeout=300)
 
-    assert isinstance(logging.lastResort.formatter, TerminalLogFormatter)
-    record = logging.LogRecord("vaf.test", logging.WARNING, __file__, 1,
-                               "mail from %s: %s", ("Bob\x1b]0;T\x07", "\x9b2J ok"), None)
-    line = logging.lastResort.format(record)
-    assert line == "mail from Bob]0;T: 2J ok"
+
+def _unsafe_bytes(data: bytes) -> list:
+    return sorted({hex(b) for b in data if (b < 0x20 and b not in (9, 10)) or 0x7F <= b <= 0x9F})
+
+
+def test_a_library_that_configures_logging_on_import_gets_no_raw_stderr():
+    """`logging.basicConfig` (and browser_use on import) configure logging only when the
+    root logger has no handler. The CLI entry point puts a cleaning one there first.
+    MUTATION: drop `install_terminal_logging()` from `vaf.main.main` - red."""
+    proc = _cli_process(
+        "logging.basicConfig(level=logging.INFO)\n"
+        "logging.getLogger('lib').info('INFO line \\x1b]0;PWN\\x07')\n"
+        "logging.getLogger('lib').warning('WARN \\x1b]0;PWN\\x07 \\x9b2J end')\n")
+    assert proc.returncode == 0, proc.stderr[-800:]
+    assert not _unsafe_bytes(proc.stderr), _unsafe_bytes(proc.stderr)
+    assert b"WARN" in proc.stderr and b"end" in proc.stderr
+    assert b"INFO line" not in proc.stderr, "the INFO level is not what the terminal showed"
+
+
+def test_a_lane_with_its_own_root_handler_keeps_its_output():
+    """The tray adds its log file to the root logger; the stderr handler then stays quiet,
+    exactly as Python's last-resort handler did. MUTATION: drop `TerminalStderrHandler.handle`
+    - red."""
+    proc = _cli_process(
+        "import io\n"
+        "logging.getLogger().addHandler(logging.StreamHandler(io.StringIO()))\n"
+        "logging.getLogger('lib').warning('only in the lane log')\n")
+    assert proc.returncode == 0, proc.stderr[-800:]
+    assert b"only in the lane log" not in proc.stderr
+
+
+def test_browser_use_leaves_the_logging_alone_and_its_steps_still_reach_vaf():
+    """On import browser_use installed a raw stderr handler at INFO; its step lines carry the
+    model's next goal, steered by the page. Now its WARNINGs reach stderr cleaned, and its
+    INFO steps still reach the browser window's step capture.
+    MUTATION: drop the level in `_attach_step_logger` - red (no step captured)."""
+    pytest.importorskip("browser_use", exc_type=ImportError)   # an optional extra
+    proc = _cli_process(
+        "import queue\n"
+        "import browser_use  # noqa: F401\n"
+        "from vaf.tools.browser_agent import _attach_step_logger\n"
+        "q = queue.Queue()\n"
+        "_attach_step_logger(q)\n"
+        "log = logging.getLogger('browser_use.agent')\n"
+        "log.info('Next goal: \\x1b]0;PWN\\x07 \\x9b2J')\n"
+        "log.warning('W goal \\x1b]0;PWN\\x07 end')\n"
+        "print('captured', q.qsize())\n")
+    assert proc.returncode == 0, proc.stderr[-800:]
+    assert not _unsafe_bytes(proc.stderr), _unsafe_bytes(proc.stderr)
+    assert b"W goal" in proc.stderr
+    assert b"captured 2" in proc.stdout, proc.stdout[-300:]
+
+
+def test_the_last_resort_log_handler_writes_no_control_characters():
+    """MUTATION: drop the last-resort formatter from `install_terminal_logging` - red."""
+    import logging
+
+    from vaf.core.terminal_text import TerminalLogFormatter, install_terminal_logging
+
+    previous = logging.lastResort.formatter
+    root = logging.getLogger()
+    handlers = list(root.handlers)
+    try:
+        install_terminal_logging()
+        assert isinstance(logging.lastResort.formatter, TerminalLogFormatter)
+        record = logging.LogRecord("vaf.test", logging.WARNING, __file__, 1,
+                                   "mail from %s: %s", ("Bob\x1b]0;T\x07", "\x9b2J ok"), None)
+        assert logging.lastResort.format(record) == "mail from Bob:  ok"
+    finally:
+        logging.lastResort.setFormatter(previous)
+        root.handlers[:] = handlers

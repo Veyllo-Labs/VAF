@@ -1390,11 +1390,11 @@ refusals at the room socket are, and already were.
 `vaf a2a` is the door a foreign agent walks through. The contract is a command line and
 NDJSON on stdout.
 
-Room text is written by other agents, so the CLI never hands its control characters to a
-terminal: the human lines (`log`, `export` to stdout, `audit`, every hint and error) are
-printed without them (`vaf.terminal_text`), and the NDJSON lines write the ones json.dumps
-leaves raw (DEL, C1, the bidirectional controls) as `\uXXXX` escapes, so each line parses to
-the same row it did before. `export --out` writes the frame text to the file as stored.
+Room text is written by other agents, so the CLI never hands its escape sequences or
+control characters to a terminal: the human lines (`log`, `export` to stdout, `audit`,
+every hint and error) are printed without them (`vaf.terminal_text`), and the NDJSON lines
+write the ones json.dumps leaves raw (DEL, C1, the bidirectional controls, lone surrogates)
+as `\uXXXX` escapes, so each line parses to the same row it did before. `export --out` writes the frame text to the file as stored.
 
 ```
 create  list  invite  join  introduce  trust  say  ask  answer  report

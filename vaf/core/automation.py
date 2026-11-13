@@ -2853,8 +2853,9 @@ def refresh_scheduler_from_disk(origin: str = "unknown") -> bool:
 @automation_app.command("list")
 def list_automations():
     """List all automation tasks."""
-    from vaf.core.terminal_text import TerminalConsole, escape_markup
+    from vaf.core.terminal_text import TerminalConsole
     from rich.table import Table
+    from rich.text import Text
     
     console = TerminalConsole()
     manager = get_manager()
@@ -2879,7 +2880,7 @@ def list_automations():
         
         table.add_row(
             task.id,
-            escape_markup(task.name[:20]),
+            Text(task.name[:20]),
             task.frequency,
             task.time or task.schedule_label,
             next_run,

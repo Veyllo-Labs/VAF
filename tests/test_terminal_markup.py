@@ -24,8 +24,9 @@ import asyncio
 import contextlib
 import io
 import json
+import os
 import re
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 
 import pytest
@@ -86,23 +87,65 @@ def _render(*renderables, **kwargs) -> str:
 # ── the sink: TerminalConsole ─────────────────────────────────────────────────────────
 
 def _producer_shapes():
+    """VAF's own links, with the target each one opens computed by the same calls the
+    producer makes: `os.path.abspath` gives `C:\\tmp\\...` on a Windows host, so a
+    hard-coded `file:///tmp/...` would fail there only. Section 9 of
+    tests/test_windows_path_hygiene.py catches a POSIX literal asserted back through
+    `str(Path)`; a literal the code under test transforms (abspath, then percent-encoding)
+    is a data-flow question no static scan answers without flagging every protocol URI
+    (`file:///workspace/...` is POSIX by definition), and `os.path` cannot run as `ntpath`
+    under hostile_env.py. So the expected values are computed, and the Windows semantics
+    are exercised here with `PureWindowsPath`, on every host."""
+    from vaf.core.terminal_text import file_link
     from vaf.tools.coder import _get_clickable_path
-    coder = _get_clickable_path("/tmp/My Project")
+
+    project = os.path.join(os.sep, "tmp", "My Project")
+    expected = Path(os.path.abspath(project)).as_uri()
+    windows = PureWindowsPath("C:/tmp/My Project")
     return [
-        (coder, "file:///tmp/My%20Project"),
-        # agent.py: "file:///" + the path with backslashes turned to slashes
-        ("[link=file:////home/user/p]/home/user/p[/link]", "file:////home/user/p"),
+        (_get_clickable_path(project), expected),   # the coder
+        (file_link(project), expected),             # the engine's project and report links
+        # Windows semantics on every host: the URI of a drive path, labelled with the path.
+        (f"[link={windows.as_uri()}]{windows}[/link]", "file:///C:/tmp/My%20Project"),
         ("[link=file:///C:/Users/a/p]C:\\Users\\a\\p[/link]", "file:///C:/Users/a/p"),
+        ("[link=file://localhost/tmp/p]/tmp/p[/link]", "file://localhost/tmp/p"),
     ]
+
+
+#: Links that are not VAF's: the label is not the local path the link opens, or the reader
+#: cannot see the label as it is.
+FORGED = [
+    ("[link=https://e.org]x[/link]", "x"),
+    ("[link=file:///etc/passwd]https://bank.example[/link]", "https://bank.example"),
+    ("[link=file:///tmp/project]project[/link]", "project"),
+    # A host: the file is on that machine, whatever the label says.
+    ("[link=file://evil.example/tmp/p]/tmp/p[/link]", "/tmp/p"),
+    ("[link=file://evil.example/share/x.exe]/evil.example/share/x.exe[/link]",
+     "/evil.example/share/x.exe"),
+    ("[link=file://localhost/etc/passwd]/localhost/etc/passwd[/link]", "/localhost/etc/passwd"),
+    # A relative label for an absolute target.
+    ("[link=file:/etc/passwd]etc/passwd[/link]", "etc/passwd"),
+    # Network shares: four slashes are one on Windows, and so is a `\\host` label.
+    ("[link=file:////evil/share/x]/evil/share/x[/link]", "/evil/share/x"),
+    ("[link=file:////evil/share/x]\\\\evil\\share\\x[/link]", "\\\\evil\\share\\x"),
+    # A query or fragment the label does not show.
+    ("[link=file:///tmp/p?x=1]/tmp/p[/link]", "/tmp/p"),
+    # A label the console changes or the reader cannot see as it is.
+    ("[link=file:///tmp/a%E2%80%AEexe.txt]/tmp/a\u202eexe.txt[/link]", "/tmp/aexe.txt"),
+    ("[link=file:///tmp/a%00b]/tmp/a\x00b[/link]", "/tmp/ab"),
+    ("[link=file:///tmp/a%E2%80%8Bb]/tmp/a\u200bb[/link]", "/tmp/a"),
+]
 
 
 @pytest.mark.parametrize("shape", ["print", "table", "rule"])
 def test_a_markup_link_survives_only_as_vafs_own_file_link(shape):
-    """A foreign target, a file link whose label is not its path and a file link labelled
-    with a bare name all keep their label and lose the link; the three shapes VAF itself
-    writes keep theirs. MUTATION: drop the span filter in `render_str` - red (the foreign
-    links come back); compare with `startswith("file:")` instead of the path - red (the
-    mismatched labels are linked)."""
+    """A foreign target, a file link whose label is not its path, one that names a host or a
+    share, one with a query, a relative label, and a label with a control or format
+    character all keep their label and lose the link; the shapes VAF itself writes keep
+    theirs. MUTATION: drop the span filter in `render_str` - red (the foreign links come
+    back); compare with `startswith("file:")` instead of the path - red; compare the paths
+    with every leading slash stripped (the first version) - red (the host and share forms
+    are linked); drop the label's control and Cf check - red."""
     from rich.rule import Rule
     from rich.table import Table
 
@@ -116,13 +159,10 @@ def test_a_markup_link_survives_only_as_vafs_own_file_link(shape):
             return _render(Rule(markup))
         return _render(markup)
 
-    for markup, label in (("[link=https://e.org]x[/link]", "x"),
-                          ("[link=file:///etc/passwd]https://bank.example[/link]",
-                           "https://bank.example"),
-                          ("[link=file:///tmp/project]project[/link]", "project")):
+    for markup, label in FORGED:
         out = render(markup)
         assert _targets(out) == [], (markup, out)
-        assert label in _plain(out)
+        assert label in _plain(out), (markup, out)
     for markup, target in _producer_shapes():
         out = render(markup)
         assert _targets(out) and set(_targets(out)) == {target}, (markup, out)
@@ -260,7 +300,7 @@ def test_no_funnel_message_is_escaped_by_hand():
                         called = func.id if isinstance(func, ast.Name) else (
                             func.attr if isinstance(func, ast.Attribute) else None)
                         if called in escapes:
-                            found.append(f"{path.relative_to(ROOT)}:{node.lineno}")
+                            found.append(f"{path.relative_to(ROOT).as_posix()}:{node.lineno}")
     assert not found, found
 
 
@@ -284,9 +324,11 @@ def test_message_box_and_status_panels_show_text_as_written(tui_obj):
 
 # ── the reply stream (vaf/cli/cmd/run.py) ────────────────────────────────────────────
 
-def test_run_prints_no_reply_with_markup_on():
-    """MUTATION: set one stream print back to `markup=True` - red."""
-    tree = ast.parse((ROOT / "vaf" / "cli" / "cmd" / "run.py").read_bytes())
+@pytest.mark.parametrize("module", ["run.py", "debug.py"])
+def test_run_prints_no_reply_with_markup_on(module):
+    """The reply stream and `vaf debug`'s answers are model text. MUTATION: set one stream
+    print back to `markup=True` - red; one of `vaf debug`'s answer prints - red."""
+    tree = ast.parse((ROOT / "vaf" / "cli" / "cmd" / module).read_bytes())
     on = [node.lineno for node in ast.walk(tree)
           if isinstance(node, ast.keyword) and node.arg == "markup"
           and isinstance(node.value, ast.Constant) and node.value.value is True]
@@ -347,7 +389,10 @@ class _Ipc:
         return list(self.tasks)
 
     def get_paused_workflow_for_task(self, task_id):
-        return None
+        return PAUSED if task_id == "t-pause" else None
+
+    def claim_paused_workflow(self, workflow_id):
+        return PAUSED
 
     def consume_result(self, task_id):
         self.consumed.append(task_id)
@@ -355,6 +400,10 @@ class _Ipc:
 
 DRAIN_RESULT = ("[/x] [conceal]h[/conceal] [link=https://e.org]y[/link] arr[i] "
                 "[link=file:///tmp/p]/tmp/p[/link]")
+#: A workflow paused on a sub-agent; its run resumes with a final output of its own.
+PAUSED = SimpleNamespace(workflow_id="w1", workflow_name="[i]resumed [/x]", template_id="",
+                         user_scope_id=None, username=None, user_role=None)
+FINAL_OUTPUT = "[/y] final [conceal]f[/conceal]"
 
 
 def _drain_tasks():
@@ -363,48 +412,75 @@ def _drain_tasks():
                            completed_at=None)
     failed = SimpleNamespace(task_id="t-err", status="failed", agent_type="coder[i]",
                              result=None, error="[/]", created_at=None, completed_at=None)
-    return [done, failed]
+    workflow = SimpleNamespace(task_id="t-wf", status="completed",
+                               agent_type="workflow:[i]flow [/x]", result=DRAIN_RESULT,
+                               error=None, created_at=None, completed_at=None)
+    resumes = SimpleNamespace(task_id="t-pause", status="completed", agent_type="coder[i]",
+                              result="ok", error=None, created_at=None, completed_at=None)
+    return [done, failed, workflow, resumes]
+
+
+class _Engine:
+    """The workflow engine the drain resumes a paused run with: it finishes at once."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def resume_workflow(self, paused, result):
+        return SimpleNamespace(paused=False, success=True, final_output=FINAL_OUTPUT)
 
 
 def _drain(monkeypatch, console):
     import vaf.cli.cmd.run as run_mod
     import vaf.core.subagent_ipc as ipc_mod
 
+    import vaf.workflows.engine as engine_mod
+
     ipc = _Ipc(_drain_tasks())
     monkeypatch.setattr(ipc_mod, "get_ipc", lambda: ipc)
     monkeypatch.setattr(ipc_mod, "get_current_session_id", lambda: "sess-markup-test")
-    agent = SimpleNamespace(history=[], _async_subagent_tasks={})
-    tui = SimpleNamespace(console=console, info=lambda m: None, primary="#00d4ff")
+    monkeypatch.setattr(engine_mod, "WorkflowEngine", _Engine)
+    monkeypatch.setattr(engine_mod, "identity_for_engine", lambda *a, **k: {})
+    agent = SimpleNamespace(history=[], _async_subagent_tasks={}, tools=[])
+    errors = []
+    tui = SimpleNamespace(console=console, info=lambda m: None, error=errors.append,
+                          primary="#00d4ff")
     found = run_mod._check_subagent_results(tui, agent)
+    assert errors == [], errors
     return ipc, found
 
 
 def test_the_drain_shows_results_as_written_and_consumes_them(monkeypatch):
-    """Both tasks are consumed and their panels show the text as written, through VAF's
-    console and through a plain Rich console (the way the app's Textual lane renders the
-    panels, with no TerminalConsole fallback). MUTATION: drop `escape_markup` on
-    `result_preview` - red (VAF's own tags show, and through a plain console MarkupError
-    and no `consume_result`); drop it on `task.error` - red likewise."""
+    """Every task is consumed and every panel (a result, an error, a finished workflow, a
+    paused workflow resumed to its end) shows the text as written, through VAF's console and
+    through a plain Rich console (the way the app's Textual lane renders the panels, with no
+    TerminalConsole fallback). MUTATION: drop `escape_markup` on `result_preview` - red
+    (VAF's own tags show, and through a plain console MarkupError and no `consume_result`);
+    on `task.error` - red; on `workflow_name`, `paused_wf.workflow_name` or `output_preview`
+    - red, each."""
     from rich.console import Console as PlainConsole
 
+    everything = ["t-ok", "t-err", "t-wf", "t-pause"]
     console = _console()
     ipc, found = _drain(monkeypatch, console)
-    assert ipc.consumed == ["t-ok", "t-err"]
-    assert len(found) == 2
+    assert ipc.consumed == everything
+    assert len(found) == 3
     out = _out(console)
     plain = _plain(out)
     assert "[/x] [conceal]h[/conceal] [link=https://e.org]y[/link] arr[i] /tmp/p" in plain
     assert "Agent: coder[i]" in plain and "Error: [/]" in plain
+    assert "Workflow: [i]flow [/x]" in plain and "Workflow: [i]resumed [/x]" in plain
+    assert FINAL_OUTPUT in plain
     assert "[bold" not in plain and "[cyan]" not in plain, "VAF's own markup shown as text"
     assert set(_targets(out)) == {"file:///tmp/p"}
 
     plain_console = PlainConsole(file=io.StringIO(), force_terminal=True,
                                  color_system="truecolor", width=200)
     ipc, _ = _drain(monkeypatch, plain_console)
-    assert ipc.consumed == ["t-ok", "t-err"]
+    assert ipc.consumed == everything
     out = plain_console.file.getvalue()
     assert set(_targets(out)) == {"file:///tmp/p"}
-    assert "Error: [/]" in _plain(out)
+    assert "Error: [/]" in _plain(out) and FINAL_OUTPUT in _plain(out)
 
 
 # ── the CLI commands ─────────────────────────────────────────────────────────────────
@@ -422,7 +498,7 @@ def session_cli(monkeypatch, tmp_path):
     parseable.add_message("user", "arr[i] - [x] done [conceal]h[/conceal] :CD:")
     sessions = {"s1": session, "s2": parseable}
     rows = [{"id": "s1", "name": "[i]Plan[/i]", "message_count": 1,
-             "updated_at": "2026-01-01T00:00:00", "summary": "[conceal]h[/conceal]"}]
+             "updated_at": "2026-01-01T00:00:00", "summary": "[conceal]h[/conceal] C:\\d\\"}]
     found = [{"session_id": "s1", "session_name": "[i]Plan[/i]", "role": "user",
               "match": "[conceal]h[/conceal]"}]
     manager = SimpleNamespace(list=lambda limit=20: rows, load=lambda sid: sessions[sid],
@@ -434,12 +510,18 @@ def session_cli(monkeypatch, tmp_path):
     return SimpleNamespace(app=session_mod.session_app, session=session, real=real)
 
 
+#: A fixed width, so a table's columns do not depend on the terminal running the tests.
+WIDE = {"COLUMNS": "120"}
+
+
 def test_session_list_load_search_show_names_as_written(session_cli):
-    """MUTATION: drop `escape_markup` on the name cell of `vaf session list` - red."""
-    runner = CliRunner()
+    """MUTATION: the name cell of `vaf session list` back to a markup string - red; the
+    summary cell through `escape_markup` instead of `Text` - red (the final backslash of
+    `C:\\d\\` shows twice)."""
+    runner = CliRunner(env=WIDE)
     out = runner.invoke(session_cli.app, ["list"])
     assert out.exit_code == 0, out.output
-    assert "[i]Plan[/i]" in out.output and "[conceal]h[/conceal]" in out.output
+    assert "[i]Plan[/i]" in out.output and "[conceal]h[/conceal] C:\\d\\ " in out.output
     out = runner.invoke(session_cli.app, ["load", "s1"])
     assert out.exit_code == 0, out.output
     assert "[i]Plan[/i] [/x]" in out.output and "[green]" not in out.output
@@ -451,8 +533,8 @@ def test_session_list_load_search_show_names_as_written(session_cli):
 
 def test_session_export_to_a_pipe_is_the_export(session_cli):
     """MUTATION: drop `soft_wrap=True` - red (wrapped at 80 columns, the JSON does not
-    parse); drop `markup=False` - red (`[x]` vanishes); drop `emoji=False` - red (`:CD:`
-    becomes a symbol)."""
+    parse); drop `markup=False` - red (`[x]` vanishes); drop `emoji=False` together with the
+    console's emoji default - red (`:CD:` becomes a symbol)."""
     runner = CliRunner()
     out = runner.invoke(session_cli.app, ["export", "s1", "--format", "json"])
     assert out.exit_code == 0, out.output
@@ -500,8 +582,8 @@ def test_automation_run_prints_the_output_as_written(automation_cli):
 
 
 def test_automation_list_and_run_show_names_as_written(automation_cli):
-    """MUTATION: drop `escape_markup` at the name cell of `vaf automation list` - red."""
-    out = CliRunner().invoke(automation_cli, ["list"])
+    """MUTATION: the name cell of `vaf automation list` back to a markup string - red."""
+    out = CliRunner(env=WIDE).invoke(automation_cli, ["list"])
     assert out.exit_code == 0, out.output
     assert "[i]daily" in out.output
 
@@ -532,12 +614,16 @@ def test_security_lists_show_names_as_written(monkeypatch, ui_console):
 
 def test_a_markup_like_name_and_preview_show_as_written_in_the_inbox(monkeypatch,
                                                                      ui_console):
-    """MUTATION: drop `escape_markup` on the preview cell - red; on the name cell - red."""
+    """MUTATION: the preview cell back to a markup string - red; the name cell - red; the
+    name cell through `escape_markup` instead of `Text` - red (its final backslash shows
+    twice). A `Text` cell never turns `:CD:` into a symbol, whatever the console's emoji
+    default (that one is pinned by `test_emoji_codes_are_text_on_vafs_consoles`)."""
     from vaf.cli.cmd import inbox as inbox_cmd
     from vaf.core import inbox as inbox_mod
 
     monkeypatch.setattr(inbox_cmd, "_identity", lambda: ("alice", "ab12cd34"))
-    row = {"name": "[i]Bob", "id": "x", "preview": "[link=https://e.org]see[/link] [i]",
+    row = {"name": "[i]Bob C:\\x\\", "id": "x",
+           "preview": "[link=https://e.org]see[/link] [i] :CD:",
            "last_ts": 0, "channel": "whatsapp", "unread": 0, "waits": False,
            "waits_reason": "", "mode": "agent"}
     monkeypatch.setattr(inbox_mod, "list_conversations", lambda *a, **k: {
@@ -545,15 +631,90 @@ def test_a_markup_like_name_and_preview_show_as_written_in_the_inbox(monkeypatch
     result = CliRunner().invoke(inbox_cmd.app, ["list"])
     assert result.exit_code == 0, result.output
     out = _out(ui_console)
-    _assert_as_written(out, "[link=https://e.org]see[/link] [i]")
-    assert "[i]Bob" in _plain(out)
+    _assert_as_written(out, "[link=https://e.org]see[/link] [i] :CD:")
+    assert "[i]Bob C:\\x\\ " in _plain(out)
+
+
+def test_vaf_git_shows_commit_text_as_written(monkeypatch, ui_console):
+    """The suggested commit message is model text the user confirms; a log's subjects and
+    authors are whoever committed. MUTATION: drop `markup=False` on the suggestion - red
+    (`[conceal]` hides half of what the user confirms); drop `escape_markup` on a log
+    subject - red; on its author - red."""
+    import vaf.cli.cmd.git as git_cmd
+
+    calls = []
+
+    def run_git(args, cwd=None):
+        calls.append(args)
+        if args[:1] == ["log"]:
+            return 0, "abc123|Fix [conceal]x[/conceal] arr[i]|[i]Mallory|2 days ago", ""
+        return 0, "", ""
+
+    monkeypatch.setattr(git_cmd, "run_git", run_git)
+    monkeypatch.setattr(git_cmd, "get_changed_files", lambda: (["a.py"], [], []))
+    monkeypatch.setattr(git_cmd, "get_staged_diff", lambda: "diff --git a/a.py b/a.py")
+    monkeypatch.setattr(git_cmd, "_generate_commit_message_llm",
+                        lambda prompt: "Fix login [conceal]and add a backdoor[/conceal] arr[i]")
+    result = CliRunner().invoke(git_cmd.app, ["commit", "--auto"], input="n\nmine\n")
+    assert result.exit_code == 0, result.output
+    _assert_as_written(_out(ui_console), "Fix login [conceal]and add a backdoor[/conceal] arr[i]")
+
+    ui_console.file.seek(0)
+    ui_console.file.truncate()
+    result = CliRunner().invoke(git_cmd.app, ["log"])
+    assert result.exit_code == 0, result.output
+    out = _out(ui_console)
+    _assert_as_written(out, "abc123 Fix [conceal]x[/conceal] arr[i]")
+    assert "[i]Mallory" in _plain(out)
+
+
+def test_workflow_list_shows_names_as_written(monkeypatch):
+    """A workflow in the user's folder is a file the agent wrote. MUTATION: drop
+    `escape_markup` on the name - red; on the description - red."""
+    import vaf.workflows.templates as templates
+    from vaf.cli.cmd import workflow as workflow_cmd
+
+    monkeypatch.setattr(templates, "WORKFLOW_TEMPLATES", {
+        "mine": {"name": "[i]Daily [conceal]x[/conceal]",
+                 "description": "Reads arr[i] [conceal]hidden[/conceal]"}})
+    buf = io.StringIO()
+    monkeypatch.setattr("vaf.core.terminal_text.TerminalConsole",
+                        lambda **kw: _console(buf))
+    workflow_cmd.list_workflows()
+    out = buf.getvalue()
+    _assert_as_written(out, "mine: [i]Daily [conceal]x[/conceal]")
+    _assert_as_written(out, "Reads arr[i] [conceal]hidden[/conceal]")
+
+
+def test_emoji_codes_are_text_on_vafs_consoles(ui_console):
+    """VAF writes no Rich emoji code of its own, so a code in a printed string is somebody's
+    text. MUTATION: drop the console's emoji default - red."""
+    from rich.table import Table
+    from vaf.cli.tui import UI
+
+    UI.info("deploy :CD: done")
+    table = Table()
+    table.add_column("c")
+    table.add_row("a :smile: b")
+    ui_console.print(table)
+    plain = _plain(_out(ui_console))
+    assert "deploy :CD: done" in plain and "a :smile: b" in plain
+    # Asked for, the codes still work.
+    assert ":smile:" not in _plain(_render_emoji_on("a :smile: b"))
+
+
+def _render_emoji_on(text: str) -> str:
+    console = TerminalConsole(file=io.StringIO(), force_terminal=True, emoji=True, width=200)
+    console.print(text)
+    return console.file.getvalue()
 
 
 # ── the tools' live views ────────────────────────────────────────────────────────────
 
 def test_the_coder_panel_shows_a_bracketed_file_name():
     """A Next.js route file. The preview title is parsed by `Text.from_markup`, outside the
-    console. MUTATION: drop the escape in the title - red; in the files table - red."""
+    console. MUTATION: drop the escape in the title - red; the files table's name cell back
+    to a markup string - red."""
     from vaf.tools.coder import CoderTUI
 
     console = _console()

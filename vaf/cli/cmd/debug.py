@@ -67,7 +67,9 @@ _LLM_UNAVAILABLE = "Error: no LLM backend reachable. Start 'vaf run' or configur
 
 def _explain_llm(prompt: str) -> str:
     """One completion through the shared primitive; user-visible errors keep their
-    'Error: ...' shape, now provider-neutral (the old wording assumed local mode)."""
+    'Error: ...' shape, now provider-neutral (the old wording assumed local mode). The answer
+    is model text about logs and errors other parties can write: it is printed with markup
+    and emoji codes off, as written."""
     from vaf.core.completion import complete
     return complete(prompt, max_tokens=2048, temperature=0.3, timeout=120,
                     caller="cli:debug") or _LLM_UNAVAILABLE
@@ -168,7 +170,7 @@ def explain_error(
         UI.error(result)
         raise typer.Exit(1)
     
-    UI.console.print(result, markup=True)
+    UI.console.print(result, markup=False, emoji=False)
 
 @app.command("trace")
 def analyze_trace(
@@ -243,7 +245,7 @@ def analyze_trace(
         raise typer.Exit(1)
     
     UI.print()
-    UI.console.print(result, markup=True)
+    UI.console.print(result, markup=False, emoji=False)
 
 @app.command("why")
 def why_error(
@@ -278,7 +280,7 @@ Provide a clear, understandable answer with:
         raise typer.Exit(1)
     
     UI.print()
-    UI.console.print(result, markup=True)
+    UI.console.print(result, markup=False, emoji=False)
 
 @app.command("fix")
 def suggest_fix(
@@ -354,7 +356,7 @@ def suggest_fix(
         raise typer.Exit(1)
     
     UI.print()
-    UI.console.print(result, markup=True)
+    UI.console.print(result, markup=False, emoji=False)
 
 @app.callback(invoke_without_command=True)
 def debug_callback(ctx: typer.Context):

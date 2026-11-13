@@ -2559,8 +2559,9 @@ def list_sessions(
     limit: int = typer.Option(20, "--limit", "-n", help="Maximum sessions to show")
 ):
     """List all saved sessions."""
-    from vaf.core.terminal_text import TerminalConsole, escape_markup
+    from vaf.core.terminal_text import TerminalConsole
     from rich.table import Table
+    from rich.text import Text
     
     console = TerminalConsole()
     manager = get_manager()
@@ -2581,10 +2582,10 @@ def list_sessions(
         updated = s["updated_at"][:10] if s["updated_at"] else "?"
         table.add_row(
             s["id"],
-            escape_markup(s["name"][:30]),
+            Text(s["name"][:30]),
             str(s["message_count"]),
             updated,
-            escape_markup(s["summary"][:40]),
+            Text(s["summary"][:40]),
         )
     
     console.print(table)
@@ -2669,6 +2670,7 @@ def search_sessions(
     """Search your own sessions by content."""
     from vaf.core.terminal_text import TerminalConsole, escape_markup
     from rich.table import Table
+    from rich.text import Text
     from vaf.core.identity_binding import resolve_owner_identity
 
     console = TerminalConsole()
@@ -2691,9 +2693,9 @@ def search_sessions(
     for r in results:
         table.add_row(
             r["session_id"],
-            escape_markup(r["session_name"][:20]),
+            Text(r["session_name"][:20]),
             r["role"],
-            escape_markup(r["match"][:50]) + ("..." if len(r["match"]) > 50 else ""),
+            Text(r["match"][:50] + ("..." if len(r["match"]) > 50 else "")),
         )
     
     console.print(table)

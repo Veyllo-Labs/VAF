@@ -8963,7 +8963,8 @@ class Agent:
                     from pathlib import Path
                     project_path_obj = Path(project_path_hint)
                     if project_path_obj.exists():
-                        project_link = f"[link=file:///{project_path_hint.replace(chr(92), '/')}]{project_path_hint}[/link]"
+                        from vaf.core.terminal_text import file_link
+                        project_link = file_link(project_path_hint)
 
                     # UX: auto-open created project folder in file explorer
                     try:
@@ -8994,8 +8995,8 @@ class Agent:
                         p = Path(out_file) if out_file else None
                         link = ""
                         if p and p.exists():
-                            ps = str(p)
-                            link = f"[link=file:///{ps.replace(chr(92), '/')}]{ps}[/link]"
+                            from vaf.core.terminal_text import file_link
+                            link = file_link(p)
                         target = link or out_file or str(workflow_result.outputs.get("saved") or "")
                         if user_lang == "de":
                             report_saved_msg = f"**✓ Fertig!** Report gespeichert:\n{target}"

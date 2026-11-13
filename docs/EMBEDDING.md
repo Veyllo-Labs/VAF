@@ -885,17 +885,19 @@ both read `[...]` as markup. Another party's `[link=https://...]label[/link]` be
 link whose address the reader does not see, `[conceal]...[/conceal]` hides text, `[i]` in
 `arr[i]` disappears, and a lone closing tag such as `[/]` raises `MarkupError` out of the
 print. `vaf.terminal_text` does not touch brackets, because they are text everywhere else.
-Print other parties' text with `markup=False`, or wrap it in `rich.markup.escape` where it
-goes into a markup string of your own:
+Print other parties' text with `markup=False`, or wrap every value of theirs in
+`rich.markup.escape` where it goes into a markup string of your own. Rich also turns emoji
+codes such as `:smile:` into symbols; `emoji=False` keeps them as text:
 
 ```python
 from rich.console import Console
 from rich.markup import escape
 import vaf
 
-console = Console()
+console = Console(emoji=False)
 console.print(vaf.terminal_text(answer), markup=False)
-console.print(f"[bold]{name}:[/bold] {escape(vaf.terminal_text(text))}")
+console.print(f"[bold]{escape(vaf.terminal_text(name))}:[/bold] "
+              f"{escape(vaf.terminal_text(text))}")
 ```
 
 ---

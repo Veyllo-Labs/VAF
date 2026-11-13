@@ -58,11 +58,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ### Fixed
 
 - **Square brackets show as written in the plain terminal.** `arr[i]`, a task list's `[x]`
-  and `pip install "vaf[speech]"` lost their brackets, and a reply or an error message with a
-  closing tag such as `[/link]` stopped the answer with a markup error, and the answer was not
-  saved to the session. Notifications in the terminal app show brackets as written too.
-  `vaf session export` without `-o` now writes the session unchanged: lines are no longer
-  wrapped at 80 columns, so an exported JSON parses, and codes such as `:CD:` stay text.
+  and `pip install "vaf[speech]"` lost their brackets. A reply or an error message with a
+  closing tag such as `[/link]` stopped the answer with a markup error, so the answer was not
+  saved to the session. Notifications in the terminal app show brackets as written too, and
+  codes such as `:CD:` stay text instead of turning into a symbol. `vaf session export`
+  without `-o` now writes the session unchanged: lines are no longer wrapped at 80 columns,
+  so an exported JSON parses.
 - **`restart` in the terminal starts the same program again.** `restart` in `vaf run` and
   in the full-screen terminal app now starts VAF the way it was started. Before, a start
   through `run_vaf.sh` or `run_vaf.bat` came back with the GitHub tools not working (the
@@ -270,11 +271,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   run. New for developers who build on VAF: `vaf.terminal_text`.
 - **Text from others can no longer turn itself into links or hidden text in the terminal.**
   A model reply, a sub-agent's result, a mail or messenger preview in `vaf inbox`, a session or
-  automation name, a web page title in the progress lines or a scanned skill could carry
+  automation name, a web page title in the progress lines, a scanned skill, `vaf debug`'s
+  answer, a commit message `vaf git` suggests or lists, or a workflow's name could carry
   markup such as `[link=https://...]label[/link]` or `[conceal]...[/conceal]`, which the plain
   terminal modes and the CLI commands turned into a link with an address you did not see, or
   into invisible text. Such text now shows as written. VAF's own links to files it created
-  stay clickable: a link is kept only when its label is the path it opens.
+  stay clickable: a link is kept only when it points to a file on this computer and its label
+  is the path it opens, so a link to another machine or a network share is never kept.
 
 ## [0.1.0a36] - 2026-11-09
 

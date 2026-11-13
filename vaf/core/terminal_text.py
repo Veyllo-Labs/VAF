@@ -83,35 +83,41 @@ vanished and italicised the rest, and a lone closing tag (`[/]`, `[/link]`, `[/e
 raised `MarkupError` out of `print`. Three parts, from the narrowest to the widest:
 
 1. Where other parties' text enters a markup string (the narration lines of `vaf.cli.tui`,
-   sub-agent results, the inbox, session, automation and security commands, the coder's
-   and research agent's live views), it goes through `escape_markup`: Rich's own escape,
-   except that VAF's own file link (below) stays a link.
-2. Where whole replies are printed (the classic and modern reply stream, the automation
-   output, `vaf session export`), markup is OFF: text is the definition there.
+   sub-agent results, the inbox, session, automation and security commands, `vaf git`'s
+   commit lists, `vaf workflow list`, the coder's and research agent's live views), it goes
+   through `escape_markup`: Rich's own escape, except that VAF's own file link (below) stays
+   a link. A table cell takes it as a `Text` instead (see `escape_markup`).
+2. Where whole replies are printed (the classic and modern reply stream, `vaf debug`'s
+   answers, `vaf git`'s suggested commit message, the automation output, `vaf session
+   export`), markup is OFF: text is the definition there.
 3. `TerminalConsole.render_str`, for every remaining string with markup on: a string that
    does not parse is shown as text, cleaned like a markup-off string (S1), and a markup
-   link survives only as VAF's own file link (S2), its label kept.
+   link survives only as VAF's own file link (S2), its label kept. And the console prints
+   emoji codes as text unless asked otherwise: VAF writes none of its own.
 
-VAF's own file link is `[link=file:...]<path>[/link]` whose label IS the path it opens
-(`_own_file_link`); the coder's `_get_clickable_path` and the engine's report and project
-links are the three producers. A link whose label differs from its target is not VAF's,
-whoever wrote it.
+VAF's own file link is `file_link(path)`: the `file:` URI of an absolute local path,
+labelled with that path (`_own_file_link` is the check; the coder's `_get_clickable_path`
+and the engine's project and report links call it). A link whose label is not the path it
+opens, one that names a host or a network share, or one whose label holds a character the
+reader cannot see is not VAF's, whoever wrote it.
 
 Named boundaries: about 900 interpolations into markup strings outside the full-screen app
 print mostly VAF's own values (paths, counts, configuration); those without an entry escape
-rely on S1 and S2 alone, so a foreign value there can restyle itself or lose a `[word]`, but
-it cannot plant a link or raise. Rich's `Panel` titles and `Text.from_markup` parse without
-the console, so neither S1 nor S2 reaches them: a foreign value there needs the entry escape
-(the coder's file name in its preview title has one). A link from a `Text` or `Style` object,
-from `Markdown` or from the `style` argument of `print` is not markup and keeps the link
-handling of `terminal_segments` and `TerminalConsole.print`.
+rely on S1 and S2 alone, so a foreign value there can restyle itself, hide itself
+(`[conceal]`) or lose a `[word]`, but it cannot plant a link or raise. Rich's `Panel` titles
+and `Text.from_markup` parse without the console, so neither S1 nor S2 reaches them: a
+foreign value there needs the entry escape (the coder's file name in its preview title has
+one). A link from a `Text` or `Style` object, from `Markdown` or from the `style` argument of
+`print` is not markup and keeps the link handling of `terminal_segments` and
+`TerminalConsole.print`.
 """
 import json
 import logging
 import re
 import sys
+import unicodedata
 from typing import Any, Iterable, Iterator, Optional
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 from rich.cells import cell_len
 from rich.console import Console, ConsoleOptions, RenderableType
@@ -185,21 +191,56 @@ def terminal_text(value: Any) -> str:
     return _clean(text)
 
 
-def _link_path(text: str) -> str:
-    return text.replace("\\", "/").lstrip("/")
+#: A drive-letter path in slash form: `C:/...`.
+_DRIVE_RE = re.compile(r"[A-Za-z]:/")
+
+
+def _absolute_local(path: str) -> bool:
+    """A local absolute path in slash form: `/x` (one leading slash) or `C:/x`. Two leading
+    slashes are a network share on Windows (`//host/share`), never a local file."""
+    return (path.startswith("/") and not path.startswith("//")) or bool(_DRIVE_RE.match(path))
 
 
 def _own_file_link(target: str, label: str) -> bool:
-    """VAF's own markup link: a `file:` target whose decoded path IS its label, so the reader
-    sees exactly what the link opens. The three producers write `Path.as_uri()` with the
-    absolute path as label (`file:///home/user/My%20Project`, `/home/user/My Project`),
-    `file:///` + the path with its backslashes turned to slashes (`file:////home/user/p`,
-    and `file:///C:/Users/a/p` labelled `C:\\Users\\a\\p` on Windows). Leading slashes and
-    the separator do not count, an empty path is never one."""
-    if not target[:5].lower() == "file:":
+    """VAF's own markup link: a local `file:` URI whose decoded path IS its label, so the
+    reader sees exactly what the link opens. `file_link` writes it (`Path.as_uri()`, labelled
+    with the absolute path): `file:///home/user/My%20Project` labelled `/home/user/My
+    Project`, `file:///C:/Users/a/p` labelled `C:\\Users\\a\\p` on Windows.
+
+    Refused: a host (`file://evil.example/share/x` opens a file on that host, whatever the
+    label says; `localhost` alone is the local machine and is compared without it), a path
+    that is a share (`file:////host/share` is one on Windows), a query or fragment the label
+    would not show, a label that is not an absolute local path, and a label the reader
+    cannot see as it is: one with a control character the console removes or a format
+    character (Unicode category Cf: the bidi controls, a zero-width space), which would show
+    a different name than the one the link opens."""
+    if (not label or terminal_text(label) != label
+            or any(unicodedata.category(ch) == "Cf" for ch in label)):
         return False
-    path = _link_path(unquote(target[5:]))
-    return bool(path) and path == _link_path(label)
+    try:
+        parts = urlsplit(target)
+    except ValueError:
+        return False
+    if (parts.scheme.lower() != "file" or parts.netloc not in ("", "localhost")
+            or parts.query or parts.fragment):
+        return False
+    path = unquote(parts.path).replace("\\", "/")
+    if path.startswith("/") and _DRIVE_RE.match(path[1:]):
+        path = path[1:]                       # `/C:/x` is the URI form of `C:/x`
+    shown = label.replace("\\", "/")
+    return _absolute_local(path) and path == shown
+
+
+def file_link(path: Any) -> str:
+    """VAF's own clickable link to a local file or folder, as Rich markup: the `file:` URI of
+    its absolute path, labelled with that path. The one shape `_own_file_link` keeps, so it
+    stays a link through `escape_markup` and `TerminalConsole`; a network share (a UNC path
+    on Windows) carries a host and is shown as a plain label."""
+    import os
+    from pathlib import Path
+
+    absolute = os.path.abspath(os.fspath(path))
+    return f"[link={Path(absolute).as_uri()}]{_rich_escape(absolute)}[/link]"
 
 
 #: A complete markup link with a plain target and a label without brackets.
@@ -214,7 +255,12 @@ def escape_markup(value: Any) -> str:
     with its label escaped. The text between two such links is escaped as one piece, so
     Rich's rule for a trailing backslash (it would escape the next tag) still holds. Control
     characters are not this function's job: the console removes them (`TerminalConsole`).
-    `None` gives `""`; anything else is `str()`-ed."""
+    `None` gives `""`; anything else is `str()`-ed.
+
+    Named boundary: that trailing-backslash rule doubles a final backslash, which a closing
+    tag right after it takes back (`[cyan]x\\\\[/cyan]` shows `x\\`), but which shows twice
+    where plain text follows. A table cell therefore takes other parties' text as a `Text`,
+    not through this function."""
     if value is None:
         return ""
     text = value if isinstance(value, str) else str(value)
@@ -367,9 +413,13 @@ class TerminalConsole(Console):
     Rich applies after `render`, the `style` argument of `print` (and so of `out`), has an
     unsafe link target dropped before Rich sees it. A CR in `end` is removed like any other,
     which no caller relies on. Constructed exactly like
-    `rich.console.Console` (whose arguments are all keywords)."""
+    `rich.console.Console` (whose arguments are all keywords), except that emoji codes are
+    OFF unless `emoji=True` is passed: VAF writes no Rich emoji code in any string of its own
+    (an AST scan of every string literal in `vaf/` found none), so a `:CD:` or `:smile:` in a
+    printed string is somebody's text and shows as written instead of as a symbol."""
 
     def __init__(self, **kwargs: Any) -> None:
+        kwargs.setdefault("emoji", False)
         super().__init__(**kwargs)
         self._markup_default = bool(kwargs.get("markup", True))
 

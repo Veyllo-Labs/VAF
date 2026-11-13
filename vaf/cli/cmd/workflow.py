@@ -484,16 +484,19 @@ def run_workflow(
 @app.command(name="list")
 def list_workflows():
     """List all available workflows."""
-    from vaf.core.terminal_text import TerminalConsole
+    from vaf.core.terminal_text import TerminalConsole, escape_markup
     from vaf.workflows.templates import WORKFLOW_TEMPLATES
 
     console = TerminalConsole()
     console.print("\n[bold cyan]Available Workflows[/bold cyan]\n")
 
+    # A workflow in the user's folder is a file the agent or somebody else wrote: its id,
+    # name and description are shown as written.
     for wf_id, template in WORKFLOW_TEMPLATES.items():
-        console.print(f"  [green]{wf_id}[/green]: {template.get('name', wf_id)}")
+        console.print(f"  [green]{escape_markup(wf_id)}[/green]: "
+                      f"{escape_markup(template.get('name', wf_id))}")
         if template.get('description'):
-            console.print(f"      [dim]{template['description']}[/dim]")
+            console.print(f"      [dim]{escape_markup(template['description'])}[/dim]")
 
 
 if __name__ == "__main__":

@@ -1349,22 +1349,33 @@ closing tag such as `[/]` or `[/link]` raised a markup error out of the print (i
 stream the answer was then not saved; in the sub-agent drain the same result failed at
 every pass). Other parties' text is now escaped where it enters a markup string
 (`escape_markup` in `vaf/core/terminal_text.py`): the narration lines (`UI.event` and its
-helpers, `TUI.event`, the notifications, a user's message box), sub-agent results, errors
-and agent types in the drain panels, `vaf inbox list`, the `vaf session` and
-`vaf automation` commands, the coder's file names and the research agent's log, and the
-`vaf security` lists. Whole replies are printed as text, with markup off: the classic and
-modern reply stream, the automation output and `vaf session export`. `TerminalConsole`
-itself shows a markup string that does not parse as text, and keeps a markup link only
-when its label is the file path it opens, which is the one shape VAF writes (the coder's
-`_get_clickable_path`, the engine's project and report links); any other markup link keeps
-its label and loses the link. The full-screen app's toasts show their message as text.
+helpers, `TUI.event`, the notifications, a user's message box), sub-agent results, errors,
+agent types and workflow names in the drain panels, the `vaf session load` and `vaf
+automation` lines, `vaf git log`'s subjects and authors, `vaf workflow list`, the coder's
+file names, and the `vaf security` lists; a table cell (`vaf inbox list`, `vaf session list`
+and `search`, `vaf automation list`, the coder's files) takes it as a Rich `Text`, which is
+never markup. Whole replies are printed as text, with markup off: the classic and modern
+reply stream, `vaf debug`'s answers, `vaf git commit --auto`'s suggested message, the
+automation output and `vaf session export`. `TerminalConsole` itself shows a markup string
+that does not parse as text, prints emoji codes such as `:CD:` as text (VAF writes none of
+its own), and keeps a markup link only in VAF's own shape (`file_link`): a local `file:`
+URI whose label is the absolute path it opens. A link that names a host
+(`file://host/...`, a file on that machine) or a network share (`file:////host/share`, a
+UNC path on Windows), carries a query, has a relative label, or has a label with a
+character the console removes or the reader cannot see (a bidi or other format character,
+a zero-width space) keeps its label and loses the link. The full-screen app's toasts show
+their message as text.
 
 Named boundaries of the markup class: Rich's `Panel` titles and `Text.from_markup` parse
 without the console, so neither console rule reaches them and a foreign value there needs
 the entry escape (the coder's file name has one). About 900 other interpolations into
 markup strings print mostly VAF's own values (paths, counts, configuration) and rely on the
-console rules alone: a foreign value there can restyle itself or lose a `[word]`, but it
-cannot plant a link or raise.
+console rules alone: a foreign value there can restyle itself, hide itself (`[conceal]`) or
+lose a `[word]`, but it cannot plant a link or raise. A value escaped into a markup line
+that ends in a backslash shows it twice where plain text follows it (Rich's escape doubles
+it for the tag that usually follows); table cells take `Text` for that reason. VAF's own
+link to a network share (a UNC project path on Windows) carries a host and shows as a plain
+label.
 
 ## 7. Watchdog and Admin Security APIs
 

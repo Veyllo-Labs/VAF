@@ -10,6 +10,7 @@ import requests
 from pathlib import Path
 from typing import List
 from vaf.cli.ui import UI
+from vaf.core.terminal_text import escape_markup
 
 app = typer.Typer()
 
@@ -276,7 +277,9 @@ def git_commit(
                 # Show suggestion
                 UI.print()
                 UI.print("[bold]Suggested commit message:[/bold]")
-                UI.console.print(f"  {final_message}", style="cyan")
+                # Model text the user is about to confirm: printed as written, so markup in
+                # it cannot hide part of the message ([conceal]) or restyle it.
+                UI.console.print(f"  {final_message}", style="cyan", markup=False)
                 UI.print()
                 
                 if not message:  # Only confirm if not --auto
@@ -334,8 +337,9 @@ def git_log(
         parts = line.split("|")
         if len(parts) >= 4:
             hash_str, message, author, date = parts[0], parts[1], parts[2], parts[3]
-            UI.print(f"[cyan]{hash_str}[/cyan] {message[:60]}")
-            UI.print(f"        [dim]{author} • {date}[/dim]")
+            # A commit's subject and author are whoever made it: shown as written.
+            UI.print(f"[cyan]{hash_str}[/cyan] {escape_markup(message[:60])}")
+            UI.print(f"        [dim]{escape_markup(author)} • {date}[/dim]")
             UI.print()
 
 @app.command("diff")

@@ -35,7 +35,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 from rich.align import Align
 
 from vaf.core.progress import StatePublisher, resolve_ui_session_id, set_run_progress
-from vaf.core.terminal_text import TerminalConsole, escape_markup
+from vaf.core.terminal_text import TerminalConsole, escape_markup, file_link
 from vaf.cli.tui import AnimatedHeader
 
 from vaf.cli.ui import UI
@@ -782,10 +782,9 @@ def _build_git_state(base_dir: str, max_commits: int = 5) -> Dict[str, Any]:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _get_clickable_path(path: str) -> str:
-    """Returns a terminal-clickable file:// URL."""
-    abs_path = os.path.abspath(path)
-    file_url = Path(abs_path).as_uri()
-    return f"[link={file_url}]{abs_path}[/link]"
+    """Returns a terminal-clickable file:// URL: VAF's own file link (`file_link`), the one
+    shape the terminal keeps as a link."""
+    return file_link(path)
 
 
 def _open_folder(path: str) -> bool:
@@ -1380,7 +1379,7 @@ class CoderTUI:
                 icon = icons.get(info["status"], "•")
                 size_str = f"{info['size']:,}B" if info["size"] else "-"
                 # Add space after icon for compact spacing
-                files_table.add_row(f"{icon} ", escape_markup(fname[:24]), size_str, info["status"])
+                files_table.add_row(f"{icon} ", Text(fname[:24]), size_str, info["status"])
             
             if not self.files:
                 files_table.add_row("", "[dim]Waiting for files...[/dim]", "", "")

@@ -159,7 +159,11 @@ confirmed one), the confirmation gate answers `allow_once` for it (never a stand
 only while the funnel's `question` for it equals the one the card showed
 (`confirmed_call_question`; else the call does not run and the model reads that the question
 changed after the card), and every other call, a second identical one included, is answered as
-in any request.
+in any request. The
+report of the run (`CONFIRM_WAKE_PREFIX`, then the result) is bound as the wake's text, so
+`_turn_reports` counts it, and it is the turn's input, neither fenced nor stored as the app
+agent's words. A call refused after the tap (its question changed, a policy refusal) is
+reported as not run, by the funnel's own `dispatched` flag.
 
 On a channel whose far end is the account holder's own device (the Veyllo App,
 `channels.Channel.holder_device`) a tool kept off chats by the `"channel"` sentinel is carded,
@@ -178,12 +182,10 @@ unbound in the loop's per-iteration `finally`). The decider receives the call's 
 the tool's own question as the funnel computed them (the `args` and `question` keywords of
 `decide`), puts VAF's text of the whole call on a card for that device, and waits for the tap
 at most five minutes; Stop, a revoked account and a device that no longer stands end the wait
-at once. A refusal replaces the gate's `[CANCELLED]` text with the card's own sentence
-(`[VEYLLO APP] '<tool>' did NOT run: ...`). A wake turn (a timer, a background command) is not
-the person's and keeps the channel's rules. The
-report of the run (`CONFIRM_WAKE_PREFIX`, then the result) is bound as the wake's text, so
-`_turn_reports` counts it, and it is the turn's input, neither fenced nor stored as the app
-agent's words.
+at once. After a No, an expiry or a Stop the same turn shows no further card (`GATE_HELD`),
+so one turn waits once at most. A refusal replaces the gate's `[CANCELLED]` text with the
+card's own sentence (`[VEYLLO APP] '<tool>' did NOT run: ...`). A wake turn (a timer, a background command) is not
+the person's and keeps the channel's rules.
 
 NAMED BOUNDARY: `vaf run --web` serves the owner's browser chats without the runner and without
 this binding. That mode hosts the web server in the terminal's process, and its loop takes a

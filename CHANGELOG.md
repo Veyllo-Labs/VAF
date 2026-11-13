@@ -18,7 +18,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   commands, timers and the tool and workflow builders can now be used through the Veyllo App.
   Each call first shows a card on your device with the tool and everything it will run, and
   runs only after you tap Yes, once; a first connection to a server shows that question on the
-  card too. This holds for your messages in the app, for a line to your VAF agent (`@` and its
+  card too, and a long run of spaces or a tab is shown as such, so nothing in the call can
+  hide off-screen. After a No, VAF asks nothing more in that reply. This holds for your messages in the app, for a line to your VAF agent (`@` and its
   name) in the Veyllo App room, which shows that a card is waiting, and for requests of the
   app's own agent. Telegram, WhatsApp, Discord and mail stay as they were, and a timer or a
   background command that ends keeps the old rules. Needs a Veyllo App version that shows

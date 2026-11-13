@@ -715,8 +715,9 @@ in a turn the holder started or their app agent asked for (section 1h of the pol
 messenger keeps `False`: a Telegram, WhatsApp or Discord bot reaches strangers too (the Front
 Office), and nothing can be shown there. The field defaults to `False`, so a channel added later
 fails closed, and `tests/test_channel_registry_sync.py` pins `HOLDER_DEVICE_CHANNELS` to
-`("veyllo_app",)`. A tool that names a channel in its restrictions stays refused there: its
-author excluded it on purpose.
+`("veyllo_app",)`. A tool that names the Veyllo App in its restrictions is refused there in
+the lane that asks a person, also with the admin's lift on: its author excluded it on purpose,
+and that must never be weaker than the sentinel, which opens only behind a card.
 
 `tests/test_channel_registry_sync.py` refuses a hand-written channel list anywhere in
 `vaf/` (two or more channel names, or their send and read tools, in one literal), refuses a

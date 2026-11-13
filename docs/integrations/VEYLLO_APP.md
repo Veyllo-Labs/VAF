@@ -94,6 +94,11 @@ are 16 random bytes as base64url without padding (22 characters).
 - **Google and Apple** see when a push notice reaches the device (it carries no content).
 - **The app is closed source.** The end-to-end promise holds against the relay, not against a
   changed app. When you use Veyllo's models in the app, that content goes to Veyllo.
+- **A paired Veyllo App can release the tools kept off chats.** A tap on its card runs one
+  call of the host shell, host Python, SSH, FTP and the other tools kept off messaging
+  channels for your account ([below](#tools-in-the-app-chat)); for an admin account, which
+  the account allowlist does not limit, that includes the host shell. Unpairing the device
+  takes that away.
 
 ## Messages, replies and the Veyllo App being away
 
@@ -172,7 +177,9 @@ a card on your device (`vaf/core/tool_contract.py`, section 1h; `vaf/core/app_li
   UI, the terminal or with `vaf devices say`), to your most recently used device that shows
   these cards. Your turn waits for the tap up to five minutes, then the reply says the tool was
   not confirmed. No, Stop, a removed device, or an app that cannot show the card end the wait
-  at once, and the reply says the tool did NOT run and why.
+  at once, and the reply says the tool did NOT run and why. After a No, a card that ran out or
+  a Stop, the same reply shows no further card and waits no second time: it says the tool did
+  NOT run, and you can ask for it again in your next message.
 - **Every confirmation of such a turn goes to the device.** The app chat has no dialog in the
   web UI that anybody sees, so a call that needs a confirmation for another reason (a skill
   deleted with the admin's lift off, say) is put to you on the device as well; for those, an
@@ -228,8 +235,10 @@ differences (`vaf/core/app_link/bridge.py`, `vaf/core/agent_origin.py`):
   tool names as its targets (`BaseTool.agent_request_confirm_whole_args`: the coder's project,
   environment and deploy target, an automation's output path and triggers, an id) show their
   whole first line there, because their tail is their meaning. Below that block, each value
-  continues under its own name, every line indented, with runs of empty lines counted.
-  Invisible characters (direction overrides, zero-width and control characters, blank
+  continues under its own name, every line indented, with runs of empty lines counted. A tab
+  shows as `⟨U+0009⟩`, and a run of more than eight spaces as its count, `⟨300 spaces⟩`, so no
+  wall of blanks can push a second command out of sight; the call itself keeps every
+  character. Invisible characters (direction overrides, zero-width and control characters, blank
   fillers, combining marks with no letter before them or stacked beyond two, and the
   combining marks that draw as nothing at all, such as the variation selectors) appear as
   `⟨U+XXXX⟩`; a mark after a space of any kind (the no-break and the wide ones too), a tab
@@ -300,7 +309,9 @@ differences (`vaf/core/app_link/bridge.py`, `vaf/core/agent_origin.py`):
   not have seen yet; five minutes, and the turn waits for the tap). A `cancel` with that
   reply's id stops your turn; its card then ends, and a later tap gets `used` or `expired`.
   A device without the cap gets no such card: a request is answered that the tool could not
-  be shown for confirmation, and a turn of yours is told the app needs an update.
+  be shown for confirmation, and a turn of yours is told the app needs an update. The app
+  shows `what` of every card whole, with its line breaks, soft-wrapped at the screen's edge
+  and scrolled only up and down, never sideways.
 - **Tools that need you in person stay off.** Each tool declares how it answers such a request
   (`BaseTool.agent_request`); refused ones are not offered either, and the app's agent is told
   why and that VAF did not do it: a tool that names the Veyllo App in its own restrictions
@@ -566,6 +577,15 @@ links that page instead of quoting amounts, which an installed VAF could not kee
 - **The tool's own question may name an address.** The `VAF asks:` block of an SSH or FTP card
   can name the server that stored values resolve to; it goes to your own device only, never to
   the model.
+- **No admin switch for the tools behind a card.** An admin cannot keep the host shell, host
+  Python, SSH and FTP off a paired Veyllo App while keeping the device: the card is the
+  condition, and unpairing (or the account allowlist for a regular account) is the off switch.
+  No installation has asked for such a switch; it is measured again when one does.
+- **A turn of yours waits for a card at most once.** While a card of your own turn waits, the
+  turn holds one of VAF's workers, up to five minutes, as the web UI's dialog does; with the
+  local model that is the one worker. After a No, an expiry or a Stop the same turn shows no
+  further card, so one turn holds a worker for one wait at most. A request of the app's agent
+  holds no worker: its call is parked.
 - **A turn nobody started through the app asks nobody on the device.** A timer that fires or a
   background command that ends wakes the app chat with the rules of every messaging channel;
   a call in such a turn that needs a confirmation for another reason still waits up to five

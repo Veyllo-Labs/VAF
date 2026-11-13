@@ -182,7 +182,7 @@ def test_editor_content_is_never_parsed_into_the_apps_document():
     assert "innerHTML = documentEditorState.content" not in page
     assert "new DOMParser().parseFromString(documentEditorState.content" in page
     editor = (REPO / "web/components/DocumentEditor.tsx").read_text(encoding="utf-8")
-    assert "contentDiv.innerHTML = sanitizeDocumentCopy(body.innerHTML)" in editor
+    assert "contentDiv.innerHTML = sanitizeDocumentCopy(body.innerHTML" in editor
     assert "contentDiv.innerHTML = body.innerHTML" not in editor
     # measured: a position:fixed block in the file drew over the app from the offscreen copy
     assert "wrapper.style.contain = 'layout paint'" in editor
@@ -193,10 +193,21 @@ def test_a_document_copy_keeps_its_formatting_but_not_the_apps_hooks():
     cannot use the fragment policy; id and class would reach the app's CSS and globals."""
     src = (REPO / "web/lib/sanitize.ts").read_text(encoding="utf-8")
     copy = src.split("const DOCUMENT_COPY", 1)[1].split("};", 1)[0]
-    assert "FORBID_ATTR: ['class', 'id']" in copy
+    for attr in ("'class'", "'id'"):
+        assert attr in copy.split("FORBID_ATTR", 1)[1].split("]", 1)[0], attr
     assert "'style'" in copy.split("FORBID_TAGS", 1)[1].split("]", 1)[0]
     assert "'style'" not in copy.split("FORBID_ATTR", 1)[1].split("]", 1)[0], "inline style carries the formatting"
     assert "export function sanitizeDocumentCopy" in src and src.count("if (!DOMPurify.isSupported) return '';") == 2
+
+
+def test_no_cleaned_markup_keeps_a_background_picture():
+    """`background` on a table, row or cell is a picture: DOMPurify allows the attribute by
+    default, and Chromium fetched all three from a research report (measured). MUTATION: drop
+    'background' from either list and this goes red."""
+    src = (REPO / "web/lib/sanitize.ts").read_text(encoding="utf-8")
+    for config in ("const UNTRUSTED_FRAGMENT", "const DOCUMENT_COPY", "const OWN_SOURCES_COPY"):
+        forbidden = src.split(config, 1)[1].split("};", 1)[0].split("FORBID_ATTR", 1)[1].split("]", 1)[0]
+        assert "'background'" in forbidden, config
 
 
 def test_the_desktop_pdf_page_runs_no_script():

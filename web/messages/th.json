@@ -886,7 +886,8 @@
     "openSignInPage": "เปิดหน้าลงชื่อเข้าใช้",
     "back": "ย้อนกลับ",
     "next": "ถัดไป",
-    "stepOf": "ขั้นที่ {step} จาก {steps}"
+    "stepOf": "ขั้นที่ {step} จาก {steps}",
+    "markdownPictureLink": "รูปภาพบนเซิร์ฟเวอร์อื่น เปิดในแท็บใหม่"
   },
   "settings": {
     "title": "การตั้งค่า",

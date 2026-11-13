@@ -929,8 +929,9 @@ function LegacyDocumentEditor({
             // This copy lives in the APP's document, where an onerror attribute from the file
             // would run as the viewer and a position:fixed block would draw over the app; the
             // cleaned copy (web/lib/sanitize.ts) only feeds the PDF, the file itself is untouched.
-            // body IS the continuous flow.
-            contentDiv.innerHTML = sanitizeDocumentCopy(body.innerHTML);
+            // body IS the continuous flow. A Markdown file's copy keeps only own sources: its
+            // frame refused every other picture, and this copy would fetch it.
+            contentDiv.innerHTML = sanitizeDocumentCopy(body.innerHTML, { ownSourcesOnly: isMarkdownPath(filePath) });
             wrapper.appendChild(contentDiv);
             document.body.appendChild(wrapper);
             try {

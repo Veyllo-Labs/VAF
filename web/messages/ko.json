@@ -886,7 +886,8 @@
     "openSignInPage": "로그인 페이지 열기",
     "back": "뒤로",
     "next": "다음",
-    "stepOf": "{steps}단계 중 {step}단계"
+    "stepOf": "{steps}단계 중 {step}단계",
+    "markdownPictureLink": "다른 서버에 있는 이미지입니다. 새 탭에서 열립니다."
   },
   "settings": {
     "title": "설정",

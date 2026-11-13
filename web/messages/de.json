@@ -886,7 +886,8 @@
     "openSignInPage": "Anmeldeseite öffnen",
     "back": "Zurück",
     "next": "Weiter",
-    "stepOf": "Schritt {step} von {steps}"
+    "stepOf": "Schritt {step} von {steps}",
+    "markdownPictureLink": "Bild auf einem anderen Server. Öffnet sich in einem neuen Tab."
   },
   "settings": {
     "title": "Einstellungen",

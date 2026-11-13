@@ -104,6 +104,9 @@ function extractHtmlContent(content: string): string | null {
 function isHtmlDocument(doc: DocumentViewerDocument): boolean {
     const name = (doc.name || '').toLowerCase();
     if (name.endsWith('.html') || name.endsWith('.htm')) return true;
+    // A Markdown file is Markdown even when it holds a whole HTML document: it is rendered as
+    // Markdown in a frame with the Markdown policy, never as an HTML document without it.
+    if (isMarkdownDocument(doc)) return false;
     return !!extractHtmlContent(doc.content ?? '');
 }
 

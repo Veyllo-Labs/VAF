@@ -886,7 +886,8 @@
     "openSignInPage": "サインインページを開く",
     "back": "戻る",
     "next": "次へ",
-    "stepOf": "ステップ{step}/{steps}"
+    "stepOf": "ステップ{step}/{steps}",
+    "markdownPictureLink": "別のサーバー上の画像です。新しいタブで開きます。"
   },
   "settings": {
     "title": "設定",

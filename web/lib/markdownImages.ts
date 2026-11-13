@@ -18,10 +18,15 @@
  * (`web/components/Markdown.tsx`, through `rehypeOwnImagesOnly`), the attached-document viewer
  * (`renderMarkdownDocument`) and, as a backstop for raw HTML inside Markdown that no rewrite
  * sees, the policy of the frames that show Markdown (`markdownFramePolicy`). The Document
- * Editor renders unchanged (`renderMarkdownForEditor`), because its markup is written back into
- * the user's file on save; its frame carries the policy instead.
+ * Editor keeps its pictures as written (`renderMarkdownForEditor`), because its markup is written
+ * back into the user's file on save; its frame carries the policy instead.
+ *
+ * Both document renderers also drop raw frame, object and head elements (`stripRawEmbeds`): the
+ * frame policy blocks an inline frame's navigation, but Chromium still resolves the host and opens
+ * a connection first (measured), which tells a foreign server that and when the file was opened.
  */
-import { Marked, marked, type Tokens, type Token } from 'marked';
+import { Marked, type Tokens, type Token } from 'marked';
+// Type-only: @types/hast comes with react-markdown, which depends on it; not a direct dependency.
 import type { Element, ElementContent, Root, RootContent } from 'hast';
 import { getApiBase } from '@/lib/utils';
 
@@ -93,9 +98,23 @@ export function ownImageSrc(src: string | null | undefined): string | null {
         const urls = resolveAll(candidate);
         if (!urls) continue;
         const own = urls.every((url, i) => url.origin === new URL(OWN_BASES[i]).origin && url.pathname === OWN_FILE_LANE);
-        if (own) return urls[0].pathname + urls[0].search;
+        if (!own) continue;
+        // Every `path` value, because the server reads the last one and URLSearchParams the first.
+        if (urls[0].searchParams.getAll('path').some(isRemoteFilePath)) return null;
+        return urls[0].pathname + urls[0].search;
     }
     return null;
+}
+
+/**
+ * A file path that names a network share or a Windows device namespace (`\\host\share`,
+ * `//host/share`, `\\?\`, `\\.\`, `\??\`). On Windows the server opening it is an SMB
+ * connection to that host, so such a picture is not an own one. The server refuses the same
+ * spellings (`is_remote_path` in `vaf/core/path_jail.py`).
+ */
+function isRemoteFilePath(path: string): boolean {
+    const norm = path.trimStart().replace(/\\/g, '/');
+    return norm.startsWith('//') || norm.startsWith('/??/');
 }
 
 function hastText(value: string): ElementContent {
@@ -147,9 +166,13 @@ export function rehypeOwnImagesOnly() {
     };
 }
 
-function escapeHtml(text: string): string {
+/**
+ * Escapes text from Markdown for HTML. `keepEntities` leaves an `&` that already starts a
+ * character reference alone, as Markdown does (`a &amp; b` reads "a & b", not "a &amp; b").
+ */
+function escapeHtml(text: string, keepEntities = false): string {
     return text
-        .replace(/&/g, '&amp;')
+        .replace(keepEntities ? /&(?!#?[a-zA-Z0-9]+;)/g : /&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
@@ -171,7 +194,33 @@ function textInsteadOfImages(tokens: Token[] | undefined): void {
     }
 }
 
-// A local instance: `marked.use()` would change the shared one the Document Editor renders with.
+// Raw HTML elements a Markdown document may not carry into its frame: frames and plugins
+// connect to their host even when the frame policy blocks them, and the head elements (a
+// stylesheet, a refresh, a base) are not the document's to set.
+const RAW_EMBED = /<\/?\s*(?:iframe|frame|frameset|object|embed|applet|portal|link|meta|base)\b[^>]*>?/gi;
+
+/**
+ * Raw HTML from a Markdown file without those elements. Repeated until nothing changes, so a
+ * tag that only forms once another is cut out (`ifr` + a whole frame tag + `ame`) goes as well. Text outside
+ * raw HTML never needs this: marked escapes it.
+ */
+export function stripRawEmbeds(html: string): string {
+    let out = html;
+    for (let previous = ''; previous !== out;) {
+        previous = out;
+        out = out.replace(RAW_EMBED, '');
+    }
+    return out;
+}
+
+// The picture icon of the UI (lucide's image), inline because a document frame loads nothing.
+const IMAGE_GLYPH = '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="none" '
+    + 'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" '
+    + 'style="display:inline-block;vertical-align:-0.125em;margin-right:0.25em">'
+    + '<rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/>'
+    + '<path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>';
+
+// Local instances: `marked.use()` would change the shared one every other importer gets.
 const documentMarked = new Marked({
     gfm: true,
     async: false,
@@ -181,12 +230,28 @@ const documentMarked = new Marked({
     renderer: {
         image({ href, text }: Tokens.Image) {
             const own = ownImageSrc(href);
-            if (own !== null) return `<img src="${escapeHtml(own)}" alt="${escapeHtml(text || '')}">`;
+            const label = escapeHtml(text || '', true);
+            if (own !== null) return `<img src="${escapeHtml(own)}" alt="${label}">`;
             const link = imageLinkHref(href);
             if (link !== null) {
-                return `<a href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(link)}">${escapeHtml(text || link)}</a>`;
+                return `<a href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(link)}">`
+                    + `${IMAGE_GLYPH}${label || escapeHtml(link)}</a>`;
             }
-            return escapeHtml(text || '');
+            return label;
+        },
+        html({ text }: Tokens.HTML | Tokens.Tag) {
+            return stripRawEmbeds(text);
+        },
+    },
+});
+
+const editorMarked = new Marked({
+    gfm: true,
+    breaks: false,
+    async: false,
+    renderer: {
+        html({ text }: Tokens.HTML | Tokens.Tag) {
+            return stripRawEmbeds(text);
         },
     },
 });
@@ -197,12 +262,17 @@ export function renderMarkdownDocument(md: string): string {
 }
 
 /**
- * HTML for a Markdown file opened in the Document Editor, unchanged: the editor saves its markup
- * back into the file, so a rewritten image would be written into the user's file. Its frame
- * carries `markdownFramePolicy` instead.
+ * HTML for a Markdown file opened in the Document Editor. Pictures stay as written: the editor
+ * saves its markup back into the file, so a rewritten picture would be written into the user's
+ * file; its frame carries `markdownFramePolicy` instead. The raw embeds are dropped
+ * (`stripRawEmbeds`), which costs the file nothing: the save's conversion back to Markdown
+ * (`markdownify` behind `/api/file/save`) drops those elements anyway (measured; at most two
+ * spaces around an inline frame become one, which Markdown renders the same). An iframe
+ * left unclosed is the one difference, and there the file keeps more: unstripped, everything
+ * after it was the frame's fallback text, which the save dropped with it.
  */
 export async function renderMarkdownForEditor(md: string): Promise<string> {
-    return marked.parse(md, { gfm: true, breaks: false });
+    return editorMarked.parse(md) as string;
 }
 
 const ORIGIN_SHAPE = /^https?:\/\/[A-Za-z0-9.\-[\]:]+$/;
@@ -213,7 +283,7 @@ const ORIGIN_SHAPE = /^https?:\/\/[A-Za-z0-9.\-[\]:]+$/;
  * this server can be triggered from the frame) and inline data; no scripts, frames, objects or
  * connections; styles inline and from the stylesheet host the document viewer uses. It is the
  * backstop for raw HTML in a Markdown file (`<img>`, `srcset`, `<picture>`, `<video poster>`,
- * `<iframe>`, CSS `url()`), which no Markdown rewrite sees. An origin that is not a plain web
+ * inline frames, CSS `url()`), which no Markdown rewrite sees. An origin that is not a plain web
  * origin is left out, so the frame then loads no file either.
  */
 export function markdownFramePolicy(origin: string): string {

@@ -256,7 +256,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   file on your VAF; a picture from anywhere else shows as a link with a picture icon that you
   can open yourself, so merely viewing a reply can no longer send anything to a foreign
   server. In the Document Editor such a picture shows as a blocked placeholder, and the file
-  is saved as it was. Model card links now open in a new tab.
+  is saved as it was. Embedded frames in a Markdown document are left out, a research report
+  no longer loads table background pictures, and a PDF exported from a Markdown file keeps only
+  pictures from your VAF. Model card links now open in a new tab and look like links.
+- **On Windows, VAF no longer contacts a network share named in a file address.** Opening a
+  file through VAF with a share path (`\\server\share\...`) used to make VAF connect to that
+  server and offer it your Windows login before the request was refused; such paths are now
+  refused straight away. Needs a restart of VAF.
 - **The agent's file tools stay out of VAF's own data and your shell start files.** Reading
   VAF's data and settings folders (messages, mail, contacts, key files, the MCP server list,
   tool permissions, and in Docker mode the configuration folder) is now refused for every

@@ -34,8 +34,8 @@ import unicodedata
 from pathlib import Path
 from typing import Optional
 
-__all__ = ["PathEscape", "WriteRefused", "contained_path", "discard_written", "is_rooted",
-           "open_for_write", "safe_entry_name"]
+__all__ = ["PathEscape", "WriteRefused", "contained_path", "discard_written", "is_remote_path",
+           "is_rooted", "open_for_write", "safe_entry_name"]
 
 
 class PathEscape(ValueError):
@@ -74,6 +74,36 @@ def is_rooted(fragment: str) -> bool:
     if fragment[0] in ("/", "\\"):
         return True
     return len(fragment) > 1 and fragment[1] == ":"
+
+
+def is_remote_path(spelled: str) -> bool:
+    """True if a path names a network share or a Windows device namespace, whatever the host.
+
+    On Windows, merely resolving or testing such a path reaches out: ``Path.resolve()`` (in
+    3.13 ``ntpath.realpath`` calls ``nt._getfinalpathname`` first) opens ``\\\\host\\share``,
+    which is an SMB connection to that host carrying the Windows account's NTLM login attempt,
+    before any root comparison can refuse it. A path a caller hands in (an HTTP query, a tool
+    argument) must therefore be refused while it is still text.
+
+    Lexical, in both separator conventions on every host, because the text carries the
+    sender's convention: ``\\\\host\\share`` and ``//host/share`` (UNC), ``\\\\?\\`` and
+    ``\\\\.\\`` (the Win32 device and long-path namespaces, ``\\\\?\\UNC\\host`` included),
+    and ``\\??\\`` (the NT object namespace, which Win32 passes through unchanged). On POSIX a
+    leading ``//`` is an implementation-defined spelling of ``/`` that nothing needs, so
+    refusing it only ever errs towards refusing.
+
+    NAMED BOUNDARY: a drive letter mapped to a share (``Z:\\x``) and a link or junction
+    inside a served root that points at a share are not seen here; both are set up on the
+    machine by its owner, not spelled by a caller.
+
+    NAMED BOUNDARY, facade: not exported as ``vaf.is_remote_path`` yet. It has one caller that
+    takes an absolute path from outside (the web file lane, ``_allowed_file_path``), and an
+    embedder resolving a relative fragment through ``vaf.contained_path`` is covered already,
+    because ``is_rooted`` refuses every fragment that starts with a separator.
+    """
+    text = str(spelled or "").lstrip()
+    norm = text.replace("\\", "/")
+    return norm.startswith("//") or norm.startswith("/??/")
 
 
 def contained_path(root, relative: str = "", *, must_exist: bool = False) -> Path:

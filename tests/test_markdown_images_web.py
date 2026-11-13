@@ -67,6 +67,8 @@ CODE_VIEWER = WEB / "components" / "CodeViewer.tsx"
 SETTINGS = WEB / "components" / "SettingsModal.tsx"
 DOC_VIEWER = WEB / "components" / "DocumentViewer.tsx"
 DOC_EDITOR = WEB / "components" / "DocumentEditor.tsx"
+SANITIZE = WEB / "lib" / "sanitize.ts"
+LOCALES = ("en", "de", "ja", "ko", "th", "tr", "zh")
 
 
 def _source(path):
@@ -94,21 +96,34 @@ function load(src, stubs) {
   new Function('require', 'module', 'exports', js)((id) => (id in stubs ? stubs[id] : req(id)), m, m.exports);
   return m.exports;
 }
+const catalogue = (locale) => JSON.parse(fs.readFileSync(path.join(W, 'messages', locale + '.json'), 'utf8'));
+let messages = catalogue('en');
 const stubs = {
   '@/lib/utils': {cn: (...a) => a.filter(Boolean).join(' '), getApiBase: () => ''},
   'lucide-react': new Proxy({}, {get: (_, name) => (name === '__esModule' ? undefined
     : (props) => React.createElement('svg', {'data-icon': String(name), 'aria-hidden': props['aria-hidden']}))}),
+  // next-intl's useTranslations, reading the real catalogue of the current locale.
+  'next-intl': {useTranslations: (ns) => (key) => {
+    const value = (messages[ns] || {})[key];
+    if (typeof value !== 'string') throw new Error('missing message ' + ns + '.' + key);
+    return value;
+  }},
+  // sanitize.ts only needs DOMPurify for its DOM half; the decision it exports is pure.
+  'dompurify': {__esModule: true, default: {isSupported: false}},
 };
 stubs['@/lib/markdownImages'] = load(files.lib, stubs);
 stubs['@/components/Markdown'] = load(files.wrapper, stubs);
 const lib = stubs['@/lib/markdownImages'];
+const sanitize = load(files.sanitize, stubs);
+const viewer = load(files.viewer, stubs);
 const { Markdown } = stubs['@/components/Markdown'];
 const chat = load(files.chat, stubs);
 const preview = load(files.preview, stubs);
 (async () => {
   const out = [];
   for (const [op, arg, extra] of ops) {
-    if (op === 'markdown') out.push(renderToStaticMarkup(React.createElement(Markdown, null, arg)));
+    if (op === 'locale') { messages = catalogue(arg); out.push(arg); }
+    else if (op === 'markdown') out.push(renderToStaticMarkup(React.createElement(Markdown, null, arg)));
     else if (op === 'chat') out.push(renderToStaticMarkup(React.createElement(chat.ChatMarkdown, {dark: !!extra}, arg)));
     else if (op === 'preview') out.push(renderToStaticMarkup(React.createElement(preview.MarkdownPreview, {source: arg})));
     else if (op === 'own') out.push(lib.ownImageSrc(arg));
@@ -118,6 +133,9 @@ const preview = load(files.preview, stubs);
     else if (op === 'editor') out.push(await lib.renderMarkdownForEditor(arg));
     else if (op === 'global') out.push(req('marked').marked.parse(arg, {gfm: true, breaks: false}));
     else if (op === 'policy') out.push(lib.markdownFramePolicy(arg));
+    else if (op === 'strip') out.push(lib.stripRawEmbeds(arg));
+    else if (op === 'keep') out.push(sanitize.keepsOwnSourcesOnly(arg[0], arg[1], arg[2]));
+    else if (op === 'isHtml') out.push(viewer.isHtmlDocument(arg));
     else throw new Error('unknown op ' + op);
   }
   process.stdout.write(JSON.stringify(out));
@@ -140,7 +158,14 @@ def _run(ops):
                "import { Markdown } from '@/components/Markdown';\n"
                + _slice(CODE_VIEWER, "function MarkdownPreview", "// ── Language detection")
                + "\nexport { MarkdownPreview };\n")
-    files = {"lib": _source(LIB), "wrapper": _source(WRAPPER), "chat": chat, "preview": preview}
+    # The viewer's document-kind helpers, cut out as they stand (the component itself pulls in
+    # PDF and Word renderers).
+    viewer = "\n".join(_slice(DOC_VIEWER, f"function {name}(", "\n}\n") + "\n}\n" for name in
+                       ("extractHtmlContent", "isHtmlDocument", "isMarkdownDocument"))
+    viewer = ("type DocumentViewerDocument = { name?: string; content?: string };\n" + viewer
+              + "export { isHtmlDocument };\n")
+    files = {"lib": _source(LIB), "wrapper": _source(WRAPPER), "chat": chat, "preview": preview,
+             "sanitize": _source(SANITIZE), "viewer": viewer}
     out = subprocess.run(["node", "-e", _SCRIPT, str(WEB)], input=json.dumps([files, ops]),
                          capture_output=True, text=True, encoding="utf-8")
     assert out.returncode == 0, out.stderr
@@ -149,6 +174,15 @@ def _run(ops):
 
 def _anchors(html):
     return re.findall(r"<a\b[^>]*>", html)
+
+
+PICTURE_LINK_EN = "Picture on another server. Opens in a new tab."
+
+
+def _visible(html):
+    """The text a sighted reader sees: without the screen-reader-only note and the tags."""
+    html = re.sub(r'<span class="sr-only">.*?</span>', "", html)
+    return re.sub(r"<[^>]+>", "", html).strip()
 
 
 SECRET = "https://attacker.example/x.png?d=secret"
@@ -171,15 +205,17 @@ def test_a_remote_image_in_a_bubble_is_a_link_not_an_image(dark):
         href = url.replace("&", "&amp;")
         assert f'href="{href}"' in anchors[0], f"{form}: {html}"
         assert 'target="_blank"' in anchors[0] and 'rel="noopener noreferrer"' in anchors[0], html
-        assert f'<span title="{href}"' in html, f"{form}: no hover address: {html}"
+        title = re.search(r'<span title="([^"]*)"', html)
+        assert title and title.group(1).split("\n") == [PICTURE_LINK_EN, href], f"{form}: hover text: {html}"
         assert 'data-icon="Image"' in html, f"{form}: no image icon: {html}"
-        assert re.sub(r"<[^>]+>", "", html).strip() == "p", f"{form}: label is not the alt text: {html}"
+        assert _visible(html) == "p", f"{form}: label is not the alt text: {html}"
+        assert f'<span class="sr-only"> {PICTURE_LINK_EN}</span>' in html, f"{form}: nothing for a screen reader"
 
 
 def test_an_image_without_alt_is_labelled_with_its_address():
     [html] = _run([["chat", "![](https://a.example/y.png)", False]])
     assert "<img" not in html
-    assert re.sub(r"<[^>]+>", "", html).strip() == "https://a.example/y.png"
+    assert _visible(html) == "https://a.example/y.png"
 
 
 def test_an_image_inside_a_link_is_the_links_text():
@@ -268,12 +304,17 @@ def test_an_attached_markdown_document_shows_remote_images_as_links():
     doc, editor, glob = _run([["doc", md], ["editor", md], ["global", md]])
     imgs = re.findall(r"<img\b[^>]*>", doc)
     assert imgs == ['<img src="/api/file?path=c.png" alt="c">'], doc
-    assert (f'<a href="{SECRET.replace("&", "&amp;")}" target="_blank" rel="noopener noreferrer" '
-            f'title="{SECRET.replace("&", "&amp;")}">p</a>') in doc, doc
+    secret = SECRET.replace("&", "&amp;")
+    link = re.search(r'<a href="([^"]*)" target="_blank" rel="noopener noreferrer" title="([^"]*)">(<svg\b.*?</svg>)p</a>', doc)
+    assert link and link.group(1) == link.group(2) == secret, doc
+    # The picture cue of the UI, drawn inline: the frame loads nothing.
+    assert 'aria-hidden="true"' in link.group(3) and "http://www.w3.org/2000/svg" in link.group(3)
+    assert re.search(r"<svg\b", link.group(3)) and "href=" not in link.group(3) and "url(" not in link.group(3)
     assert '<a href="https://x.example">b</a>' in doc, doc
-    assert ">https://a.example/y.png</a>" in doc, doc
+    assert "</svg>https://a.example/y.png</a>" in doc, doc
     assert "data:" not in doc, doc
-    # The shared instance (the editor's) is untouched: it still writes every image as it stands.
+    # The editor keeps every picture as written (its markup is saved), and the shared instance is
+    # untouched by the document renderer.
     assert editor == glob
     assert f'<img src="{SECRET.replace("&", "&amp;")}" alt="p">' in editor, editor
     assert '<img src="https://badge.example/b.svg" alt="b">' in editor, editor
@@ -325,7 +366,8 @@ def test_one_importer_per_markdown_library():
             for name in pattern.findall(_source(path)):
                 found[name].append(path)
     for name, paths in found.items():
-        assert paths == [allowed[name]], f"{name} is imported by {[str(p.relative_to(ROOT)) for p in paths]}"
+        where = [p.relative_to(ROOT).as_posix() for p in paths]
+        assert paths == [allowed[name]], f"{name} is imported by {where}, allowed only in {allowed[name].relative_to(ROOT).as_posix()}"
 
 
 def test_the_editor_keeps_the_files_markup():
@@ -337,7 +379,7 @@ def test_the_editor_keeps_the_files_markup():
 def test_the_chat_uses_the_wrapper_and_the_moved_link_rule():
     page = _source(PAGE)
     chat = _slice(PAGE, "/** Renders markdown in chat bubbles", "// Component: Thinking Accordion")
-    assert "<Markdown\n" in chat and "</Markdown>" in chat
+    assert re.search(r"<Markdown\s+components=", chat) and "</Markdown>" in chat
     assert "import { normalizeDownloadHref } from '@/lib/markdownImages';" in page
     assert "const normalizeDownloadHref" not in page and "function normalizeDownloadHref" not in page
     assert "renderMarkdownLinks" not in page
@@ -347,3 +389,168 @@ def test_the_chat_uses_the_wrapper_and_the_moved_link_rule():
     assert out[:4] == ["/api/file?path=a%20b", "/api/file?path=%2Fhome%2Fuser%2Fr.pdf",
                        "/api/file?path=C%3A%5Cx%5Cr.pdf", "https://x.example/r"]
     assert 'href="/api/file?path=%2Fhome%2Fuser%2Fr.pdf"' in out[4] and "data-icon" not in out[4], out[4]
+
+
+# -- round 1: share paths, raw embeds, the copies, the wording ------------------------------
+
+UNC_OWN = [
+    "/api/file?path=%5C%5Cevil.example%5Cs%5Cx.png",
+    "/api/file?path=//evil.example/share/x.png",
+    "/api/file?path=%5C%5C%3F%5CUNC%5Cevil.example%5Cs%5Cx.png",
+    "/api/file?path=%5C%5C.%5Cpipe%5Cx",
+    "/api/file?path=%5C%3F%3F%5CUNC%5Cevil.example%5Cs",
+    "/api/file?path=%20%5C%5Cevil.example%5Cs%5Cx.png",
+    "/api/file?path=a.png&path=%5C%5Cevil.example%5Cs%5Cx.png",
+    "sandbox:\\\\evil.example\\s\\x.png",
+]
+
+
+def test_a_share_path_is_never_an_own_picture():
+    """On Windows the server opening `\\\\host\\share` is an SMB connection to that host."""
+    outs = _run([["own", s] for s in UNC_OWN] + [["chat", f"![p]({UNC_OWN[0]})", False],
+                                                  ["own", "/api/file?path=C%3A%5Cx.png"]])
+    for s, value in zip(UNC_OWN, outs):
+        assert value is None, (s, value)
+    assert "<img" not in outs[len(UNC_OWN)], outs[len(UNC_OWN)]
+    assert outs[-1] == "/api/file?path=C%3A%5Cx.png"
+
+
+RAW_EMBEDS = [
+    '<iframe src="http://evil.example/f"></iframe>',
+    '<IFRAME/src=http://evil.example/f>',
+    '<ifr<iframe>ame src="http://evil.example/f">',
+    '<object data="http://evil.example/o"></object>',
+    '<embed src="http://evil.example/e">',
+    '<portal src="http://evil.example/p"></portal>',
+    '<frameset><frame src="http://evil.example/fr"></frameset>',
+    '<link rel="stylesheet" href="http://evil.example/c.css">',
+    '<meta http-equiv="refresh" content="0;url=http://evil.example/m">',
+    '<base href="http://evil.example/">',
+    '<p>text <span>inline</span> <iframe src="http://evil.example/i"></iframe> after</p>',
+]
+
+
+def test_raw_frames_and_head_elements_never_reach_a_markdown_frame():
+    md = "\n\n".join(RAW_EMBEDS) + "\n\n<img src=\"https://evil.example/kept-for-the-policy.png\">\n"
+    stripped = _run([["strip", s] for s in RAW_EMBEDS])
+    for raw, out in zip(RAW_EMBEDS, stripped):
+        assert "evil.example" not in out or "<" not in out.split("evil.example")[0][-40:], (raw, out)
+        assert not re.search(r"<\s*/?\s*(iframe|frame|object|embed|portal|link|meta|base)\b", out, re.I), (raw, out)
+    doc, editor = _run([["doc", md], ["editor", md]])
+    for name, html in (("document", doc), ("editor", editor)):
+        assert not re.search(r"<\s*/?\s*(iframe|frame|frameset|object|embed|portal|link|meta|base)\b", html, re.I), (name, html)
+        # The raw picture stays; the frame policy blocks it (and the editor saves it as it is).
+        assert "kept-for-the-policy.png" in html, (name, html)
+        assert "<span>inline</span>" in html and "after" in html, (name, html)
+
+
+def test_the_editor_saves_the_same_markdown_without_the_embeds():
+    """The editor may drop the embeds from what it shows because the save's conversion back to
+    Markdown (markdownify behind /api/file/save) drops them anyway: same file either way. Only an
+    iframe left unclosed differs, and there the strip keeps MORE: unstripped, the browser reads
+    everything after it as the frame's fallback text, and the save lost it."""
+    markdownify = pytest.importorskip("markdownify").markdownify
+    closed = [e for e in RAW_EMBEDS if not e.startswith(("<IFRAME/", "<ifr<"))]
+    md = ("# Notes\n\n![chart](https://evil.example/c.png)\n\n" + "\n\n".join(closed)
+          + "\n\n| a | b |\n|---|---|\n| 1 | 2 |\n")
+    editor, glob = _run([["editor", md], ["global", md]])
+    assert editor != glob
+
+    def saved(html):
+        return re.sub(r"\n{3,}", "\n\n", markdownify(html, heading_style="ATX")).strip() + "\n"
+
+    # Where an inline frame sat between two spaces, the unstripped save keeps both; Markdown
+    # renders a run of spaces as one, so the file reads the same.
+    def spaces(text):
+        return re.sub(r"[ \t]+", " ", text)
+
+    assert spaces(saved(editor)) == spaces(saved(glob))
+    assert "![chart](https://evil.example/c.png)" in saved(editor)
+
+
+def test_an_entity_in_alt_text_is_escaped_once():
+    doc, = _run([["doc", "![a &amp; b <i>](https://r.example/i.png) ![c &amp; d](/api/file?path=c.png)"]])
+    assert "a &amp; b &lt;i&gt;</a>" in doc and "&amp;amp;" not in doc, doc
+    assert 'alt="c &amp; d"' in doc, doc
+
+
+def test_a_markdown_file_holding_an_html_document_stays_markdown():
+    page = "<!DOCTYPE html><html><body><img src=\"https://evil.example/x.png\"></body></html>"
+    md_doc, markdown_doc, html_doc, txt_doc = _run([
+        ["isHtml", {"name": "report.md", "content": page}],
+        ["isHtml", {"name": "Report.MARKDOWN", "content": page}],
+        ["isHtml", {"name": "page.html", "content": "x"}],
+        ["isHtml", {"name": "notes.txt", "content": page}],
+    ])
+    assert (md_doc, markdown_doc, html_doc, txt_doc) == (False, False, True, True)
+    # Both viewer modes (dock and overlay) choose the HTML frame through this one helper.
+    viewer = _source(DOC_VIEWER)
+    assert viewer.count("const htmlContent = isHtmlDocument(doc) ? extractHtmlContent(doc.content ?? '') : null;") == 2
+    assert viewer.count("extractHtmlContent(") == 4  # the definition, isHtmlDocument, the two modes
+
+
+KEEP_CASES = [
+    (("img", "src", "/api/file?path=c.png"), True),
+    (("img", "src", "https://evil.example/x.png"), False),
+    (("img", "src", "/api/file?path=%5C%5Cevil%5Cs"), False),
+    (("img", "srcset", "/api/file?path=c.png 1x"), False),
+    (("video", "poster", "/api/file?path=c.png"), False),
+    (("td", "background", "https://evil.example/b.png"), False),
+    (("source", "src", "https://evil.example/v.mp4"), False),
+    (("image", "href", "https://evil.example/s.png"), False),
+    (("use", "xlink:href", "https://evil.example/s.svg#a"), False),
+    (("a", "href", "https://example.org/doc"), True),
+    (("span", "style", "background-color: #ff0"), True),
+    (("span", "style", "background: URL(https://evil.example/b.png)"), False),
+    (("span", "style", "background: u\\72l(https://evil.example/b.png)"), False),
+    (("div", "style", "background-image: image-set('x.png' 1x)"), False),
+    (("p", "align", "center"), True),
+]
+
+
+def test_a_markdown_files_pdf_copy_keeps_only_own_sources():
+    outs = _run([["keep", list(args)] for args, _ in KEEP_CASES])
+    for (args, want), got in zip(KEEP_CASES, outs):
+        assert got is want, (args, got)
+    sanitize = _source(SANITIZE)
+    assert "DOMPurify.addHook('uponSanitizeAttribute', dropForeignSource);" in sanitize
+    assert "DOMPurify.removeHook('uponSanitizeAttribute', dropForeignSource);" in sanitize
+    own = sanitize.split("const OWN_SOURCES_COPY", 1)[1].split("};", 1)[0]
+    for tag in ("'iframe'", "'object'", "'embed'", "'link'", "'meta'", "'base'"):
+        assert tag in own, tag
+    editor = _source(DOC_EDITOR)
+    assert ("contentDiv.innerHTML = sanitizeDocumentCopy(body.innerHTML, "
+            "{ ownSourcesOnly: isMarkdownPath(filePath) });") in editor
+
+
+def test_the_picture_link_explains_itself_in_every_language():
+    texts = {}
+    for locale in LOCALES:
+        catalogue = json.loads((WEB / "messages" / f"{locale}.json").read_bytes().decode("utf-8"))
+        texts[locale] = catalogue["common"]["markdownPictureLink"]
+        assert texts[locale].strip() and "\u2014" not in texts[locale], locale
+    assert texts["de"] == "Bild auf einem anderen Server. Öffnet sich in einem neuen Tab."
+    assert len(set(texts.values())) == len(LOCALES), "an untranslated copy"
+    _, html = _run([["locale", "de"], ["chat", f"![p]({SECRET})", False]])
+    assert f'<span class="sr-only"> {texts["de"]}</span>' in html, html
+    assert re.search(r'<span title="' + re.escape(texts["de"]) + "\n", html), html
+
+
+def test_the_model_card_links_look_like_links_and_long_addresses_wrap():
+    long = "https://images.example.com/" + "a" * 120 + ".png"
+    card, chat = _run([["markdown", f"[docs](https://docs.example)\n\n![]({long})"],
+                       ["chat", f"![]({long})", False]])
+    for a in _anchors(card):
+        assert 'class="underline break-all"' in a, a
+    for html in (card, chat):
+        assert re.search(r'<span title="[^"]*" class="\[overflow-wrap:anywhere\]">', html), html
+
+
+def test_the_icon_never_ends_a_line_alone():
+    outs = _run([["chat", "![Quarterly diagram](https://a.example/q.png)", False],
+                 ["chat", "![กิน x](https://a.example/t.png)", False]])
+    first = re.search(r'<span class="whitespace-nowrap"><svg data-icon="Image" aria-hidden="true"></svg>([^<]*)</span>([^<]*)<span class="sr-only">', outs[0])
+    assert first and first.groups() == ("Q", "uarterly diagram"), outs[0]
+    # A combining mark stays with its letter (one grapheme), Thai here.
+    thai = re.search(r'<span class="whitespace-nowrap"><svg[^>]*></svg>([^<]*)</span>', outs[1])
+    assert thai and thai.group(1) == "กิ", outs[1]

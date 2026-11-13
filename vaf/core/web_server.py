@@ -4263,10 +4263,18 @@ def _allowed_file_path(path_str: str, request: Request, *, mode: str = "read",
     3. Only then does the disk count. Answering "not found" before "refused" told any account
        which files exist anywhere under the roots.
 
-    A save route passes ``must_exist=False``: it asks before it creates."""
+    A save route passes ``must_exist=False``: it asks before it creates.
+
+    0. Before anything touches the disk: a network share or a device path is refused while it
+       is still text (``is_remote_path``). On Windows resolving ``\\\\host\\share`` already
+       opens an SMB connection to that host with the account's NTLM login attempt, so the root
+       check below would come too late."""
     from vaf.api.user_routes import caller_is_admin
+    from vaf.core.path_jail import is_remote_path
     from vaf.core.platform import Platform
     from vaf.tools.filesystem import jail_allows
+    if is_remote_path(path_str):
+        raise HTTPException(status_code=403, detail="Access denied")
     try:
         target = Platform.normalize_path(path_str)
     except Exception:

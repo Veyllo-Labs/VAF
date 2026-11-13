@@ -886,7 +886,8 @@
     "openSignInPage": "Open the sign-in page",
     "back": "Back",
     "next": "Next",
-    "stepOf": "Step {step} of {steps}"
+    "stepOf": "Step {step} of {steps}",
+    "markdownPictureLink": "Picture on another server. Opens in a new tab."
   },
   "settings": {
     "title": "Settings",

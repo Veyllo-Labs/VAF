@@ -886,7 +886,8 @@
     "openSignInPage": "Giriş sayfasını aç",
     "back": "Geri",
     "next": "Devam",
-    "stepOf": "Adım {step} / {steps}"
+    "stepOf": "Adım {step} / {steps}",
+    "markdownPictureLink": "Başka bir sunucudaki resim. Yeni sekmede açılır."
   },
   "settings": {
     "title": "Ayarlar",

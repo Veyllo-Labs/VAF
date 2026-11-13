@@ -459,7 +459,9 @@ class _BrowserStepLogger(logging.Handler):
     Using a queue avoids calling async code from a sync logging context.
     """
 
-    def __init__(self, q: _queue.Queue, run: object = None) -> None:
+    def __init__(self, q: _queue.Queue, run: object) -> None:
+        # Required: a handler without its run would take every record logged outside any
+        # run, which may be another person's run's line, from a thread without a context.
         super().__init__(level=logging.INFO)
         self._q = q
         self._run = run

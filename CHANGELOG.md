@@ -222,15 +222,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   obeys. The terminal app, the plain terminal modes, `vaf a2a`, `vaf run -p`, `vaf audit`,
   `vaf env` (except `vaf env exec` and `vaf env logs`, which show a program's own output
   unchanged, colours included, also for a program the agent started), the log lines and the
-  JSON outputs now remove or escape them, so such text cannot change the window title,
-  clear the screen, reset the terminal or write to your clipboard. A tool's coloured output shows as plain text instead of colour
-  codes. One case stays open: a link written as `[link=...]` in a model reply still shows as
-  a link in the plain terminal mode, with a label and address the sender chose. The text
-  itself is kept as it was sent. The browser agent's step lines ("Next goal") no longer
-  appear on the plain terminal; they show in the browser window, as before. When two
-  browser runs overlap, each browser window now shows only its own run's steps; before, one
-  person could see the steps of another person's run. New for developers who build on VAF:
-  `vaf.terminal_text`.
+  JSON outputs now remove or escape them, so such text cannot change the window title, clear
+  the screen, reset the terminal or write to your clipboard. A tool's coloured output shows
+  as plain text instead of colour codes. One case stays open: a link written as `[link=...]`
+  in a model reply still shows as a link in the plain terminal mode, with a label and
+  address the sender chose. The text itself is kept as it was sent. The browser agent's step
+  lines ("Next goal") no longer appear on the plain terminal; they show in the browser
+  window, as before. When two browser runs overlap, each browser window now shows only its
+  own run's steps; before, one person could see the steps of another person's run. New for
+  developers who build on VAF: `vaf.terminal_text`.
 
 ## [0.1.0a36] - 2026-11-09
 

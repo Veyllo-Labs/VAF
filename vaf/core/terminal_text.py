@@ -191,16 +191,29 @@ def terminal_segments(segments: Iterable[Segment]) -> Iterator[Segment]:
             line = []
             yield segment
             continue
-        line.append(segment)
-        if "\n" in segment.text:
-            yield from _clean_line(line)
-            line = []
+        if "\n" not in segment.text:
+            line.append(segment)
+            continue
+        # A segment that holds a newline is split at it, and the line ends there: the width a
+        # run lost is given back before the newline, not at the start of the next line, and
+        # a sequence after the newline is matched with the rest of its own line.
+        parts = segment.text.split("\n")
+        for index, part in enumerate(parts):
+            if part:
+                line.append(Segment(part, segment.style, None))
+            if index < len(parts) - 1:
+                line.append(Segment("\n", segment.style, None))
+                yield from _clean_line(line)
+                line = []
     yield from _clean_line(line)
 
 
 def _hostile_link(style) -> bool:
+    """A link target holding an unsafe character, a newline or a tab: Rich and Textual write
+    the target raw into their OSC 8 sequence, and a URL never holds any of them."""
     link = style.link if style is not None else None
-    return bool(link) and _UNSAFE_RE.search(link) is not None
+    return bool(link) and (_UNSAFE_RE.search(link) is not None or "\n" in link
+                           or "\t" in link)
 
 
 def _clean_line(line: list) -> Iterator[Segment]:
@@ -235,16 +248,16 @@ def _clean_line(line: list) -> Iterator[Segment]:
             pieces.append(joined[pos:end])
         cleaned = "".join(pieces).translate(_REMOVE)
         if cleaned == text and style is segment.style:
-            if held is not None:
+            if held is not None and (held.text or pad > 0):
                 yield _padded(held, pad)
-                held, pad = None, 0
+            held, pad = None, 0
             yield segment
             continue
         if held is not None and held.text:
             yield held
         held = Segment(cleaned, style, None)
         pad += cell_len(text) - cell_len(cleaned)
-    if held is not None:
+    if held is not None and (held.text or pad > 0):
         yield _padded(held, pad)
 
 

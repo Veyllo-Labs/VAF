@@ -292,9 +292,10 @@ def test_a_sequence_the_highlighter_split_still_goes_whole():
 
 
 def test_the_console_strips_a_text_object_and_keeps_its_width():
-    """A `Text` object is not a string, so it is cleaned at the segments; a sequence that took
-    printable characters with it is padded back, so a panel keeps its right border in place.
-    MUTATION: drop the padding in `terminal_segments` - red."""
+    """A `Text` object is not a string, so it is cleaned at the segments, and a panel keeps
+    its right border in place (inside a panel Rich pads each rendered line itself; the
+    padding of `terminal_segments` is pinned by the line-filter and newline tests).
+    MUTATION: let `render` pass segments unchanged - red."""
     from rich.panel import Panel
     from rich.text import Text
 
@@ -398,6 +399,52 @@ def test_a_link_in_the_print_style_carries_no_control_character():
     own = _rendered({"force_terminal": True, "color_system": "truecolor"}, "project",
                     style=Style(link="file:///tmp/project"))
     assert _foreign(own)[1][0] == "file:///tmp/project"
+
+
+def test_a_segment_that_was_only_a_control_character_is_dropped():
+    """An empty text segment is invalid to Textual (its debug check warns), so a segment that
+    held nothing but removed characters is not yielded. MUTATION: flush a held segment whose
+    text is empty and whose pad is 0 - red."""
+    from rich.segment import Segment
+    from rich.style import Style
+
+    from vaf.core.terminal_text import terminal_segments
+
+    assert [s.text for s in terminal_segments([Segment("\x00")])] == []
+    assert [s.text for s in terminal_segments([Segment("ab"),
+                                               Segment("\x7f", Style(bold=True))])] == ["ab"]
+    assert [s.text for s in terminal_segments([Segment("\x00"), Segment("ab")])] == ["ab"]
+
+
+def test_a_link_target_with_a_newline_or_a_tab_is_dropped():
+    """Newline and tab are fine in text, but inside an OSC 8 target Rich and Textual write
+    them raw into the sequence. MUTATION: let `_hostile_link` look at unsafe characters
+    only - red."""
+    from rich.style import Style
+    from rich.text import Text
+
+    for target in ("http://a/\nx", "http://a/\tx"):
+        out = _rendered({"force_terminal": True, "color_system": "truecolor"},
+                        Text("hi", style=Style(link=target)), end="")
+        assert "\x1b]8;" not in out and "\n" not in out and "\t" not in out, repr(out)
+
+
+@pytest.mark.parametrize("segments, shown", [
+    # text, a sequence, then a newline in the same segment: the width comes back before
+    # the newline, not at the start of the next line
+    (["a\x1b[31m\nb"], ["a    ", "\n", "b"]),
+    # a sequence that begins after a newline is matched with the rest of its own line
+    (["ab\n\x1b[", "31mc\n"], ["ab", "\n", "c    ", "\n"]),
+    # a newline in the middle of a would-be string sequence ends it there
+    (["a\x1b]0;x\n\x07b"], ["a0;x ", "\n", "b"]),
+])
+def test_a_segment_is_split_at_its_newlines(segments, shown):
+    """MUTATION: flush the line after a segment that holds a newline, unsplit - red."""
+    from rich.segment import Segment
+
+    from vaf.core.terminal_text import terminal_segments
+
+    assert [s.text for s in terminal_segments([Segment(t) for t in segments])] == shown
 
 
 def test_the_console_still_takes_the_rich_console_arguments():
@@ -853,6 +900,25 @@ def test_a_lane_with_its_own_root_handler_keeps_its_output():
         "logging.getLogger('lib').warning('only in the lane log')\n")
     assert proc.returncode == 0, proc.stderr[-800:]
     assert b"only in the lane log" not in proc.stderr
+
+
+def test_a_step_handler_cannot_be_built_without_its_run():
+    """A handler without a run took every record logged outside any run, from a thread with
+    no run context, which may be another person's line. MUTATION: give `run` a default of
+    None again - red."""
+    import logging
+    import queue
+
+    from vaf.tools.browser_agent import _BrowserStepLogger
+
+    with pytest.raises(TypeError):
+        _BrowserStepLogger(queue.Queue())
+    q = queue.Queue()
+    handler = _BrowserStepLogger(q, object())
+    record = logging.LogRecord("browser_use.agent", logging.INFO, __file__, 1,
+                               "a line of no run", None, None)
+    handler.handle(record)
+    assert q.empty()
 
 
 def test_two_overlapping_browser_runs_each_capture_only_their_own_steps():

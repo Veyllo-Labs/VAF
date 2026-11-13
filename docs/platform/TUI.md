@@ -148,10 +148,10 @@ The classic and modern lanes print through `TerminalConsole`, a Rich console tha
 every line it renders, link targets included, and a string printed with markup off already
 before Rich lays it out. A string printed with markup ON goes to Rich's markup parser
 unchanged: cleaning it first would rebuild a tag that `rich.markup.escape` left alone
-because a control character stood in it (`[` NUL `link=...]`). Every Rich console in VAF is one (pinned by an AST scan in `tests/test_terminal_text.py`,
-which also refuses importing `Console` from Rich anywhere else). Rich's own colours, cursor
-moves and clears pass, since they come from styles and control segments rather than from
-text.
+because a control character stood in it (`[` NUL `link=...]`). Every Rich console in VAF is
+one (pinned by an AST scan in `tests/test_terminal_text.py`, which also refuses importing
+`Console` from Rich anywhere else). Rich's own colours, cursor moves and clears pass, since
+they come from styles and control segments rather than from text.
 
 Named boundaries: `vaf env exec` and `vaf env logs` print a container program's standard
 output byte for byte, as `docker exec` and `docker logs` do, because removing its control

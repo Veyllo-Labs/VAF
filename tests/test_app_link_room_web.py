@@ -165,13 +165,22 @@ def test_the_hint_shows_a_handle_that_reaches_the_agent_and_fits_one_line():
     the server takes. A handle wider than 12 Latin letters is not cut (a cut handle is no
     mention) but becomes "VAF", which always reaches the VAF agent. Width counts what a reader
     sees as one character (a family emoji, a Thai consonant with its marks) and counts a wide
-    one (Han, kana, Hangul, emoji) double. MUTATION: cut the handle instead of "VAF", count
-    code points instead of graphemes, or count wide characters single - red."""
+    one (Han, kana, Hangul, emoji) double and a wide Latin letter (M, W) as 1.6. MUTATION: cut
+    the handle instead of "VAF", count code points instead of graphemes, count wide characters
+    single, or count M and W as ordinary letters - red."""
     assert _call("m.HINT_HANDLE_MAX") == 12
     assert _call("m.hintHandle('Nobel')") == "Nobel"
     assert _call("m.hintHandle(' Nobel ')") == "Nobel"
     assert _call("m.hintHandle('Bartholom\u00e4us')") == "Bartholom\u00e4us"
     assert _call("m.hintHandle('Bartholom\u00e4uss')") == "VAF"
+    # Wide Latin letters weigh more than one: twelve M or ten W do not fit one line at 390 px
+    # (203 and 181 px against about 159), an ordinary twelve-letter name does.
+    assert _call("m.hintHandle('MMMMMMMMMMMM')") == "VAF"
+    assert _call("m.hintHandle('WWWWWWWWWW')") == "VAF"
+    assert _call("m.hintHandle('Wiedenbr\u00fccks')") == "Wiedenbr\u00fccks"
+    assert abs(_call("m.hintWidth('Bartholom\u00e4us')") - 11.65) < 1e-9
+    # An accented capital weighs as its base letter, decomposed or not.
+    assert _call("m.hintWidth('\u00c4')") == _call("m.hintWidth('A\u0308')") == 1.25
     assert _call("m.hintHandle('')") == "VAF"
     assert _call("m.hintHandle('   ')") == "VAF"
     # Han: two letters wide each; six fit, seven do not.

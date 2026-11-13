@@ -499,7 +499,8 @@ agent in their Veyllo App and the VAF agent; its rules are in
   handle (the first word of the agent's name without trailing punctuation). The hint reads "Ask
   the Veyllo App…". While no line can reach the app's agent it reads "Ask @<handle>…", because a
   line without the mention would go to the app's agent and be refused; a handle wider than 12
-  Latin letters (counted by grapheme, a wide CJK character or an emoji as two; `hintHandle`)
+  lowercase Latin letters (counted by grapheme: a narrow letter such as i or l as 0.6, a capital
+  as 1.25, M and W as 1.6, a wide CJK character or an emoji as two; `hintHandle`)
   shows as "@VAF", which always reaches the VAF agent, so the hint stays on one line at 390 px
   and is never a cut, wrong mention. The empty room and the notices teach the handle too, and `@`
   completes only that handle.

@@ -56,12 +56,31 @@ export const emptyKey = (canWrite: boolean) => (canWrite ? 'appRoomEmpty' : 'app
  *  reaches the VAF agent, because a line without it goes to the app's agent and is refused. */
 export const placeholderKey = (canWrite: boolean) => (canWrite ? 'appRoomPlaceholder' : 'appRoomPlaceholderAgentOnly');
 
-/** How wide, in Latin letters (`hintWidth`), the handle in the composer's hint may be. */
+/** How wide, in lowercase Latin letters (`hintWidth`), the handle in the composer's hint may
+ *  be. At 390 px the tightest form, Turkish "@\u2026 ile sor\u2026", leaves about 97 px for the handle,
+ *  and one unit of `hintWidth` is at most about 8 px at the box's 14 px (Roboto, measured). */
 export const HINT_HANDLE_MAX = 12;
 
 /** A grapheme a font draws about twice as wide as a Latin letter: Han, kana, Hangul, the
  *  full-width forms and CJK punctuation, an emoji, a flag. */
 const WIDE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Extended_Pictographic}\p{Regional_Indicator}\u3000-\u303f\uff01-\uff60\uffe0-\uffe6]/u;
+/** Latin letters a font draws about one and a half lowercase letters wide (10.5-12.4 px at 14 px
+ *  against 7.1-8 px for an ordinary lowercase letter), so "@MMMMMMMMMMMM" does not pass as 12. */
+const WIDE_LATIN = /^[mwMW]$/;
+/** The narrow ones, about half a lowercase letter (3.4-4.9 px). */
+const NARROW = /^[ijlrtfI.,:;'!|-]$/;
+/** Any other capital, about a quarter wider than a lowercase letter (8.3-10 px). */
+const CAPITAL = /^\p{Lu}$/u;
+
+/** One grapheme's width in lowercase Latin letters; an accented letter weighs as its base. */
+function graphemeWidth(g: string): number {
+    if (WIDE.test(g)) return 2;
+    const base = g.normalize('NFD').charAt(0);
+    if (WIDE_LATIN.test(base)) return 1.6;
+    if (CAPITAL.test(base)) return 1.25;
+    if (NARROW.test(base)) return 0.6;
+    return 1;
+}
 
 /** What a reader sees as one character: a grapheme (a family emoji, a Thai consonant with its
  *  vowel and tone marks), or a code point where the browser has no `Intl.Segmenter`. */
@@ -72,15 +91,16 @@ function graphemes(text: string): string[] {
     return Array.from(text);
 }
 
-/** A text's width in Latin letters: one per grapheme, two for a wide one (`WIDE`). */
+/** A text's width in lowercase Latin letters, grapheme by grapheme (`graphemeWidth`). */
 export function hintWidth(text: string): number {
-    return graphemes(text).reduce((sum, g) => sum + (WIDE.test(g) ? 2 : 1), 0);
+    return graphemes(text).reduce((sum, g) => sum + graphemeWidth(g), 0);
 }
 
 /** The handle the composer's hint shows after "@" ("Frag @Nobel …"). A textarea's placeholder
  *  can neither wrap nor end in an ellipsis (Chromium clips it hard, and a second line scrolls
  *  the box), and at 390 px the box leaves about 159 px of text: "@Bartholomäus ile sor…"
- *  measures 150 px, "Frag @MMMMMMMMMMMM …" 203 px. A handle wider than `max` is not cut, because
+ *  measures 150 px (width 11.65), "Frag @MMMMMMMMMMMM …" 203 px (width 19.2, so it falls back).
+ *  A handle wider than `max` is not cut, because
  *  a cut handle is no mention ("@Hubertus-Max" reaches nobody): the hint shows "VAF" then, which
  *  the server always takes for the VAF agent (`room.addressee`). */
 export function hintHandle(handle: string, max: number = HINT_HANDLE_MAX): string {

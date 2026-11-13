@@ -20,11 +20,37 @@ Three further synthetic scope directories held ~3600 more rows. Same class as th
 incident where suite runs left synthetic security events in the production log and made
 the dashboard's "threats blocked today" counter lie.
 
-So all four axes are redirected for the WHOLE session. Tests that need their own log dir
-still monkeypatch VAF_LOG_DIR per-test. The counter-proof that this actually holds -
-including for directories a future `Platform` axis might add - lives in
-`tests/test_suite_writes_nowhere_real.py`; it is the half that makes this docstring more
-than a claim.
+So the six store axes (`ISOLATED_ENV_AXES`) and, on a developer machine, HOME are
+redirected when this file is IMPORTED, before collection and before any vaf module loads,
+into one `vaf-test-*` root that is removed at exit. A session fixture is too late, for
+three measured reasons: importing `vaf.core.web_server` at collection appends startup-trace
+lines to the caller's XDG data dir; `Config.APP_DIR` and the context archive freeze
+`Path.home()` on first import; and a sampled third of the suite projected to about 970
+tests that write `~/.vaf` (the sub-agent queue a running app's runner drains, the
+learning store, `active_sessions.txt`) or `~/Documents/VAF_Projects`. Running with a
+scratch HOME stays the house rule as the outer layer; a caller that already passes one is
+left exactly as it is. Tests that need their own log dir still monkeypatch VAF_LOG_DIR
+per-test. The counter-proof that this actually holds - including for directories a
+future `Platform` axis might add - lives in `tests/test_suite_writes_nowhere_real.py`; it
+is the half that makes this docstring more than a claim.
+
+Named boundaries of the HOME redirect:
+
+- Windows gets none: "the account's own home" is read from `pwd`, which Windows lacks.
+  The suite runs there only on GitHub runners with a throwaway profile, and the house
+  rule (USERPROFILE as well as HOME) stays.
+- GitHub Actions keeps its real, throwaway home: only those runners have the checkout
+  inside the home, the case scripts/hostile_env.py names under "WHAT IT CANNOT DO".
+- No per-test "left a file under ~/Documents" check. Measured: 25 of 4803 sampled tests
+  (about 80 suite-wide) write `Documents/VAF_Projects` through product lanes by design
+  (the room workspace, the workflow engine, the session workspace). Failing them would
+  mean editing about 80 tests or keeping an allowlist; a fresh home per session already
+  removes both the risk to real data and the second-run failure.
+
+THE SUITE ALSO NEVER CONNECTS TO VAF'S OWN SERVICE PORTS. In every test that drives a turn
+the push fallback and the terminal heartbeat post to 127.0.0.1:8001; with the app open on
+the same machine, test events reached it. The guard below refuses the ports of
+`scripts/hostile_env.py` in every run; see the comment there.
 """
 import pytest
 
@@ -85,6 +111,135 @@ ISOLATED_ENV_AXES = (
     "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME",   # Linux
     "LOCALAPPDATA", "APPDATA",                              # Windows
 )
+
+
+# ── isolation at import, before collection ─────────────────────────────────────
+# No vaf import may precede this block (see the module docstring for why a fixture is too
+# late). Same shape as the standalone mode of tests/contract/conftest.py, which this file
+# cannot import: that directory is vendored without its parent.
+import errno as _errno
+import importlib.util as _importlib_util
+import os as _os
+import shutil as _shutil
+import socket as _socket
+import tempfile as _tempfile
+from pathlib import Path as _Path
+
+_SESSION_ROOT = _Path(_tempfile.mkdtemp(prefix="vaf-test-"))
+# Registered here, so it runs after every exit handler a test registers later (atexit is
+# last in, first out): those handlers still write into the session's home and stores.
+_atexit.register(_shutil.rmtree, _SESSION_ROOT, ignore_errors=True)
+
+_STORE_ROOT = _SESSION_ROOT / "stores"
+for _var in ISOLATED_ENV_AXES:
+    (_STORE_ROOT / _var.lower()).mkdir(parents=True, exist_ok=True)
+    _os.environ[_var] = str(_STORE_ROOT / _var.lower())
+# Exposed so the counter-proof can assert against the same root rather than recomputing
+# it - a proof that derives its own expectation is not a proof.
+_os.environ["VAF_TEST_STORE_ROOT"] = str(_STORE_ROOT)
+
+
+def _home_needs_redirect() -> bool:
+    """True when HOME is the account's own home on a developer machine: POSIX, not GitHub
+    Actions, and `Path.home()` is the passwd entry's home. A scratch home the caller passed
+    (the CI script, the hostile run, a test's child process) is not."""
+    if _os.name == "nt" or _os.environ.get("GITHUB_ACTIONS") == "true":
+        return False
+    import pwd
+    try:
+        account_home = pwd.getpwuid(_os.getuid()).pw_dir
+    except KeyError:
+        return True     # no passwd entry: whose home this is cannot be told, so redirect
+    return _Path.home().resolve() == _Path(account_home).resolve()
+
+
+HOME_REDIRECTED = _home_needs_redirect()
+if HOME_REDIRECTED:
+    _already = sorted(m for m in _sys.modules if m == "vaf" or m.startswith("vaf."))
+    if _already:
+        raise RuntimeError(
+            "the vaf package was imported before tests/conftest.py could move HOME away "
+            f"from the account's own home ({_already[:3]}...); Config.APP_DIR and the "
+            "context archive already hold the real home. Run pytest in a fresh process "
+            "with no plugin that imports vaf, or pass a scratch HOME yourself")
+    (_SESSION_ROOT / "home" / ".vaf").mkdir(parents=True)
+    _os.environ["HOME"] = _os.environ["USERPROFILE"] = str(_SESSION_ROOT / "home")
+
+
+# ── VAF's own service ports are refused in every run ────────────────────────────
+# Measured over a third of the suite: 4.2 % of the tests dial a VAF port on this machine
+# (8001: the push fallback and the terminal heartbeat; 8080: the model health check and
+# the backend; 5432: the memory and auth stores), and with the app open those requests
+# reached it. Refused here, before a SYN leaves, in every run, CI included: urllib3 turns
+# the error into NewConnectionError, so the local API's outage memory pauses exactly as on
+# a runner without an app, and asyncio's selector loop dials through `sock.connect`, so
+# asyncpg and httpx are covered too. The port list and the "is this address local" answer
+# are scripts/hostile_env.py's, one copy for both. The guard is never uninstalled: threads
+# that outlived their test and the Agent exit handlers (a GET to 8080) dial after the
+# session ended. A test about the guard extends `REFUSED_SERVICE_PORTS`, read per call;
+# there is deliberately no switch to turn it off, since no test needs a live VAF port.
+#
+# In the hostile run (scripts/hostile_env.py on POSIX) the guard steps aside: that run's
+# sitecustomize refuses the same ports itself and charges each refusal to the test that
+# made it, and a refusal here would hide it from that count.
+#
+# Named boundaries, the same as the hostile run's: a client on uvloop (libuv dials, not
+# the selector loop), `connect` called on the C base `_socket.socket`, the Windows
+# proactor loop (ConnectEx, asyncio's default there), and a literal address of one of this
+# machine's own network interfaces.
+_ROOT = _Path(__file__).resolve().parent.parent
+_hostile_spec = _importlib_util.spec_from_file_location(
+    "vaf_tests_hostile_env", _ROOT / "scripts" / "hostile_env.py")
+_hostile = _importlib_util.module_from_spec(_hostile_spec)
+_hostile_spec.loader.exec_module(_hostile)
+
+REFUSED_SERVICE_PORTS = frozenset(_hostile._VAF_SERVICE_PORTS)
+HOSTILE_COUNTS_REFUSALS = bool(_os.environ.get("VAF_HOSTILE_REFUSAL_LOG")) and _os.name != "nt"
+
+_INET = (_socket.AF_INET, _socket.AF_INET6)
+
+
+def _service_port(sock, address) -> bool:
+    return (sock.family in _INET and sock.type == _socket.SOCK_STREAM
+            and isinstance(address, tuple) and len(address) >= 2
+            and address[1] in REFUSED_SERVICE_PORTS and _hostile.local_address(address))
+
+
+def _refusal(address) -> ConnectionRefusedError:
+    return ConnectionRefusedError(
+        _errno.ECONNREFUSED,
+        f"refused under test, never dialed: {address[0]}:{address[1]} (tests/conftest.py)")
+
+
+def _install_service_port_guard():
+    plain_connect = _socket.socket.connect
+    plain_connect_ex = _socket.socket.connect_ex
+
+    def connect(self, address):
+        if _service_port(self, address):
+            raise _refusal(address)
+        return plain_connect(self, address)
+
+    def connect_ex(self, address):
+        if _service_port(self, address):
+            return _errno.ECONNREFUSED
+        return plain_connect_ex(self, address)
+
+    connect._vaf_service_port_guard = connect_ex._vaf_service_port_guard = True
+    _socket.socket.connect = connect
+    _socket.socket.connect_ex = connect_ex
+
+
+if not HOSTILE_COUNTS_REFUSALS:
+    _install_service_port_guard()
+
+
+def pytest_report_header(config):
+    home = (f"home: redirected to {_SESSION_ROOT / 'home'} (the account's own home was set)"
+            if HOME_REDIRECTED else "home: as given")
+    ports = ("service ports: refused and counted by scripts/hostile_env.py"
+             if HOSTILE_COUNTS_REFUSALS else "service ports: refused (tests/conftest.py)")
+    return [home, ports]
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -209,7 +364,8 @@ def _isolated_data_keyring(tmp_path, monkeypatch):
 
     # The recovery note is the ONE artifact of the keyring that is deliberately
     # written outside the data directory: `recovery_kit.kit_path()` resolves
-    # `Path.home()/"Desktop"`, and HOME is not one of the redirected axes. So
+    # `Path.home()/"Desktop"`, and HOME was not one of the redirected axes (it is
+    # redirected only on a developer machine, never on CI). So
     # minting a key in a test overwrote the developer's REAL
     # Desktop/VAF-BackThisUp.md with a note for a throwaway tmp-dir keyring.
     #
@@ -387,25 +543,12 @@ def _isolated_provider_keys(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True, scope="session")
-def _isolated_store_dirs(tmp_path_factory):
-    import os
-    root = tmp_path_factory.mktemp("vaf-test-stores")
-    previous = {}
-    for var in ISOLATED_ENV_AXES:
-        previous[var] = os.environ.get(var)
-        target = root / var.lower()
-        target.mkdir(parents=True, exist_ok=True)
-        os.environ[var] = str(target)
-    # Exposed so the counter-proof can assert against the same root rather than
-    # recomputing it - a proof that derives its own expectation is not a proof.
-    os.environ["VAF_TEST_STORE_ROOT"] = str(root)
-    yield root
-    for var, old in previous.items():
-        if old is None:
-            os.environ.pop(var, None)
-        else:
-            os.environ[var] = old
-    os.environ.pop("VAF_TEST_STORE_ROOT", None)
+def _isolated_store_dirs():
+    """The root the six store axes point into, set at import (top of this file).
+
+    Deliberately not restored at session end: exit handlers and threads that outlived
+    their test still write, and restoring would hand them the caller's real dirs."""
+    yield _STORE_ROOT
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -794,8 +937,9 @@ def _isolated_threat_db(tmp_path_factory):
     under test too unless something redirects it.
 
     It hangs off `Platform.vaf_dir()` (`~/.vaf/security/`), which none of the axes
-    above reach: HOME is not redirected here, and the fixtures that do redirect
-    (`Config.APP_DIR`, the XDG vars) do not feed that helper. Left alone, any test
+    above reach on CI: HOME is redirected only on a developer machine (top of this
+    file), and the fixtures that do redirect (`Config.APP_DIR`, the XDG vars) do not
+    feed that helper. Left alone, any test
     that deletes a quarantined skill - the path that LISTS a digest - would append to
     the developer's real list, and a suite that silently adds entries to a live block
     list is the same class of damage the two fixtures above were written for.

@@ -9,9 +9,11 @@ changes before upgrading (see README.md in this directory). It therefore runs
 in two modes:
 
 - In-repo: the parent tests/conftest.py exists and already redirects the six
-  store axes for the whole session; the repo test discipline additionally runs
-  the suite under a scratch HOME (tests/README.md). This file adds only the
-  per-test fixtures.
+  store axes at import, before collection, and on a developer machine HOME
+  as well (tests/README.md); it also refuses VAF's own service ports. This
+  file adds only the per-test fixtures. The axis list below is a deliberate
+  copy of the parent's `ISOLATED_ENV_AXES`, kept equal by
+  tests/test_suite_writes_nowhere_real.py.
 - Standalone (vendored): no parent conftest exists, so THIS file isolates the
   process itself, at import time - before any vaf module loads - because
   vaf.core.config computes its config directory when it is first imported.

@@ -229,7 +229,9 @@ def test_every_governing_mechanism_is_one_the_suite_redirects(tmp_path):
     Windows was. Whatever actually governs an axis here has to appear in
     `conftest.ISOLATED_ENV_AXES`, or a correct table sits next to a suite that pollutes.
     """
-    redirected = set(ISOLATED_ENV_AXES) | set(HOME_MECHANISM.values())   # the home axis is the runner's job
+    # HOME: conftest moves it on a developer machine, a CI runner's home is throwaway, and a
+    # caller's scratch home is kept (test_the_account_home_is_moved_before_collection).
+    redirected = set(ISOLATED_ENV_AXES) | set(HOME_MECHANISM.values())
     missing = sorted({m for ms in _governing_mechanisms(tmp_path).values() for m in ms} - redirected)
     assert not missing, (
         f"mechanism(s) govern a VAF directory on {_platform_key()} and are not redirected: "
@@ -341,6 +343,143 @@ def test_a_real_pytest_run_delivers_nothing_into_the_callers_home(tmp_path):
         f"without it every suite run mixes synthetic rows into the developer's real "
         f"stores. That has already turned one measurement into a false security finding."
     )
+
+
+# ── the import-time isolation, measured in a child pytest (tests/_home_witness.py) ──
+#
+# "The account's own home" is what conftest reads from the passwd entry. A child cannot be
+# run in the developer's real home without writing into it, so the passwd entry is faked by
+# a `-p` plugin that pytest loads before any conftest: its home becomes a tmp directory H,
+# and HOME=H then looks exactly like a developer typing a plain `pytest`.
+_FAKE_ACCOUNT_PLUGIN = """
+import os
+import pwd
+
+_home = os.environ["VAF_FAKE_ACCOUNT_HOME"]
+_real = pwd.getpwuid
+
+
+def _getpwuid(uid):
+    try:
+        entry = tuple(_real(uid))
+    except KeyError:
+        entry = ("user", "x", uid, uid, "", "", "/bin/sh")
+    return pwd.struct_passwd(entry[:5] + (_home,) + entry[6:])
+
+
+pwd.getpwuid = _getpwuid
+if os.environ.get("VAF_FAKE_IMPORT_VAF_FIRST"):
+    import vaf.core.config  # noqa: F401
+"""
+
+needs_pwd = pytest.mark.skipif(os.name == "nt", reason="the account's home is read from pwd, POSIX only")
+
+
+def _witness_run(tmp_path, home, *, github=False, import_vaf_first=False):
+    """Run tests/_home_witness.py in a child pytest whose account home is faked to
+    tmp_path/acct; return (completed process, report dict or None, the XDG dirs given)."""
+    import json
+
+    plugin_dir = tmp_path / "plugin"
+    plugin_dir.mkdir(exist_ok=True)
+    (plugin_dir / "vaf_fake_account.py").write_text(_FAKE_ACCOUNT_PLUGIN, encoding="utf-8")
+    out_file = tmp_path / "witness.json"
+    out_file.unlink(missing_ok=True)
+    xdg = {var: tmp_path / ("given-" + var.lower()) for var in (_XDG_D, _XDG_C, _XDG_K)}
+    for path in xdg.values():
+        path.mkdir(exist_ok=True)
+
+    env = {key: value for key, value in os.environ.items()
+           if key not in CHILD_ENV_TO_CLEAR and not key.startswith(("VAF_HOSTILE_", "VAF_HOME_WITNESS_"))
+           and key not in ("PYTHONPATH", "PYTEST_CURRENT_TEST", "PYTEST_ADDOPTS",
+                           "GITHUB_ACTIONS", "VAF_SIMULATED_WINDOWS_HOME")}
+    env.update({var: str(path) for var, path in xdg.items()})
+    env.update(HOME=str(home), USERPROFILE=str(home),
+               PYTHONPATH=os.pathsep.join([str(plugin_dir), str(REPO)]),
+               VAF_FAKE_ACCOUNT_HOME=str(tmp_path / "acct"),
+               VAF_HOME_WITNESS_OUT=str(out_file))
+    if github:
+        env["GITHUB_ACTIONS"] = "true"
+    if import_vaf_first:
+        env["VAF_FAKE_IMPORT_VAF_FIRST"] = "1"
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/_home_witness.py", "-p", "no:cacheprovider",
+         "-p", "vaf_fake_account"],
+        cwd=REPO, env=env, capture_output=True, text=True, timeout=300)
+    report = json.loads(out_file.read_text(encoding="utf-8")) if out_file.exists() else None
+    return proc, report, xdg
+
+
+def _files_under(path):
+    return sorted(p.relative_to(path).as_posix() for p in path.rglob("*"))
+
+
+@needs_pwd
+def test_the_account_home_is_moved_before_collection(tmp_path):
+    """A plain `pytest` in the account's own home runs in a `vaf-test-*` home of its own
+    from conftest import on, and the six store axes are moved at the same moment: a write
+    at collection and one during a test land there, and neither the account's home nor the
+    caller's XDG dirs receive anything. The guard is still installed in exit handlers.
+    MUTATION: drop the HOME redirect - red (collect.txt in H); do it in a fixture - red
+    (collect.txt in H); move the axes redirect back into the session fixture - red
+    (collect.txt in the given XDG data dir); uninstall the guard at unconfigure - red."""
+    account = tmp_path / "acct"
+    account.mkdir()
+    proc, report, xdg = _witness_run(tmp_path, account)
+    assert proc.returncode == 0, proc.stdout[-3000:] + proc.stderr[-3000:]
+    assert _files_under(account) == [], "the run wrote into the account's own home"
+    for var, path in xdg.items():
+        assert _files_under(path) == [], f"the run wrote into the caller's {var}"
+    home = Path(report["home"])
+    assert home != account
+    assert any(part.startswith("vaf-test-") for part in home.parts), home
+    assert report["guard_at_exit"] is True
+    assert "home: redirected to" in proc.stdout
+
+
+@needs_pwd
+def test_a_scratch_home_and_a_ci_home_are_left_as_given(tmp_path):
+    """A caller's scratch home (the CI script, the hostile run, a test's child) is kept, and
+    so is the home of a GitHub runner even where it is the account's own.
+    MUTATION: redirect always - red; drop the GitHub exemption - red."""
+    scratch = tmp_path / "scratch-home"
+    scratch.mkdir()
+    proc, report, _xdg = _witness_run(tmp_path, scratch)
+    assert proc.returncode == 0, proc.stdout[-3000:] + proc.stderr[-3000:]
+    assert Path(report["home"]) == scratch
+    assert "home: as given" in proc.stdout
+
+    account = tmp_path / "acct"
+    account.mkdir()
+    proc, report, _xdg = _witness_run(tmp_path, account, github=True)
+    assert proc.returncode == 0, proc.stdout[-3000:] + proc.stderr[-3000:]
+    assert Path(report["home"]) == account
+
+
+@needs_pwd
+def test_a_run_that_imported_vaf_too_early_stops(tmp_path):
+    """If vaf was imported before conftest could move the account's home away, the run
+    stops instead of running against the real home.
+    MUTATION: drop the "vaf already imported" check - red (the run goes ahead)."""
+    account = tmp_path / "acct"
+    account.mkdir()
+    proc, _report, _xdg = _witness_run(tmp_path, account, import_vaf_first=True)
+    assert proc.returncode != 0
+    assert "the vaf package was imported before tests/conftest.py" in proc.stdout + proc.stderr
+
+
+def test_the_contract_suite_isolates_the_same_axes():
+    """The vendored contract suite keeps its own copy of the axis list (it ships without
+    this directory's conftest); the two must not drift.
+    MUTATION: add an axis to one tuple only - red."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "vaf_contract_conftest_copy", REPO / "tests" / "contract" / "conftest.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.STANDALONE is False
+    assert tuple(module._ENV_AXES) == tuple(ISOLATED_ENV_AXES)
 
 
 def test_the_darwin_store_dirs_honor_a_set_xdg_variable(monkeypatch):

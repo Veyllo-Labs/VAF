@@ -33,7 +33,12 @@ relative paths and pathspecs are read from there. `expect_folder` is the real pa
 judged: a folder that is not it when it is opened is refused, and so is one without a `.git`
 of its own (no walk up to a repository above it, which nobody judged: without that, a `.git`
 renamed away in that moment made `log` print a parent repository's history and `add -A`
-would stage the parent's whole tree). Measured with a racer looping
+would stage the parent's whole tree). The judged folder is the top, decided once: a `.git`
+that is there when it is looked at and gone again a moment later is refused, never answered
+by the repository above (with a racer flipping `.git`, 1000 calls: 0 of 269 answered calls
+printed the parent's history, 242 of 418 while the runner still looked twice), and git's
+own search for a linked worktree's `.git` file stops at the judged folder
+(`GIT_CEILING_DIRECTORIES`). Measured with a racer looping
 rename-and-link, 1000 calls each: log 0 leaks of 930 answered (6 of 992 before), status 3 of
 570 (10 of 629), diff 10 of 868 (20 of 865).
 
@@ -340,6 +345,11 @@ def project_repo_problem(cwd: str, *, linked_worktree: bool = False) -> str:
     top = _top(cwd)
     if top is None:
         return f"Not a git repository: {cwd}"
+    return _repo_problem_at(top, linked_worktree=linked_worktree)
+
+
+def _repo_problem_at(top: str, *, linked_worktree: bool = False) -> str:
+    """`project_repo_problem` for the repository whose top is `top`, without a walk."""
     if linked_worktree:
         return ""
     dotgit = os.path.join(top, ".git")
@@ -387,6 +397,9 @@ class _Pin:
         self.git_fd = -1                # -1 for init and for a linked worktree
         self.by_handle = False
         self.expected: Optional[str] = None   # the Windows branch's comparison
+        # A linked worktree with expect_folder: git finds the `.git` file itself, and must
+        # not search above the judged folder when it is gone (GIT_CEILING_DIRECTORIES).
+        self.ceiling: Optional[str] = None
         self._fds: List[int] = []
 
     def own(self, fd: int) -> int:
@@ -444,6 +457,8 @@ class _Pin:
             # After project_git_env removed every layout variable: the common directory
             # (refs, objects, config) is the pinned `.git` too, not a `commondir` file's.
             env = {**env, "GIT_COMMON_DIR": self.git_dir()}
+        if self.ceiling is not None:
+            env = {**env, "GIT_CEILING_DIRECTORIES": self.ceiling}
         kwargs = _popen_kwargs(self.work_tree(), env, timeout)
         if self.by_handle:
             kwargs["pass_fds"] = tuple(fd for fd in (self.top_fd, self.git_fd) if fd >= 0)
@@ -482,7 +497,9 @@ def _pin_by_handle(pin: _Pin, sub: str, linked_worktree: bool, expect_folder) ->
     if sub != "init":
         if expect_folder is not None and not _has_git_entry(fd):
             raise _no_git_here(pin.cwd)
-        while not _has_git_entry(fd):
+        # With expect_folder the judged folder is the top, decided once: a `.git` gone again
+        # by now is refused by its open below, never answered by a repository further up.
+        while expect_folder is None and not _has_git_entry(fd):
             parent = os.path.dirname(real)
             if parent == real:
                 raise ProjectGitRefused(f"Not a git repository: {pin.cwd}")
@@ -511,10 +528,14 @@ def _pin_by_handle(pin: _Pin, sub: str, linked_worktree: bool, expect_folder) ->
         except FolderMoved as e:
             # The top was renamed or swapped after it was opened: not a layout question.
             raise ProjectGitRefused(f"{top}/.git: {e}") from None
+        except FileNotFoundError:
+            raise _no_git_here(pin.cwd) from None
         except (PathEscape, OSError):
             raise ProjectGitRefused(f"{top}/.git is not a folder: a linked worktree or a link "
                                     f"to another repository") from None
         pin.git_fd = pin.own(gfd)
+    elif expect_folder is not None:
+        pin.ceiling = os.path.dirname(real)
     pin.by_handle = _proc_fd_usable(pin.top_fd) and (pin.git_fd < 0
                                                      or _proc_fd_usable(pin.git_fd))
     if pin.git_fd >= 0:
@@ -530,8 +551,20 @@ def _pin_by_path(pin: _Pin, sub: str, linked_worktree: bool) -> None:
             raise ProjectGitRefused(f"{Path(os.path.abspath(pin.cwd)).as_posix()}/.git is a link")
         pin.top = os.path.realpath(pin.cwd)
         return
-    if pin.expected is not None and not os.path.lexists(os.path.join(pin.cwd, ".git")):
-        raise _no_git_here(pin.cwd)
+    if pin.expected is not None:
+        # The judged folder is the top, decided once: no `_top` walk that a `.git` renamed
+        # away in the meantime would send to a repository further up. git then gets this
+        # folder's `.git` by name (--git-dir), and fails on its own if it is gone.
+        top = os.path.realpath(pin.cwd)
+        if not os.path.lexists(os.path.join(top, ".git")):
+            raise _no_git_here(pin.cwd)
+        problem = _repo_problem_at(top, linked_worktree=linked_worktree)
+        if problem:
+            raise ProjectGitRefused(problem)
+        pin.top = top
+        if linked_worktree:
+            pin.ceiling = os.path.dirname(top)
+        return
     problem = project_repo_problem(pin.cwd, linked_worktree=linked_worktree)
     if problem:
         raise ProjectGitRefused(problem)

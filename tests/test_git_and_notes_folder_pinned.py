@@ -560,3 +560,122 @@ def test_the_windows_notes_folder_is_not_taken_from_a_folder_swapped_during_crea
     monkeypatch.setattr(os, "makedirs", real)
     assert done, "the swap never ran"
     assert pm.notes_folder() is None
+
+
+# ── 13. a .git removed after the runner's own presence check ────────────────
+
+def _inner_repo(world) -> Path:
+    """A repository of its own inside A's: the judged folder, with A's above it."""
+    return _repo(world.a / "inner", "INNER-OWN", "INNER_ONLY")
+
+
+@_HANDLES
+def test_a_git_folder_gone_after_the_presence_check_does_not_lead_upwards(world, monkeypatch):
+    """Handle branch: `.git` renamed away right after the runner saw it. MUTATION: walk
+    upwards under expect_folder again (`while not _has_git_entry(fd)`) - red (A's history)."""
+    inner = _inner_repo(world)
+    real = gr._has_git_entry
+    done = []
+
+    def _vanishing(fd):
+        answer = real(fd)
+        if answer and not done:
+            done.append(os.rename(inner / ".git", inner / ".git-aside"))
+        return answer
+
+    monkeypatch.setattr(gr, "_has_git_entry", _vanishing)
+    proc = gr.run_project_git(["log", "--oneline"], cwd=str(inner), expect_folder=str(inner))
+    assert done, "the rename never ran"
+    assert proc.returncode != 0, proc.stdout
+    assert "A-OWN" not in proc.stdout
+
+
+def test_a_git_folder_gone_after_the_presence_check_does_not_lead_upwards_by_path(
+        world, monkeypatch):
+    """Windows branch (taken on any host): `.git` renamed away right after the presence
+    check. MUTATION: find the top by walking up (`_top`) under expect_folder again - red."""
+    monkeypatch.setattr(path_jail, "_DIR_FD", False)
+    inner = _inner_repo(world)
+    dotgit = os.path.join(str(inner), ".git")
+    real = os.path.lexists
+    done = []
+
+    def _vanishing(path):
+        answer = real(path)
+        if answer and not done and os.fspath(path) == dotgit:
+            done.append(os.rename(dotgit, dotgit + "-aside"))
+        return answer
+
+    monkeypatch.setattr(os.path, "lexists", _vanishing)
+    proc = gr.run_project_git(["log", "--oneline"], cwd=str(inner), expect_folder=str(inner))
+    monkeypatch.setattr(os.path, "lexists", real)
+    assert done, "the rename never ran"
+    assert proc.returncode != 0, proc.stdout
+    assert "A-OWN" not in proc.stdout
+
+
+def test_a_linked_worktree_under_expect_folder_is_not_searched_above(world, any_branch,
+                                                                     monkeypatch):
+    """With `linked_worktree=True` git finds the `.git` file itself; one removed during the
+    call must not let it find the repository above. MUTATION: drop GIT_CEILING_DIRECTORIES
+    - red (A's history)."""
+    wt = world.a / "wt"
+    _git("worktree", "add", "-q", "-b", "side", str(wt), cwd=world.a)
+    wt = wt.resolve()
+    real = gr._untrusted_drivers
+    done = []
+
+    def _removing(*args, **kwargs):
+        if not done:
+            done.append(os.rename(wt / ".git", wt / "git-file-aside"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(gr, "_untrusted_drivers", _removing)
+    proc = gr.run_project_git(["log", "--oneline"], cwd=str(wt), expect_folder=str(wt),
+                              linked_worktree=True)
+    assert done, "the removal never ran"
+    assert proc.returncode != 0, proc.stdout
+    assert "A-OWN" not in proc.stdout
+
+
+# ── 14. the notes read on Windows: the opened file is the checked one ───────
+
+@pytest.mark.parametrize("swapped", ["file", "folder"])
+def test_the_windows_notes_read_refuses_a_link_present_only_during_the_open(world, monkeypatch,
+                                                                           swapped):
+    """MUTATION: drop the samestat comparison of the opened file - red (B's text read)."""
+    from vaf.core.persistence import PersistenceManager
+    monkeypatch.setattr(path_jail, "_DIR_FD", False)
+    secret = world.b / ".vaf"
+    secret.mkdir()
+    (secret / "memory.md").write_text("B-NOTES\n", encoding="utf-8")
+    pm = PersistenceManager(str(world.a), expect_folder=str(world.a))
+    vaf = world.a / ".vaf"
+    (vaf / "memory.md").write_text("A-NOTES\n", encoding="utf-8")
+    target = vaf / "memory.md" if swapped == "file" else vaf
+    aside = target.with_name(target.name + "-aside")
+    link_to = secret / "memory.md" if swapped == "file" else secret
+    real_open = os.open
+    done = []
+
+    def _swapping(path, flags, *args, **kwargs):
+        if os.fspath(path).endswith("memory.md") and not done:
+            os.rename(target, aside)
+            try:
+                os.symlink(link_to, target, target_is_directory=(swapped == "folder"))
+            except (OSError, NotImplementedError):
+                os.rename(aside, target)
+                pytest.skip("symlinks are not available here")
+            done.append(True)
+            try:
+                return real_open(path, flags, *args, **kwargs)
+            finally:
+                os.unlink(target)
+                os.rename(aside, target)
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", _swapping)
+    text = pm.get_memory()
+    monkeypatch.setattr(os, "open", real_open)
+    assert done, "the swap never ran"
+    assert "B-NOTES" not in text

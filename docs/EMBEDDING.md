@@ -1100,7 +1100,10 @@ and the call is refused (`returncode` -1, "a link on the way" in `stderr`). The 
 hold a `.git` of its own: with `expect_folder` the runner never walks up to a repository
 above the folder you checked, which you did not judge (with a `.git` renamed away at that
 moment, a history call printed the parent repository's commits, and `add -A` would stage the
-parent's whole tree). It then holds that folder for the whole call: it opens `.git` through
+parent's whole tree). The folder is decided once, so a `.git` that disappears during the
+call is refused rather than replaced by the one above, and with `linked_worktree=True` git's
+own search for the `.git` file stops at your folder. It then holds that folder for the whole
+call: it opens `.git` through
 the folder's handle (never following a link there; without `expect_folder` it first walks up
 to the top through `..` handles), and on Linux every git process of the call runs in
 `/proc/self/fd/<top>` with `--git-dir=/proc/self/fd/<git>`, `--work-tree=/proc/self/fd/<top>`

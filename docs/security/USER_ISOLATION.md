@@ -507,8 +507,10 @@ The six now declare `user_scope_id`/`user_role`, and `tool_work_folder` asks
   link, so a `.vaf` swapped for a link and back around the read cannot carry another
   account's file into a run. A `.vaf` deleted during a run is made again at the same real
   path, never resolved anew. On Windows (no folder handles) the read refuses a link at the
-  name and compares the resolved folder after the open, so a folder link in place only
-  while the file is opened is not seen there. A hard link is not seen, as for every writer
+  name, requires the opened file to be the very file it checked before the open
+  (`samestat`, so a file or folder link swapped in only for the moment of the open is
+  refused) and compares the resolved folder after the open. A hard link is not seen, as
+  for every writer
   (a sandbox cannot make one to a file outside its mount).
 
 **git and the notes work on the folder that was checked.** A process of the account can
@@ -530,7 +532,9 @@ commit in 21 of 300 calls, and a new notes manager whose `.vaf` was missing left
   kernel path with the judged text, requires a `.git` in that folder itself (no walk up to
   a repository above it, which nobody judged: with a `.git` renamed away in that moment,
   `log` printed a parent repository's history, and `add -A` would have staged the parent's
-  whole tree) and opens `.git` without following a link. On Linux every git process of the call (the
+  whole tree; the folder is decided once, so a racer flipping `.git` got the parent's
+  history in 0 of 269 answered calls, 242 of 418 while the runner still looked twice) and
+  opens `.git` without following a link. On Linux every git process of the call (the
   driver reads, the gitlinks read, the command) then runs in `/proc/self/fd/<top>` with
   `--git-dir=/proc/self/fd/<git>`, `--work-tree=/proc/self/fd/<top>` and `GIT_COMMON_DIR` on
   that handle (`pass_fds`): one folder for the whole call, and a `.git` swapped for a link

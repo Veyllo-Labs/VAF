@@ -361,10 +361,12 @@ class PersistenceManager:
         The folder is opened first (`vaf.core.path_jail.open_folder`, no link as its last
         part), its handle's kernel path compared with `notes_folder`, and the file opened
         relative to that handle with ``O_NOFOLLOW``: a ``.vaf`` swapped for a link and back
-        around the open cannot leave the read on a file outside. NAMED BOUNDARY, Windows (no
-        folder handles, no ``O_NOFOLLOW``): a link at the name is refused and the folder's
-        resolved path is compared after the open, so a folder link that is in place only
-        while the file is opened is not seen there."""
+        around the open cannot leave the read on a file outside. Windows (no folder handles,
+        no ``O_NOFOLLOW``): a link at the name is refused, the opened file must be the very
+        file checked before the open (``samestat``: a file or folder link swapped in only
+        for the moment of the open opens another file and is refused), and the folder's
+        resolved path is compared after the open. NAMED BOUNDARY: a hard link is the same
+        file under a second name and passes, as for every writer."""
         folder = self.notes_folder()
         if folder is None:
             return ""
@@ -381,10 +383,17 @@ class PersistenceManager:
                 finally:
                     os.close(dfd)
             else:
+                import stat as _stat
                 full = os.path.join(folder, name)
-                if os.path.islink(full) or not os.path.isfile(full):
-                    return ""
+                checked = os.lstat(full)
+                if not _stat.S_ISREG(checked.st_mode):
+                    return ""           # a link, or not a regular file
                 fd = os.open(full, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+                # The file that was opened must be the one just checked: a link swapped in
+                # for the file, or for the folder, for the moment of the open opens another
+                # file, even when the name is restored before the comparison below.
+                if not os.path.samestat(os.fstat(fd), checked):
+                    return ""
                 real = os.path.dirname(os.path.realpath(full))
                 if os.path.normcase(real) != os.path.normcase(folder):
                     return ""

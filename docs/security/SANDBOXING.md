@@ -733,10 +733,11 @@ path and changes into it for every command that reads or writes the files, so un
 looping rename-and-link `git status` still leaked in 3 of 570 calls and `git diff` in 10 of
 868 (`git log` 0 of 930), and a command that writes the work tree can write the project's
 own files into the swapped-in folder: `reset --hard` (`project_rollback`) did in 2 of 247
-answered calls, `checkout -- .` (as `/undo` runs it) in 0 of 255. `git init` writes the new repository by
-path. With `expect_folder` the checked folder must hold its own `.git`: git never runs on a
-repository above it. An entry written
-inside `.git` right after the runner scanned it (alternates, a `commondir`) is read for that
+answered calls, `checkout -- .` (as `/undo` runs it) in 0 of 255. `git init` writes the new
+repository by path. With `expect_folder` the checked folder must hold its own `.git`, decided
+once: git never runs on a repository above it, not even when `.git` disappears during the
+call. An entry written inside `.git` right after the runner scanned it (alternates, a
+`commondir`) is read for that
 call. macOS and Windows run git by path after a comparison before each process. The jailed
 shell's `--bind <path>` and an environment's mount are by path as well; one mount-namespace
 primitive that binds the judged folder by handle would close all three, and it is a

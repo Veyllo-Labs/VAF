@@ -2757,30 +2757,35 @@ class GitAddCommitTool(BaseTool):
         if not os.path.exists(os.path.join(base_dir, '.git')):
             return "❌ Git repository not initialized. Call git_init first."
         from vaf.core.git_runner import run_project_git
+        import posixpath
+
         from vaf.core.path_jail import PathEscape, contained_path
 
         steps = []
         if files:
-            # Every name is judged as text before any of them is probed or staged: contained_path
-            # refuses an absolute path, '..' and a share spelling (on Windows probing
-            # \\host\share already contacts that host) before it resolves, and after resolving a
-            # link that leads outside. One refusal and nothing is staged.
+            # Each name is asked contained_path before this tool probes or stages anything:
+            # it refuses an absolute path, '..', a drive and a share spelling as text, before it
+            # resolves (on Windows probing \\host\share already contacts that host), and a
+            # link that leads outside after resolving. One refusal and nothing is staged.
             targets = []
             for entry in files:
                 entry = str(entry)
                 try:
-                    targets.append(contained_path(base_dir, entry))
+                    resolved = contained_path(base_dir, entry)
                 except PathEscape:
                     return (f"❌ Not committed: '{entry}' is not a file inside the project "
                             "folder. Name files relative to the project folder (for example "
                             "index.html); an absolute path, '..', a network share or a link that "
                             "leads outside is refused. Nothing was added.")
-            root = Path(base_dir).resolve()
-            for target in targets:
-                if target.exists():
-                    rel = "." if target == root else target.relative_to(root).as_posix()
+                # Staged under the name the caller gave, normalized but not resolved: git adds
+                # a link inside the project as the link, and the resolved path would stage its
+                # target instead. Containment was decided on the resolved path above.
+                name = posixpath.normpath(entry.strip().replace("\\", "/").strip("/") or ".")
+                targets.append((resolved, name))
+            for resolved, name in targets:
+                if resolved.exists():
                     # "--": a path is never read as an option.
-                    steps.append(["add", "--", rel])
+                    steps.append(["add", "--", name])
         else:
             steps.append(["add", "."])
         steps.append(["commit", "-m", message])
@@ -3052,11 +3057,14 @@ def _base_dir_tool(tool_class, base_dir, *, owner_scope, owner_role):
     return GitToolWrapper(tool_class(), base_dir)
 
 
-# Inner tools that exist ONLY inside the coder's child process - never in the main
-# registry, so the admin's user-management picker cannot offer them from the registry list.
-# Exposed via GET /api/users/tool-universe so "the admin can disable bash for a user" is
-# expressible; guarded by tests/test_tool_account_allowlist.py against drifting from the
-# local_tools construction below.
+# The coder's inner tools, named so the admin's per-user picker can govern each of them.
+# bash, run_tests, project_history and project_rollback exist only inside the coder's child
+# process and never reach the main registry, so the picker could not offer them from the
+# registry list. The four git tools, update_codex and add_memory are registered for the main
+# agent as well (Agent._load_tools takes every tool that is neither coder_only nor excluded),
+# so the registry lists them too. Exposed via GET /api/users/tool-universe so "the admin can
+# disable bash for a user" is expressible; guarded by tests/test_tool_account_allowlist.py
+# against drifting from the local_tools construction below.
 CODER_ONLY_TOOL_NAMES = (
     "bash",
     "git_init", "git_add_commit", "git_status", "git_log",

@@ -3061,7 +3061,10 @@ Stable public surface (safe to build on):
   separator convention, whatever the host runs: `os.path.isabs` answers only for the
   host, and its answer for a driveless rooted path changed in Python 3.13 on Windows,
   so a fragment carrying the SENDER's convention would otherwise be read as plain
-  relative text and joined onto your root.
+  relative text and joined onto your root. A drive in a later part (`a/Z:/x`, `sub/b:x`)
+  is refused too, as text: on Windows joining it replaces the path with a drive-relative
+  one (`Z:x`) whose resolve probes that drive. On POSIX this refuses the rare name whose
+  second character is a colon.
 - `vaf.code_audit(root, *, scope=, base=, paths=, include_untracked=, profile=, ask=,
   checks=, max_files=, remember=, batch_chars=, progress=, parallel=, should_stop=,
   verify_steps=, linked_worktree=)` /

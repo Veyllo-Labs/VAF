@@ -1513,9 +1513,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [licenseModalTitle, setLicenseModalTitle] = useState('');
 
     // Coder-internal tool names (bash, git tools, ...) for the per-user access picker.
-    // They are deliberately NOT in the main registry, so without this the admin could
-    // never express "this user does not get bash": the allowlist cannot omit a name the
-    // picker never showed. Served by the backend from the coder's own declaration.
+    // Several, bash above all, are deliberately NOT in the main registry, so without this
+    // the admin could never express "this user does not get bash": the allowlist cannot omit
+    // a name the picker never showed. Served by the backend from the coder's own declaration.
     const [coderOnlyTools, setCoderOnlyTools] = useState<string[]>([]);
     useEffect(() => {
         if (activeTab !== 'users' || currentUser?.role !== 'admin') return;

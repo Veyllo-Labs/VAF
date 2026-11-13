@@ -125,3 +125,24 @@ def test_a_share_or_device_path_is_named_before_anything_touches_it(spelled):
 @pytest.mark.parametrize("spelled", ["C:\\Users\\a\\x.png", "/home/user/x.png", "relative/x", "", "~/x"])
 def test_a_local_path_is_not_remote(spelled):
     assert vaf.is_remote_path(spelled) is False
+
+
+def test_a_drive_in_a_later_part_is_refused_before_anything_resolves(tmp_path, monkeypatch):
+    """Windows joins a later part that names a drive as a drive-relative path and drops what
+    came before it, so resolving `<root>/a/Z:/x` would probe drive Z (possibly a mapped share)
+    before the containment comparison could refuse it. The refusal is decided as text."""
+    import pathlib
+    from pathlib import PureWindowsPath
+
+    assert str(PureWindowsPath("C:/proj").joinpath("a", "Z:", "x")) == "Z:x"
+    assert str(PureWindowsPath("C:/proj").joinpath("sub", "b:x")) == "b:x"
+    resolved = []
+    real = pathlib.Path.resolve
+    monkeypatch.setattr(pathlib.Path, "resolve",
+                        lambda self, *a, **k: resolved.append(str(self)) or real(self, *a, **k))
+    for bad in ("a/Z:/x", "sub/b:x", "a\\Z:\\x", "sub\\b:x", "a/Z:"):
+        with pytest.raises(vaf.PathEscape, match="must not name a drive"):
+            vaf.contained_path(tmp_path, bad)
+    assert resolved == [], resolved
+    # A colon further into a name is not a drive.
+    assert vaf.contained_path(tmp_path, "sub/notes:v2.txt") == tmp_path.resolve() / "sub" / "notes:v2.txt"

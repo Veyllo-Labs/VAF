@@ -112,12 +112,13 @@ def is_remote_path(spelled: str) -> bool:
     reach whatever the machine reaches, which is a question of its own, not a path screen.
 
     NAMED BOUNDARY: ``run_project_git`` probes its ``cwd`` (``os.path.isdir``) without asking
-    here, because its ``cwd`` is a folder its caller chose and screened, never a fragment the
-    model wrote: the coder's run folder (``_choose_base_dir``, ``_base_dir_tool``), the git
-    tools' folder (``_git_tool_folder``), ``project_git``'s ``_resolve_project`` (which the
-    code audit tool asks too, before ``jail_allows``), the folder a person typed for ``vaf
-    audit``, and the snapshots' own working folder. Measured: no caller hands it a folder the
-    model wrote without one of those screens.
+    here, because every caller has refused a share or device path for it already: the coder's
+    run folder (``_choose_base_dir``, ``_base_dir_tool``), ``project_git``'s
+    ``_resolve_project`` (which the code audit tool asks too, before ``jail_allows``), the
+    folder a person typed for ``vaf audit``, the snapshots' own working folder, and the git
+    tools' folder (``_git_tool_folder``). That last one is the model's text on the main agent,
+    screened for shares and device paths only and not confined to any folder; the share half
+    is what this boundary needs. Measured: no caller hands it a share or device path.
 
     On the facade as ``vaf.is_remote_path``, because the route recipe in docs/EMBEDDING.md asks
     primitives that resolve the path (``vaf.is_vaf_state``), so a surface built to it would
@@ -144,7 +145,9 @@ def contained_path(root, relative: str = "", *, must_exist: bool = False) -> Pat
     """The absolute, resolved path ``relative`` names inside ``root``.
 
     Raises `PathEscape` if the fragment is rooted (absolute or drive-anchored,
-    in either separator convention - see `is_rooted`), walks upwards, or resolves
+    in either separator convention - see `is_rooted`), names a drive in any later
+    part (``a/Z:/x``; all of these are decided as text, before anything is
+    resolved), walks upwards, or resolves
     to somewhere outside ``root`` - including by way of a symlink that lives
     inside the root and points out of it, which is exactly the case a prefix
     comparison cannot see.
@@ -177,6 +180,12 @@ def contained_path(root, relative: str = "", *, must_exist: bool = False) -> Pat
         parts = []
     if is_rooted(fragment):
         raise PathEscape("path must be relative")
+    # A drive in a LATER part (`a/Z:/x`, `sub/b:x`): on Windows joining it replaces everything
+    # before it with a drive-relative path (`Z:x`), and resolving that probes the drive, which
+    # may be mapped to a share. Refused as text, in every part and on every host: a POSIX name
+    # whose second character is a colon is refused with it.
+    if any(len(p) >= 2 and p[1] == ":" for p in parts):
+        raise PathEscape("path must not name a drive")
 
     root_resolved = Path(root).resolve()
     target = root_resolved.joinpath(*parts).resolve() if parts else root_resolved

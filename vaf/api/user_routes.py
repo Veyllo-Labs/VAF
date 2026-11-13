@@ -214,11 +214,12 @@ class UserResponse(BaseModel):
 async def tool_universe(_: dict = Depends(require_admin)):
     """Every tool name the per-user picker may govern beyond the main registry.
 
-    The picker builds its list from the live registry, and the coder's inner tools -
-    bash above all - are deliberately NOT in that registry. Without this, "disable bash
-    for this user" is not expressible: the allowlist could never contain or omit a name
-    the admin was never shown. `coder_only` names come from the coder module's own
-    declaration, so the picker cannot drift from what the child actually runs.
+    The picker builds its list from the live registry, and several of the coder's inner
+    tools - bash above all - are deliberately NOT in that registry (others, such as the git
+    tools, are in both). Without this, "disable bash for this user" is not expressible: the
+    allowlist could never contain or omit a name the admin was never shown. `coder_only`
+    names come from the coder module's own declaration, so the picker cannot drift from
+    what the child actually runs.
     """
     try:
         from vaf.tools.coder import CODER_ONLY_TOOL_NAMES

@@ -47,7 +47,11 @@ MUTATIONS, each turns the named test red:
 - `contained_path` replaced by a plain join (normalized and resolved)
   -> test_git_add_commit_adds_only_files_inside_the_project (an absolute in-project path is
   committed); dropping the `isinstance(files, str)` coercion -> the same test (`git add -- .`
-  from the name's characters commits every file);
+  from the name's characters commits every file); no drive check in `contained_path` -> the
+  same test (`sub/Z:/e.txt` is committed) and, in tests/contract/test_contract_path_jail.py,
+  test_a_drive_in_a_later_part_is_refused_before_anything_resolves;
+- staging the resolved path instead of the name the call gave, or the name unnormalized
+  -> test_git_add_commit_stages_an_inside_link_as_the_link;
 - `_git_tool_folder` never refusing -> test_the_git_tools_refuse_a_share_folder_on_the_chat_lane;
 - `edit_file` or `read_file` dropped from `_LOOP_PATH_TOOLS`, or `content` judged as well
   -> test_the_coder_loop_refusal_names_only_share_paths;
@@ -584,7 +588,8 @@ def test_git_add_commit_adds_only_files_inside_the_project(tmp_path):
     assert committed() == ["d.txt"]
 
     head = _git("rev-parse", "HEAD", cwd=repo).stdout
-    refused = [str(repo / "e.txt"), "../outside.txt", str(outside), os.path.join("..", "repo", "e.txt")]
+    refused = [str(repo / "e.txt"), "../outside.txt", str(outside), os.path.join("..", "repo", "e.txt"),
+               "sub/Z:/e.txt"]
     link = repo / "link.txt"
     try:
         os.symlink(outside, link)
@@ -597,6 +602,42 @@ def test_git_add_commit_adds_only_files_inside_the_project(tmp_path):
         assert answer.startswith("❌ Not committed:") and entry in answer, (entry, answer)
         assert staged() == [], entry
         assert _git("rev-parse", "HEAD", cwd=repo).stdout == head, entry
+
+
+def test_git_add_commit_stages_an_inside_link_as_the_link(tmp_path):
+    """A link inside the project that points to another file inside it is staged as the link
+    the caller named, not as its target, and a name is normalized the way git expects it."""
+    import os
+    import shutil
+
+    from vaf.tools.coder import GitAddCommitTool
+
+    if not shutil.which("git"):
+        pytest.skip("git is not installed")
+    repo = tmp_path / "repo"
+    (repo / "sub").mkdir(parents=True)
+    _git("init", "-q", cwd=repo)
+    _git("config", "user.name", "T", cwd=repo)
+    _git("config", "user.email", "t@example.invalid", cwd=repo)
+    (repo / "real.txt").write_text("one", encoding="utf-8")
+    (repo / "sub" / "b.txt").write_text("b", encoding="utf-8")
+    tool = GitAddCommitTool()
+    assert tool.run(base_dir=str(repo), message="base", files=["real.txt"]).startswith("✅")
+    try:
+        os.symlink("real.txt", repo / "alias.txt")
+    except (OSError, NotImplementedError):
+        pytest.skip("links cannot be created here")
+    # A change to the target that nobody asked to commit.
+    (repo / "real.txt").write_text("two", encoding="utf-8")
+
+    def committed():
+        return _git("show", "--name-only", "--format=", "HEAD", cwd=repo).stdout.split()
+
+    assert tool.run(base_dir=str(repo), message="link", files=["alias.txt"]).startswith("✅")
+    assert committed() == ["alias.txt"]
+    assert _git("diff", "--name-only", cwd=repo).stdout.split() == ["real.txt"]
+    assert tool.run(base_dir=str(repo), message="sub", files=[".\\sub//./b.txt"]).startswith("✅")
+    assert committed() == ["sub/b.txt"]
 
 
 def test_the_git_tools_refuse_a_share_folder_on_the_chat_lane(monkeypatch):

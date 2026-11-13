@@ -262,9 +262,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   was created and listed it as created in its summary, in the task list and as a download in the
   chat. When they refused a read, it showed the refused file's contents in the live code view.
   Now the agent gets the refusal, the file is not listed, and the live view shows nothing; the
-  same refusal three times in a row ends the run with that reason. A successful write to a file
-  whose name contains "locked" or "blocked" is no longer counted as an error. Needs a restart
-  of VAF for coding runs inside VAF's own process.
+  same refusal three times in a row ends the run with that reason. The live code view and the
+  terminal's change preview now open only a file the agent's file tools may read or write. A
+  successful write to a file whose name contains "locked", "blocked" or "failed", and a read of a
+  file that starts with a word like "Failed" or "Cannot", are no longer counted as errors. A
+  relative path the coding agent reads now means a file in its project, as it already did for
+  writes. Needs a restart of VAF for coding runs inside VAF's own process.
 - **Pictures in replies no longer load from other servers.** A picture in a reply, a Markdown
   file's preview, an attached Markdown document or a model card now loads only when it is a
   file on your VAF; a picture from anywhere else shows as a link with a picture icon that you

@@ -3236,22 +3236,103 @@ def _remote_path_refusal(fn_name: str, fn_args) -> Optional[str]:
     return None
 
 
+# What a refused or failed read answers, as the read tool (`is_safe_path`'s refusals, its
+# own "Error: ..." and "Error reading ...") and the funnel ("Tool Error:", "Security Error:",
+# "Error: Unknown tool") write it, case for case. A read's answer IS the file's text, so the
+# shared classifier's wide openers ("failed", "cannot ", "exception", "error" in any case)
+# would book a file that merely starts with such a word as a failed read, and read-before-edit,
+# which has no stand-down, would then never let that file be edited in the run.
+_READ_FAILURE_OPENERS = ("Access denied:", "Invalid path", "Error:", "Error reading ",
+                         "Tool Error:", "Security Error:")
+
+
 def _loop_call_failed(tools, fn_name: str, result) -> bool:
     """Whether the coder loop's call did not do its work: the classifier every lane shares
-    (`vaf.core.context.tool_result_is_error`), called as the chat lane calls it, plus an
-    aborted call (`abort_kind`), whose outcome is unknown and so is never booked as done.
+    (`vaf.core.context.tool_result_is_error`), plus an aborted call (`abort_kind`), whose
+    outcome is unknown and so is never booked as done.
 
     A refusal the file tools give from inside their run (`Access denied: ...`, `Invalid
     path`) is a failure here: the funnel dispatched the call, so its `dispatched` flag cannot
-    tell, and the loop must neither book the file as written nor mirror a refused read."""
+    tell, and the loop must neither book the file as written nor mirror a refused read.
+
+    The loop's three file tools answer with text the model controls, so they are judged by
+    the start of the answer only: write_file and edit_file name the model's path in their
+    success answer (a path with "failed" and "tool" in it is still a write) and every failure
+    they give opens the answer, so the classifier runs content-carrying for them; read_file's
+    answer is the file itself, so only the openers the read tool and the funnel write count."""
     from vaf.core.context import tool_result_is_error
     from vaf.core.tool_dispatch import abort_kind
     text = str(result or "")
     if abort_kind(text) is not None:
         return True
+    if fn_name == "read_file":
+        return text.startswith(_READ_FAILURE_OPENERS)
     tool = (tools or {}).get(fn_name)
-    return tool_result_is_error(
-        text, content_carrying=bool(getattr(tool, "result_is_deliverable", False)))
+    carrying = fn_name in _LOOP_PATH_TOOLS or bool(getattr(tool, "result_is_deliverable", False))
+    return tool_result_is_error(text, content_carrying=carrying)
+
+
+def _project_read_path(path: str, base_dir: str) -> str:
+    """A read_file path as the loop hands it to the tool: a relative one joined to the
+    project folder, as write_file and edit_file already are; an absolute or ``~`` path as
+    given. Left to the tool, a relative path resolves against the process's working folder
+    or a folder alias, and the loop's own steps after the call would judge another file."""
+    if not path or os.path.isabs(os.path.expanduser(path)):
+        return path
+    return os.path.join(base_dir, path)
+
+
+# The live editor shows text files only, and only up to this size.
+_LIVE_VIEW_BINARY_SUFFIXES = frozenset({
+    ".pdf", ".docx", ".xlsx", ".pptx", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico",
+    ".svgz", ".zip", ".gz", ".tar", ".mp4", ".mp3", ".wav", ".woff", ".woff2", ".ttf", ".eot",
+})
+_LIVE_VIEW_MAX_BYTES = 400_000
+
+
+def _live_view_target(path: str, *, scope, role) -> Optional[str]:
+    """The file the live editor may show after a successful read of ``path``, or None.
+
+    The mirror opens the file with the process's own rights, after the tool, so it asks the
+    same questions the read tool asked: the read screen (`is_safe_path(read_only=True)`,
+    which resolves aliases and ``~`` the way the tool does) and the caller's jail in read
+    mode, and it opens the path that screen answered, never a spelling of its own. A text
+    file of at most `_LIVE_VIEW_MAX_BYTES`."""
+    from vaf.tools.filesystem import is_safe_path, jail_allows
+    try:
+        ok, res = is_safe_path(str(path or ""), read_only=True)
+        if not ok or not path:
+            return None
+        if not jail_allows(res, user_scope_id=scope, user_role=role, mode="read"):
+            return None
+        if os.path.splitext(res)[1].lower() in _LIVE_VIEW_BINARY_SUFFIXES:
+            return None
+        if not os.path.isfile(res) or os.path.getsize(res) > _LIVE_VIEW_MAX_BYTES:
+            return None
+        return res
+    except Exception:
+        return None
+
+
+def _preview_old_lines(path: str, *, scope, role) -> Optional[List[str]]:
+    """The current lines of ``path`` for the write preview's diff, or None (a new file, an
+    unreadable one, or one the write would be refused for).
+
+    The preview runs before the write tool and opens the file with the process's own rights,
+    so it asks the write screen (`is_safe_path`) and the caller's jail in write mode first: a
+    file the write is refused for (a project's .env, VAF's own data, another account's file)
+    is never opened for a diff."""
+    from vaf.tools.filesystem import is_safe_path, jail_allows
+    try:
+        ok, res = is_safe_path(str(path or ""))
+        if not ok or not jail_allows(res, user_scope_id=scope, user_role=role, mode="write"):
+            return None
+        if not os.path.isfile(res):
+            return None
+        with open(res, 'r', encoding='utf-8') as f:
+            return f.readlines()
+    except Exception:
+        return None
 
 
 def _identical_rewrite(path: str, content: str, base_dir: str, *, scope, role) -> Optional[str]:
@@ -9557,11 +9638,19 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                             # CRITICAL: Check if we are just rewriting the same content
                             path = extracted_args["path"]
                             content = extracted_args["content"]
-                            # None for a share path, from its text alone, and for a path the
-                            # file screen or the caller's jail refuses: the dispatch below
-                            # answers both with the tool's own refusal.
-                            full_path = _identical_rewrite(path, content, base_dir,
-                                                           scope=caller_scope, role=caller_role)
+                            # The shortcut answers in the write tool's place, so it first asks
+                            # what the dispatch asks before that tool may run (the coder's and
+                            # the account's allowlists); a refused call goes on to the dispatch
+                            # below, which answers the refusal. _identical_rewrite is None for a
+                            # share path, from its text alone, and for a path the file screen or
+                            # the caller's jail refuses: the dispatch answers those too.
+                            _write_refused = _coder_dispatch_refusal(
+                                _requested_fn_name, self.local_tools.get("write_file"),
+                                coder_allowed=_coder_allowed, caller_allowed=caller_allowed,
+                                scope=caller_scope, role=caller_role, session_id=caller_session,
+                            )
+                            full_path = None if _write_refused is not None else _identical_rewrite(
+                                path, content, base_dir, scope=caller_scope, role=caller_role)
                             is_duplicate_write = full_path is not None
 
                             if is_duplicate_write:
@@ -10594,6 +10683,14 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         if _ipath and not os.path.isabs(os.path.expanduser(_ipath)):
                             fn_args["image_path"] = os.path.join(base_dir, _ipath)
 
+                    # A relative read_file path is the project's, as for write_file and
+                    # edit_file below: the read tool alone would resolve it against the
+                    # process's working folder or a folder alias, and the loop's own steps
+                    # after the call (the live-editor mirror, read-before-edit's
+                    # files_known) would judge a different file than the one read.
+                    if fn_name == "read_file" and fn_args.get("path"):
+                        fn_args["path"] = _project_read_path(str(fn_args["path"]), base_dir)
+
                     # Fix relative paths and show in stream
                     if fn_name == "edit_file":
                         # edit_file shares write_file's pre-dispatch guards: plan-first, the
@@ -10728,10 +10825,11 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                             preview_content = ""
                             preview_lang = "python" # Default
                             
-                            if os.path.exists(path):
+                            # Only a file the write may touch is opened for the diff.
+                            old_content = _preview_old_lines(path, scope=caller_scope,
+                                                             role=caller_role)
+                            if old_content is not None:
                                 try:
-                                    with open(path, 'r', encoding='utf-8') as f:
-                                        old_content = f.readlines()
                                     new_lines = fn_args.get("content", "").splitlines(keepends=True)
                                     
                                     import difflib
@@ -10751,7 +10849,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                 except:
                                     preview_content = fn_args.get("content", "")
                             else:
-                                # New file
+                                # A new file, or one the preview may not open
                                 preview_content = fn_args.get("content", "")
                                 ext = os.path.splitext(fname)[1].lower()
                                 if ext in ['.js', '.ts']: preview_lang = "javascript"
@@ -10941,16 +11039,11 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         # stuck on "Waiting for code…". Text files only, size-bounded.
                         if fn_name == "read_file" and not is_error_result:
                             try:
-                                _rp = fn_args.get("path", "") or ""
-                                _rp_abs = _rp if os.path.isabs(_rp) else os.path.join(base_dir, _rp)
-                                _ext = os.path.splitext(_rp_abs)[1].lower()
-                                _BIN_EXT = {
-                                    ".pdf", ".docx", ".xlsx", ".pptx", ".png", ".jpg", ".jpeg",
-                                    ".gif", ".webp", ".ico", ".svgz", ".zip", ".gz", ".tar",
-                                    ".mp4", ".mp3", ".wav", ".woff", ".woff2", ".ttf", ".eot",
-                                }
-                                if (_rp and _ext not in _BIN_EXT and os.path.isfile(_rp_abs)
-                                        and os.path.getsize(_rp_abs) <= 400_000):
+                                # The path the read screen and the jail answered, never a
+                                # spelling of the loop's own (_live_view_target).
+                                _rp_abs = _live_view_target(fn_args.get("path", "") or "",
+                                                            scope=caller_scope, role=caller_role)
+                                if _rp_abs:
                                     with open(_rp_abs, "r", encoding="utf-8", errors="replace") as _rf:
                                         _emit_live_code(os.path.basename(_rp_abs), _rf.read(), force=True)
                             except Exception:

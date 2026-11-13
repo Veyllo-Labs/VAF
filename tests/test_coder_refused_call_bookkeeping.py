@@ -21,8 +21,20 @@ MUTATIONS, each turns the named test red:
 - the body of `_loop_call_failed` replaced by the old hand list (prefixes plus the "locked" /
   "permission denied" substrings) -> test_refusals_through_the_funnel_are_failures,
   test_successes_stay_successes (the `blocked_locked.html` write);
-- `content_carrying=` dropped -> test_successes_stay_successes (the read of a file that
-  mentions a traceback);
+- `content_carrying=` dropped, or write_file/edit_file no longer judged content-carrying
+  -> test_a_write_whose_path_has_failure_words_is_a_write;
+- the read_file branch dropped (a read judged by the shared classifier's wide openers)
+  -> test_a_read_of_any_text_is_a_read;
+- the guard's write branch opened with `if True:` (or not on the helper's answer), or its read
+  branch without `not _gfailed` -> test_the_guard_books_only_what_the_helper_calls_done;
+- `_project_read_path` returning the path unchanged, or not called for read_file
+  -> test_a_relative_read_is_the_projects_file;
+- `_live_view_target` without its `is_safe_path` or its `jail_allows` question, or the
+  mirror opening its own spelling -> test_the_live_view_opens_only_what_the_read_screen_allows;
+- `_preview_old_lines` without its `is_safe_path` or its `jail_allows` question, or the
+  preview opening the path itself -> test_the_write_preview_never_opens_a_refused_file;
+- the duplicate-write shortcut without the dispatch refusal in front of it
+  -> test_the_duplicate_write_shortcut_asks_the_dispatch_first;
 - the `abort_kind` check dropped -> test_funnel_and_abort_answers_are_failures;
 - the `is_error_result = (` list restored in `run()`, the guard's write check back to
   `.startswith("error")`, `and not is_error_result` dropped from the mirror, or the refusal
@@ -35,10 +47,12 @@ MUTATIONS, each turns the named test red:
 - `scope`/`role` given defaults, or the call site without them
   -> test_identical_rewrite_takes_the_caller_by_keyword.
 """
+import ast
 import builtins
 import inspect
 import os
 import re
+from pathlib import Path
 
 import pytest
 
@@ -274,5 +288,201 @@ def test_identical_rewrite_takes_the_caller_by_keyword():
         assert params[key].kind is inspect.Parameter.KEYWORD_ONLY, key
         assert params[key].default is inspect.Parameter.empty, key
     src = _run_source()
-    assert re.search(r"_identical_rewrite\(path, content, base_dir,\s*scope=caller_scope, "
+    assert re.search(r"_identical_rewrite\(\s*path, content, base_dir,\s*scope=caller_scope, "
                      r"role=caller_role\)", src)
+
+
+# ── round two: the success shapes, the guard's write branch, the loop's own file opens ──
+
+def test_a_write_whose_path_has_failure_words_is_a_write(world):
+    p = world.proj
+    for name in ("failed_tool_calls.py", "tool_execution_failed.py"):
+        out = world.run("write_file", {"path": str(p / name), "content": "x = 1\n"})
+        assert (p / name).exists(), out
+        assert not _failed(world, "write_file", out), out
+    (p / "tool_failed.py").write_text("x = 1\n", encoding="utf-8")
+    out = world.run("edit_file", {"path": str(p / "tool_failed.py"),
+                                  "edits": [{"search": "x = 1", "replace": "x = 2"}]})
+    assert "x = 2" in (p / "tool_failed.py").read_text(encoding="utf-8"), out
+    assert not _failed(world, "edit_file", out), out
+    for text in (f"⚠️ File written but size verification failed: {p / 'tools' / 'a.py'}",
+                 f"✓ Created {p / 'failed_tool_execution.py'} (6 bytes)"):
+        assert not _failed(world, "write_file", text), text
+    # The write and edit failures still open the answer, so they stay failures.
+    for text in ("❌ Permission denied: Cannot write to /p/x", "EDIT FAILED: edit 0's search",
+                 "Error: edit_file needs a 'path'.", "Access denied: .env"):
+        assert _failed(world, "write_file", text) and _failed(world, "edit_file", text), text
+
+
+def test_a_read_of_any_text_is_a_read(world):
+    p = world.proj
+    openers = ["Failed attempts are logged below.", "Exception handling in this module",
+               "Cannot be empty: the name field", "error log of the last build",
+               "Refused: requests without a token", "[WARN] deprecated option",
+               "Tests failed: 3 of 10", "Blocked: waiting for review",
+               "Invalid input is rejected", "Build failed: see below", "❌ broken"]
+    for i, first in enumerate(openers):
+        f = p / f"doc{i}.md"
+        f.write_text(first + "\nmore text\n", encoding="utf-8")
+        out = world.run("read_file", {"path": str(f)})
+        assert out.startswith(first), out
+        assert not _failed(world, "read_file", out), first
+    # What the read tool and the funnel answer for a failed read stays a failure.
+    for text in ("Error reading PDF: broken xref", "Error: Unknown tool 'read_file'",
+                 "Invalid path", "Security Error: not enabled"):
+        assert _failed(world, "read_file", text), text
+
+
+def _run_tree():
+    """CodingAgentTool.run as a syntax tree, parsed from its module (its source holds string
+    literals at column 0, so it cannot be dedented and parsed on its own)."""
+    import vaf.tools.coder as coder
+    module = ast.parse(Path(inspect.getsourcefile(coder)).read_text(encoding="utf-8"))
+    cls = next(n for n in module.body
+               if isinstance(n, ast.ClassDef) and n.name == "CodingAgentTool")
+    return next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "run")
+
+
+def _assigns(node, attr_owner, attr):
+    return any(isinstance(n, ast.Assign) and any(
+        isinstance(t, ast.Attribute) and t.attr == attr and isinstance(t.value, ast.Name)
+        and t.value.id == attr_owner for t in n.targets) for n in ast.walk(node))
+
+
+def test_the_guard_books_only_what_the_helper_calls_done():
+    tree = _run_tree()
+    names = {n.targets[0].id for n in ast.walk(tree)
+             if isinstance(n, ast.Assign) and len(n.targets) == 1
+             and isinstance(n.targets[0], ast.Name) and isinstance(n.value, ast.Call)
+             and getattr(n.value.func, "id", "") == "_loop_call_failed"}
+    guard_names = names - {"is_error_result"}
+    assert guard_names, "the guard tracking no longer asks _loop_call_failed"
+
+    def is_not_failed(test):
+        return (isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not)
+                and isinstance(test.operand, ast.Name) and test.operand.id in guard_names)
+
+    # The write branch: the If that sets current_state.last_write_seq opens on "not failed".
+    write_ifs = [n for n in ast.walk(tree) if isinstance(n, ast.If)
+                 and any(_assigns(b, "current_state", "last_write_seq") for b in n.body)
+                 and not any(isinstance(b, ast.If) and _assigns(b, "current_state", "last_write_seq")
+                             for b in n.body)]
+    assert write_ifs, "no branch sets last_write_seq"
+    assert all(is_not_failed(n.test) for n in write_ifs), [ast.unparse(n.test) for n in write_ifs]
+
+    # The read branch: the If that adds to files_known under fn_name == "read_file".
+    read_branch = [n for n in ast.walk(tree) if isinstance(n, ast.If)
+                   and ast.unparse(n.test) == "fn_name == 'read_file'"
+                   and "files_known.add" in ast.unparse(n)]
+    assert len(read_branch) == 1
+    inner = read_branch[0].body[0]
+    assert isinstance(inner, ast.If) and isinstance(inner.test, ast.BoolOp)
+    assert any(is_not_failed(v) for v in inner.test.values), ast.unparse(inner.test)
+
+
+@pytest.fixture
+def linked(world, tmp_path, monkeypatch):
+    """A harmless notes.txt in the process's working folder, and notes.txt in the project as a
+    link to a protected file with a synthetic secret."""
+    secret = world.home / ".vaf" / "config.json"
+    secret.parent.mkdir(parents=True, exist_ok=True)
+    secret.write_text('{"api_key_x": "SYNTHETIC-SECRET"}\n', encoding="utf-8")
+    try:
+        os.symlink(secret, world.proj / "notes.txt")
+    except (OSError, NotImplementedError):
+        pytest.skip("symbolic links are not available here")
+    cwd = tmp_path / "elsewhere"
+    cwd.mkdir()
+    (cwd / "notes.txt").write_text("harmless\n", encoding="utf-8")
+    monkeypatch.chdir(cwd)
+    return world
+
+
+def test_a_relative_read_is_the_projects_file(linked):
+    from vaf.tools.coder import _live_view_target, _project_read_path
+    w = linked
+    path = _project_read_path("notes.txt", str(w.proj))
+    assert os.path.normpath(path) == os.path.normpath(str(w.proj / "notes.txt"))
+    out = w.run("read_file", {"path": path})
+    assert out.startswith("Access denied:"), out
+    assert _failed(w, "read_file", out)
+    assert _live_view_target(path, scope=None, role=None) is None
+    # Absolute and home paths are handed on as given.
+    assert _project_read_path(str(w.proj / "index.html"), "/elsewhere") == str(w.proj / "index.html")
+    assert _project_read_path("~/x.txt", str(w.proj)) == "~/x.txt"
+    src = _run_source()
+    assert 'fn_args["path"] = _project_read_path(str(fn_args["path"]), base_dir)' in src
+    # Before the tool runs, so the tool, the mirror and files_known judge the same file.
+    assert src.index("_project_read_path(str(fn_args") < src.index("# THE FUNNEL, like every")
+
+
+def test_the_live_view_opens_only_what_the_read_screen_allows(linked):
+    from vaf.tools.coder import _live_view_target
+    w = linked
+    p = w.proj
+    for path, scope, role in ((str(p / ".env"), None, None),
+                              (str(p / ".vaf" / "codex.md"), None, None),
+                              (str(p / "notes.txt"), None, None),
+                              (str(w.b_proj / "secret.txt"), A, "user")):
+        assert _live_view_target(path, scope=scope, role=role) is None, path
+    assert _live_view_target(str(p / "index.html"), scope=A, role="user") == str(p / "index.html")
+    assert _live_view_target(str(w.b_proj / "secret.txt"), scope=None, role=None) == str(
+        w.b_proj / "secret.txt")
+    src = _run_source()
+    mirror = src[src.index('if fn_name == "read_file" and not is_error_result:'):
+                 src.index("# Track created files")]
+    assert "_live_view_target(" in mirror
+    assert "os.path.join(base_dir" not in mirror
+
+
+def test_the_write_preview_never_opens_a_refused_file(world, monkeypatch):
+    from vaf.tools.coder import _preview_old_lines
+    p = world.proj
+    refused = {str(p / ".env"), str(world.b_proj / "secret.txt"), str(p / ".vaf" / "codex.md")}
+    opened = []
+    real_open = builtins.open
+
+    def recording_open(file, *a, **k):
+        if os.path.abspath(str(file)) in refused:
+            opened.append(file)
+        return real_open(file, *a, **k)
+
+    monkeypatch.setattr(builtins, "open", recording_open)
+    assert _preview_old_lines(str(p / ".env"), scope=None, role=None) is None
+    assert _preview_old_lines(str(p / ".vaf" / "codex.md"), scope=None, role=None) is None
+    assert _preview_old_lines(str(world.b_proj / "secret.txt"), scope=A, role="user") is None
+    assert opened == [], opened
+    assert _preview_old_lines(str(p / "index.html"), scope=A, role="user") == ["<p>old</p>\n"]
+    assert _preview_old_lines(str(p / "new.html"), scope=None, role=None) is None
+    src = _run_source()
+    start = src.index("# Generate Diff or Content Preview")
+    block = src[start:src.index("tui.set_code_preview(fname, preview_content", start)]
+    assert "_preview_old_lines(path, scope=caller_scope" in block
+    assert "open(" not in block
+
+
+def test_the_duplicate_write_shortcut_asks_the_dispatch_first(world):
+    from vaf.core.coder_tools import resolve_coder_tools
+    from vaf.tools.coder import _coder_dispatch_refusal
+    refusal = _coder_dispatch_refusal("write_file", world.tools["write_file"],
+                                      coder_allowed=resolve_coder_tools(),
+                                      caller_allowed={"read_file"}, scope=A, role="user",
+                                      session_id=None)
+    assert refusal and refusal.startswith("Security Error:"), refusal
+
+    tree = _run_tree()
+    fallback = [n for n in ast.walk(tree) if isinstance(n, ast.If)
+                and ast.unparse(n.test) == "'path' in extracted_args and 'content' in extracted_args"]
+    assert len(fallback) == 1
+    block = fallback[0]
+    calls = [n for n in ast.walk(block) if isinstance(n, ast.Call)]
+    ask = [c for c in calls if getattr(c.func, "id", "") == "_coder_dispatch_refusal"]
+    rewrite = [c for c in calls if getattr(c.func, "id", "") == "_identical_rewrite"]
+    assert len(ask) == 1 and len(rewrite) == 1
+    assert ask[0].lineno < rewrite[0].lineno
+    # Asked by the name the model used, like every dispatch check (an alias is its own name).
+    assert getattr(ask[0].args[0], "id", "") == "_requested_fn_name"
+    # The rewrite runs only when the dispatch refused nothing.
+    cond = [n for n in ast.walk(block) if isinstance(n, ast.IfExp)
+            and any(c is rewrite[0] for c in ast.walk(n.orelse))]
+    assert cond and "is not None" in ast.unparse(cond[0].test), "rewrite asked regardless"

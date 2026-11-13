@@ -18,15 +18,24 @@ import pytest
 import vaf.core.a2a.store as store_mod
 from vaf.core.a2a.invite import guest_client_path, guest_client_sha256, invitation
 from vaf.core.a2a.room import Room
+from vaf.core.platform import Platform
 
 ROOT = Path(__file__).resolve().parents[1]
 WIRE_PEER = ROOT / "examples" / "12_a2a_wire_peer.py"
+
+
+def _workspaces_under(tmp_path, monkeypatch):
+    """A room's workspace lives under Documents/VAF_Projects (Room.workspace_dir), not
+    under the room store: without this the fixtures below wrote it, its notes and the
+    traversal test's symlink into the home of whoever ran the suite."""
+    monkeypatch.setattr(Platform, "documents_dir", staticmethod(lambda: tmp_path / "documents"))
 
 
 @pytest.fixture()
 def circle(tmp_path, monkeypatch):
     monkeypatch.setattr(store_mod, "rooms_root",
                         lambda base=None: Path(base) if base else tmp_path)
+    _workspaces_under(tmp_path, monkeypatch)
     room = Room.create(kind="round", owner_scope="scope-a", base=tmp_path,
                        room_id="room-guest", topic="Guest lane")
     owner = room.join(display="VAF", scope_id="scope-a", peer_id="p-owner")
@@ -185,6 +194,7 @@ def seated(tmp_path, monkeypatch):
     """A hosted room, a member with a SEAT, and its workspace on disk."""
     monkeypatch.setattr(store_mod, "rooms_root",
                         lambda base=None: Path(base) if base else tmp_path)
+    _workspaces_under(tmp_path, monkeypatch)
     room = Room.create(kind="round", owner_scope="scope-a", base=tmp_path,
                        room_id="room-seatfs", topic="Files over the wire")
     member = room.join(display="Opus", scope_id=None, peer_id="p-far1")
@@ -192,6 +202,22 @@ def seated(tmp_path, monkeypatch):
     workspace = room.workspace_dir(create=True)
     (workspace / "notes.txt").write_text("hallo raum", encoding="utf-8")
     return {"room": room, "seat": seat, "workspace": workspace}
+
+
+def test_the_room_workspace_lives_under_the_tests_own_folder(circle, tmp_path):
+    """Each fixture keeps its room workspace in the test's own folder, so this file writes
+    nothing into the home it runs under and passes twice on one home (the symlink of the
+    traversal test below already existed on a second run). One test per fixture: in a
+    test that used both, either patch would cover the other's workspace.
+    MUTATION: drop the documents_dir patch in `circle` - red."""
+    room, _owner = circle
+    assert room.workspace_dir().is_relative_to(tmp_path)
+
+
+def test_the_seated_workspace_lives_under_the_tests_own_folder(seated, tmp_path):
+    """MUTATION: drop the documents_dir patch in `seated` - red."""
+    assert seated["workspace"].is_relative_to(tmp_path)
+    assert (seated["workspace"] / "notes.txt").is_file()
 
 
 def test_a_wrong_seat_is_refused_without_an_existence_oracle(client, seated):

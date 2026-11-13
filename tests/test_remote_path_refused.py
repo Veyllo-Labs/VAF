@@ -5,7 +5,8 @@
 (`vaf.is_remote_path`, `vaf/core/path_jail.py`): asked first by `_allowed_file_path` in
 `vaf/core/web_server.py`, by the file tools' screen `is_safe_path`, and by the two tools that touch
 their path before that screen (`codesearch`, `download_file`). The coding agent's lanes too:
-`git_add_commit`'s files, the git tools' folder, and the loop's own checks on a file tool's path.
+`git_add_commit`'s files, the folder of the git and project notes tools, and the loop's own
+checks on a file tool's path.
 
 On Windows, `_allowed_file_path` used to resolve the caller's path before comparing it with the
 served roots, and resolving `\\\\host\\share\\x` opens that share: an SMB connection to a foreign
@@ -52,7 +53,11 @@ MUTATIONS, each turns the named test red:
   test_a_drive_in_a_later_part_is_refused_before_anything_resolves;
 - staging the resolved path instead of the name the call gave, or the name unnormalized
   -> test_git_add_commit_stages_an_inside_link_as_the_link;
-- `_git_tool_folder` never refusing -> test_the_git_tools_refuse_a_share_folder_on_the_chat_lane;
+- `tool_work_folder` never refusing, or `update_codex` / `add_memory` not asking it
+  -> test_the_git_tools_refuse_a_share_folder_on_the_chat_lane;
+- staging the name without `:(literal)` -> test_git_add_commit_reads_a_name_literally;
+- the existence check on the resolved path instead of `os.path.lexists` on the name
+  -> test_git_add_commit_stages_an_inside_link_as_the_link (a dangling link is skipped);
 - `edit_file` or `read_file` dropped from `_LOOP_PATH_TOOLS`, or `content` judged as well
   -> test_the_coder_loop_refusal_names_only_share_paths;
 - `or _remote_path_refusal(fn_name, fn_args)` dropped from the local-tool chain, or asked below
@@ -635,27 +640,69 @@ def test_git_add_commit_stages_an_inside_link_as_the_link(tmp_path):
 
     assert tool.run(base_dir=str(repo), message="link", files=["alias.txt"]).startswith("✅")
     assert committed() == ["alias.txt"]
+    # A link whose target inside the project is missing is still the link the call named.
+    os.symlink("missing.txt", repo / "dangling.txt")
+    assert tool.run(base_dir=str(repo), message="dangling", files=["dangling.txt"]).startswith("✅")
+    assert committed() == ["dangling.txt"]
     assert _git("diff", "--name-only", cwd=repo).stdout.split() == ["real.txt"]
     assert tool.run(base_dir=str(repo), message="sub", files=[".\\sub//./b.txt"]).startswith("✅")
     assert committed() == ["sub/b.txt"]
 
 
-def test_the_git_tools_refuse_a_share_folder_on_the_chat_lane(monkeypatch):
-    """On the main agent the git tools are registered too, and `base_dir` is what the model
-    wrote. Driven through the framework's funnel, as the chat lane calls them."""
+def test_git_add_commit_reads_a_name_literally(tmp_path):
+    """A name is a file name, never git pathspec magic: a file called `:(glob)*` is that one
+    file, not every file in the project."""
+    import os
+    import shutil
+
+    from vaf.tools.coder import GitAddCommitTool
+
+    if not shutil.which("git"):
+        pytest.skip("git is not installed")
+    if os.name == "nt":
+        pytest.skip("':', '(' and '*' cannot be part of a file name on Windows")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git("init", "-q", cwd=repo)
+    _git("config", "user.name", "T", cwd=repo)
+    _git("config", "user.email", "t@example.invalid", cwd=repo)
+    for name in (":(glob)*", "other.txt", "third.txt"):
+        (repo / name).write_text(name, encoding="utf-8")
+    tool = GitAddCommitTool()
+    assert tool.run(base_dir=str(repo), message="magic", files=[":(glob)*"]).startswith("✅")
+    assert _git("show", "--name-only", "--format=", "HEAD", cwd=repo).stdout.split() == [":(glob)*"]
+
+
+def test_the_git_tools_refuse_a_share_folder_on_the_chat_lane(tmp_path, monkeypatch):
+    """On the main agent the four git tools, `update_codex` and `add_memory` are registered too,
+    and `base_dir` is what the model wrote. Driven through the framework's funnel, as the chat
+    lane calls them."""
+    import os
+
     from vaf.core.tool_dispatch import ToolCaller
     from vaf.tools.coder import GitAddCommitTool, GitInitTool, GitLogTool, GitStatusTool
+    from vaf.tools.knowledge import AddMemoryTool, UpdateCodexTool
 
-    caller = ToolCaller({t.name: t for t in (GitInitTool(), GitAddCommitTool(), GitStatusTool(),
-                                             GitLogTool())},
-                        gate_enabled=False, max_result_chars=None)
+    tools = (GitInitTool(), GitAddCommitTool(), GitStatusTool(), GitLogTool(), UpdateCodexTool(),
+             AddMemoryTool())
+    caller = ToolCaller({t.name: t for t in tools}, gate_enabled=False, max_result_chars=None)
+    # A backslash spelling is a relative name on POSIX: a tool that did not refuse would
+    # create it here, not in the worktree.
+    monkeypatch.chdir(tmp_path)
     _windows_paths(monkeypatch)
     steps = _record_git(monkeypatch)
     seen = _touches(monkeypatch)
+    real_makedirs, real_open = os.makedirs, open
+    monkeypatch.setattr(os, "makedirs",
+                        lambda p, *a, **k: seen.append(("makedirs", str(p))) or real_makedirs(p, *a, **k))
+    monkeypatch.setattr("builtins.open",
+                        lambda p, *a, **k: seen.append(("open", str(p))) or real_open(p, *a, **k))
+    args = {"message": "m", "title": "t", "content": "c", "note": "n"}
     for spelled in REMOTE:
-        for name in ("git_init", "git_add_commit", "git_status", "git_log"):
-            answer = caller.execute(name, {"base_dir": spelled, "message": "m"})
-            assert answer.startswith("❌ Refused:") and "network share" in answer, (name, spelled, answer)
+        for tool in tools:
+            answer = caller.execute(tool.name, {"base_dir": spelled, **args})
+            assert answer.startswith("❌ Refused:") and "network share" in answer, (
+                tool.name, spelled, answer)
     assert _share_touches(seen) == [], _share_touches(seen)
     assert steps == [], f"a git step ran: {steps}"
 

@@ -4,6 +4,7 @@
 from typing import Optional
 from vaf.tools.base import BaseTool
 from vaf.core.persistence import PersistenceManager
+from vaf.tools.filesystem import tool_work_folder
 import os
 
 class UpdateCodexTool(BaseTool):
@@ -35,7 +36,10 @@ class UpdateCodexTool(BaseTool):
     }
     
     def run(self, **kwargs) -> str:
-        base_dir = kwargs.get('base_dir', '.')
+        # Before PersistenceManager creates <base_dir>/.vaf: see tool_work_folder.
+        base_dir, refusal = tool_work_folder(kwargs)
+        if refusal:
+            return refusal
         title = kwargs.get('title', 'Untitled Pattern')
         content = kwargs.get('content', '')
         
@@ -75,7 +79,10 @@ class AddMemoryTool(BaseTool):
     }
     
     def run(self, **kwargs) -> str:
-        base_dir = kwargs.get('base_dir', '.')
+        # Before PersistenceManager creates <base_dir>/.vaf: see tool_work_folder.
+        base_dir, refusal = tool_work_folder(kwargs)
+        if refusal:
+            return refusal
         note = kwargs.get('note', '')
         
         if not note:

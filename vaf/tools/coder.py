@@ -42,6 +42,7 @@ from vaf.cli.ui import UI
 from vaf.tools.base import BaseTool
 from vaf.tools.filesystem import (
     REMOTE_PATH_REFUSAL, WriteFileTool, EditFileTool, ReadFileTool, ListFilesTool, MoveFileTool,
+    tool_work_folder,
 )
 from vaf.tools.python_sandbox import PythonSandboxTool
 from vaf.tools.coder_templates import TemplateManager
@@ -2669,22 +2670,6 @@ class ContextState:
 # Git Tools for Coding Agent
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _git_tool_folder(kwargs) -> tuple:
-    """``(base_dir, "")`` for a git tool call, or ``("", refusal)`` for a share or device path.
-
-    The coder's wrapper (`_base_dir_tool`) hands these tools a run folder that was screened
-    when it was chosen. The same four tools are registered for the main agent too, where
-    ``base_dir`` is whatever the model wrote, and each probes ``<base_dir>/.git`` first: on
-    Windows that probe opens ``\\\\host\\share`` and sends the account's NTLM login attempt.
-    """
-    base_dir = kwargs.get('base_dir', '.')
-    from vaf.core.path_jail import is_remote_path
-    if is_remote_path(str(base_dir or "")):
-        return "", (f"❌ Refused: '{base_dir}' is a network share or device path; the git tools "
-                    "work only in a local project folder.")
-    return base_dir, ""
-
-
 class GitInitTool(BaseTool):
     """Initialize a Git repository in the project directory."""
     name = "git_init"
@@ -2704,7 +2689,7 @@ class GitInitTool(BaseTool):
     
     def run(self, **kwargs) -> str:
         # base_dir will be passed from the CodingAgentTool context
-        base_dir, refusal = _git_tool_folder(kwargs)
+        base_dir, refusal = tool_work_folder(kwargs)
         if refusal:
             return refusal
         # lexists: a dangling .git link would otherwise make git init create the repository
@@ -2745,7 +2730,7 @@ class GitAddCommitTool(BaseTool):
     }
 
     def run(self, **kwargs) -> str:
-        base_dir, refusal = _git_tool_folder(kwargs)
+        base_dir, refusal = tool_work_folder(kwargs)
         if refusal:
             return refusal
         message = kwargs.get('message', 'Update')
@@ -2783,9 +2768,14 @@ class GitAddCommitTool(BaseTool):
                 name = posixpath.normpath(entry.strip().replace("\\", "/").strip("/") or ".")
                 targets.append((resolved, name))
             for resolved, name in targets:
-                if resolved.exists():
-                    # "--": a path is never read as an option.
-                    steps.append(["add", "--", name])
+                # lexists on the name as given: a link inside the project is staged as the link
+                # even when its target is missing (containment was decided on `resolved`).
+                if os.path.lexists(os.path.join(base_dir, name)):
+                    # "--": a path is never read as an option. ":(literal)": nor is a leading
+                    # ':' read as pathspec magic (`:(glob)*` would stage every file); not
+                    # GIT_LITERAL_PATHSPECS, which would also switch off the runner's own
+                    # `:(exclude)` pathspecs for gitlinks.
+                    steps.append(["add", "--", f":(literal){name}"])
         else:
             steps.append(["add", "."])
         steps.append(["commit", "-m", message])
@@ -2811,7 +2801,7 @@ class GitStatusTool(BaseTool):
     }
     
     def run(self, **kwargs) -> str:
-        base_dir, refusal = _git_tool_folder(kwargs)
+        base_dir, refusal = tool_work_folder(kwargs)
         if refusal:
             return refusal
         if not os.path.exists(os.path.join(base_dir, '.git')):
@@ -2846,7 +2836,7 @@ class GitLogTool(BaseTool):
     }
     
     def run(self, **kwargs) -> str:
-        base_dir, refusal = _git_tool_folder(kwargs)
+        base_dir, refusal = tool_work_folder(kwargs)
         if refusal:
             return refusal
         limit = kwargs.get('limit', 10)

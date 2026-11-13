@@ -538,6 +538,25 @@ VAF_STATE_READ_REFUSAL = "Access denied: VAF's own data directory"
 REMOTE_PATH_REFUSAL = (
     "Access denied: a network share or device path (\\\\server\\share, //server/share, "
     "\\\\?\\, \\\\.\\) is not opened by the file tools")
+
+
+def tool_work_folder(kwargs) -> Tuple[str, str]:
+    """``(base_dir, "")`` for a tool that works in ``kwargs["base_dir"]`` (default: the working
+    folder), or ``("", refusal)`` when that folder is a network share or device path.
+
+    The coder's wrapper (`_base_dir_tool`) hands its inner tools a run folder that was screened
+    when it was chosen. Six of them (the four git tools, ``update_codex`` and ``add_memory``)
+    are registered for the main agent as well, where ``base_dir`` is whatever the model wrote,
+    and each probes or writes below it first: on Windows that opens ``\\\\host\\share`` and
+    sends the account's NTLM login attempt. NAMED BOUNDARY: this answers the share and device
+    half only; on the main agent the folder is not confined to the caller's own folders.
+    """
+    base_dir = kwargs.get("base_dir", ".")
+    from vaf.core.path_jail import is_remote_path
+    if is_remote_path(str(base_dir or "")):
+        return "", (f"❌ Refused: '{base_dir}' is a network share or device path; this tool "
+                    "works only in a local project folder.")
+    return base_dir, ""
 HOST_CONFIG_WRITE_REFUSAL = (
     "Access denied: the home directory's configuration (dot files and folders such as "
     "~/.bashrc, ~/.config or ~/.local, autostart entries) runs or steers programs outside VAF "

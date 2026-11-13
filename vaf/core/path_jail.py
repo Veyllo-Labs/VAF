@@ -99,9 +99,10 @@ def is_remote_path(spelled: str) -> bool:
     coder's ``project_path``, a folder named in its task text and its stored last project,
     ``run_project_git``'s ``_resolve_project``, ``run_in_workspace``, a sandbox environment's
     mount); ``jail_allows``; and the coding agent's own checks on a file tool's path
-    (``_remote_path_refusal``, the duplicate-write check ``_identical_rewrite``) and the git
-    tools' folder (``_git_tool_folder``), while ``git_add_commit``'s files go through
-    ``contained_path``. ``tests/test_remote_path_refused.py`` drives those lanes with share
+    (``_remote_path_refusal``, the duplicate-write check ``_identical_rewrite``) and the
+    folder of the six inner tools the main agent has as well, the four git tools,
+    ``update_codex`` and ``add_memory`` (``tool_work_folder``), while ``git_add_commit``'s files
+    go through ``contained_path``. ``tests/test_remote_path_refused.py`` drives those lanes with share
     paths and records every disk call, and scans every function that screens with one of the
     four screens above (``is_safe_path``, ``project_dir_refusal``, ``is_unsafe_project_dir``,
     ``jail_allows``) for a disk call on the screened argument (by name, directly) before the
@@ -116,7 +117,7 @@ def is_remote_path(spelled: str) -> bool:
     run folder (``_choose_base_dir``, ``_base_dir_tool``), ``project_git``'s
     ``_resolve_project`` (which the code audit tool asks too, before ``jail_allows``), the
     folder a person typed for ``vaf audit``, the snapshots' own working folder, and the git
-    tools' folder (``_git_tool_folder``). That last one is the model's text on the main agent,
+    tools' folder (``tool_work_folder``). That last one is the model's text on the main agent,
     screened for shares and device paths only and not confined to any folder; the share half
     is what this boundary needs. Measured: no caller hands it a share or device path.
 

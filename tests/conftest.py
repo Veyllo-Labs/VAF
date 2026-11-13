@@ -639,6 +639,30 @@ def _no_give_back_parker():
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _no_connection_tracker_cleanup_thread():
+    """No test may start the connection map's cleanup thread.
+
+    `ConnectionTracker` is a process singleton; its first construction starts a daemon that
+    runs `while True: time.sleep(30); self._cleanup_stale()` with no way to stop it. In a
+    test process the first WebSocket that reaches the web server starts it, and it then lives
+    for the whole session. It looks `time.sleep` up on the shared `time` module on every turn,
+    so a later test's process-wide sleep fake reaches it: measured with a fake clock's sleep
+    installed, it turned about a million times a second and moved the clock 30 s per turn.
+    A test about the cleanup calls `_cleanup_stale` directly.
+    """
+    from vaf.network.connection_tracker import ConnectionTracker
+
+    # A rename must fail here, not leave a stub on a method nothing calls any more.
+    assert hasattr(ConnectionTracker, "_start_cleanup_thread")
+    previous = ConnectionTracker._start_cleanup_thread
+    ConnectionTracker._start_cleanup_thread = lambda self: None
+    try:
+        yield
+    finally:
+        ConnectionTracker._start_cleanup_thread = previous
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _no_command_in_a_real_container():
     """No test may run a command INSIDE a real container, or start, stop or remove one.
 
@@ -775,7 +799,7 @@ def _no_child_processes():
 # The product's long-running background loops, as (module, qualname suffix) of the thread's
 # target. Each is started once per process and then acts on a timer: the thinking runs build
 # system prompts (and with them data keys), the scheduler fires reminders, the scan reads the
-# skills, the backup schedule writes backups.
+# skills, the backup schedule writes backups, the connection map forgets idle connections.
 _PRODUCT_LOOPS = (
     ("vaf.core.thinking_mode", "_background_loop"),
     ("vaf.core.automation", "scheduler_loop"),
@@ -783,6 +807,7 @@ _PRODUCT_LOOPS = (
     ("vaf.core.web_interface", "start_maintenance_broadcast.<locals>._loop"),
     ("vaf.whare_wananga.eager", "_run_scanner"),
     ("vaf.core.backup_schedule", "_loop"),
+    ("vaf.network.connection_tracker", "cleanup_loop"),
 )
 
 

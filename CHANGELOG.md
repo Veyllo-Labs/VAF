@@ -57,6 +57,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **Square brackets show as written in the plain terminal.** `arr[i]`, a task list's `[x]`
+  and `pip install "vaf[speech]"` lost their brackets, and a reply or an error message with a
+  closing tag such as `[/link]` stopped the answer with a markup error, and the answer was not
+  saved to the session. Notifications in the terminal app show brackets as written too.
+  `vaf session export` without `-o` now writes the session unchanged: lines are no longer
+  wrapped at 80 columns, so an exported JSON parses, and codes such as `:CD:` stay text.
 - **`restart` in the terminal starts the same program again.** `restart` in `vaf run` and
   in the full-screen terminal app now starts VAF the way it was started. Before, a start
   through `run_vaf.sh` or `run_vaf.bat` came back with the GitHub tools not working (the
@@ -257,13 +263,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   unchanged, colours included, also for a program the agent started), the log lines and the
   JSON outputs now remove or escape them, so such text cannot change the window title, clear
   the screen, reset the terminal or write to your clipboard. A tool's coloured output shows
-  as plain text instead of colour codes. One case stays open: a link written as `[link=...]`
-  in a model reply still shows as a link in the plain terminal mode, with a label and
-  address the sender chose. The text itself is kept as it was sent. The browser agent's step
-  lines ("Next goal") no longer appear on the plain terminal; they show in the browser
-  window, as before. When two browser runs overlap, each browser window now shows only its
-  own run's steps; before, one person could see the steps of another person's run. New for
-  developers who build on VAF: `vaf.terminal_text`.
+  as plain text instead of colour codes. The text itself is kept as it was sent. The
+  browser agent's step lines ("Next goal") no longer appear on the plain terminal; they show
+  in the browser window, as before. When two browser runs overlap, each browser window now
+  shows only its own run's steps; before, one person could see the steps of another person's
+  run. New for developers who build on VAF: `vaf.terminal_text`.
+- **Text from others can no longer turn itself into links or hidden text in the terminal.**
+  A model reply, a sub-agent's result, a mail or messenger preview in `vaf inbox`, a session or
+  automation name, a web page title in the progress lines or a scanned skill could carry
+  markup such as `[link=https://...]label[/link]` or `[conceal]...[/conceal]`, which the plain
+  terminal modes and the CLI commands turned into a link with an address you did not see, or
+  into invisible text. Such text now shows as written. VAF's own links to files it created
+  stay clickable: a link is kept only when its label is the path it opens.
 
 ## [0.1.0a36] - 2026-11-09
 

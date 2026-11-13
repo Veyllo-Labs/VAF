@@ -479,8 +479,9 @@ class ResearchTUI:
                 word_line.append("Words: (n/a)", style="dim")
 
             logs = "\n".join(self._logs) if self._logs else "…"
+            # The log lines carry model section titles and search errors: text, not markup.
             log_panel = Panel(
-                logs, 
+                Text(logs), 
                 title=f"[bold {self.text_color}]Research Log[/bold {self.text_color}]", 
                 border_style=self.border_color, 
                 padding=(0, 1)

@@ -2853,7 +2853,7 @@ def refresh_scheduler_from_disk(origin: str = "unknown") -> bool:
 @automation_app.command("list")
 def list_automations():
     """List all automation tasks."""
-    from vaf.core.terminal_text import TerminalConsole
+    from vaf.core.terminal_text import TerminalConsole, escape_markup
     from rich.table import Table
     
     console = TerminalConsole()
@@ -2879,7 +2879,7 @@ def list_automations():
         
         table.add_row(
             task.id,
-            task.name[:20],
+            escape_markup(task.name[:20]),
             task.frequency,
             task.time or task.schedule_label,
             next_run,
@@ -2961,7 +2961,7 @@ def run_automation(
     task_id: str = typer.Argument(..., help="Task ID to run")
 ):
     """Manually run an automation task."""
-    from vaf.core.terminal_text import TerminalConsole
+    from vaf.core.terminal_text import TerminalConsole, escape_markup
     
     console = TerminalConsole()
     manager = get_manager()
@@ -2977,10 +2977,11 @@ def run_automation(
         console.print(f"[red]Task not found: {task_id}[/red]")
         finish_terminal(success=False)
 
-    console.print(f"\n[cyan]⚡ Running: {task.name}[/cyan]\n")
+    console.print(f"\n[cyan]⚡ Running: {escape_markup(task.name)}[/cyan]\n")
 
     def print_output(text):
-        console.print(text, end="")
+        # The run's output is the model's text: printed as written, never as markup.
+        console.print(text, end="", markup=False, emoji=False)
 
     ok = True
     try:
@@ -2988,7 +2989,7 @@ def run_automation(
         manager.run_task(task, callback=print_output, new_terminal=False)
     except Exception as exc:
         ok = False
-        console.print(f"\n[red]Automation failed: {exc}[/red]")
+        console.print(f"\n[red]Automation failed: {escape_markup(exc)}[/red]")
     console.print("\n")
     finish_terminal(success=ok)
 
@@ -2999,7 +3000,7 @@ def delete_automation(
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation")
 ):
     """Delete an automation task."""
-    from vaf.core.terminal_text import TerminalConsole
+    from vaf.core.terminal_text import TerminalConsole, escape_markup
     
     console = TerminalConsole()
     manager = get_manager()
@@ -3016,13 +3017,13 @@ def delete_automation(
             return
     
     manager.delete(task_id)
-    console.print(f"[green]✓ Deleted: {task.name}[/green]")
+    console.print(f"[green]✓ Deleted: {escape_markup(task.name)}[/green]")
 
 
 @automation_app.command("start")
 def start_scheduler():
     """Start the automation scheduler daemon."""
-    from vaf.core.terminal_text import TerminalConsole
+    from vaf.core.terminal_text import TerminalConsole, escape_markup
     from rich.live import Live
     from rich.panel import Panel
     from rich.text import Text
@@ -3040,7 +3041,7 @@ def start_scheduler():
     console.print(f"[dim]Running {len(tasks)} task(s). Press Ctrl+C to stop.[/dim]\n")
     
     for task in tasks:
-        console.print(f"  • {task.name} @ {task.time} ({task.frequency})")
+        console.print(f"  • {escape_markup(task.name)} @ {task.time} ({task.frequency})")
     
     console.print()
     

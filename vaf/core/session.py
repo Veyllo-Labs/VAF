@@ -2559,7 +2559,7 @@ def list_sessions(
     limit: int = typer.Option(20, "--limit", "-n", help="Maximum sessions to show")
 ):
     """List all saved sessions."""
-    from vaf.core.terminal_text import TerminalConsole
+    from vaf.core.terminal_text import TerminalConsole, escape_markup
     from rich.table import Table
     
     console = TerminalConsole()
@@ -2581,10 +2581,10 @@ def list_sessions(
         updated = s["updated_at"][:10] if s["updated_at"] else "?"
         table.add_row(
             s["id"],
-            s["name"][:30],
+            escape_markup(s["name"][:30]),
             str(s["message_count"]),
             updated,
-            s["summary"][:40],
+            escape_markup(s["summary"][:40]),
         )
     
     console.print(table)
@@ -2595,14 +2595,14 @@ def load_session(
     session_id: str = typer.Argument(..., help="Session ID to load")
 ):
     """Load a saved session."""
-    from vaf.core.terminal_text import TerminalConsole
+    from vaf.core.terminal_text import TerminalConsole, escape_markup
     
     console = TerminalConsole()
     manager = get_manager()
     
     try:
         session = manager.load(session_id)
-        console.print(f"[green]✓ Loaded session: {session.name} ({len(session.messages)} messages)[/green]")
+        console.print(f"[green]✓ Loaded session: {escape_markup(session.name)} ({len(session.messages)} messages)[/green]")
     except FileNotFoundError:
         console.print(f"[red]✗ Session not found: {session_id}[/red]")
         raise typer.Exit(1)
@@ -2652,7 +2652,9 @@ def export_session(
                 f.write(content)
             console.print(f"[green]✓ Exported to: {output}[/green]")
         else:
-            console.print(content)
+            # The session as written, in one write: no markup, no emoji codes, no wrapping
+            # at the console width (a wrapped JSON export no longer parsed).
+            console.print(content, markup=False, highlight=False, emoji=False, soft_wrap=True)
             
     except FileNotFoundError:
         console.print(f"[red]✗ Session not found: {session_id}[/red]")
@@ -2665,7 +2667,7 @@ def search_sessions(
     limit: int = typer.Option(10, "--limit", "-n", help="Maximum results")
 ):
     """Search your own sessions by content."""
-    from vaf.core.terminal_text import TerminalConsole
+    from vaf.core.terminal_text import TerminalConsole, escape_markup
     from rich.table import Table
     from vaf.core.identity_binding import resolve_owner_identity
 
@@ -2677,10 +2679,10 @@ def search_sessions(
     results = manager.search(query, limit=limit, user_scope_id=resolve_owner_identity().scope)
 
     if not results:
-        console.print(f"[yellow]No sessions found matching: {query}[/yellow]")
+        console.print(f"[yellow]No sessions found matching: {escape_markup(query)}[/yellow]")
         return
     
-    table = Table(title=f"Search Results: '{query}'")
+    table = Table(title=f"Search Results: '{escape_markup(query)}'")
     table.add_column("Session ID", style="cyan")
     table.add_column("Name")
     table.add_column("Role")
@@ -2689,9 +2691,9 @@ def search_sessions(
     for r in results:
         table.add_row(
             r["session_id"],
-            r["session_name"][:20],
+            escape_markup(r["session_name"][:20]),
             r["role"],
-            r["match"][:50] + "..." if len(r["match"]) > 50 else r["match"],
+            escape_markup(r["match"][:50]) + ("..." if len(r["match"]) > 50 else ""),
         )
     
     console.print(table)

@@ -1340,10 +1340,31 @@ where these characters do nothing. The Veyllo App protocol still refuses them in
 
 Named boundaries: `vaf env exec` and `vaf env logs` print a container program's standard
 output byte for byte, the way `docker exec` and `docker logs` do (see
-[SANDBOXING.md](SANDBOXING.md)). Rich markup in other parties' text is a separate open
-class: text printed with markup on (the classic lane's model chunks, some table cells)
-still turns `[link=...]` written with clean characters into an OSC 8 link whose label and
-target the sender chose; fixing it needs VAF's own markup separated from model text.
+[SANDBOXING.md](SANDBOXING.md)).
+
+Rich markup is the second class, with clean characters only: Rich reads `[...]` in a printed
+string as markup, so `[link=https://...]label[/link]` from another party became a link whose
+address the reader never saw, `[conceal]` hid text, `arr[i]` lost its `[i]`, and a lone
+closing tag such as `[/]` or `[/link]` raised a markup error out of the print (in the reply
+stream the answer was then not saved; in the sub-agent drain the same result failed at
+every pass). Other parties' text is now escaped where it enters a markup string
+(`escape_markup` in `vaf/core/terminal_text.py`): the narration lines (`UI.event` and its
+helpers, `TUI.event`, the notifications, a user's message box), sub-agent results, errors
+and agent types in the drain panels, `vaf inbox list`, the `vaf session` and
+`vaf automation` commands, the coder's file names and the research agent's log, and the
+`vaf security` lists. Whole replies are printed as text, with markup off: the classic and
+modern reply stream, the automation output and `vaf session export`. `TerminalConsole`
+itself shows a markup string that does not parse as text, and keeps a markup link only
+when its label is the file path it opens, which is the one shape VAF writes (the coder's
+`_get_clickable_path`, the engine's project and report links); any other markup link keeps
+its label and loses the link. The full-screen app's toasts show their message as text.
+
+Named boundaries of the markup class: Rich's `Panel` titles and `Text.from_markup` parse
+without the console, so neither console rule reaches them and a foreign value there needs
+the entry escape (the coder's file name has one). About 900 other interpolations into
+markup strings print mostly VAF's own values (paths, counts, configuration) and rely on the
+console rules alone: a foreign value there can restyle itself or lose a `[word]`, but it
+cannot plant a link or raise.
 
 ## 7. Watchdog and Admin Security APIs
 

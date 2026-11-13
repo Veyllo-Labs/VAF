@@ -790,10 +790,8 @@ def _peer_trust_line(fingerprint: str) -> None:
     except Exception:
         pass
     if why:
-        # The reason quotes the certificate's names, which come from whoever made it: a
-        # SAN like "[link=...]vafhost[/link]" would otherwise print as markup.
         UI.warning("Other machines that joined a room on this VAF cannot reach it now: "
-                   f"{escape(why)}.")
+                   f"{why}.")
         return
     _line("Other machines that joined a room on this VAF trust the new authority again with:")
     _line(f"  vaf a2a trust wss://{escape(host)}{_access_port_suffix()} --ca-fp "
@@ -840,7 +838,7 @@ def cert_show():
     _line(f"  Authority:    {escape(facts['authority_subject'])}")
     _line(f"                {colon_fingerprint(facts['authority_sha256'])}")
     if state.get("uncovered"):
-        UI.warning("It does not name " + escape(", ".join(state["uncovered"])) + ": a device "
+        UI.warning("It does not name " + ", ".join(state["uncovered"]) + ": a device "
                    "that reaches VAF there gets a certificate warning. Open VAF by an address "
                    "or name it carries instead.")
     _line()
@@ -927,14 +925,12 @@ def _left_out_line(left: list) -> None:
     """The machine's names a new authority leaves out of VAF's certificate, and what to use."""
     if not left:
         return
-    from rich.markup import escape
-
     from vaf.network.ssl_utils import mdns_name
     mdns = mdns_name()
     instead = "its address" + (f" or {mdns}" if mdns and mdns not in left else "")
-    UI.warning("A new authority leaves " + escape(", ".join(left)) + " out of VAF's "
+    UI.warning("A new authority leaves " + ", ".join(left) + " out of VAF's "
                f"certificate: devices that open VAF by one of them get a warning; open it by "
-               f"{escape(instead)} instead.")
+               f"{instead} instead.")
 
 
 def _app_devices_line() -> None:

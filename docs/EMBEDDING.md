@@ -880,6 +880,24 @@ filter, every Rich console it builds, its JSON lines and its log handler); see
 "Text from others on a terminal" in
 [USER_ISOLATION.md](security/USER_ISOLATION.md#text-from-others-on-a-terminal).
 
+If you print through Rich or Textual, there is a second class with clean characters only:
+both read `[...]` as markup. Another party's `[link=https://...]label[/link]` becomes a
+link whose address the reader does not see, `[conceal]...[/conceal]` hides text, `[i]` in
+`arr[i]` disappears, and a lone closing tag such as `[/]` raises `MarkupError` out of the
+print. `vaf.terminal_text` does not touch brackets, because they are text everywhere else.
+Print other parties' text with `markup=False`, or wrap it in `rich.markup.escape` where it
+goes into a markup string of your own:
+
+```python
+from rich.console import Console
+from rich.markup import escape
+import vaf
+
+console = Console()
+console.print(vaf.terminal_text(answer), markup=False)
+console.print(f"[bold]{name}:[/bold] {escape(vaf.terminal_text(text))}")
+```
+
 ---
 
 ## Content arriving from someone else: `vaf.inspect_upload`

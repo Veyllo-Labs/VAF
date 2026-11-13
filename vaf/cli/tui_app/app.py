@@ -470,6 +470,15 @@ class VafApp(App):
     def get_line_filters(self):
         return [*super().get_line_filters(), _TERMINAL_TEXT_FILTER]
 
+    def notify(self, message, *, title="", severity="information", timeout=None,
+               markup=False):
+        """A toast always shows its message as text. The messages quote exceptions and typed
+        values, Textual parses markup by default (`a [/] b` raised MarkupError), and a
+        widget's `notify` passes `markup=True` explicitly, so the flag is ignored rather
+        than defaulted."""
+        super().notify(message, title=title, severity=severity, timeout=timeout,
+                       markup=False)
+
     # theme plumbing -----------------------------------------------------------------
     def get_css_variables(self):
         base = super().get_css_variables()

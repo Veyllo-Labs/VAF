@@ -39,7 +39,7 @@ from typing import Optional, Callable
 from datetime import datetime
 
 from vaf.cli.themes import ThemeManager
-from vaf.core.terminal_text import TerminalConsole, terminal_text
+from vaf.core.terminal_text import TerminalConsole, escape_markup, terminal_text
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # BOX STYLES (using built-in Rich boxes)
@@ -671,7 +671,7 @@ O))         O))       O))))))))
             time_str = f" [{self.muted}]{timestamp.strftime('%H:%M')}[/{self.muted}]"
         
         panel = Panel(
-            Markdown(content) if role == "assistant" else content,
+            Markdown(content) if role == "assistant" else escape_markup(content),
             title=f"{icon} [bold]{display_title}[/bold]{time_str}",
             title_align="left",
             border_style=color,
@@ -707,7 +707,8 @@ O))         O))       O))))))))
     # ═══════════════════════════════════════════════════════════════════════════
     
     def event(self, type_name: str, message: str, style: str = "info", end: str = "\n"):
-        """Print an event/status message."""
+        """Print an event/status message. `message` is text, never markup: brackets in it
+        show as written."""
         color_map = {
             "info": self.primary,
             "success": self.theme["success"],
@@ -720,7 +721,8 @@ O))         O))       O))))))))
         # Bar indicator
         bar = f"[{color}]│[/{color}]"
         type_str = f"[{self.muted}]{type_name:<10}[/{self.muted}]"
-        msg_str = f"[{color}]{message}[/{color}]"
+        # The message is text: a page title or an exception body in it is shown as written.
+        msg_str = f"[{color}]{escape_markup(message)}[/{color}]"
             
         self.console.print(f"{bar} {type_str} {msg_str}", end=end)
         
@@ -763,7 +765,7 @@ O))         O))       O))))))))
         }
         color = color_map.get(style, self.muted)
         # Simple one-line notification that doesn't interfere with input
-        self.console.print(f"[{self.muted}]→[/{self.muted}] [{color}]{message}[/{color}]")
+        self.console.print(f"[{self.muted}]→[/{self.muted}] [{color}]{escape_markup(message)}[/{color}]")
     
     # ═══════════════════════════════════════════════════════════════════════════
     # PROGRESS & LOADING
@@ -1198,7 +1200,8 @@ class UI:
 
     @staticmethod
     def event(type_name: str, title: str, style: str = "info", end: str = "\n"):
-        """Print event in OpenCode style."""
+        """Print event in OpenCode style. `title` is text, never markup: brackets in it show
+        as written (VAF's own file link, whose label is the path it opens, stays a link)."""
         import os as _os
 
         # In workflow/subagent context the Rich Console lock can block (background threads
@@ -1244,7 +1247,9 @@ class UI:
             color = color_map.get(style, "white")
             bar = f"[{color}]|[/{color}]"
             type_str = f"[dim] {type_name:<7}[/dim]"
-            title_str = f"[{color}]{title}[/{color}]"
+            # The title is text: a page title, a search answer or an exception body in it is
+            # shown as written; the sinks and the web log above and below get it raw.
+            title_str = f"[{color}]{escape_markup(title)}[/{color}]"
             UI.console.print(f"{bar}{type_str} {title_str}", end=end)
 
         # BRIDGE TO WEB UI
@@ -1268,7 +1273,7 @@ class UI:
         }
         color = color_map.get(style, "dim")
         # Simple one-line notification that doesn't interfere with input
-        UI.console.print(f"[dim]→[/dim] [{color}]{message}[/{color}]")
+        UI.console.print(f"[dim]→[/dim] [{color}]{escape_markup(message)}[/{color}]")
 
     @staticmethod
     def prompt(prompt_text: str = "> ") -> str:

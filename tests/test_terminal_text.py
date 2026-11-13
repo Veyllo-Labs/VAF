@@ -379,7 +379,7 @@ def test_the_console_writes_no_control_character_into_a_link_target():
         assert not [t for t in targets if _unsafe_in(t)], (renderable, targets)
         assert "LINK" in out
     own = _rendered({"force_terminal": True, "color_system": "truecolor"},
-                    "[link=file:///tmp/project]project[/link]", markup=True)
+                    "[link=file:///tmp/project]/tmp/project[/link]", markup=True)
     assert _foreign(own)[1][0] == "file:///tmp/project"
 
 

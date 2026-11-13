@@ -13,7 +13,7 @@ Standard libraries (`os`, `json`, `re`, `threading`) and `rich` components are i
 *   **`vaf.tools.coder_templates`**: Manages template assets.
 
 ### Helper Functions
-*   **`_get_clickable_path(path)`**: Converts a path to a `file://` URI for terminal clickability.
+*   **`_get_clickable_path(path)`**: Converts a path to a `file://` URI for terminal clickability. The link's label is the absolute path itself, which is the one shape VAF's console keeps as a markup link (`TerminalConsole` drops a markup link whose label is not the file path it opens).
 *   **`_open_folder(path)`**: OS-independent folder opening (`startfile` on Win, `open` on Mac, `xdg-open` on Linux).
 *   **`_get_open_instructions(files, base_dir)`**: Analyzes created files to generate context-aware help (e.g., "To run this Python script...").
 *   **`_run_linter_for_files(files, history, local_tools)`**:

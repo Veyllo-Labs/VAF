@@ -12,6 +12,7 @@ import typer
 
 from vaf.cli.ui import UI
 from vaf.core.security_misconfig import collect_security_findings
+from vaf.core.terminal_text import escape_markup
 
 app = typer.Typer(help="Security diagnostics and hardening checks.")
 
@@ -49,7 +50,7 @@ def doctor() -> None:
         style = _SEVERITY_STYLE.get(sev, "white")
         code = str(item.get("code", "unknown"))
         msg = str(item.get("message", ""))
-        UI.print(f"[{style}]- [{sev_label}] {code}[/{style}] {msg}")
+        UI.print(f"[{style}]- [{sev_label}] {escape_markup(code)}[/{style}] {escape_markup(msg)}")
 
 
 # ── the known-bad hash list ────────────────────────────────────────
@@ -76,9 +77,11 @@ def threats_list() -> None:
         return
     UI.warning(f"{len(items)} listed digest(s).")
     for item in items:
+        # A listed file keeps the name and reason it arrived with (a scanned skill chooses
+        # its own name): shown as written.
         UI.print(f"[red]- {str(item.get('sha256', ''))[:12]}[/red] "
-                 f"{item.get('kind', 'file')} {item.get('name', '')} "
-                 f"[dim]{item.get('reason', '')} ({item.get('listed_at', '')})[/dim]")
+                 f"{escape_markup(item.get('kind', 'file'))} {escape_markup(item.get('name', ''))} "
+                 f"[dim]{escape_markup(item.get('reason', ''))} ({item.get('listed_at', '')})[/dim]")
 
 
 @threats.command("check")

@@ -43,7 +43,7 @@ each renderer writes:
    tests/test_terminal_text.py). It cleans every rendered line, and a string printed with
    markup OFF already before layout (`render_str`); a string printed with markup ON is
    parsed as it is, because cleaning it first rebuilds tags that `rich.markup.escape` left
-   alone (`[` NUL `link=...]`).
+   alone (`[` NUL `link=...]`), and gets the markup rules S1 and S2 (RICH MARKUP below).
    Both use `terminal_segments`, which matches sequences on a line's joined text (a renderer
    splits text by style, Rich's highlighter even inside a colour code), drops a style's LINK
    target when it holds an unsafe character (Rich and Textual write that target raw into
@@ -61,9 +61,11 @@ each renderer writes:
    only when the root logger has no handler (browser_use on import, `logging.basicConfig`)
    then leaves it alone instead of writing every record raw.
 
-Named boundaries: the Rich console class and `terminal_json` stay internal; the facade's own
-examples print with `print`, which is what `vaf.terminal_text` serves, and no embedder lane
-has shown a Rich console or a JSON writer of its own. Log records written before
+Named boundaries: the Rich console class, `escape_markup` and `terminal_json` stay internal;
+the facade's own examples print with `print`, which is what `vaf.terminal_text` serves, no
+embedder lane has shown a Rich console or a JSON writer of its own, and an embedder who
+prints through Rich has Rich's own `rich.markup.escape` and `markup=False` (docs/EMBEDDING.md
+names them). Log records written before
 `vaf.main.main` runs (the dependency bootstrap, module imports) and in a process that does
 not start through it are formatted by whatever handler Python has then. The cleaning covers
 the records that reach the root logger while VAF's handler is its only handler: a handler a
@@ -72,21 +74,51 @@ handler a library adds later (which also silences VAF's, by design), and
 `logging.basicConfig(force=True)` write raw. The engine's other
 `rich.print` lines (the process scan, the server stop) print VAF's own strings and local
 command lines. `vaf env exec` and `vaf env logs` print a container program's output byte for
-byte, as `docker exec` and `docker logs` do. Rich MARKUP in other parties' text is a
-different class: `[link=...]` with clean characters in text printed with markup on still
-becomes an OSC 8 link whose label and target the sender chose, and separating VAF's own
-markup from model text there is a design change of its own.
+byte, as `docker exec` and `docker logs` do.
+
+RICH MARKUP. Rich reads `[...]` as markup in every string a console prints with markup on,
+which is every console's default: `[link=https://...]label[/link]` from another party became
+an OSC 8 link whose address the reader never saw, `[conceal]` hid text, `[i]` in `arr[i]`
+vanished and italicised the rest, and a lone closing tag (`[/]`, `[/link]`, `[/etc/hosts]`)
+raised `MarkupError` out of `print`. Three parts, from the narrowest to the widest:
+
+1. Where other parties' text enters a markup string (the narration lines of `vaf.cli.tui`,
+   sub-agent results, the inbox, session, automation and security commands, the coder's
+   and research agent's live views), it goes through `escape_markup`: Rich's own escape,
+   except that VAF's own file link (below) stays a link.
+2. Where whole replies are printed (the classic and modern reply stream, the automation
+   output, `vaf session export`), markup is OFF: text is the definition there.
+3. `TerminalConsole.render_str`, for every remaining string with markup on: a string that
+   does not parse is shown as text, cleaned like a markup-off string (S1), and a markup
+   link survives only as VAF's own file link (S2), its label kept.
+
+VAF's own file link is `[link=file:...]<path>[/link]` whose label IS the path it opens
+(`_own_file_link`); the coder's `_get_clickable_path` and the engine's report and project
+links are the three producers. A link whose label differs from its target is not VAF's,
+whoever wrote it.
+
+Named boundaries: about 900 interpolations into markup strings outside the full-screen app
+print mostly VAF's own values (paths, counts, configuration); those without an entry escape
+rely on S1 and S2 alone, so a foreign value there can restyle itself or lose a `[word]`, but
+it cannot plant a link or raise. Rich's `Panel` titles and `Text.from_markup` parse without
+the console, so neither S1 nor S2 reaches them: a foreign value there needs the entry escape
+(the coder's file name in its preview title has one). A link from a `Text` or `Style` object,
+from `Markdown` or from the `style` argument of `print` is not markup and keeps the link
+handling of `terminal_segments` and `TerminalConsole.print`.
 """
 import json
 import logging
 import re
 import sys
 from typing import Any, Iterable, Iterator, Optional
+from urllib.parse import unquote
 
 from rich.cells import cell_len
 from rich.console import Console, ConsoleOptions, RenderableType
+from rich.errors import MarkupError
+from rich.markup import escape as _rich_escape
 from rich.segment import Segment
-from rich.text import Text
+from rich.text import Span, Text
 
 #: The bidirectional marks, embeddings, overrides and isolates: they reorder how a line reads.
 _BIDI_CONTROLS = frozenset("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e"
@@ -151,6 +183,53 @@ def terminal_text(value: Any) -> str:
     if not _UNSAFE_RE.search(text):
         return text
     return _clean(text)
+
+
+def _link_path(text: str) -> str:
+    return text.replace("\\", "/").lstrip("/")
+
+
+def _own_file_link(target: str, label: str) -> bool:
+    """VAF's own markup link: a `file:` target whose decoded path IS its label, so the reader
+    sees exactly what the link opens. The three producers write `Path.as_uri()` with the
+    absolute path as label (`file:///home/user/My%20Project`, `/home/user/My Project`),
+    `file:///` + the path with its backslashes turned to slashes (`file:////home/user/p`,
+    and `file:///C:/Users/a/p` labelled `C:\\Users\\a\\p` on Windows). Leading slashes and
+    the separator do not count, an empty path is never one."""
+    if not target[:5].lower() == "file:":
+        return False
+    path = _link_path(unquote(target[5:]))
+    return bool(path) and path == _link_path(label)
+
+
+#: A complete markup link with a plain target and a label without brackets.
+_MARKUP_LINK_RE = re.compile(r"\[link=([^\]\s]+)\]([^\[\]]*)\[/link\]")
+
+
+def escape_markup(value: Any) -> str:
+    """Other parties' `value`, safe to put into a Rich markup string: shown as written.
+
+    Escaped with `rich.markup.escape`, except that VAF's own file link
+    (`[link=file:...]<path>[/link]` whose label is the path it opens) stays a live link,
+    with its label escaped. The text between two such links is escaped as one piece, so
+    Rich's rule for a trailing backslash (it would escape the next tag) still holds. Control
+    characters are not this function's job: the console removes them (`TerminalConsole`).
+    `None` gives `""`; anything else is `str()`-ed."""
+    if value is None:
+        return ""
+    text = value if isinstance(value, str) else str(value)
+    if "[" not in text:
+        return _rich_escape(text)
+    pieces, pos = [], 0
+    for match in _MARKUP_LINK_RE.finditer(text):
+        target, label = match.group(1), match.group(2)
+        if not _own_file_link(target, label):
+            continue
+        pieces.append(_rich_escape(text[pos:match.start()]))
+        pieces.append(f"[link={target}]{_rich_escape(label)}[/link]")
+        pos = match.end()
+    pieces.append(_rich_escape(text[pos:]))
+    return "".join(pieces)
 
 
 def _json_escape(match: "re.Match[str]") -> str:
@@ -279,9 +358,12 @@ class TerminalConsole(Console):
     A string printed with markup OFF is also cleaned before Rich lays it out (`render_str`),
     so no gap is left. With markup ON it is not: cleaning before the markup parser would
     rebuild a tag that `rich.markup.escape` left alone because a control character stood
-    in it (`[` NUL `link=...]` became a live link, `[` NUL `/]` a MarkupError). Rich's own
+    in it (`[` NUL `link=...]` became a live link, `[` NUL `/]` a MarkupError). Instead, a
+    markup string that does not parse is shown as text, cleaned like a markup-off string, and
+    a markup link is kept only when its label is the file path it opens (VAF's own
+    `[link=file://...]`); any other markup link keeps its label and loses the link. Rich's own
     control codes (`Control.clear()`, cursor moves) are control segments and pass; its colours
-    and VAF's own `[link=file://...]` come from styles and are untouched. The one style
+    come from styles and are untouched. The one style
     Rich applies after `render`, the `style` argument of `print` (and so of `out`), has an
     unsafe link target dropped before Rich sees it. A CR in `end` is removed like any other,
     which no caller relies on. Constructed exactly like
@@ -308,7 +390,31 @@ class TerminalConsole(Console):
         markup = kwargs.get("markup")
         if not (self._markup_default if markup is None else markup):
             text = terminal_text(text)
-        return super().render_str(text, **kwargs)
+            return super().render_str(text, **kwargs)
+        try:
+            rich_text = super().render_str(text, **kwargs)
+        except MarkupError:
+            # S1: markup that does not parse is somebody's text (`[/]`, `[/etc/hosts]`), and
+            # Rich would raise it out of `print`; shown as written, cleaned like markup off.
+            return self.render_str(text, **{**kwargs, "markup": False})
+        return self._own_links_only(rich_text)
+
+    def _own_links_only(self, rich_text: Text) -> Text:
+        """S2: a link that markup put on a span stays only as VAF's own file link (its label
+        is the path it opens); any other loses the link and keeps its label. A style that
+        does not resolve is left as it is: Rich renders it as no style, so no link."""
+        spans = rich_text.spans
+        for index, span in enumerate(spans):
+            if not span.style:
+                continue
+            try:
+                style = self.get_style(span.style)
+            except Exception:
+                continue
+            if style.link and not _own_file_link(
+                    style.link, rich_text.plain[span.start:span.end]):
+                spans[index] = Span(span.start, span.end, style.update_link(None))
+        return rich_text
 
     def render(self, renderable: RenderableType,
                options: Optional[ConsoleOptions] = None) -> Iterable[Segment]:

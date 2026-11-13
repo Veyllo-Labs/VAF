@@ -21,7 +21,7 @@ from typing import Optional
 import typer
 
 from vaf.cli.ui import UI
-from vaf.core.terminal_text import terminal_json
+from vaf.core.terminal_text import escape_markup, terminal_json
 
 app = typer.Typer(help="Your conversations across every channel.")
 
@@ -93,6 +93,8 @@ def list_conversations(
     for row in rows:
         waits = row["waits_reason"] if row["waits"] else ""
         preview = (row.get("preview") or "").replace("\n", " ")[:60]
-        table.add_row(_when(row["last_ts"]), inbox.channel_label(row["channel"]), (row.get("name") or row["id"])[:40],
-                      str(row["unread"] or ""), waits, row["mode"], preview)
+        # A contact's name and a message preview are the sender's text, shown as written.
+        table.add_row(_when(row["last_ts"]), inbox.channel_label(row["channel"]),
+                      escape_markup((row.get("name") or row["id"])[:40]),
+                      str(row["unread"] or ""), waits, row["mode"], escape_markup(preview))
     UI.console.print(table)

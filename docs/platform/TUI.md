@@ -155,11 +155,24 @@ they come from styles and control segments rather than from text.
 
 Named boundaries: `vaf env exec` and `vaf env logs` print a container program's standard
 output byte for byte, as `docker exec` and `docker logs` do, because removing its control
-characters would break that program's colours and progress bars. And Rich MARKUP in text
-from others is an open class of its own: the classic lane prints model chunks with markup
-on (the engine puts its own `[link=file://...]` into them), so `[link=...]` written with
-clean characters in such text still becomes an OSC 8 link whose label and target the
-sender chose. It can no longer carry a control character into the terminal.
+characters would break that program's colours and progress bars.
+
+### Brackets in text from others show as written
+
+Rich reads `[...]` as markup, so a reply's `arr[i]` lost its `[i]`, a lone `[/link]` raised
+a markup error that stopped the answer, and `[link=https://...]label[/link]` became a link
+whose address nobody saw. The classic and modern lanes now print the reply stream with
+markup off; the narration lines, the sub-agent result panels, a user's message box and the
+`/context` and `/session` panels escape the text of others where it enters their markup
+(`escape_markup`, `vaf/core/terminal_text.py`). `TerminalConsole` shows a markup string
+that does not parse as text, and keeps a markup link only when its label is the file path
+it opens, which is how VAF writes its own links; any other keeps its label and loses the
+link. A coder link the model repeats in its reply therefore shows as written in the stream
+(`[link=file:///...]/path[/link]`), as it already did in the full-screen app, whose
+transcript renders Markdown. The app's toasts show their message as text too: `VafApp.notify`
+passes `markup=False` whatever the caller asked for. The named boundaries (`Panel` titles,
+the long tail of VAF's own values in markup) are listed in
+[USER_ISOLATION.md](../security/USER_ISOLATION.md#text-from-others-on-a-terminal).
 
 ## Keys and commands
 

@@ -19,7 +19,7 @@ from vaf.core.channel_ingress_policy import CHANNEL_TASK_SOURCES, MAIL_CHANNEL
 from vaf.core.channels import channel_label
 from vaf.cli.ui import UI
 from vaf.core.log_helper import append_crash_log, get_dated_log_path
-from vaf.core.terminal_text import TerminalConsole, terminal_json, terminal_text
+from vaf.core.terminal_text import TerminalConsole, escape_markup, terminal_json, terminal_text
 import threading
 
 
@@ -235,13 +235,18 @@ def _check_subagent_results(tui, agent):
                 # Detect if this is a workflow result (agent_type starts with "workflow:")
                 is_workflow = task.agent_type.startswith("workflow:")
                 
+                # A result, an error, an agent type and a workflow name are the sub-agent's
+                # text: escaped where they enter the panels' markup, so "[/x]" cannot raise
+                # before consume_result below (the same result would fail at every pass) and a
+                # "[link=...]" stays text. The app's Textual lane renders these panels without
+                # TerminalConsole, so this escape is the only protection there.
                 if paused_wf:
                     tui.console.print()
                     tui.console.print(Panel(
                         f"[bold green][OK] Sub-Agent complete - resuming workflow[/bold green]\n\n"
                         f"[cyan]Task:[/cyan] {task.task_id}\n"
-                        f"[cyan]Agent:[/cyan] {task.agent_type}\n"
-                        f"[cyan]Workflow:[/cyan] {paused_wf.workflow_name}",
+                        f"[cyan]Agent:[/cyan] {escape_markup(task.agent_type)}\n"
+                        f"[cyan]Workflow:[/cyan] {escape_markup(paused_wf.workflow_name)}",
                         title="[>] Workflow Resuming",
                         border_style="green"
                     ))
@@ -257,10 +262,10 @@ def _check_subagent_results(tui, agent):
                     tui.console.print()
                     tui.console.print(Panel(
                         f"[bold green][OK] Workflow completed[/bold green]\n\n"
-                        f"[cyan]Workflow:[/cyan] {workflow_name}\n"
+                        f"[cyan]Workflow:[/cyan] {escape_markup(workflow_name)}\n"
                         f"[cyan]Task:[/cyan] {task.task_id}\n"
                         f"[cyan]Duration:[/cyan] {_format_duration(task.created_at, task.completed_at)}\n\n"
-                        f"[bold]Result:[/bold]\n{result_preview}{'...' if has_more else ''}",
+                        f"[bold]Result:[/bold]\n{escape_markup(result_preview)}{'...' if has_more else ''}",
                         title="[OK] Workflow Complete",
                         border_style="green"
                     ))
@@ -282,9 +287,9 @@ def _check_subagent_results(tui, agent):
                     tui.console.print(Panel(
                         f"[bold green][OK] Sub-Agent result received[/bold green]\n\n"
                         f"[cyan]Task:[/cyan] {task.task_id}\n"
-                        f"[cyan]Agent:[/cyan] {task.agent_type}\n"
+                        f"[cyan]Agent:[/cyan] {escape_markup(task.agent_type)}\n"
                         f"[cyan]Duration:[/cyan] {_format_duration(task.created_at, task.completed_at)}\n\n"
-                        f"[bold]Result:[/bold]\n{result_preview}{'...' if has_more else ''}",
+                        f"[bold]Result:[/bold]\n{escape_markup(result_preview)}{'...' if has_more else ''}",
                         title="[OK] Sub-Agent Complete",
                         border_style="green"
                     ))
@@ -314,8 +319,8 @@ def _check_subagent_results(tui, agent):
                 tui.console.print(Panel(
                     f"[bold red][X] Sub-Agent failed[/bold red]\n\n"
                     f"[cyan]Task:[/cyan] {task.task_id}\n"
-                    f"[cyan]Agent:[/cyan] {task.agent_type}\n\n"
-                    f"[red]Error:[/red] {task.error}",
+                    f"[cyan]Agent:[/cyan] {escape_markup(task.agent_type)}\n\n"
+                    f"[red]Error:[/red] {escape_markup(task.error)}",
                     title="[X] Sub-Agent Error",
                     border_style="red"
                 ))
@@ -351,7 +356,7 @@ def _check_subagent_results(tui, agent):
                 tui.console.print(Panel(
                     f"[bold yellow][!] Sub-Agent Timeout[/bold yellow]\n\n"
                     f"[cyan]Task:[/cyan] {task.task_id}\n"
-                    f"[cyan]Agent:[/cyan] {task.agent_type}",
+                    f"[cyan]Agent:[/cyan] {escape_markup(task.agent_type)}",
                     title="[!] Timeout",
                     border_style="yellow"
                 ))
@@ -408,7 +413,7 @@ def _resume_paused_workflow(tui, agent, paused_wf, subagent_result: str):
             tui.console.print()
             tui.console.print(Panel(
                 f"[bold green][OK] Workflow completed[/bold green]\n\n"
-                f"[bold]Final Output:[/bold]\n{output_preview}{'...' if has_more else ''}",
+                f"[bold]Final Output:[/bold]\n{escape_markup(output_preview)}{'...' if has_more else ''}",
                 title="[OK] Workflow Complete",
                 border_style="green"
             ))
@@ -1487,7 +1492,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                     combined_results = "\n\n---\n\n".join(r[:1000] for r in found_results)
                     
                     def simple_stream_callback(text):
-                        tui.console.print(text, end="", markup=True, style=f"bold {tui.primary}")
+                        tui.console.print(text, end="", markup=False, emoji=False, style=f"bold {tui.primary}")
 
                     if user_lang == "de":
                         instruction_prompt = (
@@ -1908,7 +1913,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                     combined_results = "\n\n---\n\n".join(r[:1000] for r in immediate_results)
                     
                     def simple_stream_callback(text):
-                        tui.console.print(text, end="", markup=True, style=f"bold {tui.primary}")
+                        tui.console.print(text, end="", markup=False, emoji=False, style=f"bold {tui.primary}")
 
                     if user_lang == "de":
                         instruction_prompt = (
@@ -2266,7 +2271,7 @@ Usage:  [{usage_bar}] {status['usage_percent']:.0%}
 Messages: {status['messages']}
 
 **Tracked State:**
-• Intent: {status['intent_goal'] or 'Not set'}
+• Intent: {escape_markup(status['intent_goal']) or 'Not set'}
 • Files touched: {status['files_touched']}
 • Errors logged: {status['errors']}
 • Archives available: {status['archives_available']}
@@ -2297,10 +2302,10 @@ Messages: {status['messages']}
                                 updated = s["updated_at"][:10] if s["updated_at"] else "?"
                                 table.add_row(
                                     s["id"][:12],
-                                    s["name"][:30],
+                                    escape_markup(s["name"][:30]),
                                     str(s["message_count"]),
                                     updated,
-                                    s["summary"][:40] if s.get("summary") else "-"
+                                    escape_markup(s["summary"][:40]) if s.get("summary") else "-"
                                 )
                             
                             tui.console.print(table)
@@ -2322,7 +2327,7 @@ Messages: {status['messages']}
                                 updated = s["updated_at"][:10] if s["updated_at"] else "?"
                                 table.add_row(
                                     s["id"][:12],
-                                    s["name"][:30],
+                                    escape_markup(s["name"][:30]),
                                     str(s["message_count"]),
                                     updated
                                 )
@@ -2334,7 +2339,7 @@ Messages: {status['messages']}
                             tui.panel(f"""
 **Current Session:**
 ID: {current_session.id}
-Name: {current_session.name}
+Name: {escape_markup(current_session.name)}
 Messages: {len(current_session.messages)}
 Created: {current_session.created_at}
 """, title="📋 Current Session", style="info")
@@ -2639,7 +2644,7 @@ def _process_agent_message(agent, user_input: str, tui, session):
             if len(buf) >= len(target):
                 if buf[:len(target)].lower() == target:
                      # Match! Print "Resposta" part as DIM
-                     tui.console.print(buf[:len(target)], end="", markup=True, style="dim")
+                     tui.console.print(buf[:len(target)], end="", markup=False, emoji=False, style="dim")
                      # Process rest normally
                      remaining_text = buf[len(target):]
                      start_filter["done"] = True
@@ -2655,7 +2660,10 @@ def _process_agent_message(agent, user_input: str, tui, session):
                 remaining_text = buf
                 start_filter["done"] = True
         
-        # Parse <think> tags for styling
+        # Parse <think> tags for styling. Every chunk prints as TEXT (markup and emoji codes
+        # off): a reply is somebody's text, "arr[i]" and "[x]" are part of it, a split or a
+        # foreign "[/link]" raised MarkupError out of the stream, and a "[link=...]" became a
+        # link whose address the reader did not see.
         current_text = remaining_text
         while current_text:
             if not think_state["active"]:
@@ -2664,32 +2672,32 @@ def _process_agent_message(agent, user_input: str, tui, session):
                 if idx != -1:
                     # Found start tag - print prior part normally
                     if idx > 0:
-                        tui.console.print(current_text[:idx], end="", markup=True, style=f"bold {tui.primary}")
+                        tui.console.print(current_text[:idx], end="", markup=False, emoji=False, style=f"bold {tui.primary}")
                     
                     # Switch to thinking mode (print tag HIDDEN)
-                    # tui.console.print("<think>", end="", markup=True, style="dim")
+                    # tui.console.print("<think>", end="", markup=False, emoji=False, style="dim")
                     think_state["active"] = True
                     current_text = current_text[idx+7:] # +7 len of <think>
                 else:
                     # No tag, print all normally
-                    tui.console.print(current_text, end="", markup=True, style=f"bold {tui.primary}")
+                    tui.console.print(current_text, end="", markup=False, emoji=False, style=f"bold {tui.primary}")
                     current_text = ""
             else:
                 # Thinking mode: search for end of thinking
                 idx = current_text.find("</think>")
                 if idx != -1:
                     # Found end tag - print prior part dim
-                    tui.console.print(current_text[:idx], end="", markup=True, style="dim")
+                    tui.console.print(current_text[:idx], end="", markup=False, emoji=False, style="dim")
                     
                     # Print end tag also HIDDEN
-                    # tui.console.print("</think>", end="", markup=True, style="dim")
+                    # tui.console.print("</think>", end="", markup=False, emoji=False, style="dim")
                     
                     # Switch back to normal mode
                     think_state["active"] = False
                     current_text = current_text[idx+8:] # +8 len of </think>
                 else:
                     # No end tag, print all dim
-                    tui.console.print(current_text, end="", markup=True, style="dim")
+                    tui.console.print(current_text, end="", markup=False, emoji=False, style="dim")
                     current_text = ""
     
     try:
@@ -2730,7 +2738,7 @@ def _process_agent_message(agent, user_input: str, tui, session):
             # If it's an async ack, we ALWAYS print it even if there was content
             if is_async_ack:
                 tui.newline()
-                tui.console.print(str(result_text), markup=True, style=f"bold {tui.primary}")
+                tui.console.print(str(result_text), markup=False, emoji=False, style=f"bold {tui.primary}")
                 # Ensure it's in the response parts for session saving
                 response_parts.append(str(result_text))
             elif (not response_parts) or (not has_real_content):
@@ -2739,7 +2747,7 @@ def _process_agent_message(agent, user_input: str, tui, session):
                 # This fallback was causing double printing (Blue) if response_parts logic failed.
                 pass 
                 # response_parts = [str(result_text)]
-                # tui.console.print(str(result_text), markup=True, style=f"bold {tui.primary}")
+                # tui.console.print(str(result_text), markup=False, emoji=False, style=f"bold {tui.primary}")
         tui.newline()
         
         # Save response to session (USE CLEAN TEXT!)
@@ -3112,4 +3120,5 @@ def _run_classic(message: str, verbose: bool, session_id: str = None):
             pass
 
 def output_stream(text):
-    UI.console.print(text, end="", markup=True, style="bold cyan")
+    # A reply chunk is text, never markup (see the stream callback of _process_agent_message).
+    UI.console.print(text, end="", markup=False, emoji=False, style="bold cyan")

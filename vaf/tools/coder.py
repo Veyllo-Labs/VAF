@@ -35,7 +35,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 from rich.align import Align
 
 from vaf.core.progress import StatePublisher, resolve_ui_session_id, set_run_progress
-from vaf.core.terminal_text import TerminalConsole
+from vaf.core.terminal_text import TerminalConsole, escape_markup
 from vaf.cli.tui import AnimatedHeader
 
 from vaf.cli.ui import UI
@@ -1321,7 +1321,9 @@ class CoderTUI:
                     )
 
                     # Show auto-scroll indicator in title if content is scrolled
-                    title_text = f"📝 Editing: {self.active_code_preview['filename']}"
+                    # A Panel title is parsed by Text.from_markup, outside the console, so a
+                    # file name such as "[id].tsx" is escaped here or loses its brackets.
+                    title_text = f"📝 Editing: {escape_markup(self.active_code_preview['filename'])}"
                     if len(lines) > MAX_VISIBLE_LINES:
                         # Add scroll indicator to show we're auto-scrolling
                         title_text += f" [dim](showing last {MAX_VISIBLE_LINES} lines)[/dim]"
@@ -1378,7 +1380,7 @@ class CoderTUI:
                 icon = icons.get(info["status"], "•")
                 size_str = f"{info['size']:,}B" if info["size"] else "-"
                 # Add space after icon for compact spacing
-                files_table.add_row(f"{icon} ", fname[:24], size_str, info["status"])
+                files_table.add_row(f"{icon} ", escape_markup(fname[:24]), size_str, info["status"])
             
             if not self.files:
                 files_table.add_row("", "[dim]Waiting for files...[/dim]", "", "")

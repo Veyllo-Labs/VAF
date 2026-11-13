@@ -11,8 +11,8 @@ that kept answering retry-after 41: one SDK call sent 6 requests and waited
 194 s against a 60 s budget, and VAF's own capped wait (30 s) sent 11 s early.
 
 All answers are fake (the network is httpx's HTTPTransport.handle_request
-replaced, below every client the product builds) and the clock is fake: no
-request leaves the machine and no test sleeps.
+replaced, below every client the product builds) and the clock is fake, and only
+the test's own thread moves it: no request leaves the machine and no test sleeps.
 """
 import ast
 import logging
@@ -27,6 +27,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
+from fake_clock import FakeClock
 import vaf.core.rate_limit_gate as rl
 from vaf.core.rate_limit_gate import RateLimitGate, RateLimitHeld, rate_limit_gate, send_gated
 
@@ -38,21 +39,6 @@ OPEN = {"x-ratelimit-limit-requests": "180", "x-ratelimit-remaining-requests": "
         "x-ratelimit-reset-requests": "41s"}
 
 
-class FakeClock:
-    def __init__(self):
-        self.t = 0.0
-        self.sleeps = []
-        self._lock = threading.Lock()
-
-    def monotonic(self):
-        return self.t
-
-    def sleep(self, s):
-        with self._lock:
-            self.sleeps.append(float(s))
-            self.t += float(s)
-
-
 @pytest.fixture(autouse=True)
 def clock(monkeypatch):
     # Before AND after: the STT tests elsewhere share key literals, and a gate left
@@ -60,8 +46,10 @@ def clock(monkeypatch):
     rl.reset_gates()
     c = FakeClock()
     monkeypatch.setattr(rl, "_monotonic", c.monotonic)
-    monkeypatch.setattr(rl, "_sleep", c.sleep)
-    monkeypatch.setattr(time, "sleep", c.sleep)
+    # Both patches reach every thread in the process; a sleep from any thread but the
+    # test's own must not move this test's clock (see tests/fake_clock.py).
+    monkeypatch.setattr(rl, "_sleep", c.sleep_in_test_thread)
+    monkeypatch.setattr(time, "sleep", c.sleep_in_test_thread)
     yield c
     rl.reset_gates()
 
@@ -112,6 +100,19 @@ def _gate(clock):
     return RateLimitGate("Veyllo", clock=clock.monotonic, sleep=clock.sleep)
 
 
+def _sleep_on_another_thread(seconds):
+    """What a background loop left alive by an earlier test does: it reaches the patched
+    sleeps, from a thread of its own."""
+    def loop_turn():
+        time.sleep(seconds)
+        rl._sleep(seconds)
+
+    th = threading.Thread(target=loop_turn)
+    th.start()
+    th.join(5)
+    assert not th.is_alive()
+
+
 def _completion(text="ok"):
     return {"id": "x", "object": "chat.completion", "created": 0, "model": "veyllo-chat",
             "choices": [{"index": 0, "finish_reason": "stop",
@@ -150,6 +151,18 @@ def _chat(provider, stream=False):
 def _veyllo(key="vk-test-key"):
     from vaf.core.api_backend import OpenAIProvider
     return OpenAIProvider("veyllo", key, base_url="https://api.example.test/v1")
+
+
+# ── The fake clock belongs to the test's own thread ───────────────────────────
+
+def test_a_sleep_on_another_thread_leaves_the_fake_clock_alone(clock):
+    _sleep_on_another_thread(0.01)
+    assert clock.t == 0.0 and clock.sleeps == []
+    # The test's own thread still sleeps fake: recorded, the clock moved, no real wait.
+    started = time.monotonic()
+    time.sleep(5.0)
+    assert clock.sleeps == [5.0] and clock.t == 5.0
+    assert time.monotonic() - started < 2.0
 
 
 # ── AC1: every contract header is read, and the 429 wait is not capped ────────
@@ -312,10 +325,19 @@ def test_gate_registry_shared_per_key_and_veyllo_only(config):
 
 # ── AC5: the SDK lane sends nothing while remaining is 0 ──────────────────────
 
+@pytest.mark.parametrize("foreign", [False, True], ids=["alone", "foreign_sleep"])
 @pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
-def test_sdk_lane_holds_after_remaining_zero(config, network, clock, stream):
+def test_sdk_lane_holds_after_remaining_zero(config, network, clock, stream, foreign):
     provider = _veyllo()
-    network["answer"] = lambda req, n: _ok(CLOSED if n == 1 else OPEN, stream)(req, n)
+
+    def answer(req, n):
+        if foreign and n == 1:
+            # Another thread sleeps while the first request is on the wire; the gate's
+            # window and the logged times must not move with it.
+            _sleep_on_another_thread(0.05)
+        return _ok(CLOSED if n == 1 else OPEN, stream)(req, n)
+
+    network["answer"] = answer
     assert _chat(provider, stream) == "ok"
     assert _chat(provider, stream) == "ok"
     assert [t for t, _ in network["log"]] == [0.0, 41.0]

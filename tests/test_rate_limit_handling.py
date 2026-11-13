@@ -16,8 +16,12 @@ headers whose reset values are DURATION strings ("120ms", "0s", "6m0s"), a 429
 may carry a Retry-After header in seconds, and the docs say to treat the named
 wait as a minimum plus jitter, bounding total time spent retrying.
 """
+import threading
+import time
+
 import pytest
 
+from fake_clock import FakeClock
 from vaf.core.api_backend import (
     BaseAIProvider,
     OpenAIProvider,
@@ -85,8 +89,11 @@ def test_a_429_and_the_incident_text_are_rate_limits_a_500_is_not():
 # ── The two budgets in _with_retry ────────────────────────────────────────────
 
 def _provider(monkeypatch, sleeps):
+    """The waits land in `sleeps`, from the test's own thread only: the patched
+    time.sleep reaches every thread in the process, and another thread's wait in
+    that list would be read as one of _with_retry's (see tests/fake_clock.py)."""
     p = OpenAIProvider("openai", "k")
-    monkeypatch.setattr("time.sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr("time.sleep", FakeClock(sleeps).sleep_in_test_thread)
     return p
 
 
@@ -100,6 +107,11 @@ def test_a_rate_limit_asking_for_milliseconds_is_survived(monkeypatch):
 
     def flaky():
         calls["n"] += 1
+        if calls["n"] == 1:
+            # Another thread sleeps while the lane retries; its wait is not the lane's.
+            th = threading.Thread(target=time.sleep, args=(0.05,))
+            th.start()
+            th.join(5)
         if calls["n"] <= 2:
             raise _Err(INCIDENT_BODY, status=429)
         return "ok"

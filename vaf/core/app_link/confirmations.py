@@ -142,6 +142,12 @@ GATE_OLD_APP = ("it needs your user's confirmation in the Veyllo App, and the Ve
 GATE_NO_DEVICE = ("it needs your user's confirmation in the Veyllo App, and no Veyllo App of "
                   "theirs can receive it.")
 GATE_STOPPED = "the turn was stopped before your user confirmed it."
+GATE_HELD = ("your user declined or did not confirm a call in the Veyllo App earlier in this "
+             "turn, so VAF asks nothing more in it; they can ask for it again in their next "
+             "message.")
+#: How a card's end holds the rest of its turn: after a No, an expiry or a Stop no further
+#: card of the same turn is shown, so one turn holds a worker for one wait at most.
+_HOLDS_THE_TURN = ("declined", "expired", "stopped")
 NOT_STARTED = "'{tool}' did NOT run: it was stopped before it started."
 _INSTRUCTION = ("Answer the app's agent with the outcome in a few sentences. Do not run it "
                 "again.")
@@ -729,8 +735,19 @@ def _run_action(agent: Any, entry: Pending) -> str:
         args = None
     if not isinstance(args, dict) or call_digest(entry.tool, args) != entry.digest:
         return f"'{entry.tool}' did NOT run: its stored call could not be read back."
+    # The funnel's own flag says whether the tool started: a call refused after the tap (the
+    # tool's question changed since the card, a policy or allowlist refusal) must not be
+    # reported as run.
+    outcome_of = getattr(agent, "_execute_tool_outcome", None)
     with confirmed_call_scope(entry.tool, entry.digest, entry.question):
-        result = agent.execute_tool(entry.tool, dict(args))
+        if callable(outcome_of):
+            outcome = outcome_of(entry.tool, dict(args))
+            result, ran = outcome.result, bool(outcome.dispatched)
+        else:
+            result, ran = agent.execute_tool(entry.tool, dict(args)), True
+    if not ran:
+        return (f"Your user CONFIRMED '{entry.tool}' in the Veyllo App, but it did NOT run. "
+                f"VAF's answer:\n{str(result or '').strip()}")
     return (f"Your user CONFIRMED '{entry.tool}' in the Veyllo App, and it ran once just now. "
             f"Its result:\n{confirmed_result_text(entry.tool, result)}")
 
@@ -867,7 +884,8 @@ def ask_on_device(scope: Any, username: str, tool_name: str, tool: Any, args: An
     else ``("cancel", <the sentence the model reads>)``. No card and no wait when none can be
     shown: no turn bound (`turn_device_scope`), no standing device of the account, an app
     without ``CAP_TOOL`` or without cards, a call with an argument outside the tool's schema or
-    whose text is over ``WHAT_MAX``. Never raises."""
+    whose text is over ``WHAT_MAX``, and a turn one of whose cards already ended with a No, an
+    expiry or a Stop (``GATE_HELD``: one turn waits once at most). Never raises."""
     name = str(tool_name)
     try:
         bound = _TURN_DEVICE.get() or {}
@@ -875,6 +893,9 @@ def ask_on_device(scope: Any, username: str, tool_name: str, tool: Any, args: An
         reply_id = str(bound.get("reply_id") or "")
         if not scope or not reply_id or str(bound.get("scope") or "") != scope:
             return "cancel", _gate_text(name, GATE_NO_DEVICE)
+        if bound.get("held"):
+            # A card of this turn was declined, ran out or was stopped: the turn asks no more.
+            return "cancel", _gate_text(name, GATE_HELD)
         row = _target_device(scope, str(bound.get("device_id") or ""))
         if row is None:
             return "cancel", _gate_text(name, GATE_NO_DEVICE)
@@ -921,6 +942,8 @@ def ask_on_device(scope: Any, username: str, tool_name: str, tool: Any, args: An
         _room_changed(scope)
     if result == "allow_once":
         return "allow_once", ""
+    if result in _HOLDS_THE_TURN:
+        bound["held"] = result
     return "cancel", _gate_text(name, _GATE_ENDS.get(result, GATE_STOPPED))
 
 

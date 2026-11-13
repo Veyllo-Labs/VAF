@@ -2254,7 +2254,7 @@ def test_waiting_card_note(room_home):
         lines = room.transcript(SCOPE_A, "alice")
         notes = [l for l in lines if l.get("code") == "card_waiting"]
         assert len(notes) == 1 and notes[0]["kind"] == "note" and notes[0]["peer"] == ""
-        assert notes[0]["text"] == room.WAKE_NOTES["card_waiting"]
+        assert notes[0]["text"] == room.CARD_NOTES["card_waiting"]
         assert notes[0]["ts"] == now and notes[0]["id"] == f"card:{card.id}"
         # Another account's room shows nothing of it.
         assert not [l for l in room.transcript(SCOPE_B, "bob") if l.get("code") == "card_waiting"]

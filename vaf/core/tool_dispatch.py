@@ -101,14 +101,16 @@ def is_holder_device_session(source: str | None, session_id: str | None) -> bool
     instead of being refused (``tool_contract.evaluate_tool_policy``, section 1h).
 
     The same two signals as ``is_channel_session``, and they must not disagree: a source that
-    names another channel, or a holder-device source on another channel's session id, is no
-    holder-device call. Without a source, the session id's prefix decides."""
+    names another channel, or a holder-device source on any session id without the channel's
+    own prefix, is no holder-device call. Without a source, the session id's prefix decides."""
     normalized = str(source or "").strip().lower()
     sid = session_id if isinstance(session_id, str) else ""
-    on_chat_id = bool(sid) and sid.startswith(CHANNEL_SESSION_PREFIXES)
     on_holder_id = bool(sid) and sid.startswith(HOLDER_DEVICE_SESSION_PREFIXES)
     if normalized:
-        return normalized in HOLDER_DEVICE_CHANNELS and (on_holder_id or not on_chat_id)
+        # A session id that is given must be the channel's own: every lane that queues a
+        # holder-device turn runs it in a session with the channel's prefix, so any other id
+        # (a web chat, a room, another channel) is a call that only claims the source.
+        return normalized in HOLDER_DEVICE_CHANNELS and (on_holder_id or not sid)
     return on_holder_id
 
 
@@ -1635,7 +1637,10 @@ class ToolCaller:
         # handed as `_call_subject`: a server resolved from stored names that needs no
         # question of its own may still change before run.
         subject: str | None = None
-        if verdict.decision != "allow" and tool is not None:
+        # A call opened only on the condition of a confirmation (`ask_each_call`) is put to the
+        # person even after an authorizer's allow(): the application may narrow what runs, it
+        # cannot take the condition of the opening away.
+        if (verdict.decision != "allow" or decision.ask_each_call) and tool is not None:
             # The tool's own say about THIS call (BaseTool.ask_reason), e.g. a first contact.
             own_reason = self._tool_ask_reason(tool, args)
             asked = own_reason
@@ -1653,7 +1658,8 @@ class ToolCaller:
                                 else OWN_QUESTION_FOR_MODEL)
                 forced_ask = True
         fresh = fresh or forced_ask
-        needs_gate = (decision.requires_confirmation or forced_ask) and verdict.decision != "allow"
+        needs_gate = ((decision.requires_confirmation or forced_ask)
+                      and (verdict.decision != "allow" or decision.ask_each_call))
         # Whether THIS call was confirmed - by a person at the gate, or by the application's
         # allow(). Handed to a tool that declared it wants to know (accepts_call_confirmation).
         confirmed = verdict.decision == "allow"

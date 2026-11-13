@@ -250,6 +250,7 @@ def test_tool_caller_keeps_the_arguments_embedding_md_documents():
         "allowed_tools": inspect.Parameter.KEYWORD_ONLY,
         "channel_lift": inspect.Parameter.KEYWORD_ONLY,
         "request_origin": inspect.Parameter.KEYWORD_ONLY,
+        "holder_present": inspect.Parameter.KEYWORD_ONLY,
         "on_event": inspect.Parameter.KEYWORD_ONLY,
     }
     for name, kind in documented.items():
@@ -261,6 +262,7 @@ def test_tool_caller_keeps_the_arguments_embedding_md_documents():
     assert params["interactive"].default is False
     assert params["channel_lift"].default is True
     assert params["request_origin"].default is None
+    assert params["holder_present"].default is False
 
 
 def test_base_tool_declares_how_it_answers_another_agents_request():

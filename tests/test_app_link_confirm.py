@@ -1099,8 +1099,9 @@ def test_invisible_characters_are_shown_and_counted(agent_world):
     assert "environment: Water\u27e8U+202E\u27e9gnp.exe" in what
     # CRLF and a lone CR are line breaks on the card (display only); nothing else is hidden.
     assert "task: ok\u27e8U+200B\u27e9 (continued below)" in what
-    assert "  next\u27e8U+2028\u27e9line\tend\n  last" in what
-    for char in ("\u202e", "\u200b", "\r", "\u2028"):
+    # A tab is a mark too (shown_text.blanks_counted): its width is the renderer's to choose.
+    assert "  next\u27e8U+2028\u27e9line\u27e8U+0009\u27e9end\n  last" in what
+    for char in ("\u202e", "\u200b", "\r", "\u2028", "\t"):
         assert char not in what
     # An empty first line cannot hide a value: the top block says so.
     assert "deploy_to: (starts with an empty line) (continued below)" in what
@@ -1177,7 +1178,7 @@ def test_a_mark_cannot_be_forged_on_a_card():
     # An already escaped character is no base: a mark after it is escaped too.
     what = agent_origin.confirm_what("coding_agent", _Coder(), {
         "task": "a \u0338b\t\u0301", "environment": "\u200b\u0301"}, "en")
-    assert "task: a " + M("0338") + "b\t" + M("0301") in what
+    assert "task: a " + M("0338") + "b" + M("0009") + M("0301") in what
     assert "environment: " + M("200B") + M("0301") in what
 
 

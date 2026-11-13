@@ -324,10 +324,12 @@ def _pending_turns(sids: Tuple[str, str]) -> List[Tuple[str, Any]]:
 #: The note a wake leaves in the room, by its kind (task_queue.WAKE_KINDS), in English for the
 #: terminal; the web words it by ``code``.
 WAKE_NOTES = {"timer": "A timer fired.", "process": "A background command finished.",
-              "draft": "A draft was sent.", "confirm": CONFIRMED_NOTE,
-              # Not a wake: a card of a person's turn waits for the tap in the Veyllo App
-              # (confirmations.waiting_gate_cards). Shown while it waits, gone after.
-              "card_waiting": "Waiting for your confirmation in the Veyllo App."}
+              "draft": "A draft was sent.", "confirm": CONFIRMED_NOTE}
+#: The notes that are no wake, by their code: a card of a person's own turn that waits for the
+#: tap in the Veyllo App (confirmations.waiting_gate_cards), shown while it waits and gone
+#: after. Kept apart from WAKE_NOTES, whose keys name the kinds a stored line or a queued turn
+#: is read as.
+CARD_NOTES = {"card_waiting": "Waiting for your confirmation in the Veyllo App."}
 
 
 def _waiting_cards(scope: str) -> List[Tuple[str, float]]:
@@ -461,7 +463,8 @@ def _build(scope: str, username: str, sids: Tuple[str, str],
     stored_turns = set()
 
     def _note(lid: str, wake: str, ts: float) -> Dict[str, Any]:
-        return _line(lid, "", "", WAKE_NOTES[wake], ts, kind="note", code=wake)
+        text = WAKE_NOTES.get(wake) or CARD_NOTES[wake]
+        return _line(lid, "", "", text, ts, kind="note", code=wake)
 
     def _line(lid: str, peer: str, to: str, text: str, ts: float, kind: str = "say",
               **extra) -> Dict[str, Any]:

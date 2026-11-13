@@ -531,13 +531,15 @@ def _shown_lines(value: Any, whole: bool = False) -> List[List[str]]:
     escape one token). A Windows or old Mac line break counts as a line break (display only);
     every other invisible character is escaped, and so is a combining mark with no base
     before it (`shown_text.shown_tokens`; a value shown ``whole`` keeps no presentation
-    selector). Text `shown_text` already showed (`Shown`) is laid out as it is: escaping it
-    again would escape its own marks."""
-    from vaf.core.shown_text import Shown, shown_tokens, tokens_of
+    selector). A tab shows as its mark and a long run of spaces as its count
+    (`shown_text.blanks_counted`), so no wall of blanks can push the rest of a line, a second
+    command, out of sight. Text `shown_text` already showed (`Shown`) is laid out as it is:
+    escaping it again would escape its own marks."""
+    from vaf.core.shown_text import Shown, blanks_counted, shown_tokens, tokens_of
     if isinstance(value, Shown):
         return [tokens_of(value)]
     text = _arg_text(value)
-    return [shown_tokens(raw, whole=whole)
+    return [blanks_counted(shown_tokens(raw, whole=whole))
             for raw in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
 
 

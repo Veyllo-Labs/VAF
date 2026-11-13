@@ -246,10 +246,11 @@ def test_third_party_channels_gain_nothing(monkeypatch, lift, channel, by):
 def test_holder_device_session_reads_the_registry():
     from vaf.core.tool_dispatch import is_holder_device_session as holder
     assert holder("veyllo_app", "veyllo_app_k3y") and holder("veyllo_app", None)
-    assert holder("", "veyllo_app_k3y_agent") and holder("veyllo_app", "web-chat-1")
+    assert holder("", "veyllo_app_k3y_agent") and holder("veyllo_app", "")
     for source, sid in (("telegram", "telegram_1"), ("telegram", "veyllo_app_k3y"),
                         ("veyllo_app", "whatsapp_a_1"), ("", "discord_1"), ("web", None),
-                        ("", None)):
+                        ("", None), ("veyllo_app", "green123456"),
+                        ("veyllo_app", "room.ab12.peer"), ("veyllo_app", "web-chat-1")):
         assert not holder(source, sid), (source, sid)
 
 
@@ -1114,3 +1115,187 @@ def test_no_doc_says_v1_has_no_confirmation():
                  ROOT / "docs" / "integrations" / "VEYLLO_APP.md"):
         text = " ".join(path.read_text(encoding="utf-8").split())
         assert not any(s in text for s in stale), path
+
+
+# ── round 1 ───────────────────────────────────────────────────────────────────────────────
+
+def test_an_authorizer_allow_does_not_skip_the_card():
+    """The card is the condition of the opening: an application's allow() narrows nothing
+    away from it. A call the policy does not open only behind a card keeps the old rule.
+    MUTATION: let `needs_gate` follow an allow() again, or skip the tool's question on that
+    path - red."""
+    from vaf.core.tool_dispatch import ToolCaller
+    asked = []
+
+    class Shell(vaf.BaseTool):
+        name = "host_shell_stub"
+        description = "A stand-in kept off chats."
+        permission_level = "dangerous"
+        channel_restrictions = ("channel",)
+        parameters = {"type": "object", "properties": {"command": {"type": "string"}}}
+
+        def ask_reason(self, args, *, user_scope_id=None, username=None):
+            return "First connection to h1."
+
+        def run(self, **kwargs):
+            return "ran"
+
+    class Plain(Shell):
+        name = "plain_stub"
+        channel_restrictions = ()
+
+        def ask_reason(self, args, *, user_scope_id=None, username=None):
+            return ""
+
+    tools = {"host_shell_stub": Shell(), "plain_stub": Plain()}
+
+    def decide(tool_name, reason, question=None, args=None):
+        asked.append((tool_name, question, args))
+        return "cancel"
+
+    caller = ToolCaller(tools, source="veyllo_app", session_id="veyllo_app_ab12",
+                        holder_present=True, interactive=True, decide=decide,
+                        authorize=lambda request: request.allow())
+    out = caller.execute("host_shell_stub", {"command": "uname -a"})
+    assert out.startswith("[CANCELLED]")
+    # The tool's own question is computed on that path too, and reaches the card.
+    assert asked == [("host_shell_stub", "First connection to h1.", {"command": "uname -a"})]
+    # Not opened behind a card: the application's allow() still answers on its own.
+    asked.clear()
+    plain = ToolCaller(tools, source="web", session_id="web-1", interactive=True,
+                       decide=decide, authorize=lambda request: request.allow())
+    assert plain.execute("plain_stub", {"command": "x"}) == "ran" and asked == []
+
+
+def test_a_refused_confirmed_call_is_not_reported_as_run(world, monkeypatch):
+    """The confirm wake turn's report follows the funnel's own flag: a call refused after the
+    tap (here the tool's question changed since the card) reads "did NOT run".
+    MUTATION: report every confirmed call as run - red."""
+    agent = world.make()
+    _allow(monkeypatch, "ssh")
+    _tool, seen = _ssh(agent, monkeypatch, question="")
+    _ask_turn(agent)
+    agent._parked_this_round, agent._held_this_round = [], []
+    agent.execute_tool("ssh", dict(SSH_ARGS))
+    parked = agent._parked_this_round[0]
+    monkeypatch.setattr(agent.tools["ssh"], "ask_reason",
+                        lambda args, **k: "First connection to deploy@203.0.113.7: ...")
+    _client, row = _device()
+    now = time.time()
+    entry = confirmations.Pending(
+        id=str(uuid.uuid4()), ask_id=A1, device_id=row["device_id"], scope=SCOPE_A,
+        username="alice", chat_sid=_ask_chat(), kind="tool", what=parked.what,
+        headline=parked.what.split("\n", 1)[0], exp=now + 600, created=now, tool="ssh",
+        args_json=parked.args_json, digest=parked.digest, question=parked.question,
+        state="approved")
+    with bridge._lock:
+        confirmations._cards[entry.id] = entry
+    task = SimpleNamespace(metadata={"app_confirm_id": entry.id, "app_device_id": row["device_id"],
+                                     "user_scope_id": SCOPE_A, "app_ask_id": A1})
+    report = confirmations.run_confirmed(agent, task)
+    assert seen == [] and "did NOT run" in report and "ran once" not in report
+    assert "changed after the card was shown" in report
+
+
+@pytest.mark.parametrize("value,shown", [
+    ("echo one" + " " * 300 + "; echo two", "echo one\u27e8300 spaces\u27e9; echo two"),
+    ("echo one" + "\t" * 3 + "; echo two",
+     "echo one" + "\u27e8U+0009\u27e9" * 3 + "; echo two"),
+])
+def test_a_wall_of_blanks_cannot_hide_a_second_command(value, shown):
+    """A run of spaces or tabs cannot push the rest of a command out of sight on a card: a
+    tab shows as its mark, more than eight spaces as their count; the call itself keeps every
+    character. Normal indentation stays as it is. MUTATION: drop `blanks_counted` from the
+    card's lines, or count runs above the limit as they are - red."""
+    from vaf.tools.host_bash import HostBashTool
+    what = agent_origin.confirm_what("host_bash", HostBashTool(), {"command": value}, "en")
+    assert f"command: {shown}" in what.split("\n"), what
+    assert "\t" not in what and " " * 9 not in what
+    lines = agent_origin.confirm_what("python_exec", None, {
+        "code": "if True:\n        print(1)"}, "en").split("\n")
+    assert "          print(1)" in lines
+    assert agent_origin.call_digest("host_bash", {"command": value}) != agent_origin.call_digest(
+        "host_bash", {"command": shown})
+
+
+def test_a_declined_card_holds_the_rest_of_its_turn(world, monkeypatch):
+    """After a No (or an expiry, or a Stop) the same turn shows no further card and waits no
+    second time; the next turn asks again. MUTATION: drop the hold - red."""
+    agent = world.make()
+    runs = _host_bash(agent, monkeypatch)
+    client, row = _device()
+    reply = str(uuid.uuid4())
+    box = {}
+
+    def _turn():
+        _bind_person(agent, device_id=row["device_id"], reply_id=reply)
+        try:
+            box["first"] = agent._execute_tool_outcome("host_bash", {"command": "uname -a"})
+            started = time.time()
+            box["second"] = agent._execute_tool_outcome("host_bash", {"command": "uname -r"})
+            box["second_took"] = time.time() - started
+        finally:
+            confirmations.unbind_turn_device()
+
+    thread = threading.Thread(target=_turn, daemon=True)
+    thread.start()
+    card = _card_out()
+    client.send({"t": "confirm_answer", "id": card.id, "ok": False})
+    thread.join(WAIT)
+    if thread.is_alive():
+        for c in list(confirmations._cards.values()):
+            c.exp = 0
+        thread.join(WAIT)
+        raise AssertionError("the turn waited for a second card")
+    assert box["second"].result == _sentence("host_bash", confirmations.GATE_HELD)
+    assert box["second_took"] < 2 and len(confirmations._cards) == 1 and runs == []
+    client.pump()
+    assert len(client.of("confirm")) == 1
+    # The next turn asks again.
+    nxt = _Call(agent, "host_bash", {"command": "uname -r"}, device_id=row["device_id"],
+                reply_id=str(uuid.uuid4()))
+    again = _card_out(2)
+    client.send({"t": "confirm_answer", "id": again.id, "ok": True})
+    assert nxt.result().dispatched and len(runs) == 1
+
+
+def test_a_turn_bound_to_another_accounts_device_sends_nothing(world, monkeypatch):
+    """The turn's device must be the turn account's own: a turn bound to another account's
+    device id shows no card anywhere. MUTATION: drop the account comparison in
+    `_target_device` - red."""
+    agent = world.make()
+    runs = _host_bash(agent, monkeypatch)
+    mine, _row = _device()
+    stranger, srow = _device(SCOPE_B, username="bob", peer="10.0.0.7", connection="c3")
+    outcome = _call_now(agent, "host_bash", {"command": "uname -a"},
+                        device_id=srow["device_id"], reply_id=str(uuid.uuid4()))
+    assert outcome.result == _sentence("host_bash", confirmations.GATE_NO_DEVICE)
+    mine.pump()
+    stranger.pump()
+    assert not mine.of("confirm") and not stranger.of("confirm")
+    assert not confirmations._cards and runs == []
+
+
+def test_the_runner_unbinds_the_turn_device_before_the_turn_ends(e2e, monkeypatch):
+    """Every iteration of the worker leaves the Veyllo App turn's device unbound, before
+    `end_turn` and whatever it may raise. MUTATION: drop the unbind, or put it after
+    `end_turn` - red."""
+    import vaf.core.headless_runner as hr
+    agent = _runner_agent(monkeypatch)
+    agent.api_backend.chat_completion = _Model("Hallo.")
+    seen = []
+    real_end = hr.end_turn
+    monkeypatch.setattr(hr, "end_turn", lambda a: seen.append(
+        confirmations._TURN_DEVICE.get()) or real_end(a))
+    client, _row = _device()
+    mid = str(uuid.uuid4())
+    client.send({"t": "msg", "id": mid, "chat": e2e.chat, "text": "Hallo"})
+    task = [t for t in _queued() if t.metadata.get("app_message_id") == mid][0]
+    TaskQueue().drop_queued_tasks_for_session(e2e.chat, where=lambda t: t is task)
+    bound = []
+    real_bind = confirmations.bind_turn_device
+    monkeypatch.setattr(confirmations, "bind_turn_device",
+                        lambda meta: bound.append(dict(meta)) or real_bind(meta))
+    run_runner(monkeypatch, agent, [task])
+    assert bound and bound[0].get("app_reply_id"), "the turn was never bound"
+    assert seen and all(value is None for value in seen), seen

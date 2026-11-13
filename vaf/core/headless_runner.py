@@ -4577,13 +4577,15 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
         finally:
             # Every exit path of every lane, the early `continue`s included, ends with the
             # markers neutral: what runs between two turns (the drain's result handling,
-            # the room sweep) is no turn and gates and routes as none.
-            end_turn(agent)
+            # the room sweep) is no turn and gates and routes as none. The Veyllo App turn's
+            # device goes first and on its own: an error in `end_turn` must not leave it bound
+            # for whatever this worker runs next.
             try:
                 from vaf.core.app_link import confirmations as _app_confirmations
                 _app_confirmations.unbind_turn_device()
             except Exception:
                 pass
+            end_turn(agent)
 
 def _handle_command(cmd_str, agent, session_mgr):
     """Handle system commands from Web UI."""

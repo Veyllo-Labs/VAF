@@ -386,4 +386,7 @@ def test_a_waiting_card_note_is_worded_in_every_catalogue():
         text = main.get("appRoomCardWaiting")
         assert isinstance(text, str) and "Veyllo App" in text and "\u2014" not in text, lang
     from vaf.core.app_link import room
-    assert "card_waiting" in room.WAKE_NOTES
+    from vaf.core.task_queue import WAKE_KINDS
+    assert "card_waiting" in room.CARD_NOTES
+    # No wake kind: a stored line or a queued turn of that kind would read as this note.
+    assert "card_waiting" not in room.WAKE_NOTES and "card_waiting" not in WAKE_KINDS

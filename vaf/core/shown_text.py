@@ -172,6 +172,39 @@ def shown_tokens(line: str, also: str = "", *, whole: bool = False) -> List[str]
     return shown
 
 
+#: The longest run of spaces a card shows as it is. A longer one is shown as its count
+#: (`blanks_counted`): a card is read as one block of text, and a wall of spaces pushes what
+#: follows it out of sight to the right, or past wrapped lines that look empty.
+SPACE_RUN_MAX = 8
+
+
+def blanks_counted(tokens: List[str]) -> List[str]:
+    """Shown tokens (`shown_tokens`) as a CARD lays them out: a tab as its mark ``⟨U+0009⟩``
+    (a tab is as wide as the renderer decides), and a run of more than ``SPACE_RUN_MAX``
+    spaces of any kind (category Zs) as one token that names how many there are,
+    ``⟨300 spaces⟩``. Display only: the call that runs keeps every character. Every bracket
+    on a card stays VAF's own, because a value's own brackets are escaped by `shown_char`.
+    Not for the draft rows and the terminal, which show a tab as it is."""
+    out: List[str] = []
+    run: List[str] = []
+
+    def _flush() -> None:
+        if len(run) > SPACE_RUN_MAX:
+            out.append(f"{OPEN}{len(run)} spaces{CLOSE}")
+        else:
+            out.extend(run)
+        run.clear()
+
+    for token in tokens:
+        if len(token) == 1 and unicodedata.category(token) == "Zs":
+            run.append(token)
+            continue
+        _flush()
+        out.append(escaped(token) if token == "\t" else token)
+    _flush()
+    return out
+
+
 def tokens_of(text: str) -> List[str]:
     """`Shown` text back as its tokens: every mark one token, every other character one."""
     out: List[str] = []

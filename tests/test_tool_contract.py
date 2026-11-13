@@ -331,8 +331,11 @@ def test_without_holder_nothing_changes(monkeypatch, name):
 @pytest.mark.parametrize("restrictions", [("veyllo_app",), ("channel", "veyllo_app")])
 @pytest.mark.parametrize("level", ["write", "dangerous"])
 def test_a_tool_naming_the_app_stays_blocked(monkeypatch, restrictions, level):
-    """Its author excluded the app on purpose. MUTATION: drop the named-channel check from
-    1h - red."""
+    """Its author excluded the app on purpose: in the lane that asks a person it is refused
+    there whatever the admin's lift, the caller's own lift and whoever started the turn say,
+    never weaker than the generic sentinel. Another channel and the unattended lanes keep
+    today's answer. MUTATION: drop the named-channel check from 1h, or let the exclusion
+    fall through to the lift - red."""
     class AppExcluded(BaseTool):
         name = "app_excluded"
         description = "Excluded from the app."
@@ -346,12 +349,23 @@ def test_a_tool_naming_the_app_stays_blocked(monkeypatch, restrictions, level):
     for lift in (True, False):
         _lift(monkeypatch, lift)
         for channel_lift in (True, False):
-            today = _policy("app_excluded", tool, channel_lift=channel_lift)
-            held = _policy("app_excluded", tool, channel_lift=channel_lift,
-                           holder_present=True, holder_device=True)
-            assert held == today and not held.ask_each_call, (restrictions, level, lift)
-    _lift(monkeypatch, False)
-    assert _policy("app_excluded", tool, holder_present=True, holder_device=True).blocked
+            for holder in ({}, {"holder_device": True},
+                           {"holder_device": True, "holder_present": True}):
+                decision = _policy("app_excluded", tool, channel_lift=channel_lift, **holder)
+                assert decision.blocked and not decision.ask_each_call, (lift, holder)
+                assert "Veyllo App" in decision.reason
+            # Unattended: the coder and workflow steps decide by today's rules.
+            today = evaluate_tool_policy("app_excluded", tool, "veyllo_app",
+                                         is_channel_session=True, gated_lane=False,
+                                         channel_lift=channel_lift)
+            assert _policy("app_excluded", tool, gated=False, channel_lift=channel_lift,
+                           holder_present=True, holder_device=True) == today
+        # On Telegram, a tool that names only the Veyllo App is no business of 1h.
+        on_telegram = evaluate_tool_policy("app_excluded", tool, "telegram",
+                                           is_channel_session=True, is_admin=True)
+        assert not on_telegram.ask_each_call
+        if lift and level == "write" and restrictions == ("veyllo_app",):
+            assert not on_telegram.blocked
 
 
 @pytest.mark.parametrize("name", sorted(_CHANNEL_TOOLS))

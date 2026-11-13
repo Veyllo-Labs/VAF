@@ -23,8 +23,10 @@ Contract fields (all defined on BaseTool):
 
 Evaluation order inside evaluate_tool_policy():
   1. admin_only check  (hard block — role-based)
-     then, on the account holder's own device (a holder-device channel, the holder present):
-     a tool kept off chats by the "channel" sentinel is put to the holder on every call;
+     then, on the account holder's own device (a holder-device channel): a tool that names
+     that channel in its restrictions is refused in the lane that asks a person, and, with
+     the holder present, a tool kept off chats by the "channel" sentinel is put to the holder
+     on every call;
      then, on a messaging channel: a dangerous tool restricted on channels is refused in
      the lane that would ask a person; after that `channel_tools_unrestricted` may lift
      2-4 for the rest
@@ -360,8 +362,9 @@ def evaluate_tool_policy(
     Evaluation order
     ----------------
     1. admin_only check      — role-based hard block (new)
-    1h. a tool kept off chats by the "channel" sentinel, on the holder's own device with the
-        holder present, in the gated lane: confirmation on every call (ask_each_call)
+    1h. on the holder's own device, in the gated lane: a tool that names that channel is
+        refused, whatever the lift; a tool kept off chats by the "channel" sentinel, with the
+        holder present, needs a confirmation on every call (ask_each_call)
     1a. a tool that needs a person, on a channel, in the gated lane: hard block
     1b. channel_tools_unrestricted: admin opt-in that lifts 2-4 on channels
         (not for a caller with channel_lift=False)
@@ -396,11 +399,27 @@ def evaluate_tool_policy(
     # refused there but put to the holder, on every call, whatever the admin's lift says:
     # the card is the condition of the opening. Only while the holder is present (their own
     # turn, or their app agent's request; never a wake turn) and only in the lane that asks a
-    # person. A tool that names the source, or any holder-device channel, in its restrictions
-    # stays refused below: its author excluded that channel on purpose (the names are matched
-    # from the registry too, so a call whose source is only in its session id is no way round).
+    # person.
+    #
+    # A tool that names the source, or any holder-device channel, in its restrictions is
+    # refused there in the gated lane, before the admin's lift and whoever started the turn:
+    # its author excluded that channel on purpose, and an explicit exclusion must never be
+    # weaker than the generic sentinel, which opens only behind a card. The names are matched
+    # from the registry too, so a call whose source is only in its session id is no way round.
     from vaf.core.channels import HOLDER_DEVICE_CHANNELS
     named = set(contract.channel_restrictions) & ({source} | set(HOLDER_DEVICE_CHANNELS))
+    if (is_channel_session and gated_lane and named
+            and (holder_device or source in HOLDER_DEVICE_CHANNELS)):
+        log.info("POLICY_BLOCK tool=%s reason=holder_device_excluded source=%s",
+                 tool_name, source or "channel")
+        return ToolPolicyDecision(
+            blocked=True,
+            requires_confirmation=False,
+            reason=(
+                f"Tool '{tool_name}' is not available in the Veyllo App: its author "
+                "excluded it there."
+            ),
+        )
     if (is_channel_session and holder_device and holder_present and gated_lane
             and "channel" in contract.channel_restrictions and not named):
         log.info("POLICY_CONFIRM tool=%s reason=holder_device source=%s",

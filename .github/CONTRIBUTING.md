@@ -38,7 +38,9 @@ For anything beyond a small fix, please open an issue first to discuss the chang
     - **Continuous Integration (CI):** All pushes are automatically tested via GitHub Actions (Windows/Linux/Mac).
     - Run the same checks locally to save time:
       ```bash
-      # Run the test suite (matches CI logic)
+      # Run the test suite (matches CI logic). On Linux and macOS it runs in a home folder
+      # of its own, and it never connects to VAF's own ports, so a VAF running on this
+      # machine is not touched.
       pytest tests/
       
       # Verify CLI startup (Smoke Test)

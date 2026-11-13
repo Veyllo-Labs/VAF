@@ -36,10 +36,13 @@ access log (`Platform.data_dir()/logs`) never read it at all. When embedding,
 set `VAF_LOG_DIR` explicitly if you want the files somewhere other than
 `Platform.data_dir()/logs`.
 
-The pytest suite pins `VAF_LOG_DIR` to a temporary directory for the entire
-run (`tests/conftest.py`), so test-generated logs and security events never
-land in the real log directory; tests that need their own directory still
-monkeypatch `VAF_LOG_DIR` per-test.
+The pytest suite pins `VAF_LOG_DIR` to a temporary directory from the moment
+`tests/conftest.py` is imported, before collection, so test-generated logs and
+security events never land in the real log directory, not even the ones a
+module writes while it is imported; tests that need their own directory still
+monkeypatch `VAF_LOG_DIR` per-test. On a Linux or macOS developer machine a run
+in the account's own home also gets a temporary HOME of its own, so `~/.vaf/logs`
+is never the real one either (tests/README.md).
 
 Dated files are named `<family>_YYYY-MM-DD.<ext>` and garbage-collected after
 `gc_max_age_hours` (default 48h; `gc_enabled`, `gc_interval_hours` in config).

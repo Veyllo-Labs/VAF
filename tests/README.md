@@ -73,10 +73,22 @@ rows into data you will later measure. On Linux and macOS: `HOME=$(mktemp -d) py
 On Windows the equivalent is `USERPROFILE`, because `Path.home()` goes through
 `os.path.expanduser`, which consults USERPROFILE and then HOMEDRIVE+HOMEPATH there and
 never looks at HOME at all - so the Linux spelling of this rule silently does nothing on
-Windows. The remaining store axes (the XDG names, and `%APPDATA%`/`%LOCALAPPDATA%`) are
-redirected by `conftest.py` for the whole session; `tests/test_suite_writes_nowhere_real.py`
-holds which mechanism governs which directory on which platform, and fails if one of them
-is governed by something nothing redirects.
+Windows. The remaining store axes (`VAF_LOG_DIR`, the XDG names, and
+`%APPDATA%`/`%LOCALAPPDATA%`) are redirected by `conftest.py` when it is imported, before
+collection; `tests/test_suite_writes_nowhere_real.py` holds which mechanism governs which
+directory on which platform, and fails if one of them is governed by something nothing
+redirects.
+
+`conftest.py` is the second layer under that rule, not a replacement for it. On a Linux or
+macOS developer machine, a run whose HOME is the account's own home (read from the passwd
+entry) is moved at import into a `vaf-test-*` home of its own, which is removed at exit; a
+scratch home you pass is left as it is, and so is the throwaway home of a GitHub runner.
+Windows gets no such redirect (there is no passwd entry to compare with), so USERPROFILE
+stays your job there. Every run, CI included, also refuses a connect to any of VAF's own
+service ports on this machine (the list in `scripts/hostile_env.py`, 8001 and 8080 among
+them) before it is dialed, so a VAF running on the same machine never receives a test's
+request. No test needs one of those ports reachable, and there is no switch to allow it.
+The header of a run says which home it used and who refuses the ports.
 
 The failure modes below have actually happened in this repository. They are worth knowing
 before writing the test, not after. (The list is deliberately not numbered in this sentence:

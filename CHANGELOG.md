@@ -45,6 +45,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **Running the test suite next to a running VAF leaves the app and your home folder alone.**
+  The suite used to send test events into a VAF open on the same machine and to write into
+  your home folder (the sub-agent queue, the learning store, `Documents/VAF_Projects`). It
+  now refuses connections to VAF's own service ports and, on Linux and macOS outside CI,
+  runs in a home folder of its own.
 - **A mention in an agent room reaches the member when punctuation follows the name.**
   `@Bob.`, `@Bob?` and `@Bob's idea` now address Bob, a name that ends in a symbol is reached
   before a full stop (`@C++.` reaches "C++"), names are matched in any case form (`@STRASSE`

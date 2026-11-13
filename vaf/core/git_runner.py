@@ -20,6 +20,44 @@ same config can move the work tree anywhere (`core.worktree`), and a `.git` file
 runner passes `--git-dir=<top>/.git --work-tree=<top>`, `<top>` being the nearest folder at or
 above the caller's that holds a `.git`, and refuses a `.git` that leads anywhere else.
 
+The folder is also pinned in time. A process of the account (a sandbox environment with the
+project mounted) can rename its project folder aside and put a link into another account's
+repository in its place between a caller's check and git's start; measured, `git_log` then
+printed the other account's history in 21 of 300 calls. On Linux the runner opens the
+caller's folder, walks up to the top through `..` handles and opens `.git` without following
+a link (`vaf.core.path_jail.open_folder`), then starts every git process of the call (the
+driver reads, the gitlinks read, the command) in `/proc/self/fd/<top>` with
+`--git-dir=/proc/self/fd/<git>`, `--work-tree=/proc/self/fd/<top>` and `GIT_COMMON_DIR` on the
+git handle, handing both handles over (`pass_fds`). git therefore runs in the top folder, and
+relative paths and pathspecs are read from there. `expect_folder` is the real path a caller
+judged: a folder that is not it when it is opened is refused. Measured with a racer looping
+rename-and-link, 1000 calls each: log 0 leaks of 930 answered (6 of 992 before), status 3 of
+570 (10 of 629), diff 10 of 868 (20 of 865).
+
+NAMED BOUNDARY, what the handles do not reach, with those numbers:
+- git's own text walk of the work tree. git keeps `--git-dir=/proc/self/fd/<n>` as given, but
+  it turns the work tree into a path (a realpath of the magic link) and every command that
+  sets up a work tree (status, diff, add, checkout, revert, reset) then changes into that
+  path: the status and diff leaks above are in the microseconds between the two (strace). A
+  log, rev-parse, cat-file or config call stays fully pinned. `git init` writes the new
+  repository by path too. Closing that needs the folder bound by handle in a mount namespace
+  of git's own, one primitive for this runner, the jailed shell's `--bind <path>` and a
+  sandbox environment's mount; not built here.
+- entries written inside `.git` after `_foreign_link` scanned it: an `objects/info/alternates`
+  written in that moment let `cat-file` read the other repository's object; a `commondir`
+  file makes `rev-parse HEAD` print the other repository's commit id (its objects stay out
+  of reach, because `GIT_COMMON_DIR` is pinned).
+- macOS (folder handles and a kernel path, no `/proc`): the folders are opened and compared
+  the same way, and before each git process the path must still name the opened folder
+  (`samestat`), else the call is refused; git itself then runs by path, so the moment between
+  that comparison and git's start remains. Not measured on a Mac; `/dev/fd` as a working
+  folder is not used, because it is unmeasured.
+- Windows (no folder handles): before each git process the caller's folder must still resolve
+  to `expect_folder`, when one is given; git runs by path.
+- `rev-parse --git-dir` and `--git-common-dir` print the handle spelling (`/proc/self/fd/<n>`,
+  meaningless outside that git process); `--absolute-git-dir` and `--show-toplevel` print
+  the real paths.
+
 NAMED BOUNDARY, the driver race: the names of the filter and merge drivers are read in one git
 call and switched off in the next, and a process writing `.git/config` at the same time can add
 a driver in between. Measured: a writer flipping the config in a loop, 189 of 400 reads saw
@@ -40,6 +78,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 from pathlib import Path
@@ -90,18 +129,20 @@ def run_git(args: List[str], cwd: str = ".", timeout: float = 60) -> tuple[int, 
         return -1, "", str(e)
 
 
-def resolve_commit(rev: str, cwd: str = ".", *, linked_worktree: bool = False) -> Optional[str]:
+def resolve_commit(rev: str, cwd: str = ".", *, linked_worktree: bool = False,
+                   expect_folder=None) -> Optional[str]:
     """The full id of the commit `rev` names, or None when it names none.
 
     A revision a caller hands in goes through here before it reaches any other git command
     line. git reads an argument that starts with a dash as an option wherever it stands, and
     `git diff --output=<file>` writes over any file the process may write; the id that comes
-    back is hex only, so it is safe in every position."""
+    back is hex only, so it is safe in every position. ``expect_folder`` as for
+    `run_project_git`."""
     rev = (rev or "").strip()
     if not rev or rev.startswith("-"):
         return None
     proc = run_project_git(["rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}"], cwd=cwd,
-                           linked_worktree=linked_worktree)
+                           linked_worktree=linked_worktree, expect_folder=expect_folder)
     out = (proc.stdout or "").strip()
     return out if proc.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", out) else None
 
@@ -300,24 +341,186 @@ def project_repo_problem(cwd: str, *, linked_worktree: bool = False) -> str:
     return f"{Path(top).as_posix()}: {problem}" if problem else ""
 
 
-def _layout_options(sub: str, cwd: str, linked_worktree: bool) -> List[str]:
-    """The options that pin git to the project's own repository. Raises ProjectGitRefused."""
+class _NoFolder(Exception):
+    """The caller's folder is missing or is not a folder."""
+
+
+def _proc_fd_usable(fd: int) -> bool:
+    """True when ``/proc/self/fd/<fd>`` names the open handle ``fd`` (Linux). Then a child
+    process reaches the very folder the handle holds through that name: its working folder,
+    `--git-dir` and `--work-tree` go through the handle, never through the folder's path."""
+    try:
+        return os.path.samestat(os.stat(f"/proc/self/fd/{fd}"), os.fstat(fd))
+    except OSError:
+        return False
+
+
+class _Pin:
+    """The repository one `run_project_git` call works on, the same for every git process the
+    call starts (the driver reads, the gitlinks read and the command).
+
+    Three branches, decided per call:
+    - by handle (Linux): the top folder and its `.git` are open handles, and every process
+      runs in `/proc/self/fd/<top>` with `--git-dir=/proc/self/fd/<git>`,
+      `--work-tree=/proc/self/fd/<top>` and `GIT_COMMON_DIR` on the git handle (`pass_fds`);
+    - by path with handles (macOS: handles and a kernel path, no `/proc`): the folders are
+      opened and compared the same way, and before each process the path must still name
+      the opened folder (`samestat`), else the call is refused; git then runs by path;
+    - by path (Windows, no folder handles): before each process the caller's folder must
+      still resolve to ``expect_folder`` when one is given; git runs by path.
+    In every branch git runs IN the top folder, so relative paths and pathspecs are read
+    from the top."""
+
+    def __init__(self, cwd: str) -> None:
+        self.cwd = cwd
+        self.top = ""                   # the top folder's real path
+        self.top_fd = -1
+        self.git_fd = -1                # -1 for init and for a linked worktree
+        self.by_handle = False
+        self.expected: Optional[str] = None   # the Windows branch's comparison
+        self._fds: List[int] = []
+
+    def own(self, fd: int) -> int:
+        self._fds.append(fd)
+        return fd
+
+    def release(self, fd: int) -> None:
+        if fd in self._fds:
+            self._fds.remove(fd)
+            os.close(fd)
+
+    def close(self) -> None:
+        while self._fds:
+            os.close(self._fds.pop())
+
+    def work_tree(self) -> str:
+        return f"/proc/self/fd/{self.top_fd}" if self.by_handle else Path(self.top).as_posix()
+
+    def git_dir(self) -> str:
+        if self.by_handle:
+            return f"/proc/self/fd/{self.git_fd}"
+        return (Path(self.top) / ".git").as_posix()
+
+    def layout(self, sub: str, linked_worktree: bool) -> List[str]:
+        if sub == "init":
+            return []
+        if linked_worktree:
+            return [f"--work-tree={self.work_tree()}"]
+        return [f"--git-dir={self.git_dir()}", f"--work-tree={self.work_tree()}"]
+
+    def check(self) -> None:
+        """Before each process of the call: the folder is still the one that was judged."""
+        if self.by_handle:
+            return
+        if self.top_fd >= 0:
+            try:
+                same = os.path.samestat(os.stat(self.top), os.fstat(self.top_fd))
+                if same and self.git_fd >= 0:
+                    same = os.path.samestat(os.lstat(os.path.join(self.top, ".git")),
+                                            os.fstat(self.git_fd))
+            except OSError:
+                same = False
+            if not same:
+                raise ProjectGitRefused(f"{Path(self.top).as_posix()} is no longer the folder "
+                                        "that was opened (a link on the way)")
+        elif self.expected is not None:
+            real = os.path.normcase(os.path.realpath(self.cwd))
+            if real != self.expected:
+                raise ProjectGitRefused(f"its folder is {real}, not {self.expected} "
+                                        "(a link on the way)")
+
+    def run(self, argv: Sequence[str], env: Dict[str, str], timeout: float):
+        self.check()
+        if self.by_handle and self.git_fd >= 0:
+            # After project_git_env removed every layout variable: the common directory
+            # (refs, objects, config) is the pinned `.git` too, not a `commondir` file's.
+            env = {**env, "GIT_COMMON_DIR": self.git_dir()}
+        kwargs = _popen_kwargs(self.work_tree(), env, timeout)
+        if self.by_handle:
+            kwargs["pass_fds"] = tuple(fd for fd in (self.top_fd, self.git_fd) if fd >= 0)
+        return subprocess.run(list(argv), **kwargs)
+
+
+def _has_git_entry(dir_fd: int) -> bool:
+    try:
+        os.stat(".git", dir_fd=dir_fd, follow_symlinks=False)
+        return True
+    except OSError:
+        return False
+
+
+def _pin_by_handle(pin: _Pin, sub: str, linked_worktree: bool, expect_folder) -> None:
+    """Open the caller's folder, walk up through `..` handles to the top, open its `.git`."""
+    from vaf.core.path_jail import PathEscape, open_folder
+    try:
+        fd, real = open_folder(pin.cwd, expect_folder=expect_folder)
+    except PathEscape as e:
+        raise ProjectGitRefused(f"{pin.cwd}: {e}") from None
+    except OSError:
+        raise _NoFolder() from None
+    pin.own(fd)
+    if sub != "init":
+        while not _has_git_entry(fd):
+            parent = os.path.dirname(real)
+            if parent == real:
+                raise ProjectGitRefused(f"Not a git repository: {pin.cwd}")
+            try:
+                up, up_real = open_folder("..", dir_fd=fd, expect_folder=parent)
+            except PathEscape as e:
+                raise ProjectGitRefused(f"{pin.cwd}: {e}") from None
+            except OSError:
+                raise ProjectGitRefused(f"Not a git repository: {pin.cwd}") from None
+            pin.release(fd)
+            fd, real = pin.own(up), up_real
+    pin.top_fd, pin.top = fd, real
+    top = Path(real).as_posix()
     if sub == "init":
         # init creates the repository: there is none to pin yet, but a `.git` link would make
         # it create the repository at the link's target.
-        if os.path.islink(os.path.join(cwd, ".git")):
-            raise ProjectGitRefused(f"{Path(os.path.abspath(cwd)).as_posix()}/.git is a link")
-        return []
-    problem = project_repo_problem(cwd, linked_worktree=linked_worktree)
+        try:
+            if stat.S_ISLNK(os.stat(".git", dir_fd=fd, follow_symlinks=False).st_mode):
+                raise ProjectGitRefused(f"{top}/.git is a link")
+        except FileNotFoundError:
+            pass
+    elif not linked_worktree:
+        try:
+            gfd, git_real = open_folder(".git", dir_fd=fd, follow=False,
+                                        expect_folder=os.path.join(real, ".git"))
+        except (PathEscape, OSError):
+            raise ProjectGitRefused(f"{top}/.git is not a folder: a linked worktree or a link "
+                                    f"to another repository") from None
+        pin.git_fd = pin.own(gfd)
+    pin.by_handle = _proc_fd_usable(pin.top_fd) and (pin.git_fd < 0
+                                                     or _proc_fd_usable(pin.git_fd))
+    if pin.git_fd >= 0:
+        problem = _foreign_link(pin.git_dir() if pin.by_handle else os.path.join(real, ".git"))
+        if problem:
+            raise ProjectGitRefused(f"{top}: {problem}")
+
+
+def _pin_by_path(pin: _Pin, sub: str, linked_worktree: bool) -> None:
+    """The Windows branch, and the layout `project_git_command` shows: decided on the path."""
+    if sub == "init":
+        if os.path.islink(os.path.join(pin.cwd, ".git")):
+            raise ProjectGitRefused(f"{Path(os.path.abspath(pin.cwd)).as_posix()}/.git is a link")
+        pin.top = os.path.realpath(pin.cwd)
+        return
+    problem = project_repo_problem(pin.cwd, linked_worktree=linked_worktree)
     if problem:
         raise ProjectGitRefused(problem)
-    top = Path(_top(cwd) or cwd)
-    if linked_worktree:
-        return [f"--work-tree={top.as_posix()}"]
-    return [f"--git-dir={(top / '.git').as_posix()}", f"--work-tree={top.as_posix()}"]
+    pin.top = _top(pin.cwd) or os.path.realpath(pin.cwd)
 
 
-def _untrusted_drivers(cwd: str, env: Dict[str, str], timeout: float,
+def _split_args(args: Sequence[str]) -> Tuple[List[str], List[str], List[str]]:
+    """(the caller's leading `-c` pairs, [subcommand] or [], the rest)."""
+    args = list(args)
+    i = 0
+    while i + 1 < len(args) and args[i] == "-c":
+        i += 2
+    return args[:i], args[i:i + 1], args[i + 1:]
+
+
+def _untrusted_drivers(pin: _Pin, env: Dict[str, str], timeout: float,
                        layout: Sequence[str] = ()) -> Dict[str, List[str]]:
     """Driver names per section ("filter", "diff", "merge") whose effective config is not
     entirely the person's global or system config (see _TRUSTED_READS).
@@ -328,13 +531,13 @@ def _untrusted_drivers(cwd: str, env: Dict[str, str], timeout: float,
     trusted = set()
     for scope in _TRUSTED_READS:
         try:
-            trusted |= _driver_pairs([scope], cwd, env, timeout, layout)
+            trusted |= _driver_pairs([scope], pin, env, timeout, layout)
         except RuntimeError:
             # An unreadable trusted file (no HOME, a broken ~/.gitconfig) trusts nothing:
             # that only switches more drivers off. Only the effective read fails closed.
             pass
     found: Dict[str, List[str]] = {}
-    for key, value in sorted(_driver_pairs([], cwd, env, timeout, layout), key=str):
+    for key, value in sorted(_driver_pairs([], pin, env, timeout, layout), key=str):
         if (key, value) in trusted:
             continue
         section, _, rest = key.partition(".")
@@ -347,13 +550,13 @@ def _untrusted_drivers(cwd: str, env: Dict[str, str], timeout: float,
     return found
 
 
-def _driver_pairs(scope: Sequence[str], cwd: str, env: Dict[str, str], timeout: float,
+def _driver_pairs(scope: Sequence[str], pin: _Pin, env: Dict[str, str], timeout: float,
                   layout: Sequence[str]) -> set:
     """The (key, value) pairs one `git config --get-regexp` read returns; value None for a key
     written without one. Exit 1 is "no such key" (or no such file); anything else raises."""
     argv = [resolve_git(), *layout, "config", *scope, "--includes", "-z", "--get-regexp",
             _DRIVER_KEYS]
-    proc = subprocess.run(argv, **_popen_kwargs(cwd, env, timeout))
+    proc = pin.run(argv, env, timeout)
     if proc.returncode not in (0, 1):
         raise RuntimeError(f"cannot read the repository's drivers: "
                            f"{(proc.stderr or '').strip()[:200]}")
@@ -374,27 +577,15 @@ def _popen_kwargs(cwd: str, env: Dict[str, str], timeout: float) -> dict:
     return kwargs
 
 
-def project_git_command(args: Sequence[str], cwd: str, *, env: Optional[Dict[str, str]] = None,
-                        timeout: float = 60, linked_worktree: bool = False) -> List[str]:
-    """The full argv `run_project_git` starts for `args` in `cwd`.
-
-    Order: git, the repository it may work on (`--git-dir`, `--work-tree`), the caller's own
-    leading `-c` pairs (an identity for a commit), then the pinned settings, so a pinned value
-    always comes last and wins, then the subcommand with its added flags and the rest. Raises
-    ValueError (ProjectGitRefused among them) for a layout the runner will not follow or a
-    driver name that cannot be pinned on a command line, RuntimeError when the names cannot be
-    read."""
-    args = list(args)
-    env = project_git_env() if env is None else env
-    i = 0
-    while i + 1 < len(args) and args[i] == "-c":
-        i += 2
-    caller_config, sub, rest = args[:i], args[i:i + 1], args[i + 1:]
-    layout = _layout_options(sub[0] if sub else "", cwd, linked_worktree)
+def _command(args: Sequence[str], pin: _Pin, env: Dict[str, str], timeout: float,
+             linked_worktree: bool) -> List[str]:
+    """The argv for `args` on `pin`'s repository; every read on the way runs on `pin` too."""
+    caller_config, sub, rest = _split_args(args)
+    layout = pin.layout(sub[0] if sub else "", linked_worktree)
     pinned: List[str] = ["-c", f"core.hooksPath={empty_hooks_dir()}"]
     for key, value in PROJECT_GIT_CONFIG:
         pinned += ["-c", f"{key}={value}"]
-    for section, names in _untrusted_drivers(cwd, env, timeout, layout).items():
+    for section, names in _untrusted_drivers(pin, env, timeout, layout).items():
         for name in names:
             if _UNSAFE_DRIVER_NAME.search(name):
                 raise ValueError(f"the repository defines a {section} driver whose name cannot "
@@ -403,7 +594,7 @@ def project_git_command(args: Sequence[str], cwd: str, *, env: Optional[Dict[str
                 pinned += ["-c", f"{section}.{name}.{var}={value}"]
     added = list(_SUBCOMMAND_FLAGS.get(sub[0], ())) if sub else []
     if sub and sub[0] in ("add", "stash"):
-        links = _gitlinks(cwd, layout, pinned, env, timeout)
+        links = _gitlinks(pin, layout, pinned, env, timeout)
         if links and sub[0] == "stash":
             raise ProjectGitRefused(f"the project holds another repository at {links[0]}; "
                                     f"git stash would run git inside it")
@@ -412,14 +603,33 @@ def project_git_command(args: Sequence[str], cwd: str, *, env: Optional[Dict[str
     return [resolve_git(), *layout, *caller_config, *pinned, *sub, *added, *rest]
 
 
-def _gitlinks(cwd: str, layout: Sequence[str], pinned: Sequence[str], env: Dict[str, str],
+def project_git_command(args: Sequence[str], cwd: str, *, env: Optional[Dict[str, str]] = None,
+                        timeout: float = 60, linked_worktree: bool = False) -> List[str]:
+    """The full argv `run_project_git` starts for `args` in `cwd`, with the folders spelled
+    as paths.
+
+    Order: git, the repository it may work on (`--git-dir`, `--work-tree`), the caller's own
+    leading `-c` pairs (an identity for a commit), then the pinned settings, so a pinned value
+    always comes last and wins, then the subcommand with its added flags and the rest. Where
+    the runner holds the folders by handle (Linux), it starts this same argv with
+    `/proc/self/fd/<n>` in place of the two paths. Raises ValueError (ProjectGitRefused among
+    them) for a layout the runner will not follow or a driver name that cannot be pinned on a
+    command line, RuntimeError when the names cannot be read."""
+    env = project_git_env() if env is None else env
+    pin = _Pin(cwd)
+    _, sub, _ = _split_args(args)
+    _pin_by_path(pin, sub[0] if sub else "", linked_worktree)
+    return _command(args, pin, env, timeout, linked_worktree)
+
+
+def _gitlinks(pin: _Pin, layout: Sequence[str], pinned: Sequence[str], env: Dict[str, str],
               timeout: float) -> List[str]:
     """Repository-relative paths of the index's gitlinks (submodules and embedded
     repositories). `git add` over one, and `git stash create` always, start a child git in it
     that reads that repository's own config, filters included, whatever diff.ignoreSubmodules
     says (measured). Reading the index starts nothing."""
     argv = [resolve_git(), *layout, *pinned, "ls-files", "-s", "-z", "--full-name", "--", ":/"]
-    proc = subprocess.run(argv, **_popen_kwargs(cwd, env, timeout))
+    proc = pin.run(argv, env, timeout)
     if proc.returncode != 0:
         raise RuntimeError(f"cannot read the index: {(proc.stderr or '').strip()[:200]}")
     links = []
@@ -447,7 +657,8 @@ def _add_excluding(rest: List[str], links: Sequence[str]) -> List[str]:
 
 
 def run_project_git(args: Sequence[str], cwd: str, *, timeout: float = 60,
-                    linked_worktree: bool = False) -> subprocess.CompletedProcess:
+                    linked_worktree: bool = False,
+                    expect_folder=None) -> subprocess.CompletedProcess:
     """Run git in a folder whose `.git` someone else may have written, starting nothing but git.
 
     `args` is what follows `git`, optionally led by `-c key=value` pairs of the caller's own.
@@ -457,19 +668,41 @@ def run_project_git(args: Sequence[str], cwd: str, *, timeout: float = 60,
     repository whose `.git` is at or nearest above `cwd`, and on its folder as the work tree,
     whatever that config says; a `.git` that is a file or a link, or that leads into another
     repository, is refused unless `linked_worktree=True` (then only the work tree is pinned).
+
+    git runs IN that top folder: relative paths and pathspecs are read from the top, not from
+    `cwd`. The folder is held for the whole call (see `_Pin`): every git process of it works
+    on the folder that was opened at the start, whatever is renamed or linked in its place
+    meanwhile. `expect_folder` is the REAL path a caller judged for `cwd` (no links on the
+    way, compared as given and never resolved): a `cwd` that is any other folder when it is
+    opened is refused, so a folder swapped for a link between the caller's check and this
+    call is never worked on.
+
     Never raises: a missing git, a timeout or a refusal comes back as returncode -1 with the
     reason in stderr.
     """
+    from vaf.core import path_jail
     argv: List[str] = ["git", *args]
-    if not os.path.isdir(cwd):
-        # subprocess reports a missing cwd as FileNotFoundError, which reads as "no git".
-        return subprocess.CompletedProcess(argv, -1, "", f"Not a directory: {cwd}")
+    _, sub, _ = _split_args(args)
+    pin = _Pin(cwd)
     try:
         env = project_git_env()
-        argv = project_git_command(args, cwd, env=env, timeout=timeout,
-                                   linked_worktree=linked_worktree)
-        return subprocess.run(argv, **_popen_kwargs(cwd, env, timeout))
+        if path_jail._DIR_FD:
+            _pin_by_handle(pin, sub[0] if sub else "", linked_worktree, expect_folder)
+        else:
+            if expect_folder is not None:
+                pin.expected = os.path.normcase(os.path.abspath(os.fspath(expect_folder)))
+            if not os.path.isdir(cwd):
+                raise _NoFolder()
+            pin.check()
+            _pin_by_path(pin, sub[0] if sub else "", linked_worktree)
+        argv = _command(args, pin, env, timeout, linked_worktree)
+        return pin.run(argv, env, timeout)
+    except _NoFolder:
+        # subprocess reports a missing cwd as FileNotFoundError, which reads as "no git".
+        return subprocess.CompletedProcess(argv, -1, "", f"Not a directory: {cwd}")
     except FileNotFoundError:
         return subprocess.CompletedProcess(argv, -1, "", "Git is not installed.")
     except Exception as e:
         return subprocess.CompletedProcess(argv, -1, "", str(e))
+    finally:
+        pin.close()

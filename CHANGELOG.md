@@ -302,9 +302,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   link in a project's `.vaf` folder (one that pointed at your shell start file or at another
   account's file), and the session goal and task list tools no longer write into a folder the
   agent names. Background thinking runs no longer create a repository or project notes.
-  Not yet covered: the git tools check the folder before git starts, so a program of the
-  account that replaces its own project folder with a link at exactly that moment, from its
-  sandbox environment for example, can still point that one git call at another folder.
+  The git tools, project history and rollback and the coding agent now run git in the very
+  folder that was checked, so a program of the account that replaces its project folder with
+  a link no longer redirects git's history or commits; project notes no longer leave an empty
+  `.vaf` folder in another folder. Still open: for commands that read the files of the
+  project (status, diff, add, rollback) git looks the folder up again by name for a moment of
+  its own, and on macOS and Windows git still runs on the folder's name.
   Needs a restart of VAF.
 - **The agent's file tools stay out of VAF's own data and your shell start files.** Reading
   VAF's data and settings folders (messages, mail, contacts, key files, the MCP server list,

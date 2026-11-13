@@ -511,30 +511,54 @@ The six now declare `user_scope_id`/`user_role`, and `tool_work_folder` asks
   while the file is opened is not seen there. A hard link is not seen, as for every writer
   (a sandbox cannot make one to a file outside its mount).
 
-NAMED BOUNDARY: the git tools check the folder by its path, and git then runs on that path.
-`tool_work_folder` judges the resolved folder and hands it on as text; `run_project_git`
-starts git with that path as its working folder, `--git-dir` and `--work-tree`. A process
-that swaps the account's OWN project folder for a link into another account's project in
-the moment between the check and git's start steers that one git call there. Measured with
-a loop that renamed a non-admin's project folder away, put a link to another account's
-project in its place and swapped back: `git_log` printed the other account's commit in 21 of
-300 calls; `git_status` reads the same way, `git_add_commit` would commit there and
-`git_init` would create `.git` there. The precondition is a process of the account racing
-inside its own folder, which its sandbox environment is (it mounts the account's project or
-project root and can rename and link below the mount). The notes tools write nothing
-outside: measured, no escape in 960 and 795 calls made while `.vaf` or the project folder was
-being swapped, because their writes are pinned to the folder handle. Under the same race one
-thing does reach the other account's project: a new notes manager whose `.vaf` is missing
-creates that folder by path, so an empty `.vaf` folder can appear there (measured 6 of 1076
-calls of a fresh manager with `.vaf` deleted); nothing is ever written into it, because the
-write that follows is refused. Creating the folder relative to a checked folder handle is the
-same fix as pinning the git runner by handle. The class is shared by every lane that checks a
-project folder by path and then runs git or a shell on it: the coder's run folder
-(`_choose_base_dir`, its base-folder wrappers), `project_history`/`project_rollback`
-(`project_git._resolve_project`) and `code_audit`. The fix belongs in `run_project_git` for
-all of them at once: open the judged folder as a handle, compare the handle's kernel path
-with the judged one, and run git through that handle (`pass_fds`, `/proc/self/fd/N` as the
-working folder, `--git-dir` and `--work-tree`).
+**git and the notes work on the folder that was checked.** A process of the account can
+swap its OWN project folder for a link into another account's project in the moment between
+a check and the work on it; its sandbox environment is such a process (it mounts the
+account's project or project root and can rename and link below the mount). Measured before
+the fix with a loop that renamed a non-admin's project folder away, put a link to another
+account's project in its place and swapped back: `git_log` printed the other account's
+commit in 21 of 300 calls, and a new notes manager whose `.vaf` was missing left an empty
+`.vaf` in the other project in 6 of 1076 calls. Closed now:
+
+- every lane resolves the folder once, judges that text and passes it on as the folder it
+  judged: `tool_work_folder` (the four git tools, `update_codex`, `add_memory`; a folder
+  swapped between its first answer and the resolution resolves elsewhere and is judged
+  again), `project_git._resolve_project` (`project_history`, `project_rollback`, the
+  `code_audit` tool) and the coder's run folder (`_choose_base_dir`, and a content-only run's
+  temporary folder);
+- `run_project_git(expect_folder=)` opens that folder as a handle, compares the handle's
+  kernel path with the judged text, walks up to the repository's top through `..` handles
+  and opens `.git` without following a link. On Linux every git process of the call (the
+  driver reads, the gitlinks read, the command) then runs in `/proc/self/fd/<top>` with
+  `--git-dir=/proc/self/fd/<git>`, `--work-tree=/proc/self/fd/<top>` and `GIT_COMMON_DIR` on
+  that handle (`pass_fds`): one folder for the whole call, and a `.git` swapped for a link
+  after the check is not followed. Measured with a racer looping rename-and-link, 1000 calls
+  each: `git log` 0 leaks of 930 answered calls (6 of 992 before), `git status` 3 of 570 (10
+  of 629), `git diff` 10 of 868 (20 of 865);
+- `.vaf` (and a missing project folder) is made relative to the checked handle of the folder
+  above it (`mkdir` with `dir_fd`), so a swap at that moment leaves nothing in the other
+  folder (`vaf/core/persistence.py`).
+
+NAMED BOUNDARY, what remains, with the numbers above:
+- git's own text walk: git keeps the git directory as the handle, but it turns the work tree
+  into a path and changes into it for every command that reads the files (status, diff,
+  add, checkout, revert), which is where the status and diff leaks above happen; `git init`
+  writes the new repository by path too. The fix is a mount namespace that binds the judged
+  folder by handle, built once for the git runner, the jailed shell's `--bind <path>` and a
+  sandbox environment's mount; a follow-up, not built here.
+- an entry written inside `.git` after the runner scanned it: an `objects/info/alternates`
+  can let `cat-file` read the other repository's object for that call, a `commondir` file
+  makes `rev-parse HEAD` print the other repository's commit id (its objects stay out of
+  reach).
+- macOS (no `/proc`): the folders are opened and compared the same way and checked again by
+  `samestat` before each git process, but git runs by path; Windows (no folder handles):
+  the folder must still resolve to the judged text before each git process, and `.vaf` is
+  still made by path (an empty one can appear in a swapped-in folder; nothing is written
+  into it). Neither is measured on its own platform.
+- the code audit (`code_audit` tool, the coder's audit after each commit) gets the per-call
+  pin of its git calls only; its file reads and its state writes under `.git/vaf-audit` go by
+  path, and pinning its root once for all three is a follow-up. So do the jailed shell's
+  `--bind <path>` and an environment's mount.
 
 The chat's own store tools (`update_intent`, `update_working_memory`, `add_task`, and the
 coder's `request_clarification`) used to take a `base_dir` from the call as well: one account

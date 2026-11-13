@@ -560,13 +560,14 @@ def test_the_repository_and_work_tree_are_pinned_from_a_subfolder(repo):
 
 
 def test_a_subfolder_caller_still_works(repo):
-    """Paths stay relative to the caller's folder, the top is the repository's."""
+    """git runs in the repository's top folder, so a pathspec is read from the top: from a
+    subfolder git would turn the pinned git directory back into a path of its own."""
     sub = repo / "pkg"
     sub.mkdir()
     (sub / "m.py").write_text("x = 1\n", encoding="utf-8")
     top = gr.run_project_git(["rev-parse", "--show-toplevel"], cwd=str(sub)).stdout.strip()
     assert Path(top) == repo.resolve()
-    assert gr.run_project_git(["add", "m.py"], cwd=str(sub)).returncode == 0
+    assert gr.run_project_git(["add", "pkg/m.py"], cwd=str(sub)).returncode == 0
     staged = gr.run_project_git(["diff", "--cached", "--name-only"], cwd=str(sub)).stdout
     assert staged.split() == ["pkg/m.py"]
 
@@ -590,11 +591,14 @@ def test_core_worktree_does_not_move_git_out_of_the_project(repo, tmp_path):
 
 
 def test_the_git_directories_stay_inside_the_project(repo):
-    """With the pin, git's own answer for both directories is the project's .git."""
+    """With the pin, git's own answer for both directories is the project's .git. Where the
+    runner holds the folder by handle, the common directory is spelled as that handle
+    (`/proc/self/fd/<n>` of the git process), which names nothing in this process."""
     top = repo.resolve()
-    for flag in ("--absolute-git-dir", "--git-common-dir"):
-        out = gr.run_project_git(["rev-parse", flag], cwd=str(repo)).stdout.strip()
-        assert Path(out).resolve() == top / ".git", flag
+    out = gr.run_project_git(["rev-parse", "--absolute-git-dir"], cwd=str(repo)).stdout.strip()
+    assert Path(out).resolve() == top / ".git"
+    out = gr.run_project_git(["rev-parse", "--git-common-dir"], cwd=str(repo)).stdout.strip()
+    assert out.startswith("/proc/self/fd/") or Path(out).resolve() == top / ".git", out
 
 
 def _gitdir_file(repo, tmp_path):

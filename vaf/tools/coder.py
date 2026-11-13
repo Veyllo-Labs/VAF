@@ -308,8 +308,8 @@ def _detect_run_changes(base_dir: str, run_start_sha: str) -> List[str]:
     try:
         from vaf.core.git_runner import run_project_git
         base = run_start_sha or _EMPTY_TREE_SHA
-        tracked = run_project_git(["diff", "--name-only", "--diff-filter=ACMR", base], cwd=base_dir).stdout or ""
-        untracked = run_project_git(["ls-files", "--others", "--exclude-standard"], cwd=base_dir).stdout or ""
+        tracked = run_project_git(["diff", "--name-only", "--diff-filter=ACMR", base], cwd=base_dir, expect_folder=base_dir).stdout or ""
+        untracked = run_project_git(["ls-files", "--others", "--exclude-standard"], cwd=base_dir, expect_folder=base_dir).stdout or ""
         names = {ln.strip() for ln in (tracked.splitlines() + untracked.splitlines()) if ln.strip()}
         return sorted(names)
     except Exception:
@@ -511,17 +511,17 @@ def _final_commit(base_dir: str, message: str) -> str:
     from vaf.tools.project_git import commit_project_state
 
     for step in (["add", "-A"], ["status", "--porcelain"]):
-        proc = run_project_git(step, cwd=base_dir)
+        proc = run_project_git(step, cwd=base_dir, expect_folder=base_dir)
         if proc.returncode != 0:
             return f"Git commit skipped: {(proc.stderr or '').strip()[:120]}"
     if not (proc.stdout or "").strip():
         return "Git: nothing new to commit"
 
-    commit = commit_project_state(base_dir, message)
+    commit = commit_project_state(base_dir, message, expect_folder=base_dir)
     if commit.returncode != 0:
         return f"Git commit failed: {(commit.stderr or '').strip()[:120]}"
 
-    short = run_project_git(["rev-parse", "--short", "HEAD"], cwd=base_dir)
+    short = run_project_git(["rev-parse", "--short", "HEAD"], cwd=base_dir, expect_folder=base_dir)
     sha = (short.stdout or "").strip()
     return f"Git: committed final state ({sha})" if sha else "Git: committed final state"
 
@@ -726,10 +726,10 @@ def _build_file_diffs(
         def _is_infra(p: str) -> bool:
             # Hide the coder's own internals (.vaf/, dotfiles) - the user wants the deliverable diff.
             return (not p) or p.startswith(".") or "/." in p
-        names = (run_project_git(["diff", "--name-only", run_start_sha], cwd=base_dir).stdout or "")
+        names = (run_project_git(["diff", "--name-only", run_start_sha], cwd=base_dir, expect_folder=base_dir).stdout or "")
         rels: List[str] = [ln.strip() for ln in names.splitlines() if ln.strip() and not _is_infra(ln.strip())]
         # Include brand-new (untracked) files the agent just wrote.
-        untracked = (run_project_git(["ls-files", "--others", "--exclude-standard"], cwd=base_dir).stdout or "")
+        untracked = (run_project_git(["ls-files", "--others", "--exclude-standard"], cwd=base_dir, expect_folder=base_dir).stdout or "")
         for ln in untracked.splitlines():
             ln = ln.strip()
             if ln and not _is_infra(ln) and ln not in rels:
@@ -745,11 +745,11 @@ def _build_file_diffs(
                     rels.append(rel)
         for rel in rels[:max_files]:
             try:
-                r = run_project_git(["diff", "--no-color", run_start_sha, "--", rel], cwd=base_dir)
+                r = run_project_git(["diff", "--no-color", run_start_sha, "--", rel], cwd=base_dir, expect_folder=base_dir)
                 d = (r.stdout or "").strip()
                 if not d:
                     # Untracked/new file: show it fully added (all green) so the editor still shows it.
-                    r2 = run_project_git(["diff", "--no-color", "--no-index", "--", os.devnull, rel], cwd=base_dir)
+                    r2 = run_project_git(["diff", "--no-color", "--no-index", "--", os.devnull, rel], cwd=base_dir, expect_folder=base_dir)
                     d = (r2.stdout or "").strip()
                 if d:
                     diffs[os.path.basename(rel)] = d[:max_chars]
@@ -767,13 +767,13 @@ def _build_git_state(base_dir: str, max_commits: int = 5) -> Dict[str, Any]:
         return state
     try:
         from vaf.core.git_runner import run_project_git
-        branch = run_project_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=base_dir)
+        branch = run_project_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=base_dir, expect_folder=base_dir)
         state["branch"] = (branch.stdout or "").strip()
-        status = run_project_git(["status", "--porcelain"], cwd=base_dir)
+        status = run_project_git(["status", "--porcelain"], cwd=base_dir, expect_folder=base_dir)
         state["dirty"] = len([ln for ln in (status.stdout or "").splitlines() if ln.strip()])
         log = run_project_git(
             ["log", f"-n{max_commits}", "--date=relative", "--pretty=format:%h|%ad|%s"],
-            cwd=base_dir,
+            cwd=base_dir, expect_folder=base_dir,
         )
         for line in (log.stdout or "").splitlines():
             sha, when, msg = (line.split("|", 2) + ["", ""])[:3]
@@ -1771,8 +1771,9 @@ class TaskManager:
             self.initialize(base_dir)
             
     def initialize(self, base_dir: str, current_task: str = ""):
-        """Initialize persistence with the project directory."""
-        self.pm = PersistenceManager(base_dir)
+        """Initialize persistence with the project directory: the run's resolved folder,
+        which the notes folder is pinned to (``expect_folder``)."""
+        self.pm = PersistenceManager(base_dir, expect_folder=base_dir)
         project_name = os.path.basename(base_dir)
         cur = (current_task or "").strip()
         # Load existing state or create new
@@ -2704,7 +2705,7 @@ class GitInitTool(BaseTool):
         if os.path.lexists(os.path.join(base_dir, '.git')):
             return "✅ Git repository already initialized."
         from vaf.core.git_runner import run_project_git
-        proc = run_project_git(["init"], cwd=base_dir)
+        proc = run_project_git(["init"], cwd=base_dir, expect_folder=base_dir)
         if proc.returncode != 0:
             return f"❌ Error initializing Git: {(proc.stderr or '').strip()[:200]}"
         return "✅ Git repository initialized successfully."
@@ -2802,7 +2803,7 @@ class GitAddCommitTool(BaseTool):
             steps.append(["add", "."])
         steps.append(["commit", "-m", message])
         for step in steps:
-            proc = run_project_git(step, cwd=base_dir)
+            proc = run_project_git(step, cwd=base_dir, expect_folder=base_dir)
             if proc.returncode != 0:
                 return f"❌ Error committing: {((proc.stderr or '') + (proc.stdout or '')).strip()[:200]}"
         return f"✅ Committed changes: {message}"
@@ -2836,7 +2837,7 @@ class GitStatusTool(BaseTool):
         if not os.path.exists(os.path.join(base_dir, '.git')):
             return "❌ Git repository not initialized. Call git_init first."
         from vaf.core.git_runner import run_project_git
-        result = run_project_git(["status", "--short"], cwd=base_dir)
+        result = run_project_git(["status", "--short"], cwd=base_dir, expect_folder=base_dir)
         if result.returncode != 0:
             return f"❌ Error getting status: {(result.stderr or '').strip()[:200]}"
         if result.stdout.strip():
@@ -2879,7 +2880,7 @@ class GitLogTool(BaseTool):
         if not os.path.exists(os.path.join(base_dir, '.git')):
             return "❌ Git repository not initialized. Call git_init first."
         from vaf.core.git_runner import run_project_git
-        result = run_project_git(["log", f"--max-count={limit}", "--oneline"], cwd=base_dir)
+        result = run_project_git(["log", f"--max-count={limit}", "--oneline"], cwd=base_dir, expect_folder=base_dir)
         if result.returncode != 0:
             return f"❌ Error getting log: {(result.stderr or '').strip()[:200]}"
         if result.stdout.strip():
@@ -2958,8 +2959,9 @@ def _choose_base_dir(tool, task, project_path, *, scope, role, content_only):
     - a path from the task that is refused falls through with the file-name hint kept: the
       extraction reads free text, and a mentioned path is not always the requested target.
     - the chat's last project and the cwd are skipped when refused.
-    The folder settled on is asked once more before it is returned; a content-only run gets
-    a fresh private temporary folder from run() and is not asked.
+    The folder settled on is resolved, asked once more on that text and returned resolved
+    (`_settled`); a content-only run gets a fresh private temporary folder from run(),
+    resolved there, and is not asked.
     For an empty scope or an admin identity the account half allows everything, so the
     choice is the one the unsafe check alone made before.
     """
@@ -2991,7 +2993,7 @@ def _choose_base_dir(tool, task, project_path, *, scope, role, content_only):
             project_path = ''
     if project_path:
         # Continue existing project OR create new one at specific path
-        return _BaseDirChoice(project_path, hint, notes, "", "project_path")
+        return _settled(project_path, hint, notes, "project_path", scope=scope, role=role)
     if content_only:
         return _BaseDirChoice("", hint, notes, "", "content_only")
 
@@ -3048,7 +3050,21 @@ def _choose_base_dir(tool, task, project_path, *, scope, role, content_only):
     if reason:
         return _BaseDirChoice(base_dir, hint, notes,
                               f"Error: cannot work in '{base_dir}': {reason}.", "chosen")
-    return _BaseDirChoice(base_dir, hint, notes, "", "chosen")
+    return _settled(base_dir, hint, notes, "chosen", scope=scope, role=role)
+
+
+def _settled(base_dir, hint, notes, source, *, scope, role) -> "_BaseDirChoice":
+    """The choice for a folder whose spelling has been judged: resolved once, judged again on
+    that text, and returned as exactly that text. Every git call of the run passes it as
+    ``expect_folder`` and the notes are pinned to it, so a folder swapped for a link after
+    this answer is refused rather than worked on, and one swapped before it resolves
+    elsewhere and meets the rule here."""
+    resolved = os.path.realpath(base_dir)
+    reason = project_dir_refusal(resolved, user_scope_id=scope, user_role=role)
+    if reason:
+        return _BaseDirChoice(resolved, hint, notes,
+                              f"Error: cannot work in '{base_dir}': {reason}.", source)
+    return _BaseDirChoice(resolved, hint, notes, "", source)
 
 
 def _base_dir_tool(tool_class, base_dir, *, owner_scope, owner_role):
@@ -3834,7 +3850,7 @@ class CodingAgentTool(BaseTool):
         
         from vaf.core.git_runner import run_project_git
         # Git not available or failed: continue without git (graceful degradation).
-        if run_project_git(["init"], cwd=base_dir).returncode != 0:
+        if run_project_git(["init"], cwd=base_dir, expect_folder=base_dir).returncode != 0:
             return
 
         # Create .gitignore - OS-independent
@@ -3875,8 +3891,8 @@ Thumbs.db
                 f.write(gitignore_content)
 
         # Initial commit if there are files; with none, the commit fails harmlessly.
-        if run_project_git(["add", "."], cwd=base_dir).returncode == 0:
-            run_project_git(["commit", "-m", "Initial commit"], cwd=base_dir)
+        if run_project_git(["add", "."], cwd=base_dir, expect_folder=base_dir).returncode == 0:
+            run_project_git(["commit", "-m", "Initial commit"], cwd=base_dir, expect_folder=base_dir)
 
     def _run_document_phase(self, base_dir: str, run_start_sha: str, tui=None) -> str:
         """Final DOCUMENT phase: create or update the README to reflect this run's changes.
@@ -4436,7 +4452,8 @@ Thumbs.db
         elif _choice.source == "content_only":
             # CONTENT_ONLY mode: Use a temporary directory instead of creating a project
             import tempfile
-            base_dir = tempfile.mkdtemp(prefix="vaf_content_")
+            # Resolved: the run's git calls and notes compare the folder's real path with it.
+            base_dir = os.path.realpath(tempfile.mkdtemp(prefix="vaf_content_"))
             tui.append_stream("Content-only mode: Using temporary directory")
         else:
             try:
@@ -4470,7 +4487,7 @@ Thumbs.db
             self._ensure_git_repo(base_dir)
             try:
                 from vaf.core.git_runner import run_project_git
-                _hs = run_project_git(["rev-parse", "--verify", "--quiet", "HEAD"], cwd=base_dir)
+                _hs = run_project_git(["rev-parse", "--verify", "--quiet", "HEAD"], cwd=base_dir, expect_folder=base_dir)
                 _run_start_sha = (_hs.stdout or "").strip()
             except Exception:
                 _run_start_sha = ""
@@ -4484,7 +4501,7 @@ Thumbs.db
         if _run_start_sha and not skip_template:
             try:
                 from vaf.core.git_runner import run_project_git
-                _snap = (run_project_git(["stash", "create"], cwd=base_dir).stdout or "").strip()
+                _snap = (run_project_git(["stash", "create"], cwd=base_dir, expect_folder=base_dir).stdout or "").strip()
                 if _snap:
                     _diff_baseline_sha = _snap
             except Exception:

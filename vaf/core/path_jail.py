@@ -32,10 +32,10 @@ is broken - so they are a follow-up, not a silent drive-by inside this one.
 import os
 import unicodedata
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 __all__ = ["PathEscape", "WriteRefused", "contained_path", "discard_written", "is_remote_path",
-           "is_rooted", "open_for_write", "safe_entry_name"]
+           "is_rooted", "open_folder", "open_for_write", "safe_entry_name"]
 
 
 class PathEscape(ValueError):
@@ -112,8 +112,8 @@ def is_remote_path(spelled: str) -> bool:
     same file, not by the scan. The host shell (``host_bash``) stays outside: its commands
     reach whatever the machine reaches, which is a question of its own, not a path screen.
 
-    NAMED BOUNDARY: ``run_project_git`` probes its ``cwd`` (``os.path.isdir``) without asking
-    here, because every caller has refused a share or device path for it already: the coder's
+    NAMED BOUNDARY: ``run_project_git`` opens its ``cwd`` (`open_folder`; on Windows
+    ``os.path.isdir``) without asking here, because every caller has refused a share or device path for it already: the coder's
     run folder (``_choose_base_dir``, ``_base_dir_tool``), ``project_git``'s
     ``_resolve_project`` (which the code audit tool asks too, before ``jail_allows``), the
     folder a person typed for ``vaf audit``, the snapshots' own working folder, and the git
@@ -404,17 +404,72 @@ def _folder_moved(raw: str, real: str, expected: str) -> "WriteRefused":
                         "(a link on the way)")
 
 
+def open_folder(path, *, dir_fd: Optional[int] = None, expect_folder=None,
+                follow: bool = True) -> Tuple[int, str]:
+    """``path`` opened as a folder handle: ``(fd, real)``, ``real`` being the kernel's path
+    for the handle. The caller closes ``fd``.
+
+    For work on a folder that somebody else can rename or replace with a link: everything
+    that is done relative to the handle (``dir_fd=``, ``/proc/self/fd/<fd>``) reaches the
+    folder that was opened, whatever is swapped in under its name afterwards.
+
+    - ``dir_fd``: ``path`` is opened relative to that folder handle (a single name, ``..``).
+    - ``expect_folder``: the REAL path the opened folder must have. Compared with ``real``
+      as given and never resolved (resolving it would follow the very link it is there to
+      catch); anything else closes the handle and raises `PathEscape` ("a link on the
+      way"). A link swapped in for the folder or any folder above it changes ``real``.
+    - ``follow=False``: a link as the last part is refused (`PathEscape`), never followed;
+      so is an entry that is not a folder.
+
+    Any other ``OSError`` (missing, not a folder, no permission) is raised as it is. Only
+    where `_DIR_FD` holds (no folder handles on Windows): callers branch on it.
+
+    NAMED BOUNDARY, the facade: not on ``vaf/__init__.py``. Measured: no module outside
+    ``vaf/core`` needs a raw folder handle, and the two public lanes that carry one are
+    ``vaf.open_for_write(expect_folder=)`` and ``vaf.run_project_git(expect_folder=)``. Its
+    users are `open_for_write`, the project git runner (`vaf.core.git_runner`) and the
+    project notes (`vaf.core.persistence.PersistenceManager`)."""
+    import errno
+    spelled = os.fspath(path)
+    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0)
+    if not follow:
+        flags |= os.O_NOFOLLOW
+    try:
+        if dir_fd is None:
+            fd = os.open(spelled, flags)
+        else:
+            fd = os.open(spelled, flags, dir_fd=dir_fd)
+    except OSError as e:
+        # ELOOP: a link under O_NOFOLLOW (EMLINK on FreeBSD); ENOTDIR: no folder at all.
+        if not follow and e.errno in (errno.ELOOP, errno.EMLINK, errno.ENOTDIR):
+            raise PathEscape(f"{spelled} is a link or not a folder") from None
+        raise
+    try:
+        fallback = spelled if dir_fd is None or expect_folder is None else os.fspath(expect_folder)
+        try:
+            real = _fd_path(fd, fallback)
+        except WriteRefused as e:
+            raise PathEscape(str(e)) from None
+        if expect_folder is not None:
+            expected = os.path.normcase(os.path.abspath(os.fspath(expect_folder)))
+            if os.path.normcase(real) != expected:
+                raise PathEscape(f"its folder is {real}, not {expected} (a link on the way)")
+        return fd, real
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def _open_in_folder(parent: str, name: str, flags: int, raw: str,
                     expected: Optional[str] = None) -> int:
     import errno
     try:
-        dfd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0))
+        dfd, real_dir = open_folder(parent, expect_folder=expected)
     except NotADirectoryError:
         raise WriteRefused(f"refusing to write {raw}: {parent} is not a folder") from None
+    except PathEscape as e:
+        raise WriteRefused(f"refusing to write {raw}: {e}") from None
     try:
-        real_dir = _fd_path(dfd, parent)
-        if expected is not None and os.path.normcase(real_dir) != expected:
-            raise _folder_moved(raw, real_dir, expected)
         real = os.path.join(real_dir, name)
         what = _protected(real)
         if what:

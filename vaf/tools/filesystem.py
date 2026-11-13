@@ -559,22 +559,31 @@ def tool_work_folder(kwargs) -> Tuple[str, str]:
     the dispatcher assigns over whatever the model wrote. A call that carries neither is a
     direct consumer with no account. A refusal names the folder as given, never resolved: a
     refused '.' must not show the program folder's path to a tenant. An allowed folder is
-    returned as it was judged (``~`` expanded, resolved), so the tool works in exactly that
-    folder and not in a same-named one below the process's working folder.
+    resolved once (``~`` expanded), judged again on that text, and returned as exactly that
+    text: the tool works in that folder and not in a same-named one below the process's
+    working folder, and a folder swapped for a link between the first answer and the
+    resolution resolves elsewhere and meets the rule again. The tools pass the returned text
+    as ``expect_folder`` (`run_project_git`, `PersistenceManager`), which refuses the folder
+    once it no longer has that real path.
     """
     base_dir = kwargs.get("base_dir") or "."
     from vaf.core.workspace_guard import project_dir_refusal
-    reason = project_dir_refusal(str(base_dir), user_scope_id=kwargs.get("user_scope_id"),
-                                 user_role=kwargs.get("user_role"))
+    scope, role = kwargs.get("user_scope_id"), kwargs.get("user_role")
+    reason = project_dir_refusal(str(base_dir), user_scope_id=scope, user_role=role)
     if reason:
         return "", (f"❌ Refused: cannot work in '{base_dir}': {reason}. Name a folder you may "
                     "work in as base_dir.")
     # The folder that was judged: project_dir_refusal expands '~' and resolves, so the raw
     # text would be a different folder (relative to the working folder, '~' a literal name).
     try:
-        return str(Path(str(base_dir)).expanduser().resolve()), ""
+        resolved = str(Path(str(base_dir)).expanduser().resolve())
     except (OSError, RuntimeError, ValueError):
         return "", f"❌ Refused: cannot work in '{base_dir}': it could not be checked."
+    reason = project_dir_refusal(resolved, user_scope_id=scope, user_role=role)
+    if reason:
+        return "", (f"❌ Refused: cannot work in '{base_dir}': {reason}. Name a folder you may "
+                    "work in as base_dir.")
+    return resolved, ""
 HOST_CONFIG_WRITE_REFUSAL = (
     "Access denied: the home directory's configuration (dot files and folders such as "
     "~/.bashrc, ~/.config or ~/.local, autostart entries) runs or steers programs outside VAF "

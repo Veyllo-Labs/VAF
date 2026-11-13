@@ -14,8 +14,10 @@ def _project_notes(base_dir, kwargs):
     `tool_work_folder` judged the project folder; the notes go into its ``.vaf``, which code
     in the project's sandbox can replace with a link to another account's folder. So the real
     path of that folder is asked the caller's file jail again, and every write is pinned to
-    it (`PersistenceManager.notes_folder`); a ``.vaf`` that is a link is not used."""
-    pm = PersistenceManager(base_dir)
+    it (`PersistenceManager.notes_folder`); a ``.vaf`` that is a link is not used. The
+    project folder itself is opened as a handle and compared with the text that was judged
+    (``expect_folder``), so ``.vaf`` is never made in a folder swapped in after the check."""
+    pm = PersistenceManager(base_dir, expect_folder=base_dir)
     folder = pm.notes_folder()
     if folder is None:
         return None, ("❌ Refused: the project's .vaf is a link or not a folder; project notes "

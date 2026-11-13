@@ -93,7 +93,11 @@ class Snapshot:
         commit = resolve_commit(commit_hash, str(self.project_path))
         if not commit:
             return False
-        result = run_project_git(["checkout", commit, "--", "."], cwd=str(self.project_path))
+        # The folder by its absolute (resolved) path, not ".": git runs in the repository's top
+        # folder, so "." would restore the whole repository from a subfolder. literal: a
+        # folder named "s[1]" must not match "s1" as a glob.
+        result = run_project_git(["checkout", commit, "--", f":(literal){self.project_path}"],
+                                 cwd=str(self.project_path))
         return result.returncode == 0
 
     def _git_diff(self, commit_hash: str = None) -> str:

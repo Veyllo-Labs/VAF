@@ -511,7 +511,8 @@ downloads, `document_writer`, `document_agent` and `research_agent` (text, Markd
 `render_check`'s screenshot, and the coder's own writes into its project (the `PARTIAL_` backup,
 the default `.gitignore`, the README of the document phase, the template files), the
 project notes and the coder's task state in a project's `.vaf` (`vaf/core/persistence.py`:
-a `.vaf` that is a link is not used, and every write is pinned to that folder's real path), and the
+a `.vaf` that is a link is not used, a missing one is made relative to the checked handle of
+the project folder, never by path, and every write is pinned to that folder's real path), and the
 cloud: `cloud_storage` `download` and `retrieve` copy into the Downloads folder through it (a
 tenant's Downloads folder lies in their own project root, which an environment of theirs can
 mount), and every provider writes its downloads through it. A cloud file's name is the remote
@@ -703,7 +704,14 @@ and the work tree to the project itself (`--git-dir=<top>/.git --work-tree=<top>
 `core.worktree` in that config moved the work tree to any host folder (a rollback wrote there,
 `add -A` pulled its files into the project, measured), and it refuses a `.git` that is a
 file or a link, or leads into another repository through `commondir`, alternates or a link
-inside it (a reflog line was appended through a linked `logs/HEAD`, measured). A repository
+inside it (a reflog line was appended through a linked `logs/HEAD`, measured). It holds the
+folder for the whole call, too: the caller's folder is opened as a handle and compared with
+the real path the caller judged (`expect_folder`), the top and its `.git` are opened through
+`..` handles without following a link, and on Linux every git process of the call runs in
+`/proc/self/fd/<top>` with `--git-dir=/proc/self/fd/<git>` and `GIT_COMMON_DIR` on that handle
+(`pass_fds`). A process in a sandbox environment that renamed the project folder aside and
+linked another account's repository in its place made `git log` print that history in 21 of
+300 calls before; with the pin, 0 of 930. A repository
 the model makes inside the project with `git init` would have git start a child git there,
 reading that repository's own config; status and diff ignore submodules, `add` excludes every
 gitlink and `stash create` is refused while one exists. The full list is in
@@ -719,6 +727,16 @@ process namespace and ends with the command, `--unshare-pid --die-with-parent`; 
 fallback is `--rm`), but a process in a running sandbox environment with the project mounted
 can. Hooks, the fsmonitor, textconv, external diff and signing are pinned without a name and
 do not race.
+
+Named boundary: the folder pin stops at git's own text walk. git turns the work tree into a
+path and changes into it for every command that reads the files, so under a racer looping
+rename-and-link `git status` still leaked in 3 of 570 calls and `git diff` in 10 of 868
+(`git log` 0 of 930), and `git init` writes the new repository by path. An entry written
+inside `.git` right after the runner scanned it (alternates, a `commondir`) is read for that
+call. macOS and Windows run git by path after a comparison before each process. The jailed
+shell's `--bind <path>` and an environment's mount are by path as well; one mount-namespace
+primitive that binds the judged folder by handle would close all three, and it is a
+follow-up. Details and numbers: the `vaf/core/git_runner.py` docstring.
 
 **In a sandbox environment** (the coder bound with `coding_agent(environment=...)`, or one
 exists for its project folder) none of the above applies as written: `bash` runs in that

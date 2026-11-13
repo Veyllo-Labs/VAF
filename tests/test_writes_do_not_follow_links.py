@@ -1154,8 +1154,8 @@ RAW_WRITES = {
     ("vaf/core/ssh.py", "askpass_helper"): (1, "VAF's askpass helper in its own ssh folder"),
     ("vaf/core/ssh.py", "ensure_identity"): (1, "the account's public key in its own ssh folder"),
     ("vaf/core/persistence.py", "PersistenceManager._read_file"):
-        (3, "reads (O_RDONLY): the .vaf folder handle, the file relative to it with "
-            "O_NOFOLLOW, and the Windows branch's open by path"),
+        (2, "reads (O_RDONLY): the file relative to the .vaf folder handle "
+            "(path_jail.open_folder) with O_NOFOLLOW, and the Windows branch's open by path"),
     ("vaf/tools/browser_agent.py", "_decrypt_session_to_tmp"):
         (1, "O_EXCL in a fresh private temp folder"),
     ("vaf/tools/cloud_storage.py", "_action_save"):

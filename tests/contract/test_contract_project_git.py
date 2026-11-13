@@ -79,3 +79,16 @@ def test_the_work_tree_is_the_folder_that_holds_git(tmp_path):
     (r / "sub").mkdir()
     top = vaf.run_project_git(["rev-parse", "--show-toplevel"], cwd=str(r / "sub")).stdout.strip()
     assert Path(top) == r.resolve()
+
+
+def test_expect_folder_refuses_a_folder_that_is_not_the_one_judged(tmp_path):
+    """`expect_folder` is the real path the caller judged; any other folder is refused, and
+    the result keeps its shape."""
+    r = _repo(tmp_path)
+    proc = vaf.run_project_git(["status", "--porcelain"], cwd=str(r),
+                               expect_folder=str(r.resolve()))
+    assert isinstance(proc, subprocess.CompletedProcess) and proc.returncode == 0
+    refused = vaf.run_project_git(["status"], cwd=str(r),
+                                  expect_folder=str((tmp_path / "elsewhere").resolve()))
+    assert isinstance(refused, subprocess.CompletedProcess)
+    assert refused.returncode != 0 and "a link on the way" in refused.stderr

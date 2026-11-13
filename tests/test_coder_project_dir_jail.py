@@ -987,10 +987,13 @@ def test_a_deleted_notes_folder_is_not_made_again_behind_a_swapped_project_folde
 
 
 def test_a_notes_folder_that_resolves_elsewhere_is_not_used(own_project, monkeypatch):
-    """A junction is no link to islink; resolved, it lands elsewhere. Simulated by the
+    """A junction is no link to islink; resolved, it lands elsewhere. Junctions exist on
+    Windows, which has no folder handles: the path branch, taken on any host, simulated by the
     resolution of the .vaf path (real os.path.realpath captured before the patch)."""
+    from vaf.core import path_jail
     from vaf.core.persistence import PersistenceManager
     w = own_project
+    monkeypatch.setattr(path_jail, "_DIR_FD", False)
     vaf = str(w.mine / ".vaf")
     real_realpath = os.path.realpath
     monkeypatch.setattr(os.path, "realpath",

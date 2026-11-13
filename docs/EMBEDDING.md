@@ -1071,11 +1071,50 @@ symbolic link inside `.git` (a reflog line, ending with a commit subject the mod
 appended through a linked `logs/HEAD`) points the project at another repository, whose files a checkout
 would then write and whose branch a commit would move. The runner passes
 `--git-dir=<top>/.git --work-tree=<top>`, `<top>` being the nearest folder at or above `cwd`
-that holds a `.git` (a caller in a subfolder keeps working), and refuses any of those
-redirections, and a folder with no repository at all. `linked_worktree=True` accepts a
+that holds a `.git`, and refuses any of those redirections, and a folder with no repository
+at all. git runs IN that top folder: a caller in a subfolder keeps working, but relative
+paths and pathspecs are read from the top, and so are the paths git prints. Name a path
+top-relative or absolute; VAF's `/undo` restores its subfolder as `:(literal)<absolute path>`,
+which also keeps a `[` in a folder name from being read as a glob. `linked_worktree=True` accepts a
 `.git` file (a `git worktree add` checkout) and pins only the work tree: pass it only for a
 repository a person chose, never for one a model wrote. `vaf.core.git_runner.project_repo_problem(cwd)`
 gives the refusal's reason without running git.
+
+**The folder you checked is the folder git works on: `expect_folder`.** A process that can
+write the folder (a container with it mounted) can rename it aside and put a link to another
+repository in its place between your check and git's start; measured, a history call then
+printed the other repository's commits in 21 of 300 calls. Judge the folder, resolve it ONCE,
+judge the resolved text again if your rule looks at the spelling, and hand exactly that text
+to every call:
+
+```python
+real = os.path.realpath(project_dir)
+if not my_rule_allows(real):              # your decision, made on the real path
+    raise PermissionError(real)
+proc = vaf.run_project_git(["log", "--oneline"], cwd=real, expect_folder=real)
+```
+
+The runner opens `cwd` as a folder handle and compares the kernel's path for it with
+`expect_folder`, as given and never resolved: a link anywhere on the way makes them differ,
+and the call is refused (`returncode` -1, "a link on the way" in `stderr`). It then holds that
+folder for the whole call: it walks up to the top and opens `.git` through handles (never
+following a link there), and on Linux every git process of the call runs in
+`/proc/self/fd/<top>` with `--git-dir=/proc/self/fd/<git>`, `--work-tree=/proc/self/fd/<top>`
+and `GIT_COMMON_DIR` on the git handle (`pass_fds`). Without `expect_folder` the folder `cwd`
+names when the call starts is the one held. One visible consequence: `rev-parse --git-dir`
+and `--git-common-dir` print `/proc/self/fd/<n>`, which means nothing outside that git
+process; ask `--absolute-git-dir` and `--show-toplevel`, which print real paths. The same
+`expect_folder` exists on `vaf.open_for_write` for the files you write there.
+
+**Named boundary: what the handles do not reach.** git turns the work tree back into a path
+and changes into it for every command that reads the files (status, diff, add, checkout,
+revert); under a process looping rename-and-link, `status` still leaked in 3 of 570 calls and
+`diff` in 10 of 868 (`log` 0 of 930), and `git init` writes the new repository by path. An
+entry written inside `.git` right after the runner scanned it (`objects/info/alternates`, a
+`commondir`) is read by that call. On macOS (no `/proc`) the folder is checked by `samestat`
+before each git process and git runs by path; on Windows (no folder handles) the folder must
+still resolve to `expect_folder` before each process. If something can write the folder
+while you call git, stop or pause it first, as for the driver race below.
 
 **What you are responsible for.** A driver only the person's global or system config names
 (the filter `git lfs install` writes) keeps running, because the folder cannot write those
@@ -3077,13 +3116,14 @@ Stable public surface (safe to build on):
   (`status` is `complete` only when everything in scope was reviewed, and `exit_code()`
   never returns 0 otherwise) and the fields named in "Reviewing a code change"; the prompts,
   the budgets and the finding ids' hashing are not.
-- `vaf.run_project_git(args, cwd, *, timeout=60, linked_worktree=False) ->
+- `vaf.run_project_git(args, cwd, *, timeout=60, linked_worktree=False, expect_folder=None) ->
   subprocess.CompletedProcess` - git in a folder a model writes, starting no program that
-  folder's config or hooks name, and working only on the repository at or above `cwd`. The
-  promise is the call shape, that it never raises, that a leading `-c` of yours is kept, that
-  the repository's config does not choose the hooks, a filter or the work tree, and that a
-  `.git` leading into another repository is refused unless `linked_worktree=True`; the exact
-  list of pinned settings is not. See "git in a folder a model writes" above.
+  folder's config or hooks name, and working only on the repository at or above `cwd`, run
+  in its top folder. The promise is the call shape, that it never raises, that a leading `-c`
+  of yours is kept, that the repository's config does not choose the hooks, a filter or the
+  work tree, that a `.git` leading into another repository is refused unless
+  `linked_worktree=True`, and that a `cwd` whose real path is not `expect_folder` is refused;
+  the exact list of pinned settings is not. See "git in a folder a model writes" above.
 - `vaf.ToolCaller` - running a tool with the agent's own policy, gate, identity
   and bounds, without an agent. Its **documented arguments** (the table under
   "Running a tool yourself"), `execute(name, args) -> str` and

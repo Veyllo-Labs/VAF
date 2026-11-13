@@ -8,6 +8,11 @@ from typing import List, Dict, Optional, Any, Literal
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
 
+# Whether a folder can be made relative to a folder handle (mkdir with dir_fd): everywhere but
+# Windows. Read once, so that what the notes folder is made with does not depend on a later
+# rebinding of os.mkdir.
+_MKDIR_DIR_FD = os.mkdir in os.supports_dir_fd
+
 # Types
 TaskStatus = Literal["pending", "in_progress", "completed", "failed", "skipped"]
 
@@ -112,12 +117,13 @@ class PersistenceManager:
     opens the file relative to that folder's checked handle, never through a link. A caller that decides
     who may write the project asks its rule for `notes_folder` (the git and notes tools ask
     the caller's file jail). NAMED BOUNDARY: a hard link is a second name of the same file and
-    is not seen; a sandbox environment cannot make one to a file outside its mount. NAMED
-    BOUNDARY: a missing ``.vaf`` is created by path (``makedirs``), so a project folder
-    swapped for a link at that moment can leave an empty ``.vaf`` folder in the link's target
-    (measured 6 of 1076 fresh managers under a swap loop); nothing is written into it, because
-    every write is refused there. Creating it relative to a checked folder handle is the same
-    fix as pinning the git runner by handle.
+    is not seen; a sandbox environment cannot make one to a file outside its mount. A missing
+    ``.vaf`` (and a missing project folder) is made relative to the checked handle of the
+    folder above it (`vaf.core.path_jail.open_folder`, ``mkdir`` with ``dir_fd``), never by
+    path: a project folder swapped for a link at that moment left an empty ``.vaf`` in the
+    link's target in 6 of 1076 fresh managers when it was made by path. NAMED BOUNDARY,
+    Windows (no folder handles): there it is still made by path and resolved afterwards, so
+    that empty folder can appear; nothing is written into it, because every write is pinned.
     """
     
     VAF_DIR = ".vaf"
@@ -125,21 +131,23 @@ class PersistenceManager:
     CODEX_FILE = "codex.md"  # Long-term patterns
     MEMORY_FILE = "memory.md"  # Short-term session memory
     
-    def __init__(self, base_dir: str):
+    def __init__(self, base_dir: str, *, expect_folder=None):
+        """``expect_folder``: the REAL path a caller judged for ``base_dir`` (no links on the
+        way, compared as given and never resolved). The project folder is opened as a handle
+        and its kernel path compared with it, so a folder swapped for a link after the check
+        is not used and gets no ``.vaf``. Without it the folder ``base_dir`` names when it is
+        opened is the one used."""
         self.base_dir = base_dir
         self.vaf_path = os.path.join(base_dir, self.VAF_DIR)
         self.tasks_path = os.path.join(self.vaf_path, self.TASKS_FILE)
         self.codex_path = os.path.join(self.vaf_path, self.CODEX_FILE)
         self.memory_path = os.path.join(self.vaf_path, self.MEMORY_FILE)
-        
+        self._expect = expect_folder
+
         self._folder: Optional[str] = None
         self._folder_asked = False
-        # Ensure .vaf directory exists (never through a link: lexists sees one, dangling too)
-        if not os.path.lexists(self.vaf_path):
-            try:
-                os.makedirs(self.vaf_path, exist_ok=True)
-            except Exception as e:
-                print(f"[PersistenceManager] WARNING: Could not create .vaf dir at {self.vaf_path}: {e}")
+        # The .vaf folder is made right away, through the checked folder handle.
+        self.notes_folder()
 
     def notes_folder(self) -> Optional[str]:
         """The real path of this project's ``.vaf`` folder, or None when it is a link (or a
@@ -156,27 +164,110 @@ class PersistenceManager:
         return self._folder
 
     @staticmethod
-    def _recreate(folder: str) -> Optional[str]:
+    def _by_handle() -> bool:
+        from vaf.core import path_jail
+        return path_jail._DIR_FD and _MKDIR_DIR_FD
+
+    @staticmethod
+    def _made_in(dir_fd: int, parent_real: str, name: str):
+        """``(fd, real)`` of the folder ``name`` inside the open folder ``dir_fd`` (real path
+        ``parent_real``), made there first when it is missing. A link at ``name`` is refused,
+        and so is anything whose kernel path is not ``parent_real/name``. Raises OSError or
+        `PathEscape` (a ValueError)."""
+        from vaf.core.path_jail import open_folder
+        try:
+            os.mkdir(name, dir_fd=dir_fd)
+        except FileExistsError:
+            pass
+        return open_folder(name, dir_fd=dir_fd, follow=False,
+                           expect_folder=os.path.join(parent_real, name))
+
+    def _open_base(self):
+        """``(fd, real)`` of the project folder; folders missing at its end are made, each
+        relative to the handle of the one above. With ``expect_folder`` the existing folder
+        must have the expected real path."""
+        from vaf.core.path_jail import PathEscape, open_folder
+        head = os.path.abspath(self.base_dir)
+        expect = os.path.abspath(self._expect) if self._expect is not None else None
+        missing = []
+        while not os.path.lexists(head):
+            head, tail = os.path.split(head)
+            if not tail:
+                break
+            if expect is not None:
+                if os.path.basename(expect) != tail:
+                    raise PathEscape(f"{self.base_dir} is not {self._expect}")
+                expect = os.path.dirname(expect)
+            missing.append(tail)
+        fd, real = open_folder(head, expect_folder=expect)
+        try:
+            for name in reversed(missing):
+                child, child_real = self._made_in(fd, real, name)
+                os.close(fd)
+                fd, real = child, child_real
+            return fd, real
+        except BaseException:
+            os.close(fd)
+            raise
+
+    def _recreate(self, folder: str) -> Optional[str]:
         """``folder`` (a real path) made again, or None when its parent is no longer that real
-        folder (a link on the way) or it cannot be made."""
+        folder (a link on the way) or it cannot be made. Made relative to the parent's
+        checked handle, so a parent swapped for a link at that moment gets nothing."""
         parent = os.path.dirname(folder)
         try:
-            if os.path.normcase(os.path.realpath(parent)) != os.path.normcase(parent):
-                return None
+            if not self._by_handle():
+                return self._recreate_by_path(folder)
+            from vaf.core.path_jail import open_folder
+            pfd, real = open_folder(parent, expect_folder=parent)
             try:
-                os.mkdir(folder)
-            except FileExistsError:
-                pass
-            if (os.path.islink(folder)
-                    or os.path.normcase(os.path.realpath(folder)) != os.path.normcase(folder)):
-                return None
+                vfd, _ = self._made_in(pfd, real, os.path.basename(folder))
+                os.close(vfd)
+            finally:
+                os.close(pfd)
             return folder
         except (OSError, ValueError):
             return None
 
     def _own_folder(self) -> Optional[str]:
+        if not self._by_handle():
+            return self._own_folder_by_path()
+        try:
+            bfd, base_real = self._open_base()
+            try:
+                vfd, real = self._made_in(bfd, base_real, self.VAF_DIR)
+                os.close(vfd)
+                return real
+            finally:
+                os.close(bfd)
+        except (OSError, ValueError):
+            return None
+
+    # NAMED BOUNDARY, Windows (no folder handles): the two methods below make the folders by
+    # path and resolve them afterwards, so a project folder swapped for a link at that moment
+    # can get an empty .vaf; nothing is written into it, because every write is pinned to the
+    # real path judged here (`open_for_write`'s expect_folder).
+
+    @staticmethod
+    def _recreate_by_path(folder: str) -> Optional[str]:
+        parent = os.path.dirname(folder)
+        if os.path.normcase(os.path.realpath(parent)) != os.path.normcase(parent):
+            return None
+        try:
+            os.mkdir(folder)
+        except FileExistsError:
+            pass
+        if (os.path.islink(folder)
+                or os.path.normcase(os.path.realpath(folder)) != os.path.normcase(folder)):
+            return None
+        return folder
+
+    def _own_folder_by_path(self) -> Optional[str]:
         try:
             if os.path.islink(self.vaf_path):
+                return None
+            if self._expect is not None and (os.path.normcase(os.path.realpath(self.base_dir))
+                                             != os.path.normcase(os.path.abspath(self._expect))):
                 return None
             os.makedirs(self.vaf_path, exist_ok=True)
             expected = os.path.join(os.path.realpath(self.base_dir), self.VAF_DIR)
@@ -263,10 +354,9 @@ class PersistenceManager:
         this project's own .vaf folder. The coder reads codex and memory into its prompt, so
         a link to another account's file would carry that file into the run.
 
-        The folder is opened first (``O_DIRECTORY | O_NOFOLLOW``), its handle's kernel path
-        compared with `notes_folder` (the same handle check `open_for_write` makes,
-        `vaf.core.path_jail._fd_path`), and the file opened relative to that handle with
-        ``O_NOFOLLOW``: a ``.vaf`` swapped for a link and back around the open cannot leave
+        The folder is opened first (`vaf.core.path_jail.open_folder`, no link as its last
+        part), its handle's kernel path compared with `notes_folder`, and the file opened
+        relative to that handle with ``O_NOFOLLOW``: a ``.vaf`` swapped for a link and back around the open cannot leave
         the read on a file outside. NAMED BOUNDARY, Windows (no folder handles, no
         ``O_NOFOLLOW``): a link at the name is refused and the folder's resolved path is
         compared after the open, so a folder link that is in place only while the file is
@@ -280,10 +370,8 @@ class PersistenceManager:
         fd = -1
         try:
             if path_jail._DIR_FD:
-                dfd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | cloexec)
+                dfd, _ = path_jail.open_folder(folder, expect_folder=folder, follow=False)
                 try:
-                    if os.path.normcase(path_jail._fd_path(dfd, folder)) != os.path.normcase(folder):
-                        return ""
                     fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | cloexec,
                                  dir_fd=dfd)
                 finally:

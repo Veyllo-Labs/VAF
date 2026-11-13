@@ -44,8 +44,7 @@ def _module():
 
 
 def _blocker() -> str:
-    module = _module()
-    return module._BLOCKER.format(names=repr(set()), refusal_s=module._WINDOWS_REFUSAL_S)
+    return _module().sitecustomize_source(set())
 
 
 def test_crlf_checkout_converts_a_mixed_case_name_under_a_lowercasing_normcase(tmp_path):
@@ -390,7 +389,7 @@ def test_a_name_cut_by_the_read_limit_is_not_local(tmp_path):
     dropped: "127.0.0.1 api" cut from api.internal must not make "api" local, while the
     complete rows before it still count.
     MUTATION: keep the text up to the limit as it is - red ("api" is force-refused)."""
-    limit = _module()._BLOCKER.split("_HOSTS_READ_LIMIT = ", 1)[1].split("\n", 1)[0]
+    limit = _blocker().split("_HOSTS_READ_LIMIT = ", 1)[1].split("\n", 1)[0]
     limit = eval(limit, {})        # the literal expression in the snippet, e.g. 1 << 20
     head = "127.0.0.1 vaf-before.example\n"
     cut = "127.0.0.1 api"
@@ -592,6 +591,26 @@ def test_main_fails_a_green_run_over_budget(tmp_path, monkeypatch, capsys):
     capsys.readouterr()
     assert run(0, None) == 0
     assert "  0 refused local connects" in capsys.readouterr().out
+
+
+def test_one_local_address_predicate_serves_the_snippet_and_the_conftest():
+    """tests/conftest.py refuses the service ports through `local_address`, and the generated
+    sitecustomize through `_local`; both are the one `_LOCAL_ADDRESS_SOURCE`, so the snippet
+    tests above pin the conftest's answer too. Every spelling here is numeric or the
+    wildcard, so no name is looked up.
+    MUTATION: format a different predicate into the template than the one local_address
+    is built from - red (the generated text no longer holds the shared source)."""
+    module = _module()
+    local = module.local_address
+    for host in ("127.0.0.1", "127.1", "0", "", "::1", "::ffff:127.0.0.1", b"127.0.0.1"):
+        assert local((host, 1)), host
+    for host in ("192.0.2.1", "2001:db8::1"):
+        assert not local((host, 1)), host
+    assert not local("/run/vaf.sock")
+    shared = "\n".join(("    " + line) if line.strip() else ""
+                       for line in module._LOCAL_ADDRESS_SOURCE.strip("\n").splitlines())
+    assert "def _local(address):" in shared
+    assert shared in _blocker()
 
 
 def test_every_port_the_door_harness_avoids_is_refused():

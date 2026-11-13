@@ -283,9 +283,7 @@ def test_the_heartbeat_ends_quietly_on_a_slim_install(tmp_path):
     hostile = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(hostile)
     snippet = tmp_path / "hide_fastapi.py"
-    snippet.write_text(hostile._BLOCKER.format(names=repr({"fastapi"}),
-                                               refusal_s=hostile._WINDOWS_REFUSAL_S),
-                       encoding="utf-8")
+    snippet.write_text(hostile.sitecustomize_source({"fastapi"}), encoding="utf-8")
     env = {key: value for key, value in os.environ.items()
            if not key.startswith("VAF_HOSTILE_") and key != "PYTEST_CURRENT_TEST"}
     env["PYTHONPATH"] = str(root)

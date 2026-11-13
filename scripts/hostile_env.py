@@ -123,11 +123,14 @@ locally, in the time the suite already takes:
                   wildcard) or a name the hosts file or the host name puts on
                   this machine, decided without a lookup; the hosts file is
                   read only for a name, and only its first megabyte.
-                  The ports VAF's own services use
-                  (3000, 5432, 8001, 8005, 8080, 8443, 9222) are refused
+                  The ports VAF's own services use (443, 3000, 5002, 5003,
+                  5005, 5432, 6379, 8001, 8005, 8080, 8443, 9222) are refused
                   without a dial: the runner has none of them, so the count
                   must not depend on what this machine runs, and the suite
-                  must never post a test's event into a live app. A refusal
+                  must never post a test's event into a live app. A plain
+                  run refuses the same ports through tests/conftest.py, which
+                  steps aside in this run so that every refusal here is still
+                  charged. A refusal
                   in a thread that outlived its test is charged "after" the
                   test that finished last; a child process inherits the log
                   and the running test's name.
@@ -205,10 +208,13 @@ Usage:  venv/bin/python scripts/hostile_env.py [pytest args...]
 """
 from __future__ import annotations
 
+import ipaddress
 import os
+import socket
 import subprocess
 import sys
 import tempfile
+import textwrap
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -226,6 +232,75 @@ OPTIONAL_PACKAGES = (
     # unguarded import (test_browser_agent_vision_lane, the controller test).
     "browser_use",
 )
+
+# The one answer to "is this TCP address on this machine?", decided without a lookup.
+# Two users: the generated sitecustomize below (formatted into it) and tests/conftest.py,
+# which refuses the same service ports in every plain run through local_address().
+# Names it expects from its host: _os, _socket and _ipaddress.
+_LOCAL_ADDRESS_SOURCE = r'''
+def _local_ip(ip):
+    # The wildcard counts: Linux routes a connect to it to loopback.
+    if getattr(ip, "ipv4_mapped", None) is not None:
+        ip = ip.ipv4_mapped
+    return ip.is_loopback or ip.is_unspecified
+
+# The loopback names of a hosts file sit in its first lines; a blocklist-style
+# file runs to megabytes, and reading all of it cost 2.3 s per interpreter start.
+_HOSTS_READ_LIMIT = 1 << 20
+_local_names = []
+
+def _names_here():
+    """The names the hosts file or the host name put on this machine, read once,
+    on the first name that is not a literal address, without any lookup."""
+    if _local_names:
+        return _local_names[0]
+    names = set([_socket.gethostname().lower().rstrip("."), "localhost"])
+    try:
+        with open(_os.environ.get("VAF_HOSTILE_HOSTS_FILE") or "/etc/hosts",
+                  encoding="utf-8", errors="replace") as hosts:
+            text = hosts.read(_HOSTS_READ_LIMIT + 1)
+    except OSError:
+        text = ""
+    if len(text) > _HOSTS_READ_LIMIT:
+        # The limit fell inside a record: "127.0.0.1 api" cut from api.internal
+        # would put a name here that the file never defines.
+        text = text[:_HOSTS_READ_LIMIT]
+        text = text[:text.rfind("\n") + 1]
+    for row in text.splitlines():
+        fields = row.split("#", 1)[0].split()
+        try:
+            if fields and _local_ip(_ipaddress.ip_address(fields[0])):
+                names.update(name.lower().rstrip(".") for name in fields[1:])
+        except ValueError:
+            continue
+    _local_names.append(names)
+    return names
+
+def _local(address):
+    """A TCP address on this machine, decided without a lookup: a numeric address
+    (any spelling the C library accepts, "0", "127.1", a %scope and bytes included,
+    and "" for the wildcard) that is loopback or the wildcard, or a name the hosts
+    file or the host name puts here."""
+    if not isinstance(address, tuple) or len(address) < 2:
+        return False
+    host = address[0]
+    if isinstance(host, (bytes, bytearray)):
+        host = bytes(host).decode("ascii", "replace")
+    host = str(host)
+    if host == "":
+        return True
+    try:
+        return _local_ip(_ipaddress.ip_address(host))
+    except ValueError:
+        pass
+    try:
+        return _local_ip(_ipaddress.ip_address(_socket.inet_aton(host)))
+    except (OSError, ValueError):
+        pass
+    name = host.lower().rstrip(".")
+    return name.endswith(".localhost") or name in _names_here()
+'''
+
 
 _BLOCKER = '''
 import sys
@@ -340,69 +415,7 @@ if _refusal_log and _os.name != "nt":
         return sock.family in _INET and sock.type == _socket.SOCK_STREAM
 
     import ipaddress as _ipaddress
-
-    def _local_ip(ip):
-        # The wildcard counts: Linux routes a connect to it to loopback.
-        if getattr(ip, "ipv4_mapped", None) is not None:
-            ip = ip.ipv4_mapped
-        return ip.is_loopback or ip.is_unspecified
-
-    # The loopback names of a hosts file sit in its first lines; a blocklist-style
-    # file runs to megabytes, and reading all of it cost 2.3 s per interpreter start.
-    _HOSTS_READ_LIMIT = 1 << 20
-    _local_names = []
-
-    def _names_here():
-        """The names the hosts file or the host name put on this machine, read once,
-        on the first name that is not a literal address, without any lookup."""
-        if _local_names:
-            return _local_names[0]
-        names = set([_socket.gethostname().lower().rstrip("."), "localhost"])
-        try:
-            with open(_os.environ.get("VAF_HOSTILE_HOSTS_FILE") or "/etc/hosts",
-                      encoding="utf-8", errors="replace") as hosts:
-                text = hosts.read(_HOSTS_READ_LIMIT + 1)
-        except OSError:
-            text = ""
-        if len(text) > _HOSTS_READ_LIMIT:
-            # The limit fell inside a record: "127.0.0.1 api" cut from api.internal
-            # would put a name here that the file never defines.
-            text = text[:_HOSTS_READ_LIMIT]
-            text = text[:text.rfind("\\n") + 1]
-        for row in text.splitlines():
-            fields = row.split("#", 1)[0].split()
-            try:
-                if fields and _local_ip(_ipaddress.ip_address(fields[0])):
-                    names.update(name.lower().rstrip(".") for name in fields[1:])
-            except ValueError:
-                continue
-        _local_names.append(names)
-        return names
-
-    def _local(address):
-        """A TCP address on this machine, decided without a lookup: a numeric address
-        (any spelling the C library accepts, "0", "127.1", a %scope and bytes included,
-        and "" for the wildcard) that is loopback or the wildcard, or a name the hosts
-        file or the host name puts here."""
-        if not isinstance(address, tuple) or len(address) < 2:
-            return False
-        host = address[0]
-        if isinstance(host, (bytes, bytearray)):
-            host = bytes(host).decode("ascii", "replace")
-        host = str(host)
-        if host == "":
-            return True
-        try:
-            return _local_ip(_ipaddress.ip_address(host))
-        except ValueError:
-            pass
-        try:
-            return _local_ip(_ipaddress.ip_address(_socket.inet_aton(host)))
-        except (OSError, ValueError):
-            pass
-        name = host.lower().rstrip(".")
-        return name.endswith(".localhost") or name in _names_here()
-
+{local_address}
     def _forced(address):
         return _local(address) and address[1] in _REFUSE_PORTS
 
@@ -492,16 +505,40 @@ _REFUSAL_BUDGET_S = 60.0
 # Ports where VAF's own services listen on a developer machine. A connect to them
 # is refused without dialing: the CI runner has none of them, so the count must
 # not depend on whether this machine runs them, and the suite must never deliver
-# a test's request to a live app.
+# a test's request to a live app. tests/conftest.py refuses the same list in every plain
+# run; tests/test_service_port_guard.py ties it to the product's own port defaults.
 _VAF_SERVICE_PORTS = (
+    443,    # the integrated HTTPS proxy (local_network_https_port's default)
     3000,   # the web UI (Next.js)
+    5002,   # text to speech (service_stack.py)
+    5003,   # speech to text (service_stack.py)
+    5005,   # the document converter, Gotenberg (service_stack.py)
     5432,   # the memory and auth database (memory_db_url's default)
+    6379,   # Redis (service_stack.py)
     8001,   # the API server (web_server.py)
-    8005,   # the voice server
+    8005,   # the voice server, the API's plain internal port under TLS
     8080,   # the local llama server
-    8443,   # the HTTPS door
+    8443,   # the HTTPS door, the proxy's port when 443 needs admin rights
     9222,   # the browser's DevTools port (service_stack.py)
 )
+
+
+def sitecustomize_source(names) -> str:
+    """The sitecustomize this script installs, hiding the packages in `names`. The one
+    place the template is filled, so main() and the tests cannot drift apart."""
+    return _BLOCKER.format(names=repr(set(names)), refusal_s=_WINDOWS_REFUSAL_S,
+                           local_address=textwrap.indent(_LOCAL_ADDRESS_SOURCE, "    "))
+
+
+def _build_local_address():
+    namespace = {"_os": os, "_socket": socket, "_ipaddress": ipaddress}
+    exec(compile(_LOCAL_ADDRESS_SOURCE, "hostile_env._LOCAL_ADDRESS_SOURCE", "exec"), namespace)
+    return namespace["_local"]
+
+
+# The same predicate as the generated sitecustomize, for an importer in this process
+# (tests/conftest.py): True for a TCP address on this machine, decided without a lookup.
+local_address = _build_local_address()
 
 # Loaded with `-p` in the argv of the one pytest this script starts, not through
 # PYTEST_ADDOPTS, so a pytest a test spawns does not load it.
@@ -606,9 +643,8 @@ def main() -> int:
             home, linked = real_home, False
         site = Path(tmp) / "site"
         site.mkdir()
-        (site / "sitecustomize.py").write_text(
-            _BLOCKER.format(names=repr(set(OPTIONAL_PACKAGES)), refusal_s=_WINDOWS_REFUSAL_S),
-            encoding="utf-8")
+        (site / "sitecustomize.py").write_text(sitecustomize_source(OPTIONAL_PACKAGES),
+                                               encoding="utf-8")
         (site / "vaf_hostile_refusals.py").write_text(_LAST_TEST_PLUGIN, encoding="utf-8")
         refusal_log = Path(tmp) / "refusals.log"
         crlf_files = _crlf_checkout_files()

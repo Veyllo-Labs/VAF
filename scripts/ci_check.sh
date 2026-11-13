@@ -137,9 +137,10 @@ fi
 echo ""
 echo "=== 6/9  Pytest ==="
 # HOME is redirected even here. The suite has twice written into the real user
-# store - once destroying the machine's recovery key - and the isolation
-# fixtures do not cover every axis. A scratch home costs nothing and removes
-# the whole class.
+# store - once destroying the machine's recovery key. tests/conftest.py now
+# moves a run in the account's own home into a home of its own, but only on a
+# POSIX developer machine; this scratch home is the outer layer that holds
+# wherever that check does not.
 VAF_CI_HOME="$(mktemp -d)"
 mkdir -p "$VAF_CI_HOME/.vaf"
 HOME="$VAF_CI_HOME" USERPROFILE="$VAF_CI_HOME" \

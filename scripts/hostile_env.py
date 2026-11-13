@@ -27,8 +27,10 @@ locally, in the time the suite already takes:
                   on one fails here rather than on the runner that lacks it.
   SCRATCH HOME    HOME points at a throwaway directory. Not a CI concern - a
                   safety one. The suite has twice written into the real user
-                  store, once destroying a recovery key, and the isolation
-                  fixtures do not cover every axis.
+                  store, once destroying a recovery key. tests/conftest.py
+                  moves only a home it recognises as the account's own (POSIX,
+                  outside GitHub Actions), so a scratch home stays the outer
+                  layer.
   WINDOWS HOME    "~" (and so Path.home()) resolves from USERPROFILE and
                   ignores HOME, as ntpath.expanduser does. A test that points
                   only HOME at a scratch directory still sees the real profile

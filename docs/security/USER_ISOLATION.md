@@ -521,9 +521,14 @@ project in its place and swapped back: `git_log` printed the other account's com
 300 calls; `git_status` reads the same way, `git_add_commit` would commit there and
 `git_init` would create `.git` there. The precondition is a process of the account racing
 inside its own folder, which its sandbox environment is (it mounts the account's project or
-project root and can rename and link below the mount). The notes tools are not affected:
-measured, no escape in 960 swaps of `.vaf` and 795 swaps of the project folder, because their
-writes are pinned to the folder handle. The class is shared by every lane that checks a
+project root and can rename and link below the mount). The notes tools write nothing
+outside: measured, no escape in 960 and 795 calls made while `.vaf` or the project folder was
+being swapped, because their writes are pinned to the folder handle. Under the same race one
+thing does reach the other account's project: a new notes manager whose `.vaf` is missing
+creates that folder by path, so an empty `.vaf` folder can appear there (measured 6 of 1076
+calls of a fresh manager with `.vaf` deleted); nothing is ever written into it, because the
+write that follows is refused. Creating the folder relative to a checked folder handle is the
+same fix as pinning the git runner by handle. The class is shared by every lane that checks a
 project folder by path and then runs git or a shell on it: the coder's run folder
 (`_choose_base_dir`, its base-folder wrappers), `project_history`/`project_rollback`
 (`project_git._resolve_project`) and `code_audit`. The fix belongs in `run_project_git` for

@@ -11,9 +11,9 @@ The leading underscore keeps it out of every collection that does not name it.
   `Path.home()` and into `Platform.data_dir()`, in the test write `Documents/run.txt` under
   the home, and at exit report the home and whether the service-port guard is still
   installed, as JSON, into that file.
-- VAF_HOME_WITNESS_DIAL: in the test, dial 127.0.0.1 on that port and expect a refusal.
+- VAF_HOME_WITNESS_DIAL: in the test, dial 127.0.0.1 on that port and expect a refusal,
+  whose message contains VAF_HOME_WITNESS_REFUSER when that is set.
 """
-import _socket
 import atexit
 import json
 import os
@@ -53,8 +53,13 @@ def test_witness():
         (documents / "run.txt").write_text("written by a test", encoding="utf-8")
     port = os.environ.get("VAF_HOME_WITNESS_DIAL")
     if port:
-        # Never dial a VAF port unguarded: with neither layer installed this must fail
-        # here, not reach whatever listens on the machine.
-        assert socket.socket.connect is not _socket.socket.connect, "no connect guard installed"
-        with pytest.raises(ConnectionRefusedError):
+        # Never dial a VAF port unguarded: unless the installed wrapper is the conftest guard
+        # or hostile's counter refusing this very port, fail here instead of reaching
+        # whatever listens on the machine.
+        connect = socket.socket.connect
+        assert (getattr(connect, "_vaf_service_port_guard", False)
+                or int(port) in getattr(connect, "_vaf_hostile_refuses", ())), \
+            "no wrapper that refuses this port is installed"
+        with pytest.raises(ConnectionRefusedError) as refused:
             socket.create_connection(("127.0.0.1", int(port)), timeout=2)
+        assert os.environ.get("VAF_HOME_WITNESS_REFUSER", "") in str(refused.value)

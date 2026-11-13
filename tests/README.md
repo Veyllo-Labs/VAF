@@ -87,8 +87,14 @@ Windows gets no such redirect (there is no passwd entry to compare with), so USE
 stays your job there. Every run, CI included, also refuses a connect to any of VAF's own
 service ports on this machine (the list in `scripts/hostile_env.py`, 8001 and 8080 among
 them) before it is dialed, so a VAF running on the same machine never receives a test's
-request. No test needs one of those ports reachable, and there is no switch to allow it.
-The header of a run says which home it used and who refuses the ports.
+request. That holds for plain and non-blocking sockets and for both asyncio loops, the
+selector loop and Windows' proactor loop. No test needs one of those ports reachable, and
+there is no switch to allow it. The header of a run says which home it used and who
+refuses the ports. Named boundaries: a client on uvloop, `connect` on the C base class
+`_socket.socket`, a literal address of one of the machine's own network interfaces, and a
+child process a test starts, which this guard does not reach (measured: 28 test files that
+start Python children, 962 tests, made no dial to any of the ports from a child; the
+hostile run covers children through its sitecustomize, a plain run does not).
 
 The failure modes below have actually happened in this repository. They are worth knowing
 before writing the test, not after. (The list is deliberately not numbered in this sentence:

@@ -172,21 +172,30 @@ if HOME_REDIRECTED:
 # the backend; 5432: the memory and auth stores), and with the app open those requests
 # reached it. Refused here, before a SYN leaves, in every run, CI included: urllib3 turns
 # the error into NewConnectionError, so the local API's outage memory pauses exactly as on
-# a runner without an app, and asyncio's selector loop dials through `sock.connect`, so
-# asyncpg and httpx are covered too. The port list and the "is this address local" answer
-# are scripts/hostile_env.py's, one copy for both. The guard is never uninstalled: threads
-# that outlived their test and the Agent exit handlers (a GET to 8080) dial after the
-# session ended. A test about the guard extends `REFUSED_SERVICE_PORTS`, read per call;
-# there is deliberately no switch to turn it off, since no test needs a live VAF port.
+# a runner without an app. Blocking and non-blocking `socket.connect`/`connect_ex` are
+# wrapped, and so is `sock_connect` of both asyncio loops: the selector loop (Linux, macOS)
+# and the proactor loop (Windows' default, which connects through ConnectEx and never calls
+# the socket methods); `create_connection` and therefore asyncpg and httpx dial through it.
+# The port list and the "is this address local" answer are scripts/hostile_env.py's, one
+# copy for both. The guard is never uninstalled: threads that outlived their test and the
+# Agent exit handlers (a GET to 8080) dial after the session ended. A test about the guard
+# extends `REFUSED_SERVICE_PORTS`, read per call; there is deliberately no switch to turn
+# it off, since no test needs a live VAF port.
 #
 # In the hostile run (scripts/hostile_env.py on POSIX) the guard steps aside: that run's
 # sitecustomize refuses the same ports itself and charges each refusal to the test that
-# made it, and a refusal here would hide it from that count.
+# made it, and a refusal here would hide it from that count. Stepping aside is decided by
+# the wrappers it installed (they carry the ports they refuse), never by its environment
+# variables: a variable inherited without the sitecustomize loaded would leave no guard.
 #
-# Named boundaries, the same as the hostile run's: a client on uvloop (libuv dials, not
-# the selector loop), `connect` called on the C base `_socket.socket`, the Windows
-# proactor loop (ConnectEx, asyncio's default there), and a literal address of one of this
-# machine's own network interfaces.
+# Named boundaries. The same as the hostile run's: a client on uvloop (libuv dials, not
+# the asyncio loops), `connect` called on the C base `_socket.socket`, and a literal
+# address of one of this machine's own network interfaces. And A CHILD PROCESS of a test:
+# this file guards the pytest process only. Measured: 28 test files that start Python
+# children (962 tests), with an audit hook carried into every child through PYTHONPATH,
+# made no dial to any of the twelve ports from a child. The hostile run covers children
+# through the sitecustomize on PYTHONPATH (unless a test strips PYTHONPATH); a plain run
+# does not, and a child pytest loads this file again.
 _ROOT = _Path(__file__).resolve().parent.parent
 _hostile_spec = _importlib_util.spec_from_file_location(
     "vaf_tests_hostile_env", _ROOT / "scripts" / "hostile_env.py")
@@ -194,7 +203,8 @@ _hostile = _importlib_util.module_from_spec(_hostile_spec)
 _hostile_spec.loader.exec_module(_hostile)
 
 REFUSED_SERVICE_PORTS = frozenset(_hostile._VAF_SERVICE_PORTS)
-HOSTILE_COUNTS_REFUSALS = bool(_os.environ.get("VAF_HOSTILE_REFUSAL_LOG")) and _os.name != "nt"
+HOSTILE_COUNTS_REFUSALS = REFUSED_SERVICE_PORTS <= frozenset(
+    getattr(_socket.socket.connect, "_vaf_hostile_refuses", ()))
 
 _INET = (_socket.AF_INET, _socket.AF_INET6)
 
@@ -211,7 +221,22 @@ def _refusal(address) -> ConnectionRefusedError:
         f"refused under test, never dialed: {address[0]}:{address[1]} (tests/conftest.py)")
 
 
+def _guard_loop_class(loop_class):
+    plain_sock_connect = loop_class.sock_connect
+
+    async def sock_connect(self, sock, address):
+        if _service_port(sock, address):
+            raise _refusal(address)
+        return await plain_sock_connect(self, sock, address)
+
+    sock_connect._vaf_service_port_guard = True
+    loop_class.sock_connect = sock_connect
+
+
 def _install_service_port_guard():
+    import asyncio.proactor_events
+    import asyncio.selector_events
+
     plain_connect = _socket.socket.connect
     plain_connect_ex = _socket.socket.connect_ex
 
@@ -228,6 +253,8 @@ def _install_service_port_guard():
     connect._vaf_service_port_guard = connect_ex._vaf_service_port_guard = True
     _socket.socket.connect = connect
     _socket.socket.connect_ex = connect_ex
+    _guard_loop_class(asyncio.selector_events.BaseSelectorEventLoop)
+    _guard_loop_class(asyncio.proactor_events.BaseProactorEventLoop)
 
 
 if not HOSTILE_COUNTS_REFUSALS:

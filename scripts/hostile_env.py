@@ -471,6 +471,11 @@ if _refusal_log and _os.name != "nt":
             _charge(address, self.gettimeout())
         return code
 
+    # What tests/conftest.py reads to step aside: the ports these wrappers refuse, carried
+    # by the wrappers themselves, so an inherited variable without this file loaded never
+    # passes for it.
+    _counted_connect._vaf_hostile_refuses = _REFUSE_PORTS
+    _counted_connect_ex._vaf_hostile_refuses = _REFUSE_PORTS
     _socket.socket.connect = _counted_connect
     _socket.socket.connect_ex = _counted_connect_ex
 

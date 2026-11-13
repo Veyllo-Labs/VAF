@@ -36,6 +36,14 @@ Named boundary: module-local seams (`monkeypatch.setattr(rl, "_sleep", f)`, a mo
 `asyncio.sleep` are not covered. The first two do not reach other modules; a foreign READ
 of a fake clock does not move it; `asyncio.sleep` is awaited on an event loop, and the one
 loop thread that outlives its test waits in `select`, not in a sleep.
+
+Also a named boundary: four spellings that DO replace the shared sleep are not seen, because
+the guard matches the call's shape and does not follow values:
+`monkeypatch.setattr(sys.modules["time"], "sleep", f)`, `patch.multiple(time, sleep=f)`,
+`setattr` with its target and name passed as keyword arguments, and a write through
+`time.__dict__`. None of them occurs under tests/ (a grep for each came back empty), so
+covering them would be detector code with nothing to catch. A test that needs one of them
+wraps the fake in `only_on_thread` all the same and adds the spelling here, with its snippet.
 """
 import ast
 import threading
@@ -85,6 +93,10 @@ def _arg(call, index, name):
 def unwrapped_sleep_patches(source: str) -> list:
     """Line numbers of every process-wide `time.sleep` replacement in `source` whose
     replacement is not `only_on_thread(...)` or `<clock>.sleep_in_test_thread`."""
+    # Every spelling below names "sleep" literally, so a file without the word has none;
+    # skipping the parse leaves about one test file in seven to read as a tree.
+    if "sleep" not in source:
+        return []
     tree = ast.parse(source)
     aliases = {"time"}
     for node in ast.walk(tree):

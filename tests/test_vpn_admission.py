@@ -347,7 +347,9 @@ def test_an_admission_change_reapplies_the_firewall_without_a_restart(monkeypatc
     monkeypatch.setattr(tray, "_schedule_network_restart", lambda k, v: restarts.append(k))
 
     tray.on_config_changed("local_network_allowed_networks", ["100.64.0.0/10"], [])
-    assert applied.wait(2), "the firewall must be re-applied for the new networks"
+    # The re-apply worker really sleeps 0.5 s first; wait() returns as soon as it is set, so a
+    # generous bound costs nothing on a fast machine and spares a loaded runner.
+    assert applied.wait(5), "the firewall must be re-applied for the new networks"
     assert restarts == []
 
     tray.on_config_changed("local_network_port", 8002, 8001)

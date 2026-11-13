@@ -502,9 +502,34 @@ The six now declare `user_scope_id`/`user_role`, and `tool_work_folder` asks
   `tasks.json`) through `vaf.open_for_write` pinned to that folder's real path (a link as the
   last part, or a folder swapped for a link later, is refused), and the notes tools ask the
   caller's file jail again for that real path. The coder reads `codex.md` and `memory.md`
-  into its prompt; that read refuses a link too, so another account's file never reaches a
-  run. A hard link is not seen, as for every writer (a sandbox cannot make one to a file
-  outside its mount).
+  into its prompt; that read opens the `.vaf` folder first, compares the handle's kernel path
+  with the checked folder and opens the file relative to that handle without following a
+  link, so a `.vaf` swapped for a link and back around the read cannot carry another
+  account's file into a run. A `.vaf` deleted during a run is made again at the same real
+  path, never resolved anew. On Windows (no folder handles) the read refuses a link at the
+  name and compares the resolved folder after the open, so a folder link in place only
+  while the file is opened is not seen there. A hard link is not seen, as for every writer
+  (a sandbox cannot make one to a file outside its mount).
+
+NAMED BOUNDARY: the git tools check the folder by its path, and git then runs on that path.
+`tool_work_folder` judges the resolved folder and hands it on as text; `run_project_git`
+starts git with that path as its working folder, `--git-dir` and `--work-tree`. A process
+that swaps the account's OWN project folder for a link into another account's project in
+the moment between the check and git's start steers that one git call there. Measured with
+a loop that renamed a non-admin's project folder away, put a link to another account's
+project in its place and swapped back: `git_log` printed the other account's commit in 21 of
+300 calls; `git_status` reads the same way, `git_add_commit` would commit there and
+`git_init` would create `.git` there. The precondition is a process of the account racing
+inside its own folder, which its sandbox environment is (it mounts the account's project or
+project root and can rename and link below the mount). The notes tools are not affected:
+measured, no escape in 960 swaps of `.vaf` and 795 swaps of the project folder, because their
+writes are pinned to the folder handle. The class is shared by every lane that checks a
+project folder by path and then runs git or a shell on it: the coder's run folder
+(`_choose_base_dir`, its base-folder wrappers), `project_history`/`project_rollback`
+(`project_git._resolve_project`) and `code_audit`. The fix belongs in `run_project_git` for
+all of them at once: open the judged folder as a handle, compare the handle's kernel path
+with the judged one, and run git through that handle (`pass_fds`, `/proc/self/fd/N` as the
+working folder, `--git-dir` and `--work-tree`).
 
 The chat's own store tools (`update_intent`, `update_working_memory`, `add_task`, and the
 coder's `request_clarification`) used to take a `base_dir` from the call as well: one account

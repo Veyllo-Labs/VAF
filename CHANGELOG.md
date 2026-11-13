@@ -288,6 +288,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   link in a project's `.vaf` folder (one that pointed at your shell start file or at another
   account's file), and the session goal and task list tools no longer write into a folder the
   agent names. Background thinking runs no longer create a repository or project notes.
+  Not yet covered: the git tools check the folder before git starts, so a program of the
+  account that replaces its own project folder with a link at exactly that moment, from its
+  sandbox environment for example, can still point that one git call at another folder.
   Needs a restart of VAF.
 - **The agent's file tools stay out of VAF's own data and your shell start files.** Reading
   VAF's data and settings folders (messages, mail, contacts, key files, the MCP server list,

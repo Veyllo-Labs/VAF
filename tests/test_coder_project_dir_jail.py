@@ -778,6 +778,16 @@ def test_the_contact_lane_never_offers_them():
 #   real_notes_folder;
 # - _read_file opens the given path with open() again -> test_the_coder_never_reads_notes_
 #   through_a_link;
+# - _read_file opens the file by its path instead of relative to the checked folder handle
+#   -> test_a_notes_folder_swapped_around_the_read_is_not_followed;
+# - notes_folder no longer makes a deleted folder again -> test_a_deleted_notes_folder_is_
+#   made_again;
+# - a deleted folder is asked _own_folder again (resolved anew) -> test_a_deleted_notes_
+#   folder_is_not_made_again_behind_a_swapped_project_folder;
+# - _own_folder drops its realpath comparison -> test_a_notes_folder_that_resolves_elsewhere_
+#   is_not_used;
+# - the read's Windows branch opens without its link and folder checks -> test_the_read_
+#   without_folder_handles_reads_its_own_file_and_no_link;
 # - tool_work_folder returns the raw base_dir again -> test_a_home_relative_folder_is_
 #   the_folder_that_was_judged;
 # - the context tools take base_dir from the call again -> test_the_store_tools_take_no_
@@ -881,6 +891,112 @@ def test_the_coder_never_reads_notes_through_a_link(own_project):
     linked.mkdir(parents=True)
     os.symlink(w.b_proj / ".vaf", linked / ".vaf")
     assert PersistenceManager(str(linked)).get_codex() == ""
+
+
+def test_a_notes_folder_swapped_around_the_read_is_not_followed(own_project, monkeypatch):
+    """.vaf swapped for a link into B's .vaf right before the file is opened and restored
+    right after: the read is relative to the folder handle checked before, so it still reads
+    A's own file. Driven deterministically through os.open."""
+    from vaf.core import path_jail
+    from vaf.core.persistence import PersistenceManager
+    if not path_jail._DIR_FD:
+        pytest.skip("no folder handles here (the Windows branch is a named boundary)")
+    w = own_project
+    vaf, aside = w.mine / ".vaf", w.mine / ".vaf-aside"
+    (vaf / "codex.md").write_text("A-OWN\n")
+    try:
+        os.symlink(w.b_proj / "secret.txt", w.mine / "probe-link")
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available here")
+    pm = PersistenceManager(str(w.mine))
+    assert pm.notes_folder()
+    real_open = os.open        # captured before the patch
+    swapped = []
+
+    def _swapping(path, flags, *args, **kwargs):
+        if os.fspath(path).endswith("codex.md") and not swapped:
+            swapped.append(path)
+            os.rename(vaf, aside)
+            os.symlink(w.b_proj / ".vaf", vaf)
+            try:
+                return real_open(path, flags, *args, **kwargs)
+            finally:
+                os.unlink(vaf)
+                os.rename(aside, vaf)
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", _swapping)
+    text = pm.get_codex()
+    monkeypatch.setattr(os, "open", real_open)
+    assert swapped, "the swap never ran"
+    assert "B-CODEX" not in text
+    assert text == "A-OWN\n"
+
+
+def test_the_read_without_folder_handles_reads_its_own_file_and_no_link(own_project,
+                                                                       monkeypatch):
+    """The Windows branch (no folder handles, no O_NOFOLLOW), taken on any host.
+    MUTATION: open the joined path without the islink and resolved-folder checks there - red
+    (B's file read)."""
+    from vaf.core import path_jail
+    from vaf.core.persistence import PersistenceManager
+    w = own_project
+    monkeypatch.setattr(path_jail, "_DIR_FD", False)
+    (w.mine / ".vaf" / "memory.md").write_text("own memory\n")
+    _symlink_or_skip(w.mine / ".vaf" / "codex.md", w.b_proj / "secret.txt")
+    pm = PersistenceManager(str(w.mine))
+    assert pm.get_memory() == "own memory\n"
+    assert pm.get_codex() == ""
+
+
+def test_a_deleted_notes_folder_is_made_again(own_project):
+    import shutil
+
+    from vaf.core.persistence import PersistenceManager, ProjectState
+    w = own_project
+    pm = PersistenceManager(str(w.mine))
+    assert pm.notes_folder()
+    shutil.rmtree(w.mine / ".vaf")
+    pm.save_state(ProjectState(project_name="site"))
+    assert (w.mine / ".vaf" / "tasks.json").is_file()
+    shutil.rmtree(w.mine / ".vaf")
+    pm.append_memory("again")
+    assert "again" in (w.mine / ".vaf" / "memory.md").read_text(encoding="utf-8")
+
+
+def test_a_deleted_notes_folder_is_not_made_again_behind_a_swapped_project_folder(own_project):
+    """Deleted, and the project folder swapped for a link into B meanwhile: the folder is made
+    again only at the real path that was judged, never resolved anew into B's tree."""
+    import shutil
+
+    from vaf.core.path_jail import WriteRefused
+    from vaf.core.persistence import PersistenceManager
+    w = own_project
+    pm = PersistenceManager(str(w.mine))
+    assert pm.notes_folder()
+    shutil.rmtree(w.mine / ".vaf")
+    # A folder of B's with no .vaf: the pinned path is then gone too, and only making it
+    # again decides where the note lands.
+    other = w.b_root / "other"
+    other.mkdir()
+    os.rename(w.mine, w.mine.parent / "site-aside")
+    _symlink_or_skip(w.mine, other)
+    with pytest.raises(WriteRefused):
+        pm.append_memory("SWAPPED")
+    assert not (other / ".vaf").exists()
+
+
+def test_a_notes_folder_that_resolves_elsewhere_is_not_used(own_project, monkeypatch):
+    """A junction is no link to islink; resolved, it lands elsewhere. Simulated by the
+    resolution of the .vaf path (real os.path.realpath captured before the patch)."""
+    from vaf.core.persistence import PersistenceManager
+    w = own_project
+    vaf = str(w.mine / ".vaf")
+    real_realpath = os.path.realpath
+    monkeypatch.setattr(os.path, "realpath",
+                        lambda p, *a, **k: str(w.b_proj / ".vaf") if os.fspath(p) == vaf
+                        else real_realpath(p, *a, **k))
+    assert PersistenceManager(str(w.mine)).notes_folder() is None
 
 
 @pytest.mark.parametrize("name", ["update_codex", "git_init"])

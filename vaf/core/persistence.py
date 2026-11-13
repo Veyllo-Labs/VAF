@@ -109,7 +109,7 @@ class PersistenceManager:
     ``.vaf`` that is a link is not used at all (`notes_folder` answers None), every write
     opens through `vaf.core.path_jail.open_for_write` pinned to the real path of that folder
     (a link as the last part, or a folder swapped for a link later, is refused), and a read
-    refuses a link as the last part and a folder that is not that one. A caller that decides
+    opens the file relative to that folder's checked handle, never through a link. A caller that decides
     who may write the project asks its rule for `notes_folder` (the git and notes tools ask
     the caller's file jail). NAMED BOUNDARY: a hard link is a second name of the same file and
     is not seen; a sandbox environment cannot make one to a file outside its mount.
@@ -139,11 +139,35 @@ class PersistenceManager:
     def notes_folder(self) -> Optional[str]:
         """The real path of this project's ``.vaf`` folder, or None when it is a link (or a
         junction), not a folder, or cannot be made. Asked once; every read and write of this
-        manager is pinned to that answer."""
+        manager is pinned to that answer. A folder deleted meanwhile (a clean-up, the run's
+        own shell) is made anew at that same real path, never resolved again: the project
+        folder may have been swapped for a link since, and the answer the caller's rule
+        judged must stay the folder that is written."""
+        if self._folder is not None and not os.path.lexists(self._folder):
+            self._folder = self._recreate(self._folder)
         if not self._folder_asked:
             self._folder_asked = True
             self._folder = self._own_folder()
         return self._folder
+
+    @staticmethod
+    def _recreate(folder: str) -> Optional[str]:
+        """``folder`` (a real path) made again, or None when its parent is no longer that real
+        folder (a link on the way) or it cannot be made."""
+        parent = os.path.dirname(folder)
+        try:
+            if os.path.normcase(os.path.realpath(parent)) != os.path.normcase(parent):
+                return None
+            try:
+                os.mkdir(folder)
+            except FileExistsError:
+                pass
+            if (os.path.islink(folder)
+                    or os.path.normcase(os.path.realpath(folder)) != os.path.normcase(folder)):
+                return None
+            return folder
+        except (OSError, ValueError):
+            return None
 
     def _own_folder(self) -> Optional[str]:
         try:
@@ -232,24 +256,43 @@ class PersistenceManager:
     def _read_file(self, path: str) -> str:
         """The file's text, or "" when it is missing, a link, not a regular file, or not in
         this project's own .vaf folder. The coder reads codex and memory into its prompt, so
-        a link to another account's file would carry that file into the run."""
+        a link to another account's file would carry that file into the run.
+
+        The folder is opened first (``O_DIRECTORY | O_NOFOLLOW``), its handle's kernel path
+        compared with `notes_folder` (the same handle check `open_for_write` makes,
+        `vaf.core.path_jail._fd_path`), and the file opened relative to that handle with
+        ``O_NOFOLLOW``: a ``.vaf`` swapped for a link and back around the open cannot leave
+        the read on a file outside. NAMED BOUNDARY, Windows (no folder handles, no
+        ``O_NOFOLLOW``): a link at the name is refused and the folder's resolved path is
+        compared after the open, so a folder link that is in place only while the file is
+        opened is not seen there."""
         folder = self.notes_folder()
         if folder is None:
             return ""
-        path = os.path.join(folder, os.path.basename(path))
+        name = os.path.basename(path)
+        from vaf.core import path_jail
+        cloexec = getattr(os, "O_CLOEXEC", 0)
+        fd = -1
         try:
-            if os.path.islink(path) or not os.path.isfile(path):
-                return ""
-            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-            fd = os.open(path, flags | getattr(os, "O_BINARY", 0))
-        except OSError:
-            return ""
-        try:
+            if path_jail._DIR_FD:
+                dfd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | cloexec)
+                try:
+                    if os.path.normcase(path_jail._fd_path(dfd, folder)) != os.path.normcase(folder):
+                        return ""
+                    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | cloexec,
+                                 dir_fd=dfd)
+                finally:
+                    os.close(dfd)
+            else:
+                full = os.path.join(folder, name)
+                if os.path.islink(full) or not os.path.isfile(full):
+                    return ""
+                fd = os.open(full, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+                real = os.path.dirname(os.path.realpath(full))
+                if os.path.normcase(real) != os.path.normcase(folder):
+                    return ""
             import stat as _stat
             if not _stat.S_ISREG(os.fstat(fd).st_mode):
-                return ""
-            real = os.path.dirname(os.path.realpath(path))
-            if os.path.normcase(real) != os.path.normcase(folder):
                 return ""
             f = os.fdopen(fd, "r", encoding="utf-8")
             fd = -1

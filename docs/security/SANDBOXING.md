@@ -949,14 +949,21 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   for bash leaves the heredoc open: inside a word (`a#b`, `$#`, `16#ff`, and after the `)`
   of `$(...)`, `$((...))`, `<(...)` or an array, where the word goes on: `$(printf x)#`),
   after an escaped blank (`a\ #b`), inside a `${...}` or `$[...]` bash really opens (a
-  quoted or escaped `${` opens none), inside `$(...)` or a backtick pair, or after `\v`.
-  After the `)` of a subshell a `#` starts a comment. For an unquoted heredoc whose body
+  quoted or escaped `${` opens none, nor `$${`, where `$$` is the process id; a `$[...]`
+  closes at its own `]`, a subscript inside it is counted), inside `$(...)` or a backtick
+  pair, or after `\v`. After every other `)`, a subshell's, an arithmetic command's
+  `(( ))` and a `case` pattern's, a `#` starts a comment. Named boundary: a `$`, a
+  backslash-newline and a `{` are not read as `${`, though bash joins the lines first; that
+  only keeps a later `#` a comment, so the check refuses more there, never less.
+  For an unquoted heredoc whose body
   is expanded, the refusal also offers quoting the delimiter (`<<'EOF'`) only when the
-  heredoc goes into a file and nowhere else: its line starts with `cat` or `tee` and names
-  a file to write, holds no `|` or `&&`, no word anywhere in the command is a shell or
-  interpreter (the ones the check knows as script readers, `csh` and `fish` among them,
-  also spelt `/bin/bash` or `b\ash`), `eval`, `source` or `.`, no variable stands where
-  a command starts (`$SHELL`), and the frozen reading lets the command pass. For a
+  heredoc goes into a file and nowhere else: the command that receives it is `cat` or
+  `tee` and names a file to write (`cat > f; at now <<EOF` is `at`'s heredoc), its line
+  holds no `|` or `&&`, no word of the command's own lines (a heredoc body is text and does
+  not count) is a shell or interpreter (the ones the check knows as script readers, `csh`
+  and `fish` among them, also spelt `/bin/bash` or `b\ash`), `eval`, `source` or `.`, no
+  variable stands where a command starts (`$SHELL`, also `"$SHELL"`), and the frozen
+  reading lets the command pass. For a
   writer's program refusal it comes first. Its accepted cost: a heredoc
   piped into a shell is not checked for substitutions inside its body
   (`cat <<'EOF' | bash` with `eval "$(...)"` in it), as on main; a dangerous command line

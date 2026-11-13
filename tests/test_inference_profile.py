@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from fake_clock import only_on_thread
 from vaf.core import inference_profile as ip
 from vaf.core import service_health as sh
 from vaf.core import service_stack as ss
@@ -847,7 +848,7 @@ def test_a_start_waiting_for_a_loading_server_ends_on_a_switch(config, monkeypat
         raise _KeptWaiting()
 
     monkeypatch.setattr(backend.requests, "get", _get)
-    monkeypatch.setattr(backend.time, "sleep", _sleep)
+    monkeypatch.setattr(backend.time, "sleep", only_on_thread(_sleep))
     fake = types.SimpleNamespace(ensure_server_exists=lambda: True, pid_file=str(pid_file),
                                  _is_process_running=lambda pid: True, process=None)
     try:

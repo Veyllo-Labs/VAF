@@ -41,6 +41,7 @@ from types import SimpleNamespace
 import pytest
 import requests
 
+from fake_clock import only_on_thread
 import vaf.core.backend as backend
 from vaf.core import local_engine as le
 from vaf.core import vllm_server as vs
@@ -61,7 +62,7 @@ def values(monkeypatch, tmp_path):
     monkeypatch.setattr(Config, "load", staticmethod(lambda: dict(vals)))
     monkeypatch.setattr(vs, "pid_file", lambda: tmp_path / "vllm.pid")
     monkeypatch.setattr(backend, "reap_abandoned_children", lambda: 0)
-    monkeypatch.setattr(backend.time, "sleep", lambda s: None)
+    monkeypatch.setattr(backend.time, "sleep", only_on_thread(lambda s: None))
     monkeypatch.setattr(backend, "_wait_port_free", lambda port, tries=20: None)
     return vals
 
@@ -189,8 +190,8 @@ def test_handover_llama_to_vllm_order(monkeypatch, tmp_path, values):
             events.append("llama-exit")
         return False
     monkeypatch.setattr(backend.ServerManager, "_looks_like_llama_server", looks_like_llama)
-    monkeypatch.setattr(backend.time, "sleep", lambda sec: events.append(("settle", sec))
-                        if sec == backend._VRAM_SETTLE_SECONDS else None)
+    monkeypatch.setattr(backend.time, "sleep", only_on_thread(
+        lambda sec: events.append(("settle", sec)) if sec == backend._VRAM_SETTLE_SECONDS else None))
     assert _manager(tmp_path).start_server("/m.gguf") is True
     assert events == ["stop-llama", "llama-exit", ("settle", 1.5),
                       ("spawn-vllm", REPO, 32768, 8080)], "the GPU memory was read before it settled"
@@ -684,7 +685,7 @@ def test_the_tray_poll_hands_an_engine_switch_on(monkeypatch, values):
         sleeps.append(sec)
         if len(sleeps) > 1:
             raise _Stop()
-    monkeypatch.setattr(tray.time, "sleep", sleep)
+    monkeypatch.setattr(tray.time, "sleep", only_on_thread(sleep))
     monkeypatch.setattr(tray, "on_config_changed", lambda k, new, old: seen.append((k, new, old)))
     values["local_engine"] = "llama"
     tray._seed_network_config()

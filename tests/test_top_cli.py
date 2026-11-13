@@ -5,6 +5,7 @@
 import typer
 from typer.testing import CliRunner
 
+from fake_clock import only_on_thread
 import vaf.cli.cmd.top as top_mod
 
 runner = CliRunner()
@@ -52,7 +53,7 @@ def test_once_renders_one_snapshot_without_probing(monkeypatch):
     monkeypatch.setattr("vaf.core.service_health.collect_service_status",
                         lambda *a, **k: _fake_services())
     monkeypatch.setattr(top_mod, "_service_pid", lambda: 4242)
-    monkeypatch.setattr(top_mod.time, "sleep", lambda s: None)
+    monkeypatch.setattr(top_mod.time, "sleep", only_on_thread(lambda s: None))
 
     app = typer.Typer()
     app.command(name="top")(top_mod.cmd_top)

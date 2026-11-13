@@ -17,6 +17,7 @@ import pathlib
 import pytest
 from fastapi import HTTPException
 
+from fake_clock import only_on_thread
 import vaf.api.mail_routes as mr
 import vaf.core.composer_lane as lane
 from vaf.core.config import Config
@@ -277,7 +278,7 @@ def test_a_cold_local_model_is_loaded_rather_than_refused(monkeypatch):
             self.status_code = code
 
     monkeypatch.setattr(rq, "get", lambda *a, **k: _R(next(health)))
-    monkeypatch.setattr(lane.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(lane.time, "sleep", only_on_thread(lambda _s: None))
 
     class _Res:
         status_code = 200

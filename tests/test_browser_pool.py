@@ -19,6 +19,7 @@ import types
 
 import pytest
 
+from fake_clock import only_on_thread
 import vaf.core.browser_interactive as bi
 import vaf.core.browser_pool as bp
 from vaf.core import containers
@@ -281,7 +282,7 @@ def test_a_browser_auto_adds_is_partitioned_like_the_first_two(pool, monkeypatch
     # The reaper: every instance idle for longer than the timeout is stopped, nothing more.
     for inst in got:
         inst.last_used = 0.0
-    monkeypatch.setattr(bp.time, "sleep", lambda s: None)
+    monkeypatch.setattr(bp.time, "sleep", only_on_thread(lambda s: None))
     # Nobody holds a lease or runs an agent on any of them.
     monkeypatch.setattr(bp.BrowserPool, "_instance_busy", staticmethod(lambda inst: False))
     before = len(pool._test_docker.calls)
@@ -876,7 +877,7 @@ def _reap_and_republish(pool, monkeypatch):
     the container on new host ports, as Docker does for `127.0.0.1::<port>`."""
     for inst in list(pool._instances.values()):
         inst.last_used = 0.0
-    monkeypatch.setattr(bp.time, "sleep", lambda s: None)
+    monkeypatch.setattr(bp.time, "sleep", only_on_thread(lambda s: None))
     pool._reaper_loop()
     assert all(s == "exited" for s in pool._test_docker.containers.values())
     pool._test_docker.next_ports = {"9222/tcp": "49333", "6901/tcp": "46902"}

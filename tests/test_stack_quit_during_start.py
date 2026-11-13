@@ -21,6 +21,7 @@ from pathlib import Path
 import psutil
 import pytest
 
+from fake_clock import only_on_thread
 import vaf.core.service_stack as stack
 
 REPO = Path(__file__).resolve().parents[1]
@@ -119,7 +120,7 @@ def test_the_second_pass_only_after_a_cut_short_start(hermetic, monkeypatch, int
     monkeypatch.setattr(stack, "cancel_start",
                         lambda: stack._start_interrupted.set() if interrupted else None)
     monkeypatch.setattr(stack, "_compose_stop", lambda root, log: stops.append(1) or True)
-    monkeypatch.setattr(stack.time, "sleep", lambda s: None)
+    monkeypatch.setattr(stack.time, "sleep", only_on_thread(lambda s: None))
     stack.stop_service_stack(still_ours=lambda: still_ours)
     assert len(stops) == passes
 

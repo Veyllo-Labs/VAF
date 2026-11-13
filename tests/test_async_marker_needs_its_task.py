@@ -21,6 +21,7 @@ MUTATIONS, each turns the named tests red:
 """
 import pytest
 
+from fake_clock import only_on_thread
 from test_front_office_tool_set import (SESSION, _front_office, _make_agent, _Provider,
                                         _tool_results)
 from vaf.markers import ASYNC_ACK
@@ -69,7 +70,7 @@ def queue(monkeypatch, tmp_path):
 def agent(monkeypatch, tmp_path, queue):
     a = _make_agent(monkeypatch, tmp_path, "deepseek")
     a._current_chat_source = "web"
-    monkeypatch.setattr("time.sleep", lambda s: None)   # the error back-off
+    monkeypatch.setattr("time.sleep", only_on_thread(lambda s: None))   # the error back-off
     return a
 
 

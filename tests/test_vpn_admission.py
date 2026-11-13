@@ -345,7 +345,6 @@ def test_an_admission_change_reapplies_the_firewall_without_a_restart(monkeypatc
     restarts = []
     monkeypatch.setattr(fw, "apply_lan_firewall", lambda log=None: applied.set())
     monkeypatch.setattr(tray, "_schedule_network_restart", lambda k, v: restarts.append(k))
-    monkeypatch.setattr(tray.time, "sleep", lambda s: None)
 
     tray.on_config_changed("local_network_allowed_networks", ["100.64.0.0/10"], [])
     assert applied.wait(2), "the firewall must be re-applied for the new networks"

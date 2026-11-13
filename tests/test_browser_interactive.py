@@ -18,6 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from fake_clock import only_on_thread
 import vaf.core.browser_interactive as bi
 
 
@@ -694,7 +695,7 @@ class _MirroredContainer:
         monkeypatch.setattr(bi, "verified_profile_wipe", bi._real_verified_profile_wipe)
         monkeypatch.setattr(bi, "_wipe_exec", self.wipe_exec)
         monkeypatch.setattr(bi, "_sync_workspace_to_container", self.sync)
-        monkeypatch.setattr(bi.time, "sleep", lambda s: None)
+        monkeypatch.setattr(bi.time, "sleep", only_on_thread(lambda s: None))
 
     def wipe_exec(self, name, cmd, timeout=20):
         if cmd.startswith("touch"):
@@ -877,17 +878,12 @@ class _JanitorDone(Exception):
 def _one_janitor_tick(mgr, monkeypatch):
     """Run the real janitor loop for exactly one tick in its own thread: its first
     sleep returns at once, the next one ends the loop. Other threads sleep as usual."""
-    real_sleep = time.sleep
-    state = {"thread": None, "calls": 0}
+    state = {"calls": 0}
 
     def sleep(s):
-        if threading.current_thread() is not state["thread"]:
-            return real_sleep(s)
         state["calls"] += 1
         if state["calls"] > 1:
             raise _JanitorDone()
-
-    monkeypatch.setattr(bi.time, "sleep", sleep)
 
     def run():
         try:
@@ -896,7 +892,7 @@ def _one_janitor_tick(mgr, monkeypatch):
             pass
 
     t = threading.Thread(target=run, daemon=True)
-    state["thread"] = t
+    monkeypatch.setattr(bi.time, "sleep", only_on_thread(sleep, thread=t))
     t.start()
     return t
 

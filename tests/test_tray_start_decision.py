@@ -14,6 +14,7 @@ import sys
 
 import pytest
 
+from fake_clock import only_on_thread
 from vaf.core import instance
 
 _DASHBOARD = [sys.executable, "-m", "vaf.main", "tray"]
@@ -116,7 +117,7 @@ def quick(monkeypatch):
     for level in ("info", "success", "warning", "error"):
         monkeypatch.setattr(ui.UI, level, lambda msg, _l=level: said.append((_l, msg)))
     monkeypatch.setattr(main_mod, "SPAWN_ANSWER_TIMEOUT_S", 2.0)
-    monkeypatch.setattr("time.sleep", lambda s: None)
+    monkeypatch.setattr("time.sleep", only_on_thread(lambda s: None))
     return main_mod, said
 
 

@@ -28,6 +28,7 @@ import json
 
 import pytest
 
+from fake_clock import only_on_thread
 from test_dispatch_event_baseline import _fake, _tool
 from test_front_office_tool_set import (SCOPE, _make_agent, _Provider, _seed_know_how,
                                         _tool_results, _wait_for_relearn, ww_store)  # noqa: F401
@@ -209,7 +210,7 @@ def test_a_dispatch_that_raised_out_of_the_lane_teaches_nothing(user_agent, monk
     def _gates(*a, **k):
         raise RuntimeError("Error: gate machinery broke")
     monkeypatch.setattr(user_agent, "_chat_turn_gates", _gates)
-    monkeypatch.setattr("time.sleep", lambda s: None)
+    monkeypatch.setattr("time.sleep", only_on_thread(lambda s: None))
     provider = _run(user_agent, contextlib.nullcontext(), ("list_contacts", {}),
                     "Das hat nicht geklappt.")
     assert _tool_results(user_agent, "list_contacts")[0].startswith("Error executing tool")

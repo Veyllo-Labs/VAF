@@ -27,6 +27,7 @@ from pathlib import Path
 
 import pytest
 
+from fake_clock import only_on_thread
 from vaf.core.platform import Platform
 
 _REPO = Path(__file__).resolve().parents[1]
@@ -105,7 +106,7 @@ def test_failure_holds_the_window_and_success_closes_it(monkeypatch, capsys):
     assert failed.value.code == 1
     assert "Press Enter to close" in capsys.readouterr().out
 
-    monkeypatch.setattr(autoclose.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(autoclose.time, "sleep", only_on_thread(lambda _s: None))
     with pytest.raises(SystemExit) as ok:
         autoclose.finish_terminal(success=True, delay=1)
     assert ok.value.code == 0

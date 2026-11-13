@@ -14,6 +14,9 @@ the process reaches it, including a background loop an earlier test left running
 and to `sleeps` (seen as a full-suite failure: two requests logged at 117840 s and 332100 s of
 fake time where 0 s and 41 s were expected). Only the thread that built the clock moves it; any
 other thread sleeps for real.
+
+`only_on_thread(fake)` is how any other process-wide sleep fake is installed (a no-op, a
+recorder, one that raises): it runs the fake on one thread and the real sleep on every other.
 """
 import threading
 import time
@@ -22,13 +25,29 @@ import time
 _REAL_SLEEP = time.sleep
 
 
+def only_on_thread(fake, thread=None):
+    """A sleep that calls `fake` on one thread and sleeps for real on every other.
+
+    The thread is `thread`, or else the one calling this. A thread object, not an ident: an
+    ident is reused once its thread has ended, and an object can be named before it starts.
+    """
+    owner = threading.current_thread() if thread is None else thread
+
+    def sleep(s):
+        if threading.current_thread() is owner:
+            return fake(s)
+        return _REAL_SLEEP(s)
+
+    return sleep
+
+
 class FakeClock:
     def __init__(self, sleeps=None):
         self.t = 0.0
         # A caller may pass its own list, so a test can keep asserting on the list it holds.
         self.sleeps = [] if sleeps is None else sleeps
         self._lock = threading.Lock()
-        self._owner = threading.get_ident()
+        self._sleep_on_owner = only_on_thread(self.sleep)
 
     def monotonic(self):
         return self.t
@@ -40,7 +59,4 @@ class FakeClock:
 
     def sleep_in_test_thread(self, s):
         """Fake on the thread that built the clock, real on every other thread."""
-        if threading.get_ident() == self._owner:
-            self.sleep(s)
-        else:
-            _REAL_SLEEP(s)
+        return self._sleep_on_owner(s)

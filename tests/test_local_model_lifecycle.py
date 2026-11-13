@@ -36,6 +36,7 @@ from pathlib import Path
 
 import pytest
 
+from fake_clock import only_on_thread
 import vaf.core.backend as backend
 
 _REPO = Path(__file__).resolve().parents[1]
@@ -291,7 +292,7 @@ def test_the_pid_path_waits_for_a_loading_server_instead_of_killing_it(tmp_path,
     monkeypatch.setattr(backend.requests, "get", _fake_get)
     monkeypatch.setattr(backend, "_loaded_model_matches", lambda *a, **kw: True)
     monkeypatch.setattr(backend, "reap_abandoned_children", lambda: 0)
-    monkeypatch.setattr(backend.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(backend.time, "sleep", only_on_thread(lambda _s: None))
 
     assert mgr.start_server("/models/wanted.gguf") is True
     assert not killed, "a server that is merely still loading must not be killed and respawned"

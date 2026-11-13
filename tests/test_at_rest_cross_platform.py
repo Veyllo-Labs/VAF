@@ -27,6 +27,7 @@ import os
 
 import pytest
 
+from fake_clock import only_on_thread
 from vaf.core import recovery_kit, secure_store
 
 
@@ -50,7 +51,7 @@ def test_a_windows_sharing_violation_is_retried_not_lost(tmp_path, monkeypatch):
 
     monkeypatch.setattr(secure_store, "_on_windows", lambda: True)
     monkeypatch.setattr(secure_store.os, "replace", flaky)
-    monkeypatch.setattr(secure_store.time, "sleep", lambda *_a: None)
+    monkeypatch.setattr(secure_store.time, "sleep", only_on_thread(lambda *_a: None))
 
     secure_store._atomic_write_bytes(target, b"the chat")
 
@@ -67,7 +68,7 @@ def test_a_permanent_windows_denial_still_raises(tmp_path, monkeypatch):
 
     monkeypatch.setattr(secure_store, "_on_windows", lambda: True)
     monkeypatch.setattr(secure_store.os, "replace", always_denied)
-    monkeypatch.setattr(secure_store.time, "sleep", lambda *_a: None)
+    monkeypatch.setattr(secure_store.time, "sleep", only_on_thread(lambda *_a: None))
 
     with pytest.raises(PermissionError):
         secure_store._atomic_write_bytes(target, b"the chat")
@@ -115,7 +116,7 @@ def test_the_browser_holder_record_retries_a_windows_sharing_violation(monkeypat
 
     monkeypatch.setattr(secure_store, "_on_windows", lambda: True)
     monkeypatch.setattr(secure_store.os, "replace", flaky)
-    monkeypatch.setattr(secure_store.time, "sleep", lambda *_a: None)
+    monkeypatch.setattr(secure_store.time, "sleep", only_on_thread(lambda *_a: None))
 
     record = bj.record_for("vaf-browser")
     token, other = record.claim(bj.KIND_PROBE, "scope-a")

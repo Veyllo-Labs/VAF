@@ -679,3 +679,32 @@ def test_the_windows_notes_read_refuses_a_link_present_only_during_the_open(worl
     monkeypatch.setattr(os, "open", real_open)
     assert done, "the swap never ran"
     assert "B-NOTES" not in text
+
+
+def test_a_linked_worktree_whose_parent_git_cannot_be_limited_is_refused(world, any_branch,
+                                                                       monkeypatch):
+    """git splits GIT_CEILING_DIRECTORIES on os.pathsep, so a parent named with one sets no
+    limit and the search goes on upwards. MUTATION: use the parent as the ceiling without the
+    check - red (the repository above prints its history)."""
+    holder = world.a.parent / f"pa{os.pathsep}rt"
+    try:
+        holder.mkdir()
+    except OSError:
+        pytest.skip("this file system refuses the separator in a name")
+    parent = _repo(holder / "repo", "PARENT-OWN", "P_ONLY")
+    wt = parent / "wt"
+    _git("worktree", "add", "-q", "-b", "side", str(wt), cwd=parent)
+    wt = wt.resolve()
+    real = gr._untrusted_drivers
+    done = []
+
+    def _removing(*args, **kwargs):
+        if not done:
+            done.append(os.rename(wt / ".git", wt / "git-file-aside"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(gr, "_untrusted_drivers", _removing)
+    proc = gr.run_project_git(["log", "--oneline"], cwd=str(wt), expect_folder=str(wt),
+                              linked_worktree=True)
+    assert proc.returncode != 0, proc.stdout
+    assert "PARENT-OWN" not in proc.stdout

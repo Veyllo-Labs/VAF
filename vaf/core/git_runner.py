@@ -38,7 +38,8 @@ that is there when it is looked at and gone again a moment later is refused, nev
 by the repository above (with a racer flipping `.git`, 1000 calls: 0 of 269 answered calls
 printed the parent's history, 242 of 418 while the runner still looked twice), and git's
 own search for a linked worktree's `.git` file stops at the judged folder
-(`GIT_CEILING_DIRECTORIES`). Measured with a racer looping
+(`GIT_CEILING_DIRECTORIES`; a parent whose name holds `os.pathsep` cannot be named there and
+is refused). Measured with a racer looping
 rename-and-link, 1000 calls each: log 0 leaks of 930 answered (6 of 992 before), status 3 of
 570 (10 of 629), diff 10 of 868 (20 of 865).
 
@@ -481,6 +482,18 @@ def _no_git_here(cwd: str) -> "ProjectGitRefused":
                              "is not run on a repository above the folder that was checked")
 
 
+def _ceiling(top: str) -> str:
+    """The `GIT_CEILING_DIRECTORIES` value that stops git's own search at `top`. git reads the
+    variable as a list split on `os.pathsep`, so a parent spelled with one (`:` on POSIX, `;`
+    on Windows) would set no ceiling at all and the search would go on upwards: refused."""
+    parent = os.path.dirname(top)
+    if os.pathsep in parent:
+        raise ProjectGitRefused(f"{Path(top).as_posix()}: the folder above it has "
+                                f"{os.pathsep!r} in its name, which git's search limit cannot "
+                                "carry; a linked worktree is not run there")
+    return parent
+
+
 def _pin_by_handle(pin: _Pin, sub: str, linked_worktree: bool, expect_folder) -> None:
     """Open the caller's folder, walk up through `..` handles to the top, open its `.git`.
     With `expect_folder` there is no walk: the judged folder must hold `.git` itself."""
@@ -535,7 +548,7 @@ def _pin_by_handle(pin: _Pin, sub: str, linked_worktree: bool, expect_folder) ->
                                     f"to another repository") from None
         pin.git_fd = pin.own(gfd)
     elif expect_folder is not None:
-        pin.ceiling = os.path.dirname(real)
+        pin.ceiling = _ceiling(real)
     pin.by_handle = _proc_fd_usable(pin.top_fd) and (pin.git_fd < 0
                                                      or _proc_fd_usable(pin.git_fd))
     if pin.git_fd >= 0:
@@ -563,7 +576,7 @@ def _pin_by_path(pin: _Pin, sub: str, linked_worktree: bool) -> None:
             raise ProjectGitRefused(problem)
         pin.top = top
         if linked_worktree:
-            pin.ceiling = os.path.dirname(top)
+            pin.ceiling = _ceiling(top)
         return
     problem = project_repo_problem(pin.cwd, linked_worktree=linked_worktree)
     if problem:

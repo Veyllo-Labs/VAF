@@ -365,8 +365,14 @@ class PersistenceManager:
         no ``O_NOFOLLOW``): a link at the name is refused, the opened file must be the very
         file checked before the open (``samestat``: a file or folder link swapped in only
         for the moment of the open opens another file and is refused), and the folder's
-        resolved path is compared after the open. NAMED BOUNDARY: a hard link is the same
-        file under a second name and passes, as for every writer."""
+        resolved path is compared after the open. NAMED BOUNDARY, Windows: a ``.vaf`` folder
+        link in place over both the check and the open, and gone again before the folder
+        comparison, is still read; simulated on Linux with this branch forced and a racer
+        exchanging ``.vaf`` and a link in one step, 635 of 20000 reads (7053 without the
+        ``samestat``). Closing it means comparing the opened handle's final path
+        (``GetFinalPathNameByHandleW``), which needs a Windows host to verify. NAMED
+        BOUNDARY: a hard link is the same file under a second name and passes, as for every
+        writer."""
         folder = self.notes_folder()
         if folder is None:
             return ""

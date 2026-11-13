@@ -509,8 +509,12 @@ The six now declare `user_scope_id`/`user_role`, and `tool_work_folder` asks
   path, never resolved anew. On Windows (no folder handles) the read refuses a link at the
   name, requires the opened file to be the very file it checked before the open
   (`samestat`, so a file or folder link swapped in only for the moment of the open is
-  refused) and compares the resolved folder after the open. A hard link is not seen, as
-  for every writer
+  refused) and compares the resolved folder after the open. NAMED BOUNDARY, Windows: a
+  `.vaf` folder link that is in place over both the check and the open and gone again
+  before the folder comparison is still read (simulated on Linux with that branch forced and
+  a racer exchanging `.vaf` and a link in one step: 635 of 20000 reads, 7053 without the
+  `samestat`); comparing the opened handle's final path (`GetFinalPathNameByHandleW`) would
+  close it and needs a Windows host to verify. A hard link is not seen, as for every writer
   (a sandbox cannot make one to a file outside its mount).
 
 **git and the notes work on the folder that was checked.** A process of the account can

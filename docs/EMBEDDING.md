@@ -1102,7 +1102,9 @@ above the folder you checked, which you did not judge (with a `.git` renamed awa
 moment, a history call printed the parent repository's commits, and `add -A` would stage the
 parent's whole tree). The folder is decided once, so a `.git` that disappears during the
 call is refused rather than replaced by the one above, and with `linked_worktree=True` git's
-own search for the `.git` file stops at your folder. It then holds that folder for the whole
+own search for the `.git` file stops at your folder (`GIT_CEILING_DIRECTORIES`; git reads it
+as a list split on `:`, `;` on Windows, so a folder whose parent's name holds that character
+is refused instead). It then holds that folder for the whole
 call: it opens `.git` through
 the folder's handle (never following a link there; without `expect_folder` it first walks up
 to the top through `..` handles), and on Linux every git process of the call runs in

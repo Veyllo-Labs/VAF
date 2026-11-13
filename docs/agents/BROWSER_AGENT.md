@@ -849,6 +849,8 @@ By default, `browser_agent` is **blocked** on Telegram, WhatsApp, and Discord ch
 
 This is controlled by the `channel_tools_unrestricted` setting (Settings → Advanced, default **on**). When enabled, messaging-channel sessions get the same tools as the main agent - including `browser_agent` - and run **without** the per-call confirmation gate. The channel whitelist (`paired_only` by default) and the per-user `admin_only` checks still apply; turn it off to restrict channel sessions to non-channel-restricted tools.
 
+From the **Veyllo App**, the account holder's own paired device, `browser_agent` runs on every call only after a tap on a confirmation card on that device, which shows the whole task and the allowed domains; the setting above plays no part there. That holds for a message the person writes in the app, a line to VAF's agent in the Veyllo App room, and a request of the app's own agent ("play my playlist on Spotify"). A timer or background turn on the app chat keeps the channel rules ([VEYLLO_APP.md](../integrations/VEYLLO_APP.md#tools-in-the-app-chat)).
+
 ---
 
 ## Configuration

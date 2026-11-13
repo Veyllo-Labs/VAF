@@ -707,6 +707,17 @@ channel alike, except for a tool that needs a person: a `dangerous` tool with `"
 its restrictions (`host_bash`, `python_exec`) is refused on a channel before the lift, from the
 same chat-source answer ([TOOL_ROUTER_ARCHITECTURE.md](../agents/TOOL_ROUTER_ARCHITECTURE.md)).
 
+**A channel whose far end is the account holder's own device** sets `holder_device=True` on
+its row. Only the Veyllo App does: its far end is a device the account holder paired
+themselves, and VAF can put a confirmation card for one call on it. There a tool kept off chats
+by the `"channel"` sentinel is not refused but put to the holder on that device, on every call,
+in a turn the holder started or their app agent asked for (section 1h of the policy). Every
+messenger keeps `False`: a Telegram, WhatsApp or Discord bot reaches strangers too (the Front
+Office), and nothing can be shown there. The field defaults to `False`, so a channel added later
+fails closed, and `tests/test_channel_registry_sync.py` pins `HOLDER_DEVICE_CHANNELS` to
+`("veyllo_app",)`. A tool that names a channel in its restrictions stays refused there: its
+author excluded it on purpose.
+
 `tests/test_channel_registry_sync.py` refuses a hand-written channel list anywhere in
 `vaf/` (two or more channel names, or their send and read tools, in one literal), refuses a
 tool that restricts channels by name, and proves that a channel added to the registry is
@@ -741,13 +752,19 @@ What a new channel still needs, because it differs per channel:
 
 The Veyllo App is a chat channel in the registry like Telegram: `Channel("veyllo_app",
 "Veyllo App", bridge=True, send_tool="send_veyllo_app", secrets=("relay_secret",),
-accounts="shared")`. What differs ([VEYLLO_APP.md](VEYLLO_APP.md) for the whole picture):
+accounts="shared", holder_device=True)`. What differs ([VEYLLO_APP.md](VEYLLO_APP.md) for the
+whole picture):
 
 - **The bridge is the link manager** (`vaf/core/app_link/bridge.py`), in the web server's
   process: a paired device's message becomes a turn in the account's one chat
   (`veyllo_app_<key>`) in process, and the reply streams back to the device. The account
   comes from the device row its certificate names, never from the message.
 - **No read tool**: the account's one chat is its own history.
+- **The far end is the account holder's own device** (`holder_device=True`): a tool kept off
+  chats (the host shell, host Python, SSH, FTP, the sandbox environments, the browser agent,
+  background commands, timers, the tool and workflow builders) runs from it only behind a
+  confirmation card on the device, one tap for one call
+  ([VEYLLO_APP.md](VEYLLO_APP.md#tools-in-the-app-chat)).
 - **The conversation is the Veyllo App room**, pinned at the top of the chat list while a
   device is paired: you, your agent and the agent in the Veyllo App in one view, where a line
   you write goes to the app's agent and `@` with your agent's name asks your agent

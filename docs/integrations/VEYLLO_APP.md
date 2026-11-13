@@ -137,14 +137,55 @@ never as instructions. The Veyllo App asks you itself before sensitive actions. 
 sent and how it ended are lines of the [Veyllo App room](#the-veyllo-app-room), whatever chat
 asked for it; a task that was not sent leaves nothing there.
 
-**Tools in the app chat** follow the rules of every messaging channel
-(`vaf/core/tool_contract.py`, `evaluate_tool_policy`), because protocol v1 has no confirmation
-message. The host shell, host Python, SSH and FTP never run there: they act on a computer and
-need a confirmation only the web UI can show. The other tools kept off chats (the sandbox
-environments, the browser agent, the builders, background commands, timers) depend on the
-admin's `channel_tools_unrestricted`: on, the default, they run in the app chat without a
-confirmation, as on Telegram; off, they stay off. A request of the app's own agent never gets
-them, nor the tools that start work which keeps running after it (next section).
+### Tools in the app chat
+
+The Veyllo App is your own extended arm, not a messaging app with a stranger in it: its far
+end is a device you paired yourself, and VAF can show it a confirmation card for one call
+(`holder_device` on its row in `vaf/core/channels.py`). So the tools kept off messaging
+channels (`channel_restrictions = ("channel",)`: the host shell `host_bash`, host Python
+`python_exec`, `ssh`, `ftp`, the sandbox environments `sandbox_exec`, `sandbox_files`,
+`sandbox_manage`, `sandbox_preview`, `sandbox_transfer`, the browser agent `browser_agent`,
+`render_check`, background commands `host_process`, timers `set_timer`, and the builders
+`create_agent_tool` and `create_agent_workflow`) run through the Veyllo App, each call behind
+a card on your device (`vaf/core/tool_contract.py`, section 1h; `vaf/core/app_link/confirmations.py`):
+
+- **Every call asks.** The card shows the tool and the whole call: what it does in your
+  language, then every argument as it will run (laid out like the request cards below, the
+  targets such as a command, a server or a path whole in the first block, nothing cut; a call
+  whose text would be longer than 4000 characters is not run, and the reply says so), and,
+  when the tool asks something of its own for this call (a first connection to a server over
+  SSH or FTP), a block that starts `VAF asks:` with that question. Your Yes answers it too: a
+  server's key is only taken when the card showed that question.
+- **One tap, one call.** Yes runs exactly that call once; nothing standing is written. The
+  card offers Yes and No only, and no "always", trusted folder, "allow for this chat" or
+  admin bypass silences it, because they were given for another place. A second call of the
+  same tool in the same turn shows a second card. The admin's `channel_tools_unrestricted`
+  plays no part for these tools in the Veyllo App.
+- **Who answers.** Only a tap on that card on that device, from your account. Another device
+  of yours, another account, the web UI and the terminal cannot answer it.
+- **What stays on top.** The account allowlist (`host_bash`, `python_exec`, `ssh` and `ftp`
+  are given to a regular account only by name), `admin_only` (`create_agent_tool`) and an
+  application's authorizer still refuse before any card is shown. After the tap the tool's own
+  checks still run: a command the command check refuses stays refused, and nothing starts.
+- **Where the card goes.** For a message you wrote in the app, to the device that sent it; for
+  a line `@<your agent>` you wrote in the [Veyllo App room](#the-veyllo-app-room) (in the web
+  UI, the terminal or with `vaf devices say`), to your most recently used device that shows
+  these cards. Your turn waits for the tap up to five minutes, then the reply says the tool was
+  not confirmed. No, Stop, a removed device, or an app that cannot show the card end the wait
+  at once, and the reply says the tool did NOT run and why.
+- **Every confirmation of such a turn goes to the device.** The app chat has no dialog in the
+  web UI that anybody sees, so a call that needs a confirmation for another reason (a skill
+  deleted with the admin's lift off, say) is put to you on the device as well; for those, an
+  answer you gave ahead (a tool allowed always, a trusted folder) still holds.
+- **An older Veyllo App.** A card of this kind goes only to an app that announced it (`caps`
+  with `confirm_tool`). Without one the tool does not run, and your agent is told that the
+  Veyllo App on your device cannot show it yet (an app update brings it) and that you can also
+  ask for it in VAF's web UI.
+- **What stays as it was.** A turn nobody started through the app (a timer that fires, a
+  background command that ends, an automation) keeps the rules of every messaging channel:
+  the host shell, host Python, SSH and FTP never run there, and the other tools depend on the
+  admin's `channel_tools_unrestricted`. Telegram, WhatsApp, Discord and mail are unchanged:
+  nothing can be shown there, and a bot there can reach strangers.
 
 ## The app's agent can ask your agent
 
@@ -172,7 +213,12 @@ differences (`vaf/core/app_link/bridge.py`, `vaf/core/agent_origin.py`):
   shows a confirmation card (each such tool declares its card,
   `BaseTool.agent_request_confirm_kind`, read by `vaf/core/agent_origin.py`). So does a mail
   (`send_mail`, `reply_mail`, `forward_mail`) or a WhatsApp message to a number
-  (`send_whatsapp` with `to_phone` or `phone_number`). The card is VAF's own text of exactly
+  (`send_whatsapp` with `to_phone` or `phone_number`), and so does every tool kept off
+  messaging channels ([above](#tools-in-the-app-chat)): it is carded with the kind `tool`
+  instead of refused, the card also shows the tool's own question for the call (`VAF asks:`),
+  and the confirmed run goes through only while VAF would still ask exactly that question; a
+  question that changed since the card (a server that became unknown) runs nothing, and the
+  app's agent is told so. The card is VAF's own text of exactly
   that call: what it does, then every argument the call carries (for a message every
   recipient, Cc and Bcc, the subject, the attachment names and the whole text). The values are
   shown safely rather than byte for byte, so no value can pass itself off as another argument
@@ -240,20 +286,29 @@ differences (`vaf/core/app_link/bridge.py`, `vaf/core/agent_origin.py`):
     waits in the web UI.
 
   On the wire: VAF sends `{"t": "confirm", "id", "ask", "kind", "what", "exp"}` to the asking
-  device only (`kind` one of `coder`, `automation`, `workflow`, `skill`, `identity`, `send`;
-  `exp` ten minutes on), the app answers `{"t": "confirm_answer", "id", "ok"}`, and VAF sends
-  no frame back for an answer that counts: the outcome is the request's own `done`. An answer
-  is refused with `expired` after `exp`, `used` once the card is decided, and
+  device only (`kind` one of `coder`, `automation`, `workflow`, `skill`, `identity`, `send`,
+  `tool`; `exp` ten minutes on), the app answers `{"t": "confirm_answer", "id", "ok"}`, and VAF
+  sends no frame back for an answer that counts: the outcome is the request's own `done`. An
+  answer is refused with `expired` after `exp`, `used` once the card is decided, and
   `confirm_invalid` from another device, another account or for an unknown id. Every `welcome`
-  carries `"confirm": true` (`vaf/core/app_link/confirmations.py`).
+  carries `"confirm": true` (`vaf/core/app_link/confirmations.py`). A card of kind `tool` also
+  carries `"tool": "<tool name>"` (the field is on that kind only, the other kinds' frames are
+  unchanged) and goes only to a device that announced the cap `confirm_tool`; every `welcome`
+  carries `"confirm_tool": true`. Such a card answers either a request of the app's agent (its
+  `ask` is the request's id, ten minutes) or a turn you started yourself (its `ask` is the id
+  of the reply that is streaming, or, for a line you wrote in the room, of a reply the app may
+  not have seen yet; five minutes, and the turn waits for the tap). A `cancel` with that
+  reply's id stops your turn; its card then ends, and a later tap gets `used` or `expired`.
+  A device without the cap gets no such card: a request is answered that the tool could not
+  be shown for confirmation, and a turn of yours is told the app needs an update.
 - **Tools that need you in person stay off.** Each tool declares how it answers such a request
   (`BaseTool.agent_request`); refused ones are not offered either, and the app's agent is told
-  why and that VAF did not do it: a tool kept off chats can be done by you in VAF's web UI,
-  and every other refused tool needs your own confirmation, which a request from the app's
-  agent cannot carry. Refused: every tool kept off chats, whatever
-  `channel_tools_unrestricted` says (the sandbox, the browser agent, timers, background
-  processes); work whose own limits a request cannot reach (`set_timer`, the room tools that
-  make other agents act, `room_send`, `room_open`, `room_invite`, `room_join`, `room_react`,
+  why and that VAF did not do it: a tool that names the Veyllo App in its own restrictions
+  can be done by you in VAF's web UI, and every other refused tool needs your own
+  confirmation, which a request from the app's agent cannot carry. Refused: a tool whose
+  author excluded the Veyllo App by name (the tools kept off every chat by the `"channel"`
+  sentinel are carded instead, see above); work whose own limits a request cannot reach (the
+  room tools that make other agents act, `room_send`, `room_open`, `room_invite`, `room_join`, `room_react`,
   and the librarian, `librarian_agent`, whose own file tools would run outside these
   limits); changes to how VAF works for you that
   no card covers yet (`create_contact`, `update_contact`, `thinking_note_add`, a context
@@ -275,7 +330,7 @@ differences (`vaf/core/app_link/bridge.py`, `vaf/core/agent_origin.py`):
   to read, `mcp_call` included). A call that needs a policy confirmation is refused at once; no
   dialog appears in the web UI and nothing waits. Answers you gave ahead still hold: a tool you
   allowed always, a trusted folder, an "allow for this chat" in the app chat, and the admin
-  bypass. A reminder (`schedule_reminder`) stays possible: it only delivers its own text to
+  bypass; not for a tool kept off chats, whose card asks every time. A reminder (`schedule_reminder`) stays possible: it only delivers its own text to
   your own messenger at the time you set, and no turn runs from it.
 - **A message that cannot be parked is not sent.** When the draft of a message to somebody
   else cannot be prepared, it is not sent either, and the app's agent is told so.
@@ -320,7 +375,9 @@ your agent handed the app with their results, the lines you wrote to the app's a
 and what it wrote back, and the "Confirmed in the Veyllo App" line of a confirmation card. A
 turn nobody typed (a fired timer, a finished background command, a draft you sent, a
 confirmation) shows as a neutral note line, never under your name; the chat's compaction and
-system commands are not shown.
+system commands are not shown. While a card of a turn of yours waits for your tap in the
+Veyllo App ([tools in the app chat](#tools-in-the-app-chat)), the room shows the note "Waiting
+for your confirmation in the Veyllo App."; it goes when the card is answered or ends.
 It appears the moment the pairing is confirmed (no reload) and goes with the last device that
 is removed; pairing again brings its history back, because the room's two sessions belong to
 the account and stay when a device goes. It stays there while a device is paired, also with
@@ -497,6 +554,27 @@ links that page instead of quoting amounts, which an installed VAF could not kee
   instance whose secret is missing.
 
 ## Named boundaries
+
+- **The tap is the app's to keep honest.** VAF cannot tell a tap on a card from code in the
+  app that sends `confirm_answer`. The device is authenticated by its certificate and the
+  relay cannot inject (TLS ends in VAF), and the protocol obliges the app to send the answer
+  only from the person's tap on that card; the app's own agent must never see the card or send
+  the answer.
+- **A credential written into a command is on the card.** The card shows the whole call, so
+  a token typed into a `host_bash` command appears on the device; a stored credential named by
+  `$VAF_SECRET_<NAME>` (or `login_credential`) shows only its name.
+- **The tool's own question may name an address.** The `VAF asks:` block of an SSH or FTP card
+  can name the server that stored values resolve to; it goes to your own device only, never to
+  the model.
+- **A turn nobody started through the app asks nobody on the device.** A timer that fires or a
+  background command that ends wakes the app chat with the rules of every messaging channel;
+  a call in such a turn that needs a confirmation for another reason still waits up to five
+  minutes for the web UI's dialog, which nobody sees for the app chat, and then does not run.
+  Putting those on the device as well is a separate decision: at that moment nobody called the
+  tool through the app.
+- **A card has no command category line.** The card shows the call and the tool's own
+  question, not the command check's classification: that check still decides after the tap,
+  and its category texts are not translated.
 
 - **The local CA's key is the app link's identity.** The app pins this machine's local CA;
   its key (`~/.vaf/ssl/ca-key.pem`) is an owner-only file, not sealed, like the device CA's

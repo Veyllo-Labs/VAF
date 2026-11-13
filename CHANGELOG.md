@@ -13,6 +13,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Added
 
+- **Veyllo App: tools kept off messaging channels, behind a card on your device.** The host
+  shell, host Python, SSH, FTP, the sandbox environments, the browser agent, background
+  commands, timers and the tool and workflow builders can now be used through the Veyllo App.
+  Each call first shows a card on your device with the tool and everything it will run, and
+  runs only after you tap Yes, once; a first connection to a server shows that question on the
+  card too. This holds for your messages in the app, for a line to your VAF agent (`@` and its
+  name) in the Veyllo App room, which shows that a card is waiting, and for requests of the
+  app's own agent. Telegram, WhatsApp, Discord and mail stay as they were, and a timer or a
+  background command that ends keeps the old rules. Needs a Veyllo App version that shows
+  these cards; with an older one the reply says the tool was not run.
 - **Veyllo App room.** As soon as you pair a Veyllo App, a chat with the Veyllo App symbol
   appears at the top of the chat list and stays there. It shows everything you, your VAF agent
   and the agent in your Veyllo App wrote to each other. What you write there goes to the agent

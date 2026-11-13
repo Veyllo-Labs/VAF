@@ -229,7 +229,8 @@ The `python_exec` tool runs code directly on your host system. It is:
 - Only available with explicit trust configuration
 - Shows clear warnings when used
 - Never run from a messaging channel in the chat, also with `channel_tools_unrestricted` on
-  (it needs a person, like `host_bash`, see "Shell execution surfaces" below)
+  (it needs a person, like `host_bash`, see "Shell execution surfaces" below); from the
+  Veyllo App, the account holder's own device, only after a tap on a card there, every call
 - Refuses code that moves files over FTP (an import of ftplib, a string that names it as
   `__import__`, `importlib.import_module` (also under an alias) or `-m` takes it, an `ftp://`
   or `ftps://` address, or such
@@ -373,7 +374,8 @@ without it and the environment's `degraded` field says that the host is reachabl
 network's gateway.
 
 **The agent's tools** (`vaf/tools/environments.py`), each acting as the caller and refused
-on messaging channels:
+on messaging channels (from the Veyllo App, the account holder's own device, each call is put
+to them on a card there instead):
 - `sandbox_manage`: create, list, stop, delete. A project path runs through `is_safe_path` and
   the write jail before the manager's own checks; a path that is VAF's own state or contains it
   is refused (see "File tools and VAF's own state" below). A project environment asked for without a
@@ -539,7 +541,8 @@ refused. When neither `Documents/VAF` nor `Downloads/VAF` can be created,
 writer, `write_file`'s reroute of a new folder at the top of the home folder, then puts the
 file there without asking again; VAF neither loads nor runs anything from that folder.
 
-**Named boundary: `create_agent_tool`.** It is `admin_only`, refused on messaging channels,
+**Named boundary: `create_agent_tool`.** It is `admin_only`, refused on messaging channels
+(from the Veyllo App only after the admin's tap on a card on their device),
 and runs without a confirmation, so in the admin's own web chat it still writes and loads
 Python that the agent composed, as it is meant to. That is the one remaining agent lane to
 code VAF loads; text injected into the admin's web chat can reach it.
@@ -772,7 +775,13 @@ each use is controlled:
    enables `channel_tools_unrestricted`* (default ON on a fresh install), which otherwise
    lifts the block and the confirmation for the convenience tools (section 1a of
    `evaluate_tool_policy`). The answer comes from the chat lane's own source and session, the
-   same single resolution every channel decision uses. Only in the lane that would ask a
+   same single resolution every channel decision uses. The Veyllo App is the exception: its
+   far end is the account holder's own paired device (`holder_device` in the channel
+   registry), and there each call is put to the holder on a card on that device (section 1h:
+   the whole command, every call, nothing standing; vaf/core/app_link/confirmations.py), in a
+   turn the holder started or their app agent asked for. The account allowlist and
+   `admin_only` refuse before any card, and the command check below still runs after the tap,
+   so a Yes on a refused command runs nothing. Only in the lane that would ask a
    person (`ToolCaller` with its gate on), deliberately: it protects the turn where somebody
    would have been asked, not the unattended lanes in 2 - a coder started from a Telegram
    message may still build. `python_exec` declares the same two and is refused the same way;
@@ -1019,8 +1028,10 @@ after the host). The controls:
    client side tells the two apart, and that report never says "nothing ran" or "call
    again".
 3. **Never over a messaging channel** (dangerous and restricted with `"channel"`, see 3 in
-   the `host_bash` section), and **a regular account only when its allowlist names it**
-   (`account_opt_in`).
+   the `host_bash` section; from the Veyllo App each call is put to the account holder on a
+   card on their device, which also shows the first-connection question, and only a Yes to
+   that question takes a new server), and **a regular account only when its allowlist names
+   it** (`account_opt_in`).
 4. **The remote command is classified** with the `remote` profile: the catastrophic core is
    refused, an installer piped into a shell is named in the dialog.
 5. **Each account's own identity**: key, passphrase and servers are the account's, never the
@@ -1058,4 +1069,7 @@ standard library (`tests/ftp_stub.py`).
 > (e.g. `browser_agent`). A tool that needs a person - `dangerous` and restricted on channels:
 > `host_bash`, `python_exec` - is deliberately exempt, because code on a computer with no
 > confirmation path must never be reachable from a messaging channel. This used to be a guard
-> inside `host_bash` alone, and `python_exec` was lifted with the rest.
+> inside `host_bash` alone, and `python_exec` was lifted with the rest. In the Veyllo App the
+> setting plays no part for the tools kept off chats (the host shell, host Python, SSH, FTP,
+> the sandbox environments and the rest): each call there asks on the account holder's own
+> device instead ([VEYLLO_APP.md](../integrations/VEYLLO_APP.md#tools-in-the-app-chat)).

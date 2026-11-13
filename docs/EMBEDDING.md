@@ -1451,7 +1451,10 @@ server was known when the funnel looked) is no yes to a first contact. Hand it t
 the engine that would otherwise take a new server, so one forgotten in the last
 moment is refused there instead of trusted: VAF's `ssh` turns it into OpenSSH's
 `StrictHostKeyChecking` (`accept-new` only then, `yes` otherwise), `ftp` into its
-`connect(confirmed=...)`.
+`connect(confirmed=...)`. A confirmation surface of your own that wants to show the
+question it is confirming takes the `question` keyword in `decide` (the `ToolCaller` table
+below): it is exactly the `_call_question` the tool receives, so a Yes your surface collects
+under that question is the Yes `first_contact_confirmed` reads.
 
 **A tool that is not part of "everything".** `account_opt_in = True` keeps a
 tool away from a regular account unless the account's allowlist NAMES it; a
@@ -1573,10 +1576,16 @@ Key declarative rules the runtime enforces:
   channel session id), so it also covers a channel VAF adds later. Naming the channels
   one by one (`("telegram", "whatsapp")`) blocks exactly those and leaves the tool open
   on the next. A tool that is BOTH `dangerous` and restricted with `"channel"` needs a
-  person for every use, and no channel can show the confirmation: it is refused on a
+  person for every use, and no messenger can show the confirmation: it is refused on such a
   channel even when the admin's `channel_tools_unrestricted` lifts the other channel
   restrictions, in the lane that would ask a person (a `ToolCaller` with its gate on).
-  Declare the two and nothing else is needed - there is no per-tool guard to write.
+  Declare the two and nothing else is needed - there is no per-tool guard to write. One
+  channel can show a confirmation: VAF's Veyllo App, whose far end is the account holder's
+  own paired device. There a tool with the `"channel"` sentinel is put to the holder on a
+  card for every call instead of refused (when the caller passes `holder_present=True`,
+  below), whatever its level; a tool that names the channel (`"veyllo_app"`) stays refused
+  there. Your own client is not a VAF channel at all, so neither rule touches it: the gate
+  reaches it through `decide`.
 - `agent_request` - how the tool answers a turn ANOTHER AGENT asked for (a request of the
   agent in the user's Veyllo App): `"allow"` (the default), `"refuse_work"` (it starts work
   that keeps running after the request), `"refuse_standing"` (it changes how the agent works
@@ -1584,7 +1593,10 @@ Key declarative rules the runtime enforces:
   `"hold"` (a send to a third party; parked for approval where VAF has a park lane for it,
   which today are its own mail and WhatsApp tools, and refused for any other tool). Refused
   tools are hidden from such a turn and answer the model with the reason. A value outside the
-  five refuses. A tool kept off chats is refused there whatever this says. A tool whose answer
+  five refuses. A tool kept off chats is refused there whatever this says, except one kept
+  off by the `"channel"` sentinel alone in a request of the Veyllo App's agent: that one is
+  carded (the card kind `"tool"`, or its own `agent_request_confirm_kind`), unless it
+  declares `"refuse_person"`. A tool whose answer
   depends on its arguments overrides `agent_request_for(args)` (the same five values, plus
   `"refuse_write"` for a call that writes files; VAF's `mcp_call` answers by the level of the
   server tool it reaches, `cloud_storage` by its action). A tool with
@@ -1597,7 +1609,8 @@ Key declarative rules the runtime enforces:
   In a request of the Veyllo App's agent such a call does not run and is not refused: it is
   parked, the turn ends, the Veyllo App shows VAF's own text of exactly that call (every argument,
   never cut), and only the user's Yes runs it, once. A value outside the list keeps the
-  refusal, so a typo never opens a tool. The card itself is the Veyllo App link's
+  refusal, so a typo never opens a tool. `"tool"` is not a kind a tool declares: it is the
+  card of a tool kept off chats (above). The card itself is the Veyllo App link's
   (`vaf/core/app_link/confirmations.py`, a named first-party boundary below); a stranger's
   tool takes part by declaring this one attribute.
 - `agent_request_confirm_whole_args` - the arguments that card shows WHOLE in its top block,
@@ -1739,13 +1752,14 @@ The supported arguments:
 |---|---|
 | `tools` | Your registry, `{name: BaseTool instance}`. Positional. |
 | `user_scope_id`, `username`, `user_role` | Who is calling. Assigned into whatever the tool declares in `identity_kwargs`, overwriting anything a model put there. **Pass `username` if you serve more than one tenant.** With none, the name is resolved from the SCOPE: no scope or the owner's scope gives the configured owner (`local_admin_username`, whatever registration wrote there - never the literal `"admin"`), and any other scope gives a stable synthetic name for that tenant, so a caller whose name you did not pass never lands on the owner's name-keyed data. That synthetic name is isolated, not their account name - if a tenant must reach data stored under their real username, pass it. |
-| `source`, `session_id` | Where the call comes from. Feeds `channel_restrictions`: a `source` that names a chat channel (`"whatsapp"`, `"telegram"`, `"discord"`, `"veyllo_app"`) or a session id with that channel's prefix makes the call a chat call, which a tool's `("channel",)` refuses. `session_id` is also the chat a "for this chat" grant is kept for, and what a tool that declares `session_id` in `identity_kwargs` receives. Leave them out if you have no messaging channels and no chats. |
-| `interactive`, `decide` | Set `interactive=True` and pass `decide(tool_name, reason) -> "allow_once" \| "allow_chat" \| "allow_always" \| "cancel"` to plug your own confirmation UI into the gate. `allow_chat` remembers the tool for this person in this chat (`session_id`), in memory only. A decider that accepts the optional keywords gets them: `preview`, `choices`, and `gate_id` - the id `gate_required` carries; a UI that can show a dialog late or twice should send it back with the answer and accept only the open question's id, so a stale answer cannot approve a later command. Left out, gated tools are refused rather than run. |
+| `source`, `session_id` | Where the call comes from. Feeds `channel_restrictions`: a `source` that names a chat channel (`"whatsapp"`, `"telegram"`, `"discord"`, `"veyllo_app"`) or a session id with that channel's prefix makes the call a chat call, which a tool's `("channel",)` refuses (on the Veyllo App with `holder_present`, it asks instead). `session_id` is also the chat a "for this chat" grant is kept for, and what a tool that declares `session_id` in `identity_kwargs` receives. Leave them out if you have no messaging channels and no chats. |
+| `interactive`, `decide` | Set `interactive=True` and pass `decide(tool_name, reason) -> "allow_once" \| "allow_chat" \| "allow_always" \| "cancel"` to plug your own confirmation UI into the gate. `allow_chat` remembers the tool for this person in this chat (`session_id`), in memory only. A decider that accepts the optional keywords gets them: `preview`, `choices`, and `gate_id` - the id `gate_required` carries; a UI that can show a dialog late or twice should send it back with the answer and accept only the open question's id, so a stale answer cannot approve a later command. Two more for a surface that promises the WHOLE call: `args`, the call's arguments as the gate received them (declared secrets masked; `preview` is cut at 300 characters), and `question`, the tool's own question for this call exactly as the tool receives it as `_call_question` (`""` for none; `reason` mixes it with the policy's text). Left out, gated tools are refused rather than run. |
 | `trust_dir` | Which directory a standing grant applies to. Defaults to the process's current one. |
 | `timeout_for` | `f(tool_name) -> seconds`, for your own timeout policy; it replaces the tool's own budget. Accept a `default` keyword instead (`f(tool_name, default=None)`) to ADJUST it: you receive the tool's own budget for this call and return yours. Left out, the tool's declared budget applies (`timeout_seconds` / `budget_seconds`), else `tool_timeout_seconds`. |
 | `stop_check` | `f() -> bool`, polled during the run so you can cancel from outside. |
 | `max_result_chars` | Result cut, `2000` like a chat turn. Pass `None` to switch it off - do that when you chain a result into something else, because a cut result can lose a trailing marker. |
-| `channel_lift` | `True` (the default) lets the admin's `channel_tools_unrestricted` lift the channel restrictions and the confirmations of a chat call, as for every chat. Pass `False` for a lane that runs text another agent wrote on a chat (VAF does for a request of the Veyllo App's agent): the tools kept off chats stay refused and a call that needs a confirmation goes to the gate, which refuses it at once unless `interactive` and `decide` can ask somebody. The lift trusts a person typing on the channel; another agent's text may carry what that agent read elsewhere. |
+| `channel_lift` | `True` (the default) lets the admin's `channel_tools_unrestricted` lift the channel restrictions and the confirmations of a chat call, as for every chat. Pass `False` for a lane that runs text another agent wrote on a chat (VAF does for a request of the Veyllo App's agent): the tools kept off chats stay refused and a call that needs a confirmation goes to the gate, which refuses it at once unless `interactive` and `decide` can ask somebody. The lift trusts a person typing on the channel; another agent's text may carry what that agent read elsewhere. On the Veyllo App with `holder_present` the lift plays no part for a tool with the `"channel"` sentinel: it asks every call. |
+| `holder_present` | `False` (the default). `True` says the account holder is there for this turn: they started it, or their own app agent asked for it (VAF passes it for a person's turn and for a request of the Veyllo App's agent, never for a timer or background turn). It changes something only on a chat whose far end is the holder's own device, which the funnel reads from VAF's channel registry and never from this flag (the Veyllo App): there a tool kept off chats by `("channel",)` needs a confirmation on EVERY call instead of being refused, offering only "once" and "cancel" and ignoring standing answers, like an authorizer's `ask()`. On any other source it is a no-op. Your own client is not such a channel: a call from it is no chat call at all, and the gate reaches it through `decide`, with the whole call (`args`) and the tool's own question (`question`). |
 | `request_origin` | Who wrote the request this call serves when that was another agent (VAF passes `"veyllo_app"` for a request of the Veyllo App's agent), `None` (the default) for a person. Assigned to a tool that declares `"request_origin"` in `identity_kwargs`, overwriting anything the model put there; a tool that stores what the turn says marks it with this, so it can be read back as that agent's. |
 | `allowed_tools` | Which tools this caller may run at all: an iterable of names, `None` (the default) for no set. Any other name is refused with `Security Error: ...` before every other stage, registered or not, for every identity (admins and callers with no scope included), and nothing is emitted. An empty iterable allows nothing; a bare string raises `TypeError`. `ToolCaller(..., allowed_tools=names)` is the execution half of what `Agent.set_allowed_tools(names)` installs on an agent (its own section below). |
 | `authorize` | Your per-call decision hook, exactly as in the next section. `ToolCaller(..., authorize=fn)` is the same thing `Agent.set_tool_authorizer(fn)` installs. An account-level ban (the allowlist section below) is checked before it and cannot be lifted by an `allow()`. |

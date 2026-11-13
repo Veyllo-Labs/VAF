@@ -1125,10 +1125,11 @@ Where VAF reaches an account on Telegram (`messaging_endpoints.json`, `by_scope`
   ask-first latch or a waiting background question, does not set the intent, and does not
   become the last interaction shown in the user's other chats. Its text is stored with
   `kind="app_agent"` and read by every model inside a fence (`session.model_text`,
-  `vaf/core/agent_origin.py`). The tools kept off chats and every tool whose
+  `vaf/core/agent_origin.py`). Every tool whose
   `BaseTool.agent_request` refuses (work that keeps running after the request, changes to how
-  VAF works from now on, what needs the person; a tool among them that declares a card kind is
-  parked for the user's confirmation in the Veyllo App instead, below) are hidden and refused whatever
+  VAF works from now on, what needs the person; a tool among them that declares a card kind,
+  and every tool kept off chats by the `"channel"` sentinel, is parked for the user's
+  confirmation in the Veyllo App instead, below) is hidden and refused whatever
   `channel_tools_unrestricted` says, a call that needs a confirmation is refused at once, and a
   mail or WhatsApp message to a third party is parked for the user's approval (`outbound_hold`,
   in the web UI or on the app's card; a park that fails refuses). Every tool that writes files is refused, for every role and
@@ -1159,6 +1160,19 @@ Where VAF reaches an account on Telegram (`messaging_endpoints.json`, `by_scope`
   service process's memory, like the request they answer; a restart drops them, and nothing
   runs after it. The trust boundary for "a tap, not the app's agent" is the app (protocol
   section 12, its commitments): VAF cannot tell a tap from the app's own code.
+- **A tool kept off chats runs through the Veyllo App only behind a card on the account's own
+  device** (`holder_device` in `vaf/core/channels.py`, section 1h of the policy,
+  `confirmations.ask_on_device`). The card goes to one device of the turn's account: the device
+  that sent the message, or for a line of the Veyllo App room the account's most recently used
+  device that announced the card. Its answer counts by the same rule as above: only from that
+  device and its account, once, never from the web UI or the terminal, and a Yes runs that one
+  call with nothing standing written. The turn's device and reply id are bound per turn in the
+  runner's worker (a context variable, never process-global state), so a card of one account's
+  turn cannot go to another account's device. The account allowlist, `admin_only` and an
+  application's authorizer refuse before any card is made; the tool's own checks (the command
+  check of the host shell, a server's first contact) still decide after the tap. A turn nobody
+  started through the app (a timer, a background command) keeps the rules of every channel,
+  and Telegram, WhatsApp, Discord, mail and the Front Office lanes are unchanged.
 
 ### Discord
 

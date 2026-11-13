@@ -124,8 +124,9 @@ account, binding), and only the binding class is written per turn.
 A turn whose text another agent wrote carries `asked_by_agent` (today the agent of the user's
 Veyllo App, `agent_ask`; `vaf/core/agent_origin.py`). The binding forces `is_human` to False for
 it and adds the tools `agent_origin.agent_request_refusal` names to the hidden ones (the tools
-kept off chats, every tool that writes files, and every tool whose `BaseTool.agent_request`
-refuses: work that keeps running, standing changes, what needs the person). While it holds, the first turn gate (gate e,
+kept off chats on a channel that is not the account holder's own device, every tool that
+writes files, and every tool whose `BaseTool.agent_request` refuses: work that keeps running,
+standing changes, what needs the person). While it holds, the first turn gate (gate e,
 `_agent_request_gate_decision`) refuses those names with an `[APP AGENT]` result, and the
 tool call runs with `interactive=False`, no dialog push and `ToolCaller(channel_lift=False)`: a
 call that needs a confirmation is refused at once, and the admin's `channel_tools_unrestricted`
@@ -141,7 +142,8 @@ the coder, the automations and their notes, workflows, skills, the user's identi
 refused but PARKED in such a turn: `agent_origin.agent_request_decision` answers
 `("confirm", kind)`, so the binding keeps it offered, and gate (e) (`_park_for_confirmation`)
 records the call in the step attribute `_parked_this_round` (tool, stored arguments, their
-`call_digest`, the card's text `confirm_what`), ends the turn with the invisible
+`call_digest`, the card's text `confirm_what`, and the tool's own question for those arguments,
+`tool_dispatch.tool_ask_reason`, shown on the card under `VAF asks:`), ends the turn with the invisible
 `TURN_ENDS_AT_DRAFT` sentence exactly as a held draft does (`_close_turn`), and answers the
 call with `agent_origin.parked_result` (`NOT RUN YET.`, no id). Refused instead: a second
 parked call or a call after a draft in the same round (one card per request at a time), a call
@@ -153,8 +155,32 @@ the runner first runs exactly the parked call once through `execute_tool`, insid
 `agent_origin.confirmed_call_scope(tool, digest)`. That scope is a one-shot pass: gate (e)
 lets the first call with that tool and digest through (`confirmed_call_allows`) together with
 the other turn gates (they judge a model's step in a round, and this call is the person's
-confirmed one), the confirmation gate answers `allow_once` for it (never a standing grant),
-and every other call, a second identical one included, is answered as in any request. The
+confirmed one), the confirmation gate answers `allow_once` for it (never a standing grant)
+only while the funnel's `question` for it equals the one the card showed
+(`confirmed_call_question`; else the call does not run and the model reads that the question
+changed after the card), and every other call, a second identical one included, is answered as
+in any request.
+
+On a channel whose far end is the account holder's own device (the Veyllo App,
+`channels.Channel.holder_device`) a tool kept off chats by the `"channel"` sentinel is carded,
+not refused: in a request of the app's agent `agent_request_kind` answers `"off_chats_card"`,
+the binding keeps the tool offered, and the call parks as above for a card of kind `tool`. In a
+turn the person started there (`_turn_is_human`: a message from the app, or a line to VAF's
+agent in the Veyllo App room) the card is the gate's answer instead: the chat lane passes
+`ToolCaller(holder_present=True)`, the policy confirms such a tool on every call (section 1h,
+`ask_each_call`: no standing grant, trusted folder, chat grant or admin bypass silences it, and
+only "once" and "cancel" are offered), and `decide` is `_ask_on_device`
+(`confirmations.ask_on_device`) with no web dialog pushed (`on_gate_required=None`). Every gate
+of such a turn takes that way, also one the policy asks for another reason (the app chat has no
+dialog anybody sees); those still honour standing answers. The turn's device and reply id are
+bound by the runner (`confirmations.bind_turn_device`, after the reply id is minted, and
+unbound in the loop's per-iteration `finally`). The decider receives the call's arguments and
+the tool's own question as the funnel computed them (the `args` and `question` keywords of
+`decide`), puts VAF's text of the whole call on a card for that device, and waits for the tap
+at most five minutes; Stop, a revoked account and a device that no longer stands end the wait
+at once. A refusal replaces the gate's `[CANCELLED]` text with the card's own sentence
+(`[VEYLLO APP] '<tool>' did NOT run: ...`). A wake turn (a timer, a background command) is not
+the person's and keeps the channel's rules. The
 report of the run (`CONFIRM_WAKE_PREFIX`, then the result) is bound as the wake's text, so
 `_turn_reports` counts it, and it is the turn's input, neither fenced nor stored as the app
 agent's words.

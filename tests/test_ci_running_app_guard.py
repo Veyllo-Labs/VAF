@@ -323,26 +323,45 @@ def test_vanished_process_is_skipped(monkeypatch, error_name):
     assert [(m.pid, m.kind) for m in hits] == [(4242, "next-server")]
 
 
-@pytest.mark.parametrize("other_checkout_first", [False, True])
-def test_the_scripts_own_tree_is_imported_first(tmp_path, other_checkout_first):
+def _fake_vaf(root: Path) -> None:
+    (root / "vaf" / "core").mkdir(parents=True)
+    for rel in ("vaf/__init__.py", "vaf/core/__init__.py", "vaf/core/instance.py"):
+        (root / rel).write_text("", encoding="utf-8")
+
+
+@pytest.mark.parametrize("layout", ["plain", "other_checkout_first", "symlinked_entry", "space_in_path"])
+def test_the_scripts_own_tree_is_imported_first(tmp_path, layout):
     """A worktree's gate must use that worktree's matcher, not the editable
     install's and not another checkout listed ahead of it on PYTHONPATH: the
-    script moves its own tree to the front of sys.path."""
+    script moves its own tree to the front of sys.path, and an entry that
+    reaches the tree through a symlink is the same tree, not a second copy."""
     env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
-    if other_checkout_first:
+    script, tree = _SCRIPT, _REPO
+    if layout == "other_checkout_first":
         other = tmp_path / "other"
-        (other / "vaf" / "core").mkdir(parents=True)
-        (other / "vaf" / "__init__.py").write_text("", encoding="utf-8")
-        (other / "vaf" / "core" / "__init__.py").write_text("", encoding="utf-8")
-        (other / "vaf" / "core" / "instance.py").write_text("", encoding="utf-8")
+        _fake_vaf(other)
         env["PYTHONPATH"] = os.pathsep.join([str(other), str(_REPO)])
-    code = (f"import runpy, sys; runpy.run_path({str(_SCRIPT)!r}); "
+    elif layout == "symlinked_entry":
+        link = tmp_path / "tree-link"
+        try:
+            link.symlink_to(_REPO, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("this platform cannot create a directory symlink here")
+        env["PYTHONPATH"] = str(link)
+    elif layout == "space_in_path":
+        tree = (tmp_path / "a tree with spaces").resolve()
+        (tree / "scripts").mkdir(parents=True)
+        script = tree / "scripts" / _SCRIPT.name
+        script.write_bytes(_SCRIPT.read_bytes())
+        _fake_vaf(tree)
+    code = (f"import os, runpy, sys; runpy.run_path({str(script)!r}); "
             "import vaf.core.instance as i; print(sys.path[0]); print(i.__file__); "
-            "print(sum(1 for p in sys.path if p == sys.path[0]))")
+            "first = os.path.realpath(sys.path[0]); "
+            "print(sum(1 for p in sys.path if p and os.path.realpath(p) == first))")
     run = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                          env=env, cwd=str(tmp_path), timeout=60)
     assert run.returncode == 0, run.stderr
-    first, instance_file, copies = run.stdout.split()
-    assert Path(first) == _REPO
-    assert Path(instance_file).resolve().is_relative_to(_REPO)
+    first, instance_file, copies = run.stdout.splitlines()
+    assert Path(first) == tree
+    assert Path(instance_file).resolve().is_relative_to(tree)
     assert copies == "1", "the tree's entry is moved to the front, not duplicated"

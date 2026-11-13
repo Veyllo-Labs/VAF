@@ -217,6 +217,10 @@ def test_live_check_wants_a_tray_entry_point(monkeypatch):
     (["/venv/bin/python", "-uc", "pass", "vaf.main", "tray"], False),
     (["/venv/bin/python", "--", "-m", "vaf.main", "tray"], False),
     (["/venv/bin/python", "-m", "pytest", "vaf.main", "tray"], False),
+    (["/venv/bin/python", "-m", "pytest", "tray"], False),                  # another module
+    (["/venv/bin/python", "-mpytest", "tray"], False),
+    (["/venv/bin/python", "-", "-m", "vaf.main", "tray"], False),           # a program from stdin
+    (["/venv/bin/python", "-c", "-m", "vaf.main", "tray"], False),          # -c takes "-m" as code
     (["/venv/bin/python", "-m", "vaf.main", "run", "--web"], False),          # somebody's session
     (["/venv/bin/python", "-m", "vaf.main", "update", "--yes"], False),       # the updater itself
     (["/venv/bin/python", "-m", "vaf.main", "top"], False),                   # a viewer

@@ -320,11 +320,10 @@ def is_tray_entry(argv) -> bool:
     Positions matter because the words alone prove nothing: `pytest <checkout
     named VAF> -k tray`, `vaf run -p tray` (a chat whose prompt is the word), a
     sub-agent whose `--task` is `tray` and `python -c <code> vaf.main tray` all
-    carry the words. Anything after
-    `tray` is free (`--no-top`). An interpreter option before the script
-    (`python -u <bin>/vaf tray`) does not match; no launcher starts the
-    console script that way. The process-table scan in locate_processes()
-    applies the module form only."""
+    carry the words. Anything after `tray` is free (`--no-top`). An interpreter
+    option before the script (`python -u <bin>/vaf tray`) does not match; no
+    launcher starts the console script that way. The process-table scan in
+    locate_processes() applies the module form only."""
     try:
         parts = [str(a) for a in (argv or [])]
     except Exception:

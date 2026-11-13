@@ -37,7 +37,9 @@ MUTATIONS, each turns the named test red:
 - en `toolKillTitle` back to "Stop this sub-agent" -> test_the_kill_button_and_its_tooltip_agree;
 - en `actionLive` back to "Action..." -> test_no_three_dot_ellipsis_in_the_new_keys;
 - a plain space in de `durationSeconds` -> test_german_durations_never_break;
-- drop `whitespace-nowrap` from the kill button -> test_the_kill_button_never_wraps.
+- drop `whitespace-nowrap` from the kill button -> test_the_kill_button_never_wraps;
+- drop `break-normal` or `[overflow-wrap:anywhere]` from the stale watchdog text
+  -> test_the_stale_watchdog_text_wraps_at_words.
 """
 import json
 import re
@@ -470,3 +472,20 @@ def test_the_timeline_counts_in_the_page_language(locale, one, many, more, lots)
     assert f'aria-label="{more}"' in elided and f'title="{more}"' in elided
     # ICU groups a `#`, which turned 1536 into "1,536" and "1.536"; the plain argument does not.
     assert lots in _text(long_turn)
+
+
+def test_the_stale_watchdog_text_wraps_at_words():
+    """The card body is break-all (paths, output), which split a sentence mid-word on a phone.
+
+    The stale text resets word-break for itself and keeps an anywhere fallback for a token too
+    long for the line. Tailwind emits arbitrary properties after its utilities, so the
+    overflow-wrap of `[overflow-wrap:anywhere]` wins over the one `break-normal` also sets.
+    """
+    code = _source(TOOL_MESSAGE)
+    match = re.search(r'<span className="([^"]*)">\{tMain\(\'toolWatchdogStale\'\)\}</span>', code)
+    assert match, "the stale watchdog text is no longer its own span"
+    classes = match.group(1).split()
+    assert "break-normal" in classes and "[overflow-wrap:anywhere]" in classes, classes
+    assert "break-all" not in classes, classes
+    # The live word stays as it was: plain text in the row's span, no wrapper of its own.
+    assert re.search(r":\s*tMain\('toolWatchdogAlive'\)\}", code), "the live row changed shape"

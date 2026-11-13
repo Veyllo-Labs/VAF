@@ -412,7 +412,12 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                                                 )}
                                             />
                                             <span className="text-[11px] text-foreground">
-                                                {liveUnit.stale ? tMain('toolWatchdogStale') : tMain('toolWatchdogAlive')}
+                                                {/* The card's break-all suits paths and output, not a sentence: on a phone it split
+                                                    "vielleicht" mid-word. Words wrap whole; `anywhere` still breaks a token too long
+                                                    for the line, and keeps the row's min-content width as it was. */}
+                                                {liveUnit.stale
+                                                    ? <span className="break-normal [overflow-wrap:anywhere]">{tMain('toolWatchdogStale')}</span>
+                                                    : tMain('toolWatchdogAlive')}
                                                 {liveUnit.runtime_s != null && (
                                                     <span className="text-muted-foreground"> · {durationLabel(liveUnit.runtime_s)}</span>
                                                 )}

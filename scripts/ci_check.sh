@@ -193,9 +193,22 @@ if [ -n "$WEB_CHANGED" ]; then
     # (live incident: every login bounced back to the login screen). Failing
     # loudly beats skipping: a pre-push gate that quietly leaves a stage out
     # reports a green it did not earn.
-    if pgrep -f "next-server|vaf\.main tray" >/dev/null 2>&1; then
+    # The match is on the process title (Next retitles itself "next-server
+    # (v<version>)") and on exact argv elements for the tray, never on the joined
+    # command line: a shell that only waited for or grepped for a server carried
+    # the words in its -c payload and failed a whole run here with no server up.
+    # The helper names every PID it matched, and refuses when it cannot read the
+    # process table.
+    RUNNING_APP=0
+    python scripts/running_app.py || RUNNING_APP=$?
+    if [ "$RUNNING_APP" -eq 2 ]; then
+        echo "ERROR: cannot tell whether VAF is running (reason above), so the" >&2
+        echo "web build is refused rather than risked against a live app." >&2
+        exit 1
+    elif [ "$RUNNING_APP" -ne 0 ]; then
         echo "ERROR: VAF is running - stop it before the web build (rebuilding" >&2
         echo ".next under the live app breaks the session it is serving)." >&2
+        echo "The process(es) listed above matched a Next server or the VAF tray." >&2
         exit 1
     fi
     # A build against a STALE node_modules is the green that is not earned:

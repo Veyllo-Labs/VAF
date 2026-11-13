@@ -270,7 +270,11 @@ class PersistenceManager:
                                              != os.path.normcase(os.path.abspath(self._expect))):
                 return None
             os.makedirs(self.vaf_path, exist_ok=True)
-            expected = os.path.join(os.path.realpath(self.base_dir), self.VAF_DIR)
+            # With expect_folder, the judged folder, never the project folder resolved anew: a
+            # folder swapped for a link during makedirs would resolve into the link's target.
+            base = (os.path.abspath(self._expect) if self._expect is not None
+                    else os.path.realpath(self.base_dir))
+            expected = os.path.join(base, self.VAF_DIR)
             # A junction is no link to islink; resolved, it lands somewhere else.
             if os.path.normcase(os.path.realpath(self.vaf_path)) != os.path.normcase(expected):
                 return None
@@ -356,11 +360,11 @@ class PersistenceManager:
 
         The folder is opened first (`vaf.core.path_jail.open_folder`, no link as its last
         part), its handle's kernel path compared with `notes_folder`, and the file opened
-        relative to that handle with ``O_NOFOLLOW``: a ``.vaf`` swapped for a link and back around the open cannot leave
-        the read on a file outside. NAMED BOUNDARY, Windows (no folder handles, no
-        ``O_NOFOLLOW``): a link at the name is refused and the folder's resolved path is
-        compared after the open, so a folder link that is in place only while the file is
-        opened is not seen there."""
+        relative to that handle with ``O_NOFOLLOW``: a ``.vaf`` swapped for a link and back
+        around the open cannot leave the read on a file outside. NAMED BOUNDARY, Windows (no
+        folder handles, no ``O_NOFOLLOW``): a link at the name is refused and the folder's
+        resolved path is compared after the open, so a folder link that is in place only
+        while the file is opened is not seen there."""
         folder = self.notes_folder()
         if folder is None:
             return ""

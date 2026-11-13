@@ -169,7 +169,7 @@ def test_every_git_process_of_a_call_runs_through_the_handles(world, monkeypatch
         return real_run(argv, **kw)
 
     monkeypatch.setattr(gr.subprocess, "run", _recording)
-    proc = gr.run_project_git(args, cwd=str(world.a / "sub"), expect_folder=str(world.a / "sub"))
+    proc = gr.run_project_git(args, cwd=str(world.a / "sub"))
     assert proc.returncode == 0, proc.stderr
     assert len(seen) == count
     for cwd, git_dir, work_tree, common, fds, real in seen:
@@ -458,3 +458,105 @@ def test_rev_parse_prints_real_paths_under_the_pin(world):
     top = gr.run_project_git(["rev-parse", "--show-toplevel"], cwd=sub).stdout.strip()
     git_dir = gr.run_project_git(["rev-parse", "--absolute-git-dir"], cwd=sub).stdout.strip()
     assert Path(top) == world.a and Path(git_dir) == world.a / ".git"
+
+
+# ── 12. no walk above a judged folder ───────────────────────────────────────
+
+@pytest.fixture(params=["handle", "windows"])
+def any_branch(request, monkeypatch):
+    if request.param == "windows":
+        monkeypatch.setattr(path_jail, "_DIR_FD", False)
+    elif not path_jail._DIR_FD:
+        pytest.skip("no folder handles here")
+    return request.param
+
+
+def test_a_judged_folder_without_its_own_repository_is_refused(world, any_branch):
+    """With a `.git` renamed away (or never made) in the judged folder, the runner walked up to
+    the repository above it, which nobody judged: `log` printed its history and `add -A`
+    would stage its whole tree. MUTATION: drop the `.git` requirement under expect_folder
+    (in that branch) - red."""
+    inner = world.a / "inner"
+    inner.mkdir()
+    expected = str(inner)
+    proc = gr.run_project_git(["log", "--oneline"], cwd=expected, expect_folder=expected)
+    assert proc.returncode == -1 and "holds no .git of its own" in proc.stderr, proc.stderr
+    assert "A-OWN" not in proc.stdout
+    # Without expect_folder (/undo in a subfolder) the repository above still serves.
+    assert "A-OWN" in gr.run_project_git(["log", "--oneline"], cwd=expected).stdout
+
+
+@_HANDLES
+def test_a_top_renamed_before_its_git_folder_is_opened_names_the_move(world, monkeypatch):
+    """The refusal says what happened ("a link on the way"), not a layout problem.
+    MUTATION: let FolderMoved fall into the linked-worktree refusal - red."""
+    real = gr._has_git_entry
+    done = []
+
+    def _renaming(fd):
+        answer = real(fd)
+        if answer and not done:
+            done.append(os.rename(world.a, world.a.with_name("site-moved")))
+        return answer
+
+    monkeypatch.setattr(gr, "_has_git_entry", _renaming)
+    proc = gr.run_project_git(["log", "--oneline"], cwd=str(world.a))
+    assert done, "the rename never ran"
+    assert proc.returncode == -1 and "a link on the way" in proc.stderr, proc.stderr
+    assert "linked worktree" not in proc.stderr
+
+
+@_HANDLES
+@pytest.mark.skipif(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+                    reason="needs a folder this process cannot open")
+def test_a_folder_that_cannot_be_opened_is_named_with_its_reason(world):
+    """MUTATION: report every OSError of the open as "Not a directory" - red."""
+    locked = world.a / "locked"
+    locked.mkdir(mode=0o000)
+    try:
+        proc = gr.run_project_git(["status"], cwd=str(locked))
+    finally:
+        locked.chmod(0o700)
+    assert proc.returncode == -1 and "cannot open" in proc.stderr, proc.stderr
+    assert "Not a directory" not in proc.stderr
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks to folders need privileges there")
+def test_the_path_branches_refuse_init_in_a_folder_swapped_during_the_call(world, branch,
+                                                                         monkeypatch):
+    """MUTATION: treat the top's samestat as always the same (path branch), or drop the
+    resolved-folder comparison (Windows branch) - red (a .git in the other folder)."""
+    other = world.b.parent / "empty"
+    other.mkdir()
+    fresh = world.a.parent / "fresh"
+    fresh.mkdir()
+    expected = str(fresh.resolve())
+    done = _swap_mid_call(monkeypatch, fresh, other)
+    proc = gr.run_project_git(["init"], cwd=expected, expect_folder=expected)
+    assert done, "the swap never ran"
+    assert proc.returncode == -1 and "a link on the way" in proc.stderr, proc.stderr
+    assert not (other / ".git").exists()
+
+
+def test_the_windows_notes_folder_is_not_taken_from_a_folder_swapped_during_creation(
+        world, monkeypatch):
+    """Windows makes .vaf by path: a project folder swapped for a link while makedirs runs
+    must not become the notes folder. MUTATION: compare with the project folder resolved
+    anew instead of expect_folder - red (the other folder's .vaf is used)."""
+    from vaf.core.persistence import PersistenceManager
+    monkeypatch.setattr(path_jail, "_DIR_FD", False)
+    other = world.b.parent / "notes-free"
+    other.mkdir()
+    real = os.makedirs
+    done = []
+
+    def _swapping(*args, **kwargs):
+        if not done:
+            done.append(_swap(world.a, other))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(os, "makedirs", _swapping)
+    pm = PersistenceManager(str(world.a), expect_folder=str(world.a))
+    monkeypatch.setattr(os, "makedirs", real)
+    assert done, "the swap never ran"
+    assert pm.notes_folder() is None

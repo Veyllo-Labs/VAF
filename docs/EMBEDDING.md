@@ -1096,9 +1096,13 @@ proc = vaf.run_project_git(["log", "--oneline"], cwd=real, expect_folder=real)
 
 The runner opens `cwd` as a folder handle and compares the kernel's path for it with
 `expect_folder`, as given and never resolved: a link anywhere on the way makes them differ,
-and the call is refused (`returncode` -1, "a link on the way" in `stderr`). It then holds that
-folder for the whole call: it walks up to the top and opens `.git` through handles (never
-following a link there), and on Linux every git process of the call runs in
+and the call is refused (`returncode` -1, "a link on the way" in `stderr`). The folder must
+hold a `.git` of its own: with `expect_folder` the runner never walks up to a repository
+above the folder you checked, which you did not judge (with a `.git` renamed away at that
+moment, a history call printed the parent repository's commits, and `add -A` would stage the
+parent's whole tree). It then holds that folder for the whole call: it opens `.git` through
+the folder's handle (never following a link there; without `expect_folder` it first walks up
+to the top through `..` handles), and on Linux every git process of the call runs in
 `/proc/self/fd/<top>` with `--git-dir=/proc/self/fd/<git>`, `--work-tree=/proc/self/fd/<top>`
 and `GIT_COMMON_DIR` on the git handle (`pass_fds`). Without `expect_folder` the folder `cwd`
 names when the call starts is the one held. One visible consequence: `rev-parse --git-dir`
@@ -1107,9 +1111,12 @@ process; ask `--absolute-git-dir` and `--show-toplevel`, which print real paths.
 `expect_folder` exists on `vaf.open_for_write` for the files you write there.
 
 **Named boundary: what the handles do not reach.** git turns the work tree back into a path
-and changes into it for every command that reads the files (status, diff, add, checkout,
-revert); under a process looping rename-and-link, `status` still leaked in 3 of 570 calls and
-`diff` in 10 of 868 (`log` 0 of 930), and `git init` writes the new repository by path. An
+and changes into it for every command that reads or writes the files (status, diff, add,
+checkout, reset, revert); under a process looping rename-and-link, `status` still leaked in 3
+of 570 calls and `diff` in 10 of 868 (`log` 0 of 930), and a command that writes the work
+tree can write your repository's files into the swapped-in folder in that moment (`reset
+--hard` did in 2 of 247 answered calls, `checkout -- .` in 0 of 255). `git init` writes the
+new repository by path. An
 entry written inside `.git` right after the runner scanned it (`objects/info/alternates`, a
 `commondir`) is read by that call. On macOS (no `/proc`) the folder is checked by `samestat`
 before each git process and git runs by path; on Windows (no folder handles) the folder must

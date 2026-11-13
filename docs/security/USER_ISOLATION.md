@@ -527,8 +527,10 @@ commit in 21 of 300 calls, and a new notes manager whose `.vaf` was missing left
   `code_audit` tool) and the coder's run folder (`_choose_base_dir`, and a content-only run's
   temporary folder);
 - `run_project_git(expect_folder=)` opens that folder as a handle, compares the handle's
-  kernel path with the judged text, walks up to the repository's top through `..` handles
-  and opens `.git` without following a link. On Linux every git process of the call (the
+  kernel path with the judged text, requires a `.git` in that folder itself (no walk up to
+  a repository above it, which nobody judged: with a `.git` renamed away in that moment,
+  `log` printed a parent repository's history, and `add -A` would have staged the parent's
+  whole tree) and opens `.git` without following a link. On Linux every git process of the call (the
   driver reads, the gitlinks read, the command) then runs in `/proc/self/fd/<top>` with
   `--git-dir=/proc/self/fd/<git>`, `--work-tree=/proc/self/fd/<top>` and `GIT_COMMON_DIR` on
   that handle (`pass_fds`): one folder for the whole call, and a `.git` swapped for a link
@@ -541,8 +543,12 @@ commit in 21 of 300 calls, and a new notes manager whose `.vaf` was missing left
 
 NAMED BOUNDARY, what remains, with the numbers above:
 - git's own text walk: git keeps the git directory as the handle, but it turns the work tree
-  into a path and changes into it for every command that reads the files (status, diff,
-  add, checkout, revert), which is where the status and diff leaks above happen; `git init`
+  into a path and changes into it for every command that reads or writes the files
+  (status, diff, add, checkout, reset, revert), which is where the status and diff leaks
+  above happen. It writes too: a command that writes the work tree (`/undo`,
+  `project_rollback`) can write the project's own files over the swapped-in folder's in
+  that moment; measured, 300 calls each, `reset --hard` wrote into the other folder in 2 of
+  247 answered calls and `checkout -- .` in 0 of 255. `git init`
   writes the new repository by path too. The fix is a mount namespace that binds the judged
   folder by handle, built once for the git runner, the jailed shell's `--bind <path>` and a
   sandbox environment's mount; a follow-up, not built here.

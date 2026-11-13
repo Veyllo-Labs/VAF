@@ -34,8 +34,8 @@ import unicodedata
 from pathlib import Path
 from typing import Optional, Tuple
 
-__all__ = ["PathEscape", "WriteRefused", "contained_path", "discard_written", "is_remote_path",
-           "is_rooted", "open_folder", "open_for_write", "safe_entry_name"]
+__all__ = ["FolderMoved", "PathEscape", "WriteRefused", "contained_path", "discard_written",
+           "is_remote_path", "is_rooted", "open_folder", "open_for_write", "safe_entry_name"]
 
 
 class PathEscape(ValueError):
@@ -45,6 +45,11 @@ class PathEscape(ValueError):
     would hand the caller a DIFFERENT path than the one they named, and a
     silently redirected write is harder to reason about than a refusal.
     """
+
+
+class FolderMoved(PathEscape):
+    """`open_folder` opened a folder whose real path is not the one the caller judged: a link
+    was swapped in on the way, or the folder was renamed after the caller's check."""
 
 
 def is_rooted(fragment: str) -> bool:
@@ -113,8 +118,9 @@ def is_remote_path(spelled: str) -> bool:
     reach whatever the machine reaches, which is a question of its own, not a path screen.
 
     NAMED BOUNDARY: ``run_project_git`` opens its ``cwd`` (`open_folder`; on Windows
-    ``os.path.isdir``) without asking here, because every caller has refused a share or device path for it already: the coder's
-    run folder (``_choose_base_dir``, ``_base_dir_tool``), ``project_git``'s
+    ``os.path.isdir``) without asking here, because every caller has refused a share or
+    device path for it already: the coder's run folder (``_choose_base_dir``,
+    ``_base_dir_tool``), ``project_git``'s
     ``_resolve_project`` (which the code audit tool asks too, before ``jail_allows``), the
     folder a person typed for ``vaf audit``, the snapshots' own working folder, and the git
     tools' folder (``tool_work_folder``, which asks ``project_dir_refusal`` for the caller the
@@ -416,8 +422,8 @@ def open_folder(path, *, dir_fd: Optional[int] = None, expect_folder=None,
     - ``dir_fd``: ``path`` is opened relative to that folder handle (a single name, ``..``).
     - ``expect_folder``: the REAL path the opened folder must have. Compared with ``real``
       as given and never resolved (resolving it would follow the very link it is there to
-      catch); anything else closes the handle and raises `PathEscape` ("a link on the
-      way"). A link swapped in for the folder or any folder above it changes ``real``.
+      catch); anything else closes the handle and raises `FolderMoved`, a `PathEscape` ("a
+      link on the way"). A link swapped in for the folder or any folder above it changes ``real``.
     - ``follow=False``: a link as the last part is refused (`PathEscape`), never followed;
       so is an entry that is not a folder.
 
@@ -453,7 +459,7 @@ def open_folder(path, *, dir_fd: Optional[int] = None, expect_folder=None,
         if expect_folder is not None:
             expected = os.path.normcase(os.path.abspath(os.fspath(expect_folder)))
             if os.path.normcase(real) != expected:
-                raise PathEscape(f"its folder is {real}, not {expected} (a link on the way)")
+                raise FolderMoved(f"its folder is {real}, not {expected} (a link on the way)")
         return fd, real
     except BaseException:
         os.close(fd)

@@ -305,9 +305,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   The git tools, project history and rollback and the coding agent now run git in the very
   folder that was checked, so a program of the account that replaces its project folder with
   a link no longer redirects git's history or commits; project notes no longer leave an empty
-  `.vaf` folder in another folder. Still open: for commands that read the files of the
-  project (status, diff, add, rollback) git looks the folder up again by name for a moment of
-  its own, and on macOS and Windows git still runs on the folder's name.
+  `.vaf` folder in another folder, and git no longer runs on a repository above the checked
+  folder when that folder has no repository of its own. Still open: for commands that read
+  or write the files of the project (status, diff, add, undo, rollback) git looks the folder
+  up again by name for a moment of its own, so such a program can still redirect that one
+  moment, and on macOS and Windows git still runs on the folder's name.
   Needs a restart of VAF.
 - **The agent's file tools stay out of VAF's own data and your shell start files.** Reading
   VAF's data and settings folders (messages, mail, contacts, key files, the MCP server list,

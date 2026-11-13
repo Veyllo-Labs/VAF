@@ -30,7 +30,10 @@ driver reads, the gitlinks read, the command) in `/proc/self/fd/<top>` with
 `--git-dir=/proc/self/fd/<git>`, `--work-tree=/proc/self/fd/<top>` and `GIT_COMMON_DIR` on the
 git handle, handing both handles over (`pass_fds`). git therefore runs in the top folder, and
 relative paths and pathspecs are read from there. `expect_folder` is the real path a caller
-judged: a folder that is not it when it is opened is refused. Measured with a racer looping
+judged: a folder that is not it when it is opened is refused, and so is one without a `.git`
+of its own (no walk up to a repository above it, which nobody judged: without that, a `.git`
+renamed away in that moment made `log` print a parent repository's history and `add -A`
+would stage the parent's whole tree). Measured with a racer looping
 rename-and-link, 1000 calls each: log 0 leaks of 930 answered (6 of 992 before), status 3 of
 570 (10 of 629), diff 10 of 868 (20 of 865).
 
@@ -38,8 +41,12 @@ NAMED BOUNDARY, what the handles do not reach, with those numbers:
 - git's own text walk of the work tree. git keeps `--git-dir=/proc/self/fd/<n>` as given, but
   it turns the work tree into a path (a realpath of the magic link) and every command that
   sets up a work tree (status, diff, add, checkout, revert, reset) then changes into that
-  path: the status and diff leaks above are in the microseconds between the two (strace). A
-  log, rev-parse, cat-file or config call stays fully pinned. `git init` writes the new
+  path: the status and diff leaks above are in the microseconds between the two (strace).
+  That moment reads AND writes: a command that writes the work tree (checkout, reset,
+  revert; `/undo` and `project_rollback`) can write the project's own files into the
+  swapped-in folder. Measured, 300 calls each with `expect_folder`: `reset --hard` wrote into
+  the other folder in 2 of 247 answered calls, `checkout -- .` in 0 of 255. A log,
+  rev-parse, cat-file or config call stays fully pinned. `git init` writes the new
   repository by path too. Closing that needs the folder bound by handle in a mount namespace
   of git's own, one primitive for this runner, the jailed shell's `--bind <path>` and a
   sandbox environment's mount; not built here.
@@ -51,7 +58,9 @@ NAMED BOUNDARY, what the handles do not reach, with those numbers:
   the same way, and before each git process the path must still name the opened folder
   (`samestat`), else the call is refused; git itself then runs by path, so the moment between
   that comparison and git's start remains. Not measured on a Mac; `/dev/fd` as a working
-  folder is not used, because it is unmeasured.
+  folder is not used, because it is unmeasured. Nor is a case-insensitive volume: the kernel
+  path keeps the case on disk, so an `expect_folder` typed in another case would be refused
+  there, never wrongly accepted (unmeasured).
 - Windows (no folder handles): before each git process the caller's folder must still resolve
   to `expect_folder`, when one is given; git runs by path.
 - `rev-parse --git-dir` and `--git-common-dir` print the handle spelling (`/proc/self/fd/<n>`,
@@ -449,17 +458,30 @@ def _has_git_entry(dir_fd: int) -> bool:
         return False
 
 
+def _no_git_here(cwd: str) -> "ProjectGitRefused":
+    """The refusal for a judged folder without its own `.git`: the repository above it is a
+    folder nobody judged (another account's tree, the home folder's dotfiles repository), and
+    `add -A` there would stage all of it."""
+    return ProjectGitRefused(f"Not a git repository: {cwd} holds no .git of its own, and git "
+                             "is not run on a repository above the folder that was checked")
+
+
 def _pin_by_handle(pin: _Pin, sub: str, linked_worktree: bool, expect_folder) -> None:
-    """Open the caller's folder, walk up through `..` handles to the top, open its `.git`."""
-    from vaf.core.path_jail import PathEscape, open_folder
+    """Open the caller's folder, walk up through `..` handles to the top, open its `.git`.
+    With `expect_folder` there is no walk: the judged folder must hold `.git` itself."""
+    from vaf.core.path_jail import FolderMoved, PathEscape, open_folder
     try:
         fd, real = open_folder(pin.cwd, expect_folder=expect_folder)
     except PathEscape as e:
         raise ProjectGitRefused(f"{pin.cwd}: {e}") from None
-    except OSError:
+    except (FileNotFoundError, NotADirectoryError):
         raise _NoFolder() from None
+    except OSError as e:
+        raise ProjectGitRefused(f"cannot open {pin.cwd}: {e.strerror or e}") from None
     pin.own(fd)
     if sub != "init":
+        if expect_folder is not None and not _has_git_entry(fd):
+            raise _no_git_here(pin.cwd)
         while not _has_git_entry(fd):
             parent = os.path.dirname(real)
             if parent == real:
@@ -486,6 +508,9 @@ def _pin_by_handle(pin: _Pin, sub: str, linked_worktree: bool, expect_folder) ->
         try:
             gfd, git_real = open_folder(".git", dir_fd=fd, follow=False,
                                         expect_folder=os.path.join(real, ".git"))
+        except FolderMoved as e:
+            # The top was renamed or swapped after it was opened: not a layout question.
+            raise ProjectGitRefused(f"{top}/.git: {e}") from None
         except (PathEscape, OSError):
             raise ProjectGitRefused(f"{top}/.git is not a folder: a linked worktree or a link "
                                     f"to another repository") from None
@@ -505,6 +530,8 @@ def _pin_by_path(pin: _Pin, sub: str, linked_worktree: bool) -> None:
             raise ProjectGitRefused(f"{Path(os.path.abspath(pin.cwd)).as_posix()}/.git is a link")
         pin.top = os.path.realpath(pin.cwd)
         return
+    if pin.expected is not None and not os.path.lexists(os.path.join(pin.cwd, ".git")):
+        raise _no_git_here(pin.cwd)
     problem = project_repo_problem(pin.cwd, linked_worktree=linked_worktree)
     if problem:
         raise ProjectGitRefused(problem)
@@ -675,7 +702,8 @@ def run_project_git(args: Sequence[str], cwd: str, *, timeout: float = 60,
     meanwhile. `expect_folder` is the REAL path a caller judged for `cwd` (no links on the
     way, compared as given and never resolved): a `cwd` that is any other folder when it is
     opened is refused, so a folder swapped for a link between the caller's check and this
-    call is never worked on.
+    call is never worked on. With `expect_folder` the folder must hold `.git` itself: git is
+    never run on a repository above the judged folder, which nobody judged.
 
     Never raises: a missing git, a timeout or a refusal comes back as returncode -1 with the
     reason in stderr.

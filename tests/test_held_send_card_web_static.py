@@ -43,7 +43,15 @@ def test_the_four_keys_match_the_rows():
 
 
 def test_the_marks_are_amber():
-    assert r"const MARK = /(\u27e8U\+[0-9A-F]{4,6}\u27e9)/;" in CARD
+    """Every mark the server writes is drawn as one: an escaped character and the two counted
+    runs of blanks a name may carry. The pattern is the server's own (`shown_text._MARK_RE`).
+    MUTATION: drop the two count forms from `MARK` - red."""
+    assert (r"const MARK = /(\u27e8(?:U\+[0-9A-F]{4,6}|\d+ spaces|\d+ x U\+[0-9A-F]{4,6})"
+            r"\u27e9)/;") in CARD
+    from vaf.core import shown_text
+    server = shown_text._MARK_RE.pattern.replace(shown_text.OPEN, r"\u27e8").replace(
+        shown_text.CLOSE, r"\u27e9")
+    assert f"const MARK = /{server}/;" in CARD
     assert 'className="font-mono text-amber-700 dark:text-[#e0b866]"' in CARD
     # No new catalogue key: the marks and the punycode bracket are the signal.
     assert "t('lookalike" not in CARD and "t('confusable" not in CARD

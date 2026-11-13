@@ -1308,3 +1308,22 @@ def test_the_runner_unbinds_the_turn_device_before_the_turn_ends(e2e, monkeypatc
     run_runner(monkeypatch, agent, [task])
     assert bound and bound[0].get("app_reply_id"), "the turn was never bound"
     assert seen and all(value is None for value in seen), seen
+
+
+@pytest.mark.parametrize("break_", ["\r\n", "\r"])
+def test_a_carriage_return_never_shows_as_a_line_break(break_):
+    """To a shell a carriage return is part of a word: `cd /x` CR LF `echo two` runs the second
+    line somewhere else than `cd /x` LF `echo two`, and `echo one ` CR `# ; echo two` is no
+    comment. So the card shows a CR as its mark and never as the line break it is not, and the
+    two calls never look alike. MUTATION: turn CR LF and a lone CR into line feeds again in
+    `_shown_lines` - red."""
+    from vaf.tools.host_bash import HostBashTool
+    tool = HostBashTool()
+    for first, second in (("cd /x", "echo two"), ("echo one ", "# ; echo two")):
+        with_cr = agent_origin.confirm_what("host_bash", tool,
+                                            {"command": first + break_ + second}, "en")
+        with_lf = agent_origin.confirm_what("host_bash", tool,
+                                            {"command": first + "\n" + second}, "en")
+        assert with_cr != with_lf
+        assert "\r" not in with_cr and "\u27e8U+000D\u27e9" in with_cr
+        assert f"command: {first}\u27e8U+000D\u27e9" in with_cr

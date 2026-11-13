@@ -528,8 +528,11 @@ CARD_EMPTY = "(empty)"
 
 def _shown_lines(value: Any, whole: bool = False) -> List[List[str]]:
     """A value as the card shows it, split into lines of shown tokens (one per character, an
-    escape one token). A Windows or old Mac line break counts as a line break (display only);
-    every other invisible character is escaped, and so is a combining mark with no base
+    escape one token). Only a line feed breaks a line: a carriage return, alone or before a
+    line feed, shows as its mark ``⟨U+000D⟩``, because to a shell it is part of a word
+    (``cd /x`` CR LF ``echo two`` runs ``echo two`` somewhere else than ``cd /x`` LF
+    ``echo two``), so the two must never show alike. Every other invisible character is
+    escaped, and so is a combining mark with no base
     before it (`shown_text.shown_tokens`; a value shown ``whole`` keeps no presentation
     selector). A tab shows as its mark and a long run of spaces as its count
     (`shown_text.blanks_counted`), so no wall of blanks can push the rest of a line, a second
@@ -540,7 +543,7 @@ def _shown_lines(value: Any, whole: bool = False) -> List[List[str]]:
         return [tokens_of(value)]
     text = _arg_text(value)
     return [blanks_counted(shown_tokens(raw, whole=whole))
-            for raw in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+            for raw in text.split("\n")]
 
 
 def card_key(key: Any) -> str:

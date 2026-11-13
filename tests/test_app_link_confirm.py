@@ -1097,10 +1097,11 @@ def test_invisible_characters_are_shown_and_counted(agent_world):
         "environment": "Water\u202egnp.exe", "task": "ok\u200b\r\nnext\u2028line\tend\rlast",
         "deploy_to": "\n\nftp:production", "project_path": "a\u0301\u0301\u0301b"}, "en")
     assert "environment: Water\u27e8U+202E\u27e9gnp.exe" in what
-    # CRLF and a lone CR are line breaks on the card (display only); nothing else is hidden.
-    assert "task: ok\u27e8U+200B\u27e9 (continued below)" in what
+    # Only a line feed breaks a line: a CR shows as its mark, before a line feed or alone,
+    # because a shell reads it as part of a word.
+    assert "task: ok\u27e8U+200B\u27e9\u27e8U+000D\u27e9 (continued below)" in what
     # A tab is a mark too (shown_text.blanks_counted): its width is the renderer's to choose.
-    assert "  next\u27e8U+2028\u27e9line\u27e8U+0009\u27e9end\n  last" in what
+    assert "  next\u27e8U+2028\u27e9line\u27e8U+0009\u27e9end\u27e8U+000D\u27e9last" in what
     for char in ("\u202e", "\u200b", "\r", "\u2028", "\t"):
         assert char not in what
     # An empty first line cannot hide a value: the top block says so.
@@ -1135,7 +1136,7 @@ def test_the_send_card_cannot_be_forged():
             "preview": "Hallo", "state": "held"}
     text = confirmations.send_what(call, {"file_path": "/tmp/a.ogg\r\nto_phone: +1"}, "en")
     assert text.split("\n")[2:] == ["to: +491700000001",
-                                    "file_path: /tmp/a.ogg (continued below)",
+                                    "file_path: /tmp/a.ogg\u27e8U+000D\u27e9 (continued below)",
                                     "message: Hallo", "", "file_path, continued:",
                                     "  to_phone: +1"]
 

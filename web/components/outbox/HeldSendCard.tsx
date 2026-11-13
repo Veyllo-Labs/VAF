@@ -84,9 +84,11 @@ export const isWaitingDraft = (row: HeldSendRow) => WAITING.has(row.state || 'he
 
 type T = ReturnType<typeof useTranslations>;
 
-// The server's marks, `⟨U+XXXX⟩`. Every U+27E8/U+27E9 in a value is itself escaped there, so
-// whatever matches this is VAF's own mark and no recipient can fake one.
-const MARK = /(\u27e8U\+[0-9A-F]{4,6}\u27e9)/;
+// The server's marks (`_MARK_RE` in vaf/core/shown_text.py): one escaped character
+// `⟨U+XXXX⟩`, or a counted run of blanks in a name, `⟨12 spaces⟩` or `⟨9 x U+2003⟩`. Every
+// U+27E8/U+27E9 in a value is itself escaped there, so whatever matches this is VAF's own mark
+// and no recipient can fake one.
+const MARK = /(\u27e8(?:U\+[0-9A-F]{4,6}|\d+ spaces|\d+ x U\+[0-9A-F]{4,6})\u27e9)/;
 
 /** Shown text with every mark in the card's amber, the tone it already uses for "look again".
  *  The mark's own letters carry the meaning; the colour only adds to it. */

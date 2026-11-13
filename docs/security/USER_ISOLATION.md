@@ -1364,7 +1364,8 @@ URI whose label is the absolute path it opens. A link that names a host
 UNC path on Windows), carries a query, has a relative label, or has a label with a
 character the console removes or the reader cannot see (a bidi or other format character,
 a zero-width space, a variation selector or another default-ignorable code point, a line
-separator) keeps its label and loses the link. A backslash separates path parts only in a
+separator), or has part of its label concealed (`[conceal]` inside the label of a link
+printed raw) keeps its label and loses the link. A backslash separates path parts only in a
 drive-letter label; in a POSIX path it is part of the name. The label stays raw in
 `file_link`'s text, since the model and the workflow engine read it as a path (a Next.js
 `app/[id]/page.tsx`); `escape_markup` escapes it where it is printed. The full-screen app's

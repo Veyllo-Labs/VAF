@@ -264,7 +264,11 @@ def file_link(path: Any) -> str:
     must not arrive as `app/\\[id]/page.tsx`. The escape happens where it is printed:
     `escape_markup` keeps this link live and escapes its label, and `TerminalConsole` keeps
     it (`_own_file_link`). A network share (a UNC path on Windows) carries a host and is
-    shown as a plain label."""
+    shown as a plain label.
+
+    The result is markup with a raw label: print it through `escape_markup` (or with
+    `markup=False`), never straight into a markup string, where a `[id]` in the path would
+    be read as a tag."""
     import os
     from pathlib import Path
 
@@ -274,8 +278,10 @@ def file_link(path: Any) -> str:
 
 #: A complete markup link with a plain target, on one line. Its label may hold brackets (a
 #: Next.js route `[id]`, `[...slug]`, `[[opt]]`) but no other link tag: it ends at the
-#: first `[/link]`.
-_MARKUP_LINK_RE = re.compile(r"\[link=([^\]\s]+)\]((?:(?!\[/?link[=\]])[^\n])*)\[/link\]")
+#: first `[/link]`. The target holds no bracket at all (`Path.as_uri()` writes `[` as `%5B`):
+#: a target class that allowed `[` let a run of `[link=` openers in somebody's text cost
+#: quadratic time in every narration line (measured: 4000 openers, 0.7 s; now linear).
+_MARKUP_LINK_RE = re.compile(r"\[link=([^\[\]\s]+)\]((?:(?!\[/?link[=\]])[^\n])*)\[/link\]")
 
 
 def escape_markup(value: Any) -> str:
@@ -482,18 +488,25 @@ class TerminalConsole(Console):
 
     def _own_links_only(self, rich_text: Text) -> Text:
         """S2: a link that markup put on a span stays only as VAF's own file link (its label
-        is the path it opens); any other loses the link and keeps its label. A style that
-        does not resolve is left as it is: Rich renders it as no style, so no link."""
+        is the path it opens); any other loses the link and keeps its label. So does an own
+        link part of whose label is concealed: `/tmp/a[conceal]b[/conceal]` links `/tmp/ab`
+        while the reader sees `/tmp/a`. A style that does not resolve is left as it is: Rich
+        renders it as no style, so no link."""
         spans = rich_text.spans
-        for index, span in enumerate(spans):
-            if not span.style:
-                continue
+        resolved = []
+        for span in spans:
             try:
-                style = self.get_style(span.style)
+                resolved.append(self.get_style(span.style) if span.style else None)
             except Exception:
+                resolved.append(None)
+        hidden = [(span.start, span.end) for span, style in zip(spans, resolved)
+                  if style is not None and style.conceal]
+        for index, (span, style) in enumerate(zip(spans, resolved)):
+            if style is None or not style.link:
                 continue
-            if style.link and not _own_file_link(
-                    style.link, rich_text.plain[span.start:span.end]):
+            concealed = any(start < span.end and span.start < end for start, end in hidden)
+            if concealed or not _own_file_link(style.link,
+                                               rich_text.plain[span.start:span.end]):
                 spans[index] = Span(span.start, span.end, style.update_link(None))
         return rich_text
 

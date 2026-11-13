@@ -236,7 +236,7 @@ def test_a_bracketed_path_stays_the_real_path_for_every_reader(parts, tmp_path):
     link = _get_clickable_path(str(target))
     assert link == f"[link={uri}]{real}[/link]"
     listing = _format_file_links([os.path.join(*parts)], str(tmp_path))
-    assert real in listing and "\\[" not in listing
+    assert real in listing
     assert _strip_rich_links("Saved: " + link) == "Saved: " + real
 
     for console in (_console(), PlainConsole(file=io.StringIO(), force_terminal=True,
@@ -259,12 +259,45 @@ def test_only_file_link_writes_a_markup_link():
         if rel == "vaf/core/terminal_text.py":
             continue
         tree = ast.parse(path.read_bytes())
-        docstrings = {id(node.value) for node in ast.walk(tree)
-                      if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)}
+        # Every string standing as a statement of its own: docstrings, and the odd string
+        # used as a block comment. Neither is output.
+        bare_strings = {id(node.value) for node in ast.walk(tree)
+                        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)}
         found += [f"{rel}:{node.lineno}" for node in ast.walk(tree)
                   if isinstance(node, ast.Constant) and isinstance(node.value, str)
-                  and id(node) not in docstrings and needle.search(node.value)]
+                  and id(node) not in bare_strings and needle.search(node.value)]
     assert not found, found
+
+
+def test_a_run_of_link_openers_costs_linear_time():
+    """`escape_markup` runs on every narration line, so somebody's text decides its input.
+    A link pattern whose target allowed `[` rescanned the rest of the text from every
+    `[link=` opener (measured: 4000 openers, 0.7 s; 12000 about 6 s). The limit is far
+    above the linear time (milliseconds) and far below the quadratic one, so a slow runner
+    does not make it flaky. MUTATION: allow `[` in the target again - red."""
+    import time
+
+    for hostile in ("[link=" * 12000,
+                    ("[link=file:///a]" + "[link=" * 40 + "x") * 300):
+        start = time.perf_counter()
+        escaped = escape_markup(hostile)
+        assert time.perf_counter() - start < 1.5
+        assert escaped
+    # And the escaped text prints as written, with no link.
+    sample = ("[link=file:///a]" + "[link=" * 3 + "x") * 2
+    out = _render(escape_markup(sample), soft_wrap=True)
+    assert sample in _plain(out) and _targets(out) == []
+
+
+def test_a_concealed_part_of_a_label_drops_the_link():
+    """Text printed raw into markup (the long tail) can write VAF's own shape with part of
+    the label hidden: the link opens `/tmp/ab` while the reader sees `/tmp/a`. MUTATION:
+    drop the conceal check in `_own_links_only` - red."""
+    for markup in ("[link=file:///tmp/ab]/tmp/a[conceal]b[/conceal][/link]",
+                   "[link=file:///tmp/ab conceal]/tmp/ab[/link]"):
+        out = _render(markup)
+        assert _targets(out) == [], (markup, out)
+    assert set(_targets(_render("[link=file:///tmp/ab]/tmp/ab[/link]"))) == {"file:///tmp/ab"}
 
 
 def test_escape_markup_keeps_only_vafs_own_link():

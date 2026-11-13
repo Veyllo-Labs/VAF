@@ -557,8 +557,10 @@ def tool_work_folder(kwargs) -> Tuple[str, str]:
 
     The caller is ``user_scope_id``/``user_role`` from the tool's ``identity_kwargs``, which
     the dispatcher assigns over whatever the model wrote. A call that carries neither is a
-    direct consumer with no account. The folder is named as given, never resolved: a refused
-    '.' must not show the program folder's path to a tenant.
+    direct consumer with no account. A refusal names the folder as given, never resolved: a
+    refused '.' must not show the program folder's path to a tenant. An allowed folder is
+    returned as it was judged (``~`` expanded, resolved), so the tool works in exactly that
+    folder and not in a same-named one below the process's working folder.
     """
     base_dir = kwargs.get("base_dir") or "."
     from vaf.core.workspace_guard import project_dir_refusal
@@ -567,7 +569,12 @@ def tool_work_folder(kwargs) -> Tuple[str, str]:
     if reason:
         return "", (f"❌ Refused: cannot work in '{base_dir}': {reason}. Name a folder you may "
                     "work in as base_dir.")
-    return base_dir, ""
+    # The folder that was judged: project_dir_refusal expands '~' and resolves, so the raw
+    # text would be a different folder (relative to the working folder, '~' a literal name).
+    try:
+        return str(Path(str(base_dir)).expanduser().resolve()), ""
+    except (OSError, RuntimeError, ValueError):
+        return "", f"❌ Refused: cannot work in '{base_dir}': it could not be checked."
 HOST_CONFIG_WRITE_REFUSAL = (
     "Access denied: the home directory's configuration (dot files and folders such as "
     "~/.bashrc, ~/.config or ~/.local, autostart entries) runs or steers programs outside VAF "

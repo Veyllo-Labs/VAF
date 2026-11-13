@@ -100,6 +100,19 @@ class PersistenceManager:
     """
     Manages the persistent state of the coding agent.
     Handles storage of tasks (JSON) and knowledge (Markdown).
+
+    The files live in the project's own ``.vaf`` folder, and that is the only folder they are
+    read from or written to. Code in a sandbox environment (the coder's jailed ``bash``,
+    ``sandbox_exec`` on a mounted project) can put links in a project, which the host sees as
+    ordinary entries: a ``.vaf/memory.md`` linked to ``~/.bashrc``, a ``.vaf/codex.md``
+    linked to another account's file, or ``.vaf`` itself linked to another project's. So a
+    ``.vaf`` that is a link is not used at all (`notes_folder` answers None), every write
+    opens through `vaf.core.path_jail.open_for_write` pinned to the real path of that folder
+    (a link as the last part, or a folder swapped for a link later, is refused), and a read
+    refuses a link as the last part and a folder that is not that one. A caller that decides
+    who may write the project asks its rule for `notes_folder` (the git and notes tools ask
+    the caller's file jail). NAMED BOUNDARY: a hard link is a second name of the same file and
+    is not seen; a sandbox environment cannot make one to a file outside its mount.
     """
     
     VAF_DIR = ".vaf"
@@ -114,12 +127,45 @@ class PersistenceManager:
         self.codex_path = os.path.join(self.vaf_path, self.CODEX_FILE)
         self.memory_path = os.path.join(self.vaf_path, self.MEMORY_FILE)
         
-        # Ensure .vaf directory exists
-        if not os.path.exists(self.vaf_path):
+        self._folder: Optional[str] = None
+        self._folder_asked = False
+        # Ensure .vaf directory exists (never through a link: lexists sees one, dangling too)
+        if not os.path.lexists(self.vaf_path):
             try:
                 os.makedirs(self.vaf_path, exist_ok=True)
             except Exception as e:
                 print(f"[PersistenceManager] WARNING: Could not create .vaf dir at {self.vaf_path}: {e}")
+
+    def notes_folder(self) -> Optional[str]:
+        """The real path of this project's ``.vaf`` folder, or None when it is a link (or a
+        junction), not a folder, or cannot be made. Asked once; every read and write of this
+        manager is pinned to that answer."""
+        if not self._folder_asked:
+            self._folder_asked = True
+            self._folder = self._own_folder()
+        return self._folder
+
+    def _own_folder(self) -> Optional[str]:
+        try:
+            if os.path.islink(self.vaf_path):
+                return None
+            os.makedirs(self.vaf_path, exist_ok=True)
+            expected = os.path.join(os.path.realpath(self.base_dir), self.VAF_DIR)
+            # A junction is no link to islink; resolved, it lands somewhere else.
+            if os.path.normcase(os.path.realpath(self.vaf_path)) != os.path.normcase(expected):
+                return None
+            return expected
+        except (OSError, ValueError):
+            return None
+
+    def _open_write(self, path: str, mode: str):
+        from vaf.core.path_jail import WriteRefused, open_for_write
+        folder = self.notes_folder()
+        if folder is None:
+            raise WriteRefused(f"refusing to write {path}: the project's .vaf is a link or "
+                               "not a folder")
+        return open_for_write(os.path.join(folder, os.path.basename(path)), mode,
+                              encoding="utf-8", expect_folder=folder)
 
     def init_project(self, project_name: str):
         """Initialize a new project state if not exists."""
@@ -140,8 +186,9 @@ class PersistenceManager:
             return None
         
         try:
-            with open(self.tasks_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+            data = json.loads(self._read_file(self.tasks_path) or "null")
+            if not isinstance(data, dict):
+                return None
             return ProjectState.from_dict(data)
         except Exception as e:
             print(f"Error loading state: {e}")
@@ -150,9 +197,7 @@ class PersistenceManager:
     def save_state(self, state: ProjectState):
         """Save the project state to tasks.json."""
         try:
-            # Ensure .vaf dir exists in case it was missing at init time
-            os.makedirs(self.vaf_path, exist_ok=True)
-            with open(self.tasks_path, 'w', encoding='utf-8') as f:
+            with self._open_write(self.tasks_path, "w") as f:
                 json.dump(state.to_dict(), f, indent=2, ensure_ascii=False)
         except Exception as e:
             print(f"[PersistenceManager] ERROR saving state to {self.tasks_path}: {e}")
@@ -162,7 +207,9 @@ class PersistenceManager:
         return self._read_file(self.codex_path)
 
     def append_codex(self, content: str):
-        """Append a new pattern to the Codex."""
+        """Append a new pattern to the Codex. Raises `WriteRefused` (an OSError) when the
+        file or its folder is a link, so the caller does not report a write that did not
+        happen."""
         timestamp = time.strftime("%Y-%m-%d %H:%M")
         entry = f"\n\n## Entry [{timestamp}]\n{content}"
         self._append_file(self.codex_path, entry)
@@ -172,7 +219,7 @@ class PersistenceManager:
         return self._read_file(self.memory_path)
 
     def append_memory(self, content: str):
-        """Append to Session Memory."""
+        """Append to Session Memory. Raises like `append_codex`."""
         timestamp = time.strftime("%H:%M:%S")
         entry = f"\n- [{timestamp}] {content}"
         self._append_file(self.memory_path, entry)
@@ -183,24 +230,44 @@ class PersistenceManager:
 
     # Helpers
     def _read_file(self, path: str) -> str:
-        if not os.path.exists(path):
+        """The file's text, or "" when it is missing, a link, not a regular file, or not in
+        this project's own .vaf folder. The coder reads codex and memory into its prompt, so
+        a link to another account's file would carry that file into the run."""
+        folder = self.notes_folder()
+        if folder is None:
+            return ""
+        path = os.path.join(folder, os.path.basename(path))
+        try:
+            if os.path.islink(path) or not os.path.isfile(path):
+                return ""
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+            fd = os.open(path, flags | getattr(os, "O_BINARY", 0))
+        except OSError:
             return ""
         try:
-            with open(path, 'r', encoding='utf-8') as f:
+            import stat as _stat
+            if not _stat.S_ISREG(os.fstat(fd).st_mode):
+                return ""
+            real = os.path.dirname(os.path.realpath(path))
+            if os.path.normcase(real) != os.path.normcase(folder):
+                return ""
+            f = os.fdopen(fd, "r", encoding="utf-8")
+            fd = -1
+            with f:
                 return f.read()
-        except Exception:
+        except (OSError, ValueError):
             return ""
+        finally:
+            if fd >= 0:
+                os.close(fd)
 
     def _write_file(self, path: str, content: str):
         try:
-            with open(path, 'w', encoding='utf-8') as f:
+            with self._open_write(path, "w") as f:
                 f.write(content)
         except Exception:
             pass
 
     def _append_file(self, path: str, content: str):
-        try:
-            with open(path, 'a', encoding='utf-8') as f:
-                f.write(content)
-        except Exception:
-            pass
+        with self._open_write(path, "a") as f:
+            f.write(content)

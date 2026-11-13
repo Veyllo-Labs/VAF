@@ -489,11 +489,34 @@ The six now declare `user_scope_id`/`user_role`, and `tool_work_folder` asks
   is refused for everyone, and the answer asks for the project folder as `base_dir`, which the
   six schemas now declare;
 - the role is the one the dispatcher assigns, never the model's, and the refusal names the
-  folder as given, never its resolved path.
+  folder as given, never its resolved path;
+- an allowed folder is used exactly as it was judged (`~` expanded, resolved): a
+  `~/Documents/...` used to be judged as the account's folder and then written as a folder
+  named `~` below the working folder, VAF's program folder for the installed service;
+- the notes go only into the project's own `.vaf` folder. Code in the project's sandbox
+  (`sandbox_exec`, the coder's jailed `bash`) can put links there, and measured in the
+  account's OWN project, a `.vaf/memory.md` linked to `~/.bashrc` took a note as a shell line,
+  a `.vaf/codex.md` linked to another account's file took the codex text, and a `.vaf` linked
+  to another project's `.vaf` took both. `PersistenceManager` (`vaf/core/persistence.py`) now
+  refuses a `.vaf` that is a link, opens every file it writes (the notes and the coder's
+  `tasks.json`) through `vaf.open_for_write` pinned to that folder's real path (a link as the
+  last part, or a folder swapped for a link later, is refused), and the notes tools ask the
+  caller's file jail again for that real path. The coder reads `codex.md` and `memory.md`
+  into its prompt; that read refuses a link too, so another account's file never reaches a
+  run. A hard link is not seen, as for every writer (a sandbox cannot make one to a file
+  outside its mount).
+
+The chat's own store tools (`update_intent`, `update_working_memory`, `add_task`, and the
+coder's `request_clarification`) used to take a `base_dir` from the call as well: one account
+wrote `user_intent.md`, `working_memory.json` and `team_state.json` into another account's
+project, a folder no reader of the store looks at. They now keep the store under VAF's working
+folder, where the system prompt, the agent and the brain routes read it, and a `base_dir` in
+the call is ignored.
 
 Thinking runs no longer have `git_init`, `update_codex` or `add_memory` (they had only the three
 other git tools excluded), because a propose-only background run must not create files.
-Guarded by `tests/test_coder_project_dir_jail.py`.
+Guarded by `tests/test_coder_project_dir_jail.py` and, for the writers in
+`vaf/core/persistence.py`, `tests/test_writes_do_not_follow_links.py`.
 
 Admins and the scope-less machine owner reach everything the unsafe check allows, so nothing
 changes for them or on a single-user machine. A tenant's project from before the per-user

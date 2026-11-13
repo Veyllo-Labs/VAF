@@ -213,7 +213,7 @@ def parked(iso, monkeypatch):
 
 # ── 1. a chat turn beside a run keeps its own routing ─────────────────────────
 
-def test_a_chat_turn_beside_a_thinking_run_is_routed_and_prompted_as_a_chat(parked):
+def test_a_chat_turn_beside_a_thinking_run_is_routed_and_prompted_as_a_chat(parked, monkeypatch):
     """The defect in one test: the run is active on its thread, another account's chat turn
     runs on another thread of the same process. MUTATION: write
     `os.environ["VAF_BACKGROUND_RUN"] = "thinking"` (or `VAF_BACKGROUND_PRO` with the
@@ -224,11 +224,13 @@ def test_a_chat_turn_beside_a_thinking_run_is_routed_and_prompted_as_a_chat(park
 
     base = parked["dir"] / "work"
     base.mkdir()
+    # The store lives under the process's working folder, never a folder from the arguments.
+    monkeypatch.chdir(base)
     slot, t = _start_run(SCOPE_A, "runA0001")
 
     def _chat_turn():
         set_current_session_id("green123456")
-        reply = UpdateIntentTool().run(base_dir=str(base), intent="Plan the trip to Lisbon")
+        reply = UpdateIntentTool().run(intent="Plan the trip to Lisbon")
         return {
             "in_run": in_thinking_run(),
             "model": _resolve(),
@@ -393,11 +395,12 @@ def test_update_intent_is_a_no_op_only_inside_a_run(iso, monkeypatch):
 
     base = iso["dir"] / "work"
     base.mkdir()
+    monkeypatch.chdir(base)
     monkeypatch.setenv("VAF_THINKING_MODE", "1")
 
     def _write(intent):
         set_current_session_id("green123456")
-        return UpdateIntentTool().run(base_dir=str(base), intent=intent)
+        return UpdateIntentTool().run(intent=intent)
 
     assert "intent not changed" not in contextvars.copy_context().run(_write, "Outside")
     assert MainPersistenceManager(str(base), session_id="green123456").get_user_intent() == "Outside"
@@ -415,12 +418,12 @@ def test_the_working_memory_mirror_runs_only_inside_a_run(iso, monkeypatch):
                         lambda scope, snap: mirrored.append(scope))
     base = iso["dir"] / "work"
     base.mkdir()
+    monkeypatch.chdir(base)
     monkeypatch.setenv("VAF_THINKING_MODE", "1")
 
     def _note(text):
         set_current_session_id("green123456")
-        return UpdateWorkingMemoryTool().run(base_dir=str(base), user_scope_id=SCOPE_A,
-                                             add_notes=[text])
+        return UpdateWorkingMemoryTool().run(user_scope_id=SCOPE_A, add_notes=[text])
 
     contextvars.copy_context().run(_note, "outside")
     assert mirrored == []

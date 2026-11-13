@@ -2978,8 +2978,9 @@ Stable public surface (safe to build on):
   home directory's configuration or VAF's code, and it lies where the caller's file jail
   lets it write (`jail_allows(..., mode="write")`; an admin or an empty scope reaches every
   tree). Ask it for a folder a stored record names, or one a model names in a tool argument
-  (declare `identity_kwargs = ("user_scope_id", "user_role")` and ask it for that argument;
-  VAF's git and project notes tools do), before you serve it or hand it to a run: VAF's web
+  (declare `identity_kwargs = ("user_scope_id", "user_role")`, ask it for that argument and
+  then use the folder as it judged it, `~` expanded and resolved, not the raw text; VAF's git
+  and project notes tools do), before you serve it or hand it to a run: VAF's web
   workspace resolver, its queue runner and its jailed shell do, because a record written
   earlier can name another account's folder. The role must come from the caller's
   authenticated identity. Fail-closed: an error is a refusal.
@@ -2990,7 +2991,8 @@ Stable public surface (safe to build on):
   it, asks `is_vaf_state` and `is_host_config` again on the folder's real path (the kernel's
   answer for the open handle), writes only a regular file (a pipe or a device is refused without blocking) and
   truncates an existing file only after all of that, so a refusal changes nothing. `mode` is
-  `"w"` or `"wb"`; `exclusive=True` refuses an existing file. `WriteRefused` is a
+  `"w"` or `"wb"`, or `"a"` or `"ab"` to append (the same checks, `O_APPEND`, never
+  truncated); `exclusive=True` refuses an existing file. `WriteRefused` is a
   `PermissionError`, so code that already reports an `OSError` of its open reports this one
   the same way. An existing link at the name is refused, not replaced: delete it first.
   Code in a sandbox environment creates links in its mounted folder, and the host sees them

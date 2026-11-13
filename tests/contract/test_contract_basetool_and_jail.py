@@ -348,6 +348,31 @@ def test_open_for_write_writes_an_ordinary_file_and_refuses_a_link(tmp_path, mon
     assert target.read_text() == "kept"
 
 
+def test_open_for_write_appends_and_refuses_a_link_the_same_way(tmp_path, monkeypatch):
+    """"a" and "ab" append to an existing file (never truncate it) with the same checks:
+    a link at the name is refused and its target left untouched.
+    MUTATION: truncate in append mode too - red."""
+    for var in ("XDG_DATA_HOME", "LOCALAPPDATA"):
+        monkeypatch.setenv(var, str(tmp_path / "data"))
+    (tmp_path / "log.txt").write_text("one\n", encoding="utf-8")
+    with vaf.open_for_write(tmp_path / "log.txt", "a", encoding="utf-8") as fh:
+        fh.write("two\n")
+    with vaf.open_for_write(tmp_path / "log.txt", "ab") as fh:
+        fh.write(b"three\n")
+    assert (tmp_path / "log.txt").read_bytes().replace(b"\r\n", b"\n") == b"one\ntwo\nthree\n"
+    with pytest.raises(ValueError):
+        vaf.open_for_write(tmp_path / "log.txt", "r")
+    target = tmp_path / "elsewhere.txt"
+    target.write_text("kept")
+    try:
+        os.symlink(target, tmp_path / "link.txt")
+    except (OSError, NotImplementedError):
+        pytest.skip("this host cannot create symlinks")
+    with pytest.raises(vaf.WriteRefused):
+        vaf.open_for_write(tmp_path / "link.txt", "a", encoding="utf-8")
+    assert target.read_text() == "kept"
+
+
 def test_open_for_write_refuses_vafs_own_data(tmp_path, monkeypatch):
     for var in ("XDG_DATA_HOME", "LOCALAPPDATA"):
         monkeypatch.setenv(var, str(tmp_path / "data"))

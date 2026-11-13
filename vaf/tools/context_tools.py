@@ -18,14 +18,20 @@ from vaf.core.bounded_run import run_coroutine_on_new_loop as _run_async_in_new_
 from vaf.core.main_persistence import MainPersistenceManager
 
 
-def _current_store(base_dir) -> MainPersistenceManager:
+def _current_store() -> MainPersistenceManager:
     """The store the persistence writes land in: the chat this context serves, else the
     conversation of its own an agent room's turn declares (`MainPersistenceManager.
     for_current_context`, the rule the system prompt reads with), so a note goes where the
     next prompt looks and never into the shared global store by accident. Sub-agents inherit
     the parent's chat via VAF_SESSION_ID, or its room conversation via VAF_CONVERSATION_ID.
-    Neither -> legacy global .vaf/main/."""
-    return MainPersistenceManager.for_current_context(base_dir)
+    Neither -> legacy global .vaf/main/.
+
+    Under the process's working folder, the folder every reader of the store uses (the
+    system prompt, the agent, the brain routes), never a folder from the call's arguments: a
+    model-written ``base_dir`` reached no reader and let one account write the store files
+    into another account's project."""
+    import os
+    return MainPersistenceManager.for_current_context(os.getcwd())
 
 class UpdateIntentTool(BaseTool):
     """
@@ -55,7 +61,6 @@ class UpdateIntentTool(BaseTool):
     }
     
     def run(self, **kwargs) -> str:
-        base_dir = kwargs.get('base_dir', '.')
         intent = kwargs.get('intent', '')
 
         if not intent:
@@ -72,7 +77,7 @@ class UpdateIntentTool(BaseTool):
             return "Noted (intent not changed: a background run does not modify the main chat's user intent)."
 
         try:
-            mpm = _current_store(base_dir)
+            mpm = _current_store()
             mpm.update_user_intent(intent)
             return "✅ User Intent updated successfully."
         except Exception as e:
@@ -149,7 +154,6 @@ class UpdateWorkingMemoryTool(BaseTool):
     }
     
     def run(self, **kwargs) -> str:
-        base_dir = kwargs.get('base_dir', '.')
         user_scope_id = kwargs.get('user_scope_id')
         notes = kwargs.get('notes')
         plan = kwargs.get('plan')
@@ -171,7 +175,7 @@ class UpdateWorkingMemoryTool(BaseTool):
         mark_all_done = bool(mark_all_done)
 
         try:
-            mpm = _current_store(base_dir)
+            mpm = _current_store()
             pre_tasks = mpm.get_working_memory().get("tasks", [])
 
             # Overwrite guard: replacing the whole task list (tasks=[...]) while steps are still
@@ -360,8 +364,7 @@ class AddTaskAliasTool(BaseTool):
                 "No task text was provided, so nothing was saved."
             )
         try:
-            base_dir = kwargs.get("base_dir", ".")
-            mpm = _current_store(base_dir)
+            mpm = _current_store()
             mpm.update_working_memory(add_task=task_text.strip())
             return (
                 f"✅ Task added: \"{task_text.strip()}\"\n\n"
@@ -409,7 +412,6 @@ class RequestClarificationTool(BaseTool):
     }
     
     def run(self, **kwargs) -> str:
-        base_dir = kwargs.get('base_dir', '.')
         question = kwargs.get('question', '')
         context = kwargs.get('context', '')
         task_id = kwargs.get('task_id', '')
@@ -423,7 +425,7 @@ class RequestClarificationTool(BaseTool):
             return "Error: Question and Task ID are required."
         
         try:
-            mpm = _current_store(base_dir)
+            mpm = _current_store()
             mpm.update_subagent_status(
                 task_id=task_id,
                 agent_type=agent_type,

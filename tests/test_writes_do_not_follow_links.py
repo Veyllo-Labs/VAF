@@ -1153,6 +1153,8 @@ RAW_WRITES = {
     ("vaf/core/ftp.py", "_save"): (1, "the account's server list in VAF's own store"),
     ("vaf/core/ssh.py", "askpass_helper"): (1, "VAF's askpass helper in its own ssh folder"),
     ("vaf/core/ssh.py", "ensure_identity"): (1, "the account's public key in its own ssh folder"),
+    ("vaf/core/persistence.py", "PersistenceManager._read_file"):
+        (1, "a read: O_RDONLY with O_NOFOLLOW, in the project's own .vaf folder"),
     ("vaf/tools/browser_agent.py", "_decrypt_session_to_tmp"):
         (1, "O_EXCL in a fresh private temp folder"),
     ("vaf/tools/cloud_storage.py", "_action_save"):
@@ -1168,8 +1170,11 @@ RAW_WRITES = {
 }
 
 # The modules a write tool hands a model-chosen path to, besides vaf/tools itself. The cloud
-# providers write what a remote owner named, so all of vaf/cloud is scanned too.
-_SINKS = ("vaf/core/ftp.py", "vaf/core/ssh.py", "vaf/core/document_formatting.py")
+# providers write what a remote owner named, so all of vaf/cloud is scanned too. persistence.py
+# writes the coder's state and the notes tools' files into a project's .vaf, a folder the
+# project's sandbox code can fill with links.
+_SINKS = ("vaf/core/ftp.py", "vaf/core/ssh.py", "vaf/core/document_formatting.py",
+          "vaf/core/persistence.py")
 _SINK_FOLDERS = ("vaf/tools", "vaf/cloud")
 
 
@@ -1259,7 +1264,7 @@ def test_the_writers_named_in_the_docs_use_the_safe_open():
         "vaf/tools/download_file.py", "vaf/core/ftp.py", "vaf/core/ssh.py",
         "vaf/tools/document_writer.py", "vaf/tools/document_agent.py",
         "vaf/tools/research_agent.py", "vaf/tools/render_check.py",
-        "vaf/core/document_formatting.py", "vaf/tools/coder.py",
+        "vaf/core/document_formatting.py", "vaf/tools/coder.py", "vaf/core/persistence.py",
         "vaf/tools/coder_templates/__init__.py",
         "vaf/tools/cloud_storage.py", "vaf/cloud/google_drive.py", "vaf/cloud/onedrive.py",
         "vaf/cloud/dropbox_provider.py", "vaf/cloud/nextcloud.py", "vaf/cloud/icloud.py",

@@ -143,7 +143,7 @@ Use this when user wants to schedule recurring tasks or a one-time task at a clo
    - Never hardcode a messenger (e.g. send_telegram). The user may use WhatsApp, Discord, email, etc.
    - In the prompt, instruct: "Send the result/summary to the user with **send_to_user** (it resolves their main_messenger at run time and falls back to the Web UI). Use a platform tool (send_telegram, send_whatsapp, send_discord, send_mail, ...) ONLY if the user explicitly named that platform."
    - For "weekly review", "wöchentlicher Report", or similar: use frequency **weekly** and set **weekday** (e.g. friday). Do not use daily.
-   - Do not assume git or version control. If the prompt mentions "recent changes" or "commits", phrase it as: "If the project uses version control (e.g. git), check recent commits with git_log; otherwise skip or use file/context."
+   - Do not assume git or version control. If the prompt mentions "recent changes" or "commits", phrase it as: "If the project uses version control (e.g. git), check recent commits with git_log in the project folder (base_dir); otherwise skip or use file/context."
 
 5. **TIME SLOTS (HH:MM, 10-minute rule):**
    - Always use **HH:MM** for the time parameter (e.g. 06:00, 06:15, 18:30).

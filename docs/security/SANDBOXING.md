@@ -509,7 +509,9 @@ handle) is asked `is_vaf_state` and `is_host_config` again, and only a regular f
 without blocking). That covers `download_file` and the `.part` files of the `ssh` and `ftp`
 downloads, `document_writer`, `document_agent` and `research_agent` (text, Markdown and Word),
 `render_check`'s screenshot, and the coder's own writes into its project (the `PARTIAL_` backup,
-the default `.gitignore`, the README of the document phase, the template files), and the
+the default `.gitignore`, the README of the document phase, the template files), the
+project notes and the coder's task state in a project's `.vaf` (`vaf/core/persistence.py`:
+a `.vaf` that is a link is not used, and every write is pinned to that folder's real path), and the
 cloud: `cloud_storage` `download` and `retrieve` copy into the Downloads folder through it (a
 tenant's Downloads folder lies in their own project root, which an environment of theirs can
 mount), and every provider writes its downloads through it. A cloud file's name is the remote

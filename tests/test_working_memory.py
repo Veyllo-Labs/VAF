@@ -4,6 +4,8 @@
 import sys
 from unittest.mock import MagicMock
 
+import pytest
+
 sys.modules.setdefault("llama_cpp", MagicMock())
 
 from vaf.core.main_persistence import MainPersistenceManager  # noqa: E402
@@ -11,6 +13,13 @@ from vaf.core.main_persistence import MainPersistenceManager  # noqa: E402
 
 def _mgr(tmp_path):
     return MainPersistenceManager(str(tmp_path), session_id="t")
+
+
+@pytest.fixture(autouse=True)
+def _in_tmp(tmp_path, monkeypatch):
+    """The tools keep their store under the process's working folder (never a folder from the
+    call's arguments), so each test runs in its own."""
+    monkeypatch.chdir(tmp_path)
 
 
 # ── Plan-without-tasks reminder: steps belong in tasks, so a plan with no tasks is flagged ─────────
@@ -59,19 +68,18 @@ def test_overwrite_guard_blocks_then_confirms(tmp_path):
     import vaf.tools.context_tools as ct
     ct._TASK_OVERWRITE_CONFIRM.clear()
     tool = ct.UpdateWorkingMemoryTool()
-    base = str(tmp_path)
 
-    tool.run(base_dir=base, add_task="in progress step")           # one pending task
-    r1 = tool.run(base_dir=base, tasks=[{"text": "fresh list"}])   # replace while pending -> bounce
+    tool.run(add_task="in progress step")           # one pending task
+    r1 = tool.run(tasks=[{"text": "fresh list"}])   # replace while pending -> bounce
     assert "pending" in r1.lower() and "confirm" in r1.lower()
 
     # the old task survived the bounce (nothing was overwritten)
-    survived = ct._current_store(base).get_working_memory()
+    survived = ct._current_store().get_working_memory()
     assert any(t["text"] == "in progress step" for t in survived["tasks"])
 
-    r2 = tool.run(base_dir=base, tasks=[{"text": "fresh list"}])   # re-call within window -> confirmed
+    r2 = tool.run(tasks=[{"text": "fresh list"}])   # re-call within window -> confirmed
     assert "updated" in r2.lower()
-    after = ct._current_store(base).get_working_memory()
+    after = ct._current_store().get_working_memory()
     assert [t["text"] for t in after["tasks"]] == ["fresh list"]
 
 
@@ -79,13 +87,12 @@ def test_overwrite_guard_silent_when_no_pending(tmp_path):
     import vaf.tools.context_tools as ct
     ct._TASK_OVERWRITE_CONFIRM.clear()
     tool = ct.UpdateWorkingMemoryTool()
-    base = str(tmp_path)
 
-    tool.run(base_dir=base, add_task="done step")
-    tool.run(base_dir=base, mark_task_done=0)                       # no pending left
-    r = tool.run(base_dir=base, tasks=[{"text": "brand new"}])     # replacing with nothing pending
+    tool.run(add_task="done step")
+    tool.run(mark_task_done=0)                       # no pending left
+    r = tool.run(tasks=[{"text": "brand new"}])     # replacing with nothing pending
     assert "updated" in r.lower()                                   # no bounce
-    after = ct._current_store(base).get_working_memory()
+    after = ct._current_store().get_working_memory()
     assert [t["text"] for t in after["tasks"]] == ["brand new"]
 
 
@@ -136,21 +143,19 @@ def test_mark_all_done_marks_every_pending(tmp_path):
 def test_mark_all_done_tool_reports_count(tmp_path):
     import vaf.tools.context_tools as ct
     tool = ct.UpdateWorkingMemoryTool()
-    base = str(tmp_path)
-    tool.run(base_dir=base, add_task="a")
-    tool.run(base_dir=base, add_task="b")
-    r = tool.run(base_dir=base, mark_all_done=True)
+    tool.run(add_task="a")
+    tool.run(add_task="b")
+    r = tool.run(mark_all_done=True)
     assert "2" in r and "done" in r.lower()
 
 
 def test_tool_reports_duplicate_add_not_re_added(tmp_path):
     import vaf.tools.context_tools as ct
     tool = ct.UpdateWorkingMemoryTool()
-    base = str(tmp_path)
-    tool.run(base_dir=base, add_task="same step")
-    r = tool.run(base_dir=base, add_task="same step")
+    tool.run(add_task="same step")
+    r = tool.run(add_task="same step")
     assert "already" in r.lower()
-    after = ct._current_store(base).get_working_memory()
+    after = ct._current_store().get_working_memory()
     assert len(after["tasks"]) == 1
 
 
@@ -163,18 +168,17 @@ def test_mark_task_done_already_done_redirects_to_open_step(tmp_path):
     import vaf.tools.context_tools as ct
     ct._TASK_OVERWRITE_CONFIRM.clear()
     tool = ct.UpdateWorkingMemoryTool()
-    base = str(tmp_path)
 
-    tool.run(base_dir=base, add_task="Zahlen waehlen")
-    tool.run(base_dir=base, add_task="Kauf abschliessen")
-    tool.run(base_dir=base, mark_task_done=0)          # [0] done -> [1] is now the open step
-    r = tool.run(base_dir=base, mark_task_done=0)      # the bug: re-mark the already-done [0]
+    tool.run(add_task="Zahlen waehlen")
+    tool.run(add_task="Kauf abschliessen")
+    tool.run(mark_task_done=0)          # [0] done -> [1] is now the open step
+    r = tool.run(mark_task_done=0)      # the bug: re-mark the already-done [0]
 
     assert "already done" in r.lower()
     assert "[1]" in r and "Kauf abschliessen" in r     # redirected to the genuinely-open step
     assert "✅ Working Memory updated." not in r        # NOT a silent success
     # warn-only: the tool must never have auto-changed any status
-    wm = ct._current_store(base).get_working_memory()
+    wm = ct._current_store().get_working_memory()
     assert wm["tasks"][1]["status"] == "pending"
 
 
@@ -182,10 +186,9 @@ def test_mark_task_done_out_of_range_redirects(tmp_path):
     import vaf.tools.context_tools as ct
     ct._TASK_OVERWRITE_CONFIRM.clear()
     tool = ct.UpdateWorkingMemoryTool()
-    base = str(tmp_path)
 
-    tool.run(base_dir=base, add_task="only step")
-    r = tool.run(base_dir=base, mark_task_done=5)      # no task [5]; [0] is the open step
+    tool.run(add_task="only step")
+    r = tool.run(mark_task_done=5)      # no task [5]; [0] is the open step
     assert "no task [5]" in r.lower()
     assert "[0]" in r
     assert "✅ Working Memory updated." not in r
@@ -195,12 +198,11 @@ def test_mark_task_done_happy_path_unchanged(tmp_path):
     import vaf.tools.context_tools as ct
     ct._TASK_OVERWRITE_CONFIRM.clear()
     tool = ct.UpdateWorkingMemoryTool()
-    base = str(tmp_path)
 
-    tool.run(base_dir=base, add_task="the step")
-    r = tool.run(base_dir=base, mark_task_done=0)      # marks the genuinely-pending step
+    tool.run(add_task="the step")
+    r = tool.run(mark_task_done=0)      # marks the genuinely-pending step
     assert "✅ Working Memory updated." in r            # normal success preserved
-    wm = ct._current_store(base).get_working_memory()
+    wm = ct._current_store().get_working_memory()
     assert wm["tasks"][0]["status"] == "done"
 
 
@@ -208,11 +210,10 @@ def test_mark_already_done_when_all_complete_is_positive(tmp_path):
     import vaf.tools.context_tools as ct
     ct._TASK_OVERWRITE_CONFIRM.clear()
     tool = ct.UpdateWorkingMemoryTool()
-    base = str(tmp_path)
 
-    tool.run(base_dir=base, add_task="the step")
-    tool.run(base_dir=base, mark_task_done=0)          # done; nothing pending now
-    r = tool.run(base_dir=base, mark_task_done=0)      # already done + all complete
+    tool.run(add_task="the step")
+    tool.run(mark_task_done=0)          # done; nothing pending now
+    r = tool.run(mark_task_done=0)      # already done + all complete
     assert "all tasks are complete" in r.lower()
     assert "⚠️" not in r                                # positive close-out, not a warning
 
@@ -227,12 +228,11 @@ def test_overwrite_guard_names_the_real_call_not_a_phantom_tool(tmp_path):
     import vaf.tools.context_tools as ct
     ct._TASK_OVERWRITE_CONFIRM.clear()
     tool = ct.UpdateWorkingMemoryTool()
-    base = str(tmp_path)
 
-    tool.run(base_dir=base, add_task="first step")
-    tool.run(base_dir=base, add_task="second step")
-    tool.run(base_dir=base, mark_task_done=0)                       # the first is done
-    bounce = tool.run(base_dir=base, tasks=[])                      # wipe while [1] is pending
+    tool.run(add_task="first step")
+    tool.run(add_task="second step")
+    tool.run(mark_task_done=0)                       # the first is done
+    bounce = tool.run(tasks=[])                      # wipe while [1] is pending
 
     assert "update_working_memory(mark_task_done=1)" in bounce, "the pending step's own index"
     assert "update_working_memory(mark_all_done=true)" in bounce

@@ -328,7 +328,8 @@ def open_for_write(path, mode: str = "wb", *, exclusive: bool = False,
     - Only a regular file is written; a pipe or a device is refused without blocking.
     - An existing file is truncated only after all of that, so a refusal changes nothing.
 
-    ``mode`` is "wb" or "w" (then ``encoding``/``newline`` as for ``open``). ``exclusive``
+    ``mode`` is "wb" or "w" (then ``encoding``/``newline`` as for ``open``), or "ab" or "a"
+    to append: the same checks, the file opened with ``O_APPEND`` and never truncated. ``exclusive``
     refuses an existing file (``O_EXCL``).
 
     ``expect_folder`` is for a folder somebody else can write: the REAL path (no links on
@@ -360,8 +361,9 @@ def open_for_write(path, mode: str = "wb", *, exclusive: bool = False,
     name of the same file and is not seen on any platform; making one needs a process on the
     host with access to both folders (a sandbox environment cannot link to a file outside its
     mount)."""
-    if mode not in ("w", "wb"):
-        raise ValueError(f"open_for_write writes ('w' or 'wb'), not {mode!r}")
+    if mode not in ("w", "wb", "a", "ab"):
+        raise ValueError(f"open_for_write writes ('w', 'wb', 'a' or 'ab'), not {mode!r}")
+    append = mode.startswith("a")
     raw = os.path.abspath(os.path.expanduser(os.fspath(path)))
     parent, name = os.path.split(raw)
     if not name:
@@ -372,6 +374,8 @@ def open_for_write(path, mode: str = "wb", *, exclusive: bool = False,
     flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_BINARY", 0)
     if exclusive:
         flags |= os.O_EXCL
+    if append:
+        flags |= os.O_APPEND
     expected = (os.path.normcase(os.path.abspath(os.fspath(expect_folder)))
                 if expect_folder is not None else None)
     if _DIR_FD:
@@ -383,13 +387,13 @@ def open_for_write(path, mode: str = "wb", *, exclusive: bool = False,
         import stat as _stat
         if not _stat.S_ISREG(info.st_mode):
             raise WriteRefused(f"refusing to write {raw}: it is not a regular file")
-        if not exclusive:
+        if not exclusive and not append:
             os.ftruncate(fd, 0)
         if _DIR_FD and hasattr(os, "set_blocking"):
             os.set_blocking(fd, True)
-        if mode == "wb":
-            return os.fdopen(fd, "wb")
-        return os.fdopen(fd, "w", encoding=encoding, newline=newline)
+        if mode.endswith("b"):
+            return os.fdopen(fd, mode)
+        return os.fdopen(fd, mode, encoding=encoding, newline=newline)
     except BaseException:
         os.close(fd)
         raise

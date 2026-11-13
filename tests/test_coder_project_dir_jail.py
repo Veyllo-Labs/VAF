@@ -756,3 +756,181 @@ def test_thinking_runs_get_no_file_creating_project_tools():
 def test_the_contact_lane_never_offers_them():
     from vaf.core.front_office_tools import FRONT_OFFICE_ALLOWED_TOOLS
     assert not set(SIX) & set(FRONT_OFFICE_ALLOWED_TOOLS)
+
+
+# ── The folder as judged, and links in a project's .vaf ────────────────────────────────
+#
+# Measured after the folder rule, as account A (role "user") in its OWN project: a
+# .vaf/memory.md linked to ~/.bashrc took add_memory's note as a shell line, a .vaf/codex.md
+# linked to B's file took update_codex's text, and a .vaf linked to B's .vaf took both; the
+# coder reads codex.md and memory.md back into its prompt. And a '~/...' folder was judged
+# expanded but used as written, so the notes landed in a '~' folder below the working folder.
+#
+# Mutations, each turning the named test red:
+# - PersistenceManager._append_file opens with open(path, "a") again -> test_a_link_in_
+#   the_accounts_own_notes_folder_is_not_written_through[memory_to_home_config/codex_to_
+#   other_account];
+# - _own_folder drops its islink and realpath checks -> test_a_linked_notes_folder_is_
+#   not_used;
+# - _open_write drops expect_folder -> test_a_notes_folder_swapped_after_the_check_is_
+#   refused;
+# - _project_notes drops the jail question -> test_the_notes_tools_ask_the_jail_for_the_
+#   real_notes_folder;
+# - _read_file opens the given path with open() again -> test_the_coder_never_reads_notes_
+#   through_a_link;
+# - tool_work_folder returns the raw base_dir again -> test_a_home_relative_folder_is_
+#   the_folder_that_was_judged;
+# - the context tools take base_dir from the call again -> test_the_store_tools_take_no_
+#   folder_from_the_model.
+
+
+def _symlink_or_skip(link, target):
+    try:
+        os.symlink(target, link)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available here")
+
+
+@pytest.fixture
+def own_project(main_world):
+    mine = main_world.a_root / "chat" / "site"
+    (mine / ".vaf").mkdir(parents=True)
+    main_world.mine = mine
+    (main_world.b_proj / ".vaf").mkdir()
+    (main_world.b_proj / ".vaf" / "codex.md").write_text("B-CODEX\n")
+    return main_world
+
+
+@pytest.mark.parametrize("shape", ["memory_to_home_config", "codex_to_other_account"])
+def test_a_link_in_the_accounts_own_notes_folder_is_not_written_through(own_project, shape):
+    w = own_project
+    funnel = _six_funnel(A, "user")
+    if shape == "memory_to_home_config":
+        target = w.home / ".bashrc"
+        target.write_text("# rc\n")
+        _symlink_or_skip(w.mine / ".vaf" / "memory.md", target)
+        out = funnel.execute("add_memory", {"base_dir": str(w.mine), "note": "touch /tmp/x"})
+    else:
+        target = w.b_proj / "secret.txt"
+        _symlink_or_skip(w.mine / ".vaf" / "codex.md", target)
+        out = funnel.execute("update_codex", {"base_dir": str(w.mine), "title": "t",
+                                              "content": "INJECTED"})
+    before = target.read_text()
+    assert out.startswith("❌"), out
+    assert target.read_text() == before
+    assert "touch /tmp/x" not in before and "INJECTED" not in before
+
+
+def test_a_linked_notes_folder_is_not_used(own_project):
+    from vaf.core.persistence import PersistenceManager
+    w = own_project
+    linked = w.a_root / "chat" / "linked"
+    linked.mkdir(parents=True)
+    _symlink_or_skip(linked / ".vaf", w.b_proj / ".vaf")
+    assert PersistenceManager(str(linked)).notes_folder() is None
+    funnel = _six_funnel(A, "user")
+    for name, args in (("update_codex", {"title": "t", "content": "X"}),
+                       ("add_memory", {"note": "X"})):
+        out = funnel.execute(name, {"base_dir": str(linked), **args})
+        assert out.startswith("❌ Refused: the project's .vaf is a link"), (name, out)
+    assert sorted(os.listdir(w.b_proj / ".vaf")) == ["codex.md"]
+    assert (w.b_proj / ".vaf" / "codex.md").read_text() == "B-CODEX\n"
+    # The account's own ordinary notes folder still works.
+    assert funnel.execute("add_memory", {"base_dir": str(w.mine), "note": "mine"}).startswith("✅")
+    assert "mine" in (w.mine / ".vaf" / "memory.md").read_text(encoding="utf-8")
+
+
+def test_a_notes_folder_swapped_after_the_check_is_refused(own_project):
+    """The folder is asked once; a .vaf swapped for a link afterwards is refused by the open
+    (open_for_write's expect_folder), not followed."""
+    from vaf.core.path_jail import WriteRefused
+    from vaf.core.persistence import PersistenceManager
+    w = own_project
+    pm = PersistenceManager(str(w.mine))
+    assert pm.notes_folder() == os.path.join(os.path.realpath(w.mine), ".vaf")
+    os.rename(w.mine / ".vaf", w.mine / ".vaf-old")
+    _symlink_or_skip(w.mine / ".vaf", w.b_proj / ".vaf")
+    with pytest.raises(WriteRefused):
+        pm.append_codex("SWAPPED")
+    assert (w.b_proj / ".vaf" / "codex.md").read_text() == "B-CODEX\n"
+
+
+def test_the_notes_tools_ask_the_jail_for_the_real_notes_folder(own_project, monkeypatch):
+    """A project folder that leads elsewhere after it was judged (simulated by the judged
+    folder itself) meets the caller's jail again on the notes folder's real path."""
+    import vaf.tools.knowledge as knowledge
+    w = own_project
+    monkeypatch.setattr(knowledge, "tool_work_folder", lambda kwargs: (str(w.b_proj), ""))
+    funnel = _six_funnel(A, "user")
+    out = funnel.execute("update_codex", {"base_dir": str(w.mine), "title": "t", "content": "X"})
+    assert out.startswith("❌ Refused: the project's .vaf leads outside"), out
+    assert (w.b_proj / ".vaf" / "codex.md").read_text() == "B-CODEX\n"
+
+
+def test_the_coder_never_reads_notes_through_a_link(own_project):
+    """The coder puts codex.md and memory.md into its prompt (PersistenceManager.get_codex /
+    get_memory); a link there would carry another account's file into the run."""
+    from vaf.core.persistence import PersistenceManager
+    w = own_project
+    _symlink_or_skip(w.mine / ".vaf" / "codex.md", w.b_proj / "secret.txt")
+    (w.mine / ".vaf" / "memory.md").write_text("own memory\n")
+    pm = PersistenceManager(str(w.mine))
+    assert pm.get_codex() == ""
+    assert pm.get_memory() == "own memory\n"
+    linked = w.a_root / "chat" / "linked"
+    linked.mkdir(parents=True)
+    os.symlink(w.b_proj / ".vaf", linked / ".vaf")
+    assert PersistenceManager(str(linked)).get_codex() == ""
+
+
+@pytest.mark.parametrize("name", ["update_codex", "git_init"])
+def test_a_home_relative_folder_is_the_folder_that_was_judged(main_world, monkeypatch, name):
+    w = main_world
+    monkeypatch.chdir(w.program)
+    spelled = f"~/Documents/VAF_Projects/{A[:8]}/tproj"
+    proj = w.a_root / "tproj"
+    if name == "git_init":
+        proj.mkdir()            # git_init works in an existing folder only, as before
+    args = {"base_dir": spelled, "title": "t", "content": "home-relative"}
+    out = _six_funnel(A, "user").execute(name, args)
+    assert out.startswith("✅"), out
+    assert not (w.program / "~").exists()
+    if name == "update_codex":
+        assert "home-relative" in (proj / ".vaf" / "codex.md").read_text(encoding="utf-8")
+    else:
+        assert (proj / ".git").is_dir()
+    assert (_count(w.program), _log(w.program).count("\n")) == ("1", 1)
+
+
+STORE_TOOLS = (("update_intent", {"intent": "probe intent"}),
+               ("update_working_memory", {"add_task": "probe task"}),
+               ("add_task", {"task": "probe task two"}))
+
+
+@pytest.mark.parametrize("who", ["user", "admin", "no_account"])
+def test_the_store_tools_take_no_folder_from_the_model(main_world, monkeypatch, who):
+    """update_intent, update_working_memory and add_task keep the chat's store under the
+    process's working folder, where every reader of it looks; a base_dir in the call is not
+    a folder they use."""
+    from vaf.core.tool_dispatch import ToolCaller
+    from vaf.tools.context_tools import (AddTaskAliasTool, RequestClarificationTool,
+                                         UpdateIntentTool, UpdateWorkingMemoryTool)
+    w = main_world
+    server = w.home.parent / "server"
+    server.mkdir()
+    monkeypatch.chdir(server)
+    scope, role = {"user": (A, "user"), "admin": (A, "admin"), "no_account": (None, None)}[who]
+    tools = (UpdateIntentTool(), UpdateWorkingMemoryTool(), AddTaskAliasTool())
+    funnel = ToolCaller({t.name: t for t in tools}, user_scope_id=scope, user_role=role,
+                        gate_enabled=False, max_result_chars=None)
+    for name, args in STORE_TOOLS:
+        out = funnel.execute(name, {"base_dir": str(w.b_proj), **args})
+        assert "✅" in out, (name, out)
+    out = RequestClarificationTool().run(base_dir=str(w.b_proj), question="q", task_id="t1")
+    assert out.startswith("✅"), out
+    assert not (w.b_proj / ".vaf").exists()
+    from vaf.core.main_persistence import MainPersistenceManager
+    store = MainPersistenceManager(str(server))
+    assert store.get_user_intent() == "probe intent"
+    assert [t.get("text") for t in store.get_working_memory().get("tasks", [])] == [
+        "probe task", "probe task two"]

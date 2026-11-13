@@ -283,8 +283,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   work only in a folder the account may use (its own projects and shared room folders);
   administrators keep every folder except the home directory, the standard folders
   themselves, VAF's own data and VAF's code, so a call that names no folder while VAF runs
-  from its own folder is refused and asks for the project folder. Background thinking runs
-  no longer create a repository or project notes. Needs a restart of VAF.
+  from its own folder is refused and asks for the project folder. A folder named with `~`
+  is now used exactly as checked, the project notes are no longer written or read through a
+  link in a project's `.vaf` folder (one that pointed at your shell start file or at another
+  account's file), and the session goal and task list tools no longer write into a folder the
+  agent names. Background thinking runs no longer create a repository or project notes.
+  Needs a restart of VAF.
 - **The agent's file tools stay out of VAF's own data and your shell start files.** Reading
   VAF's data and settings folders (messages, mail, contacts, key files, the MCP server list,
   tool permissions, and in Docker mode the configuration folder) is now refused for every

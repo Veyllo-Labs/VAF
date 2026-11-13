@@ -7,6 +7,26 @@ from vaf.core.persistence import PersistenceManager
 from vaf.tools.filesystem import tool_work_folder
 import os
 
+
+def _project_notes(base_dir, kwargs):
+    """``(PersistenceManager, "")`` for the project's notes, or ``(None, refusal)``.
+
+    `tool_work_folder` judged the project folder; the notes go into its ``.vaf``, which code
+    in the project's sandbox can replace with a link to another account's folder. So the real
+    path of that folder is asked the caller's file jail again, and every write is pinned to
+    it (`PersistenceManager.notes_folder`); a ``.vaf`` that is a link is not used."""
+    pm = PersistenceManager(base_dir)
+    folder = pm.notes_folder()
+    if folder is None:
+        return None, ("❌ Refused: the project's .vaf is a link or not a folder; project notes "
+                      "are written only into the project's own .vaf folder.")
+    from vaf.tools.filesystem import jail_allows
+    if not jail_allows(folder, user_scope_id=kwargs.get("user_scope_id"),
+                       user_role=kwargs.get("user_role"), mode="write"):
+        return None, ("❌ Refused: the project's .vaf leads outside the folders this account "
+                      "may write.")
+    return pm, ""
+
 class UpdateCodexTool(BaseTool):
     """
     Save a persistent engineering pattern, convention, or architectural decision to the project's Codex.
@@ -52,8 +72,10 @@ class UpdateCodexTool(BaseTool):
         if not content:
             return "Error: Content is required."
         
+        pm, refusal = _project_notes(base_dir, kwargs)
+        if refusal:
+            return refusal
         try:
-            pm = PersistenceManager(base_dir)
             entry = f"### {title}\n{content}"
             pm.append_codex(entry)
             return f"✅ Saved to Codex: {title}"
@@ -100,8 +122,10 @@ class AddMemoryTool(BaseTool):
         if not note:
             return "Error: Note is required."
         
+        pm, refusal = _project_notes(base_dir, kwargs)
+        if refusal:
+            return refusal
         try:
-            pm = PersistenceManager(base_dir)
             pm.append_memory(note)
             return "✅ Added to session memory."
         except Exception as e:

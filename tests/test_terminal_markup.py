@@ -134,6 +134,12 @@ FORGED = [
     ("[link=file:///tmp/a%E2%80%AEexe.txt]/tmp/a\u202eexe.txt[/link]", "/tmp/aexe.txt"),
     ("[link=file:///tmp/a%00b]/tmp/a\x00b[/link]", "/tmp/ab"),
     ("[link=file:///tmp/a%E2%80%8Bb]/tmp/a\u200bb[/link]", "/tmp/a"),
+    ("[link=file:///tmp/a%CD%8Fb]/tmp/a\u034fb[/link]", "/tmp/a"),
+    ("[link=file:///tmp/a%EF%B8%8Fb]/tmp/a\ufe0fb[/link]", "/tmp/a"),
+    ("[link=file:///tmp/a%E3%85%A4b]/tmp/a\u3164b[/link]", "/tmp/a"),
+    # On POSIX a backslash is part of a name, not a separator: these are other files.
+    ("[link=file:///tmp/a%5Cb]/tmp/a/b[/link]", "/tmp/a/b"),
+    ("[link=file:///tmp/a/b]/tmp/a\\b[/link]", "/tmp/a\\b"),
 ]
 
 
@@ -182,6 +188,83 @@ def test_markup_that_does_not_parse_is_shown_as_text(text):
     assert "[/x]" in _plain(_render(table))
     # The fallback is the markup-off lane: control characters go there too.
     assert _plain(_render("a [/] \x1b]0;T\x07b")).strip() == "a [/] b"
+
+
+@pytest.mark.parametrize("target, label, own", [
+    # Characters that show as nothing: a default-ignorable code point, a line separator.
+    ("file:///tmp/a%CD%8Fb", "/tmp/a\u034fb", False),
+    ("file:///tmp/a%EF%B8%8Fb", "/tmp/a\ufe0fb", False),
+    ("file:///tmp/a%E3%85%A4b", "/tmp/a\u3164b", False),
+    ("file:///tmp/a%E2%80%A8b", "/tmp/a\u2028b", False),
+    # A decomposed accent (the way macOS writes file names) is visible: kept.
+    ("file:///tmp/cafe%CC%81", "/tmp/cafe\u0301", True),
+    # A backslash is a separator in a drive-letter label only.
+    ("file:///tmp/a%5Cb", "/tmp/a\\b", True),
+    ("file:///tmp/a%5Cb", "/tmp/a/b", False),
+    ("file:///tmp/a/b", "/tmp/a\\b", False),
+    ("file:///C:/Users/a/p", "C:\\Users\\a\\p", True),
+])
+def test_the_own_link_label_is_what_the_reader_sees(target, label, own):
+    """MUTATION: drop the default-ignorable table - red; refuse every combining mark as well
+    - red (the accent); turn backslashes into slashes for a POSIX label - red."""
+    from vaf.core.terminal_text import _own_file_link
+
+    assert _own_file_link(target, label) is own
+
+
+BRACKETED = [("app", "[id]", "page.tsx"), ("app", "[...slug]", "page.tsx"),
+             ("app", "[[opt]]", "page.html")]
+
+
+@pytest.mark.parametrize("parts", BRACKETED, ids=["id", "slug", "optional"])
+def test_a_bracketed_path_stays_the_real_path_for_every_reader(parts, tmp_path):
+    """A Next.js route. The model reads the coder's tool result as text and the workflow
+    engine keeps only a link's label, so both must get the real path; printed, the link stays
+    live. MUTATION: escape the label in `file_link` again - red (the model gets
+    `\\[id]`); forbid brackets in `_MARKUP_LINK_RE`'s label again - red (the printed link is
+    escaped into text)."""
+    from rich.console import Console as PlainConsole
+    from vaf.tools.coder import _format_file_links, _get_clickable_path
+    from vaf.workflows.engine import _strip_rich_links
+
+    target = tmp_path.joinpath(*parts)
+    target.parent.mkdir(parents=True)
+    target.write_text("x", encoding="utf-8")
+    real = os.path.abspath(target)
+    uri = Path(real).as_uri()
+
+    link = _get_clickable_path(str(target))
+    assert link == f"[link={uri}]{real}[/link]"
+    listing = _format_file_links([os.path.join(*parts)], str(tmp_path))
+    assert real in listing and "\\[" not in listing
+    assert _strip_rich_links("Saved: " + link) == "Saved: " + real
+
+    for console in (_console(), PlainConsole(file=io.StringIO(), force_terminal=True,
+                                             color_system="truecolor", width=300)):
+        console.print(escape_markup("Saved: " + link))
+        out = console.file.getvalue()
+        assert set(_targets(out)) == {uri}, out
+        assert "Saved: " + real in _plain(out)
+
+
+def test_only_file_link_writes_a_markup_link():
+    """VAF's own link has one producer, so the console's rule and the link agree by
+    construction. Docstrings and comments may show the shape; a regex escapes its bracket.
+    MUTATION: put the engine's old `"[link=file:///" + path` f-string back in agent.py -
+    red."""
+    needle = re.compile(r"(?<!\\)\[link[= ]")
+    found = []
+    for path in sorted((ROOT / "vaf").rglob("*.py")):
+        rel = path.relative_to(ROOT).as_posix()
+        if rel == "vaf/core/terminal_text.py":
+            continue
+        tree = ast.parse(path.read_bytes())
+        docstrings = {id(node.value) for node in ast.walk(tree)
+                      if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)}
+        found += [f"{rel}:{node.lineno}" for node in ast.walk(tree)
+                  if isinstance(node, ast.Constant) and isinstance(node.value, str)
+                  and id(node) not in docstrings and needle.search(node.value)]
+    assert not found, found
 
 
 def test_escape_markup_keeps_only_vafs_own_link():

@@ -13,7 +13,7 @@ Standard libraries (`os`, `json`, `re`, `threading`) and `rich` components are i
 *   **`vaf.tools.coder_templates`**: Manages template assets.
 
 ### Helper Functions
-*   **`_get_clickable_path(path)`**: Converts a path to a `file://` URI for terminal clickability, through the framework's `file_link` (`vaf/core/terminal_text.py`): the `Path.as_uri()` of the absolute path, labelled with that path. That is the one shape VAF's console keeps as a markup link (`TerminalConsole` drops a markup link whose label is not the local path it opens, or that names a host or a network share).
+*   **`_get_clickable_path(path)`**: Converts a path to a `file://` URI for terminal clickability, through the framework's `file_link` (`vaf/core/terminal_text.py`): the `Path.as_uri()` of the absolute path, labelled with that path as it is (the model reads this text in the tool result, so a Next.js `app/[id]/page.tsx` keeps its brackets; `escape_markup` escapes the label only where it is printed). That is the one shape VAF's console keeps as a markup link (`TerminalConsole` drops a markup link whose label is not the local path it opens, or that names a host or a network share).
 *   **`_open_folder(path)`**: OS-independent folder opening (`startfile` on Win, `open` on Mac, `xdg-open` on Linux).
 *   **`_get_open_instructions(files, base_dir)`**: Analyzes created files to generate context-aware help (e.g., "To run this Python script...").
 *   **`_run_linter_for_files(files, history, local_tools)`**:

@@ -1363,15 +1363,22 @@ URI whose label is the absolute path it opens. A link that names a host
 (`file://host/...`, a file on that machine) or a network share (`file:////host/share`, a
 UNC path on Windows), carries a query, has a relative label, or has a label with a
 character the console removes or the reader cannot see (a bidi or other format character,
-a zero-width space) keeps its label and loses the link. The full-screen app's toasts show
-their message as text.
+a zero-width space, a variation selector or another default-ignorable code point, a line
+separator) keeps its label and loses the link. A backslash separates path parts only in a
+drive-letter label; in a POSIX path it is part of the name. The label stays raw in
+`file_link`'s text, since the model and the workflow engine read it as a path (a Next.js
+`app/[id]/page.tsx`); `escape_markup` escapes it where it is printed. The full-screen app's
+toasts show their message as text.
 
 Named boundaries of the markup class: Rich's `Panel` titles and `Text.from_markup` parse
 without the console, so neither console rule reaches them and a foreign value there needs
 the entry escape (the coder's file name has one). About 900 other interpolations into
 markup strings print mostly VAF's own values (paths, counts, configuration) and rely on the
 console rules alone: a foreign value there can restyle itself, hide itself (`[conceal]`) or
-lose a `[word]`, but it cannot plant a link or raise. A value escaped into a markup line
+lose a `[word]`, but it cannot raise, and the only link it can produce is a local file link
+whose label is exactly the absolute path it opens. The same holds for VAF's own shape
+anywhere: foreign text that writes `[link=file:///tmp/x]/tmp/x[/link]` gets a live link,
+local only, and it opens what it says. A value escaped into a markup line
 that ends in a backslash shows it twice where plain text follows it (Rich's escape doubles
 it for the tag that usually follows); table cells take `Text` for that reason. VAF's own
 link to a network share (a UNC project path on Windows) carries a host and shows as a plain

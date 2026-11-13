@@ -96,20 +96,22 @@ raised `MarkupError` out of `print`. Three parts, from the narrowest to the wide
    emoji codes as text unless asked otherwise: VAF writes none of its own.
 
 VAF's own file link is `file_link(path)`: the `file:` URI of an absolute local path,
-labelled with that path (`_own_file_link` is the check; the coder's `_get_clickable_path`
-and the engine's project and report links call it). A link whose label is not the path it
-opens, one that names a host or a network share, or one whose label holds a character the
-reader cannot see is not VAF's, whoever wrote it.
+labelled with that path, raw (`_own_file_link` is the check; the coder's
+`_get_clickable_path` and the engine's project and report links call it, and no other
+string in `vaf/` writes `[link=`, pinned by tests/test_terminal_markup.py). A link whose
+label is not the path it opens, one that names a host or a network share, or one whose
+label holds a character the reader cannot see is not VAF's, whoever wrote it.
 
 Named boundaries: about 900 interpolations into markup strings outside the full-screen app
 print mostly VAF's own values (paths, counts, configuration); those without an entry escape
 rely on S1 and S2 alone, so a foreign value there can restyle itself, hide itself
-(`[conceal]`) or lose a `[word]`, but it cannot plant a link or raise. Rich's `Panel` titles
-and `Text.from_markup` parse without the console, so neither S1 nor S2 reaches them: a
-foreign value there needs the entry escape (the coder's file name in its preview title has
-one). A link from a `Text` or `Style` object, from `Markdown` or from the `style` argument of
-`print` is not markup and keeps the link handling of `terminal_segments` and
-`TerminalConsole.print`.
+(`[conceal]`) or lose a `[word]`, but it cannot raise, and the only link it can produce is
+a local file link whose label is exactly the absolute path it opens (as any foreign text
+can that writes VAF's own shape). Rich's `Panel` titles and `Text.from_markup` parse
+without the console, so neither S1 nor S2 reaches them: a foreign value there needs the
+entry escape (the coder's file name in its preview title has one). A link from a `Text` or
+`Style` object, from `Markdown` or from the `style` argument of `print` is not markup and
+keeps the link handling of `terminal_segments` and `TerminalConsole.print`.
 """
 import json
 import logging
@@ -194,6 +196,28 @@ def terminal_text(value: Any) -> str:
 #: A drive-letter path in slash form: `C:/...`.
 _DRIVE_RE = re.compile(r"[A-Za-z]:/")
 
+#: The Unicode default-ignorable code points (DerivedCoreProperties.txt): a terminal shows
+#: them as nothing, so a label holding one reads as a different name than the one the link
+#: opens. Combining marks are not among them: a decomposed accent (as macOS writes file
+#: names) is visible and stays allowed.
+_DEFAULT_IGNORABLE = (
+    (0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160),
+    (0x17B4, 0x17B5), (0x180B, 0x180F), (0x200B, 0x200F), (0x202A, 0x202E),
+    (0x2060, 0x206F), (0x3164, 0x3164), (0xFE00, 0xFE0F), (0xFEFF, 0xFEFF),
+    (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3), (0x1D173, 0x1D17A),
+    (0xE0000, 0xE0FFF),
+)
+
+
+def _unseen(ch: str) -> bool:
+    """A character the reader cannot see as it is: a format character (Cf), a line or
+    paragraph separator (Zl, Zp: they break the line where none is shown) or a
+    default-ignorable code point (a variation selector, the Hangul filler, U+034F)."""
+    if unicodedata.category(ch) in ("Cf", "Zl", "Zp"):
+        return True
+    code = ord(ch)
+    return any(low <= code <= high for low, high in _DEFAULT_IGNORABLE)
+
 
 def _absolute_local(path: str) -> bool:
     """A local absolute path in slash form: `/x` (one leading slash) or `C:/x`. Two leading
@@ -211,11 +235,11 @@ def _own_file_link(target: str, label: str) -> bool:
     label says; `localhost` alone is the local machine and is compared without it), a path
     that is a share (`file:////host/share` is one on Windows), a query or fragment the label
     would not show, a label that is not an absolute local path, and a label the reader
-    cannot see as it is: one with a control character the console removes or a format
-    character (Unicode category Cf: the bidi controls, a zero-width space), which would show
-    a different name than the one the link opens."""
-    if (not label or terminal_text(label) != label
-            or any(unicodedata.category(ch) == "Cf" for ch in label)):
+    cannot see as it is: one with a control character the console removes or a character
+    that shows as nothing (`_unseen`), which would show a different name than the one the
+    link opens. A backslash is a separator only in a drive-letter (Windows) label; in a POSIX
+    path it is part of the name, so `/tmp/a\\b` and `/tmp/a/b` are different files."""
+    if not label or terminal_text(label) != label or any(_unseen(ch) for ch in label):
         return False
     try:
         parts = urlsplit(target)
@@ -224,27 +248,34 @@ def _own_file_link(target: str, label: str) -> bool:
     if (parts.scheme.lower() != "file" or parts.netloc not in ("", "localhost")
             or parts.query or parts.fragment):
         return False
-    path = unquote(parts.path).replace("\\", "/")
-    if path.startswith("/") and _DRIVE_RE.match(path[1:]):
-        path = path[1:]                       # `/C:/x` is the URI form of `C:/x`
-    shown = label.replace("\\", "/")
+    path, shown = unquote(parts.path), label
+    if _DRIVE_RE.match(shown.replace("\\", "/")):
+        path, shown = path.replace("\\", "/"), shown.replace("\\", "/")
+        if path.startswith("/") and _DRIVE_RE.match(path[1:]):
+            path = path[1:]                   # `/C:/x` is the URI form of `C:/x`
     return _absolute_local(path) and path == shown
 
 
 def file_link(path: Any) -> str:
     """VAF's own clickable link to a local file or folder, as Rich markup: the `file:` URI of
-    its absolute path, labelled with that path. The one shape `_own_file_link` keeps, so it
-    stays a link through `escape_markup` and `TerminalConsole`; a network share (a UNC path
-    on Windows) carries a host and is shown as a plain label."""
+    its absolute path, labelled with that path AS IT IS. The label stays raw because this
+    text is also read: the model gets it in a tool result and the workflow engine keeps only
+    the label (`vaf.workflows.engine._strip_rich_links`), so a Next.js `app/[id]/page.tsx`
+    must not arrive as `app/\\[id]/page.tsx`. The escape happens where it is printed:
+    `escape_markup` keeps this link live and escapes its label, and `TerminalConsole` keeps
+    it (`_own_file_link`). A network share (a UNC path on Windows) carries a host and is
+    shown as a plain label."""
     import os
     from pathlib import Path
 
     absolute = os.path.abspath(os.fspath(path))
-    return f"[link={Path(absolute).as_uri()}]{_rich_escape(absolute)}[/link]"
+    return f"[link={Path(absolute).as_uri()}]{absolute}[/link]"
 
 
-#: A complete markup link with a plain target and a label without brackets.
-_MARKUP_LINK_RE = re.compile(r"\[link=([^\]\s]+)\]([^\[\]]*)\[/link\]")
+#: A complete markup link with a plain target, on one line. Its label may hold brackets (a
+#: Next.js route `[id]`, `[...slug]`, `[[opt]]`) but no other link tag: it ends at the
+#: first `[/link]`.
+_MARKUP_LINK_RE = re.compile(r"\[link=([^\]\s]+)\]((?:(?!\[/?link[=\]])[^\n])*)\[/link\]")
 
 
 def escape_markup(value: Any) -> str:

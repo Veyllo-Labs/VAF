@@ -270,14 +270,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   shows only its own run's steps; before, one person could see the steps of another person's
   run. New for developers who build on VAF: `vaf.terminal_text`.
 - **Text from others can no longer turn itself into links or hidden text in the terminal.**
-  A model reply, a sub-agent's result, a mail or messenger preview in `vaf inbox`, a session or
-  automation name, a web page title in the progress lines, a scanned skill, `vaf debug`'s
-  answer, a commit message `vaf git` suggests or lists, or a workflow's name could carry
-  markup such as `[link=https://...]label[/link]` or `[conceal]...[/conceal]`, which the plain
-  terminal modes and the CLI commands turned into a link with an address you did not see, or
-  into invisible text. Such text now shows as written. VAF's own links to files it created
-  stay clickable: a link is kept only when it points to a file on this computer and its label
-  is the path it opens, so a link to another machine or a network share is never kept.
+  Markup such as `[link=https://...]label[/link]` or `[conceal]...[/conceal]` became a link
+  with an address you did not see, or invisible text, in the plain terminal modes and the
+  CLI commands. Such text now shows as written. It could come from:
+  - a model reply, `vaf debug`'s answer or a sub-agent's result;
+  - a mail or messenger preview in `vaf inbox`, a session or automation name;
+  - a web page title in the progress lines, a scanned skill, a workflow's name;
+  - a commit message `vaf git` suggests or lists.
+
+  VAF's own links to files it created stay clickable: a link is kept only when it points to
+  a file on this computer and its label is the path it opens, so a link to another machine
+  or a network share is never kept.
 
 ## [0.1.0a36] - 2026-11-09
 

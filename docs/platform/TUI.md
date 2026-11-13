@@ -166,13 +166,14 @@ markup off; the narration lines, the sub-agent result panels, a user's message b
 `/context` and `/session` panels escape the text of others where it enters their markup
 (`escape_markup`, `vaf/core/terminal_text.py`). `TerminalConsole` shows a markup string
 that does not parse as text, prints emoji codes such as `:CD:` as text, and keeps a markup
-link only when it is a local `file:` link whose label is the absolute path it opens, which is
-how VAF writes its own links (`file_link`); any other, a link to another host or a network
-share included, keeps its label and loses the link. A coder link the model repeats in its reply therefore shows as written in the stream
-(`[link=file:///...]/path[/link]`), as it already did in the full-screen app, whose
-transcript renders Markdown. The app's toasts show their message as text too: `VafApp.notify`
-passes `markup=False` whatever the caller asked for. The named boundaries (`Panel` titles,
-the long tail of VAF's own values in markup) are listed in
+link only when it is a local `file:` link whose label is the absolute path it opens, which
+is how VAF writes its own links (`file_link`); any other, a link to another host or a
+network share included, keeps its label and loses the link. A coder link the model repeats
+in its reply therefore shows as written in the stream (`[link=file:///...]/path[/link]`),
+as it already did in the full-screen app, whose transcript renders Markdown. The app's
+toasts show their message as text too: `VafApp.notify` passes `markup=False` whatever the
+caller asked for. The named boundaries (`Panel` titles, the long tail of VAF's own values
+in markup) are listed in
 [USER_ISOLATION.md](../security/USER_ISOLATION.md#text-from-others-on-a-terminal).
 
 ## Keys and commands

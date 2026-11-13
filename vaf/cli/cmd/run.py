@@ -2411,22 +2411,20 @@ Created: {current_session.created_at}
                     # Restart Process
                     time.sleep(0.5)
                     
-                    # Robust restart logic
+                    # Same re-exec as `_exec_restart` in vaf/cli/tui_app/app.py;
+                    # tests/test_restart_reexec_argv.py drives both with one argv table.
                     try:
-                        # If running as executable (vaf.exe)
+                        # A launcher that keeps its `.exe` suffix is its own program.
                         if sys.argv[0].endswith('.exe'):
                             os.execl(sys.argv[0], sys.argv[0], *sys.argv[1:])
                         else:
-                            # If running as script (python vaf ...)
-                            # Check if run as module (-m vaf)
-                            if sys.argv[0].endswith('__main__.py'):
-                                # python -m vaf run ...
-                                args = [sys.executable, "-m", "vaf"] + sys.argv[1:]
-                                os.execl(sys.executable, *args)
-                            else:
-                                # python vaf/main.py run ...
-                                args = [sys.executable] + sys.argv
-                                os.execl(sys.executable, *args)
+                            # argv[0] is the script this interpreter ran: the console
+                            # script `<venv>/bin/vaf`, `vaf/main.py` under `-m vaf.main`,
+                            # or the `__main__` module file of a wrapper package started
+                            # with `python -m`. Running it again with the same interpreter
+                            # starts the same program. There is no `-m vaf` case: vaf has
+                            # no `__main__` module.
+                            os.execl(sys.executable, sys.executable, *sys.argv)
                     except Exception as e:
                         tui.error(f"Restart failed: {e}")
                         continue

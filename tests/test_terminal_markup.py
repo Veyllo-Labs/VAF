@@ -34,7 +34,7 @@ from typer.testing import CliRunner
 
 from test_tui_agent_bridge import FakeAgent, quiet_run_module  # noqa: F401 - fixture
 from test_tui_app_smoke import smoke_app  # noqa: F401 - fixture
-from vaf.core.terminal_text import TerminalConsole, escape_markup
+from vaf.core.terminal_text import TerminalConsole, escape_markup, own_links_as_labels
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -238,6 +238,7 @@ def test_a_bracketed_path_stays_the_real_path_for_every_reader(parts, tmp_path):
     listing = _format_file_links([os.path.join(*parts)], str(tmp_path))
     assert real in listing
     assert _strip_rich_links("Saved: " + link) == "Saved: " + real
+    assert own_links_as_labels("Saved: " + link) == "Saved: " + real   # the stored copy
 
     for console in (_console(), PlainConsole(file=io.StringIO(), force_terminal=True,
                                              color_system="truecolor", width=300)):
@@ -313,6 +314,35 @@ def test_escape_markup_keeps_only_vafs_own_link():
     # A trailing backslash before a kept link escapes nothing: Rich's rule still applies.
     out = _render_plain(escape_markup("dir\\" + OWN))
     assert set(_targets(out)) == {"file:///tmp/p"} and "dir\\/tmp/p" in _plain(out)
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("[link=https://evil.example]click[/link]", "[link=https://evil.example]click[/link]"),
+    ("[link=file://evil.example/share/x]/share/x[/link]",
+     "[link=file://evil.example/share/x]/share/x[/link]"),
+    ("[link=file:///tmp/a]/tmp/b[/link]", "[link=file:///tmp/a]/tmp/b[/link]"),
+    ("arr[i] [docs](https://e.org) - [x] [dim]x[/dim]",
+     "arr[i] [docs](https://e.org) - [x] [dim]x[/dim]"),
+    ("[link=file:///C:/Users/a/p]C:\\Users\\a\\p[/link]", "C:\\Users\\a\\p"),
+    ("see " + OWN + " and [link=https://e.org]x[/link]", "see /tmp/p and [link=https://e.org]x[/link]"),
+    (None, ""),
+    (42, "42"),
+], ids=["https", "host", "label-mismatch", "brackets", "windows", "own-and-foreign", "none",
+        "number"])
+def test_only_vafs_own_link_becomes_its_label(text, expected):
+    """The copy of a reply that leaves the terminal keeps the text as written; only VAF's
+    own file link becomes the path it opens. MUTATION: replace every link by its label (no
+    `_own_file_link` check) - red on the https, host and mismatch cases."""
+    assert own_links_as_labels(text) == expected
+
+
+def test_an_own_link_with_a_bracketed_path_becomes_that_path():
+    """`file_link` of a Next.js route: the label is the raw path. MUTATION: `_rich_escape`
+    the label - red (`\\[id]`); return the text unchanged - red."""
+    from vaf.core.terminal_text import file_link
+
+    path = os.path.abspath(os.path.join(os.sep, "home", "user", "app", "[id]", "page.tsx"))
+    assert own_links_as_labels("Saved: " + file_link(path)) == "Saved: " + path
 
 
 # ── the narration funnels (vaf/cli/tui.py) ───────────────────────────────────────────
@@ -492,6 +522,93 @@ def test_a_streamed_reply_prints_as_written_and_is_saved(quiet_run_module):
     assert reply in _plain(out), out
     assert _targets(out) == []
     assert [role for role, _ in session.messages] == ["assistant"]
+
+
+def _mirror(quiet_run_module, monkeypatch) -> list:
+    """What `_process_agent_message` sends to the browser as the reply, in order."""
+    sent = []
+    monkeypatch.setattr(quiet_run_module.web, "emit_agent_message",
+                        lambda role, content, **k: sent.append(content))
+    return sent
+
+
+#: Brackets a reply holds as text: an index, a Markdown link, a task box, a Next.js route,
+#: a bracket after a word holding "dim", a foreign link and the engine's own status line.
+BRACKET_REPLY = ("Use arr[i] and matrix[i][j]. See [the docs](https://e.org). - [x] done "
+                 "app/[id]/page.tsx a[0] and the dimension[1] [link=https://e.org]x[/link] "
+                 "[Generation stopped by user]")
+
+
+def test_the_stored_and_mirrored_reply_keeps_its_brackets(quiet_run_module, monkeypatch):
+    """The REAL `_process_agent_message`, 7-character chunks: the copy the chat stores and
+    the browser is shown is the reply as written. MUTATION: delete every `[...]` group in
+    `_reply_web_copy` again - red. MUTATION: put back only the `[...dim...]` to `<think>`
+    rule - red (the `dimension[1]` case)."""
+    import inspect
+
+    import vaf.cli.cmd.run as run_mod
+
+    sent = _mirror(quiet_run_module, monkeypatch)
+    tui, session = _StreamTui(), _Session()
+    run_mod._process_agent_message(FakeAgent(BRACKET_REPLY), "hi", tui, session)
+    assert session.messages == [("assistant", BRACKET_REPLY)]
+    assert sent and sent[-1] == BRACKET_REPLY
+    assert BRACKET_REPLY in _plain(_out(tui.console))           # the terminal, unchanged
+
+    # One copy rule at every exit, and none of it rewrites a bracket group.
+    assert "convert_rich_to_xml" not in (ROOT / "vaf" / "cli" / "cmd" / "run.py").read_text(
+        encoding="utf-8")
+    body = " ".join(inspect.getsource(run_mod._process_agent_message).split())
+    assert "clean_text = _reply_web_copy(current_full_text)" in body
+    assert "clean_ack = _reply_web_copy(str(result_text))" in body
+    assert "agent.last_turn, _reply_web_copy)" in body
+    assert "\\[" not in inspect.getsource(run_mod._reply_web_copy)
+
+
+def test_an_own_link_in_a_reply_is_stored_as_its_path(quiet_run_module, monkeypatch,
+                                                       tmp_path):
+    """A coder link the model repeats is VAF's own markup: the copy shows the path it opens,
+    and nothing else changes. MUTATION: drop the `own_links_as_labels` call from
+    `_reply_web_copy` - red."""
+    import vaf.cli.cmd.run as run_mod
+    from vaf.core.terminal_text import file_link
+
+    path = os.path.abspath(tmp_path / "app" / "[id]")
+    reply = "Created " + file_link(path) + " with arr[i]."
+    sent = _mirror(quiet_run_module, monkeypatch)
+    session = _Session()
+    run_mod._process_agent_message(FakeAgent(reply), "hi", _StreamTui(), session)
+    assert session.messages == [("assistant", "Created " + path + " with arr[i].")]
+    assert sent[-1] == "Created " + path + " with arr[i]."
+
+
+def test_an_async_ack_is_mirrored_as_written(quiet_run_module, monkeypatch):
+    """The acknowledgement of a started background task is not streamed; its own mirror
+    keeps its brackets too. MUTATION: delete the `[...]` groups at the async-ack mirror -
+    red."""
+    import vaf.cli.cmd.run as run_mod
+
+    sent = _mirror(quiet_run_module, monkeypatch)
+    session = _Session()
+    run_mod._process_agent_message(
+        FakeAgent(lambda cb: "[ASYNC_ACK]Started task [abc] for arr[i]"), "go", _StreamTui(),
+        session)
+    assert sent == ["Started task [abc] for arr[i]"]
+    assert session.messages == [("assistant", "Started task [abc] for arr[i]")]
+
+
+def test_the_german_answer_heuristic_still_folds_english_reasoning():
+    """A local model's English reasoning before a German answer, without `<think>` tags, is
+    still folded away as reasoning in the browser's copy. MUTATION: delete the heuristic -
+    red."""
+    import vaf.cli.cmd.run as run_mod
+
+    reply = ("Let me think about this. The user wants a greeting, so I should answer in "
+             "German. Hallo! Wie kann ich dir heute helfen?")
+    copy = run_mod._reply_web_copy(reply)
+    assert copy.startswith("<think>Let me think about this.")
+    assert copy.endswith("</think>\n\nHallo! Wie kann ich dir heute helfen?")
+    assert run_mod._reply_web_copy("") == "" and run_mod._reply_web_copy(None) == ""
 
 
 # ── the sub-agent drain ──────────────────────────────────────────────────────────────

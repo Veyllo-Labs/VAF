@@ -259,9 +259,9 @@ def stored_turn_copy(stream, turn: TurnStatus,
     is the tail of `stream`. `clean` is the host's own cleanup of the copy (None keeps the
     stream as it was). The head and the failure go through it apart and are joined by a
     blank line, so the recorded failure stands verbatim as the copy's tail by construction,
-    whatever the cleanup does across the boundary (a markup cleanup whose patterns match
-    across brackets, a newline collapse, a strip); a failure the cleanup removes entirely is
-    not recorded, and the copy then holds none of it. A stream that does not end with its
+    whatever the cleanup does across the boundary (a pattern that matches across brackets,
+    a newline collapse, a strip); a failure the cleanup removes entirely is not recorded,
+    and the copy then holds none of it. A stream that does not end with its
     failure has been changed after the engine's last chunk, and whether the cleanup kept
     failure text across the boundary cannot be told, so the copy is marked as a failed turn:
     no reader takes any of it. Returns (copy, `failed_turn_meta(...)`); `model_text` reads
@@ -289,9 +289,9 @@ def is_failed_turn(msg) -> bool:
     plain answers. A real answer that merely quotes a status or the stop marker further in
     is kept. Named boundary: an unmarked message from before the mark whose failure followed
     streamed text ("One moment.\\n[API Error from ...]") is not recognised, and neither is an
-    interactive CLI copy from before the mark, whose markup cleanup deleted the markers. A
-    message with tool calls never counts, because its calls anchor the tool results that
-    follow it.
+    interactive CLI copy from before the mark, whose markup cleanup of that time deleted the
+    markers. A message with tool calls never counts, because its calls anchor the tool
+    results that follow it.
     Accepts a `Message` or its dict form. Readers ask `model_text`, which builds on this."""
     get = msg.get if isinstance(msg, dict) else (lambda k, d=None: getattr(msg, k, d))
     if get("role") != "assistant" or get("tool_calls"):
@@ -316,11 +316,10 @@ def model_text(msg) -> Optional[str]:
     cleaned failure can be as short as a `<think>` tag the answer holds too. A recorded
     failure the content does not end with, or holds once more, makes the message None, the
     safe side: the stored copy altered it, or the rest cannot be told from failure text, and
-    an altered failure need not carry any signature (the CLI's markup cleanup deletes
-    every `[...]` group, `[Error]` and the head of `[API Error from ...` with it, and keeps the
-    rest). So a host builds its copy and its metadata with `stored_turn_copy`, or records no
-    failure when its copy is the turn's return value. Every other message: its content, as
-    stored.
+    an altered failure need not carry any signature (a cleanup that deletes every `[...]` group
+    takes `[Error]` and the head of `[API Error from ...` with it and keeps the rest). So a
+    host builds its copy and its metadata with `stored_turn_copy`, or records no failure when
+    its copy is the turn's return value. Every other message: its content, as stored.
 
     Asked by everything that builds a model's context, or a tool result a model reads, from
     a stored chat: the replay in `CoreAgent.load_session_context`, `Session.get_history`, the

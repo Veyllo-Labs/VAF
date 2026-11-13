@@ -64,6 +64,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   codes such as `:CD:` stay text instead of turning into a symbol. `vaf session export`
   without `-o` now writes the session unchanged: lines are no longer wrapped at 80 columns,
   so an exported JSON parses.
+- **Terminal chats keep their brackets in the browser and in the saved chat.** A reply
+  written in `vaf run` (the prompt interface and the full-screen app) was shown in the web UI
+  and saved with every `[...]` removed: `arr[i]` became `arr`, a Markdown link lost its
+  label, a task list lost its boxes and status lines such as `[Generation stopped by user]`
+  vanished; a bracket holding "dim" could even turn the rest of the reply into hidden
+  reasoning. The copy now keeps the reply as written; only a file link VAF made shows as its
+  path. Chats saved before keep what they lost.
 - **`restart` in the terminal starts the same program again.** `restart` in `vaf run` and
   in the full-screen terminal app now starts VAF the way it was started. Before, a start
   through `run_vaf.sh` or `run_vaf.bat` came back with the GitHub tools not working (the

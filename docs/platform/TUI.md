@@ -176,6 +176,18 @@ caller asked for. The named boundaries (`Panel` titles, the long tail of VAF's o
 in markup) are listed in
 [USER_ISOLATION.md](../security/USER_ISOLATION.md#text-from-others-on-a-terminal).
 
+The copy of a turn that the prompt interface and the full-screen app store in the chat and
+show in the browser (`_reply_web_copy` in `vaf/cli/cmd/run.py`) keeps the reply as written
+too: `arr[i]`, a Markdown link, a task list's `[x]`, a route such as `app/[id]/page.tsx` and
+status lines such as `[Generation stopped by user]` reach the browser and the saved chat
+unchanged, where the browser renders them as it renders a web chat's reply. Only a file link
+VAF wrote (`file_link`) appears there as the path it opens (`own_links_as_labels` in
+`vaf/core/terminal_text.py`); any other link stays as written, its address visible. Before,
+this copy deleted every `[...]` group and turned a bracket holding "dim" into hidden
+reasoning; chats saved before the change keep what they lost, because the file does not
+hold the deleted text. A local model's English reasoning before a German answer without
+`<think>` tags is still folded away as reasoning in that copy.
+
 ## Keys and commands
 
 Enter sends, Ctrl+J inserts a newline. Commands come from one shared registry

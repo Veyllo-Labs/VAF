@@ -10,6 +10,7 @@ import signal
 import time
 import requests
 import platform
+import re
 import subprocess
 from datetime import datetime
 from rich.panel import Panel
@@ -19,7 +20,8 @@ from vaf.core.channel_ingress_policy import CHANNEL_TASK_SOURCES, MAIL_CHANNEL
 from vaf.core.channels import channel_label
 from vaf.cli.ui import UI
 from vaf.core.log_helper import append_crash_log, get_dated_log_path
-from vaf.core.terminal_text import TerminalConsole, escape_markup, terminal_json, terminal_text
+from vaf.core.terminal_text import (TerminalConsole, escape_markup, own_links_as_labels,
+                                    terminal_json, terminal_text)
 import threading
 
 
@@ -2536,6 +2538,42 @@ def _handle_exit(tui, session_mgr, session):
         tui.info("Session not saved.")
 
 
+def _reply_web_copy(text: str) -> str:
+    """The copy of a terminal turn's reply that leaves the terminal: the live and the async
+    acknowledgement mirror to the browser, and the copy the chat stores (`stored_turn_copy`).
+
+    The reply as written: a reply is model text, and its brackets are text (`arr[i]`, a
+    Markdown link, a task list's `[x]`, `app/[id]/page.tsx`, `[Generation stopped by user]`),
+    which the browser renders as Markdown and a resumed chat replays. Only VAF's own file
+    link, which the model may repeat from the coder's tool result, shows as the path it opens
+    (`own_links_as_labels`).
+
+    Named boundary: a local VQ-1 reply of English reasoning followed by a German answer
+    without `<think>` tags still gets the reasoning wrapped in `<think>` below; changing that
+    changes how that model's replies read and needs a measurement with it."""
+    if not text: return ""
+    text = own_links_as_labels(text)
+
+    # Auto-detect thinking when model doesn't use <think> tags
+    # Look for English reasoning followed by German answer (VQ-1 pattern)
+    if '<think>' not in text and len(text) > 100:
+        # Common German sentence starters that indicate the actual answer
+        german_starters = r'(Ich bin|Ich kann|Ich werde|Ich habe|Hallo|Guten|Gerne|Natürlich|Ja,|Nein,|Das ist|Die |Der |Ein |Eine |Hier ist|Hier sind|Klar|Sicher|Selbstverständlich)'
+
+        # Find where German answer starts (after English reasoning)
+        match = re.search(german_starters, text)
+        if match and match.start() > 50:
+            # Check if text before looks like English reasoning
+            before = text[:match.start()]
+            # English reasoning indicators
+            if re.search(r'\b(I should|I need|I will|I\'ll|Let me|The user|should be|because|since|First|Also)\b', before, re.IGNORECASE):
+                reasoning = before.strip()
+                answer = text[match.start():].strip()
+                text = f"<think>{reasoning}</think>\n\n{answer}"
+
+    return text
+
+
 def _process_agent_message(agent, user_input: str, tui, session):
     """Process a message through the agent."""
     response_parts = []
@@ -2560,39 +2598,6 @@ def _process_agent_message(agent, user_input: str, tui, session):
     start_filter = {"buffer": "", "done": False}
     
     import re
-    def convert_rich_to_xml(text):
-        if not text: return ""
-        # 1. Convert Rich "dim" styling to XML <think> tags
-        text = re.sub(r'\[dim\]', '<think>', text, flags=re.IGNORECASE)
-        text = re.sub(r'\[white dim\]', '<think>', text, flags=re.IGNORECASE)
-        text = re.sub(r'\[.*?dim.*?\]', '<think>', text, flags=re.IGNORECASE)
-
-        # Replace end tags
-        text = text.replace('[/dim]', '</think>')
-        if '<think>' in text and '</think>' not in text:
-             text = text.replace('[/]', '</think>')
-
-        # Strip remaining Rich tags
-        text = re.sub(r'\[\/?[^\]]+\]', '', text)
-
-        # 2. Auto-detect thinking when model doesn't use <think> tags
-        # Look for English reasoning followed by German answer (VQ-1 pattern)
-        if '<think>' not in text and len(text) > 100:
-            # Common German sentence starters that indicate the actual answer
-            german_starters = r'(Ich bin|Ich kann|Ich werde|Ich habe|Hallo|Guten|Gerne|Natürlich|Ja,|Nein,|Das ist|Die |Der |Ein |Eine |Hier ist|Hier sind|Klar|Sicher|Selbstverständlich)'
-
-            # Find where German answer starts (after English reasoning)
-            match = re.search(german_starters, text)
-            if match and match.start() > 50:
-                # Check if text before looks like English reasoning
-                before = text[:match.start()]
-                # English reasoning indicators
-                if re.search(r'\b(I should|I need|I will|I\'ll|Let me|The user|should be|because|since|First|Also)\b', before, re.IGNORECASE):
-                    reasoning = before.strip()
-                    answer = text[match.start():].strip()
-                    text = f"<think>{reasoning}</think>\n\n{answer}"
-
-        return text
 
     def stream_callback(text):
         nonlocal response_parts
@@ -2601,8 +2606,8 @@ def _process_agent_message(agent, user_input: str, tui, session):
         # Construct full text so far
         current_full_text = "".join(response_parts)
 
-        # Convert Terminal-Styling to Web-Styling (XML)
-        clean_text = convert_rich_to_xml(current_full_text)
+        # The browser's copy: the reply as written (see _reply_web_copy)
+        clean_text = _reply_web_copy(current_full_text)
 
         # UI FIX: Strip leading whitespace strings to prevent large gaps/bubbles
         # This handles "\n\nText" AND "<think>...</think>\n\nText"
@@ -2715,8 +2720,7 @@ def _process_agent_message(agent, user_input: str, tui, session):
             # FIX: Ensure Web UI gets this update (since it wasn't streamed)
             # The async ack bypasses the normal stream loop in chat_step
             try:
-                # We need to construct a clean XML version (handle Rich tags if any)
-                clean_ack = convert_rich_to_xml(str(result_text))
+                clean_ack = _reply_web_copy(str(result_text))
                 web_iface.emit_agent_message("assistant", clean_ack, session_id=session.id)
             except: pass
         
@@ -2752,13 +2756,12 @@ def _process_agent_message(agent, user_input: str, tui, session):
         
         # Save response to session (USE CLEAN TEXT!)
         full_response_raw = "".join(response_parts)
-        # Use the same converter to ensure consistency. A failure that followed an answer is
-        # the tail of the stream; the markup cleanup deletes every [...] group (the head of
-        # "[API Error from ..." and all of "[Error]" with it) and turns [...dim...] groups into
-        # <think>, matching across brackets, so it is converted apart from the answer and
-        # recorded the way this copy then holds it (session.stored_turn_copy, model_text).
+        # The same copy the browser was shown: the stream as written, VAF's own file link as
+        # its path (_reply_web_copy). A failure that followed an answer is the tail of the
+        # stream; stored_turn_copy converts it apart from the answer and records it the way
+        # this copy holds it, so a reader can take it off again (model_text).
         full_response_clean, _turn_meta = stored_turn_copy(
-            full_response_raw, agent.last_turn, convert_rich_to_xml)
+            full_response_raw, agent.last_turn, _reply_web_copy)
         
         # A failed turn is marked so a resumed chat does not replay it as an answer.
         session.add_message("assistant", full_response_clean, metadata=_turn_meta)

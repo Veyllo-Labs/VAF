@@ -642,7 +642,7 @@ def test_the_hosts_that_store_the_stream_mark_a_failed_turn():
     assert once.count('add_message("assistant"') == 2 and "last_turn.failure" not in once
     classic = " ".join(inspect.getsource(run._process_agent_message).split())
     assert ("full_response_clean, _turn_meta = stored_turn_copy( full_response_raw, "
-            "agent.last_turn, convert_rich_to_xml)") in classic
+            "agent.last_turn, _reply_web_copy)") in classic
     assert 'add_message("assistant", full_response_clean, metadata=_turn_meta)' in classic
     assert classic.count('add_message("assistant"') == 1
 
@@ -754,7 +754,7 @@ def test_the_read_tools_see_what_a_model_may_read(index_world):
     assert not any("sk-proj" in b or _PATH_ERROR in b for b in bodies)
 
 
-# ── the interactive CLI and the TUI store their copy through a markup cleanup ─────────
+# ── the interactive CLI and the TUI store their copy as written ──────────────────────
 
 _TOOL_BRACKET_FAILURE = ("[API Error from openai: Error code: 400 - {'error': {'message': \"Invalid "
                          "'messages[2].content': Incorrect API key provided: sk-proj-****abcd\"}}]")
@@ -782,21 +782,20 @@ class _AnsweredThenFailed:
 @pytest.mark.parametrize("failure, leftover, before, shown", [
     ("[Error] API backend failure: " + _PATH_ERROR, _PATH_ERROR, "", True),
     (_TOOL_BRACKET_FAILURE, "sk-proj-****abcd", "", True),
-    # The cleanup's [...dim...] pattern matches lazily across brackets: inside the whole
-    # stream it starts in the text before the failure and ends inside it, which the failure
-    # converted on its own never does. Converted apart, the failure becomes a bare <think>.
-    ("[Error] API backend failure: QQSECRET42DIM : x[2][2]", "QQSECRET42", "x[dim ", False),
+    # A bracket before the failure that holds "dim" once turned the rest of the copy into
+    # <think>; the copy keeps it as written now.
+    ("[Error] API backend failure: QQSECRET42DIM : x[2][2]", "QQSECRET42", "x[dim ", True),
 ], ids=["engine-error", "sentinel-with-inner-bracket", "dim-across-the-boundary"])
 def test_the_cli_copy_of_an_answered_turn_reads_back_without_the_failure(
         engine, monkeypatch, tmp_path, failure, leftover, before, shown):
-    """`_process_agent_message` (the interactive CLI and the TUI) stores the stream through its
-    markup cleanup, which deletes every [...] group: "[Error]" and the head of the sentinel
-    vanish, the tail stays, with no signature left. The REAL function stores the copy, and the
-    recorded failure is the cleaned one, so a reader finds it and takes it off. A failure it
-    cannot find drops the message (`test_model_text` pins that safe side).
-    MUTATION: record the raw failure - not found, so the message is dropped and the answer
-    lost, red. MUTATION: convert the whole stream and record the failure converted alone -
-    the dim case leaves the secret in what a model reads, red."""
+    """`_process_agent_message` (the interactive CLI and the TUI) stores the stream as written
+    (`_reply_web_copy`): the transcript shows the failure verbatim, "[Error]" and the head of
+    the sentinel included. The REAL function stores the copy and records the failure, so a
+    reader finds it as the tail and takes it off. A failure it cannot find drops the message
+    (`test_model_text` pins that safe side).
+    MUTATION: delete every [...] group in `_reply_web_copy` again - the transcript loses the
+    failure's head, red. MUTATION: store the copy with `failed_turn_meta(turn.failed)` and no
+    recorded failure - the secret stays in what a model reads, red."""
     from contextlib import nullcontext
     from types import SimpleNamespace
 
@@ -823,7 +822,8 @@ def test_the_cli_copy_of_an_answered_turn_reads_back_without_the_failure(
                                    "Wann ist mein Termin?", tui, session)
     stored = session.messages[-1]
     assert stored.role == "assistant"
-    assert (leftover in stored.content) is shown    # the transcript shows what the cleanup kept
+    assert (leftover in stored.content) is shown    # the transcript shows what the copy kept
+    assert stored.content.endswith(failure)         # verbatim, its head included
     readable = model_text(stored) or ""
     assert readable.startswith("Ihr Termin ist am Montag um 10 Uhr.") and leftover not in readable
 

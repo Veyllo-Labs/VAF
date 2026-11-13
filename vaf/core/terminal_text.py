@@ -65,7 +65,10 @@ Named boundaries: the Rich console class, `escape_markup` and `terminal_json` st
 the facade's own examples print with `print`, which is what `vaf.terminal_text` serves, no
 embedder lane has shown a Rich console or a JSON writer of its own, and an embedder who
 prints through Rich has Rich's own `rich.markup.escape` and `markup=False` (docs/EMBEDDING.md
-names them). Log records written before
+names them). `own_links_as_labels` stays internal too: its one caller is the terminal's
+stored and mirrored reply copy, and an embedder's stream holds VAF's file link only when its
+model repeats a coder tool result; `vaf.stored_turn_copy(stream, turn, clean=None)` already
+stores a stream as written. Log records written before
 `vaf.main.main` runs (the dependency bootstrap, module imports) and in a process that does
 not start through it are formatted by whatever handler Python has then. The cleaning covers
 the records that reach the root logger while VAF's handler is its only handler: a handler a
@@ -94,6 +97,10 @@ raised `MarkupError` out of `print`. Three parts, from the narrowest to the wide
    does not parse is shown as text, cleaned like a markup-off string (S1), and a markup
    link survives only as VAF's own file link (S2), its label kept. And the console prints
    emoji codes as text unless asked otherwise: VAF writes none of its own.
+
+The copy of a terminal turn that the chat stores and the browser shows is not markup at all:
+it keeps the reply as written, brackets included, and shows only VAF's own file link as its
+label (`own_links_as_labels`).
 
 VAF's own file link is `file_link(path)`: the `file:` URI of an absolute local path,
 labelled with that path, raw (`_own_file_link` is the check; the coder's
@@ -312,6 +319,39 @@ def escape_markup(value: Any) -> str:
         pieces.append(f"[link={target}]{_rich_escape(label)}[/link]")
         pos = match.end()
     pieces.append(_rich_escape(text[pos:]))
+    return "".join(pieces)
+
+
+def own_links_as_labels(value: Any) -> str:
+    """Other parties' `value` as written, with VAF's own file link shown as its label.
+
+    For a copy of a reply that leaves the terminal: the copy a chat stores and the browser
+    shows, which a person reads as rendered Markdown and a model reads back later. Brackets
+    there are text (`arr[i]`, `[label](url)`, `- [x]`, `app/[id]/page.tsx`, a status line
+    such as `[Generation stopped by user]`), so nothing is removed or escaped: only a complete
+    link that `_own_file_link` accepts (the one `file_link` writes, which a model repeats from
+    the coder's tool result) becomes its label, the path it opens. A foreign link stays as
+    written, its address visible. Control characters are not this function's job either: a
+    browser does not obey them and a terminal prints through `TerminalConsole`. `None` gives
+    `""`; anything else is `str()`-ed.
+
+    `vaf.workflows.engine._strip_rich_links` is wider on purpose: it keeps the label of
+    EVERY link, because the next workflow step reads its paths with a regex and never shows
+    them to a person."""
+    if value is None:
+        return ""
+    text = value if isinstance(value, str) else str(value)
+    if "[link=" not in text:
+        return text
+    pieces, pos = [], 0
+    for match in _MARKUP_LINK_RE.finditer(text):
+        target, label = match.group(1), match.group(2)
+        if not _own_file_link(target, label):
+            continue
+        pieces.append(text[pos:match.start()])
+        pieces.append(label)
+        pos = match.end()
+    pieces.append(text[pos:])
     return "".join(pieces)
 
 

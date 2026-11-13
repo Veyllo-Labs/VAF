@@ -181,6 +181,9 @@ def test_the_hint_shows_a_handle_that_reaches_the_agent_and_fits_one_line():
     assert abs(_call("m.hintWidth('Bartholom\u00e4us')") - 11.65) < 1e-9
     # An accented capital weighs as its base letter, decomposed or not.
     assert _call("m.hintWidth('\u00c4')") == _call("m.hintWidth('A\u0308')") == 1.25
+    # The lowercase w is wide too, and the capital I is narrow, not a capital's 1.25.
+    assert abs(_call("m.hintWidth('www')") - 4.8) < 1e-9
+    assert abs(_call("m.hintWidth('III')") - 1.8) < 1e-9
     assert _call("m.hintHandle('')") == "VAF"
     assert _call("m.hintHandle('   ')") == "VAF"
     # Han: two letters wide each; six fit, seven do not.

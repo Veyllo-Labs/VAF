@@ -57,7 +57,7 @@ export const emptyKey = (canWrite: boolean) => (canWrite ? 'appRoomEmpty' : 'app
 export const placeholderKey = (canWrite: boolean) => (canWrite ? 'appRoomPlaceholder' : 'appRoomPlaceholderAgentOnly');
 
 /** How wide, in lowercase Latin letters (`hintWidth`), the handle in the composer's hint may
- *  be. At 390 px the tightest form, Turkish "@\u2026 ile sor\u2026", leaves about 97 px for the handle,
+ *  be. At 390 px the tightest form, Turkish "@… ile sor…", leaves about 97 px for the handle,
  *  and one unit of `hintWidth` is at most about 8 px at the box's 14 px (Roboto, measured). */
 export const HINT_HANDLE_MAX = 12;
 
@@ -67,18 +67,21 @@ const WIDE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han
 /** Latin letters a font draws about one and a half lowercase letters wide (10.5-12.4 px at 14 px
  *  against 7.1-8 px for an ordinary lowercase letter), so "@MMMMMMMMMMMM" does not pass as 12. */
 const WIDE_LATIN = /^[mwMW]$/;
-/** The narrow ones, about half a lowercase letter (3.4-4.9 px). */
+/** The narrow ones, about half a lowercase letter (3.4-4.9 px; the capital I 3.8 px, so it is
+ *  tested before the capitals). */
 const NARROW = /^[ijlrtfI.,:;'!|-]$/;
 /** Any other capital, about a quarter wider than a lowercase letter (8.3-10 px). */
 const CAPITAL = /^\p{Lu}$/u;
 
-/** One grapheme's width in lowercase Latin letters; an accented letter weighs as its base. */
+/** One grapheme's width in lowercase Latin letters; an accented letter weighs as its base. The
+ *  table is measured for Latin in the box's font only: a letter of another script counts 1 (1.25
+ *  as a capital) without a measurement, so a long Cyrillic or Greek handle can still clip (rare). */
 function graphemeWidth(g: string): number {
     if (WIDE.test(g)) return 2;
     const base = g.normalize('NFD').charAt(0);
     if (WIDE_LATIN.test(base)) return 1.6;
-    if (CAPITAL.test(base)) return 1.25;
     if (NARROW.test(base)) return 0.6;
+    if (CAPITAL.test(base)) return 1.25;
     return 1;
 }
 

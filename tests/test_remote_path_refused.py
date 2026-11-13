@@ -36,7 +36,10 @@ MUTATIONS, each turns the named test red:
   path, `_project_path_refusal` or `_choose_base_dir` without their share answer,
   `run_in_workspace` or `_safe_mount_path` without the check
   -> test_the_project_lanes_refuse_a_share_before_touching_it (and the static guard for the
-  ordering in `_resolve_project`).
+  ordering in `_resolve_project`);
+- the Windows simulation calling `ntpath.abspath` at call time instead of the function captured
+  before the patch -> test_the_windows_simulation_holds_where_os_path_is_ntpath
+  (RecursionError, as on a Windows host, where os.path is ntpath).
 """
 import ast
 import ntpath
@@ -342,9 +345,23 @@ def _windows_abspath(monkeypatch):
 
     from vaf.core.path_jail import is_remote_path
 
+    # Both captured before the patch: on Windows os.path IS ntpath, so a lambda that looked up
+    # ntpath.abspath at call time would find itself and recurse.
     real = os.path.abspath
+    real_ntabspath = ntpath.abspath
     monkeypatch.setattr(os.path, "abspath",
-                        lambda p: ntpath.abspath(p) if is_remote_path(str(p)) else real(p))
+                        lambda p: real_ntabspath(p) if is_remote_path(str(p)) else real(p))
+
+
+def test_the_windows_simulation_holds_where_os_path_is_ntpath(monkeypatch):
+    """On Windows `os.path` and `ntpath` are one module, so patching one patches the other.
+    Simulated here by making `os.path` the ntpath module; the patch must still answer."""
+    import os
+
+    monkeypatch.setattr(os, "path", ntpath)
+    _windows_abspath(monkeypatch)
+    assert ntpath.abspath("\\\\evil.example\\share\\proj") == "\\\\evil.example\\share\\proj"
+    assert os.path.abspath("//evil.example/share/proj") == "\\\\evil.example\\share\\proj"
 
 
 def test_the_project_lanes_refuse_a_share_before_touching_it(tmp_path, monkeypatch):

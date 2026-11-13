@@ -29,8 +29,9 @@ first whitespace-separated word of the name, or of argv[0], is exactly
 gate pass with a server up; check start-server.js on a Next bump.
 
 The tray is matched by `vaf.core.instance.is_tray_entry`, the framework's own
-matcher (`... -m vaf.main tray` or `.../vaf tray`, on exact argv elements), so
-there is one definition of "the tray" in the tree.
+matcher (`<python> [options] -m vaf.main tray` with `vaf.main` the module `-m`
+runs, or the console script `vaf tray`, on exact argv elements), so there is one
+definition of "the tray" in the tree.
 
 Named boundary: the gate runs on Linux. On macOS psutil's name is the kernel's
 p_comm, which the title may not change, so detection there rests on argv[0] alone

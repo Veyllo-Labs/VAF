@@ -173,7 +173,8 @@ def test_tray_command_lines(argv, expected):
 
 
 def test_a_process_matching_both_is_reported_once_as_next():
-    hits = _module().find_running_app([(4242, _FULL_TITLE, ["x", "vaf.main", "tray"])])
+    hits = _module().find_running_app(
+        [(4242, _FULL_TITLE, ["/x/venv/bin/python", "-m", "vaf.main", "tray"])])
     assert [(m.pid, m.kind) for m in hits] == [(4242, "next-server")]
 
 
@@ -182,10 +183,41 @@ def test_this_process_is_never_reported():
     assert hits == []
 
 
+def _spawn_fake_tray(tmp_path):
+    """A process with a real tray start's argv, `<python> -S -m vaf.main tray`,
+    that runs a scratch `vaf` package which only sleeps. The child's path holds
+    the scratch directory and the standard library alone (-S keeps the
+    site-packages and the installed vaf out), so the real VAF cannot start; the
+    child records which vaf it imported, and that is checked before the table
+    is read."""
+    pkg = tmp_path / "vaf"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "main.py").write_text(
+        "import os, time, vaf\n"
+        "mark = os.environ['FAKE_TRAY_MARK']\n"
+        "with open(mark + '.tmp', 'w', encoding='utf-8') as f:\n"
+        "    f.write(vaf.__file__)\n"
+        "os.replace(mark + '.tmp', mark)\n"
+        "time.sleep(20)\n", encoding="utf-8")
+    mark = tmp_path / "imported.txt"
+    env = {**os.environ, "PYTHONPATH": str(tmp_path), "FAKE_TRAY_MARK": str(mark)}
+    proc = subprocess.Popen([sys.executable, "-S", "-m", "vaf.main", "tray"], cwd=str(tmp_path),
+                            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    deadline = time.monotonic() + 10
+    while not mark.exists() and proc.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.05)
+    imported = mark.read_text(encoding="utf-8") if mark.exists() else ""
+    if Path(imported).resolve() != (pkg / "__init__.py").resolve():
+        _stop(proc)
+        pytest.fail(f"the fake tray did not run the scratch package: {imported!r}")
+    return proc
+
+
 @posix_only
-def test_tray_entry_is_reported():
+def test_tray_entry_is_reported(tmp_path):
     mod = _module()
-    fake = _spawn([sys.executable, "-c", _SLEEP, "vaf.main", "tray"])
+    fake = _spawn_fake_tray(tmp_path)
     try:
         hits = {m.pid: m.kind for m in mod.find_running_app()}
     finally:
@@ -194,11 +226,11 @@ def test_tray_entry_is_reported():
 
 
 @posix_only
-def test_tray_matcher_is_the_frameworks(monkeypatch):
+def test_tray_matcher_is_the_frameworks(monkeypatch, tmp_path):
     from vaf.core import instance
 
     mod = _module()
-    fake = _spawn([sys.executable, "-c", _SLEEP, "vaf.main", "tray"])
+    fake = _spawn_fake_tray(tmp_path)
     try:
         monkeypatch.setattr(instance, "is_tray_entry", lambda argv: False)
         pids = {m.pid for m in mod.find_running_app()}

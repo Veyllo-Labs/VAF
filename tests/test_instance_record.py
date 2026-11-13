@@ -4,8 +4,8 @@
 """The instance record: the running VAF says which process it is and how it
 was started; `vaf stop`, `vaf status`, `vaf restart`, `vaf top` and the
 self-updater read it, and fall back to the process table (the singleton-port
-owner, else `-m vaf.main tray` by adjacent argv elements) for a VAF that kept
-none.
+owner, else `-m vaf.main tray` with `vaf.main` the module `-m` runs) for a VAF
+that kept none.
 
 The record complements the service pid file a launcher writes: that file only
 exists for `vaf start` and the tray dashboard, so the app shortcut, run_vaf.sh
@@ -184,6 +184,10 @@ def test_live_check_wants_a_tray_entry_point(monkeypatch):
     (["C:\\VAF\\venv\\Scripts\\pythonw.exe", "-m", "vaf.main", "tray"], True),
     (["C:\\VAF\\venv\\Scripts\\vaf.exe", "tray"], True),
     (["/venv/bin/python", "-X", "utf8", "-u", "-m", "vaf.main", "tray", "--no-top"], True),
+    (["/venv/bin/python", "-Xutf8", "-OO", "-W", "ignore", "-m", "vaf.main", "tray"], True),
+    (["/venv/bin/python", "-mvaf.main", "tray"], True),                       # joined -m
+    (["/venv/bin/python", "-um", "vaf.main", "tray"], True),                  # clustered switches
+    (["/venv/bin/python", "--check-hash-based-pycs", "always", "-m", "vaf.main", "tray"], True),
     (["/venv/bin/python", "/venv/bin/vaf", "tray", "--no-top"], True),
     (["/venv/bin/python3.13", "/venv/bin/vaf", "tray"], True),
     # The macOS framework binary re-execs with the script still at argv[1].
@@ -205,6 +209,14 @@ def test_live_check_wants_a_tray_entry_point(monkeypatch):
     (["/venv/bin/python", "-m", "vaf.main", "subagent", "run", "coder", "--task", "tray",
       "--task-id", "t1"], False),                                              # a sub-agent's task
     (["uv", "run", "vaf", "tray"], False),            # a wrapper; its Python child is the tray
+    # vaf.main as an argument of something else, not the module -m runs.
+    (["/venv/bin/python", "-c", "import time; time.sleep(600)", "vaf.main", "tray"], False),
+    (["/venv/bin/python", "/home/user/script.py", "vaf.main", "tray"], False),
+    (["/venv/bin/python", "/home/user/script.py", "-m", "vaf.main", "tray"], False),  # its own -m
+    (["/venv/bin/python", "-c", "pass", "-m", "vaf.main", "tray"], False),
+    (["/venv/bin/python", "-uc", "pass", "vaf.main", "tray"], False),
+    (["/venv/bin/python", "--", "-m", "vaf.main", "tray"], False),
+    (["/venv/bin/python", "-m", "pytest", "vaf.main", "tray"], False),
     (["/venv/bin/python", "-m", "vaf.main", "run", "--web"], False),          # somebody's session
     (["/venv/bin/python", "-m", "vaf.main", "update", "--yes"], False),       # the updater itself
     (["/venv/bin/python", "-m", "vaf.main", "top"], False),                   # a viewer
@@ -252,13 +264,16 @@ def test_scan_prefers_the_singleton_port_owner(monkeypatch):
 
 def test_scan_matches_only_the_tray_module_form(monkeypatch):
     """Without a port owner the scan decides by argv, and only `-m vaf.main tray`
-    counts: a chat or a sub-agent with the word `tray` among its arguments is
-    somebody's work that `vaf stop` must not end."""
+    counts: a chat or a sub-agent with the word `tray` among its arguments, or
+    a `-c` program that merely carries both words, is somebody's work that
+    `vaf stop` must not end."""
     procs = [
         FakeProc(81, [sys.executable, "-m", "vaf.main", "run", "-p", "tray"], env={}),
         FakeProc(82, [sys.executable, "-m", "vaf.main", "subagent", "run", "coder",
                       "--task", "tray", "--task-id", "t1"], env={}),
         FakeProc(83, _TRAY, env={}),
+        FakeProc(84, [sys.executable, "-c", "import time; time.sleep(600)", "vaf.main", "tray"],
+                 env={}),
     ]
     _fake_table(monkeypatch, procs)
     assert [p.pid for p in instance.locate_processes()] == [83]

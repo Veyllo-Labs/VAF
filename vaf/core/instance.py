@@ -11,9 +11,10 @@ and how to start it again so it comes back the way it was.
 
 WHICH process is answered by locate_processes(): the owner of the tray's
 singleton port (an identity no command line can fake), or failing that every
-process running `-m vaf.main tray`, with `tray` the argv element directly after
-the module. This is the one implementation of that rule; the CLI's finder
-reads through it. It is the answer for "what to stop", deliberately wide.
+process running `-m vaf.main tray`: `vaf.main` the module Python's `-m`
+selects, after interpreter options only, and `tray` the argv element directly
+after it. This is the one implementation of that rule; the CLI's finder reads
+through it. It is the answer for "what to stop", deliberately wide.
 "Is VAF up?" is a different question with a strict answer, find_service():
 only the singleton port counts, because argv cannot tell the service from a
 terminal dashboard watching it.
@@ -309,16 +310,17 @@ def is_tray_entry(argv) -> bool:
     started it, and tells tooling whether VAF runs.
 
     Two shapes, and nothing else:
-      module form     `... -m vaf.main tray ...`: `tray` is the element
-                      directly after `vaf.main`
+      module form     `<python> [options] -m vaf.main tray ...`: `vaf.main`
+                      is the module `-m` runs, and `tray` the element after it
       console script  `vaf tray ...` with the script as the program: argv[0],
                       or argv[1] after a Python interpreter (how the kernel
                       runs a shebang script and how pip's Windows launcher
                       starts its Python child), directly followed by `tray`
 
     Positions matter because the words alone prove nothing: `pytest <checkout
-    named VAF> -k tray`, `vaf run -p tray` (a chat whose prompt is the word) and
-    a sub-agent whose `--task` is `tray` all carry both words. Anything after
+    named VAF> -k tray`, `vaf run -p tray` (a chat whose prompt is the word), a
+    sub-agent whose `--task` is `tray` and `python -c <code> vaf.main tray` all
+    carry the words. Anything after
     `tray` is free (`--no-top`). An interpreter option before the script
     (`python -u <bin>/vaf tray`) does not match; no launcher starts the
     console script that way. The process-table scan in locate_processes()
@@ -351,12 +353,49 @@ def _base(token: str) -> str:
     return base[:-4] if base.endswith(".exe") else base
 
 
+# CPython's own command-line options. `W` and `X` take a value, joined (`-Xutf8`)
+# or as the next element (`-X utf8`); the other letters are switches and may be
+# clustered (`-uB`). `-c` and `-m` end the options, and so does the first
+# element that is no option: the script.
+_PY_SWITCHES = frozenset("bBdEhiIOPqRsSuvVx?")
+_PY_VALUE_OPTS = frozenset("WX")
+_PY_LONG_VALUE_OPTS = frozenset({"--check-hash-based-pycs"})
+
+
 def _runs_tray_module(parts: List[str]) -> bool:
-    """True when the argv runs the module form `vaf.main tray`: an element that
-    is exactly `vaf.main` with `tray` directly after it. Every launcher in the
-    tree passes the three as `-m vaf.main tray`; a word further on (`run -p
-    tray`, `--task tray`) is an argument to another command."""
-    return any(tok == "vaf.main" and nxt == "tray" for tok, nxt in zip(parts, parts[1:]))
+    """True when the argv runs the module form: `vaf.main` is the module that
+    Python's `-m` selects (`-m vaf.main`, or joined `-mvaf.main`), reached
+    through interpreter options only, and `tray` is the element directly after
+    it. Every launcher in the tree passes `<python> [options] -m vaf.main tray`.
+    The same words as arguments of something else are not a start: after `-c
+    <code>`, after a script, or further on (`run -p tray`, `--task tray`).
+    argv[0] is not checked: the interpreter's name varies by platform and
+    install, and the option grammar alone already separates the shapes above."""
+    i = 1
+    while i < len(parts):
+        tok = parts[i]
+        if tok in _PY_LONG_VALUE_OPTS:
+            i += 2
+            continue
+        if tok == "--" or not tok.startswith("-") or tok == "-":
+            return False  # the end of the options, a script or stdin: no -m
+        if tok.startswith("--"):
+            i += 1
+            continue
+        for j in range(1, len(tok)):
+            letter, rest = tok[j], tok[j + 1:]
+            if letter == "m":
+                module, after = (rest, i + 1) if rest else (
+                    parts[i + 1] if i + 1 < len(parts) else "", i + 2)
+                return module == "vaf.main" and after < len(parts) and parts[after] == "tray"
+            if letter in _PY_VALUE_OPTS:
+                if not rest:
+                    i += 1  # the value is the next element
+                break
+            if letter not in _PY_SWITCHES:
+                return False  # -c, or no interpreter option at all
+        i += 1
+    return False
 
 
 def _port_owner():

@@ -478,7 +478,8 @@ The agent has **the same tools as the normal agent**, with these exceptions:
 | `update_user_identity` | Excluded | Do not mutate the profile in the background - propose via `save_thinking_suggestion` |
 | `update_intent` | No-op | A background run must not overwrite the main chat's `user_intent`. The tool returns a no-op inside a thinking run (asked of the call's own context, `in_thinking_run`, not the shared environment - a concurrent chat turn used to get the same no-op), so a run cannot write itself a directive that the next run would read back as a standing order |
 | `set_timer` | Excluded | Do not schedule user-facing actions directly - propose via `ask_user`; the main agent sets it on confirm |
-| `git_add_commit` / `git_status` / `git_log` | Excluded | VAF is the user's project, not the agent's |
+| `git_init` / `git_add_commit` / `git_status` / `git_log` | Excluded | VAF is the user's project, not the agent's |
+| `update_codex` / `add_memory` | Excluded | A propose-only run must not create files (they write a project's `.vaf/` notes) |
 
 ---
 

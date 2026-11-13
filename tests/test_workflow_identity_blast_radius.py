@@ -149,6 +149,15 @@ NEWLY_IDENTIFIED = {
     # owner's, as in the chat lane.
     "project_history": ('user_role', 'user_scope_id'),
     "project_rollback": ('user_role', 'user_scope_id'),
+    # Added with the folder rule of the four git tools and the two project notes tools: a
+    # step's base_dir is judged for the WORKFLOW OWNER, who works only in a folder they may
+    # write (tool_work_folder asks project_dir_refusal).
+    "add_memory": ('user_role', 'user_scope_id'),
+    "git_add_commit": ('user_role', 'user_scope_id'),
+    "git_init": ('user_role', 'user_scope_id'),
+    "git_log": ('user_role', 'user_scope_id'),
+    "git_status": ('user_role', 'user_scope_id'),
+    "update_codex": ('user_role', 'user_scope_id'),
     "linter": ('user_role', 'user_scope_id'),
     # Added 2026-07-31 as the first consumer of the `file_access` declaration: it is a
     # WRITE tool whose gap was closed by declaring the mode, and the declaration cannot

@@ -461,3 +461,294 @@ def test_the_coder_shell_comment_no_longer_promises_docker():
     src = (Path(__file__).resolve().parents[1] / "vaf" / "tools" / "coder.py").read_text(
         encoding="utf-8")
     assert "incl. host docker" not in src
+
+
+# ── The same tools on the main agent ───────────────────────────────────────────────────
+#
+# The four git tools, update_codex and add_memory are registered for the main agent, its
+# messengers, automations and workflows too, and a content-only coder run has the notes tools
+# unwrapped; there base_dir is the model's. Measured before the change, as account A (role
+# "user") through the chat lane's funnel: git_log printed B's history, git_add_commit committed
+# into B's repository, the notes tools wrote B's .vaf, git_init and the notes tools created
+# .git and .vaf in any folder, and a call naming no folder worked in the process's working
+# folder, which for the installed service is VAF's own checkout.
+#
+# Mutations, each turning the named test red:
+# - delete identity_kwargs from GitLogTool -> test_the_six_tools_declare_their_caller_and_
+#   their_folder (and the git_log row of the tenant test: B's history printed);
+# - restore the share-only tool_work_folder -> test_a_tenant_or_guest_stays_out_of_other_
+#   folders (B's log printed, a commit made, .vaf written);
+# - make tool_work_folder refuse always -> test_a_tenant_works_in_its_own_project;
+# - pass user_role=None to project_dir_refusal in tool_work_folder -> the (A, "admin") row of
+#   test_an_admin_the_owner_and_a_direct_consumer_keep_every_folder;
+# - skip the check when base_dir == "." -> test_nobody_works_in_home_or_the_program_folder;
+# - read the role from kwargs.get("role") -> test_a_model_written_admin_role_does_not_open_
+#   a_folder;
+# - delete identity_kwargs from AddMemoryTool -> test_the_unwrapped_notes_tools_in_a_coder_
+#   run_are_confined;
+# - delete identity_kwargs from UpdateCodexTool -> test_a_workflow_step_is_confined_to_its_
+#   owner;
+# - drop "git_init" from the thinking tuple -> test_thinking_runs_get_no_file_creating_
+#   project_tools;
+# - add "git_log" to FRONT_OFFICE_ALLOWED_TOOLS -> test_the_contact_lane_never_offers_them.
+
+SIX = ("git_init", "git_add_commit", "git_status", "git_log", "update_codex", "add_memory")
+# Every required argument of the six, so each call reaches run().
+SIX_ARGS = {"message": "probe commit", "title": "probe title", "content": "probe content",
+            "note": "probe note"}
+UNSAFE = "not a project folder"
+
+
+def _six():
+    from vaf.tools.coder import GitAddCommitTool, GitInitTool, GitLogTool, GitStatusTool
+    from vaf.tools.knowledge import AddMemoryTool, UpdateCodexTool
+    return [GitInitTool(), GitAddCommitTool(), GitStatusTool(), GitLogTool(), UpdateCodexTool(),
+            AddMemoryTool()]
+
+
+def _six_funnel(scope, role):
+    """The chat lane's funnel, as `Agent.execute_tool` and an embedder's ToolCaller run it."""
+    from vaf.core.tool_dispatch import ToolCaller
+    return ToolCaller({t.name: t for t in _six()}, user_scope_id=scope, user_role=role,
+                      gate_enabled=False, max_result_chars=None)
+
+
+def _repo(path, subject):
+    path.mkdir(parents=True)
+    (path / "file.txt").write_text(subject + "\n")
+    _git("init", "-q", cwd=path)
+    _git("add", "-A", cwd=path)
+    _git("commit", "-qm", subject, cwd=path)
+    return path
+
+
+def _log(repo):
+    return _git("log", "--format=%H %s", cwd=repo).stdout
+
+
+@pytest.fixture
+def main_world(world, tmp_path, monkeypatch):
+    """`world` plus an outside folder, an outside repository, a stand-in for VAF's program
+    folder and a recorder around the real git runner."""
+    for var in ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME"):
+        monkeypatch.setenv(var, str(world.home / ".xdg" / var.lower()))
+    for var, value in (("GIT_AUTHOR_NAME", "Probe"), ("GIT_COMMITTER_NAME", "Probe"),
+                       ("GIT_AUTHOR_EMAIL", "probe@example.invalid"),
+                       ("GIT_COMMITTER_EMAIL", "probe@example.invalid")):
+        monkeypatch.setenv(var, value)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside_repo = _repo(tmp_path / "outside-repo", "outside commit")
+    # A stand-in, so a mutation that lets a call through writes here and never into the
+    # checkout the tests run from.
+    program = _repo(tmp_path / "vafroot", "program commit")
+    import vaf.core.workspace_guard as workspace_guard
+    monkeypatch.setattr(workspace_guard, "_VAF_ROOT", program.resolve())
+
+    import vaf.core.git_runner as git_runner
+    real_run = git_runner.run_project_git   # captured before the patch
+    steps = []
+
+    def _recording(args, cwd, **kw):
+        steps.append((list(args), str(cwd)))
+        return real_run(args, cwd, **kw)
+
+    monkeypatch.setattr(git_runner, "run_project_git", _recording)
+    world.outside, world.outside_repo, world.program, world.steps = (outside, outside_repo,
+                                                                     program, steps)
+    return world
+
+
+def test_the_six_tools_declare_their_caller_and_their_folder():
+    import inspect
+
+    from vaf.tools.filesystem import tool_work_folder
+    for tool in _six():
+        cls = type(tool)
+        assert cls.identity_kwargs == ("user_scope_id", "user_role"), cls.__name__
+        assert cls.file_access is None, cls.__name__
+        prop = cls.parameters["properties"].get("base_dir")
+        assert prop and prop["type"] == "string", cls.__name__
+        assert "base_dir" not in cls.parameters.get("required", []), cls.__name__
+    src = inspect.getsource(tool_work_folder)
+    assert "project_dir_refusal(" in src
+    # The share question is project_dir_refusal's first one, not a second copy here.
+    assert "is_remote_path" not in src
+
+
+@pytest.mark.parametrize("role", ["user", "guest"])
+def test_a_tenant_or_guest_stays_out_of_other_folders(main_world, monkeypatch, role):
+    w = main_world
+    funnel = _six_funnel(A, role)
+    before = (_count(w.b_proj), _files(w.b_proj), _log(w.b_proj))
+    outside_before = (_count(w.outside_repo), _log(w.outside_repo))
+    for target in (w.b_proj, w.outside):
+        for name in SIX:
+            out = funnel.execute(name, {"base_dir": str(target), **SIX_ARGS})
+            assert out.startswith(f"❌ Refused: cannot work in '{target}'"), (name, out)
+            assert OUTSIDE_ACCOUNT in out and "base_dir" in out, (name, out)
+            assert "B private commit" not in out
+    # No folder named: the working folder, here another repository.
+    monkeypatch.chdir(w.outside_repo)
+    for name in SIX:
+        out = funnel.execute(name, dict(SIX_ARGS))
+        assert out.startswith("❌ Refused: cannot work in '.'"), (name, out)
+        assert OUTSIDE_ACCOUNT in out
+        # The folder is named as given: no absolute path of the working folder.
+        assert str(w.outside_repo) not in out
+    assert w.steps == [], f"a git step ran: {w.steps}"
+    assert (_count(w.b_proj), _files(w.b_proj), _log(w.b_proj)) == before
+    assert not (w.b_proj / ".vaf").exists()
+    assert not (w.outside / ".git").exists() and not (w.outside / ".vaf").exists()
+    assert (_count(w.outside_repo), _log(w.outside_repo)) == outside_before
+    assert not (w.outside_repo / ".vaf").exists()
+
+
+def test_a_tenant_works_in_its_own_project(main_world):
+    w = main_world
+    mine = w.a_root / "chat" / "site"
+    mine.mkdir(parents=True)
+    (mine / "index.html").write_text("<p>a</p>\n")
+    funnel = _six_funnel(A, "user")
+    at = {"base_dir": str(mine)}
+
+    assert funnel.execute("git_init", at).startswith("✅"), "git_init"
+    assert (mine / ".git").is_dir()
+    assert funnel.execute("update_codex", {**at, "title": "Rule",
+                                           "content": "codex-line"}).startswith("✅")
+    assert "codex-line" in (mine / ".vaf" / "codex.md").read_text(encoding="utf-8")
+    assert funnel.execute("add_memory", {**at, "note": "memory-line"}).startswith("✅")
+    assert "memory-line" in (mine / ".vaf" / "memory.md").read_text(encoding="utf-8")
+    out = funnel.execute("git_add_commit", {**at, "message": "own page",
+                                            "files": ["index.html"]})
+    assert out.startswith("✅"), out
+    assert _count(mine) == "1"
+    (mine / "new.txt").write_text("x\n")
+    assert "new.txt" in funnel.execute("git_status", at)
+    assert "own page" in funnel.execute("git_log", at)
+
+
+def _local_admin():
+    from vaf.core.config import get_local_admin_scope_id
+    return get_local_admin_scope_id()
+
+
+@pytest.mark.parametrize("who", ["admin", "local_admin", "no_account"])
+def test_an_admin_the_owner_and_a_direct_consumer_keep_every_folder(main_world, who):
+    w = main_world
+    scope, role = {"admin": (A, "admin"), "local_admin": (_local_admin(), None),
+                   "no_account": (None, None)}[who]
+    funnel = _six_funnel(scope, role)
+    b = {"base_dir": str(w.b_proj)}
+
+    assert "B private commit" in funnel.execute("git_log", b)
+    (w.b_proj / "new.txt").write_text("x\n")
+    assert "new.txt" in funnel.execute("git_status", b)
+    out = funnel.execute("git_add_commit", {**b, "message": "admin commit", "files": ["new.txt"]})
+    assert out.startswith("✅"), out
+    assert _count(w.b_proj) == "2"
+    assert funnel.execute("update_codex", {**b, "title": "t", "content": "c"}).startswith("✅")
+    assert funnel.execute("add_memory", {**b, "note": "n"}).startswith("✅")
+    assert (w.b_proj / ".vaf" / "codex.md").is_file()
+    assert (w.b_proj / ".vaf" / "memory.md").is_file()
+
+    o = {"base_dir": str(w.outside)}
+    assert funnel.execute("git_init", o).startswith("✅")
+    assert (w.outside / ".git").is_dir()
+    assert funnel.execute("add_memory", {**o, "note": "n"}).startswith("✅")
+    assert (w.outside / ".vaf" / "memory.md").is_file()
+
+
+IDENTITIES = {"user": (A, "user"), "guest": (A, "guest"), "admin": (A, "admin"),
+              "local_admin": None, "no_account": (None, None)}
+
+
+@pytest.mark.parametrize("who", sorted(IDENTITIES))
+def test_nobody_works_in_home_or_the_program_folder(main_world, monkeypatch, who):
+    w = main_world
+    scope, role = IDENTITIES[who] or (_local_admin(), None)
+    funnel = _six_funnel(scope, role)
+    program_before = (_count(w.program), _log(w.program))
+    for target in (w.home, w.program):
+        for name in SIX:
+            out = funnel.execute(name, {"base_dir": str(target), **SIX_ARGS})
+            assert out.startswith(f"❌ Refused: cannot work in '{target}'"), (name, out)
+            assert UNSAFE in out, (name, out)
+    monkeypatch.chdir(w.program)
+    for name in SIX:
+        out = funnel.execute(name, dict(SIX_ARGS))
+        assert out.startswith("❌ Refused: cannot work in '.'"), (name, out)
+        assert UNSAFE in out, (name, out)
+    assert w.steps == [], f"a git step ran: {w.steps}"
+    assert (_count(w.program), _log(w.program)) == program_before
+    assert not (w.program / ".vaf").exists()
+    assert not (w.home / ".git").exists() and not (w.home / ".vaf").exists()
+
+
+def test_a_model_written_admin_role_does_not_open_a_folder(main_world):
+    """The dispatcher assigns the declared keys over the model's; a key it does not assign
+    ("role") must not be read either."""
+    w = main_world
+    funnel = _six_funnel(A, "user")
+    spoof = {"base_dir": str(w.b_proj), "user_role": "admin", "user_scope_id": None,
+             "role": "admin", **SIX_ARGS}
+    for name in SIX:
+        out = funnel.execute(name, dict(spoof))
+        assert OUTSIDE_ACCOUNT in out, (name, out)
+        assert "B private commit" not in out
+    assert w.steps == []
+    assert not (w.b_proj / ".vaf").exists() and _count(w.b_proj) == "1"
+
+
+def test_the_unwrapped_notes_tools_in_a_coder_run_are_confined(main_world):
+    """A content-only run registers the raw notes tools (no base-folder wrapper); its funnel
+    assigns the run's caller like the chat lane's."""
+    from vaf.tools.coder import _coder_funnel
+    from vaf.tools.knowledge import AddMemoryTool, UpdateCodexTool
+    w = main_world
+    funnel = _coder_funnel({"add_memory": AddMemoryTool(), "update_codex": UpdateCodexTool()},
+                           scope=A, role="user", session_id=None)
+    for name in ("add_memory", "update_codex"):
+        out = funnel.execute(name, {"base_dir": str(w.b_proj), **SIX_ARGS})
+        assert OUTSIDE_ACCOUNT in out, (name, out)
+    assert not (w.b_proj / ".vaf").exists()
+
+
+def test_a_workflow_step_is_confined_to_its_owner(main_world):
+    from unittest.mock import patch
+
+    from vaf.tools.knowledge import UpdateCodexTool
+    from vaf.workflows.engine import WorkflowEngine, WorkflowStep
+    w = main_world
+    answers = []
+
+    class _Recorded(UpdateCodexTool):
+        def run(self, **kwargs):
+            answers.append(super().run(**kwargs))
+            return answers[-1]
+
+    with patch("vaf.core.config.Config.get",
+               side_effect=lambda k, d=None: "declared" if k == "workflow_identity_injection"
+               else d):
+        engine = WorkflowEngine(tools={"update_codex": _Recorded()}, callback=lambda *a, **k: None,
+                                user_scope_id=A, username="tenant", user_role="user")
+        engine.execute([WorkflowStep(tool="update_codex", input_template="", output_name="o",
+                                     args_template={"base_dir": str(w.b_proj), "title": "t",
+                                                    "content": "c"})], variables={})
+    assert len(answers) == 1 and OUTSIDE_ACCOUNT in answers[0], answers
+    assert not (w.b_proj / ".vaf").exists()
+
+
+def test_thinking_runs_get_no_file_creating_project_tools():
+    import re
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "vaf" / "core" / "agent.py").read_bytes().decode()
+    block = re.search(r"if _rk_thinking:\s*\n\s*if instance\.name in \(([^)]*)\)", src)
+    assert block, "the thinking exclusion tuple moved"
+    excluded = set(re.findall(r'"([a-z_]+)"', block.group(1)))
+    assert set(SIX) <= excluded, sorted(set(SIX) - excluded)
+
+
+def test_the_contact_lane_never_offers_them():
+    from vaf.core.front_office_tools import FRONT_OFFICE_ALLOWED_TOOLS
+    assert not set(SIX) & set(FRONT_OFFICE_ALLOWED_TOOLS)

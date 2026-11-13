@@ -117,9 +117,8 @@ def is_remote_path(spelled: str) -> bool:
     run folder (``_choose_base_dir``, ``_base_dir_tool``), ``project_git``'s
     ``_resolve_project`` (which the code audit tool asks too, before ``jail_allows``), the
     folder a person typed for ``vaf audit``, the snapshots' own working folder, and the git
-    tools' folder (``tool_work_folder``). That last one is the model's text on the main agent,
-    screened for shares and device paths only and not confined to any folder; the share half
-    is what this boundary needs. Measured: no caller hands it a share or device path.
+    tools' folder (``tool_work_folder``, which asks ``project_dir_refusal`` for the caller the
+    tools declare, this question first). Measured: no caller hands it a share or device path.
 
     On the facade as ``vaf.is_remote_path``, because the route recipe in docs/EMBEDDING.md asks
     primitives that resolve the path (``vaf.is_vaf_state``), so a surface built to it would

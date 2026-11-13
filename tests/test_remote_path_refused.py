@@ -539,11 +539,19 @@ def test_git_add_commit_refuses_a_share_file_before_touching_it(tmp_path, monkey
     _windows_paths(monkeypatch)
     steps = _record_git(monkeypatch)
     seen = _touches(monkeypatch)
+    # The folder screen (tool_work_folder asks project_dir_refusal) resolves the run folder
+    # and the roots it compares against; measured once here, so the set below names exactly
+    # those and the repository probe.
+    from vaf.core.workspace_guard import project_dir_refusal
+    assert project_dir_refusal(str(repo), user_scope_id=None) is None
+    folder_screen = {s[1] for s in seen}
+    seen.clear()
     for spelled in REMOTE:
         answer = GitAddCommitTool().run(base_dir=str(repo), message="m", files=[spelled])
         assert answer.startswith("❌ Not committed:"), (spelled, answer)
-    # Only the repository probe in the run folder, nothing on any file name.
-    assert {s[1] for s in seen} <= {os.path.join(str(repo), ".git")}, seen
+    # Only the folder screen and the repository probe in the run folder, nothing on any
+    # file name.
+    assert {s[1] for s in seen} <= folder_screen | {os.path.join(str(repo), ".git")}, seen
     wrapped = _base_dir_tool(GitAddCommitTool, str(repo), owner_scope=None, owner_role=None)
     for spelled in REMOTE:
         answer = wrapped.run(message="m", files=["index.html", spelled])

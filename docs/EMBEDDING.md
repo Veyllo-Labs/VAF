@@ -2977,9 +2977,11 @@ Stable public surface (safe to build on):
   resolves it), not the home directory, a standard folder itself, VAF's own data, the
   home directory's configuration or VAF's code, and it lies where the caller's file jail
   lets it write (`jail_allows(..., mode="write")`; an admin or an empty scope reaches every
-  tree). Ask it for a folder a stored record names before you serve it or hand it to a run:
-  VAF's web workspace resolver, its queue runner and its jailed shell do, because a record
-  written earlier can name another account's folder. The role must come from the caller's
+  tree). Ask it for a folder a stored record names, or one a model names in a tool argument
+  (declare `identity_kwargs = ("user_scope_id", "user_role")` and ask it for that argument;
+  VAF's git and project notes tools do), before you serve it or hand it to a run: VAF's web
+  workspace resolver, its queue runner and its jailed shell do, because a record written
+  earlier can name another account's folder. The role must come from the caller's
   authenticated identity. Fail-closed: an error is a refusal.
 - `vaf.open_for_write(path, mode="wb", *, exclusive=False, encoding=None, newline=None, expect_folder=None)` /
   `vaf.WriteRefused` - the open that goes with that answer, for a file under a name a

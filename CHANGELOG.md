@@ -275,6 +275,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   way. The coding agent's commit tool now takes file names relative to the project folder.
   Commands the agent runs in the host shell are not covered by this. Needs a restart
   of VAF.
+- **The agent's git and project notes tools stay in folders you may use.** `git_init`,
+  `git_add_commit`, `git_status`, `git_log`, `update_codex` and `add_memory` used to work in
+  any folder the agent named, in a chat, on a messenger, in an automation or a workflow: a
+  user account could read another account's commit history, commit into its project or leave
+  notes there, and a call that named no folder worked in the folder VAF runs from. They now
+  work only in a folder the account may use (its own projects and shared room folders);
+  administrators keep every folder except the home directory, the standard folders
+  themselves, VAF's own data and VAF's code, so a call that names no folder while VAF runs
+  from its own folder is refused and asks for the project folder. Background thinking runs
+  no longer create a repository or project notes. Needs a restart of VAF.
 - **The agent's file tools stay out of VAF's own data and your shell start files.** Reading
   VAF's data and settings folders (messages, mail, contacts, key files, the MCP server list,
   tool permissions, and in Docker mode the configuration folder) is now refused for every

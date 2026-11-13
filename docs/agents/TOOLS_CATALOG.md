@@ -66,10 +66,10 @@ list, enumerate `Agent.tools` after constructing a `CoreAgent`.
 | `memory_save` | write | Save information to long-term RAG memory. Refuses a near-duplicate once, naming the existing memory: the model then updates it via `memory_update` or insists with `confirm_new=true`. |
 | `memory_update` | write | Update an existing long-term memory in place (full new text, re-embedded); the id comes from `memory_search` or `memory_save`'s duplicate notice. |
 | `memory_search` | read | Search long-term RAG memory, and the caller's other chats for where a topic was discussed (two labelled sections; the chat half needs no database and still answers during an outage). Each memory snippet names its `memory_id` for `memory_update`. |
-| `add_memory` | write | Add a note to short-term session memory. |
+| `add_memory` | write | Add a note to short-term session memory, in a project folder you may work in (`base_dir`). |
 | `learn_document` | write | Learn a document into long-term memory. |
 | `learn_attached_knowledge` | write | Persist attached Web UI documents into memory. |
-| `update_codex` | write | Save a pattern/convention to the project Codex. |
+| `update_codex` | write | Save a pattern/convention to the project Codex, in a project folder you may work in (`base_dir`). |
 | `checkpoint_context` | system | Archive history and reset context after a major step. |
 
 ## Working memory, intent & identity
@@ -262,11 +262,13 @@ that woke it. The gate is `_room_mode_gate_decision` in
 
 | Tool | Perm | What it does |
 |------|------|--------------|
-| `git_init` | write | Initialize a Git repo in the project dir. |
-| `git_add_commit` | write | Stage files (relative to the project folder) and commit (irreversible). |
-| `git_status` | read | Show working-tree status. |
-| `git_log` | read | Show commit history. |
+| `git_init` | write | Initialize a Git repo in a project folder you may work in (`base_dir`). |
+| `git_add_commit` | write | Stage files (relative to the project folder) and commit (irreversible), in a project folder you may work in (`base_dir`). |
+| `git_status` | read | Show working-tree status, in a project folder you may work in (`base_dir`). |
+| `git_log` | read | Show commit history, in a project folder you may work in (`base_dir`). |
 | `set_git_coauthor` | write | Turn the `Co-authored-by: VAF Agent` trailer on or off for the commits VAF creates itself. |
+
+Outside a coding run the four git tools, `update_codex` and `add_memory` work only in a folder the caller may write: a non-admin in its own projects and the shared folders of its rooms, an admin anywhere except the home directory, a standard folder itself, VAF's own data and VAF's code (`tool_work_folder`, see [USER_ISOLATION.md](../security/USER_ISOLATION.md)). A call that names no `base_dir` works in the folder VAF runs from, which is refused when that is VAF's own folder.
 
 ## Other
 

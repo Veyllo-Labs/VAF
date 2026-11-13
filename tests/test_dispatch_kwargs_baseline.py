@@ -62,7 +62,9 @@ SCOPE = "deadbeef-0000-0000-0000-000000000000"   # synthetic; never a real scope
 KWARGS_BASELINE = {
     "add_automation_note":       ("chat", ["user_scope_id"]),
     "add_automation_todo":       ("chat", ["user_scope_id"]),
-    "add_memory":                ("chat", []),
+    # +user_role/+user_scope_id with the folder rule: the four git tools and the two
+    # project notes tools judge the model's base_dir for the caller (tool_work_folder).
+    "add_memory":                ("chat", ["user_role", "user_scope_id"]),
     "add_task":                  ("chat", []),
     # +user_role with the file_access declaration: image_path is looked at under the
     # read jail read_file has, which the role resolves for a second admin.
@@ -117,10 +119,10 @@ KWARGS_BASELINE = {
     "folder_size":               ("chat", ["user_role", "user_scope_id"]),
     "forward_mail":              ("chat", ["hold", "hold_session", "user_scope_id", "username"]),
     "get_contact":               ("chat", ["user_scope_id", "username"]),
-    "git_add_commit":            ("chat", []),
-    "git_init":                  ("chat", []),
-    "git_log":                   ("chat", []),
-    "git_status":                ("chat", []),
+    "git_add_commit":            ("chat", ["user_role", "user_scope_id"]),
+    "git_init":                  ("chat", ["user_role", "user_scope_id"]),
+    "git_log":                   ("chat", ["user_role", "user_scope_id"]),
+    "git_status":                ("chat", ["user_role", "user_scope_id"]),
     "github_create_issue":       ("chat", ["user_scope_id", "username"]),
     "github_get_file":           ("chat", ["user_scope_id", "username"]),
     "github_get_file_structure": ("chat", ["user_scope_id", "username"]),
@@ -259,7 +261,7 @@ KWARGS_BASELINE = {
     "tree":                      ("chat", ["user_role", "user_scope_id"]),
     "update_automation":         ("chat", ["user_role", "user_scope_id"]),
     "update_calendar_event":     ("chat", ["user_scope_id", "username"]),
-    "update_codex":              ("chat", []),
+    "update_codex":              ("chat", ["user_role", "user_scope_id"]),
     "update_contact":            ("chat", ["user_scope_id", "username"]),
     "update_intent":             ("chat", ["user_scope_id"]),
     "update_skill":              ("chat", ["user_scope_id", "username"]),

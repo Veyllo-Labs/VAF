@@ -2673,6 +2673,8 @@ class ContextState:
 class GitInitTool(BaseTool):
     """Initialize a Git repository in the project directory."""
     name = "git_init"
+    # The folder rule in tool_work_folder judges base_dir for this caller.
+    identity_kwargs = ("user_scope_id", "user_role")
     # It creates .git in the working folder: a file write the request does not name, and
     # `.git/hooks` run on every later commit.
     agent_request = "refuse_person"
@@ -2683,7 +2685,12 @@ class GitInitTool(BaseTool):
     
     parameters = {
         "type": "object",
-        "properties": {},
+        "properties": {
+            "base_dir": {
+                "type": "string",
+                "description": "The project folder to work in: one you may work in (default: the folder VAF runs from)."
+            }
+        },
         "required": []
     }
     
@@ -2706,6 +2713,8 @@ class GitInitTool(BaseTool):
 class GitAddCommitTool(BaseTool):
     """Add files to Git staging area and commit them."""
     name = "git_add_commit"
+    # The folder rule in tool_work_folder judges base_dir for this caller.
+    identity_kwargs = ("user_scope_id", "user_role")
     # It writes .git (index, objects, the commit) in the working folder.
     agent_request = "refuse_person"
     category    = "git"
@@ -2724,6 +2733,10 @@ class GitAddCommitTool(BaseTool):
                 "type": "array",
                 "items": {"type": "string"},
                 "description": "Optional: files to add, relative to the project folder (default: all files)"
+            },
+            "base_dir": {
+                "type": "string",
+                "description": "The project folder to work in: one you may work in (default: the folder VAF runs from)."
             }
         },
         "required": ["message"]
@@ -2798,6 +2811,8 @@ class GitAddCommitTool(BaseTool):
 class GitStatusTool(BaseTool):
     """Get the current Git status of the repository."""
     name = "git_status"
+    # The folder rule in tool_work_folder judges base_dir for this caller.
+    identity_kwargs = ("user_scope_id", "user_role")
     category    = "git"
     permission_level = "read"
     side_effect_class = "none"
@@ -2805,7 +2820,12 @@ class GitStatusTool(BaseTool):
     
     parameters = {
         "type": "object",
-        "properties": {},
+        "properties": {
+            "base_dir": {
+                "type": "string",
+                "description": "The project folder to work in: one you may work in (default: the folder VAF runs from)."
+            }
+        },
         "required": []
     }
     
@@ -2827,6 +2847,8 @@ class GitStatusTool(BaseTool):
 class GitLogTool(BaseTool):
     """View Git commit history."""
     name = "git_log"
+    # The folder rule in tool_work_folder judges base_dir for this caller.
+    identity_kwargs = ("user_scope_id", "user_role")
     category    = "git"
     permission_level = "read"
     side_effect_class = "none"
@@ -2839,6 +2861,10 @@ class GitLogTool(BaseTool):
                 "type": "integer",
                 "description": "Number of commits to show (default: 10)",
                 "default": 10
+            },
+            "base_dir": {
+                "type": "string",
+                "description": "The project folder to work in: one you may work in (default: the folder VAF runs from)."
             }
         },
         "required": []

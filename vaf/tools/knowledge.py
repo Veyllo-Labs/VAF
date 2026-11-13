@@ -13,6 +13,8 @@ class UpdateCodexTool(BaseTool):
     Use this when you learn something important that should be remembered for future tasks.
     """
     name = "update_codex"
+    # The folder rule in tool_work_folder judges base_dir for this caller.
+    identity_kwargs = ("user_scope_id", "user_role")
     # It writes <base_dir>/.vaf/codex.md, which the coder reads back as its own context.
     agent_request = "refuse_standing"
     category    = "memory"
@@ -30,6 +32,10 @@ class UpdateCodexTool(BaseTool):
             "content": {
                 "type": "string",
                 "description": "The detailed pattern, rule, or learning to save."
+            },
+            "base_dir": {
+                "type": "string",
+                "description": "The project folder to work in: one you may work in (default: the folder VAF runs from)."
             }
         },
         "required": ["title", "content"]
@@ -60,6 +66,8 @@ class AddMemoryTool(BaseTool):
     Use this for short-term reminders or scratchpad notes for the CURRENT workflow.
     """
     name = "add_memory"
+    # The folder rule in tool_work_folder judges base_dir for this caller.
+    identity_kwargs = ("user_scope_id", "user_role")
     # It writes <base_dir>/.vaf/memory.md, which the coder reads back as its own context.
     agent_request = "refuse_standing"
     category    = "memory"
@@ -73,6 +81,10 @@ class AddMemoryTool(BaseTool):
             "note": {
                 "type": "string",
                 "description": "The note to add."
+            },
+            "base_dir": {
+                "type": "string",
+                "description": "The project folder to work in: one you may work in (default: the folder VAF runs from)."
             }
         },
         "required": ["note"]

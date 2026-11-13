@@ -542,20 +542,31 @@ REMOTE_PATH_REFUSAL = (
 
 def tool_work_folder(kwargs) -> Tuple[str, str]:
     """``(base_dir, "")`` for a tool that works in ``kwargs["base_dir"]`` (default: the working
-    folder), or ``("", refusal)`` when that folder is a network share or device path.
+    folder), or ``("", refusal)`` when this caller may not work there.
 
-    The coder's wrapper (`_base_dir_tool`) hands its inner tools a run folder that was screened
-    when it was chosen. Six of them (the four git tools, ``update_codex`` and ``add_memory``)
-    are registered for the main agent as well, where ``base_dir`` is whatever the model wrote,
-    and each probes or writes below it first: on Windows that opens ``\\\\host\\share`` and
-    sends the account's NTLM login attempt. NAMED BOUNDARY: this answers the share and device
-    half only; on the main agent the folder is not confined to the caller's own folders.
+    Six tools take that folder: the four git tools, ``update_codex`` and ``add_memory``. Inside
+    a coder run the wrapper (`_base_dir_tool`) hands them the run folder; on the main agent, a
+    messenger, an automation, a workflow step and a content-only coder run ``base_dir`` is
+    whatever the model wrote. Each tool probes or writes below it first, so the folder is asked
+    `project_dir_refusal` before anything touches it, in its order: a network share or device
+    path (resolving one on Windows opens the share and sends the account's NTLM login attempt),
+    then the home directory, a standard folder itself, VAF's own data or VAF's code, then the
+    caller's file jail in write mode. A non-admin works only in its own projects and the shared
+    folders of its rooms; an admin and a direct consumer reach every folder the first two
+    questions allow.
+
+    The caller is ``user_scope_id``/``user_role`` from the tool's ``identity_kwargs``, which
+    the dispatcher assigns over whatever the model wrote. A call that carries neither is a
+    direct consumer with no account. The folder is named as given, never resolved: a refused
+    '.' must not show the program folder's path to a tenant.
     """
-    base_dir = kwargs.get("base_dir", ".")
-    from vaf.core.path_jail import is_remote_path
-    if is_remote_path(str(base_dir or "")):
-        return "", (f"❌ Refused: '{base_dir}' is a network share or device path; this tool "
-                    "works only in a local project folder.")
+    base_dir = kwargs.get("base_dir") or "."
+    from vaf.core.workspace_guard import project_dir_refusal
+    reason = project_dir_refusal(str(base_dir), user_scope_id=kwargs.get("user_scope_id"),
+                                 user_role=kwargs.get("user_role"))
+    if reason:
+        return "", (f"❌ Refused: cannot work in '{base_dir}': {reason}. Name a folder you may "
+                    "work in as base_dir.")
     return base_dir, ""
 HOST_CONFIG_WRITE_REFUSAL = (
     "Access denied: the home directory's configuration (dot files and folders such as "

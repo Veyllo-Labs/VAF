@@ -2752,24 +2752,33 @@ class GitAddCommitTool(BaseTool):
             # it refuses an absolute path, '..', a drive and a share spelling as text, before it
             # resolves (on Windows probing \\host\share already contacts that host), and a
             # link that leads outside after resolving. One refusal and nothing is staged.
-            targets = []
+            names = []
             for entry in files:
                 entry = str(entry)
                 try:
-                    resolved = contained_path(base_dir, entry)
+                    contained_path(base_dir, entry)
+                    # The last part is staged as the caller named it, normalized but not
+                    # resolved: git adds a link inside the project as the link, and the resolved
+                    # path would stage its target instead. The folders on the way are named by
+                    # their real path, because git refuses a pathspec that runs through a link
+                    # ("beyond a symbolic link"); they are asked contained_path too, since a
+                    # final link can lead back in from a folder outside.
+                    name = posixpath.normpath(entry.strip().replace("\\", "/").strip("/") or ".")
+                    head, tail = posixpath.split(name)
+                    if head:
+                        real_head = contained_path(base_dir, head)
+                        root = Path(base_dir).resolve()
+                        if real_head != root:
+                            tail = f"{real_head.relative_to(root).as_posix()}/{tail}"
+                    names.append(tail)
                 except PathEscape:
                     return (f"❌ Not committed: '{entry}' is not a file inside the project "
                             "folder. Name files relative to the project folder (for example "
                             "index.html); an absolute path, '..', a network share or a link that "
                             "leads outside is refused. Nothing was added.")
-                # Staged under the name the caller gave, normalized but not resolved: git adds
-                # a link inside the project as the link, and the resolved path would stage its
-                # target instead. Containment was decided on the resolved path above.
-                name = posixpath.normpath(entry.strip().replace("\\", "/").strip("/") or ".")
-                targets.append((resolved, name))
-            for resolved, name in targets:
-                # lexists on the name as given: a link inside the project is staged as the link
-                # even when its target is missing (containment was decided on `resolved`).
+            for name in names:
+                # lexists: a link inside the project is staged as the link even when its target
+                # is missing (containment was decided on the resolved path above).
                 if os.path.lexists(os.path.join(base_dir, name)):
                     # "--": a path is never read as an option. ":(literal)": nor is a leading
                     # ':' read as pathspec magic (`:(glob)*` would stage every file); not

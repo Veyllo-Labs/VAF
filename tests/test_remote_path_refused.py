@@ -53,6 +53,8 @@ MUTATIONS, each turns the named test red:
   test_a_drive_in_a_later_part_is_refused_before_anything_resolves;
 - staging the resolved path instead of the name the call gave, or the name unnormalized
   -> test_git_add_commit_stages_an_inside_link_as_the_link;
+- staging the name through a folder link as given (no real path for its folders), or not
+  asking contained_path for those folders -> the same test;
 - `tool_work_folder` never refusing, or `update_codex` / `add_memory` not asking it
   -> test_the_git_tools_refuse_a_share_folder_on_the_chat_lane;
 - staging the name without `:(literal)` -> test_git_add_commit_reads_a_name_literally;
@@ -647,6 +649,32 @@ def test_git_add_commit_stages_an_inside_link_as_the_link(tmp_path):
     assert _git("diff", "--name-only", cwd=repo).stdout.split() == ["real.txt"]
     assert tool.run(base_dir=str(repo), message="sub", files=[".\\sub//./b.txt"]).startswith("✅")
     assert committed() == ["sub/b.txt"]
+
+    # Through a link to a folder inside the project: git refuses a pathspec beyond a link, so
+    # the folders are named by their real path, and the last part stays the name given.
+    os.symlink("sub", repo / "dirlink")
+    (repo / "sub" / "c.txt").write_text("c", encoding="utf-8")
+    os.symlink("b.txt", repo / "sub" / "alias2.txt")
+    os.symlink("gone.txt", repo / "sub" / "dangling2.txt")
+    for given, staged in (("dirlink/c.txt", "sub/c.txt"), ("dirlink/alias2.txt", "sub/alias2.txt"),
+                          ("dirlink/dangling2.txt", "sub/dangling2.txt")):
+        answer = tool.run(base_dir=str(repo), message=given, files=[given])
+        assert answer.startswith("✅"), (given, answer)
+        assert committed() == [staged], given
+    # The two links are committed as links (mode 120000), not as their targets.
+    modes = {line.split("\t")[1]: line.split()[0]
+             for line in _git("ls-files", "-s", cwd=repo).stdout.splitlines()}
+    assert modes["sub/alias2.txt"] == modes["sub/dangling2.txt"] == "120000", modes
+
+    # A folder outside whose link leads back in: the whole name resolves inside, its folder
+    # does not, and nothing is staged.
+    away = tmp_path / "away"
+    away.mkdir()
+    os.symlink(repo / "real.txt", away / "back.txt")
+    os.symlink(away, repo / "outlink")
+    answer = tool.run(base_dir=str(repo), message="no", files=["outlink/back.txt"])
+    assert answer.startswith("❌ Not committed:"), answer
+    assert _git("diff", "--cached", "--name-only", cwd=repo).stdout.split() == []
 
 
 def test_git_add_commit_reads_a_name_literally(tmp_path):

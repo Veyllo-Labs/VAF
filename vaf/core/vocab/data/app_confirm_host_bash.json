@@ -1,0 +1,32 @@
+{
+  "ar": [
+    "تشغيل أمر على حاسوب VAF"
+  ],
+  "de": [
+    "VAF soll einen Befehl auf dem VAF-Computer ausführen"
+  ],
+  "en": [
+    "Run a command on VAF's computer"
+  ],
+  "es": [
+    "Ejecutar un comando en el ordenador de VAF"
+  ],
+  "fr": [
+    "Exécuter une commande sur l'ordinateur de VAF"
+  ],
+  "ja": [
+    "VAFのコンピューターでコマンドを実行"
+  ],
+  "ko": [
+    "VAF 컴퓨터에서 명령 실행"
+  ],
+  "th": [
+    "เรียกใช้คำสั่งบนคอมพิวเตอร์ของ VAF"
+  ],
+  "tr": [
+    "VAF'ın bilgisayarında bir komut çalıştır"
+  ],
+  "zh": [
+    "在 VAF 的电脑上运行一条命令"
+  ]
+}

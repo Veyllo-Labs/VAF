@@ -1,0 +1,32 @@
+{
+  "ar": [
+    "عرض صفحة من بيئة معزولة"
+  ],
+  "de": [
+    "VAF soll eine Seite aus einer Sandbox-Umgebung anzeigen"
+  ],
+  "en": [
+    "Show a page from a sandbox environment"
+  ],
+  "es": [
+    "Mostrar una página de un entorno sandbox"
+  ],
+  "fr": [
+    "Afficher une page d'un environnement sandbox"
+  ],
+  "ja": [
+    "サンドボックス環境のページを表示"
+  ],
+  "ko": [
+    "샌드박스 환경의 페이지 표시"
+  ],
+  "th": [
+    "แสดงหน้าจากสภาพแวดล้อมแซนด์บ็อกซ์"
+  ],
+  "tr": [
+    "Bir sandbox ortamından bir sayfa göster"
+  ],
+  "zh": [
+    "显示沙盒环境中的一个页面"
+  ]
+}

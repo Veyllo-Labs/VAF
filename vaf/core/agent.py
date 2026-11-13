@@ -46,6 +46,7 @@ from vaf.core.tool_dispatch import (
     emit_event,
     event_result,
     is_channel_session as _is_channel_session,
+    is_holder_device_session as _is_holder_device_session,
     make_json_serializable,
     normalize_allowed_tools as _normalize_allowed_tools,
     normalize_tool_name,
@@ -14308,12 +14309,38 @@ class Agent:
         # for is answered "allow_once" for it, and nothing standing is granted. Every other
         # call of such a turn is refused at once, as above.
         _card_confirmed = False
+        _card_question = ""
         if _asked_by_agent:
             try:
-                from vaf.core.agent_origin import confirmed_call_pending
+                from vaf.core.agent_origin import confirmed_call_pending, confirmed_call_question
                 _card_confirmed = confirmed_call_pending(name, args if isinstance(args, dict) else {})
+                _card_question = confirmed_call_question() or ""
             except Exception:
                 _card_confirmed = False
+        # The account holder is present for this turn: they started it, or their own app agent
+        # asked for it (never a wake turn: a timer, a background command). On a chat whose far
+        # end is their own paired device (the Veyllo App) a tool kept off chats is then put to
+        # them on every call instead of refused (tool_contract, section 1h); the funnel reads
+        # the channel from the registry, so this flag opens nothing on any other chat.
+        _holder_present = bool(_asked_by_agent) or bool(getattr(self, "_turn_is_human", False))
+        # A person's own turn on that device: every gate of it is answered by a card there
+        # (`_ask_on_device`), because the app chat has no web dialog anybody sees.
+        _device_turn = (_holder_present and not _asked_by_agent
+                        and _is_holder_device_session(current_source, sid))
+        _device_note: dict = {}
+
+        def _device_decide(tool_name, reason, preview=None, choices=None, gate_id=None,
+                           args=None, question=None):
+            choice, note = self._ask_on_device(tool_name, args=args, question=question)
+            _device_note["text"] = note
+            return choice
+
+        def _card_decide(tool_name, reason, question=None, **_kw):
+            # The user's tap confirmed exactly the call the card showed, the tool's own
+            # question included: a question that changed since (a server forgotten, a key
+            # that is new now) is no question they answered.
+            return "allow_once" if str(question or "") == _card_question else "cancel"
+
         caller = _ToolCaller(
             self.tools,
             user_scope_id=getattr(self, "_current_user_scope_id", None),
@@ -14321,13 +14348,17 @@ class Agent:
             user_role=getattr(self, "_current_user_role", None),
             source=current_source,
             session_id=sid,
-            interactive=_card_confirmed or (not self._noninteractive and not _asked_by_agent),
+            interactive=(_card_confirmed or _device_turn
+                         or (not self._noninteractive and not _asked_by_agent)),
             gate_enabled=not _ww,
             trust_dir=Path.cwd(),
-            decide=((lambda *_a, **_k: "allow_once") if _card_confirmed
+            decide=(_card_decide if _card_confirmed
+                    else _device_decide if _device_turn
                     else self._ask_user_about_gate),
-            on_gate_required=None if _asked_by_agent else self._push_gate_to_websocket,
+            on_gate_required=(None if (_asked_by_agent or _device_turn)
+                              else self._push_gate_to_websocket),
             channel_lift=not _asked_by_agent,
+            holder_present=_holder_present,
             request_origin=getattr(self, "_turn_asked_by_agent", None) or None,
             stop_check=_session_stop_check(sid),
             authorize=getattr(self, "_tool_authorizer", None),
@@ -14366,6 +14397,16 @@ class Agent:
             if refusal:
                 from dataclasses import replace as _replace
                 outcome = _replace(outcome, result=refusal)
+        if not outcome.dispatched and str(outcome.result or "").startswith("[CANCELLED]"):
+            # The gate's generic cancel says "cancelled by user"; the model reads what really
+            # happened, so it does not report the call as done or blame the person.
+            from dataclasses import replace as _replace
+            if _card_confirmed:
+                outcome = _replace(outcome, result=(
+                    f"[APP AGENT] '{name}' did NOT run: what VAF would have asked about it "
+                    "changed after the card was shown. Do not report it as done."))
+            elif _device_turn and _device_note.get("text"):
+                outcome = _replace(outcome, result=_device_note["text"])
         self._take_tool_advice(name, outcome.advised_tools)
         return outcome
 
@@ -14592,9 +14633,16 @@ class Agent:
         if unknown:
             return unknown
         from vaf.core import vocab
+        from vaf.core.tool_dispatch import tool_ask_reason
         lang = vocab.resolve_user_language(getattr(self, "_current_user_scope_id", None),
                                            getattr(self, "_current_username", None))
-        what = agent_origin.confirm_what(name, tool, call_args, lang)
+        # The tool's own question for exactly these arguments (a first contact), computed the
+        # way the funnel computes it, shown on the card and kept with the call: the confirmed
+        # run goes through only while the funnel still asks the same.
+        question = tool_ask_reason(tool, agent_origin._storable(call_args),
+                                   user_scope_id=getattr(self, "_current_user_scope_id", None),
+                                   username=getattr(self, "_current_username", None))
+        what = agent_origin.confirm_what(name, tool, call_args, lang, question=question)
         too_long = agent_origin.confirm_too_long(name, tool, call_args, what)
         if too_long:
             return too_long
@@ -14605,11 +14653,34 @@ class Agent:
         stored = agent_origin._storable(call_args)
         parked.append(agent_origin.ParkedCall(
             tool=str(name), args_json=_json.dumps(stored, sort_keys=True, ensure_ascii=False),
-            digest=agent_origin.call_digest(name, stored), kind=str(kind), what=what))
+            digest=agent_origin.call_digest(name, stored), kind=str(kind), what=what,
+            question=question))
         self._parked_this_round = parked
         from vaf.core import outbound_hold
         self._close_turn(outbound_hold.TURN_ENDS_AT_DRAFT, visible=False)
         return agent_origin.parked_result(name)
+
+    def _ask_on_device(self, name, args=None, question=None):
+        """A gate of a person's own Veyllo App turn: a card on their device, waited for
+        (`confirmations.ask_on_device`). ``(choice, sentence)``: "allow_once" after the tap on
+        Yes, else "cancel" and what the model reads. Stop on the session and a revoked account
+        end the wait at once."""
+        from vaf.core import vocab
+        from vaf.core.app_link import confirmations
+        from vaf.core.revocation import is_revoked
+        from vaf.core.task_queue import TaskQueue
+        scope = getattr(self, "_current_user_scope_id", None)
+        username = getattr(self, "_current_username", None)
+        session = self._dispatch_session_id()
+        queue = TaskQueue()
+        try:
+            lang = vocab.resolve_user_language(scope, username)
+        except Exception:
+            lang = None
+        return confirmations.ask_on_device(
+            scope, str(username or ""), name, (self.tools or {}).get(name), args, question, lang,
+            should_cancel=lambda: bool(session and queue.should_stop(session)) or is_revoked(scope),
+            session_id=str(session or ""))
 
     def _ask_user_about_gate(self, name, reason, preview=None, choices=None, gate_id=None):
         """How THIS lane reaches a human. Prefer the WebSocket gate when a web session is

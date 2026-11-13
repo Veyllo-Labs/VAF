@@ -36,7 +36,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from vaf.core.channels import CHAT_CHANNELS, CHAT_SESSION_PREFIXES
+from vaf.core.channels import (CHAT_CHANNELS, CHAT_SESSION_PREFIXES, HOLDER_DEVICE_CHANNELS,
+                               HOLDER_DEVICE_SESSION_PREFIXES)
 
 
 def make_json_serializable(obj: Any) -> Any:
@@ -75,6 +76,40 @@ def is_channel_session(source: str | None, session_id: str | None) -> bool:
     return normalized in CHANNEL_SOURCES or (
         isinstance(session_id, str) and session_id.startswith(CHANNEL_SESSION_PREFIXES)
     )
+
+
+def tool_ask_reason(tool: Any, args: dict | None, *, user_scope_id: str | None = None,
+                    username: str | None = None) -> str:
+    """A tool's own question about one call (``BaseTool.ask_reason``), as a string ("" for
+    none): what the funnel hands the gate and the tool (``_call_question``), and what a
+    deferred confirmation of the call shows and compares against later. Fail-closed: a hook
+    that raises is a reason to ask, never a silent pass."""
+    fn = getattr(tool, "ask_reason", None)
+    if not callable(fn):
+        return ""
+    try:
+        return str(fn(dict(args or {}), user_scope_id=user_scope_id, username=username) or "")
+    except Exception as exc:                                      # noqa: BLE001
+        return (f"This call could not be checked ({type(exc).__name__}), so it is put "
+                "to you.")
+
+
+def is_holder_device_session(source: str | None, session_id: str | None) -> bool:
+    """Is this call coming from a chat whose far end is the account holder's own paired device
+    (``channels.Channel.holder_device``, the Veyllo App)? Read from the registry, never from a
+    caller's flag: only then does a tool kept off chats go to a confirmation on that device
+    instead of being refused (``tool_contract.evaluate_tool_policy``, section 1h).
+
+    The same two signals as ``is_channel_session``, and they must not disagree: a source that
+    names another channel, or a holder-device source on another channel's session id, is no
+    holder-device call. Without a source, the session id's prefix decides."""
+    normalized = str(source or "").strip().lower()
+    sid = session_id if isinstance(session_id, str) else ""
+    on_chat_id = bool(sid) and sid.startswith(CHANNEL_SESSION_PREFIXES)
+    on_holder_id = bool(sid) and sid.startswith(HOLDER_DEVICE_SESSION_PREFIXES)
+    if normalized:
+        return normalized in HOLDER_DEVICE_CHANNELS and (on_holder_id or not on_chat_id)
+    return on_holder_id
 
 
 def policy_admin_flag(role: str | None, scope_id: str | None) -> bool:
@@ -378,7 +413,8 @@ def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
                               session_id: str | None = None,
                               offer_standing: bool = True,
                               trust_folder: bool = True,
-                              model_reason: str | None = None) -> str | None:
+                              model_reason: str | None = None,
+                              question: str | None = None) -> str | None:
     """Decide whether a confirmation-gated tool may run.
 
     Returns ``None`` when it may proceed, or the string to hand back to the model. Never
@@ -448,6 +484,14 @@ def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
     (``interactive=False``), in place of ``reason``; None repeats ``reason``. The two differ
     when the question is written for the person and names something the model must not read:
     a tool's own ``ask_reason`` may show the address a stored credential resolves to.
+
+    ``question`` is the tool's own question for this call exactly as the funnel computed it and
+    hands it to the tool as ``_call_question`` (``""`` for none; ``BaseTool.ask_reason``). A
+    decider that accepts the optional keyword ``question`` gets it, and one that accepts
+    ``args`` gets the call's arguments as this gate received them (declared secrets masked by
+    the caller). ``reason`` mixes the policy's text, an authorizer's reason and that question,
+    and the preview is cut, so a surface that promises the WHOLE call, or a Yes to the tool's
+    own question (a first contact, ``BaseTool.first_contact_confirmed``), needs these two.
     """
     from vaf.core.trust import (get_tool_policy, grant_tool_for_chat, has_chat_grant,
                                 is_trusted_dir, mark_trusted_dir, set_tool_policy)
@@ -543,6 +587,10 @@ def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
             _extra["choices"] = choices
         if "gate_id" in _params:
             _extra["gate_id"] = gate_id
+        if "args" in _params:
+            _extra["args"] = dict(args or {})
+        if "question" in _params:
+            _extra["question"] = str(question or "")
         choice = decide(tool_name, reason, **_extra)
     if not offer_standing and choice in ("allow_chat", "allow_always"):
         choice = "allow_once"       # never widen: this question offered no standing answer
@@ -1390,6 +1438,7 @@ class ToolCaller:
         allowed_tools=None,
         channel_lift: bool = True,
         request_origin: str | None = None,
+        holder_present: bool = False,
         # RUNTIME CONTROL
         timeout_for=None,
         self_supervised=None,
@@ -1432,6 +1481,12 @@ class ToolCaller:
         # Who wrote the turn's request when that was another agent: handed to a tool that
         # declares "request_origin" in identity_kwargs (`assign_declared_identity`).
         self.request_origin = str(request_origin) if request_origin else None
+        # True: the account holder is present for this turn (they started it, or their own app
+        # agent asked for it). On a chat whose far end is their own paired device
+        # (`is_holder_device_session`, read from the registry here, never from this flag) a
+        # tool kept off chats is then confirmed on every call instead of refused
+        # (`evaluate_tool_policy`, section 1h). On any other chat it changes nothing.
+        self.holder_present = bool(holder_present)
         self.timeout_for = timeout_for
         self.self_supervised = self_supervised
         self.stop_check = stop_check
@@ -1567,6 +1622,10 @@ class ToolCaller:
                 return ToolCallOutcome(gate_msg, False)
 
         forced_ask = verdict.decision == "ask"
+        # Asked afresh on every call: an authorizer's ask(), or a call the policy opens only on
+        # the condition of a confirmation (`ToolPolicyDecision.ask_each_call`). Nothing standing
+        # silences it, and it offers nothing standing.
+        fresh = forced_ask or decision.ask_each_call
         ask_reason = verdict.reason if forced_ask else ""
         model_reason = ask_reason
         # The tool's own question as it was put (or would have been, "" for none), handed to
@@ -1593,6 +1652,7 @@ class ToolCaller:
                 model_reason = (f"{model_reason} {OWN_QUESTION_FOR_MODEL}" if model_reason
                                 else OWN_QUESTION_FOR_MODEL)
                 forced_ask = True
+        fresh = fresh or forced_ask
         needs_gate = (decision.requires_confirmation or forced_ask) and verdict.decision != "allow"
         # Whether THIS call was confirmed - by a person at the gate, or by the application's
         # allow(). Handed to a tool that declared it wants to know (accepts_call_confirmation).
@@ -1603,8 +1663,8 @@ class ToolCaller:
             refusal = resolve_confirmation_gate(
                 name, reason=(ask_reason if forced_ask else decision.reason),
                 args=mask_secret_args(args, getattr(tool, "secret_args", ())),
-                ignore_standing_grants=forced_ask,
-                offer_standing=not forced_ask,
+                ignore_standing_grants=fresh,
+                offer_standing=not fresh,
                 trust_folder=bool(getattr(tool, "trusted_dir_grants", True)),
                 trust_dir=self.trust_dir if self.trust_dir is not None else Path.cwd(),
                 user_scope_id=self.user_scope_id, user_role=self.user_role,
@@ -1612,6 +1672,7 @@ class ToolCaller:
                 decide=self.decide, emit=self.on_event,
                 on_gate_required=self.on_gate_required,
                 model_reason=(model_reason if forced_ask else None),
+                question=(asked or ""),
             )
             if refusal is not None:
                 return ToolCallOutcome(refusal, False)
@@ -1672,17 +1733,9 @@ class ToolCaller:
             return ""
 
     def _tool_ask_reason(self, tool, args) -> str:
-        """BaseTool.ask_reason for this call, as a string ("" for none). Fail-closed: a hook
-        that raises is a reason to ask, never a silent pass."""
-        fn = getattr(tool, "ask_reason", None)
-        if not callable(fn):
-            return ""
-        try:
-            return str(fn(dict(args or {}), user_scope_id=self.user_scope_id,
-                          username=self.username) or "")
-        except Exception as exc:                                  # noqa: BLE001
-            return (f"This call could not be checked ({type(exc).__name__}), so it is put "
-                    "to you.")
+        """BaseTool.ask_reason for this call (`tool_ask_reason`)."""
+        return tool_ask_reason(tool, args, user_scope_id=self.user_scope_id,
+                               username=self.username)
 
     def _policy(self, name, tool, *, quiet: bool = False):
         from vaf.core.tool_contract import evaluate_tool_policy
@@ -1696,6 +1749,8 @@ class ToolCaller:
             # An offer check is not a call: same decision, no POLICY_* log line.
             quiet=quiet,
             channel_lift=self.channel_lift,
+            holder_present=self.holder_present,
+            holder_device=is_holder_device_session(self.source, self.session_id),
         )
 
     def _offerable(self, name: str) -> bool:

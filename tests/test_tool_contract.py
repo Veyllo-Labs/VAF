@@ -268,3 +268,98 @@ def test_channel_full_access_does_not_affect_web_sessions():
         )
     assert decision.blocked is False
     assert decision.requires_confirmation is True
+
+
+# ── section 1h: a tool kept off chats, on the account holder's own device ───────────────
+
+from app_link_env import channel_tool_classes  # noqa: E402
+
+_CHANNEL_TOOLS = channel_tool_classes()
+
+
+def _lift(monkeypatch, on):
+    real = Config.get
+    monkeypatch.setattr(Config, "get", staticmethod(lambda key, default=None: (
+        on if key == "channel_tools_unrestricted" else real(key, default))))
+
+
+def _policy(name, tool, *, admin=True, gated=True, channel_lift=True, **holder):
+    return evaluate_tool_policy(name, tool, "veyllo_app", is_channel_session=True,
+                                is_admin=admin, gated_lane=gated, channel_lift=channel_lift,
+                                **holder)
+
+
+def test_the_registry_holds_the_reviewed_channel_tools():
+    assert len(_CHANNEL_TOOLS) == 15 and {"host_bash", "ssh", "ftp", "set_timer"} <= set(
+        _CHANNEL_TOOLS)
+
+
+@pytest.mark.parametrize("name", sorted(_CHANNEL_TOOLS))
+@pytest.mark.parametrize("lift", [True, False])
+@pytest.mark.parametrize("admin", [True, False])
+def test_holder_present_confirms_every_channel_tool(monkeypatch, name, lift, admin):
+    """MUTATION: move 1h after 1b - red (lift on); drop `holder_present` from the condition
+    - red in test_without_holder_nothing_changes."""
+    _lift(monkeypatch, lift)
+    tool = _CHANNEL_TOOLS[name]
+    decision = _policy(name, tool, admin=admin, holder_present=True, holder_device=True)
+    if getattr(tool, "admin_only", False) and not admin:
+        assert decision.blocked and "admin session" in decision.reason
+        assert not decision.ask_each_call
+    else:
+        assert (decision.blocked, decision.requires_confirmation, decision.ask_each_call) \
+            == (False, True, True), (name, decision)
+        assert "Veyllo App" in decision.reason
+
+
+@pytest.mark.parametrize("name", sorted(_CHANNEL_TOOLS))
+def test_without_holder_nothing_changes(monkeypatch, name):
+    tool = _CHANNEL_TOOLS[name]
+    for lift in (True, False):
+        _lift(monkeypatch, lift)
+        for admin in (True, False):
+            for channel_lift in (True, False):
+                today = _policy(name, tool, admin=admin, channel_lift=channel_lift)
+                for holder in ({"holder_present": False, "holder_device": True},
+                               {"holder_present": True, "holder_device": False},
+                               {"holder_present": False, "holder_device": False}):
+                    assert _policy(name, tool, admin=admin, channel_lift=channel_lift,
+                                   **holder) == today, (name, lift, admin, holder)
+                assert not today.ask_each_call
+
+
+@pytest.mark.parametrize("restrictions", [("veyllo_app",), ("channel", "veyllo_app")])
+@pytest.mark.parametrize("level", ["write", "dangerous"])
+def test_a_tool_naming_the_app_stays_blocked(monkeypatch, restrictions, level):
+    """Its author excluded the app on purpose. MUTATION: drop the named-channel check from
+    1h - red."""
+    class AppExcluded(BaseTool):
+        name = "app_excluded"
+        description = "Excluded from the app."
+        permission_level = level
+        channel_restrictions = restrictions
+
+        def run(self, **kwargs):
+            return "ran"
+
+    tool = AppExcluded()
+    for lift in (True, False):
+        _lift(monkeypatch, lift)
+        for channel_lift in (True, False):
+            today = _policy("app_excluded", tool, channel_lift=channel_lift)
+            held = _policy("app_excluded", tool, channel_lift=channel_lift,
+                           holder_present=True, holder_device=True)
+            assert held == today and not held.ask_each_call, (restrictions, level, lift)
+    _lift(monkeypatch, False)
+    assert _policy("app_excluded", tool, holder_present=True, holder_device=True).blocked
+
+
+@pytest.mark.parametrize("name", sorted(_CHANNEL_TOOLS))
+def test_unattended_lane_unchanged(monkeypatch, name):
+    """The coder and workflow steps (no gate) decide as before. MUTATION: drop `gated_lane`
+    from 1h - red."""
+    tool = _CHANNEL_TOOLS[name]
+    for lift in (True, False):
+        _lift(monkeypatch, lift)
+        today = _policy(name, tool, gated=False)
+        assert _policy(name, tool, gated=False, holder_present=True, holder_device=True) == today

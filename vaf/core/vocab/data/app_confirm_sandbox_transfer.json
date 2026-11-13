@@ -1,0 +1,32 @@
+{
+  "ar": [
+    "نقل ملفات بين مجلداتك وبيئة معزولة"
+  ],
+  "de": [
+    "VAF soll Dateien zwischen deinen Ordnern und einer Sandbox-Umgebung übertragen"
+  ],
+  "en": [
+    "Move files between your folders and a sandbox environment"
+  ],
+  "es": [
+    "Mover archivos entre tus carpetas y un entorno sandbox"
+  ],
+  "fr": [
+    "Déplacer des fichiers entre tes dossiers et un environnement sandbox"
+  ],
+  "ja": [
+    "フォルダーとサンドボックス環境の間でファイルを移動"
+  ],
+  "ko": [
+    "내 폴더와 샌드박스 환경 사이에서 파일 이동"
+  ],
+  "th": [
+    "ย้ายไฟล์ระหว่างโฟลเดอร์ของคุณกับสภาพแวดล้อมแซนด์บ็อกซ์"
+  ],
+  "tr": [
+    "Klasörlerin ile bir sandbox ortamı arasında dosya taşı"
+  ],
+  "zh": [
+    "在你的文件夹和沙盒环境之间移动文件"
+  ]
+}

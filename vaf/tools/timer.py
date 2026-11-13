@@ -12,7 +12,8 @@ Use these for short in-chat timers (seconds to a few minutes). For longer or per
 recurring reminders use create_automation (frequency='once'), which survives restarts.
 
 Timers are blocked on messaging channels (Telegram/WhatsApp/Discord) because proactive
-in-chat delivery there is not wired up — use create_automation for those.
+in-chat delivery there is not wired up, so use create_automation for those. From the Veyllo
+App each timer is confirmed on the person's own device first.
 """
 from vaf.tools.base import BaseTool
 from vaf.core.timers import add_timer, list_timers, cancel_timer

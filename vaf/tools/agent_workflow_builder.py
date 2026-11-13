@@ -548,6 +548,9 @@ class AgentWorkflowBuilderTool(BaseTool):
     side_effect_class = "reversible"    # files can be deleted; temp leaves nothing
     admin_only        = False           # run_temp works for all; create/delete checked internally
     channel_restrictions = ("channel",)
+    # What a confirmation card in the Veyllo App shows whole in its top block: the
+    # target's tail is its meaning (agent_origin.card_lines).
+    agent_request_confirm_whole_args = ("workflow_id",)
 
     # ── Examples ──────────────────────────────────────────────────────────────
     input_examples = [

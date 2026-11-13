@@ -1,0 +1,32 @@
+{
+  "ar": [
+    "إدارة بيئة معزولة"
+  ],
+  "de": [
+    "VAF soll eine Sandbox-Umgebung verwalten"
+  ],
+  "en": [
+    "Manage a sandbox environment"
+  ],
+  "es": [
+    "Gestionar un entorno sandbox"
+  ],
+  "fr": [
+    "Gérer un environnement sandbox"
+  ],
+  "ja": [
+    "サンドボックス環境を管理"
+  ],
+  "ko": [
+    "샌드박스 환경 관리"
+  ],
+  "th": [
+    "จัดการสภาพแวดล้อมแซนด์บ็อกซ์"
+  ],
+  "tr": [
+    "Bir sandbox ortamını yönet"
+  ],
+  "zh": [
+    "管理一个沙盒环境"
+  ]
+}

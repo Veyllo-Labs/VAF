@@ -52,6 +52,23 @@ def test_the_registry_is_consistent_in_itself():
     assert set(CHAT_SEND_TOOLS) <= set(ALL_SEND_TOOLS) == set(CHANNEL_SEND_TOOLS.values())
 
 
+def test_holder_device_channels_are_pinned():
+    """Only the Veyllo App's far end is the account holder's own device, which can show a
+    confirmation for one call: there a tool kept off chats is carded instead of refused
+    (tool_contract section 1h). Turning it on for another channel is a reviewed change of
+    this literal, and a channel added later is off by default (it fails closed).
+    MUTATION: set `holder_device=True` on telegram, or default the field to True - red."""
+    import dataclasses
+    assert reg.HOLDER_DEVICE_CHANNELS == ("veyllo_app",)
+    assert reg.HOLDER_DEVICE_SESSION_PREFIXES == ("veyllo_app_",)
+    assert {c.name for c in reg.CHANNELS if c.holder_device} == {"veyllo_app"}
+    default = {f.name: f.default for f in dataclasses.fields(reg.Channel)}["holder_device"]
+    assert default is False
+    assert reg.Channel("signal", "Signal", bridge=True, send_tool="send_signal").holder_device \
+        is False
+    assert not set(reg.HOLDER_DEVICE_CHANNELS) & set(FRONT_OFFICE_MESSENGERS)
+
+
 def test_the_registry_imports_nothing_from_vaf():
     """Tool classes read it at class-definition time and the dependency-free ingress policy
     reads it too; one VAF import here and the first import cycle is a matter of time."""

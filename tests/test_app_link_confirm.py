@@ -282,21 +282,28 @@ def test_undeclared_work_stays_refused(agent_world):
 
 def test_the_declarations_are_the_source(agent_world):
     """Every tool that declares a card kind is a refuse_work/refuse_standing tool with a kind
-    of the list and a headline; the set is the reviewed one; agent_origin names none of them."""
-    from vaf.core.tool_contract import resolve_tool_contract
+    of the list and a headline; the set is the reviewed one; agent_origin names none of them.
+    A refuse class without a kind stays refused, unless it is kept off chats by the "channel"
+    sentinel: on the Veyllo App, the holder's own device, that one is carded as kind `tool`."""
+    from vaf.core.tool_contract import AGENT_REQUEST_CONFIRM_KINDS, resolve_tool_contract
     agent = agent_world.make()
     declared = {}
     for name, tool in agent.tools.items():
         contract = resolve_tool_contract(name, tool)
         if contract.agent_request_confirm_kind:
             assert contract.agent_request in ("refuse_work", "refuse_standing"), name
-            assert contract.agent_request_confirm_kind in confirmations.KINDS[:-1], name
+            assert contract.agent_request_confirm_kind in confirmations.KINDS[:-2], name
             assert (ROOT / "vaf" / "core" / "vocab" / "data" / f"app_confirm_{name}.json").is_file()
             declared[name] = contract.agent_request_confirm_kind
         elif contract.agent_request in ("refuse_work", "refuse_standing"):
-            assert agent_origin.agent_request_decision(name, tool, "veyllo_app")[0] == "refuse"
+            expected = (("confirm", "tool") if "channel" in contract.channel_restrictions
+                        else "refuse")
+            got = agent_origin.agent_request_decision(name, tool, "veyllo_app")
+            assert (got if expected != "refuse" else got[0]) == expected, name
     assert declared == CARDED
-    assert confirmations.KINDS == ("coder", "automation", "workflow", "skill", "identity", "send")
+    assert confirmations.KINDS == ("coder", "automation", "workflow", "skill", "identity", "send",
+                                   "tool")
+    assert confirmations.KINDS[:-2] == AGENT_REQUEST_CONFIRM_KINDS
     src = (ROOT / "vaf" / "core" / "agent_origin.py").read_text(encoding="utf-8")
     code = "\n".join(line for line in src.splitlines() if not line.lstrip().startswith("#"))
     code = re.sub(r'"""[\s\S]*?"""', "", code)

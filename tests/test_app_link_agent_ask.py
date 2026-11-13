@@ -468,7 +468,7 @@ def test_agent_ask_gate_refuses_person_tools(agent_world):
         ("note_it", (), "allow"))}
     agent.tools.update(tools)
     _ask_turn(agent)
-    for name in ("user_phone", "store_credential", "set_timer", "app_only_tool"):
+    for name in ("user_phone", "store_credential", "app_only_tool"):
         gate = agent._agent_request_gate_decision(name, tools[name])
         assert gate is not None and gate.startswith("[APP AGENT]"), name
         out = agent.execute_tool(name, {})
@@ -481,6 +481,13 @@ def test_agent_ask_gate_refuses_person_tools(agent_world):
         assert out.endswith(tail), (name, out)
         assert not tools[name].calls, f"{name} ran on an agent's request"
         assert name not in agent.visible_tools(), f"{name} was offered"
+    # Kept off chats by the "channel" sentinel: on the Veyllo App, the holder's own device, it
+    # is offered and parks for a card of kind `tool` instead of running or being refused.
+    assert "set_timer" in agent.visible_tools()
+    agent._parked_this_round, agent._held_this_round = [], []
+    assert agent.execute_tool("set_timer", {}).startswith("NOT RUN YET.")
+    assert [(c.tool, c.kind) for c in agent._parked_this_round] == [("set_timer", "tool")]
+    assert not tools["set_timer"].calls
     assert agent.execute_tool("note_it", {}) == "ok" and "note_it" in agent.visible_tools()
     # A message of the person in the same chat: the gate does not apply.
     _ask_turn(agent, asked=False)
@@ -729,7 +736,8 @@ def test_every_tool_that_starts_or_steers_work_declares_itself(agent_world):
         n for n in guarded
         if n not in _ALLOWED_REVIEWED
         and not _declares_agent_request(agent.tools[n])
-        and agent_request_kind(n, agent.tools[n], "veyllo_app") != "off_chats")
+        and agent_request_kind(n, agent.tools[n], "veyllo_app") not in ("off_chats",
+                                                                           "off_chats_card"))
     assert undeclared == [], f"neither declared, kept off chats nor reviewed: {undeclared}"
     declared_and_reviewed = sorted(n for n in _ALLOWED_REVIEWED
                                    if n in agent.tools and _declares_agent_request(agent.tools[n]))
@@ -1417,7 +1425,8 @@ def test_every_file_access_write_tool_is_refused_on_a_request(agent_world):
             assert name in THIRD_PARTY_SEND_TOOLS and \
                 resolve_tool_contract(name, writers[name]).agent_request == "hold", name
         else:
-            assert kind in ("refuse_write", "refuse_own_messenger", "off_chats"), (name, kind)
+            assert kind in ("refuse_write", "refuse_own_messenger", "off_chats",
+                            "off_chats_card"), (name, kind)
     assert {n for n, k in kinds.items() if k == "refuse_write"} >= set(_FILE_TOOLS)
     assert {n for n, k in kinds.items() if k == "refuse_own_messenger"} == set(_SELF_SENDS)
     assert {n for n, k in kinds.items() if k is None} == {"send_mail", "send_whatsapp"}

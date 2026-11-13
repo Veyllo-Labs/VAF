@@ -47,6 +47,26 @@ The card is not in the device's outbox: a device that is away gets the relay's n
 a card waits (vaf/core/app_link/relay.py), and the card again after its next ``welcome``, with
 the same id and ``exp``.
 
+A tool kept off messaging channels (``"channel"`` in its restrictions) runs through the
+Veyllo App only behind a card of kind ``tool``: the app's device is the account holder's own
+(``channels.Channel.holder_device``). It comes two ways. In a request of the app's agent it is
+parked like the kinds above (``agent_origin.agent_request_decision`` answers ``("confirm",
+"tool")``). In a turn the person started (a message from the app, or a line to VAF's agent in
+the Veyllo App room) the card IS the confirmation gate's answer (`ask_on_device`, the turn's
+``decide``): the turn waits for the tap, at most ``DEVICE_GATE_SECONDS``, on the device that
+sent the message (the turn's device, `turn_device_scope`) or, for a room line, on the
+account's most recently used device that announced the cap ``CAP_TOOL``. Every gate of such a
+turn goes that way, because the app chat has no other place to show one. Such a GATE card
+(``Pending.gate``) wakes its waiting turn with the answer and never answers or ends the turn's
+reply itself: a Yes runs exactly the call the gate holds, once (``allow_once``, nothing
+standing); a No, the time running out, Stop, a device that no longer stands, or an app that
+cannot show cards refuses it with a sentence the model reads (``_GATE``). ``cancel`` leaves a
+gate card alone: the reply's id it carries is a running reply, which the bridge's own cancel
+stops, and the stop ends the wait. The card shows the tool's own question for the call as the
+funnel computed it (``agent_origin.CARD_QUESTION``), so a Yes on it is a Yes to a first
+contact only when the card said so. A card of kind ``tool`` goes only to a device whose
+``caps`` hold ``CAP_TOOL``; ``welcome`` says ``"confirm_tool": true``.
+
 NAMED BOUNDARY: memory only, like the request it answers (the bridge's open requests and the
 task queue live in this process). A restart of VAF drops every card; nothing runs after it,
 a tap on such a card gets ``confirm_invalid``, and a parked draft still waits in the web UI
@@ -55,12 +75,15 @@ tap on the phone.
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import json
 import logging
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from vaf.core.agent_origin import CONFIRM_SECONDS, WHAT_MAX, ParkedCall
 from vaf.core.app_link import CHANNEL, devices
@@ -76,8 +99,13 @@ CONFIRMS_PER_ASK_MAX = 3
 #: An approved card whose turn the queue no longer holds after this long (the web UI's stop
 #: dropped it) answers its request instead of waiting for nothing.
 START_GRACE_SECONDS = 30
-#: The card kinds the protocol knows.
-KINDS = AGENT_REQUEST_CONFIRM_KINDS + ("send",)
+#: The card kinds the protocol knows: the declared ones, a message to somebody else, and one
+#: call of a tool kept off messaging channels.
+KINDS = AGENT_REQUEST_CONFIRM_KINDS + ("send", "tool")
+#: The capability a Veyllo App announces in ``hello`` when it shows a card of kind ``tool``.
+CAP_TOOL = "confirm_tool"
+#: How long a gate card of a person's own turn waits for the tap (as the web UI's dialog).
+DEVICE_GATE_SECONDS = 300
 #: The first line of a confirm wake turn (the web chat shows the rest of it on the wake row).
 CONFIRM_WAKE_PREFIX = "✔ Confirmed in the app:"
 
@@ -103,6 +131,17 @@ FOLLOWUPS_WAIT = ("The other message this request prepared was NOT sent either: 
 CANNOT_SHOW = ("[APP AGENT] '{tool}' could not be shown to your user for confirmation, so it did "
                "NOT run. Tell your user it was not done.")
 DECIDED_ELSEWHERE = "Your user decided in VAF's web UI: {status}"
+# What the model of a person's own turn reads when a gate card ends without a Yes (it replaces
+# the gate's generic cancel text). Never the card's id.
+_GATE = "[VEYLLO APP] '{tool}' did NOT run: {why} Do not report it as done."
+GATE_DECLINED = "your user declined it in the Veyllo App."
+GATE_EXPIRED = "your user did not confirm it in the Veyllo App within {minutes} minutes."
+GATE_OLD_APP = ("it needs your user's confirmation in the Veyllo App, and the Veyllo App on "
+                "their device cannot show it yet (an app update brings it). They can also ask "
+                "for it in VAF's web UI.")
+GATE_NO_DEVICE = ("it needs your user's confirmation in the Veyllo App, and no Veyllo App of "
+                  "theirs can receive it.")
+GATE_STOPPED = "the turn was stopped before your user confirmed it."
 NOT_STARTED = "'{tool}' did NOT run: it was stopped before it started."
 _INSTRUCTION = ("Answer the app's agent with the outcome in a few sentences. Do not run it "
                 "again.")
@@ -134,14 +173,26 @@ class Pending:
     sent_to: int = 0
     # The drafts of the same round still to be carded, in order, once this card's Yes has run.
     followups: List[str] = field(default_factory=list)
+    # A gate card: a person's turn waits on it (`ask_on_device`); its answer wakes that turn and
+    # never answers a reply.
+    gate: bool = False
+    # The tool's own question the card showed ("" for none).
+    question: str = ""
+    # The gate card's answer, set once: "allow_once", or how it ended without a Yes.
+    result: str = ""
+    answered: threading.Event = field(default_factory=threading.Event, repr=False)
 
     @property
     def is_send(self) -> bool:
         return self.kind == "send"
 
     def frame(self) -> Dict[str, Any]:
-        return {"t": "confirm", "id": self.id, "ask": self.ask_id, "kind": self.kind,
-                "what": self.what, "exp": int(self.exp)}
+        out: Dict[str, Any] = {"t": "confirm", "id": self.id, "ask": self.ask_id,
+                               "kind": self.kind}
+        if self.kind == "tool":
+            out["tool"] = self.tool
+        out.update({"what": self.what, "exp": int(self.exp)})
+        return out
 
     def meta(self) -> Dict[str, Any]:
         """The request's reply as the bridge finds it (a request answers under its own id)."""
@@ -302,8 +353,12 @@ def _open_card(meta: Dict[str, Any], *, action: Optional[ParkedCall],
     if action is not None:
         if action.kind not in KINDS or action.kind == "send":
             return fallback
+        if action.kind == "tool" and CAP_TOOL not in (row.get("caps") or []):
+            # An app that did not announce the kind gets no such card.
+            return fallback
         entry.kind, entry.what, entry.tool = action.kind, action.what, action.tool
         entry.args_json, entry.digest = action.args_json, action.digest
+        entry.question = str(getattr(action, "question", "") or "")
     else:
         from vaf.core import outbound_hold
         draft = _draft(draft_ref, username, scope)
@@ -386,12 +441,34 @@ def on_answer(session, row: Dict[str, Any], message: Dict[str, Any]) -> None:
             entry.state, entry.decided, settle_as = "declined", now, "declined"
         else:
             entry.state, entry.decided, approved = "approved", now, entry
+        if approved is not None and approved.gate:
+            # Nothing is queued for a gate card: the waiting turn runs the call itself.
+            entry.state = "done"
     if error:
         session.send_json({"t": "error", "code": error, "ref": cid})
     if settle_as:
-        _settled(entry, settle_as)
+        _ended(entry, settle_as)
     if approved is not None:
-        _queue_confirmed(approved)
+        if approved.gate:
+            _wake(approved, "allow_once")
+        else:
+            _queue_confirmed(approved)
+
+
+def _wake(entry: Pending, result: str) -> None:
+    """A gate card's answer reaches the turn that waits on it (once)."""
+    if not entry.result:
+        entry.result = result
+    entry.answered.set()
+
+
+def _ended(entry: Pending, how: str) -> None:
+    """A card ended without a run (its state is set already): a gate card wakes its turn, a
+    request's card answers the request (`_settled`)."""
+    if entry.gate:
+        _wake(entry, how)
+    else:
+        _settled(entry, how)
 
 
 def _queue_confirmed(entry: Pending) -> None:
@@ -501,7 +578,7 @@ def refused_by_app(session) -> int:
         for entry in hit:
             entry.state, entry.decided = "refused_by_app", time.time()
     for entry in hit:
-        _settled(entry, "refused_by_app")
+        _ended(entry, "refused_by_app")
     return len(hit)
 
 
@@ -511,11 +588,14 @@ def cancel(row: Dict[str, Any], ask_id: str) -> bool:
     """``cancel`` of a request whose card waits, from the device that asked: the card is
     settled (its draft discarded), or the confirmed turn still in the queue dropped, and the
     request answered with ``done`` and no text. False when the request has no such card (it
-    runs or never parked: the bridge's own cancel applies)."""
+    runs or never parked: the bridge's own cancel applies). A gate card is never one: its
+    ``ask`` is the id of a person's reply that is still running, and answering that reply here
+    would cut it; the bridge's cancel stops the turn instead, and the stop ends the wait."""
     from vaf.core.app_link import bridge
     did, scope = row["device_id"], str(row.get("user_scope_id") or "")
     with _lock():
         mine = [c for c in _cards.values() if c.device_id == did and c.scope == scope
+                and not c.gate
                 and c.ask_id == str(ask_id) and c.state in ("pending", "approved")]
         if not mine:
             return False
@@ -571,7 +651,8 @@ def settle(now: Optional[float] = None) -> int:
                     how = "cancelled"
                 elif entry.is_send and _draft_moved(entry):
                     how = "decided_elsewhere"
-            elif entry.state == "approved" and wall - entry.decided > START_GRACE_SECONDS:
+            elif entry.state == "approved" and not entry.gate \
+                    and wall - entry.decided > START_GRACE_SECONDS:
                 from vaf.core.task_queue import TaskQueue
                 if not TaskQueue().has_queued(entry.chat_sid, in_flight=True, where=lambda t, e=entry: (
                         (t.metadata or {}).get("app_confirm_id") == e.id)):
@@ -589,7 +670,7 @@ def settle(now: Optional[float] = None) -> int:
             entry.decided = wall
         out.append((entry, how))
     for entry, how in out:
-        _settled(entry, how)
+        _ended(entry, how)
     with _lock():
         for key in [k for k, c in _cards.items() if c.state not in _OPEN
                     and wall > max(c.exp, c.decided) + TOMBSTONE_SECONDS]:
@@ -648,7 +729,7 @@ def _run_action(agent: Any, entry: Pending) -> str:
         args = None
     if not isinstance(args, dict) or call_digest(entry.tool, args) != entry.digest:
         return f"'{entry.tool}' did NOT run: its stored call could not be read back."
-    with confirmed_call_scope(entry.tool, entry.digest):
+    with confirmed_call_scope(entry.tool, entry.digest, entry.question):
         result = agent.execute_tool(entry.tool, dict(args))
     return (f"Your user CONFIRMED '{entry.tool}' in the Veyllo App, and it ran once just now. "
             f"Its result:\n{confirmed_result_text(entry.tool, result)}")
@@ -673,3 +754,182 @@ def _run_send(agent: Any, entry: Pending) -> str:
         return f"Your user CONFIRMED the message in the Veyllo App. {line}"
     return (f"Your user CONFIRMED the message in the Veyllo App, but sending it failed "
             f"({res.get('error') or 'no reason given'}). {line}")
+
+
+# ── a person's own turn: the card is the gate's answer ───────────────────────────────────
+
+_TURN_DEVICE: "contextvars.ContextVar[Optional[Dict[str, str]]]" = contextvars.ContextVar(
+    "vaf_app_turn_device", default=None)
+
+
+@contextlib.contextmanager
+def turn_device_scope(meta: Dict[str, Any]) -> Iterator[None]:
+    """While a Veyllo App turn runs: its account, the device that sent it (none for a line of
+    the Veyllo App room) and its reply id, for `ask_on_device`. Never outlives the turn and is
+    never process-global state: a turn of another account in another worker reads its own."""
+    meta = meta if isinstance(meta, dict) else {}
+    token = _TURN_DEVICE.set({"scope": str(meta.get("user_scope_id") or "").strip(),
+                              "device_id": str(meta.get("app_device_id") or ""),
+                              "reply_id": str(meta.get("app_reply_id") or "")})
+    try:
+        yield
+    finally:
+        _TURN_DEVICE.reset(token)
+
+
+def bind_turn_device(meta: Dict[str, Any]) -> None:
+    """`turn_device_scope` for a runner that cannot wrap its turn in a block: bound here after
+    the turn's reply id is minted, and taken off by `unbind_turn_device` on every exit of the
+    worker's turn."""
+    meta = meta if isinstance(meta, dict) else {}
+    _TURN_DEVICE.set({"scope": str(meta.get("user_scope_id") or "").strip(),
+                      "device_id": str(meta.get("app_device_id") or ""),
+                      "reply_id": str(meta.get("app_reply_id") or "")})
+
+
+def unbind_turn_device() -> None:
+    _TURN_DEVICE.set(None)
+
+
+def _target_device(scope: str, device_id: str) -> Optional[Dict[str, Any]]:
+    """The device a gate card goes to: the turn's own device while it stands and is the
+    account's (never another one in its place); for a turn without one (a room line) the
+    account's most recently used standing device with ``CAP_TOOL``, else its most recently
+    used standing one (which then cannot show it). None when the account has none."""
+    if device_id:
+        row = devices.get(device_id)
+        if row and str(row.get("user_scope_id") or "") == scope and devices.row_stands(row):
+            return row
+        return None
+    from vaf.core.app_link import bridge
+    standing = sorted(bridge.standing_devices(scope),
+                      key=lambda r: -float(r.get("last_seen_at") or 0))
+    capable = [r for r in standing if CAP_TOOL in (r.get("caps") or [])]
+    return (capable or standing or [None])[0]
+
+
+def _room_changed(scope: str) -> None:
+    try:
+        from vaf.core.app_link import room
+        room.changed(scope)
+    except Exception:
+        logger.debug("app link: the room notice failed", exc_info=True)
+
+
+def _gate_text(tool: str, why: str) -> str:
+    return _GATE.format(tool=tool, why=why)
+
+
+_GATE_ENDS = {
+    "declined": GATE_DECLINED,
+    "expired": GATE_EXPIRED.format(minutes=DEVICE_GATE_SECONDS // 60),
+    "refused_by_app": GATE_OLD_APP,
+    "cancelled": GATE_NO_DEVICE,
+    "no_device": GATE_NO_DEVICE,
+    "stopped": GATE_STOPPED,
+}
+
+
+def _await(entry: Pending, should_cancel: Optional[Callable[[], bool]]) -> str:
+    """Wait for a gate card's answer in half-second slices, ending it at once on Stop (or
+    whatever ``should_cancel`` says), when its device no longer stands, and at ``exp``. The
+    card's state is set once, under the lock, from ``pending``; an answer that came in between
+    wins. Its result."""
+    while not entry.answered.wait(0.5):
+        why = ""
+        try:
+            if should_cancel is not None and should_cancel():
+                why = "stopped"
+            elif not devices.stands(entry.device_id):
+                why = "no_device"
+            elif time.time() > entry.exp:
+                why = "expired"
+        except Exception:
+            why = "stopped"
+        if not why:
+            continue
+        with _lock():
+            if entry.state == "pending":
+                entry.state = "expired" if why == "expired" else "cancelled"
+                entry.decided = time.time()
+                _wake(entry, why)
+    return entry.result
+
+
+def ask_on_device(scope: Any, username: str, tool_name: str, tool: Any, args: Any,
+                  question: Optional[str], lang: Optional[str],
+                  should_cancel: Optional[Callable[[], bool]] = None,
+                  session_id: str = "") -> Tuple[str, str]:
+    """The confirmation gate's answer in a person's own Veyllo App turn: a card of kind
+    ``tool`` with VAF's text of the whole call (`agent_origin.confirm_what` over the call's
+    arguments as the funnel will run them, after ``repair_arguments``, and the tool's own
+    ``question``), sent to one device, waited for. ``("allow_once", "")`` after the tap on Yes,
+    else ``("cancel", <the sentence the model reads>)``. No card and no wait when none can be
+    shown: no turn bound (`turn_device_scope`), no standing device of the account, an app
+    without ``CAP_TOOL`` or without cards, a call with an argument outside the tool's schema or
+    whose text is over ``WHAT_MAX``. Never raises."""
+    name = str(tool_name)
+    try:
+        bound = _TURN_DEVICE.get() or {}
+        scope = str(scope or "").strip()
+        reply_id = str(bound.get("reply_id") or "")
+        if not scope or not reply_id or str(bound.get("scope") or "") != scope:
+            return "cancel", _gate_text(name, GATE_NO_DEVICE)
+        row = _target_device(scope, str(bound.get("device_id") or ""))
+        if row is None:
+            return "cancel", _gate_text(name, GATE_NO_DEVICE)
+        from vaf.core.app_link import bridge
+        session = bridge.session_for(row["device_id"])
+        if CAP_TOOL not in (row.get("caps") or []) \
+                or (session is not None and getattr(session, "confirm_unsupported", False)):
+            return "cancel", _gate_text(name, GATE_OLD_APP)
+        from vaf.core import agent_origin
+        shown = dict(args or {}) if isinstance(args, dict) else {}
+        if tool is not None:
+            from vaf.core.tool_dispatch import repair_arguments
+            shown, _errors = repair_arguments(tool, shown, tool_name=name)
+        unknown = agent_origin.confirm_unknown_arguments(name, tool, shown)
+        if unknown:
+            return "cancel", unknown
+        what = agent_origin.confirm_what(name, tool, shown, lang, question=str(question or ""))
+        too_long = agent_origin.confirm_too_long(name, tool, shown, what)
+        if too_long:
+            return "cancel", too_long
+        now = time.time()
+        entry = Pending(id=str(uuid.uuid4()), ask_id=reply_id, device_id=row["device_id"],
+                        scope=scope, username=str(username or row.get("username") or ""),
+                        chat_sid=str(session_id or devices.chat_session_id(scope)),
+                        kind="tool", what=what, headline=what.split("\n", 1)[0],
+                        exp=now + DEVICE_GATE_SECONDS, created=now, tool=name, gate=True,
+                        question=str(question or ""))
+    except Exception:
+        logger.debug("app link: a card for a tool call could not be made", exc_info=True)
+        return "cancel", _gate_text(name, GATE_NO_DEVICE)
+    with _lock():
+        _cards[entry.id] = entry
+    try:
+        _send_card(entry, row)
+        _room_changed(scope)
+        result = _await(entry, should_cancel)
+    except Exception:
+        logger.debug("app link: waiting for a card failed", exc_info=True)
+        with _lock():
+            if entry.state == "pending":
+                entry.state, entry.decided = "cancelled", time.time()
+        result = "stopped"
+    finally:
+        _room_changed(scope)
+    if result == "allow_once":
+        return "allow_once", ""
+    return "cancel", _gate_text(name, _GATE_ENDS.get(result, GATE_STOPPED))
+
+
+def waiting_gate_cards(scope: Any) -> List[Tuple[str, float]]:
+    """``(id, created)`` of the gate cards of the account that wait for a tap, oldest first:
+    the Veyllo App room shows a line for each."""
+    key = str(scope or "").strip()
+    now = time.time()
+    with _lock():
+        return sorted(((c.id, c.created) for c in _cards.values()
+                       if c.gate and c.scope == key and c.state == "pending" and now <= c.exp),
+                      key=lambda item: item[1])

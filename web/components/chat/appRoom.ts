@@ -140,15 +140,17 @@ function deliveryState(state: string, reason?: string, devices?: number, device?
     }
 }
 
-/** The catalogue key of a line's own text, when the server sent a code instead of words: how a
- *  task the VAF agent handed the app ended (`room.TASK_RESULT_CODES`), or an answer that
- *  failed. Null when the line's text is shown as it is. */
+/** The catalogue key of a line's own text, when the server sent a code instead of words: a
+ *  wake note, a card that waits for the tap in the Veyllo App, how a task the VAF agent handed
+ *  the app ended (`room.TASK_RESULT_CODES`), or an answer that failed. Null when the line's
+ *  text is shown as it is. */
 export function lineTextKey(code?: string): string | null {
     switch (code) {
         case 'timer': return 'appRoomWakeTimer';
         case 'process': return 'appRoomWakeProcess';
         case 'draft': return 'appRoomWakeDraft';
         case 'confirm': return 'appRoomConfirmed';
+        case 'card_waiting': return 'appRoomCardWaiting';
         case 'turn_failed': return 'appRoomTurnFailed';
         case 'declined': return 'appRoomTaskDeclined';
         case 'unavailable': return 'appRoomTaskUnavailable';

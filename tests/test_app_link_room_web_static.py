@@ -369,3 +369,21 @@ def test_the_room_details_read_on_a_phone():
     drafts = _between(PAGE, "<div data-app-room-drafts className=\"", "\">")
     assert "[&_.vaf-msg-row>div>div:first-child]:hidden" in drafts
     assert "[&_.vaf-msg-row>div>div:last-child]:pl-11" in drafts
+
+
+def test_a_waiting_card_note_is_worded_in_every_catalogue():
+    """The note a card of the person's own turn leaves while it waits for the tap (room.py
+    `card_waiting`) is worded by its code, with the key in all seven catalogues.
+    MUTATION: drop the case from `lineTextKey`, or the key from one catalogue - red."""
+    import json
+    import re
+    src = (ROOT / "web" / "components" / "chat" / "appRoom.ts").read_text(encoding="utf-8")
+    found = re.search(r"case 'card_waiting': return '(\w+)';", src)
+    assert found and found.group(1) == "appRoomCardWaiting"
+    for lang in ("de", "en", "ja", "ko", "th", "tr", "zh"):
+        main = json.loads((ROOT / "web" / "messages" / f"{lang}.json").read_text(
+            encoding="utf-8"))["main"]
+        text = main.get("appRoomCardWaiting")
+        assert isinstance(text, str) and "Veyllo App" in text and "\u2014" not in text, lang
+    from vaf.core.app_link import room
+    assert "card_waiting" in room.WAKE_NOTES

@@ -46,6 +46,9 @@ class PythonExecTool(BaseTool):
     accepts_call_confirmation = True
     permission_level = "dangerous"
     channel_restrictions = ("channel",)
+    # What a confirmation card in the Veyllo App shows whole in its top block: the
+    # target's tail is its meaning (agent_origin.card_lines).
+    agent_request_confirm_whole_args = ("code",)
     # Unsandboxed Python is the host, the same as host_bash: a regular account gets it only
     # when the admin names it.
     account_opt_in = True

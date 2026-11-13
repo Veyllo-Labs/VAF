@@ -289,6 +289,7 @@
     "appRoomWaiting": "Veyllo App bekleniyor",
     "appRoomNotDelivered": "iletilmedi: Veyllo App kabul etmedi",
     "appRoomConfirmed": "Veyllo App'te onaylandı",
+    "appRoomCardWaiting": "Veyllo App'te onayın bekleniyor",
     "appRoomPlaceholder": "Veyllo App'e sor…",
     "appRoomNeedsNewerApp": "Veyllo App'indeki ajana yazmak için Veyllo App'in daha yeni bir sürümü gerekiyor. {name} ajanına yine de @{handle} ile sorabilirsin.",
     "appRoomChannelOff": "Veyllo App hesabın için kapalı. Ayarlar, Bağlantılar bölümünden aç.",

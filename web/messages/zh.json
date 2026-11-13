@@ -289,6 +289,7 @@
     "appRoomWaiting": "等待 Veyllo App",
     "appRoomNotDelivered": "未送达：Veyllo App 没有接收",
     "appRoomConfirmed": "已在 Veyllo App 中确认",
+    "appRoomCardWaiting": "正在等待你在 Veyllo App 中确认",
     "appRoomPlaceholder": "问问 Veyllo App…",
     "appRoomNeedsNewerApp": "要给你 Veyllo App 中的智能体写消息，需要更新版本的 Veyllo App。你仍然可以用 @{handle} 询问 {name}。",
     "appRoomChannelOff": "你的账户已关闭 Veyllo App。请在设置的“连接”中打开。",

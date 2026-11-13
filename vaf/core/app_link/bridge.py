@@ -286,12 +286,15 @@ def on_hello(session, hello: Dict[str, Any]) -> None:
     agent = agent_name(row.get("username") or "")
     # `agent_ask` is always taken (protocol section 10: no switch); the protocol's reserved
     # switch message and refusal code for it are never sent. `confirm`: this VAF sends
-    # confirmation cards (section 12) and takes `confirm_answer`. `room`: this VAF sends
+    # confirmation cards (section 12) and takes `confirm_answer`. `confirm_tool`: this VAF sends
+    # a card of kind `tool` (one call of a tool kept off messaging channels) to a device that
+    # announced the cap `confirm_tool` (confirmations.CAP_TOOL). `room`: this VAF sends
     # `room_msg` to a device that announced the cap `room` and takes `room_say` (room.py).
     session.send_json({"t": "welcome", "v": pr.PROTOCOL_VERSION,
                        "chat": devices.chat_session_id(scope), "account": row.get("username", ""),
                        "agent": agent or "VAF", "server_time": int(time.time()),
-                       "agent_ask": True, "confirm": True, "unpair": True, "room": True})
+                       "agent_ask": True, "confirm": True, "confirm_tool": True, "unpair": True,
+                       "room": True})
     _came_online(did)
     replay(session)
     from vaf.core.app_link import confirmations

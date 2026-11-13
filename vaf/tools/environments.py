@@ -11,7 +11,8 @@ server) are listed, read and stopped with host_process, which already holds the 
 background commands.
 
 Every tool acts as the caller (identity_kwargs); another person's environment answers
-like a missing one. None runs from a messaging channel, where nobody could be asked.
+like a missing one. None runs from a messaging channel, where nobody could be asked; from
+the Veyllo App, the person's own device, each call is put to them on a card there.
 """
 from __future__ import annotations
 
@@ -75,6 +76,9 @@ class SandboxManageTool(BaseTool):
     permission_level = "write"
     side_effect_class = "irreversible"          # delete removes the environment's files
     channel_restrictions = ("channel",)
+    # What a confirmation card in the Veyllo App shows whole in its top block: the
+    # target's tail is its meaning (agent_origin.card_lines).
+    agent_request_confirm_whole_args = ("environment", "name", "project_path")
     identity_kwargs = ("user_scope_id", "username", "user_role", "session_id")
     # A project environment mounts a host folder read-write: the person's own write jail.
     file_access = "write"
@@ -175,6 +179,9 @@ class SandboxExecTool(BaseTool):
     permission_level = "write"
     side_effect_class = "reversible"            # changes only the environment
     channel_restrictions = ("channel",)
+    # What a confirmation card in the Veyllo App shows whole in its top block: the
+    # target's tail is its meaning (agent_origin.card_lines).
+    agent_request_confirm_whole_args = ("environment", "command", "cwd")
     identity_kwargs = ("user_scope_id", "username", "user_role", "session_id")
     # Its own clock: `timeout -s KILL` inside the container plus a stop-aware backstop.
     self_supervised = True
@@ -247,6 +254,9 @@ class SandboxFilesTool(BaseTool):
     permission_level = "write"
     side_effect_class = "reversible"
     channel_restrictions = ("channel",)
+    # What a confirmation card in the Veyllo App shows whole in its top block: the
+    # target's tail is its meaning (agent_origin.card_lines).
+    agent_request_confirm_whole_args = ("environment", "path")
     identity_kwargs = ("user_scope_id", "username", "user_role", "session_id")
     description = (
         "Read, write or list files INSIDE one of your sandbox environments (relative paths "
@@ -296,6 +306,9 @@ class SandboxTransferTool(BaseTool):
     permission_level = "write"
     side_effect_class = "reversible"
     channel_restrictions = ("channel",)
+    # What a confirmation card in the Veyllo App shows whole in its top block: the
+    # target's tail is its meaning (agent_origin.card_lines).
+    agent_request_confirm_whole_args = ("environment", "host_path", "path")
     identity_kwargs = ("user_scope_id", "username", "user_role", "session_id")
     # host_path is a folder or file of the person's own, read (copy_in) or written (copy_out).
     file_access = "write"
@@ -369,6 +382,9 @@ class SandboxPreviewTool(BaseTool):
     permission_level = "write"                 # saves the screenshot into the chat workspace
     side_effect_class = "reversible"
     channel_restrictions = ("channel",)
+    # What a confirmation card in the Veyllo App shows whole in its top block: the
+    # target's tail is its meaning (agent_origin.card_lines).
+    agent_request_confirm_whole_args = ("environment", "target")
     identity_kwargs = ("user_scope_id", "username", "user_role", "session_id")
     description = (
         "Look at a page one of your sandbox environments serves or holds: a screenshot "

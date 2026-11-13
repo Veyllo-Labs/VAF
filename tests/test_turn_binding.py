@@ -622,7 +622,11 @@ def test_an_agent_request_hides_what_its_gate_refuses(world):
     bind_turn(agent, TurnBinding(identity=BOB, source="veyllo_app", session_id=BOB_SESSION,
                                  excluded_tools={"web_search"}, asked_by_agent="veyllo_app"))
     refused = refused_tool_names(agent.tools, "veyllo_app")
-    assert {"user_phone", "store_credential", "set_timer", "browser_agent"} <= refused
+    assert {"user_phone", "store_credential"} <= refused
+    # Kept off chats by the "channel" sentinel: on the Veyllo App, the holder's own device,
+    # offered and carded; on any other chat hidden as before.
+    assert not {"set_timer", "browser_agent"} & refused
+    assert {"set_timer", "browser_agent"} <= refused_tool_names(agent.tools, "telegram")
     assert agent._excluded_tools == refused | {"web_search"}
     assert not refused & set(agent.visible_tools())
     bind_turn(agent, TurnBinding(identity=BOB, source="veyllo_app", session_id=BOB_SESSION))

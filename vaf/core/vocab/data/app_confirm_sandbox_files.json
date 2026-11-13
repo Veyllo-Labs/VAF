@@ -1,0 +1,32 @@
+{
+  "ar": [
+    "العمل على ملفات في بيئة معزولة"
+  ],
+  "de": [
+    "VAF soll mit Dateien in einer Sandbox-Umgebung arbeiten"
+  ],
+  "en": [
+    "Work with files in a sandbox environment"
+  ],
+  "es": [
+    "Trabajar con archivos en un entorno sandbox"
+  ],
+  "fr": [
+    "Travailler sur des fichiers dans un environnement sandbox"
+  ],
+  "ja": [
+    "サンドボックス環境のファイルを操作"
+  ],
+  "ko": [
+    "샌드박스 환경의 파일 작업"
+  ],
+  "th": [
+    "จัดการไฟล์ในสภาพแวดล้อมแซนด์บ็อกซ์"
+  ],
+  "tr": [
+    "Bir sandbox ortamındaki dosyalarla çalış"
+  ],
+  "zh": [
+    "处理沙盒环境中的文件"
+  ]
+}

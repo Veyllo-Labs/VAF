@@ -1,0 +1,32 @@
+{
+  "ar": [
+    "العمل على حاسوب آخر عبر SSH"
+  ],
+  "de": [
+    "VAF soll über SSH auf einem anderen Computer arbeiten"
+  ],
+  "en": [
+    "Work on another computer over SSH"
+  ],
+  "es": [
+    "Trabajar en otro ordenador por SSH"
+  ],
+  "fr": [
+    "Travailler sur un autre ordinateur via SSH"
+  ],
+  "ja": [
+    "SSHで別のコンピューターを操作"
+  ],
+  "ko": [
+    "SSH로 다른 컴퓨터에서 작업"
+  ],
+  "th": [
+    "ทำงานบนคอมพิวเตอร์เครื่องอื่นผ่าน SSH"
+  ],
+  "tr": [
+    "SSH ile başka bir bilgisayarda çalış"
+  ],
+  "zh": [
+    "通过 SSH 在另一台电脑上工作"
+  ]
+}

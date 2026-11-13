@@ -316,3 +316,26 @@ def _two_devices():
     other_client, _p2, other_row = link(SCOPE_A, device=other, peer="10.0.0.6", connection="c2")
     return SimpleNamespace(client=client, row=row, other_client=other_client, other_row=other_row,
                            away=away[0], asker=asker)
+
+
+def channel_tool_classes():
+    """``{name: class}`` of every tool under vaf/tools kept off chats by the "channel" sentinel,
+    found by reading the sources and importing the modules that name it (the tests pin the set
+    they expect, so a new one is a reviewed change)."""
+    import importlib
+    from pathlib import Path as _Path
+
+    from vaf.tools.base import BaseTool
+    root = _Path(vaf.__file__).resolve().parent / "tools"
+    found = {}
+    for path in sorted(root.rglob("*.py")):
+        if '"channel"' not in path.read_text(encoding="utf-8"):
+            continue
+        module = importlib.import_module(
+            "vaf.tools." + ".".join(path.relative_to(root).with_suffix("").parts))
+        for obj in vars(module).values():
+            if isinstance(obj, type) and issubclass(obj, BaseTool) \
+                    and obj.__module__ == module.__name__ \
+                    and "channel" in tuple(getattr(obj, "channel_restrictions", ()) or ()):
+                found[str(obj.name)] = obj
+    return found

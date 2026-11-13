@@ -324,7 +324,19 @@ def _pending_turns(sids: Tuple[str, str]) -> List[Tuple[str, Any]]:
 #: The note a wake leaves in the room, by its kind (task_queue.WAKE_KINDS), in English for the
 #: terminal; the web words it by ``code``.
 WAKE_NOTES = {"timer": "A timer fired.", "process": "A background command finished.",
-              "draft": "A draft was sent.", "confirm": CONFIRMED_NOTE}
+              "draft": "A draft was sent.", "confirm": CONFIRMED_NOTE,
+              # Not a wake: a card of a person's turn waits for the tap in the Veyllo App
+              # (confirmations.waiting_gate_cards). Shown while it waits, gone after.
+              "card_waiting": "Waiting for your confirmation in the Veyllo App."}
+
+
+def _waiting_cards(scope: str) -> List[Tuple[str, float]]:
+    """The cards of the account's own turns that wait for a tap in the Veyllo App."""
+    try:
+        from vaf.core.app_link import confirmations
+        return confirmations.waiting_gate_cards(scope)
+    except Exception:
+        return []
 
 
 def _legacy_wake_prefixes() -> Tuple[Tuple[str, str], ...]:
@@ -392,7 +404,9 @@ def _cache_key(scope: str, username: str, sids: Tuple[str, str],
             devices.generation(), lane_on(scope),
             tuple(str(getattr(t, "turn_id", "")) for _sid, t in pending),
             # A credential forgotten in either session changes what a waiting line shows.
-            hash(tuple(tuple(sorted(_forgotten(sid).items())) for sid in sids)))
+            hash(tuple(tuple(sorted(_forgotten(sid).items())) for sid in sids)),
+            # A card that starts or stops waiting changes no file.
+            tuple(_waiting_cards(scope)))
 
 
 def _projection(scope: str, username: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
@@ -560,6 +574,11 @@ def _build(scope: str, username: str, sids: Tuple[str, str],
                                  or ""))
             turn_anchor.setdefault(turn, (ts, seq))
         lines.append(((ts, seq, 0, 0), line))
+    # A card of the person's own turn that waits for the tap in the Veyllo App: one note each,
+    # at the time the card went out, until it is answered or ends.
+    for order, (card_id, created) in enumerate(_waiting_cards(scope)):
+        lines.append(((created, 3_000_000 + order, 0, 0),
+                      _note(f"card:{card_id}", "card_waiting", created)))
     for turn, seq, ts, order, line in deferred:
         anchor = turn_anchor.get(turn)
         key = (anchor[0], anchor[1], 1, order) if anchor else (ts, seq, 0, 0)

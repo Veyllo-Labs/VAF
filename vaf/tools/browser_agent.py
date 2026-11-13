@@ -1074,6 +1074,9 @@ class BrowserAgentTool(BaseTool):
     permission_level = "write"
     side_effect_class = "irreversible"
     channel_restrictions = ("channel",)
+    # What a confirmation card in the Veyllo App shows whole in its top block: the
+    # target's tail is its meaning (agent_origin.card_lines).
+    agent_request_confirm_whole_args = ("task", "allowed_domains")
 
     description = (
         "Controls a real Chromium browser to complete multi-step web tasks. "

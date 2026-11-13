@@ -289,6 +289,7 @@
     "appRoomWaiting": "wartet auf die Veyllo App",
     "appRoomNotDelivered": "nicht zugestellt: die Veyllo App hat sie nicht angenommen",
     "appRoomConfirmed": "In der Veyllo App bestätigt",
+    "appRoomCardWaiting": "Wartet auf deine Bestätigung in der Veyllo App",
     "appRoomPlaceholder": "Frag die Veyllo App …",
     "appRoomNeedsNewerApp": "Um dem Agenten in deiner Veyllo App zu schreiben, brauchst du eine neuere Version der Veyllo App. {name} kannst du weiterhin mit @{handle} fragen.",
     "appRoomChannelOff": "Die Veyllo App ist für dein Konto ausgeschaltet. Schalte sie unter Einstellungen, Verbindungen ein.",

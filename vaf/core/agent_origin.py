@@ -16,6 +16,12 @@ user did not type it, and the phone's agent may pass on text it read elsewhere. 
   the tools ``agent_request_refusal`` names are hidden and refused, a call that needs a
   confirmation is refused at once instead of waiting for a dialog, and the admin's
   ``channel_tools_unrestricted`` lift does not apply (``ToolCaller(channel_lift=False)``);
+- a tool kept off chats by the ``"channel"`` sentinel is carded, not refused, when the request
+  comes from a channel whose far end is the account holder's own device
+  (``channels.Channel.holder_device``, the Veyllo App): ``agent_request_kind`` answers
+  ``"off_chats_card"`` and the call parks for a card of kind ``tool`` (or the tool's own kind),
+  showing the tool's own question too (``ParkedCall.question``); its confirmed run goes through
+  only while that question is unchanged (``confirmed_call_question``);
 - a send that can reach somebody other than the user is parked as a draft for the user's
   approval in the web UI and on the phone that asked (vaf/core/outbound_hold.py,
   ``asked_by_agent``), never sent from it; when the park fails, the call is refused (fails
@@ -47,7 +53,8 @@ for), every tool with ``file_access = "write"`` but a call a park lane holds (``
 ``send_whatsapp`` to somebody else: the park is the user's confirmation; the sends to the
 user's own messengers, ``channels.OWNER_SEND_TOOLS`` with ``send_whatsapp`` to the user's own
 number, are refused with their own reason, ``refuse_own_messenger``), plus every tool kept
-off chats (``channel_restrictions``) whatever the admin's lift says. A tool a stranger builds on ``BaseTool`` places itself the
+off chats (``channel_restrictions``) whatever the admin's lift says, except on the holder's
+own device, where the sentinel ones are carded. A tool a stranger builds on ``BaseTool`` places itself the
 same way. The guards in tests/test_app_link_agent_ask.py make every write-level tool of the
 categories that start or steer later work (automations, workflows, timers, rooms, skills,
 contacts) and every sub-agent spawner declare itself or name its reason, and every tool a
@@ -62,7 +69,8 @@ later word: three (the held mail, the parked messenger call, this card), each wi
 artifact and its own verb, so no one primitive for all of them is proven. Re-measure when an
 embedder forwards another agent's request and wants a deferred confirmation of its own. What
 stays a refusal with no card: ``refuse_person``, ``refuse_write``, ``refuse_own_messenger``,
-the tools kept off chats, and a refuse class without a declared kind (the contacts, the room
+a tool that names the channel itself in its restrictions, the tools kept off chats on a channel
+that is not the holder's own device, and a refuse class without a declared kind (the contacts, the room
 tools, ``thinking_note_add``, ...: no card kind fits them). ``schedule_reminder`` stays
 allowed: it delivers its own text verbatim to the user's own messenger at the time set, and
 no turn runs from it.
@@ -162,6 +170,9 @@ _CONFIRM_NOT_CARRIED = ("it needs your user's own confirmation, which a request 
 _WHY = {
     "off_chats": ("it can only be done by your user in VAF's web UI.",
                   "tell your user it was not done and that it can be done there."),
+    # A tool carded on the holder's own device, asked for by any other origin: no card.
+    "off_chats_card": ("it can only be done by your user in VAF's web UI.",
+                       "tell your user it was not done and that it can be done there."),
     "refuse_person": ("it needs your user's confirmation.", _CONFIRM_NOT_CARRIED),
     "refuse_work": ("it starts work that keeps running after this request, which needs your "
                     "user's confirmation.", _CONFIRM_NOT_CARRIED),
@@ -329,7 +340,11 @@ def agent_request_kind(name: str, tool: Any, source: str = "",
                        args: Optional[Mapping[str, Any]] = None) -> Optional[str]:
     """Why a tool stays off in a turn another agent asked for, or None when it may run:
     ``"off_chats"`` for a tool kept off chats (``channel_restrictions`` naming ``"channel"`` or
-    this chat's ``source``), whatever ``channel_tools_unrestricted`` says; else the tool's own
+    this chat's ``source``), whatever ``channel_tools_unrestricted`` says; on a channel whose
+    far end is the account holder's own device (``channels.HOLDER_DEVICE_CHANNELS``) a tool
+    kept off by the ``"channel"`` sentinel alone answers ``"off_chats_card"`` instead (the
+    call can be confirmed on that device), unless it needs the person for its own reason
+    (``refuse_person``, or ``hold``, which no park lane holds for it); else the tool's own
     ``agent_request`` (``refuse_work``, ``refuse_standing``, ``refuse_person``), and
     ``refuse_person`` for ``hold`` on a tool no park lane holds; else ``"refuse_write"`` for a
     tool that declares ``file_access = "write"``, whatever its arguments, its target and the
@@ -349,8 +364,18 @@ def agent_request_kind(name: str, tool: Any, source: str = "",
     except Exception:
         return "refuse_person"
     restrictions = set(contract.channel_restrictions or ())
-    if restrictions & ({"channel", str(source or "").strip().lower()} - {""}):
-        return "off_chats"
+    src = str(source or "").strip().lower()
+    if restrictions & ({"channel", src} - {""}):
+        from vaf.core.channels import HOLDER_DEVICE_CHANNELS
+        if src not in HOLDER_DEVICE_CHANNELS \
+                or restrictions & ({src} | set(HOLDER_DEVICE_CHANNELS)):
+            return "off_chats"
+        # The holder's own device: the call is put to them on a card, decided before the writer
+        # rule below (the card is the person's confirmation of exactly that call, as the park
+        # is for a held send). A tool that needs the person for its own reason keeps it.
+        if kind in ("refuse_person", "hold"):
+            return "refuse_person"
+        return "off_chats_card"
     parked = False
     if kind == "hold":
         from vaf.core.outbound_hold import THIRD_PARTY_SEND_TOOLS, reaches_a_third_party
@@ -382,7 +407,9 @@ def agent_request_decision(name: str, tool: Any, source: str = "",
     ``("confirm", kind)`` when the user can confirm exactly this call on the phone that asked:
     a ``refuse_work`` or ``refuse_standing`` tool that declares a card kind
     (``BaseTool.agent_request_confirm_kind``), in a request of the Veyllo App's agent
-    (``origin``). Every other refusal stays one: a tool kept off chats, one that needs the
+    (``origin``), and a tool kept off chats on the holder's own device (``"off_chats_card"``:
+    the tool's own card kind, else ``"tool"``). Every other refusal stays one: a tool kept off
+    chats anywhere else, one that needs the
     person (``refuse_person``), one that writes files (``refuse_write``) or sends to the user's
     own messenger (``refuse_own_messenger``), a tool without a declared kind, any other
     origin. The one predicate the schema's hiding (no ``args``: what a tool's class says) and
@@ -391,6 +418,13 @@ def agent_request_decision(name: str, tool: Any, source: str = "",
     kind = agent_request_kind(str(name), tool, str(source or ""), args)
     if kind is None:
         return None
+    if kind == "off_chats_card" and origin == APP_AGENT_ORIGIN:
+        try:
+            from vaf.core.tool_contract import resolve_tool_contract
+            card = resolve_tool_contract(str(name), tool).agent_request_confirm_kind
+        except Exception:
+            card = ""
+        return ("confirm", card or "tool")
     if kind in ("refuse_work", "refuse_standing") and origin == APP_AGENT_ORIGIN:
         try:
             from vaf.core.tool_contract import resolve_tool_contract
@@ -439,12 +473,15 @@ WHAT_MAX = 4000
 class ParkedCall:
     """One call of a request that waits for the user's confirmation on the phone: the tool, its
     stored arguments (``outbound_hold.storable_args``, as JSON with sorted keys), their
-    ``call_digest``, the card kind and the card's text (``confirm_what``)."""
+    ``call_digest``, the card kind, the card's text (``confirm_what``) and the tool's own
+    question for those arguments as the card showed it (``BaseTool.ask_reason``, "" for none):
+    the confirmed run goes through only while the question is still the same."""
     tool: str
     args_json: str
     digest: str
     kind: str
     what: str
+    question: str = ""
 
 
 #: Every result of a parked call starts with this; it says nothing that reads as done.
@@ -612,19 +649,30 @@ def _whole_args(tool: Any) -> Tuple[str, ...]:
     return tuple(item for item in declared if isinstance(item, str))
 
 
+#: The line before the tool's own question on a card (``confirm_what``): a Yes answers it too.
+CARD_QUESTION = "VAF asks:"
+
+
 def confirm_what(name: str, tool: Any, args: Optional[Mapping[str, Any]],
-                 lang: Optional[str] = None) -> str:
+                 lang: Optional[str] = None, question: str = "") -> str:
     """VAF's own plain text of exactly the call a card confirms: the headline
     (`confirm_headline`, the tool name when there is none), an empty line, then every argument
     the call carries (`card_lines`: a top block with every argument's first line in the order
-    of the tool's schema, then what each one continues with, all shown safely). Nothing is left out and
-    nothing is cut (``WHAT_MAX`` is checked by the caller, on the text as shown); never the
-    requesting agent's own words about the call."""
+    of the tool's schema, then what each one continues with, all shown safely), and, when the
+    call carries the tool's own ``question`` (``BaseTool.ask_reason``, a first contact), an
+    empty line, ``CARD_QUESTION`` and that question, every line indented and shown safely, so
+    a Yes on the card is a Yes to it. Nothing is left out and nothing is cut (``WHAT_MAX`` is
+    checked by the caller, on the text as shown); never the requesting agent's own words about
+    the call."""
     stored = _storable(args)
     lines = card_lines([(key, stored[key]) for key in _argument_order(tool, stored)],
                        whole=_whole_args(tool))
     headline = confirm_headline(str(name), lang) or str(name)
-    return "\n".join([headline, ""] + lines) if lines else headline
+    out = [headline, ""] + lines if lines else [headline]
+    if str(question or "").strip():
+        out += ["", CARD_QUESTION] + [CARD_INDENT + "".join(line)
+                                      for line in _shown_lines(str(question).strip())]
+    return "\n".join(out)
 
 
 def confirm_unknown_arguments(name: str, tool: Any,
@@ -697,12 +745,16 @@ _CONFIRMED: "contextvars.ContextVar[Optional[dict]]" = contextvars.ContextVar(
 
 
 @contextlib.contextmanager
-def confirmed_call_scope(name: str, digest: str):
+def confirmed_call_scope(name: str, digest: str, question: str = ""):
     """While the user's confirmed call runs: one pass through the request gate for exactly that
     call (tool and ``call_digest``), spent by the first call that matches. Everything else in
     the scope, a second identical call and a call the confirmed one makes in turn included,
-    is answered as in any request (`confirmed_call_allows`, `in_confirmed_call`)."""
-    token = _CONFIRMED.set({"tool": str(name), "digest": str(digest), "spent": False})
+    is answered as in any request (`confirmed_call_allows`, `in_confirmed_call`).
+    ``question`` is the tool's own question the card showed ("" for none,
+    `confirmed_call_question`): the confirmed call's gate is answered Yes only while the
+    funnel computes the same one, so a tap never confirms a first contact it did not show."""
+    token = _CONFIRMED.set({"tool": str(name), "digest": str(digest), "spent": False,
+                            "question": str(question or "")})
     try:
         yield
     finally:
@@ -736,3 +788,10 @@ def confirmed_call_allows(name: str, args: Optional[Mapping[str, Any]]) -> bool:
 def in_confirmed_call() -> bool:
     """Whether a confirmed call is running in this context (its pass spent or not)."""
     return _CONFIRMED.get() is not None
+
+
+def confirmed_call_question() -> Optional[str]:
+    """The tool's own question the card of the confirmed call showed ("" for none), or None
+    outside a confirmed call."""
+    pass_ = _CONFIRMED.get()
+    return None if pass_ is None else str(pass_.get("question") or "")

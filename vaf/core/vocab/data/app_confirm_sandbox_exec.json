@@ -1,0 +1,32 @@
+{
+  "ar": [
+    "تشغيل أمر في بيئة معزولة"
+  ],
+  "de": [
+    "VAF soll einen Befehl in einer Sandbox-Umgebung ausführen"
+  ],
+  "en": [
+    "Run a command in a sandbox environment"
+  ],
+  "es": [
+    "Ejecutar un comando en un entorno sandbox"
+  ],
+  "fr": [
+    "Exécuter une commande dans un environnement sandbox"
+  ],
+  "ja": [
+    "サンドボックス環境でコマンドを実行"
+  ],
+  "ko": [
+    "샌드박스 환경에서 명령 실행"
+  ],
+  "th": [
+    "เรียกใช้คำสั่งในสภาพแวดล้อมแซนด์บ็อกซ์"
+  ],
+  "tr": [
+    "Bir sandbox ortamında komut çalıştır"
+  ],
+  "zh": [
+    "在沙盒环境中运行一条命令"
+  ]
+}

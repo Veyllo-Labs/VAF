@@ -2230,3 +2230,35 @@ def test_a_forgotten_credential_leaves_a_waiting_request_of_the_app_agent(room_h
         assert "zugang98765" not in json.dumps(room.transcript(SCOPE_A))
     finally:
         forget_secrets._by_session.clear()
+
+
+def test_waiting_card_note(room_home):
+    """While a card of the person's own turn waits for the tap, the room holds exactly one
+    note line `card_waiting`, and none once it is answered; neither change touches a file.
+    MUTATION: leave the cards out of `_cache_key`, or keep the note after the answer - red."""
+    import time as _time
+    from vaf.core.app_link import confirmations
+    confirmations.reset()
+    _client, _pipe, row = _capable()
+    before = room.transcript(SCOPE_A, "alice")
+    assert not [l for l in before if l.get("code") == "card_waiting"]
+    now = _time.time()
+    card = confirmations.Pending(
+        id="7f8fad5b-d9cb-469f-a165-70867728950e", ask_id="r1", device_id=row["device_id"],
+        scope=SCOPE_A, username="alice", chat_sid=devices.chat_session_id(SCOPE_A),
+        kind="tool", what="Run\n\ncommand: ls", headline="Run", exp=now + 300, created=now,
+        tool="host_bash", gate=True)
+    with bridge._lock:
+        confirmations._cards[card.id] = card
+    try:
+        lines = room.transcript(SCOPE_A, "alice")
+        notes = [l for l in lines if l.get("code") == "card_waiting"]
+        assert len(notes) == 1 and notes[0]["kind"] == "note" and notes[0]["peer"] == ""
+        assert notes[0]["text"] == room.WAKE_NOTES["card_waiting"]
+        assert notes[0]["ts"] == now and notes[0]["id"] == f"card:{card.id}"
+        # Another account's room shows nothing of it.
+        assert not [l for l in room.transcript(SCOPE_B, "bob") if l.get("code") == "card_waiting"]
+        card.state = "done"
+        assert not [l for l in room.transcript(SCOPE_A, "alice") if l.get("code") == "card_waiting"]
+    finally:
+        confirmations.reset()

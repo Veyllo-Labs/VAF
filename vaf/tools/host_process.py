@@ -28,6 +28,9 @@ class HostProcessTool(BaseTool):
     permission_level = "write"
     side_effect_class = "reversible"
     channel_restrictions = ("channel",)
+    # What a confirmation card in the Veyllo App shows whole in its top block: the
+    # target's tail is its meaning (agent_origin.card_lines).
+    agent_request_confirm_whole_args = ("id",)
     # The owner of a process is the person AND the chat: the scope comes from here, the
     # chat from the run's session.
     identity_kwargs = ("user_scope_id",)

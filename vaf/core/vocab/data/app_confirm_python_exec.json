@@ -1,0 +1,32 @@
+{
+  "ar": [
+    "تشغيل شيفرة Python على حاسوب VAF"
+  ],
+  "de": [
+    "VAF soll Python-Code auf dem VAF-Computer ausführen"
+  ],
+  "en": [
+    "Run Python code on VAF's computer"
+  ],
+  "es": [
+    "Ejecutar código Python en el ordenador de VAF"
+  ],
+  "fr": [
+    "Exécuter du code Python sur l'ordinateur de VAF"
+  ],
+  "ja": [
+    "VAFのコンピューターでPythonコードを実行"
+  ],
+  "ko": [
+    "VAF 컴퓨터에서 Python 코드 실행"
+  ],
+  "th": [
+    "เรียกใช้โค้ด Python บนคอมพิวเตอร์ของ VAF"
+  ],
+  "tr": [
+    "VAF'ın bilgisayarında Python kodu çalıştır"
+  ],
+  "zh": [
+    "在 VAF 的电脑上运行 Python 代码"
+  ]
+}

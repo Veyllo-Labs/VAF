@@ -16,8 +16,9 @@ transfers); this module is the tool's contract around it, the same one as the ss
   question, and a stored value changed or a server forgotten since then is refused
   (`BaseTool.changed_since_asked`). The server itself is bound too (`call_subject`), so a
   stored host moved between two servers confirmed earlier, which ask nothing, is refused.
-- Not over messaging channels, and a regular account gets it only when its allowlist names it
-  (`account_opt_in`).
+- Not over messaging channels (from the Veyllo App, the person's own device, every call is put
+  to them on a card there, the first-connection question included), and a regular account gets
+  it only when its allowlist names it (`account_opt_in`).
 - The password is never an argument: `login_credential` NAMES a credential the person stored
   (vaf/core/user_secrets.py), and its value is taken out of everything the tool returns.
 - A stored host, login or port is written `$NAME` inside `server`
@@ -62,6 +63,9 @@ class FtpTool(BaseTool):
     permission_level = "dangerous"
     side_effect_class = "irreversible"
     channel_restrictions = ("channel",)
+    # What a confirmation card in the Veyllo App shows whole in its top block: the
+    # target's tail is its meaning (agent_origin.card_lines).
+    agent_request_confirm_whole_args = ("server", "remote_path", "local_path")
     trusted_dir_grants = False
     accepts_call_confirmation = True
     account_opt_in = True

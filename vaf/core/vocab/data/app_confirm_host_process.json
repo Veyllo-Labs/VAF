@@ -1,0 +1,32 @@
+{
+  "ar": [
+    "إدارة أمر في الخلفية"
+  ],
+  "de": [
+    "VAF soll einen Hintergrundbefehl verwalten"
+  ],
+  "en": [
+    "Manage a background command"
+  ],
+  "es": [
+    "Gestionar un comando en segundo plano"
+  ],
+  "fr": [
+    "Gérer une commande en arrière-plan"
+  ],
+  "ja": [
+    "バックグラウンドのコマンドを管理"
+  ],
+  "ko": [
+    "백그라운드 명령 관리"
+  ],
+  "th": [
+    "จัดการคำสั่งเบื้องหลัง"
+  ],
+  "tr": [
+    "Arka plandaki bir komutu yönet"
+  ],
+  "zh": [
+    "管理一条后台命令"
+  ]
+}

@@ -2609,6 +2609,14 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         task.session_id, should_stop=lambda: tq.should_stop(task.session_id),
                         emit=_app_link_emit(task))
                     response_parts = webui_stream_callback.parts
+                    # A Veyllo App turn: its account, its device and the reply id just minted,
+                    # for a confirmation card of this turn on that device
+                    # (confirmations.ask_on_device). Taken off when the turn ends, on every exit.
+                    if getattr(task, "source", None) == "veyllo_app":
+                        from vaf.core.app_link import confirmations as _app_confirmations
+                        _app_confirmations.bind_turn_device(
+                            task.metadata if isinstance(getattr(task, "metadata", None), dict)
+                            else {})
 
                     # The source, the Front Office set, the unattended mark and the contact
                     # record were bound with the turn (_task_turn_binding).
@@ -4571,6 +4579,11 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
             # markers neutral: what runs between two turns (the drain's result handling,
             # the room sweep) is no turn and gates and routes as none.
             end_turn(agent)
+            try:
+                from vaf.core.app_link import confirmations as _app_confirmations
+                _app_confirmations.unbind_turn_device()
+            except Exception:
+                pass
 
 def _handle_command(cmd_str, agent, session_mgr):
     """Handle system commands from Web UI."""

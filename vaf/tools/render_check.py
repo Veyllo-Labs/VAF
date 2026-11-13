@@ -38,6 +38,9 @@ class RenderCheckTool(BaseTool):
     # can reach host services through host.docker.internal - not a surface to
     # hand to remote messenger channels.
     channel_restrictions = ("channel",)
+    # What a confirmation card in the Veyllo App shows whole in its top block: the
+    # target's tail is its meaning (agent_origin.card_lines).
+    agent_request_confirm_whole_args = ("target",)
 
     description = (
         "Open a URL or an HTML file from the project workspace in the sandbox browser, "

@@ -28,7 +28,11 @@ NAMED BOUNDARY: first-party only, like `vaf.memory`. There is no facade export f
 registering a channel of one's own: no embedder has asked for it, and the one thing a
 third-party TOOL needs, to be blocked on every chat channel including future ones, is
 the `"channel"` sentinel in `channel_restrictions` (docs/EMBEDDING.md), which needs no
-list at all. Re-measure when an embedder brings a channel.
+list at all. The same holds for `holder_device`: an embedder's own client is not a channel
+here (`tool_dispatch.is_channel_session` is False for every source outside `CHAT_CHANNELS`),
+so a tool's `("channel",)` never refuses there, and the confirmation reaches that client
+through the gate's `decide`, which is handed the whole call and the tool's own question.
+Re-measure when an embedder brings a channel.
 """
 
 from __future__ import annotations
@@ -69,6 +73,15 @@ class Channel:
     `enabled` is the BOT's switch, which admins control and ride, and every other account
     has its own switch on top of it.
     "owner" - one bot that serves the local admin alone (Discord); nobody else has a lane."""
+    holder_device: bool = False
+    """The far end is a device the account holder paired themselves (not a messenger where a
+    stranger can write), and VAF can put a confirmation for one call on it (the Veyllo App's
+    card, vaf/core/app_link/confirmations.py). A tool kept off chats ("channel" in its
+    restrictions) is then put to the holder on that device instead of refused, in a turn the
+    holder started or the holder's app agent asked for (tool_contract.evaluate_tool_policy,
+    section 1h). False for every messenger: Telegram, WhatsApp and Discord bots reach
+    strangers too (the Front Office), and nothing can be shown there. False is the default,
+    so a channel added later fails closed."""
 
 
 CHANNELS: Tuple[Channel, ...] = (
@@ -82,12 +95,12 @@ CHANNELS: Tuple[Channel, ...] = (
             accounts="owner"),
     # The Veyllo App: the bridge is the link manager (vaf/core/app_link/bridge.py), there is
     # no read tool (the account's one chat is its own history), and one relay instance serves
-    # every account, which pairs its own devices on it. A chat channel like Telegram, so every
-    # tool kept off chats ("channel" in its restrictions) is off here too. NAMED BOUNDARY:
-    # protocol v1 has no confirmation message type, so a tool that needs a person to confirm
-    # cannot ask on the phone; lifting it needs a v2 `confirm` type agreed with the app.
+    # every account, which pairs its own devices on it. A chat channel like Telegram, but its
+    # far end is the account holder's own paired device, which shows a confirmation card for
+    # one call: a tool kept off chats by the "channel" sentinel runs from it only after the
+    # holder's tap on that card (`holder_device`).
     Channel("veyllo_app", "Veyllo App", bridge=True, send_tool="send_veyllo_app",
-            secrets=("relay_secret",), accounts="shared"),
+            secrets=("relay_secret",), accounts="shared", holder_device=True),
     # Known, not built: `send_slack` exists and answers that it cannot send yet.
     Channel("slack", "Slack", bridge=False, send_tool="send_slack"),
 )
@@ -103,6 +116,11 @@ FRONT_OFFICE_MESSENGERS: Tuple[str, ...] = tuple(c.name for c in CHANNELS if c.f
 # The prefix of a chat channel's session id (`telegram_<chat>`, `whatsapp_<user>_<digits>`,
 # `discord_<user>`): a resumed or drained session may carry nothing else that says "chat".
 CHAT_SESSION_PREFIXES: Tuple[str, ...] = tuple(f"{c}_" for c in CHAT_CHANNELS)
+# The chat channels whose far end is the account holder's own paired device, which can show a
+# confirmation for one call (`Channel.holder_device`), and their session id prefixes.
+HOLDER_DEVICE_CHANNELS: Tuple[str, ...] = tuple(c.name for c in CHANNELS
+                                                if c.bridge and c.holder_device)
+HOLDER_DEVICE_SESSION_PREFIXES: Tuple[str, ...] = tuple(f"{c}_" for c in HOLDER_DEVICE_CHANNELS)
 # What the owner may pick as main messenger: a channel VAF can deliver to. A known channel
 # without a bridge is not one, or a proactive message would land in the web UI instead
 # while the setting said otherwise.

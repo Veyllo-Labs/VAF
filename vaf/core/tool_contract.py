@@ -23,6 +23,8 @@ Contract fields (all defined on BaseTool):
 
 Evaluation order inside evaluate_tool_policy():
   1. admin_only check  (hard block — role-based)
+     then, on the account holder's own device (a holder-device channel, the holder present):
+     a tool kept off chats by the "channel" sentinel is put to the holder on every call;
      then, on a messaging channel: a dangerous tool restricted on channels is refused in
      the lane that would ask a person; after that `channel_tools_unrestricted` may lift
      2-4 for the rest
@@ -189,6 +191,10 @@ class ToolPolicyDecision:
     blocked: bool
     requires_confirmation: bool
     reason: str = ""
+    # The confirmation is the condition of the call itself (section 1h): every call is put to
+    # the person, and no standing answer (an "always", a trusted folder, a chat grant, the
+    # admin bypass) silences it or is offered.
+    ask_each_call: bool = False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -308,6 +314,8 @@ def evaluate_tool_policy(
     gated_lane: bool = True,
     quiet: bool = False,
     channel_lift: bool = True,
+    holder_present: bool = False,
+    holder_device: bool = False,
 ) -> ToolPolicyDecision:
     """
     Evaluate whether a tool may run in the current session context.
@@ -336,6 +344,14 @@ def evaluate_tool_policy(
                         confirmations a channel has without the lift. The lift trusts a
                         person typing on the channel; such a text may carry what that agent
                         read elsewhere.
+    holder_present    : True when the account holder started this turn themselves, or their
+                        own app agent asked for it (a person's turn or a request of the
+                        Veyllo App's agent); False for a wake turn (a timer, a background
+                        command) and every unattended lane.
+    holder_device     : True when the chat is a channel whose far end is the holder's own
+                        paired device, which can show a confirmation for one call
+                        (``channels.Channel.holder_device``). The caller computes it from the
+                        registry, never from a flag it was handed.
 
     Returns
     -------
@@ -344,6 +360,8 @@ def evaluate_tool_policy(
     Evaluation order
     ----------------
     1. admin_only check      — role-based hard block (new)
+    1h. a tool kept off chats by the "channel" sentinel, on the holder's own device with the
+        holder present, in the gated lane: confirmation on every call (ask_each_call)
     1a. a tool that needs a person, on a channel, in the gated lane: hard block
     1b. channel_tools_unrestricted: admin opt-in that lifts 2-4 on channels
         (not for a caller with channel_lift=False)
@@ -368,6 +386,32 @@ def evaluate_tool_policy(
             reason=(
                 f"Tool '{tool_name}' requires an admin session. "
                 "This action is not available for regular user accounts."
+            ),
+        )
+
+    # ── 1h. A tool kept off chats, on the account holder's own device ─────
+    # The far end of a holder-device channel (the Veyllo App) is the account holder's own
+    # paired device, not a messenger with a stranger in it, and it can show a confirmation
+    # card for one call. So a tool kept off chats by the generic "channel" sentinel is not
+    # refused there but put to the holder, on every call, whatever the admin's lift says:
+    # the card is the condition of the opening. Only while the holder is present (their own
+    # turn, or their app agent's request; never a wake turn) and only in the lane that asks a
+    # person. A tool that names the source, or any holder-device channel, in its restrictions
+    # stays refused below: its author excluded that channel on purpose (the names are matched
+    # from the registry too, so a call whose source is only in its session id is no way round).
+    from vaf.core.channels import HOLDER_DEVICE_CHANNELS
+    named = set(contract.channel_restrictions) & ({source} | set(HOLDER_DEVICE_CHANNELS))
+    if (is_channel_session and holder_device and holder_present and gated_lane
+            and "channel" in contract.channel_restrictions and not named):
+        log.info("POLICY_CONFIRM tool=%s reason=holder_device source=%s",
+                 tool_name, source or "channel")
+        return ToolPolicyDecision(
+            blocked=False,
+            requires_confirmation=True,
+            ask_each_call=True,
+            reason=(
+                f"Tool '{tool_name}' is kept off messaging channels; from the Veyllo App it "
+                "runs only after your user confirms this call on their device."
             ),
         )
 

@@ -203,8 +203,9 @@ def test_the_hint_shows_a_handle_that_reaches_the_agent_and_fits_one_line():
 def test_wake_notes_and_the_empty_room_are_worded():
     """MUTATION: word a timer note as the general failure, or one empty text whatever the room
     can do - red."""
-    assert _call("['timer','process','draft','confirm'].map(m.lineTextKey)") == [
-        "appRoomWakeTimer", "appRoomWakeProcess", "appRoomWakeDraft", "appRoomConfirmed"]
+    assert _call("['timer','process','draft','confirm','card_waiting'].map(m.lineTextKey)") == [
+        "appRoomWakeTimer", "appRoomWakeProcess", "appRoomWakeDraft", "appRoomConfirmed",
+        "appRoomCardWaiting"]
     assert _call("m.emptyKey(true)") == "appRoomEmpty"
     assert _call("m.emptyKey(false)") == "appRoomEmptyAgentOnly"
     assert _call("m.refusalKey('text_only')") == "appRoomTextOnly"

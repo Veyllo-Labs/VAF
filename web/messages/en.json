@@ -289,6 +289,7 @@
     "appRoomWaiting": "waiting for the Veyllo App",
     "appRoomNotDelivered": "not delivered: the Veyllo App did not take it",
     "appRoomConfirmed": "Confirmed in the Veyllo App",
+    "appRoomCardWaiting": "Waiting for your confirmation in the Veyllo App",
     "appRoomPlaceholder": "Ask the Veyllo App…",
     "appRoomNeedsNewerApp": "Writing to the agent in your Veyllo App needs a newer version of the Veyllo App. You can still ask {name} with @{handle}.",
     "appRoomChannelOff": "The Veyllo App is switched off for your account. Switch it on in Settings, Connections.",

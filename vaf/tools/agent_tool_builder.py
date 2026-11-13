@@ -64,6 +64,9 @@ class AgentToolBuilderTool(BaseTool):
 
     side_effect_class    = "reversible"   # files can be deleted again
     channel_restrictions = ("channel",)  # no tool creation from any chat channel
+    # What a confirmation card in the Veyllo App shows whole in its top block: the
+    # target's tail is its meaning (agent_origin.card_lines).
+    agent_request_confirm_whole_args = ("tool_name",)
 
     # ── Examples (shown to the LLM in the tool description) ──────────────────
     input_examples = [

@@ -289,6 +289,7 @@
     "appRoomWaiting": "Veyllo Appを待っています",
     "appRoomNotDelivered": "未配信：Veyllo Appが受け取りませんでした",
     "appRoomConfirmed": "Veyllo Appで確認済み",
+    "appRoomCardWaiting": "Veyllo Appでの確認を待っています",
     "appRoomPlaceholder": "Veyllo Appに尋ねる…",
     "appRoomNeedsNewerApp": "Veyllo Appのエージェントに書き込むには、新しいバージョンのVeyllo Appが必要です。{name}には引き続き@{handle}で尋ねられます。",
     "appRoomChannelOff": "このアカウントではVeyllo Appがオフになっています。設定の「接続」でオンにしてください。",

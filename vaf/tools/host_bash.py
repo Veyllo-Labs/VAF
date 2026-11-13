@@ -25,6 +25,9 @@ owner always have it. HOW each use is controlled:
      a person, BEFORE channel_tools_unrestricted can lift the restriction for the convenience
      tools. Only that lane: the rule protects the turn where somebody would have been asked,
      not the unattended lanes in 2.
+  4. From the Veyllo App, the person's own paired device, every call is put to them on a card
+     on that device (section 1h, vaf/core/app_link/confirmations.py): the whole command, one
+     tap for one call, nothing standing. The command check below still runs after the tap.
 
 A cheap blocklist stops the few catastrophic patterns (command_policy, host profile).
 """
@@ -41,6 +44,9 @@ class HostBashTool(BaseTool):
     category    = "code"
     permission_level = "dangerous"   # -> confirmation gate in execute_tool
     channel_restrictions = ("channel",)  # hard-blocked on every chat channel
+    # What a confirmation card in the Veyllo App shows whole in its top block: the
+    # target's tail is its meaning (agent_origin.card_lines).
+    agent_request_confirm_whole_args = ("command",)
     side_effect_class = "irreversible"
     # The whole computer, as the user VAF runs as: a regular account gets it only when the
     # admin names it (the module docstring).
@@ -53,8 +59,9 @@ class HostBashTool(BaseTool):
         "Run a shell command directly on the HOST (no sandbox). For host/system tasks that "
         "need real host access - e.g. inspecting a running docker container, host services, "
         "or a host CLI. Asks the user before it runs, unless the user already allowed it for "
-        "this chat or always, and is available only in the local app (never over "
-        "Telegram/WhatsApp/Discord). Prefer safer tools when host access is not actually "
+        "this chat or always; from the Veyllo App it asks on the user's device every time, and "
+        "it is never available over Telegram/WhatsApp/Discord. Prefer safer tools when host "
+        "access is not actually "
         "required. With background=true the command keeps running after the call returns "
         "(a local server, a long upload or build): you get its id at once, read or stop it "
         "with host_process, and this chat gets a new turn when it ends. If the task needs a "

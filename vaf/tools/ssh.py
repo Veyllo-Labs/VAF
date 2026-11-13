@@ -16,7 +16,9 @@ line); this module is the tool's contract around it:
   the call starts, is refused by the engine: only a call confirmed as a first contact
   (`BaseTool.first_contact_confirmed`) lets OpenSSH take a new key.
 - Not over messaging channels: dangerous and restricted with "channel", which the policy
-  refuses there before any admin lift (vaf/core/tool_contract.py, section 1a).
+  refuses there before any admin lift (vaf/core/tool_contract.py, section 1a). From the Veyllo
+  App, the person's own device, every call is put to them on a card there (section 1h), which
+  also shows the first-contact question; only a Yes to that question takes a new key.
 - A regular account gets it only when its allowlist names it (`account_opt_in`).
 - The password is never an argument: `login_credential` NAMES a credential the person stored
   (vaf/core/user_secrets.py), and its value is taken out of everything the tool returns. The
@@ -73,6 +75,9 @@ class SshTool(BaseTool):
     permission_level = "dangerous"
     side_effect_class = "irreversible"
     channel_restrictions = ("channel",)
+    # What a confirmation card in the Veyllo App shows whole in its top block: the
+    # target's tail is its meaning (agent_origin.card_lines).
+    agent_request_confirm_whole_args = ("server", "command", "local_path", "remote_path")
     trusted_dir_grants = False
     accepts_call_confirmation = True
     account_opt_in = True

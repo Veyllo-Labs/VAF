@@ -1,0 +1,32 @@
+{
+  "ar": [
+    "نقل ملفات عبر FTP"
+  ],
+  "de": [
+    "VAF soll Dateien über FTP übertragen"
+  ],
+  "en": [
+    "Transfer files over FTP"
+  ],
+  "es": [
+    "Transferir archivos por FTP"
+  ],
+  "fr": [
+    "Transférer des fichiers via FTP"
+  ],
+  "ja": [
+    "FTPでファイルを転送"
+  ],
+  "ko": [
+    "FTP로 파일 전송"
+  ],
+  "th": [
+    "โอนไฟล์ผ่าน FTP"
+  ],
+  "tr": [
+    "FTP ile dosya aktar"
+  ],
+  "zh": [
+    "通过 FTP 传输文件"
+  ]
+}

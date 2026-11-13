@@ -4,7 +4,8 @@
 """The instance record: the running VAF says which process it is and how it
 was started; `vaf stop`, `vaf status`, `vaf restart`, `vaf top` and the
 self-updater read it, and fall back to the process table (the singleton-port
-owner, else `vaf.main tray` by exact argv elements) for a VAF that kept none.
+owner, else `-m vaf.main tray` by adjacent argv elements) for a VAF that kept
+none.
 
 The record complements the service pid file a launcher writes: that file only
 exists for `vaf start` and the tray dashboard, so the app shortcut, run_vaf.sh
@@ -182,6 +183,26 @@ def test_live_check_wants_a_tray_entry_point(monkeypatch):
     (["/venv/bin/python", "/venv/bin/vaf", "tray"], True),                    # console script
     (["C:\\VAF\\venv\\Scripts\\pythonw.exe", "-m", "vaf.main", "tray"], True),
     (["C:\\VAF\\venv\\Scripts\\vaf.exe", "tray"], True),
+    (["/venv/bin/python", "-X", "utf8", "-u", "-m", "vaf.main", "tray", "--no-top"], True),
+    (["/venv/bin/python", "/venv/bin/vaf", "tray", "--no-top"], True),
+    (["/venv/bin/python3.13", "/venv/bin/vaf", "tray"], True),
+    # The macOS framework binary re-execs with the script still at argv[1].
+    (["/Library/Frameworks/Python.framework/Versions/3.13/Resources/Python.app/Contents/MacOS/Python",
+      "/venv/bin/vaf", "tray"], True),
+    (["C:\\VAF\\venv\\Scripts\\VAF.EXE", "tray"], True),             # Windows names are case-free
+    # pip's vaf.exe launcher starts its Python child with its own path as the script.
+    (["C:\\VAF\\venv\\Scripts\\python.exe", "C:\\VAF\\venv\\Scripts\\vaf.exe", "tray"], True),
+    # Both words present, neither a tray start: a folder named VAF is no program.
+    (["/venv/bin/python", "/venv/bin/pytest", "/home/user/VAF", "-k", "tray"], False),
+    (["C:\\Python313\\python.exe", "-m", "pytest", "C:\\Users\\user\\VAF", "-k", "tray"], False),
+    (["/venv/bin/python", "-c", "import time; time.sleep(1)", "/home/user/VAF", "tray"], False),
+    (["/bin/bash", "-c", "sleep 1", "bash", "/home/user/VAF", "tray"], False),
+    (["/usr/bin/vim", "/venv/bin/vaf", "tray"], False),                       # argv[0] no interpreter
+    (["/venv/bin/python", "/venv/bin/vaf", "run", "-p", "tray"], False),      # a chat about trays
+    (["/venv/bin/python", "-m", "vaf.main", "run", "-p", "tray"], False),
+    (["/venv/bin/python", "-m", "vaf.main", "subagent", "run", "coder", "--task", "tray",
+      "--task-id", "t1"], False),                                              # a sub-agent's task
+    (["uv", "run", "vaf", "tray"], False),            # a wrapper; its Python child is the tray
     (["/venv/bin/python", "-m", "vaf.main", "run", "--web"], False),          # somebody's session
     (["/venv/bin/python", "-m", "vaf.main", "update", "--yes"], False),       # the updater itself
     (["/venv/bin/python", "-m", "vaf.main", "top"], False),                   # a viewer
@@ -225,6 +246,28 @@ def test_scan_prefers_the_singleton_port_owner(monkeypatch):
     _fake_table(monkeypatch, [viewer, owner], port_owner=4242)
     found = instance.scan_processes()
     assert [(i.pid, i.mode) for i in found] == [(4242, "tray")]
+
+
+def test_scan_matches_only_the_tray_module_form(monkeypatch):
+    """Without a port owner the scan decides by argv, and only `-m vaf.main tray`
+    counts: a chat or a sub-agent with the word `tray` among its arguments is
+    somebody's work that `vaf stop` must not end."""
+    procs = [
+        FakeProc(81, [sys.executable, "-m", "vaf.main", "run", "-p", "tray"], env={}),
+        FakeProc(82, [sys.executable, "-m", "vaf.main", "subagent", "run", "coder",
+                      "--task", "tray", "--task-id", "t1"], env={}),
+        FakeProc(83, _TRAY, env={}),
+    ]
+    _fake_table(monkeypatch, procs)
+    assert [p.pid for p in instance.locate_processes()] == [83]
+
+
+def test_the_scan_and_the_record_check_share_one_module_rule():
+    """One rule, not a second hand copy inside the scan."""
+    import inspect
+    src = inspect.getsource(instance.locate_processes)
+    assert "_runs_tray_module(" in src
+    assert '"vaf.main" in' not in src
 
 
 def test_scan_without_psutil_is_empty(monkeypatch):

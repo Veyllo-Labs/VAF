@@ -232,9 +232,15 @@ not `build_app.sh`.
   and covers the launches that write none (the app shortcut, `run_vaf.sh`,
   `vaf tray --no-top`). `vaf stop`, `vaf status`, `vaf restart` and the
   self-updater address that process and start it again in the same mode. The
-  identity rule (the singleton-port owner, else `vaf.main tray` by exact argv
-  elements) lives in `vaf/core/instance.py` and serves the CLI's finder too;
-  it is the wide answer for "what to stop". "Is VAF up?" has a strict one,
+  identity rule (the singleton-port owner, else a process whose argv runs
+  `-m vaf.main tray`, with `tray` the element directly after the module) lives
+  in `vaf/core/instance.py` and serves the CLI's finder too; it is the wide
+  answer for "what to stop". Validating the record and recognising the
+  dashboard that started a tray also accept the console script `vaf` as the
+  program (argv[0], or argv[1] after a Python interpreter) directly followed by
+  `tray`. Both words elsewhere in a command line prove nothing: `pytest` in a
+  checkout named VAF with `-k tray`, `vaf run -p tray` or a sub-agent whose task
+  is `tray` is not VAF, and `vaf stop` leaves it alone. "Is VAF up?" has a strict one,
   `find_service()`: only the singleton port accepting a connection counts
   (a connect, since listing a port's owner needs root on macOS). A process is
   named only with evidence that it is the listener: its OWN sockets (readable

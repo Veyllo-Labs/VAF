@@ -97,6 +97,9 @@ class _Parent:
     (["/bin/bash", "./run_vaf.sh", "tray"], False),                   # the shell launcher
     (["/usr/lib/systemd/systemd", "--user"], False),                  # reparented / systemd
     ([sys.executable, "-m", "vaf.main", "start"], False),             # the `vaf start` launcher
+    ([sys.executable, "/venv/bin/vaf", "tray"], True),                # a console-script dashboard
+    # A test run in a checkout named VAF: both words, no tray start.
+    ([sys.executable, "/venv/bin/pytest", "/home/user/VAF", "-k", "tray"], False),
 ])
 def test_only_the_dashboard_that_started_us_is_ended(monkeypatch, argv, ended):
     from vaf import tray

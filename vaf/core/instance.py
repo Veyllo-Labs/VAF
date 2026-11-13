@@ -11,7 +11,8 @@ and how to start it again so it comes back the way it was.
 
 WHICH process is answered by locate_processes(): the owner of the tray's
 singleton port (an identity no command line can fake), or failing that every
-`vaf.main tray` process matched on exact argv elements. This is the one
+process running `-m vaf.main tray`, with `tray` the argv element directly after
+the module. This is the one
 implementation of that rule; the CLI's finder reads through it. It is the
 answer for "what to stop", deliberately wide. "Is VAF up?" is a different
 question with a strict answer, find_service(): only the singleton port counts,
@@ -39,6 +40,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -202,7 +204,7 @@ def locate_processes() -> list:
                 if proc.info["pid"] == me:
                     continue
                 parts = list(proc.info["cmdline"] or [])
-                if "vaf.main" in parts and "tray" in parts:
+                if _runs_tray_module(parts):
                     found.append(proc)
             except Exception:
                 continue
@@ -302,27 +304,58 @@ def port_held_by_another() -> bool:
 
 
 def is_tray_entry(argv) -> bool:
-    """True for a command line that runs the tray entry point: `... -m vaf.main
-    tray ...` or the console script `.../vaf tray ...`, matched on exact argv
-    elements. Used to validate a record's pid; the process-table scan applies
-    the stricter module form only."""
+    """True for a command line that STARTS the tray entry point. Validates a
+    record's pid, tells the tray whether its parent is the dashboard that
+    started it, and tells tooling whether VAF runs.
+
+    Two shapes, and nothing else:
+      module form     `... -m vaf.main tray ...`: `tray` is the element
+                      directly after `vaf.main`
+      console script  `vaf tray ...` with the script as the program: argv[0],
+                      or argv[1] after a Python interpreter (how the kernel
+                      runs a shebang script and how pip's Windows launcher
+                      starts its Python child), directly followed by `tray`
+
+    Positions matter because the words alone prove nothing: `pytest <checkout
+    named VAF> -k tray`, `vaf run -p tray` (a chat whose prompt is the word) and
+    a sub-agent whose `--task` is `tray` all carry both words. Anything after
+    `tray` is free (`--no-top`). The process-table scan in locate_processes()
+    applies the module form only."""
     try:
         parts = [str(a) for a in (argv or [])]
     except Exception:
         return False
-    if "tray" not in parts:
-        return False
-    if "vaf.main" in parts:
+    if _runs_tray_module(parts):
         return True
-    for tok in parts[:-1]:
-        # Both separators: a Windows command line keeps its backslashes.
-        base = tok.replace("\\", "/").rsplit("/", 1)[-1].lower()
-        if base in ("vaf", "vaf.exe"):
-            return True
-    return False
+    if len(parts) >= 2 and _base(parts[0]) == "vaf" and parts[1] == "tray":
+        return True
+    return (len(parts) >= 3 and _INTERPRETER.fullmatch(_base(parts[0])) is not None
+            and _base(parts[1]) == "vaf" and parts[2] == "tray")
 
 
 # ── internals ────────────────────────────────────────────────────────────────
+
+# A Python interpreter as the program: python, python3, python3.13, the
+# free-threaded python3.13t, Windows' pythonw, and the macOS framework binary
+# `Python`. Matched against _base(), so `.exe` and the case are already gone.
+_INTERPRETER = re.compile(r"python(\d+(\.\d+)*)?[tw]?")
+
+
+def _base(token: str) -> str:
+    """The last path component of an argv element, lowercased and without a
+    trailing `.exe`. Both separators: a Windows command line keeps its
+    backslashes, and Windows names are case-insensitive (`VAF.EXE tray`)."""
+    base = token.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    return base[:-4] if base.endswith(".exe") else base
+
+
+def _runs_tray_module(parts: List[str]) -> bool:
+    """True when the argv runs the module form `vaf.main tray`: an element that
+    is exactly `vaf.main` with `tray` directly after it. Every launcher in the
+    tree passes the three as `-m vaf.main tray`; a word further on (`run -p
+    tray`, `--task tray`) is an argument to another command."""
+    return any(tok == "vaf.main" and nxt == "tray" for tok, nxt in zip(parts, parts[1:]))
+
 
 def _port_owner():
     """The psutil.Process listening on the singleton port, or None - also where

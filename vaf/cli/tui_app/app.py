@@ -1298,21 +1298,13 @@ class VafApp(App):
 def _exec_restart() -> None:
     """Replace this process with a fresh `vaf run`.
 
-    The re-exec matches the classic lane's (`restart` in `_run_modern`): a
-    launcher that keeps its `.exe` suffix is exec'd directly, everything else
-    runs argv[0], the script this interpreter ran (the console script, or
-    `vaf/main.py` under `-m vaf.main`, or the `__main__` module file of a
-    wrapper package started with `python -m`), again with the same interpreter. There is no `-m vaf` case: the package
-    has no `__main__` module and every start runs `-m vaf.main` or the console
-    script. tests/test_restart_reexec_argv.py drives both copies with one argv
-    table so they cannot drift apart. What is NOT ported is the classic lane's
+    The re-exec is the classic lane's, `vaf.cli.reexec.reexec`, which starts
+    again what was started (`python -m vaf.main`, the console script, a
+    wrapper package's `python -m`). What is NOT ported is the classic lane's
     npm teardown: `npm_process` is initialised to None there and never
     assigned, so that block has always been dead. The frontend, if this
     process owns one at all, is torn down through its manager.
     """
-    import os
-    import sys
-
     from vaf.cli.ui import UI as _UI
     try:
         from vaf.core.frontend_manager import FrontendManager
@@ -1320,10 +1312,8 @@ def _exec_restart() -> None:
     except Exception:
         pass
     try:
-        if sys.argv[0].endswith(".exe"):
-            os.execl(sys.argv[0], sys.argv[0], *sys.argv[1:])
-        else:
-            os.execl(sys.executable, sys.executable, *sys.argv)
+        from vaf.cli.reexec import reexec
+        reexec()
     except Exception as exc:
         _UI.error(f"Restart failed: {exc}")
 

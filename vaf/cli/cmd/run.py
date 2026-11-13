@@ -2411,20 +2411,11 @@ Created: {current_session.created_at}
                     # Restart Process
                     time.sleep(0.5)
                     
-                    # Same re-exec as `_exec_restart` in vaf/cli/tui_app/app.py;
-                    # tests/test_restart_reexec_argv.py drives both with one argv table.
+                    # Starts again what was started (`python -m vaf.main`, the console
+                    # script, a wrapper's `python -m`); shared with the full-screen app.
                     try:
-                        # A launcher that keeps its `.exe` suffix is its own program.
-                        if sys.argv[0].endswith('.exe'):
-                            os.execl(sys.argv[0], sys.argv[0], *sys.argv[1:])
-                        else:
-                            # argv[0] is the script this interpreter ran: the console
-                            # script `<venv>/bin/vaf`, `vaf/main.py` under `-m vaf.main`,
-                            # or the `__main__` module file of a wrapper package started
-                            # with `python -m`. Running it again with the same interpreter
-                            # starts the same program. There is no `-m vaf` case: vaf has
-                            # no `__main__` module.
-                            os.execl(sys.executable, sys.executable, *sys.argv)
+                        from vaf.cli.reexec import reexec
+                        reexec()
                     except Exception as e:
                         tui.error(f"Restart failed: {e}")
                         continue

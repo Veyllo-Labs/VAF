@@ -58,9 +58,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ### Fixed
 
 - **`restart` in the terminal starts the same program again.** `restart` in `vaf run` and
-  in the full-screen terminal app now starts again the same program that was started, also when
-  VAF runs inside another package's `python -m` entry point. Before, it tried `python -m vaf`,
-  which cannot start.
+  in the full-screen terminal app now starts VAF the way it was started. Before, a start
+  through `run_vaf.sh` or `run_vaf.bat` came back with the GitHub tools not working (the
+  log said PyGithub was not installed), because VAF's own `github` folder hid the GitHub
+  library. VAF started from another package's `python -m` entry point came back as
+  `python -m vaf`, which cannot start.
 
 - **A mention in an agent room reaches the member when punctuation follows the name.**
   `@Bob.`, `@Bob?` and `@Bob's idea` now address Bob, a name that ends in a symbol is reached

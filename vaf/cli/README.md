@@ -8,6 +8,9 @@ The `vaf.cli` module implements the user-facing terminal interface, including th
 - **ui.py**: A thin backward-compatibility shim that re-exports the UI components from `tui.py`.
 - **themes.py**: Definition of the color themes (Dracula, Nord, etc.).
 - **autosuggest.py**: Logic for smart inline completions.
+- **reexec.py**: The process re-exec behind `restart` in both terminal lanes. It starts again
+  what was started: `python -m vaf.main` (the launchers) or a wrapper's `python -m` start as a
+  module, the console script or a script file as a script, and a `.exe` launcher directly.
 - **cmd/**: Directory containing individual CLI command implementations.
 
 ## Usage

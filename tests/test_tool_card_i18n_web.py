@@ -23,8 +23,9 @@ MUTATIONS, each turns the named test red:
 - call `tMain('toolStatLines', { n: stat.count })` -> test_every_call_passes_the_message_arguments;
 - set en.json `toolStatDone` back to `Fertig` -> test_english_says_done_and_german_fertig and
   test_the_card_renders_in_the_page_language;
-- `Math.floor(s)` for seconds, `lines >= 1`, or drop the KB branch
-  -> test_the_helpers_pick_the_old_branch;
+- `lines >= 1`, drop the KB branch, `result.length` instead of the UTF-8 byte count, or split
+  before rounding (`Math.floor(s / 60)` and `Math.round(s % 60)`, which read 119.6 s as 1m 60s)
+  -> test_the_helpers_count_bytes_and_whole_seconds;
 - `useGrouping: true`, or `.toFixed(1)` instead of the formatter
   -> test_the_card_renders_in_the_page_language;
 - a hardcoded `${n} actions` label -> test_the_timeline_counts_in_the_page_language;
@@ -39,7 +40,9 @@ MUTATIONS, each turns the named test red:
 - a plain space in de `durationSeconds` -> test_german_durations_never_break;
 - drop `whitespace-nowrap` from the kill button -> test_the_kill_button_never_wraps;
 - drop `break-normal` or `[overflow-wrap:anywhere]` from the stale watchdog text
-  -> test_the_stale_watchdog_text_wraps_at_words.
+  -> test_the_stale_watchdog_text_wraps_at_words;
+- drop either class from a duration span of the watchdog row
+  -> test_the_watchdog_durations_keep_their_no_break_spaces.
 """
 import json
 import re
@@ -252,8 +255,14 @@ def _call(fn, *args):
     return json.loads(out)
 
 
-def test_the_helpers_pick_the_old_branch():
-    """Same branches and numbers as the German-only helpers they replace."""
+def test_the_helpers_count_bytes_and_whole_seconds():
+    """The branches of the German-only helpers they replace, with two of their numbers fixed.
+
+    The old counter compared `result.length`, which counts UTF-16 units, so 600 Japanese
+    characters (1800 bytes) read "done"; it now counts UTF-8 bytes. The old duration split before
+    rounding, so 119.6 s read "1m 60s"; it now rounds the total first, which also moves 59.6 s
+    from "60s" to "1m 0s".
+    """
     done = {"key": "toolStatDone"}
     assert _call("toolResultStat", None) == done
     assert _call("toolResultStat", "") == done
@@ -264,11 +273,18 @@ def test_the_helpers_pick_the_old_branch():
     assert _call("toolResultStat", "x" * 1023) == done
     assert _call("toolResultStat", "x" * 1024) == {"key": "toolStatKb", "kb": 1}
     assert _call("toolResultStat", "x" * 2048) == {"key": "toolStatKb", "kb": 2}
+    # Under 1024 in UTF-16 units, over it in bytes: kana are 3 bytes, an emoji 4 (2 units).
+    assert _call("toolResultStat", "あ" * 600) == {"key": "toolStatKb", "kb": 1800 / 1024}
+    assert _call("toolResultStat", "\U0001F600" * 300) == {"key": "toolStatKb", "kb": 1200 / 1024}
+    assert _call("toolResultStat", "あ" * 341) == done  # 1023 bytes
+    assert _call("toolResultStat", "あ\nい") == {"key": "toolStatLines", "count": 2}
     assert _call("durationText", 0.4) == {"key": "durationSeconds", "seconds": 0}
-    assert _call("durationText", 59.6) == {"key": "durationSeconds", "seconds": 60}
+    assert _call("durationText", 59.4) == {"key": "durationSeconds", "seconds": 59}
+    assert _call("durationText", 59.6) == {"key": "durationMinutesSeconds", "minutes": 1, "seconds": 0}
     assert _call("durationText", 60) == {"key": "durationMinutesSeconds", "minutes": 1, "seconds": 0}
     assert _call("durationText", 65) == {"key": "durationMinutesSeconds", "minutes": 1, "seconds": 5}
-    assert _call("durationText", 3599.6) == {"key": "durationMinutesSeconds", "minutes": 59, "seconds": 60}
+    assert _call("durationText", 119.6) == {"key": "durationMinutesSeconds", "minutes": 2, "seconds": 0}
+    assert _call("durationText", 3599.6) == {"key": "durationMinutesSeconds", "minutes": 60, "seconds": 0}
 
 
 _AST_SCRIPT = r"""
@@ -430,18 +446,21 @@ _CARDS = [
     {"id": "11", "name": "read_file", "status": "completed", "result": "\n".join(["l"] * 1000)},
     {"id": "12", "name": "read_file", "status": "completed", "result": "\n".join(["l"] * 1536)},
     {"id": "13", "name": "update_working_memory", "status": "completed", "args": json.dumps({"items": [0] * 1536})},
+    {"id": "14", "name": "web_fetch", "status": "completed", "result": "あ" * 600},
+    {"id": "15", "name": "render_check", "status": "running", "startTime": 1000, "endTime": 120600},
 ]
 
 # What each card shows, per locale, in the order of _CARDS.
 _EXPECTED = {
     "en": ["Done", "3 lines", "1.5 KB", "1536.0 KB", "running…", "running… 1m 5s", "Error",
            "Persistent Workflow", "Delete", "items: [3 items]", "1000 lines", "1536 lines",
-           "items: [1536 items]"],
+           "items: [1536 items]", "1.8 KB", "running… 2m 0s"],
     "de": ["Fertig", "3 Zeilen", "1,5 KB", "1536,0 KB", "läuft…", "läuft… 1\u00a0min\u00a05\u00a0s", "Fehler",
            "Dauerhafter Workflow", "Entfernen", "items: [3 Einträge]", "1000 Zeilen", "1536 Zeilen",
-           "items: [1536 Einträge]"],
+           "items: [1536 Einträge]", "1,8 KB", "läuft… 2\u00a0min\u00a00\u00a0s"],
     "ja": ["完了", "3行", "1.5 KB", "1536.0 KB", "実行中…", "実行中…1分5秒", "エラー",
-           "永続ワークフロー", "削除", "items: [3件]", "1000行", "1536行", "items: [1536件]"],
+           "永続ワークフロー", "削除", "items: [3件]", "1000行", "1536行", "items: [1536件]",
+           "1.8 KB", "実行中…2分0秒"],
 }
 
 
@@ -489,3 +508,13 @@ def test_the_stale_watchdog_text_wraps_at_words():
     assert "break-all" not in classes, classes
     # The live word stays as it was: plain text in the row's span, no wrapper of its own.
     assert re.search(r":\s*tMain\('toolWatchdogAlive'\)\}", code), "the live row changed shape"
+
+
+def test_the_watchdog_durations_keep_their_no_break_spaces():
+    """The runtime and heartbeat spans sit in the same break-all body, which split "2 min" and
+    "♥ 2 s" at 320 px through the no-break spaces of the catalogue."""
+    code = _source(TOOL_MESSAGE)
+    spans = re.findall(r'<span className="([^"]*)">[^<]*\{durationLabel\(liveUnit\.', code)
+    assert len(spans) == 2, f"expected the runtime and heartbeat spans, found {len(spans)}"
+    for classes in (c.split() for c in spans):
+        assert "break-normal" in classes and "[overflow-wrap:anywhere]" in classes, classes

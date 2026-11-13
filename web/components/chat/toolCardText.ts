@@ -11,12 +11,17 @@ export type ToolStat =
     | { key: 'toolStatLines'; count: number }
     | { key: 'toolStatKb'; kb: number };
 
-/** The result counter (mockup ".stat"): the line count, else the size in KB, else a neutral "done". */
+const utf8 = new TextEncoder();
+
+/** The result counter (mockup ".stat"): the line count, else the size in KB, else a neutral "done".
+ *  The size is UTF-8 bytes, not `length`: a string counts UTF-16 units, so 600 Japanese characters
+ *  (1800 bytes) used to stay under the 1 KB threshold and read "done". */
 export function toolResultStat(result?: string): ToolStat {
     if (!result || !result.trim()) return { key: 'toolStatDone' };
     const lines = result.trim().split('\n').filter(l => l.trim()).length;
     if (lines > 1) return { key: 'toolStatLines', count: lines };
-    if (result.length >= 1024) return { key: 'toolStatKb', kb: result.length / 1024 };
+    const bytes = utf8.encode(result).length;
+    if (bytes >= 1024) return { key: 'toolStatKb', kb: bytes / 1024 };
     return { key: 'toolStatDone' };
 }
 
@@ -24,8 +29,10 @@ export type DurationText =
     | { key: 'durationSeconds'; seconds: number }
     | { key: 'durationMinutesSeconds'; minutes: number; seconds: number };
 
-/** A compact elapsed time: whole seconds under a minute, else minutes and seconds. */
+/** A compact elapsed time: whole seconds under a minute, else minutes and seconds. The total is
+ *  rounded before it is split, so 119.6 s reads 2m 0s rather than 1m 60s, and 59.6 s reads 1m 0s. */
 export function durationText(s: number): DurationText {
-    if (s < 60) return { key: 'durationSeconds', seconds: Math.round(s) };
-    return { key: 'durationMinutesSeconds', minutes: Math.floor(s / 60), seconds: Math.round(s % 60) };
+    const total = Math.round(s);
+    if (total < 60) return { key: 'durationSeconds', seconds: total };
+    return { key: 'durationMinutesSeconds', minutes: Math.floor(total / 60), seconds: total % 60 };
 }

@@ -75,7 +75,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   thinking block, the "No heartbeat" line of a running sub-agent card and the labels of the
   workflow card were English on every page, and the sub-agent's Kill button had a German
   tooltip. All of them now come from the language catalogues in all seven languages, and
-  numbers use the language's decimal separator.
+  numbers use the language's decimal separator. A long result in Japanese, Chinese or another
+  script beyond Latin now shows its size instead of "Done", and a time a fraction of a second
+  short of a whole minute rounds up, so 1 minute 59.6 seconds reads "2m 0s" instead of "1m 60s".
 - **A mention in an agent room reaches the member when punctuation follows the name.**
   `@Bob.`, `@Bob?` and `@Bob's idea` now address Bob, a name that ends in a symbol is reached
   before a full stop (`@C++.` reaches "C++"), names are matched in any case form (`@STRASSE`

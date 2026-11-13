@@ -413,16 +413,17 @@ export const ToolMessage: React.FC<ToolMessageProps> = ({
                                             />
                                             <span className="text-[11px] text-foreground">
                                                 {/* The card's break-all suits paths and output, not a sentence: on a phone it split
-                                                    "vielleicht" mid-word. Words wrap whole; `anywhere` still breaks a token too long
-                                                    for the line, and keeps the row's min-content width as it was. */}
+                                                    "vielleicht" mid-word, and the durations below inside "2 min" and "♥ 2 s".
+                                                    Words wrap whole and the no-break spaces hold; `anywhere` still breaks a token
+                                                    too long for the line, and keeps the row's min-content width as it was. */}
                                                 {liveUnit.stale
                                                     ? <span className="break-normal [overflow-wrap:anywhere]">{tMain('toolWatchdogStale')}</span>
                                                     : tMain('toolWatchdogAlive')}
                                                 {liveUnit.runtime_s != null && (
-                                                    <span className="text-muted-foreground"> · {durationLabel(liveUnit.runtime_s)}</span>
+                                                    <span className="break-normal text-muted-foreground [overflow-wrap:anywhere]"> · {durationLabel(liveUnit.runtime_s)}</span>
                                                 )}
                                                 {liveUnit.heartbeat_age_s != null && (
-                                                    <span className="text-muted-foreground"> · ♥ {durationLabel(liveUnit.heartbeat_age_s)}</span>
+                                                    <span className="break-normal text-muted-foreground [overflow-wrap:anywhere]"> · ♥ {durationLabel(liveUnit.heartbeat_age_s)}</span>
                                                 )}
                                             </span>
                                             <button

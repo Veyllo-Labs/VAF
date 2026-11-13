@@ -30,21 +30,46 @@ import { Marked, type Tokens, type Token } from 'marked';
 import type { Element, ElementContent, Root, RootContent } from 'hast';
 import { getApiBase } from '@/lib/utils';
 
-/** Turns a sandbox path or an absolute host path into the file lane's URL; anything else is returned as it is. */
+const WINDOWS_DRIVE_PATH = /^[a-zA-Z]:[\\/]/;
+
+/**
+ * The path an address spells. Both Markdown libraries percent-encode a destination before any
+ * renderer sees it (`C:\x` arrives as `C:%5Cx`, `ü` as `%C3%BC`), and the file lane wants the
+ * path itself, not its URL spelling; a malformed escape is kept as written.
+ */
+function spelledPath(value: string): string {
+    try {
+        return decodeURIComponent(value);
+    } catch {
+        return value;
+    }
+}
+
+/**
+ * The file lane's address for a link or picture that names a file on this machine, or the input
+ * unchanged. The result is either the input itself or `${base}/api/file?path=<encoded path>`:
+ * - already the file lane (`/api/file?...`): unchanged, so nothing is wrapped twice;
+ * - a sandbox path (`sandbox:/...`, the prefix case-sensitive): the path, kept absolute with
+ *   exactly one leading slash (relative, the server would resolve it against its own working
+ *   directory), or a drive path when it is one (`sandbox:/C:/x`). Never spelled as a share
+ *   (`sandbox://host/s` is `/host/s`);
+ * - a Windows drive path (`C:\...`, `C:/...`) or an absolute host path (`/...`);
+ * - everything else, a protocol-relative address (`//host/x`, `/\host/x`, which a browser reads
+ *   as another host) included: unchanged.
+ */
 export const normalizeDownloadHref = (rawHref: string): string => {
     if (!rawHref) return rawHref;
     const base = getApiBase();
+    if (rawHref.startsWith(`${base}/api/file?`)) return rawHref;
+    const toFileLane = (path: string) => `${base}/api/file?path=${encodeURIComponent(path)}`;
     if (rawHref.startsWith('sandbox:/')) {
-        const path = rawHref.replace(/^sandbox:\/*/, '');
-        return `${base}/api/file?path=${encodeURIComponent(path)}`;
+        const path = spelledPath(rawHref.slice('sandbox:'.length)).replace(/^[\\/]+/, '');
+        return toFileLane(WINDOWS_DRIVE_PATH.test(path) ? path : `/${path}`);
     }
 
-    const looksLikeWindowsPath = /^[a-zA-Z]:[\\/]/.test(rawHref);
-    const looksLikeUnixPath = rawHref.startsWith('/');
-    if (looksLikeWindowsPath || looksLikeUnixPath) {
-        return `${base}/api/file?path=${encodeURIComponent(rawHref)}`;
-    }
-
+    const path = spelledPath(rawHref);
+    if (WINDOWS_DRIVE_PATH.test(path)) return toFileLane(path);
+    if (rawHref.startsWith('/') && !/^\/[\\/]/.test(path)) return toFileLane(path);
     return rawHref;
 };
 

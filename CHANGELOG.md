@@ -57,6 +57,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **A link to a file in a reply opens the file.** A link to a file the agent made in the
+  sandbox, or to a Windows path, was shown without a target and did nothing; it now opens
+  the file from your VAF, the same way a link to any other file on your VAF does. File
+  names with spaces or umlauts are found too, and the same links work in a Markdown file's
+  preview and in a model card.
 - **Square brackets show as written in the plain terminal.** `arr[i]`, a task list's `[x]`
   and `pip install "vaf[speech]"` lost their brackets. A reply or an error message with a
   closing tag such as `[/link]` stopped the answer with a markup error, so the answer was not

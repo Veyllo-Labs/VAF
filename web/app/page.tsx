@@ -69,7 +69,6 @@ import type { VAFWorkflow } from '@/components/workflows/stores/workflowStore';
 import { useWorkflowStore, forgetWorkflowState } from '@/components/workflows/stores/workflowStore';
 import { WorkflowChatElement } from '@/components/workflows/WorkflowChatElement';
 import { Markdown } from '@/components/Markdown';
-import { normalizeDownloadHref } from '@/lib/markdownImages';
 
 // Types
 type Message = {
@@ -769,7 +768,7 @@ function parseWorkflowAsync(answer: string): { taskId: string; workflowId: strin
     return { taskId: m[1], workflowId: m[2], name: m[3], rest: m[4].trim() };
 }
 
-/** Renders markdown in chat bubbles (headings, lists, bold, links, code). Links use normalizeDownloadHref for sandbox/local paths; images follow the rule of web/lib/markdownImages.ts (only this server's file lane loads). User messages (dark): single line breaks are preserved as sent. */
+/** Renders markdown in chat bubbles (headings, lists, bold, links, code). A link to a sandbox, host or Windows path goes to the file lane through the wrapper (web/components/Markdown.tsx); images follow the rule of web/lib/markdownImages.ts (only this server's file lane loads). User messages (dark): single line breaks are preserved as sent. */
 const ChatMarkdown = ({ children, dark = false }: { children: string; dark?: boolean }) => {
     const text = dark ? children.replace(/\n/g, "  \n") : children;
     const linkClass = dark
@@ -779,7 +778,7 @@ const ChatMarkdown = ({ children, dark = false }: { children: string; dark?: boo
         <Markdown
             components={{
                 a: ({ href, children: linkChildren }) => (
-                    <a href={href ? normalizeDownloadHref(href) : href} target="_blank" rel="noopener noreferrer" className={linkClass}>
+                    <a href={href} target="_blank" rel="noopener noreferrer" className={linkClass}>
                         {linkChildren}
                     </a>
                 ),

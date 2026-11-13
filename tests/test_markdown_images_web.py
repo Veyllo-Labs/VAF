@@ -38,8 +38,29 @@ MUTATIONS, each turns the named test red:
 - `import ReactMarkdown from 'react-markdown'` back in CodeViewer.tsx, or `import('marked')` back
   in DocumentEditor.tsx -> test_one_importer_per_markdown_library;
 - the editor calling `renderMarkdownDocument` -> test_the_editor_keeps_the_files_markup;
-- a local `normalizeDownloadHref` back in page.tsx, or `renderMarkdownLinks` back
+- a local `normalizeDownloadHref` back in page.tsx, `normalizeDownloadHref(href)` back in the
+  chat's anchor, or `renderMarkdownLinks` back -> test_the_chat_uses_the_wrapper_and_the_moved_link_rule;
+- remove `urlTransform={urlTransform}` from the wrapper's `<ReactMarkdown>` (react-markdown's
+  default then empties `sandbox:` and `C:` links)
+  -> test_a_file_link_goes_to_the_file_lane, test_the_chat_uses_the_wrapper_and_the_moved_link_rule;
+- the sandbox path relative again (`toFileLane(path)`, the server resolves it against its own
+  working directory) -> test_a_file_link_goes_to_the_file_lane, test_own_images_load_from_the_file_lane,
+  test_the_decision_over_hostile_and_own_sources, test_the_chat_uses_the_wrapper_and_the_moved_link_rule;
+- strip one leading slash only (`sandbox://host/s` keeps a share spelling)
   -> test_the_chat_uses_the_wrapper_and_the_moved_link_rule;
+- the transform without `defaultUrlTransform`, or `urlTransform = (url) => url`
+  -> test_dangerous_link_schemes_stay_empty;
+- the sandbox prefix case-insensitive, or `sandbox:` without its slash
+  -> test_dangerous_link_schemes_stay_empty;
+- the transform failing closed on everything but the file lane
+  -> test_safe_links_are_unchanged;
+- drop the early return for an address already on the file lane
+  -> test_an_own_file_link_is_not_wrapped_twice;
+- normalize `img[src]` in the transform as well, without that early return
+  -> test_own_images_load_from_the_file_lane, test_a_windows_or_encoded_picture_path_loads_from_the_file_lane;
+- drop the percent-decoding (`spelledPath` returning its input; Markdown hands over `C:%5C...`)
+  -> test_a_file_link_goes_to_the_file_lane, test_a_windows_or_encoded_picture_path_loads_from_the_file_lane;
+- map a protocol-relative `//host/x` to the file lane -> test_safe_links_are_unchanged;
 - render a picture link without its icon (`if (true) return <Anchor ...>` in the wrapper)
   -> test_a_remote_image_in_a_bubble_is_a_link_not_an_image;
 - try the http base first (`//host/x` then reads as http)
@@ -151,7 +172,6 @@ def _run(ops):
             pytest.skip(f"web/node_modules/{pkg} is not installed")
     chat = ("import React from 'react';\n"
             "import { Markdown } from '@/components/Markdown';\n"
-            "import { normalizeDownloadHref } from '@/lib/markdownImages';\n"
             + _slice(PAGE, "/** Renders markdown in chat bubbles", "// Component: Thinking Accordion")
             + "\nexport { ChatMarkdown };\n")
     preview = ("import React from 'react';\n"
@@ -233,7 +253,7 @@ def test_an_image_inside_a_link_is_the_links_text():
 
 OWN_FORMS = [
     ("![c](/api/file?path=out%2Fc.png)", "/api/file?path=out%2Fc.png"),
-    ("![c](sandbox:/out/c.png)", "/api/file?path=out%2Fc.png"),
+    ("![c](sandbox:/out/c.png)", "/api/file?path=%2Fout%2Fc.png"),
     ("![c](/home/user/c.png)", "/api/file?path=%2Fhome%2Fuser%2Fc.png"),
 ]
 
@@ -272,7 +292,7 @@ def test_the_decision_over_hostile_and_own_sources():
     # Relative to any page of the UI this is the file lane itself; it is returned absolute.
     assert got["api/file?path=a"] == "/api/file?path=a"
     assert got["C:\\Users\\a\\c.png"] == "/api/file?path=C%3A%5CUsers%5Ca%5Cc.png"
-    assert got["sandbox:/a b.png"] == "/api/file?path=a%20b.png"
+    assert got["sandbox:/a b.png"] == "/api/file?path=%2Fa%20b.png"
     assert got["/home/user/c.png"] == "/api/file?path=%2Fhome%2Fuser%2Fc.png"
     for s, value in got.items():
         assert value is None or value.startswith("/api/file?"), (s, value)
@@ -288,7 +308,7 @@ def test_the_preview_and_the_model_card_follow_the_same_rule():
     preview, card = _run([["preview", md], ["markdown", md]])
     for name, html in (("code viewer preview", preview), ("model card", card)):
         imgs = re.findall(r"<img\b[^>]*>", html)
-        assert len(imgs) == 1 and 'src="/api/file?path=out%2Fc.png"' in imgs[0], f"{name}: {html}"
+        assert len(imgs) == 1 and 'src="/api/file?path=%2Fout%2Fc.png"' in imgs[0], f"{name}: {html}"
         assert SECRET.replace("&", "&amp;") in html and 'data-icon="Image"' in html, f"{name}: {html}"
         for a in _anchors(html):
             assert 'target="_blank"' in a and 'rel="noopener noreferrer"' in a, f"{name}: {a}"
@@ -376,19 +396,136 @@ def test_the_editor_keeps_the_files_markup():
     assert "renderMarkdownDocument" not in _source(DOC_EDITOR)
 
 
+NORMALIZE_CASES = [
+    ("sandbox:/a b", "/api/file?path=%2Fa%20b"),
+    ("sandbox:///x", "/api/file?path=%2Fx"),
+    # Never spelled as a share: `//host/s` is SMB to that host on a Windows server.
+    ("sandbox://evil.example/s/x", "/api/file?path=%2Fevil.example%2Fs%2Fx"),
+    ("sandbox:/%5C%5Cevil.example%5Cs%5Cx", "/api/file?path=%2Fevil.example%5Cs%5Cx"),
+    ("sandbox:/C:/Users/a/x", "/api/file?path=C%3A%2FUsers%2Fa%2Fx"),
+    ("/api/file?path=a", "/api/file?path=a"),
+    ("/home/user/r.pdf", "/api/file?path=%2Fhome%2Fuser%2Fr.pdf"),
+    ("C:\\x\\r.pdf", "/api/file?path=C%3A%5Cx%5Cr.pdf"),
+    # As Markdown hands them over (percent-encoded): the path itself goes to the server.
+    ("C:%5Cx%5Cr.pdf", "/api/file?path=C%3A%5Cx%5Cr.pdf"),
+    ("/home/user/B%C3%BCcher/My%20File.csv", "/api/file?path=%2Fhome%2Fuser%2FB%C3%BCcher%2FMy%20File.csv"),
+    ("/home/user/100%.csv", "/api/file?path=%2Fhome%2Fuser%2F100%25.csv"),
+    ("https://x.example/r", "https://x.example/r"),
+    # A browser reads these as another host: a web link, not a file.
+    ("//host.example/x", "//host.example/x"),
+    ("/%5Chost.example/x", "/%5Chost.example/x"),
+    ("SANDBOX:/x", "SANDBOX:/x"),
+    ("sandbox:javascript:alert(1)", "sandbox:javascript:alert(1)"),
+    ("relative/a.csv", "relative/a.csv"),
+]
+
+
 def test_the_chat_uses_the_wrapper_and_the_moved_link_rule():
     page = _source(PAGE)
     chat = _slice(PAGE, "/** Renders markdown in chat bubbles", "// Component: Thinking Accordion")
     assert re.search(r"<Markdown\s+components=", chat) and "</Markdown>" in chat
-    assert "import { normalizeDownloadHref } from '@/lib/markdownImages';" in page
-    assert "const normalizeDownloadHref" not in page and "function normalizeDownloadHref" not in page
+    # The wrapper decides every link; the chat's anchor takes the href as it comes.
+    assert "normalizeDownloadHref" not in page, "page.tsx maps links on its own again"
+    assert "<a href={href} " in chat
     assert "renderMarkdownLinks" not in page
-    out = _run([["normalize", "sandbox:/a b"], ["normalize", "/home/user/r.pdf"],
-                ["normalize", "C:\\x\\r.pdf"], ["normalize", "https://x.example/r"],
-                ["chat", "[r](/home/user/r.pdf)", False]])
-    assert out[:4] == ["/api/file?path=a%20b", "/api/file?path=%2Fhome%2Fuser%2Fr.pdf",
-                       "/api/file?path=C%3A%5Cx%5Cr.pdf", "https://x.example/r"]
-    assert 'href="/api/file?path=%2Fhome%2Fuser%2Fr.pdf"' in out[4] and "data-icon" not in out[4], out[4]
+    wrapper = _source(WRAPPER)
+    assert "urlTransform={urlTransform}" in wrapper and "defaultUrlTransform(" in wrapper
+    out = _run([["normalize", raw] for raw, _ in NORMALIZE_CASES] + [["chat", "[r](/home/user/r.pdf)", False]])
+    for (raw, want), got in zip(NORMALIZE_CASES, out):
+        assert got == want, (raw, got)
+    assert 'href="/api/file?path=%2Fhome%2Fuser%2Fr.pdf"' in out[-1] and "data-icon" not in out[-1], out[-1]
+
+
+# -- links in Markdown: every renderer of the wrapper ------------------------------------------
+
+RENDERERS = [("chat", False), ("chat", True), ("preview", None), ("markdown", None)]
+RENDERER_IDS = ["bot", "user", "code viewer preview", "model card"]
+
+
+def _render_links(destinations):
+    """The href of the one link each destination renders to, in every renderer of the wrapper
+    (None when the link has no href at all)."""
+    ops = []
+    for op, dark in RENDERERS:
+        for dest in destinations:
+            md = f"[f]({dest})"
+            ops.append([op, md, dark] if op == "chat" else [op, md])
+    outs = iter(_run(ops))
+    result = {}
+    for name in RENDERER_IDS:
+        for dest in destinations:
+            html = next(outs)
+            anchors = _anchors(html)
+            assert len(anchors) == 1, (name, dest, html)
+            href = re.search(r'href="([^"]*)"', anchors[0])
+            result[(name, dest)] = (href.group(1).replace("&amp;", "&") if href else None, html)
+    return result
+
+
+FILE_LINKS = [
+    ("sandbox:/home/user/Documents/out.csv", "/api/file?path=%2Fhome%2Fuser%2FDocuments%2Fout.csv"),
+    ("C:\\Users\\a\\out.csv", "/api/file?path=C%3A%5CUsers%5Ca%5Cout.csv"),
+    ("C:/Users/a/out.csv", "/api/file?path=C%3A%2FUsers%2Fa%2Fout.csv"),
+    ("sandbox:/C:/Users/a/out.csv", "/api/file?path=C%3A%2FUsers%2Fa%2Fout.csv"),
+    ("/home/user/B\u00fccher/out.csv", "/api/file?path=%2Fhome%2Fuser%2FB%C3%BCcher%2Fout.csv"),
+    ("</home/user/My Files/out.csv>", "/api/file?path=%2Fhome%2Fuser%2FMy%20Files%2Fout.csv"),
+]
+
+
+def test_a_file_link_goes_to_the_file_lane():
+    got = _render_links([dest for dest, _ in FILE_LINKS])
+    for name in RENDERER_IDS:
+        for dest, want in FILE_LINKS:
+            href, html = got[(name, dest)]
+            assert href == want, f"{name}: {dest}: {html}"
+
+
+DANGEROUS_LINKS = [
+    "javascript:alert(1)", "JAVASCRIPT:alert(1)", "jav&#x09;ascript:alert(1)", "data:text/html,x",
+    "vbscript:msgbox(1)", "file:///etc/passwd", "blob:http://localhost:3000/a", "SANDBOX:/x",
+    "sandbox:javascript:alert(1)",
+]
+
+
+def test_dangerous_link_schemes_stay_empty():
+    got = _render_links(DANGEROUS_LINKS)
+    for name in RENDERER_IDS:
+        for dest in DANGEROUS_LINKS:
+            href, html = got[(name, dest)]
+            assert not href, f"{name}: {dest} kept a target: {html}"
+            attrs = " ".join(re.findall(r'="([^"]*)"', html)).lower()
+            for scheme in ("javascript", "vbscript", "data:", "file:", "blob:", "sandbox"):
+                assert scheme not in attrs, f"{name}: {dest}: {html}"
+
+
+SAFE_LINKS = ["https://x.example/a", "mailto:a@b.c", "#section", "relative/a.csv", "//host.example/x"]
+
+
+def test_safe_links_are_unchanged():
+    got = _render_links(SAFE_LINKS)
+    for name in RENDERER_IDS:
+        for dest in SAFE_LINKS:
+            href, html = got[(name, dest)]
+            assert href == dest, f"{name}: {dest}: {html}"
+
+
+def test_an_own_file_link_is_not_wrapped_twice():
+    dest = "/api/file?path=%2Fhome%2Fa.csv"
+    got = _render_links([dest])
+    for name in RENDERER_IDS:
+        href, html = got[(name, dest)]
+        assert href == dest, f"{name}: {html}"
+
+
+def test_a_windows_or_encoded_picture_path_loads_from_the_file_lane():
+    """Both Markdown libraries percent-encode a destination, so the decision sees `C:%5C...`;
+    the picture still loads its own file, in the wrapper and in the document renderer."""
+    md = "![c](C:\\Users\\a\\c.png)\n\n![d](/home/user/B\u00fccher/d.png)"
+    chat, doc = _run([["chat", md, False], ["doc", md]])
+    for name, html in (("chat", chat), ("document", doc)):
+        srcs = re.findall(r'<img\b[^>]*src="([^"]*)"', html)
+        assert srcs == ["/api/file?path=C%3A%5CUsers%5Ca%5Cc.png",
+                        "/api/file?path=%2Fhome%2Fuser%2FB%C3%BCcher%2Fd.png"], (name, html)
 
 
 # -- round 1: share paths, raw embeds, the copies, the wording ------------------------------
@@ -493,7 +630,7 @@ DROP = None
 KEEP_CASES = [
     # A src keeps the file lane's own address, never the raw value.
     (("img", "src", "/api/file?path=c.png"), "/api/file?path=c.png"),
-    (("img", "src", "sandbox:/out/c.png"), "/api/file?path=out%2Fc.png"),
+    (("img", "src", "sandbox:/out/c.png"), "/api/file?path=%2Fout%2Fc.png"),
     (("img", "src", "/api/config"), "/api/file?path=%2Fapi%2Fconfig"),
     (("img", "src", "https://evil.example/x.png"), DROP),
     (("img", "src", "/api/file?path=%5C%5Cevil%5Cs"), DROP),

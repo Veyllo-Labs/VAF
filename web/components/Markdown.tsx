@@ -3,22 +3,33 @@
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 /**
  * The one react-markdown renderer of the UI (chat bubbles, the Markdown preview of the Code
- * Viewer, the model card preview). It applies the image rule of `web/lib/markdownImages.ts`: an
+ * Viewer, the model card preview). It applies the rules of `web/lib/markdownImages.ts`: an
  * image loads only from this server's file lane, any other image is shown as a link marked with
- * an image icon, whose full address shows on hover and which says to a screen reader what it is.
+ * an image icon, whose full address shows on hover and which says to a screen reader what it is;
+ * a link to a sandbox, host or Windows path opens that file through the file lane
+ * (`normalizeDownloadHref`, in `urlTransform`).
  */
 import React, { useMemo } from 'react';
 import { useTranslations } from 'next-intl';
-import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform, type Components, type ExtraProps, type UrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Image as ImageIcon } from 'lucide-react';
-import { rehypeOwnImagesOnly, splitFirstGrapheme } from '@/lib/markdownImages';
+import { normalizeDownloadHref, rehypeOwnImagesOnly, splitFirstGrapheme } from '@/lib/markdownImages';
 
 type AnchorProps = React.ComponentProps<'a'> & ExtraProps;
 type ImgProps = React.ComponentProps<'img'> & ExtraProps;
 
 const remarkPlugins = [remarkGfm];
 const rehypePlugins = [rehypeOwnImagesOnly];
+
+// react-markdown's default filter empties every scheme it does not know, `sandbox:` and a drive
+// letter (`C:`) included, before any component sees the address, so a link to a file the agent
+// made had no target. A link is first sent to the file lane when it names a file, and every
+// result still passes the default filter: a scheme it refuses (`javascript:`, `data:`, `file:`)
+// stays refused, and the file lane's own address (`/api/file?path=...`) passes it unchanged. A
+// picture's address is not touched here; `rehypeOwnImagesOnly` has already decided it.
+const urlTransform: UrlTransform = (url, key, node) =>
+    defaultUrlTransform(key === 'href' && node.tagName === 'a' ? normalizeDownloadHref(url) : url);
 
 // Underlined because the base styles take a link's look away; the colour is the text's own, so
 // it reads in both themes. Callers with their own `a` (chat, Code Viewer) keep theirs.
@@ -69,7 +80,8 @@ export function Markdown({ children, components, className }: {
         return { img: DefaultImage, ...components, a: ImageAwareAnchor };
     }, [components, pictureLink]);
     const body = (
-        <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={merged}>
+        <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} urlTransform={urlTransform}
+            components={merged}>
             {children}
         </ReactMarkdown>
     );

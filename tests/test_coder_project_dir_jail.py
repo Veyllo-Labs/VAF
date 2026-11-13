@@ -15,6 +15,10 @@ Every folder the coder may work in now asks `project_dir_refusal` for the caller
 the file jail's own `jail_allows(mode="write")` on top of the unsafe check. An admin, the
 machine owner and a scope-less caller keep their behaviour. No LLM, no network: the paths
 under test end before a model is asked, and the spawn is a recorder.
+
+The last section, "The same tools on the main agent", pins the six tools the main agent
+has as well (the four git tools, update_codex, add_memory) per identity with real git; its
+mutations are listed at its head.
 """
 import os
 import subprocess

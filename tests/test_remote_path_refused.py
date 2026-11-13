@@ -785,16 +785,17 @@ def test_the_coder_loop_refuses_a_share_before_its_own_checks():
 def test_the_duplicate_write_check_never_probes_a_share(tmp_path, monkeypatch):
     from vaf.tools.coder import _identical_rewrite
 
+    anyone = {"scope": None, "role": None}
     (tmp_path / "a.txt").write_text("hello\n", encoding="utf-8")
-    assert _identical_rewrite("a.txt", "hello", str(tmp_path)) == str(tmp_path / "a.txt")
-    assert _identical_rewrite(str(tmp_path / "a.txt"), " hello ", str(tmp_path)) == str(tmp_path / "a.txt")
-    assert _identical_rewrite("a.txt", "other", str(tmp_path)) is None
-    assert _identical_rewrite("b.txt", "hello", str(tmp_path)) is None
+    assert _identical_rewrite("a.txt", "hello", str(tmp_path), **anyone) == str(tmp_path / "a.txt")
+    assert _identical_rewrite(str(tmp_path / "a.txt"), " hello ", str(tmp_path), **anyone) == str(tmp_path / "a.txt")
+    assert _identical_rewrite("a.txt", "other", str(tmp_path), **anyone) is None
+    assert _identical_rewrite("b.txt", "hello", str(tmp_path), **anyone) is None
 
     _windows_paths(monkeypatch)
     seen = _touches(monkeypatch)
     for spelled in REMOTE:
-        assert _identical_rewrite(spelled, "hello", str(tmp_path)) is None, spelled
+        assert _identical_rewrite(spelled, "hello", str(tmp_path), **anyone) is None, spelled
     assert seen == [], f"touched a share path: {seen}"
 
     src = _run_source()

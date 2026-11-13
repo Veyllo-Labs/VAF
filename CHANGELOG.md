@@ -256,6 +256,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **The coding agent no longer treats a refused file as read or written.** When the file tools
+  refused a write or an edit (a project's `.env`, a file in `.git` or `node_modules`, VAF's own
+  data, or a file outside your account's folders), the coding agent used to tell itself the file
+  was created and listed it as created in its summary, in the task list and as a download in the
+  chat. When they refused a read, it showed the refused file's contents in the live code view.
+  Now the agent gets the refusal, the file is not listed, and the live view shows nothing; the
+  same refusal three times in a row ends the run with that reason. A successful write to a file
+  whose name contains "locked" or "blocked" is no longer counted as an error. Needs a restart
+  of VAF for coding runs inside VAF's own process.
 - **Pictures in replies no longer load from other servers.** A picture in a reply, a Markdown
   file's preview, an attached Markdown document or a model card now loads only when it is a
   file on your VAF; a picture from anywhere else shows as a link with a picture icon that you

@@ -3236,16 +3236,46 @@ def _remote_path_refusal(fn_name: str, fn_args) -> Optional[str]:
     return None
 
 
-def _identical_rewrite(path: str, content: str, base_dir: str) -> Optional[str]:
+def _loop_call_failed(tools, fn_name: str, result) -> bool:
+    """Whether the coder loop's call did not do its work: the classifier every lane shares
+    (`vaf.core.context.tool_result_is_error`), called as the chat lane calls it, plus an
+    aborted call (`abort_kind`), whose outcome is unknown and so is never booked as done.
+
+    A refusal the file tools give from inside their run (`Access denied: ...`, `Invalid
+    path`) is a failure here: the funnel dispatched the call, so its `dispatched` flag cannot
+    tell, and the loop must neither book the file as written nor mirror a refused read."""
+    from vaf.core.context import tool_result_is_error
+    from vaf.core.tool_dispatch import abort_kind
+    text = str(result or "")
+    if abort_kind(text) is not None:
+        return True
+    tool = (tools or {}).get(fn_name)
+    return tool_result_is_error(
+        text, content_carrying=bool(getattr(tool, "result_is_deliverable", False)))
+
+
+def _identical_rewrite(path: str, content: str, base_dir: str, *, scope, role) -> Optional[str]:
     """The full path of a file that already holds exactly ``content`` (whitespace at the ends
     ignored), or None.
 
     A share or device path is answered None from its text, with no disk call: the write then
-    continues to the dispatch, where `_remote_path_refusal` answers it."""
+    continues to the dispatch, where `_remote_path_refusal` answers it. A path the file
+    tools' screen or the caller's jail refuses is answered None before the file is opened:
+    "identical" would record it as written and confirm a guessed content of a file the
+    caller may not touch; the dispatch then answers the refusal. ``scope`` and ``role`` have
+    no defaults, so a forgotten identity cannot mean "no jail"."""
     from vaf.core.path_jail import is_remote_path
     if is_remote_path(str(path or "")):
         return None
     full_path = path if os.path.isabs(path) else os.path.join(base_dir, path)
+    from vaf.tools.filesystem import is_safe_path, jail_allows
+    try:
+        if not is_safe_path(full_path)[0]:
+            return None
+        if not jail_allows(full_path, user_scope_id=scope, user_role=role, mode="write"):
+            return None
+    except Exception:
+        return None
     try:
         if not os.path.exists(full_path):
             return None
@@ -9527,9 +9557,11 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                             # CRITICAL: Check if we are just rewriting the same content
                             path = extracted_args["path"]
                             content = extracted_args["content"]
-                            # None for a share path, from its text alone: the dispatch below
-                            # answers it with the remote-path refusal.
-                            full_path = _identical_rewrite(path, content, base_dir)
+                            # None for a share path, from its text alone, and for a path the
+                            # file screen or the caller's jail refuses: the dispatch below
+                            # answers both with the tool's own refusal.
+                            full_path = _identical_rewrite(path, content, base_dir,
+                                                           scope=caller_scope, role=caller_role)
                             is_duplicate_write = full_path is not None
 
                             if is_duplicate_write:
@@ -10897,20 +10929,11 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         tui.append_stream(f"[DEBUG] Tool {fn_name} result: {str(result)[:100]}...")
                         result_str = str(result)
                         
-                        # Check if result indicates an error (even if no exception was raised)
-                        is_error_result = (
-                            result_str.startswith("❌") or
-                            result_str.startswith("Error:") or
-                            result_str.startswith("Tool Error:") or      # the funnel: raised / invalid input
-                            result_str.startswith("Security Error:") or  # the funnel: policy / allowlist
-                            result_str.startswith("[VAF_TOOL_TIMEOUT]") or  # the funnel: past its budget
-                            result_str.startswith("[VAF_TOOL_STOPPED]") or
-                            result_str.startswith("EDIT FAILED") or   # edit_file: search not found / not unique -> nothing written
-                            "permission denied" in result_str.lower() or
-                            "locked" in result_str.lower() or
-                            "file write error" in result_str.lower() or
-                            "cannot write" in result_str.lower()
-                        )
+                        # Did the call do its work? The shared classifier plus an abort
+                        # (_loop_call_failed): a refusal the tool itself answers (Access
+                        # denied: ...) is a failure, so it is never mirrored, booked as
+                        # written or counted as a success below.
+                        is_error_result = _loop_call_failed(self.local_tools, fn_name, result_str)
                         
                         # WebUI live editor: when the agent READS a file, mirror it into the
                         # editor so the view "follows" the agent during non-writing phases
@@ -10956,13 +10979,15 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                             f"**File**: {path}\n"
                                             f"**Error**: {result_str}\n\n"
                                             f"**Possible causes:**\n"
+                                            f"- The file tools refuse this path (the error says why: VAF's own data, a protected folder or file name, or outside this account's folders)\n"
                                             f"- File is locked by another program (editor, browser, etc.)\n"
                                             f"- Insufficient permissions\n"
                                             f"- Disk space issues\n\n"
                                             f"**Solution:**\n"
-                                            f"1. Close any programs that might have the file open\n"
-                                            f"2. Check file permissions\n"
-                                            f"3. Try a different file path\n\n"
+                                            f"1. Write a different path if the error says Access denied\n"
+                                            f"2. Close any programs that might have the file open\n"
+                                            f"3. Check file permissions\n"
+                                            f"4. Try a different file path\n\n"
                                             f"Stopped to prevent infinite loop."
                                         )
                             elif os.path.exists(path):
@@ -11240,8 +11265,10 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                 # a result rewritten after the fact ("File not found after write") never arrived.
                 result_str = str(result)
 
-                # Check for error patterns in result and prevent bash echo of errors
-                
+                # Check for error patterns in result and prevent bash echo of errors.
+                # Deliberately not _loop_call_failed: this judges a command's printed output
+                # for echoed error words (a bash answer starts with "$ <command>"), not
+                # whether the call did its work.
                 is_error = (
                     result_str.startswith("❌") or 
                     result_str.startswith("Error:") or
@@ -11282,16 +11309,18 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                 # Gate bookkeeping (verify-before-done, read-before-edit): the ORDER of
                 # writes vs. green verifies per task context, and the set of files this
                 # run has actually seen. Fed from the one place every tool result passes.
-                # Blocked calls never reach here (their handlers answer + continue), so
-                # a refused write does not count as a write.
+                # Calls refused before dispatch never reach here (their handlers answer and
+                # continue); a call the tool itself refused or failed does, and
+                # _loop_call_failed keeps it out of the write and read bookkeeping.
                 try:
                     if not hasattr(loop, 'guard_seq'):
                         loop.guard_seq = 0
                         loop.files_known = set()
                     loop.guard_seq += 1
                     _gpath = fn_args.get("path", "") if isinstance(fn_args, dict) else ""
+                    _gfailed = _loop_call_failed(self.local_tools, fn_name, result_str)
                     if fn_name in ("write_file", "edit_file"):
-                        if not result_str.lstrip().lower().startswith("error"):
+                        if not _gfailed:
                             current_state.last_write_seq = loop.guard_seq
                             if _gpath:
                                 loop.files_known.add(os.path.realpath(
@@ -11315,7 +11344,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                     else:
                                         tui.append_stream(f"✅ LINTER PASS: {os.path.basename(_gpath)}")
                     elif fn_name == "read_file":
-                        if _gpath and not result_str.lstrip().startswith("Error"):
+                        if _gpath and not _gfailed:
                             loop.files_known.add(os.path.realpath(
                                 _gpath if os.path.isabs(_gpath) else os.path.join(base_dir, _gpath)))
                     elif fn_name == "run_tests":

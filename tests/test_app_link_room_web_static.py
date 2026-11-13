@@ -140,12 +140,14 @@ def test_what_an_agent_room_offers_is_hidden_in_the_veyllo_app_room():
         assert "tabIndex={appRoomWords ? -1 : undefined}" in button
     # Only in the room: the definition and exactly the two uses, each behind the room's gate, so
     # the chat's buttons cannot pick up the switched-off look. MUTATION: add an ungated
-    # `OFF_IN_APP_ROOM` to either button - red.
+    # `OFF_IN_APP_ROOM` to either button, or negate the gate (`!appRoomWords &&`) - red.
     assert PAGE.count("OFF_IN_APP_ROOM") == 3
     uses = [i for i in range(len(PAGE)) if PAGE.startswith("OFF_IN_APP_ROOM", i)]
     assert PAGE.startswith("const OFF_IN_APP_ROOM = ", uses[0] - len("const "))
     for at in uses[1:]:
-        assert PAGE[:at].endswith("appRoomWords && "), PAGE[at - 40:at + 20]
+        # The whole line, so `!appRoomWords && ...` (the look in the chat, not the room) fails.
+        line = PAGE[PAGE.rindex("\n", 0, at) + 1:PAGE.index("\n", at)].strip()
+        assert line == "appRoomWords && OFF_IN_APP_ROOM", line
     off = _between(PAGE, "const OFF_IN_APP_ROOM = \"", "\";")
     for cls in ("disabled:opacity-40", "disabled:cursor-not-allowed", "disabled:hover:bg-transparent"):
         assert cls in off.split(), cls

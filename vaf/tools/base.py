@@ -83,9 +83,10 @@ class BaseTool(ABC):
     # openers its own failure answers start with, case as written. When set, VAF's loops
     # that book a call as done (the workflow engine's step outcome, the coding loop) count
     # a call of this tool as failed only when its answer opens with one of these or with
-    # the funnel's own "Tool Error:" / "Security Error:"; the shared classifier's wide
+    # the funnel's own (tool_dispatch.FUNNEL_FAILURE_OPENERS); the shared classifier's wide
     # openers ("failed", "cannot ", "error" in any case) are not asked, because a file may
-    # begin with "Failed attempts". Empty means the shared classifier decides.
+    # begin with "Failed attempts". Empty means the shared classifier decides. A tuple; a
+    # bare string is read as one opener.
     failure_openers: tuple[str, ...] = ()
 
     # The arguments that carry a credential - a password, a token, a login. Declared, the

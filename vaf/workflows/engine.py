@@ -580,6 +580,26 @@ def _step_answer_failed(tool, result) -> bool:
     return tool_call_failed(tool, result, content_carrying=True)
 
 
+_STATUS_TAG_RE = re.compile(r"^\[VAF_CODING_AGENT_STATUS:[^\]\n]*\]\s*")
+
+
+def _step_failure_reason(result) -> str:
+    """The failed step's error as a person reads it (the run's `error`, shown as the reason
+    a workflow stopped): one line, at most 200 characters. A report's status tag and its
+    markdown heading marks are dropped ("### ❌ Repeated Error Detected" reads "Repeated
+    Error Detected. ..."), and an answer that already opens with "Error:" is not prefixed
+    a second time."""
+    text = _STATUS_TAG_RE.sub("", str(result or "").strip())
+    lines = [ln.strip().lstrip("#❌ \t").strip() for ln in text.splitlines()]
+    lines = [ln for ln in lines if ln]
+    if len(lines) > 1 and not lines[0].endswith((".", ":", "!", "?")):
+        lines[0] += "."
+    text = " ".join(lines)
+    if not text.lower().startswith("error:"):
+        text = f"Tool returned error message: {text}"
+    return text[:200]
+
+
 def _workflow_step_timeout(tool_name: str, default: float | None = None) -> float:
     """Worst-case hard cap for one workflow step.
 
@@ -851,6 +871,7 @@ class WorkflowEngine:
         check_stop: Optional[Callable[[], bool]] = None,
         wait_for_subagents: bool = False,
         _preexisting: Any = _NO_SNAPSHOT,
+        _completed_prefix: Optional[List[WorkflowStep]] = None,
     ) -> WorkflowResult:
         """
         Execute a workflow with the given steps.
@@ -866,6 +887,10 @@ class WorkflowEngine:
                 the in-process hang and the abandoned-thread-holds-the-LLM-lock problem.
                 browser_agent spawns too: the step sets VAF_SPAWN_BROWSER_SUBAGENT, which
                 BrowserAgentTool.run reads (standalone browser use stays in-process).
+            _completed_prefix: the steps a resumed run already went through (internal,
+                handed in by resume_workflow). A pause of this leg writes them in front of
+                its own steps, so the record keeps every earlier step's outcome and the
+                final resume can still see a failed one.
 
         Returns:
             WorkflowResult with all outputs and status
@@ -1682,8 +1707,11 @@ class WorkflowEngine:
                     from vaf.core.subagent_ipc import get_ipc, PausedWorkflow
                     
                     # Serialize current state
+                    # The steps of earlier legs first (_completed_prefix), so a run
+                    # paused a second time still carries their outcomes.
+                    _prefix = list(_completed_prefix or ())
                     steps_data = []
-                    for s in steps:
+                    for s in _prefix + list(steps):
                         steps_data.append({
                             'tool': s.tool,
                             'input_template': s.input_template,
@@ -1714,7 +1742,7 @@ class WorkflowEngine:
                     paused_wf = PausedWorkflow(
                         workflow_id=workflow_id,
                         waiting_for_task_id=task_id,
-                        current_step_index=i - 1,  # 0-based index (i is 1-based)
+                        current_step_index=len(_prefix) + i - 1,  # 0-based (i is 1-based)
                         outputs=outputs,
                         variables=dict(variables or {}),
                         steps_data=steps_data,
@@ -1788,7 +1816,7 @@ class WorkflowEngine:
 
                 if is_error_result:
                     step.status = StepStatus.FAILED
-                    step.error = f"Tool returned error message: {result_str[:200]}"
+                    step.error = _step_failure_reason(result_str)
                     step.result = result
                     step.duration = time.time() - step_start
                     error = step.error
@@ -2168,7 +2196,7 @@ class WorkflowEngine:
         current_step.result = subagent_result
         if _awaited_failed:
             current_step.status = StepStatus.FAILED
-            current_step.error = f"Tool returned error message: {str(subagent_result)[:200]}"
+            current_step.error = _step_failure_reason(subagent_result)
             UI.error(f"  [FAIL] {current_step.error}")
         else:
             current_step.status = StepStatus.SUCCESS
@@ -2192,9 +2220,17 @@ class WorkflowEngine:
         _stored = getattr(paused_wf, "preexisting_files", ())
         _preexisting = None if _stored is None else tuple(_stored or ())
 
-        if _awaited_failed and (not current_step.optional or not remaining_steps):
-            # A failed step ends the run as in execute() (stop_on_error), and a failed
-            # optional last step leaves the run failed as there.
+        # Every step this run has gone through so far, earlier legs included (a run paused
+        # more than once carries them in its record, see _completed_prefix). A step that
+        # failed among them, an optional one or the awaited one, leaves the run failed at
+        # the end, exactly as success = all(...) does in execute().
+        _done = steps[:paused_wf.current_step_index + 1]
+        _first_failure = next((s for s in _done if s.status == StepStatus.FAILED), None)
+        if _first_failure is not None and not _first_failure.error:
+            _first_failure.error = f"Step {_first_failure.tool} failed"
+
+        if _awaited_failed and not current_step.optional:
+            # A failed step ends the run as in execute() (stop_on_error).
             return WorkflowResult(
                 success=False,
                 outputs=outputs,
@@ -2208,14 +2244,15 @@ class WorkflowEngine:
 
         if not remaining_steps:
             # Workflow is complete
-            UI.event("Workflow", "Completed!", style="success")
+            if _first_failure is None:
+                UI.event("Workflow", "Completed!", style="success")
             return WorkflowResult(
-                success=True,
+                success=_first_failure is None,
                 outputs=outputs,
-                final_output=subagent_result,
+                final_output=None if _awaited_failed else subagent_result,
                 steps=steps,
                 total_duration=0.0,  # Can't track across pause
-                error=None,
+                error=_first_failure.error if _first_failure is not None else None,
                 project_path=_project_path,
                 preexisting_files=_preexisting,
             )
@@ -2229,6 +2266,7 @@ class WorkflowEngine:
             variables=outputs,  # Use all outputs as variables
             stop_on_error=True,
             _preexisting=_preexisting,
+            _completed_prefix=_done,
         )
         
         # If remaining steps also paused, propagate that
@@ -2240,13 +2278,13 @@ class WorkflowEngine:
         all_outputs = {**outputs, **remaining_result.outputs}
         
         return WorkflowResult(
-            # A failed optional awaited step leaves the run failed, as in execute().
-            success=remaining_result.success and not _awaited_failed,
+            success=remaining_result.success and _first_failure is None,
             outputs=all_outputs,
             final_output=remaining_result.final_output,
             steps=all_steps,
             total_duration=remaining_result.total_duration,
-            error=remaining_result.error or (current_step.error if _awaited_failed else None),
+            error=remaining_result.error or (
+                _first_failure.error if _first_failure is not None else None),
             project_path=remaining_result.project_path,
             preexisting_files=remaining_result.preexisting_files,
         )

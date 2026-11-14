@@ -241,7 +241,8 @@ work.
 - **A tool whose answer is content declares its failure openers.** `read_file` declares
   `failure_openers` (`Access denied:`, `Invalid path`, `Error:`, `Error reading `), so a file
   that begins with "Failed attempts" is a successful read; only those openers and the funnel's
-  two fail it. A file whose first line opens with exactly one of them (a log that starts with
+  own refusals (`FUNNEL_FAILURE_OPENERS`: `Tool Error:`, `Security Error:`, the confirmation
+  gate's `[ERROR] Tool '` and `[CANCELLED] Tool '`) fail it. A file whose first line opens with exactly one of them (a log that starts with
   `Error: `) is read as a failed step.
 - **The coding agent's failure reports** open with `[VAF_CODING_AGENT_STATUS: FAILED]` or
   `### ❌` (`Task Failed`, `Repeated Error Detected`); both are shared openers. A `PARTIAL` or
@@ -251,7 +252,10 @@ work.
   <reason>`, whatever the child's text was.
 - **A resumed run judges the awaited step the same way.** A child that finished but answered
   with its failure report fails the step: the run ends there, or, for an `optional` step, goes
-  on and reports failed at the end. Its report is not handed to the next step. NAMED BOUNDARY:
+  on and reports failed at the end. Its report is not handed to the next step. A run that
+  pauses again keeps every earlier step in its record (`_completed_prefix`), so the final
+  resume decides from all of them: an `optional` step that failed before the first pause, or
+  an awaited one that failed before a second pause, still leaves the run failed. NAMED BOUNDARY:
   resume applies no `on_success` / `on_failure` jump for the awaited step, so a failed awaited
   step with `on_failure` ends the run rather than running the next step.
 - **A failure is never retried.** The same arguments meet the same screen, and for a send or
@@ -262,7 +266,10 @@ work.
   three times). When those runs are used up, the last answer is booked as a failed step like
   any other.
 
-A failed step then does what the step says: the run stops (`stop_on_error`), goes on
+The run's `error` is the failed step's answer in one line, at most 200 characters, with a
+report's status tag and heading marks dropped (`Repeated Error Detected. The same error
+occurred ...`); an answer that does not open with `Error:` gets `Tool returned error message: `
+in front. A failed step then does what the step says: the run stops (`stop_on_error`), goes on
 (`optional`, the step stays failed and the run reports failed), or jumps (`on_failure`, the
 step counts as handled and the run can still succeed).
 

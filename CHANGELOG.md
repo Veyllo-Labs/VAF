@@ -61,7 +61,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   file was refused (VAF's own data, a protected folder, outside your account's folders), a
   sandbox step that could not start, and a helper that crashed or timed out used to count as
   done, so the workflow said it completed although nothing was written. Those steps now fail,
-  and the workflow stops or goes on as the step says (`optional`, `on_failure`). The other way
+  and the workflow stops or goes on as the step says (`optional`, `on_failure`); a failed
+  step still counts when the workflow waited for a background helper afterwards. The other way
   round, a step whose result merely mentions "Task Failed" no longer fails, and a step whose
   result mentions a context size is no longer run three times (a send step sent its message
   three times). Needs a restart of VAF.

@@ -683,10 +683,14 @@ def abort_kind(result) -> str | None:
     return None
 
 
-# What the funnel itself answers when it did not run a call or the call raised (the
-# argument check, the policy and authorizer stages, a tool that raised). A tool that
-# declares its own failure openers is still judged failed on these.
-FUNNEL_FAILURE_OPENERS = ("Tool Error:", "Security Error:")
+# What the funnel itself answers when it did not run a call or the call raised: the
+# argument check and a tool that raised ("Tool Error:"), the policy and authorizer stages
+# ("Security Error:"), and the confirmation gate, unconfirmed ("[ERROR] Tool '<name>'
+# requires confirmation") or declined ("[CANCELLED] Tool '<name>' cancelled by user.").
+# The last two are anchored with the quoted tool name, so a document that opens with a
+# bare "[ERROR]" is not taken for one. A tool that declares its own failure openers is
+# still judged failed on these.
+FUNNEL_FAILURE_OPENERS = ("Tool Error:", "Security Error:", "[ERROR] Tool '", "[CANCELLED] Tool '")
 
 
 def tool_call_failed(tool: Any, result: Any, *, content_carrying: bool | None = None) -> bool:
@@ -712,7 +716,10 @@ def tool_call_failed(tool: Any, result: Any, *, content_carrying: bool | None = 
     text = str(result or "")
     if abort_kind(text) is not None:
         return True
-    openers = tuple(getattr(tool, "failure_openers", None) or ())
+    openers = getattr(tool, "failure_openers", None) or ()
+    # A bare string is one opener, never a tuple of its characters (which would fail
+    # nearly every answer).
+    openers = (openers,) if isinstance(openers, str) else tuple(openers)
     if openers:
         return text.startswith(openers + FUNNEL_FAILURE_OPENERS)
     from vaf.core.context import tool_result_is_error

@@ -35,7 +35,17 @@ MUTATIONS, each turns the named test red:
 - `_await_subagent` returning `task.result or task.error` again -> test_await_subagent_keeps_the_childs_status,
   test_a_failed_child_is_a_failed_step;
 - `resume_workflow` booking the awaited step SUCCESS unconditionally, or going on after a
-  non-optional failure -> test_resume_books_a_failed_awaited_step.
+  non-optional failure -> test_resume_books_a_failed_awaited_step;
+- a bare-string `failure_openers` split into characters again, the confirmation gate's two
+  openers dropped from `FUNNEL_FAILURE_OPENERS`, or `[ERROR] Tool '` shortened to `[ERROR]`
+  -> test_tool_call_failed_rules;
+- `_step_failure_reason` prefixing an `Error:` answer again -> test_a_failed_child_is_a_failed_step;
+  keeping the heading marks -> test_resume_books_a_failed_awaited_step;
+- the pause record without the earlier legs (`_completed_prefix` not written, or not handed
+  to the next leg) -> test_an_awaited_failure_survives_a_second_pause;
+- resume deciding success from the awaited step alone, at the last step
+  -> test_an_optional_failure_before_the_first_pause_fails_the_run, or after the remaining
+  steps -> test_an_optional_failure_before_the_pause_fails_a_run_that_goes_on.
 """
 import inspect
 
@@ -132,6 +142,18 @@ def test_tool_call_failed_rules():
     assert tool_call_failed(d, "Security Error: not here") is True
     assert tool_call_failed(d, "Failed attempts are listed below") is False
     assert tool_call_failed(d, "Error: not one of mine") is False
+    # The confirmation gate's own answers, anchored with the quoted tool name.
+    assert tool_call_failed(d, "[ERROR] Tool 'notes' requires confirmation (no channel).") is True
+    assert tool_call_failed(d, "[CANCELLED] Tool 'notes' cancelled by user.") is True
+    assert tool_call_failed(d, "[ERROR] codes are listed in the table below") is False
+
+    class DeclaresAString:
+        failure_openers = "Nope:"
+    # A bare string is one opener, not a tuple of its characters.
+    s = DeclaresAString()
+    assert tool_call_failed(s, "Nope: refused") is True
+    assert tool_call_failed(s, "Notes for today") is False
+    assert tool_call_failed(s, "everything is fine") is False
 
     # Otherwise the shared classifier, content-carrying as the caller says.
     body = "Summary\nthe tool failed twice before it worked"   # whole-content belt only
@@ -315,6 +337,8 @@ def test_a_failed_child_is_a_failed_step(home):
         wait_for_subagents=True)
     assert result.paused is False
     assert result.steps[0].status == StepStatus.FAILED, result.steps[0].result
+    # One "error", not "Tool returned error message: Error: ...".
+    assert str(result.error).startswith("Error: document_agent did not finish:"), result.error
     assert "CRASH DETECTED" in str(result.error)
     assert result.success is False and after.calls == 0
 
@@ -349,7 +373,9 @@ def test_resume_books_a_failed_awaited_step(home):
     failed = "### ❌ Repeated Error Detected\n\nThe same error occurred 3 times in a row"
     result, calls = _resume(home, failed)
     assert result.success is False
-    assert str(result.error).startswith("Tool returned error message:"), result.error
+    # The reason a person reads: no heading marks, one line.
+    assert result.error == ("Tool returned error message: Repeated Error Detected. "
+                            "The same error occurred 3 times in a row"), result.error
     assert result.steps[0].status == StepStatus.FAILED
     assert calls == 0
     assert home.ipc.get_all_paused_workflows() == []
@@ -376,3 +402,68 @@ def test_the_engine_has_one_step_rule():
     assert "is_error_result = _step_answer_failed(tool, result)" in src
     assert "is_context_error_in_result = _step_answer_failed(tool, result) and" in src
     assert "_step_answer_failed(" in inspect.getsource(WorkflowEngine.resume_workflow)
+
+
+# ── a run paused more than once keeps every earlier step's outcome ────────────────────
+
+def _delegating(agent_type):
+    def _fn(**kw):
+        from vaf.core.subagent_spawn import spawn_subagent
+        return spawn_subagent(agent_type, "work").marker
+    return _Tool(_fn)
+
+
+def _only_record(home):
+    (record,) = home.ipc.get_all_paused_workflows()
+    return record
+
+
+def test_an_optional_failure_before_the_first_pause_fails_the_run(home):
+    tools = {"first": _Tool(lambda **kw: "Access denied: outside your own data"),
+             "coding_agent": _delegating("coding_agent")}
+    paused = _engine(tools).execute(
+        [_step("first", "a", optional=True), _step("coding_agent", "b")], variables={})
+    assert paused.paused is True, paused
+    done = "[VAF_CODING_AGENT_STATUS: COMPLETE]\n\n### ✅ Task Completed\n\nAll done."
+    result = _engine(tools).resume_workflow(_only_record(home), done)
+    assert result.steps[1].status == StepStatus.SUCCESS
+    assert result.success is False
+    assert "Access denied" in str(result.error), result.error
+
+
+def test_an_optional_failure_before_the_pause_fails_a_run_that_goes_on(home):
+    third = _Tool(lambda **kw: "three")
+    tools = {"first": _Tool(lambda **kw: "Access denied: outside your own data"),
+             "coding_agent": _delegating("coding_agent"), "third": third}
+    paused = _engine(tools).execute(
+        [_step("first", "a", optional=True), _step("coding_agent", "b"), _step("third", "c")],
+        variables={})
+    assert paused.paused is True, paused
+    done = "[VAF_CODING_AGENT_STATUS: COMPLETE]\n\n### ✅ Task Completed\n\nAll done."
+    result = _engine(tools).resume_workflow(_only_record(home), done)
+    assert third.calls == 1
+    assert [s.status for s in result.steps] == [StepStatus.FAILED, StepStatus.SUCCESS,
+                                                StepStatus.SUCCESS]
+    assert result.success is False
+    assert "Access denied" in str(result.error), result.error
+
+
+def test_an_awaited_failure_survives_a_second_pause(home):
+    tools = {"coding_agent": _delegating("coding_agent"),
+             "document_agent": _delegating("document_agent")}
+    steps = [_step("coding_agent", "a", optional=True), _step("document_agent", "b")]
+    first = _engine(tools).execute(steps, variables={})
+    assert first.paused is True and first.waiting_for_agent == "coding_agent"
+
+    failed = "### ❌ Repeated Error Detected\n\nThe same error occurred 3 times in a row"
+    second = _engine(tools).resume_workflow(_only_record(home), failed)
+    assert second.paused is True and second.waiting_for_agent == "document_agent", second
+    record = _only_record(home)
+    # The new record holds the first leg too, with its failed step.
+    assert [d["status"] for d in record.steps_data][:1] == ["failed"]
+    assert record.current_step_index == 1
+
+    result = _engine(tools).resume_workflow(record, "the document is written")
+    assert [s.status for s in result.steps] == [StepStatus.FAILED, StepStatus.SUCCESS]
+    assert result.success is False
+    assert "Repeated Error Detected" in str(result.error), result.error

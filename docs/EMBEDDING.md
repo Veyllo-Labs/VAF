@@ -1480,8 +1480,11 @@ results independently.
 openers its own failure answers start with: `failure_openers = ("Error:",)` on a
 notes tool. VAF's loops that book a call as done, the workflow engine's step
 outcome and the coding loop, then count a call of that tool as failed only when its
-answer opens with one of those, or with the funnel's own `Tool Error:` /
-`Security Error:`; a note that begins with "Failed attempts" is a successful call.
+answer opens with one of those, or with the funnel's own refusals (`Tool Error:`,
+`Security Error:`, and the confirmation gate's `[ERROR] Tool '...' requires
+confirmation` and `[CANCELLED] Tool '...' cancelled by user.`); a note that begins
+with "Failed attempts" is a successful call. Declare a tuple; a bare string
+(`failure_openers = "Error:"`) is read as one opener, not as its characters.
 Without the declaration the shared classifier decides; a workflow step is judged
 by the answer's opening only (`Error`, `Access denied:`, `Cannot `, `Failed` and the
 rest of its list), because a step's answer is data for the next step.

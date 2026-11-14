@@ -105,7 +105,8 @@ class PythonExecTool(BaseTool):
         # out of its environment (measured: the model did exactly that once host_bash refused
         # curl). The same check host_bash applies to `python -c` (vaf/core/command_policy.py).
         from vaf.core.command_policy import python_code_categories
-        if "ftp_transfer" in python_code_categories(code):
+        code_categories = python_code_categories(code)
+        if "ftp_transfer" in code_categories:
             return ("[BLOCKED] python_exec: this code moves files over FTP (ftplib or an ftp:// "
                     "address). Use the ftp tool: it asks before a new server, checks the "
                     "certificate, and takes stored credentials by name (login_credential, and "
@@ -124,6 +125,16 @@ class PythonExecTool(BaseTool):
                 "This is blocked by default for security.\n\n"
                 "Use 'python_sandbox' for safe execution, or configure trust policy to allow python_exec."
             )
+        # A standing or chat grant lets this run where nobody is asked (the coding agent, a
+        # workflow step). There a string naming a network share or a Windows device path is
+        # refused: on Windows opening one sends this account's login to that host, and no
+        # person saw the code. A yes to THIS call keeps it (the same rule host_bash applies).
+        if "share_path" in code_categories and kwargs.get("_call_confirmed") is not True:
+            return ("[BLOCKED] python_exec: this code names a network share or a Windows device "
+                    "path, which on Windows makes this computer contact that host with this "
+                    "account's login, and nobody confirmed this call. Ask for it in the chat, "
+                    "where the person sees and confirms it, or copy the files to a local "
+                    "folder first.")
 
         logger.warning(f"⚠️ Executing Python code on HOST (unsandboxed): {code[:50]}...")
 

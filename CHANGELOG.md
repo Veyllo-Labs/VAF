@@ -275,6 +275,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **Commands nobody confirmed no longer reach a network share.** The host shell (`host_bash`)
+  and `python_exec` now refuse a network share or Windows device path (`\\server\share`,
+  `\\?\UNC\...`, `file://server/...`) in a coding agent run or a workflow step, where nobody
+  confirms the command: on Windows, naming one sends your account's login to that host. In the
+  chat the confirmation dialog shows it as "share path" and runs it on a yes. Other network
+  access from those runs (downloads, local services) is unchanged.
 - **The coding agent no longer treats a refused file as read or written.** When the file tools
   refused a write or an edit (a project's `.env`, a file in `.git` or `node_modules`, VAF's own
   data, or a file outside your account's folders), the coding agent used to tell itself the file

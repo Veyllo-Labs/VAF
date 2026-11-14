@@ -16,8 +16,13 @@ owner always have it. HOW each use is controlled:
   2. The coding agent and workflow steps run it WITHOUT asking (vaf/tools/coder.py,
      vaf/workflows/engine.py). Deliberate: both run unattended, a dialog would stall them,
      and a coder that needs a host build or a host CLI must not stop for it. What still
-     applies there: the account allowlist, the policy block, and (for workflow steps) an
-     application's authorizer.
+     applies there: the account allowlist, the policy block, (for workflow steps) an
+     application's authorizer, and the stricter command check below. The funnel tells the
+     tool whether a person or the application confirmed THIS call (`_call_confirmed`,
+     accepts_call_confirmation); an unconfirmed call, a direct `run` included, is judged
+     with the `host_unattended` profile, which also refuses a network share or Windows
+     device path (`share_path`): on Windows naming `\\\\host\\share` makes the machine open
+     an SMB connection carrying the account's NTLM login attempt, and nobody saw the command.
   3. The main agent's DIRECT call from a messaging channel (Telegram/WhatsApp/Discord) is
      refused, because the person cannot be shown the confirmation there. The policy does it
      (vaf/core/tool_contract.evaluate_tool_policy, section 1a): a dangerous tool with
@@ -30,13 +35,25 @@ owner always have it. HOW each use is controlled:
      tap for one call, nothing standing. The command check below still runs after the tap.
 
 A cheap blocklist stops the few catastrophic patterns (command_policy, host profile).
+
+NAMED BOUNDARY, what an unconfirmed command still reaches on the network: everything the
+machine reaches. Loopback, which includes VAF's own tokenless loopback trust (a tokenless
+request from 127.0.0.1 is the machine owner; measured: an unconfirmed `curl` to a listener on
+127.0.0.1 ran with no question and was answered), the LAN, the internet, link-local addresses
+with a cloud metadata service, and multicast. Deliberate: the coding agent's downloads (pip,
+npm, git clone) run here by design (vaf/tools/bash.py sends them here). A cut that keeps them
+(pasta without its gateway mapping) closes loopback only, for about 150 ms a call and a package
+most systems lack, and the same shell reads the same data from disk; a full cut
+(`bwrap --unshare-net`, 2.6 ms) ends the downloads. The account permission is the answer
+there; the per-start IPC token that replaces the tokenless loopback trust is a change of its
+own (docs/setup/NETWORK_FEATURES.md, Layer 3).
 """
 from __future__ import annotations
 
 import subprocess
 
 from vaf.tools.base import BaseTool
-from vaf.core.command_policy import is_command_safe  # offline classifier, strict profile
+from vaf.core.command_policy import is_command_safe  # offline classifier, host profiles
 
 
 class HostBashTool(BaseTool):
@@ -52,6 +69,10 @@ class HostBashTool(BaseTool):
     # admin names it (the module docstring).
     account_opt_in = True
     coder_only = False               # offered to the main agent; the coder may call it too
+    # Whether a person (or the application's authorizer) confirmed THIS call: the funnel
+    # assigns `_call_confirmed`, overwriting the model's, and an unconfirmed call gets the
+    # stricter command check (the module docstring, point 2).
+    accepts_call_confirmation = True
     # Whose command it is: a background command belongs to this person's chat, and the
     # turn that wakes the chat when it ends runs as them.
     identity_kwargs = ("user_scope_id", "username", "user_role")
@@ -107,8 +128,11 @@ class HostBashTool(BaseTool):
 
         timeout = self._command_timeout(kwargs)
 
-        # Reisleine: refuse the handful of catastrophic patterns even after confirmation.
-        is_safe, warning = is_command_safe(command, profile="host")
+        # Reisleine: refuse the handful of catastrophic patterns even after confirmation, and
+        # a share or device path where nobody confirmed this call. Before the background
+        # branch, so a background start is held to the same check.
+        profile = "host" if kwargs.get("_call_confirmed") is True else "host_unattended"
+        is_safe, warning = is_command_safe(command, profile=profile)
         if not is_safe:
             return f"[BLOCKED] {warning}"
 

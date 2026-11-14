@@ -1018,12 +1018,16 @@ def test_no_refusal_of_the_base_is_lost():
     assert lost == []
 
 
-def test_the_corpus_verdicts_and_categories_hold():
+def test_the_corpus_verdicts_and_categories_hold(monkeypatch):
     """Every verdict and every category of the corpus as recorded, per lane. A change of the
     splitter or the classifier that moves one fails here and is decided, then recorded in
     the corpus file.
     MUTATION: read a `$((` as arithmetic only - red; read npm ungated - red;
-    MUTATION: name a login `ftp_transfer` - red (the category, the verdict holds)."""
+    MUTATION: name a login `ftp_transfer` - red (the category, the verdict holds).
+    The corpus is the POSIX reading: on a Windows host `//dev/fd/3` also names the share
+    `\\\\dev\\fd` (`share_path`), which tests/test_unattended_host_share_paths.py pins."""
+    from vaf.core import command_policy
+    monkeypatch.setattr(command_policy, "_windows_host", lambda: False)
     moved = []
     for row in _corpus():
         verdicts = [classify_command(row["command"], profile=p)

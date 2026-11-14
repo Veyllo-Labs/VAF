@@ -117,6 +117,9 @@ def is_remote_path(spelled: str) -> bool:
     checks and ``git_add_commit`` were such lanes) is pinned by the behavioral tests in the
     same file, not by the scan. The host shell (``host_bash``) stays outside: its commands
     reach whatever the machine reaches, which is a question of its own, not a path screen.
+    Where nobody confirmed the command (the coding agent, a workflow step), the command
+    policy's ``share_path`` category refuses one that names a share or device path, read from
+    the raw text (``share_paths`` in vaf/core/command_policy.py, which asks this function).
 
     NAMED BOUNDARY: ``run_project_git`` opens its ``cwd`` (`open_folder`; on Windows
     ``os.path.isdir``) without asking here, because every caller has refused a share or

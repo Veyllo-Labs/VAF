@@ -705,12 +705,17 @@ What an embedded agent can and cannot do on the host - the short version of
   continues. The coder sub-agent's shell needs bubblewrap or Docker and
   refuses otherwise.
 - **Host execution is opt-in.** `python_exec` (unsandboxed Python on the
-  host) checks for itself, on top of the gate, that the person allowed it
-  beyond a single call: a persisted `set_tool_policy("python_exec",
-  "allow")`, or their "for this chat" grant for the chat the call runs in
-  (`vaf.core.trust.grant_tool_for_chat`, in memory, keyed on the person and
-  the session). A one-call confirmation is not enough: the tool cannot tell
-  which call it was given for. File tools write to the host as the gate
+  host) checks for itself, on top of the gate, that the person allowed it:
+  a persisted `set_tool_policy("python_exec", "allow")`, their "for this
+  chat" grant for the chat the call runs in (`vaf.core.trust.grant_tool_for_chat`,
+  in memory, keyed on the person and the session), or their "only this time"
+  for THIS call, which the funnel hands over as `_call_confirmed` (see "A tool
+  that checks for itself whether it may run"). A standing or chat grant lets it
+  run where nobody is asked (a workflow step, VAF's coding agent); there, and on
+  a direct `run()`, `python_exec` and `host_bash` refuse code or a command that
+  names a network share or a Windows device path (`\\server\share`,
+  `\\?\UNC\...`, `file://server/...`), because on Windows naming one sends the
+  account's login to that host. File tools write to the host as the gate
   allows.
 - **Network posture.** `import vaf` and `Agent(config=...)` open no ports and
   start no services. An API provider means outbound HTTPS only. Local mode
@@ -1536,7 +1541,13 @@ funnel's gate asked a person about THIS call and they said yes (once, for this
 chat, always), or your authorizer `allow()`ed it; False otherwise. The funnel
 ASSIGNS the value, so a model that writes `_call_confirmed: true` into its
 arguments is overwritten. VAF's `python_exec` uses it, so "only this time" runs
-the code instead of being refused by the tool's own check.
+the code instead of being refused by the tool's own check. VAF's `host_bash` uses
+it to choose how strictly the command is read: an unconfirmed call (a workflow
+step, the coding agent, and a direct `HostBashTool().run(...)` of yours, which
+carries no value at all) is classified with the `host_unattended` profile of
+`vaf/core/command_policy.py`, which also refuses a network share or Windows
+device path (`share_path`); a confirmed one gets the `host` profile, where the
+same category is only a note the dialog shows.
 
 **A tool whose effect is not in a folder.** A trusted directory silences the
 confirmation of every gated tool under it, and "always" trusts the current

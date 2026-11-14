@@ -42,8 +42,10 @@ shares this module's classifier. Folding it in would only log every refused imag
 NOT IN SCOPE, NAMED BOUNDARIES: fixed internal loopback calls (sub-agent and workflow IPC
 to VAF's own backend) are VAF choosing its own destination, not a fetch; A2A rooms dial
 over their own wss client with a pinned CA (vaf/core/a2a/client.py); a shell command the
-agent runs with host_bash (curl) is the person's grant and is not an HTTP client this
-module can wrap.
+agent runs with host_bash (curl) is not an HTTP client this module can wrap. In the chat it
+runs on the person's yes; in the coding agent and in workflow steps nobody is asked and the
+account permission is the only answer, so such a command reaches loopback (VAF's tokenless
+trust included), the LAN and the internet (vaf/tools/host_bash.py, NAMED BOUNDARY there).
 """
 from __future__ import annotations
 

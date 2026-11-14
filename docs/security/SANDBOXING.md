@@ -264,6 +264,13 @@ The `python_exec` tool runs code directly on your host system. It is:
   fed to the interpreter, or an interpreter under another name or in a container is not seen,
   as a shell script's content is not read. The control for host code stays the confirmation
   and the account opt-in.
+- Refuses code with a string that names a network share or a Windows device path
+  (`open(r"\\server\share\x")`, `pathlib.Path(r"\\?\UNC\...")`, `"file://server/..."`)
+  where nobody confirmed the call: a standing or chat grant lets it run in the coding agent
+  and in a workflow step, and there `_call_confirmed` is False. On Windows opening such a
+  path sends the account's NTLM login attempt to that host. "Only this time" in the chat
+  runs it. The same reading (`share_paths` in `vaf/core/command_policy.py`, on each string
+  constant) is the `share_path` category of `host_bash` below.
 
 Use this only when you need host filesystem/network access and trust the code source.
 
@@ -306,8 +313,10 @@ NAMED BOUNDARIES:
 - Behind a site proxy the proxy resolves the name, so nothing can be pinned. A name
   that resolves LOCALLY to a refused address is still refused; a name the local resolver
   does not know (split horizon) is the proxy's to judge.
-- A shell command (`host_bash`, `curl`) is the person's grant, not an HTTP client this
-  guard wraps.
+- A shell command (`host_bash`, `curl`) is not an HTTP client this guard wraps. In the
+  chat it runs on the person's yes; in the coding agent and in workflow steps nobody is
+  asked, and the account permission is the only answer (see "What an unattended host
+  command reaches" under `host_bash`).
 - VAF's own fixed internal calls (sub-agent and workflow IPC to its backend) and the A2A
   rooms (their own `wss` client with a pinned CA) are not fetches of an outside URL.
 - The receiving side still treats a tokenless loopback request as the owner; replacing
@@ -827,6 +836,12 @@ each use is controlled:
    `channel_restrictions` while the admin keeps `channel_tools_unrestricted` off), and for
    workflow steps an application's authorizer. The coder enforces its own tool allow-list
    at dispatch as well, so a tool it was never given does not run because the model named it.
+   The command check is stricter there: the funnel tells the tool whether a person or the
+   application confirmed THIS call (`_call_confirmed`, `accepts_call_confirmation`), and an
+   unconfirmed call, a direct `HostBashTool().run(...)` included, is read with the
+   `host_unattended` profile, which also refuses a network share or Windows device path
+   (`share_path` below). A model that writes `_call_confirmed: true` into its arguments is
+   overwritten by the funnel.
 3. **The main agent's direct call is blocked on remote channels.** There is no safe way to
    show the confirmation on Telegram/WhatsApp/Discord. `channel_restrictions = ("channel",)`
    is the policy-layer block (`evaluate_tool_policy`), and because the tool is ALSO
@@ -864,8 +879,29 @@ each use is controlled:
    doors"). It closes the easy path, not the account permission: a command that clears its
    environment, or reads files directly, is what an account with `host_bash` can do.
 
+**What an unattended host command reaches (NAMED BOUNDARY).** Everything the machine
+reaches, apart from share and device paths. Measured on Linux through the funnel as the coder
+and the workflow engine build it (`ToolCaller(..., gate_enabled=False)`): `curl` to a listener
+on `127.0.0.1` ran with no question and was answered (1 of 1), with only the note "fetches
+data from the network". Loopback includes VAF's own tokenless loopback trust (the "Localhost
+Bypass" in [NETWORK_FEATURES.md](../setup/NETWORK_FEATURES.md)); the LAN, the internet,
+link-local addresses with a cloud instance's metadata service, and multicast are reachable
+the same way (not contacted in the measurement, and no layer stands in between). Deliberate:
+the coding agent's downloads (`pip`, `npm`, `git clone`) run through `host_bash` by design (see
+the coder's `bash` above), and the agent downloads without friction. The two measured cuts:
+`bwrap --dev-bind / / --unshare-net` (2.6 ms a start against 1.1 ms, the docker CLI keeps
+working over its socket) ends every download; `pasta --config-net --no-map-gw` (about 150 ms a
+start, a package most systems lack) keeps the downloads and closes loopback only, while the
+same shell still reads the same data from disk. The account permission is the answer here; the
+API half of loopback is closed by replacing the tokenless loopback trust with a per-start IPC
+token, a change of its own that also covers every process the agent starts. A main-agent turn
+nobody watches (an automation) runs `host_bash` only under a standing answer (always, a
+trusted folder, the admin's bypass, the user-grant resolver); that counts as confirmed, so the
+`host` profile applies there.
+
 An offline classifier (`vaf/core/command_policy.py`, shared with `bash` but run with the
-strict `host` profile) refuses the catastrophic set even after confirmation: code fetched
+strict `host` profile, or `host_unattended` where nobody confirmed the call) refuses the
+catastrophic set even after confirmation: code fetched
 from the network and piped into a shell, writes to a block device, a fork bomb, a recursive
 delete of a system or home root, and a command whose program or shell text the approved
 text does not show. It tokenizes quote-aware and reads commands rather than matching
@@ -922,6 +958,30 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   passes (`"$(git rev-parse --show-toplevel)/scripts/build.sh"`), and so does a
   substitution in an argument, an option's value, a `VAR=` prefix or an array assignment
   (`sudo -u $(whoami) ls`, `X=$(date) make`, `arr=($(ls))`).
+- **Share and device paths (`share_path`).** A command that names a network share or a
+  Windows device path: the backslash UNC shape with a host and a share (`dir \\server\share`,
+  `\\%COMPUTERNAME%\share`, `\\h@80\s`), a device prefix (`\\?\UNC\...`, `\\.\`, `\??\`), a
+  `file:` URL naming another host (`file://h/s`, `file:////h/s`), and on a Windows host the
+  forward-slash form `//host/share`. On Windows naming one makes the machine open an SMB
+  connection that carries the account's NTLM login attempt. Refused in `host_unattended`, a
+  note in `host` (the dialog shows "share path" and a yes runs it), never in `jailed` or
+  `remote`; on every host, so the result does not hang on the platform. It is read from the
+  RAW text, once for the whole command (every nested `bash -c`, substitution and runner
+  included), never from the tokens: a POSIX shell lexer turns `\\h\s` into `\hs`. The text
+  is cut at whitespace, quotes, the shell's separators and redirections, `=`, parentheses
+  and commas, so `X=\\h\s make` and `--path=\\h\s` count. A shape filter in front of
+  `is_remote_path` keeps `//`, `//tmp`, `// TODO`, `\\n`, `\\d+\\.`, `C:\x`, `https://...`,
+  `file:///x` and `file://localhost/x` out; a host holds no regular-expression operator.
+  `python -c` code is read through `python_code_categories` as well, so a share written with
+  Python's own escapes (`"\\\\h\\s"`) counts too. Named boundary: text only. A share built at
+  run time (a variable, a string joined in PowerShell, `[char]92`), one inside a script file,
+  a share name parted from its host by two separators, Windows name resolution of a bare
+  share name, and an HTTP client told to log in as the Windows account (`curl --ntlm`,
+  `-UseDefaultCredentials`) are not seen; the Windows-side control for that class is the
+  operating system's outgoing-NTLM restriction, which needs admin rights and which VAF does
+  not set. Accepted cost: the scan does not tell data from a command, so a heredoc body or an
+  `echo` that names a share is refused unattended too, and so is a WSL path typed as one
+  (`\\wsl$\...`, local on Windows).
 - **Arithmetic is read both ways.** Whether bash evaluates `$((...))` or runs it as a
   command substitution holding a subshell depends on more than its parentheses (a `#`
   comment or a backtick holding a `)` moves where it closes), so every `$((`, and an
@@ -1047,9 +1107,10 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
 
 For the main agent's own call, the real safety is still the person's approval plus the
 local-only rule in 3. The unattended lanes (the coder and workflow steps, point 2) have no
-approval: there it is the account allowlist, the policy block and, for workflow steps, the
-application's authorizer that decide. The controls are pinned in `tests/test_host_bash.py`,
-`tests/test_command_policy.py` and `tests/test_coder_dispatch_gate.py`.
+approval: there it is the account allowlist, the policy block, for workflow steps the
+application's authorizer, and the `host_unattended` profile that decide. The controls are
+pinned in `tests/test_host_bash.py`, `tests/test_command_policy.py`,
+`tests/test_coder_dispatch_gate.py` and `tests/test_unattended_host_share_paths.py`.
 
 ### `ssh` - a shell on another machine (`vaf/tools/ssh.py`)
 

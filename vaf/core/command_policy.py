@@ -14,10 +14,16 @@ and then judges the executable and its arguments. The verdict is DATA (categorie
 segments), so the confirmation dialog can show WHY a command is flagged
 instead of only that it is.
 
-Three profiles, because the lanes have different confinement:
+Four profiles, because the lanes have different confinement:
 - ``host``   - vaf/tools/host_bash.py runs unsandboxed on the machine, with
   the whole environment. Its only other control is the human approval, so the
   catastrophic set is refused outright.
+- ``host_unattended`` - the same shell where nobody confirmed THIS call (the coding
+  agent, a workflow step, a direct ``run``): the host set plus ``share_path``. A
+  command that names a network share or a Windows device path (``\\\\host\\share``,
+  ``\\\\?\\UNC\\...``, ``file://host/...``) makes Windows open an SMB connection that
+  carries the account's NTLM login attempt to that host, and no person saw the command.
+  In ``host`` the same category is a note the dialog shows, and a yes runs it.
 - ``jailed`` - vaf/tools/bash.py runs under bubblewrap (--clearenv,
   --unshare-net, repo and secrets unmounted) or a --network none container.
   Network fetches cannot reach anything, and wiping the throwaway workspace is
@@ -151,6 +157,8 @@ import shlex
 import traceback
 from dataclasses import dataclass, field
 from typing import Iterable, List, Optional
+
+from vaf.core.path_jail import is_remote_path
 
 _log = logging.getLogger(__name__)
 
@@ -344,6 +352,8 @@ CATEGORY_REASONS = {
                     "or Python's ftplib), with the password in the command or the code; use the "
                     "ftp tool, which asks before a new server, checks its certificate and keeps "
                     "the password out of every command",
+    "share_path": "names a network share or a Windows device path, which on Windows makes this "
+                  "computer contact that host with this account's login",
 }
 
 # The other ways a command hides what runs, each with its way out (all `opaque_command`).
@@ -391,6 +401,8 @@ _OPAQUE_REASONS = {
 _WAY_OUT = {
     "pipe_to_shell": "; download it to a file, read the file, then run it "
                      "(`curl -fsSL -o install.sh URL`, then `bash install.sh`)",
+    "share_path": "; nobody confirmed this command, so ask for it in the chat, where the "
+                  "person sees and confirms it, or copy the files to a local folder first",
 }
 
 # What each profile refuses outright. Everything else in CATEGORY_REASONS is a note.
@@ -405,6 +417,12 @@ _BLOCKING = {
     "remote": ("fork_bomb", "device_write", "destructive_removal", "opaque_command",
                "nested_too_deep", "too_long"),
 }
+# The host shell where nobody confirmed this call (the module docstring): a share or device
+# path is refused there, a note in `host`.
+_BLOCKING["host_unattended"] = _BLOCKING["host"] + ("share_path",)
+# The profiles whose commands run on this machine with its own network login. The jail has
+# no network and is Linux; a remote command runs on another machine.
+_SHARE_PROFILES = ("host", "host_unattended")
 
 
 @dataclass
@@ -1118,46 +1136,138 @@ def _call_argument(node, keyword: str):
     return value.value if isinstance(value, ast.Constant) else None
 
 
+def _windows_host() -> bool:
+    """Whether this machine reads `//host/share` as a share (Windows). A seam the tests patch."""
+    return os.name == "nt"
+
+
+# Where a piece of command text ends for the share reading: whitespace, quotes, the shell's
+# separators and redirections, `=` (`X=\\h\s`, `--path=\\h\s`), parentheses and commas (code).
+_SHARE_PIECE_SPLIT_RE = re.compile(r"[\s\"'`(),;|&<>=]+")
+# Two separators, a host and ONE separator before a share name that is not only dots. The host
+# holds no regular-expression operator, so `\\d+\\.`, `\\w+\\s` and `\\n\\t` (a regex or an
+# escape written with doubled backslashes) are no share; `%VAR%`, `h@80` and `wsl$` are hosts.
+_UNC_SHAPE_RE = re.compile(r"^[\\/]{2}[^\\/+*?()\[\]{}|^]+[\\/](?!\.+(?:[\\/]|$))[^\\/]")
+# The Win32 device and long-path namespaces (`\\?\`, `\\.\`) and the NT object namespace
+# (`\??\`), which Win32 passes through unchanged.
+_DEVICE_SHAPE_RE = re.compile(r"^(?:[\\/]{2}[?.]|[\\/]\?\?)[\\/]")
+_FILE_URL_RE = re.compile(r"^file:(?P<seps>[\\/]*)(?P<rest>.*)$", re.IGNORECASE | re.DOTALL)
+
+
+def _is_share_piece(piece: str, windows: bool) -> bool:
+    """One piece of text (no blank, no quote) that names a share or a device path."""
+    url = _FILE_URL_RE.match(piece)
+    if url:
+        # `file://h/s` names host h; `file:///x` and `file://localhost/x` are this machine;
+        # four or more separators (`file:////h/s`, `file:\\\\h\s`) carry a UNC path whole.
+        seps, rest = len(url.group("seps")), url.group("rest")
+        host = re.split(r"[\\/]", rest, maxsplit=1)[0]
+        if seps == 2:
+            return host.lower() not in ("", "localhost")
+        return seps >= 4 and bool(host)
+    if not is_remote_path(piece):
+        return False
+    if _DEVICE_SHAPE_RE.match(piece) or _UNC_SHAPE_RE.match(piece):
+        # All forward slashes is a share only where the OS reads it as one: on POSIX
+        # `//host/share` is a spelling of `/host/share`.
+        return windows or "\\" in piece[:2]
+    return False
+
+
+def share_paths(text: str, *, windows: Optional[bool] = None) -> List[str]:
+    r"""The pieces of `text` that name a network share or a Windows device path, in order.
+
+    Read from the RAW text, never through shlex: a POSIX shell lexer turns `\\h\s` into
+    `\hs`, so the tokens the classifier judges never show the share. The text is cut at
+    whitespace, quotes, the shell's separators and redirections, `=`, parentheses and commas,
+    and a piece counts when it has
+    - the backslash UNC shape, a host and a share (`\\host\share`, `\\%VAR%\s`, `\\h@80\s`),
+      or a device prefix (`\\?\`, `\\.\`, `\??\`), on every host;
+    - the forward-slash shape with a host and a share (`//host/share`), only when `windows`
+      (default: this machine is Windows; on POSIX it is a spelling of `/host/share`);
+    - a `file:` URL naming a host other than empty or `localhost` (`file://h/s`,
+      `file:////h/s`), on every host.
+    `path_jail.is_remote_path` judges every piece of the first two shapes; the shape filter in
+    front keeps `//`, `//tmp`, `// TODO`, `\\n`, `\\d+\\.`, `C:\x` and `https://...` out,
+    several of which it answers True alone. Never raises.
+
+    NAMED BOUNDARY: text only. A share built at run time (a variable, a string joined in
+    PowerShell, `[char]92`), one inside a script file, a share name parted from its host by
+    two separators (`\\h\\s`), Windows name resolution of a bare share name, and an HTTP
+    client told to log in as the Windows account (`curl --ntlm`, `-UseDefaultCredentials`)
+    are not seen."""
+    try:
+        if windows is None:
+            windows = _windows_host()
+        found = []
+        for piece in _SHARE_PIECE_SPLIT_RE.split(str(text or "")):
+            if piece and _is_share_piece(piece, windows) and piece not in found:
+                found.append(piece)
+        return found
+    except Exception:                   # noqa: BLE001 - a reading aid, never a crash
+        return []
+
+
 def python_code_categories(code: str, *, _depth: int = 0) -> List[str]:
-    """["ftp_transfer"] when Python `code` moves files over FTP, else []. Read from the syntax
-    tree, so a comment naming ftplib does not count: an import of ftplib (also `from ftplib
-    import ...`), a string that IS the module's name, `ftplib` or `ftplib.<name>` (whatever
-    imports it: `__import__`, `importlib.import_module` also under an alias, a getattr of
-    `__import__`, `-m ftplib` in a subprocess argument list), or a string that starts with
-    ftp:// or ftps:// (urllib's FTP, an f-string's literal part). A constant string handed to
-    exec, eval or compile is read as code too, a few levels deep. Code that does not parse,
+    r"""What Python `code` does that a host lane judges, in a fixed order: "ftp_transfer" when
+    it moves files over FTP, "share_path" when a string constant names a network share or a
+    Windows device path (`share_paths` on its value: `open(r"\\h\s\x")`,
+    `os.listdir("\\\\h\\s")`, `pathlib.Path(r"\\?\UNC\h\s")`, `"file://h/s/x"`).
+
+    Read from the syntax tree, so a comment does not count. FTP is an import of ftplib (also
+    `from ftplib import ...`), a string that IS the module's name, `ftplib` or `ftplib.<name>`
+    (whatever imports it: `__import__`, `importlib.import_module` also under an alias, a
+    getattr of `__import__`, `-m ftplib` in a subprocess argument list), or a string that starts
+    with ftp:// or ftps:// (urllib's FTP, an f-string's literal part). A constant string handed
+    to exec, eval or compile is read as code too, a few levels deep. Code that does not parse,
     or nests deeper, is searched as text. Never raises."""
     import ast
     text = code.decode("utf-8", "replace") if isinstance(code, bytes) else str(code or "")
+    found = set()
+
+    def _ordered() -> List[str]:
+        return [c for c in ("ftp_transfer", "share_path") if c in found]
+
+    def _as_text() -> List[str]:
+        if _PYTHON_FTP_TEXT_RE.search(text):
+            found.add("ftp_transfer")
+        if share_paths(text):
+            found.add("share_path")
+        return _ordered()
+
     if _depth > _MAX_CODE_DEPTH:
-        return ["ftp_transfer"] if _PYTHON_FTP_TEXT_RE.search(text) else []
+        return _as_text()
     try:
         tree = ast.parse(text)
     except (SyntaxError, ValueError, RecursionError, MemoryError):
-        return ["ftp_transfer"] if _PYTHON_FTP_TEXT_RE.search(text) else []
+        return _as_text()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            hit = any(_is_ftplib(alias.name) for alias in node.names)
+            if any(_is_ftplib(alias.name) for alias in node.names):
+                found.add("ftp_transfer")
         elif isinstance(node, ast.ImportFrom):
-            hit = _is_ftplib(node.module)
+            if _is_ftplib(node.module):
+                found.add("ftp_transfer")
         elif isinstance(node, ast.Call):
             fn = node.func
             called = fn.id if isinstance(fn, ast.Name) else (
                 fn.attr if isinstance(fn, ast.Attribute) else "")
             if called in _CODE_STRING_CALLS:
                 inner = _call_argument(node, "source")
-                hit = isinstance(inner, (str, bytes)) and bool(
-                    python_code_categories(inner, _depth=_depth + 1))
-            else:
-                hit = False
-        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-            hit = (_is_ftplib(node.value)
-                   or node.value.lstrip().lower().startswith(("ftp://", "ftps://")))
-        else:
-            hit = False
-        if hit:
-            return ["ftp_transfer"]
-    return []
+                if isinstance(inner, (str, bytes)):
+                    found.update(python_code_categories(inner, _depth=_depth + 1))
+        elif isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)):
+            value = (node.value.decode("latin-1") if isinstance(node.value, bytes)
+                     else node.value)
+            if isinstance(node.value, str) and (
+                    _is_ftplib(value)
+                    or value.lstrip().lower().startswith(("ftp://", "ftps://"))):
+                found.add("ftp_transfer")
+            if share_paths(value.strip()):
+                found.add("share_path")
+        if len(found) == 2:
+            break
+    return _ordered()
 
 
 def _runner_commands(exe: str, args: List[str]) -> List[int]:
@@ -1338,6 +1448,8 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
     fails (either one) refuses the command as unreadable and is logged.
 
     profile="host"   - unsandboxed lane: refuse the catastrophic set.
+    profile="host_unattended" - the same lane where nobody confirmed this call: also refuse
+                       a network share or Windows device path (`share_path`).
     profile="jailed" - bubblewrap/container lane: refuse only what escapes the
                        jail or hurts the machine.
     profile="remote" - runs on another machine: the host set minus the fetch into
@@ -1571,11 +1683,18 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[List[int
 
         if exe in _REMOTE_LOGINS and "remote_login" not in cats:
             cats.append("remote_login")
+        # Asked by name, not by truthiness: `python -c` code that names a share is
+        # `share_path`, not an FTP transfer.
+        py_cats = _python_command_categories(args) if _PYTHON_EXE_RE.match(exe) else []
         if (exe in _FTP_CLIENTS or (exe in _NETWORK_FETCHERS
                                     and any(_FTP_URL_RE.match(a) for a in args))
-                or (_PYTHON_EXE_RE.match(exe) and _python_command_categories(args))) \
+                or "ftp_transfer" in py_cats) \
                 and "ftp_transfer" not in cats:
             cats.append("ftp_transfer")
+        # The code's strings after Python's own escapes (`"\\\\h\\s"` is `\\h\s`), which the
+        # raw scan below does not undo.
+        if "share_path" in py_cats and profile in _SHARE_PROFILES and "share_path" not in cats:
+            cats.append("share_path")
 
         if exe in _NETWORK_FETCHERS:
             pipeline_fetch = True
@@ -1612,6 +1731,11 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[List[int
             if "history_rewrite" not in cats:
                 cats.append("history_rewrite")
 
+    # One scan of the whole raw text covers every nested `bash -c`, substitution and runner;
+    # shlex has already dropped the backslashes from the tokens read above.
+    if (_depth == 0 and profile in _SHARE_PROFILES and "share_path" not in cats
+            and share_paths(text)):
+        cats.append("share_path")
     blocking = [c for c in cats if c in _BLOCKING.get(profile, _BLOCKING["host"])]
     verdict.categories = cats + [c for c in remote_cats if c not in cats]
     if "opaque_command" in cats:

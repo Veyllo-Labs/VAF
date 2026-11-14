@@ -40,6 +40,9 @@ MUTATIONS, each turns the named test red:
 - `useAccessPreset`'s `reapply` resolving over its own closure's lists, or `epoch` dropped from
   its dependencies -> test_a_list_that_arrives_while_the_create_is_pending_reaches_the_next_form;
 - `key` dropped from its dependencies -> test_the_preset_follows_the_account_being_edited;
+- `applyRef.current = apply;` dropped -> test_the_preset_is_applied_through_the_latest_callback;
+- `if (!current) return;` dropped from the answer, or the `current` check dropped from the
+  failure -> test_an_answer_to_an_abandoned_request_changes_nothing;
 - a 200 without a list counted as 'ready', the failure kept as 'loading', `retry` a no-op, or a
   loaded list fetched again -> test_the_tool_universe_request_has_its_own_state;
 - `presetSaveBlocked` letting 'loading' or 'failed' through, or blocking 'custom'
@@ -48,6 +51,8 @@ MUTATIONS, each turns the named test red:
   -> test_both_save_buttons_wait_for_the_full_list;
 - the failure notice or its retry button dropped, or the loading line shown on 'ready'
   -> test_the_picker_says_when_the_list_is_incomplete;
+- the LF normalization dropped from `_cut_section` (a CRLF checkout cut an empty section)
+  -> test_the_section_is_cut_out_the_same_from_a_crlf_checkout;
 - `[...tools, ...coderOnlyTools.map(...)]` back in SettingsModal -> test_no_concat_of_the_coder_list_remains;
 - `activeTab === 'users'` back in the universe gate -> test_universe_fetch_gate_names_a_real_tab;
 - a preset hook over `tools` instead of `pickerTools` -> test_preset_hooks_follow_the_merged_list;
@@ -75,9 +80,24 @@ _SHARED = ("add_memory", "git_add_commit", "git_init", "git_log", "git_status", 
 _CODER_OWN = ("bash", "run_tests", "project_history", "project_rollback")
 
 
-def _source(path):
+def _lf(text):
     # A Windows checkout (core.autocrlf) holds the sources with CRLF; the searches expect LF.
-    return path.read_bytes().decode("utf-8").replace("\r\n", "\n")
+    return text.replace("\r\n", "\n")
+
+
+def _source(path):
+    return _lf(path.read_bytes().decode("utf-8"))
+
+
+def _cut_section(text):
+    """AccessPresetSection as it stands in SettingsModal.tsx, from its line to its closing brace.
+
+    Cut here, after the LF normalization, and handed to node: a node script reading the file
+    itself sees the checkout's own line ends, and on a CRLF checkout the closing-brace needle
+    matched nothing, so the slice was empty."""
+    text = _lf(text)
+    start = text.index("function AccessPresetSection(")
+    return text[start:text.index("\n}\n", start) + 3]
 
 
 def _strip_comments(source):
@@ -265,6 +285,57 @@ def test_the_preset_follows_the_account_being_edited():
     assert "bash" in out["otherAccount"] and "opened" not in out["otherAccount"]
 
 
+_LATEST_APPLY = r"""
+const workflows = [];
+let latest;
+function Form({tools, tag}) {
+  const [got, setGot] = React.useState(null);
+  // apply closes over this render's tag: the hook must call the latest one.
+  lib.useAccessPreset('full', tools, workflows, (resolved) => setGot(tag + ':' + resolved.tools.length));
+  latest = got;
+  return null;
+}
+const before = lib.mergePickerTools(input.registry, []);
+const after = lib.mergePickerTools(input.registry, input.coder);
+await act(async () => root.render(h(Form, {tools: before, tag: 'first'})));
+const first = latest;
+await act(async () => root.render(h(Form, {tools: after, tag: 'second'})));
+return {first, second: latest, sizes: [before.length, after.length]};
+"""
+
+
+def test_the_preset_is_applied_through_the_latest_callback():
+    out = _node(_LATEST_APPLY, {"registry": _registry(), "coder": _coder_names()})
+    before, after = out["sizes"]
+    assert out["first"] == f"first:{before}"
+    assert out["second"] == f"second:{after}", "an apply from an earlier render wrote into its stale closure"
+
+
+_STALE_ANSWER = r"""
+const resolvers = [];
+global.fetch = () => new Promise((r) => { resolvers.push(r); });
+const reply = (ok, status, body) => ({ok, status, json: async () => body});
+let latest;
+function U({enabled}) { latest = lib.useToolUniverse(enabled); return null; }
+await act(async () => root.render(h(U, {enabled: true})));
+// The tab is left while the request is pending; its answer arrives afterwards.
+await act(async () => root.render(h(U, {enabled: false})));
+await act(async () => { resolvers[0](reply(true, 200, {coder_only: ['bash']})); await settle(); });
+const staleAnswer = [latest.state, latest.names];
+await act(async () => root.render(h(U, {enabled: true})));
+await act(async () => root.render(h(U, {enabled: false})));
+await act(async () => { resolvers[1](reply(false, 503, {})); await settle(); });
+return {staleAnswer, staleFailure: latest.state, requests: resolvers.length};
+"""
+
+
+def test_an_answer_to_an_abandoned_request_changes_nothing():
+    out = _node(_STALE_ANSWER, {})
+    assert out["requests"] == 2
+    assert out["staleAnswer"] == ["loading", []], "an abandoned request's list was taken as loaded"
+    assert out["staleFailure"] == "loading", "an abandoned request's failure was reported"
+
+
 _UNIVERSE = r"""
 const calls = [];
 let respond;
@@ -305,10 +376,8 @@ def test_the_tool_universe_request_has_its_own_state():
 
 
 _SECTION = r"""
-const modal = fs.readFileSync(path.join(W, 'components', 'SettingsModal.tsx'), 'utf8');
-const i = modal.indexOf('function AccessPresetSection('), j = modal.indexOf('\n}\n', i) + 3;
 const src = "import React, { useState } from 'react';\nimport { useTranslations } from 'next-intl';\n" +
-  "import { cn } from '@/lib/utils';\nexport " + modal.slice(i, j);
+  "import { cn } from '@/lib/utils';\nexport " + input.section;
 const out = {};
 for (const locale of input.locales) {
   const messages = JSON.parse(fs.readFileSync(path.join(W, 'messages', locale + '.json'), 'utf8'));
@@ -331,13 +400,21 @@ return out;
 """
 
 
+def test_the_section_is_cut_out_the_same_from_a_crlf_checkout():
+    raw = SETTINGS.read_bytes().decode("utf-8").replace("\r\n", "\n")
+    section = _cut_section(raw)
+    assert section.startswith("function AccessPresetSection(") and section.endswith("\n}\n")
+    assert "onRetryUniverse" in section and "function " not in section[len("function "):]
+    assert _cut_section(raw.replace("\n", "\r\n")) == section
+
+
 def _escaped(text):
     return text.replace("&", "&amp;").replace("'", "&#x27;").replace('"', "&quot;").replace("<", "&lt;")
 
 
 def test_the_picker_says_when_the_list_is_incomplete():
     locales = ("en", "de", "tr", "zh", "ja", "ko", "th")
-    out = _node(_SECTION, {"locales": list(locales)})
+    out = _node(_SECTION, {"locales": list(locales), "section": _cut_section(_source(SETTINGS))})
     for locale in locales:
         add_user = json.loads((WEB / "messages" / f"{locale}.json").read_bytes())["modals"]
         loading = _escaped(add_user["addUser"]["toolUniverseLoading"])

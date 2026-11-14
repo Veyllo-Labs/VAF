@@ -191,6 +191,20 @@ while 3.12, 3.13, macOS and Ubuntu were green. The rule: the name goes first and
 folder goes in as `path=`, `shutil.which("nvcc", path=folder)`, which every version
 resolves with PATHEXT. The scan below refuses a lookup whose command is a path built
 in place (a join, a `/` on a Path, a literal or f-string with a separator).
+
+## 11. A node script in a test never searches a source it read itself for a newline.
+
+Several web tests run node on the app's real TypeScript. A script that reads a tracked
+source with `fs.readFileSync` gets the checkout's own line ends, and on a Windows
+checkout (core.autocrlf) those are `\r\n`. A needle with a `\n` in it, such as the
+closing-brace search `src.indexOf('\n}\n', i)` that cuts one component out of a file,
+then finds nothing: `-1 + 3` made the slice end at 2 and the cut component empty, so the
+test failed on the Windows leg only. Section 2's scan and hostile_env.py's CRLF axis
+cannot see it: both work on Python's `Path.read_bytes`, and node reads the file from
+disk, where a Linux checkout holds LF. Measured when this was added: 12 test modules run
+node on a source they read, one of them searched it for a newline. The rule: cut or
+search in Python after the LF normalization and hand node the result, or normalize in
+the script (`.replace(/\r\n/g, '\n')`) before the first newline needle.
 """
 import ast
 import ntpath
@@ -1352,3 +1366,71 @@ def test_no_program_is_looked_up_by_a_built_path():
         hits += [f"{rel}:{no}" for no in found]
     assert hits == [], ("look the program up by its name with the folder as path=, "
                         "shutil.which(name, path=folder): " + ", ".join(hits))
+
+
+# ---------------------------------------------------------------------------
+# 11. A node script's newline needle over a source it read from disk
+# ---------------------------------------------------------------------------
+
+# A string literal argument with a `\n` escape in it, to a call that searches text.
+_JS_NEWLINE_NEEDLE = re.compile(
+    r"\.(?:indexOf|lastIndexOf|includes|startsWith|endsWith|split|search|match)\(\s*"
+    r"(['\"`])(?:(?!\1).)*?\\n")
+# A read of a file from disk; stdin (`readFileSync(0, ...)`) carries what Python sent.
+_JS_READS_A_FILE = re.compile(r"readFileSync\(\s*(?!0\s*[,)])")
+# `JSON.parse(fs.readFileSync(` - a catalogue read, indifferent to CRLF.
+_JS_FEEDS_JSON_PARSE = re.compile(r"JSON\.parse\(\s*(?:\w+\.)?$")
+# The script normalizes the line ends itself.
+_JS_NORMALIZES = re.compile(r"replace\(\s*/\\r\\n/g|split\(\s*/\\r\?\\n/")
+
+
+def _node_newline_needles(source: str):
+    """Lines of string constants (node scripts) that search for a `\\n` while some script
+    of the same module reads a file from disk and none normalizes its line ends. A read
+    that only feeds `JSON.parse` is indifferent to CRLF and does not count."""
+    scripts = [(node.lineno, node.value) for node in ast.walk(ast.parse(source))
+               if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+    reads = any(not _JS_FEEDS_JSON_PARSE.search(text[max(0, m.start() - 40):m.start()])
+                for _, text in scripts for m in _JS_READS_A_FILE.finditer(text))
+    if not reads or any(_JS_NORMALIZES.search(text) for _, text in scripts):
+        return []
+    return sorted(lineno for lineno, text in scripts if _JS_NEWLINE_NEEDLE.search(text))
+
+
+def test_the_node_newline_class_is_real():
+    """The scan tells the spellings apart: a needle over a file the script read is
+    refused; normalized first, over stdin only, or over a JSON read, it passes."""
+    cut = "const i = src.indexOf('function X('), j = src.indexOf('\\n}\\n', i) + 3;"
+    from_disk = "const src = fs.readFileSync(path.join(W, 'components', 'X.tsx'), 'utf8');"
+    assert _node_newline_needles(f"A = {from_disk!r}\nB = {cut!r}\n") == [2]
+    normalized = from_disk.replace("'utf8');", "'utf8').replace(/\\r\\n/g, '\\n');")
+    assert _node_newline_needles(f"A = {normalized!r}\nB = {cut!r}\n") == []
+    stdin = "const input = JSON.parse(fs.readFileSync(0, 'utf8'));"
+    assert _node_newline_needles(f"A = {stdin!r}\nB = {cut!r}\n") == []
+    catalogue = "const m = JSON.parse(fs.readFileSync(path.join(W, 'messages', 'en.json'), 'utf8'));"
+    assert _node_newline_needles(f"A = {catalogue!r}\nB = {cut!r}\n") == []
+    # What a Windows checkout does to the cut, measured the way node reads it.
+    crlf = "const before = 0;\r\nfunction X() {\r\n  return 1;\r\n}\r\nconst after = 2;\r\n"
+    start = crlf.find("function X(")
+    assert crlf.find("\n}\n", start) == -1
+    assert crlf[start:crlf.find("\n}\n", start) + 3] == ""
+
+
+def test_no_node_script_searches_a_source_it_read_for_a_newline():
+    """MUTATION: put the node-side cut back into tests/test_user_access_picker_web.py's
+    `_SECTION` (`fs.readFileSync(... 'SettingsModal.tsx' ...)` and `indexOf('\\n}\\n', i)`)
+    - red."""
+    hits = []
+    for rel, path in _tracked_python_files(("tests/",)):
+        if rel == "tests/test_windows_path_hygiene.py":
+            continue
+        try:
+            found = _node_newline_needles(path.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+        hits += [f"{rel}:{no}" for no in found]
+    assert hits == [], (
+        "a node script searches a source it read from disk for a newline; on a Windows "
+        "checkout the file holds \\r\\n and the needle finds nothing. Cut it in Python after "
+        "the LF normalization and pass the result in, or normalize in the script first: "
+        + ", ".join(hits))

@@ -98,6 +98,8 @@ locally, in the time the suite already takes:
                   Path.read_bytes is converted, not open(path, "rb"), which the
                   tests use on tracked files only to feed ast.parse or a
                   substring check without a newline, both indifferent to CRLF.
+                  Nor what a node subprocess reads from disk itself: section 11
+                  of tests/test_windows_path_hygiene.py holds that class.
   SLOW REFUSAL    a refused TCP connect to a local address is charged what a
                   Windows runner waits for it: about two seconds of SYN retries
                   (or the caller's connect timeout when that is shorter), where

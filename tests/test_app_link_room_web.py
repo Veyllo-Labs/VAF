@@ -461,3 +461,45 @@ def test_a_give_up_without_the_line_says_it_may_still_come():
     `timeout` case - red."""
     assert _call("m.refusalKey('timeout')") == "appRoomSendUnconfirmed"
     assert _call("m.refusalKey('failed')") == "appRoomFailed"
+
+
+# ── an agent room's writes, settled by the id each was sent with ──────────────────────────
+
+_WRITES = ("[{cid: 'c1', roomId: 'r1', kind: 'say', text: 'OK'},"
+           " {cid: 'c2', roomId: 'r1', kind: 'say', text: 'Second'},"
+           " {cid: 'c3', roomId: 'r1', kind: 'react', text: '+1'}]")
+
+
+def test_an_answer_settles_only_the_write_it_names():
+    """A view that answers no write of this page (a poll, or one carrying an older line of
+    the same text, or another member's) settles nothing; the answer naming `c1` settles only
+    `c1`. MUTATION: settle by text, or settle every write on any answer - red."""
+    left = _call(f"m.afterAnswer({_WRITES}, '').map(w => w.cid)")
+    assert left == ["c1", "c2", "c3"], "a view that answers nothing settled a write"
+    assert _call(f"m.afterAnswer({_WRITES}, 'c1').map(w => w.cid)") == ["c2", "c3"]
+    assert _call(f"m.afterAnswer({_WRITES}, 'someone-else').map(w => w.cid)") == ["c1", "c2", "c3"]
+
+
+def test_a_refusal_settles_only_the_refused_write():
+    """Two lines on their way and the second refused: the second leaves, the first stays on
+    its way to be settled by its own answer or refusal. MUTATION: drop every write of the room
+    on a refusal, or take the newest for the refused one - red."""
+    out = _call(f"(() => {{ const r = m.afterRefusal({_WRITES}, 'c1');"
+                " return [r.refused && r.refused.cid, r.writes.map(w => w.cid)]; })()")
+    assert out == ["c1", ["c2", "c3"]]
+    out = _call(f"(() => {{ const r = m.afterRefusal({_WRITES}, 'nope');"
+                " return [r.refused, r.writes.length]; })()")
+    assert out == [None, 3]
+
+
+@pytest.mark.parametrize("box, cid, want", [
+    ("", "c1", "OK"),                  # a refused line goes back into an empty box
+    ("  ", "c2", "Second"),            # a box of spaces counts as empty
+    ("new words", "c1", "new words"),  # what the person started writing stays
+    ("", "c3", ""),                    # a refused reaction restores nothing, text or not
+])
+def test_the_box_after_a_refusal(box, cid, want):
+    """MUTATION: restore for a reaction or a ballot, or over a box the person writes in -
+    red."""
+    expr = (f"m.boxAfterRefusal({json.dumps(box)}, m.afterRefusal({_WRITES}, '{cid}').refused)")
+    assert _call(expr) == want

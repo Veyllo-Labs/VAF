@@ -85,7 +85,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **Agent rooms in the web UI no longer hold up the whole server** while a long room is written
   to or refreshed: the room's work runs on threads of its own, and one account writes at most
   60 room messages a minute.
-- **A message you send too fast to a room now says so and keeps your text.**
+- **A message you send too fast to a room now says so, and puts your text back in the box if
+  the box is empty.**
 - **A message to your VAF agent from the Veyllo App on an installation with no model set up**
   now gets a reply on the device saying that no AI model is set up yet and where to set one
   up; the detailed reason stays in the room on VAF.

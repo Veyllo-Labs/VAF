@@ -317,20 +317,32 @@ def test_the_sixty_first_write_in_a_minute_is_refused(ws_world):
         assert window.take(SCOPE_A, limit=ROOM_WRITES_PER_MINUTE)
     with ws_world.connect(SCOPE_A) as socket:
         for number in range(3):
+            sent_id = str(uuid.uuid4())
             frame = _answer(socket, {"type": "room_say", "room_id": "room-a",
-                                     "text": f"zeile {number}"})
+                                     "text": f"zeile {number}", "client_id": sent_id})
             assert frame["type"] == "room_transcript", frame
+            assert frame["ack"] == sent_id, "the answer does not name the write it answers"
         before = _frames("room-a")
-        refusal = {"type": "error", "code": "room_rate", "message": ROOM_WRITES_REFUSED}
-        refused = _answer(socket, {"type": "room_say", "room_id": "room-a", "text": "zu viel"})
-        assert refused == refusal
+
+        def refusal(write_id):
+            return {"type": "error", "code": "room_rate", "message": ROOM_WRITES_REFUSED,
+                    "client_id": write_id}
+
+        said, reacted_id, voted_id = (str(uuid.uuid4()) for _ in range(3))
+        refused = _answer(socket, {"type": "room_say", "room_id": "room-a", "text": "zu viel",
+                                   "client_id": said})
+        assert refused == refusal(said), "the refusal does not name the refused write"
         target = Room.open("room-a").transcript()[-1]["id"]
         reacted = _answer(socket, {"type": "room_react", "room_id": "room-a",
-                                   "reply_to": target, "emoji": "+1"})
-        assert reacted == refusal
+                                   "reply_to": target, "emoji": "+1", "client_id": reacted_id})
+        assert reacted == refusal(reacted_id)
         voted = _answer(socket, {"type": "cast_room_vote", "room_id": "room-a",
-                                 "vote_id": vote.id, "choice": "yes"})
-        assert voted == refusal, "a ballot is a write of the same window"
+                                 "vote_id": vote.id, "choice": "yes", "client_id": voted_id})
+        assert voted == refusal(voted_id), "a ballot is a write of the same window"
+        # An id that is no UUID is not echoed: the frame names nothing then.
+        odd = _answer(socket, {"type": "room_say", "room_id": "room-a", "text": "x",
+                               "client_id": "<b>not an id</b>"})
+        assert odd == refusal("")
         assert _frames("room-a") == before, "a refused write was stored"
     with ws_world.connect(SCOPE_B) as other:
         assert _answer(other, {"type": "room_say", "room_id": "room-b",
@@ -393,28 +405,69 @@ def test_every_room_store_path_of_the_socket_runs_on_the_room_lane(ws_world, mon
         assert seen and all(n.startswith("vaf-room-lane") for n in seen), (name, seen)
 
 
+def test_the_sidebar_and_the_workspace_resolver_run_on_the_room_lane(ws_world, monkeypatch):
+    """The chat list opens every room on this machine (`_room_rows`) and the page asks for it
+    after every room write: the list on connect, `get_sessions` and the broadcast after a room
+    command are built on `vaf-room-lane` threads, and so is the workspace routes' resolver.
+    MUTATION: build one of them inline again - red."""
+    import vaf.core.web_server as web_server
+    lists = _record_threads(monkeypatch, web_server.session_mgr, "list_ui")
+    with ws_world.connect(SCOPE_A) as socket:
+        _answer(socket, {"type": "get_sessions"}, kinds=("session_list",))
+        assert _answer(socket, {"type": "rename_room", "room_id": "room-a",
+                                "title": "Renamed"})["type"] == "room_transcript"
+        # The rename's broadcast goes out before the next command is answered.
+        _answer(socket, {"type": "open_room", "room_id": "room-a"})
+    assert len(lists) >= 3, lists
+    assert all(n.startswith("vaf-room-lane") for n in lists), lists
+
+    resolved = []
+    monkeypatch.setattr(web_server, "_resolve_session_workspace",
+                        lambda *a, **k: resolved.append(threading.current_thread().name) or "")
+    assert asyncio.run(web_server._workspace_root("room-a", None, create=True)) == ""
+    assert resolved and resolved[0].startswith("vaf-room-lane"), resolved
+    source = Path(web_server.__file__).read_text(encoding="utf-8")
+    assert source.count("root = await _workspace_root(") == 4
+    assert "root = _resolve_session_workspace(" not in source
+
+
 def test_the_page_says_a_refused_room_write_and_keeps_its_text():
-    """The page handles the `room_rate` code: the refused line leaves the pending list and
-    goes back into an empty box, and the agent room shows the catalogue's notice in the amber
-    status style; a reaction and a ballot clear it before they go. MUTATION: drop the branch,
-    the text's return, or the notice - red."""
+    """The page names every room write it sends (`client_id`) and settles each by that name:
+    the answer that carries it as `ack` ends its pending copy, never a line of the same text;
+    a `room_rate` refusal naming it settles that write alone (`afterRefusal`) and gives a
+    refused LINE back to an empty box (`boxAfterRefusal`, run in node in
+    test_app_link_room_web.py). The agent room shows the catalogue's notice in the amber status
+    style; another room on screen drops it. MUTATION: reconcile by text again, drop the
+    branch, restore without the helper, send a write without its id, or keep the notice
+    across rooms - red."""
     page = (Path(__file__).resolve().parents[1] / "web" / "app" / "page.tsx").read_text(
         encoding="utf-8")
     branch = page.split("else if (data.type === 'error') {", 1)[1].split(
         "// The server refused the chat a reconnect asked for again", 1)[0]
     assert "if (data.code === 'room_rate') {" in branch
-    assert "setPendingRoomSays(prev => prev.filter(p => p.roomId !== rid));" in branch
-    assert "if (refused) setInput(prev => (prev.trim() ? prev : refused.text));" in branch
+    assert "const settled = afterRefusal(roomWritesInFlightRef.current, cid);" in branch
+    assert "setPendingRoomSays(prev => prev.filter(p => p.cid !== refused.cid));" in branch
+    assert "setInput(prev => boxAfterRefusal(prev, refused));" in branch
     assert "setRoomRateNotice(rid);" in branch
+    assert "p.roomId !== rid" not in branch, "a refusal drops every line of the room again"
     notice = page.split("{roomView && !appRoomWords && roomRateNotice === roomView.room.roomId && (",
                         1)[1][:700]
     assert 'role="status"' in notice and "{tMain('appRoomRateLimited')}" in notice
     assert "border-amber-200 bg-amber-50 text-amber-800" in notice
-    sender = page.split("type: 'room_say', room_id: roomView.room.roomId, text: roomText,", 1)[1][:400]
-    assert "roomSaysInFlightRef.current = [...roomSaysInFlightRef.current," in sender
     transcript = page.split("else if (data.type === 'room_transcript') {", 1)[1][:4000]
-    assert "roomSaysInFlightRef.current = roomSaysInFlightRef.current.filter(p =>" in transcript
-    assert page.count("setRoomRateNotice(null);") >= 4, "a write or a switch keeps a stale notice"
+    assert "setPendingRoomSays(prev => afterAnswer(prev, ack).filter(p =>" in transcript
+    assert "roomWritesInFlightRef.current = afterAnswer(roomWritesInFlightRef.current, ack);" \
+        in transcript
+    assert "texts.has(" not in transcript, "a pending line is settled by its text again"
+    writer = page.split("const sendRoomWrite = (", 1)[1].split("\n    };", 1)[0]
+    assert "const cid = newLineId();" in writer
+    assert "sock.send(JSON.stringify({ ...payload, room_id: roomId, client_id: cid }));" in writer
+    assert "setRoomRateNotice(null);" in writer
+    for kind, command in (("say", "room_say"), ("react", "room_react"), ("vote", "cast_room_vote")):
+        assert f"sendRoomWrite('{kind}', " in page and f"{{ type: '{command}', " in page, kind
+        assert f"type: '{command}', room_id" not in page, f"{command} is sent without its id"
+    assert ("setRoomRateNotice(prev => (prev && prev !== roomView?.room.roomId ? null : prev));\n"
+            "    }, [roomView?.room.roomId]);") in page, "another room shows this room's notice"
 
 
 # ── item 4: labels keep their numbers when a member joins or renames into a collision ────
@@ -785,7 +838,9 @@ def _doc(path: str) -> str:
         "An async server runs them on threads of its own, not on its event loop, and bounds "
         "what one person may write with `vaf.RateWindow`",
         "## Bounding what one person may send: `vaf.RateWindow`",
-        "- `vaf.RateWindow` - the per-key sliding window"], []),
+        "- `vaf.RateWindow` - the per-key sliding window",
+        "one `now` far ahead lets every key's earlier charges expire, and a clock that stepped "
+        "back holds every key's charges until it catches up"], []),
     ("docs/agents/A2A_PROTOCOL.md", [
         "The members of a collision are numbered in the order they took the name, then by "
         "handle",
@@ -799,10 +854,14 @@ def _doc(path: str) -> str:
         "`room_task_history`, the invitation commands and the answer at the door",
         "so it runs on the room lane's threads and only the map write stays on the loop.",
         "the room shows `appRoomRateLimited` above the box",
-        "\"Too many room messages in a minute. Wait a moment and write again.\""],
-     ["never touches the room store", "the page ignores `error` frames"]),
+        "\"Too many room messages in a minute. Wait a moment and write again.\"",
+        "the page settles a write only by that id, never by matching text",
+        "it opens every room on this machine to find the account's rows"],
+     ["never touches the room store", "the page ignores `error` frames",
+      "every room of the account"]),
     ("docs/web-ui/WEB_UI.md", ["**A follow yields to the person.**",
-                               "`appRoomRateLimited` until the next write"], []),
+                               "`appRoomRateLimited` until the next write",
+                               "it is never settled by text"], ["compared TRIMMED"]),
 ])
 def test_the_docs_say_what_the_rooms_do(path, sentences, gone):
     """MUTATION: delete one of these sentences from its doc - red."""

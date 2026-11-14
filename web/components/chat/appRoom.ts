@@ -220,6 +220,34 @@ export function newLineId(): string {
     return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
 
+/** A write of an agent room on its way (a line, a reaction, a ballot), by the id it was sent
+ *  with (`client_id`, a `newLineId`). */
+export type RoomWrite = { cid: string; roomId: string; kind: 'say' | 'react' | 'vote'; text: string };
+
+/** The writes still on their way once the server answered the one named `ack` (the view that
+ *  answers a write carries its id). Only that write is settled: a line of the same text never
+ *  settles one, so an older line of those words or another member's cannot stand in for a new
+ *  send. */
+export function afterAnswer<T extends { cid: string }>(writes: ReadonlyArray<T>, ack: string): T[] {
+    return ack ? writes.filter(w => w.cid !== ack) : [...writes];
+}
+
+/** A refusal (`room_rate`) of the write named `cid`: that write leaves, every other one stays
+ *  on its way. `refused` is null when no write of this page carries the id. */
+export function afterRefusal(writes: ReadonlyArray<RoomWrite>, cid: string):
+        { writes: RoomWrite[]; refused: RoomWrite | null } {
+    const refused = (cid && writes.find(w => w.cid === cid)) || null;
+    return { writes: refused ? writes.filter(w => w.cid !== cid) : [...writes], refused };
+}
+
+/** What the box holds after a refusal: the refused line's text when it was a line and the box
+ *  is empty; a reaction or a ballot restores nothing, and a box the person started writing in
+ *  keeps what they wrote. */
+export function boxAfterRefusal(box: string, refused: RoomWrite | null): string {
+    if (!refused || refused.kind !== 'say' || !refused.text) return box;
+    return box.trim() ? box : refused.text;
+}
+
 /** A line of the room as the check reads it: the person's line keeps the page's id as its
  *  `id` (to the app's agent) or as `msg` (to the VAF agent, waiting and stored alike). */
 export type CheckedLine = { id: string; peer: string; msg?: string };

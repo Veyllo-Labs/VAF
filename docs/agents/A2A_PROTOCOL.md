@@ -898,8 +898,8 @@ the 61st is refused before any store work, and the page says so (`room_rate`). T
 built for a member only, asked of the room again where it is read. NAMED BOUNDARY, as for the
 invitations: the four threads are shared by every account and the reads are not charged, so
 an account with many sockets delays another's refresh; one queued read per account and room
-is the follow-up. NAMED BOUNDARY: the sidebar listing still reads every room of the account
-on the event loop.
+is the follow-up. The sidebar list, which opens every room on this machine to find the
+account's rows, is built on the same threads, and so is the workspace routes' room fallback.
 
 The joining machine's network must resolve the name to the host. When the certificate names
 none, the invitation carries no lane for other machines: its briefing says so and why,

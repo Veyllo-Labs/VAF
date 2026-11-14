@@ -501,7 +501,8 @@ def _automation_wire(task) -> Dict[str, Any]:
     }
 
 
-async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -> None:
+async def _send_room_transcript(websocket, room, user_scope_id: Optional[str],
+                                ack: str = "") -> None:
     """The room as the browser reads it, from the store, every time.
 
     One place, because three commands answer with it - opening a room, writing into
@@ -783,6 +784,9 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
     payload, acting = await loop.run_in_executor(_room_lane_pool(), _build)
     if payload is None:
         return
+    if ack:
+        # The write this view answers (its `client_id`): the page settles that write by it.
+        payload = {**payload, "ack": ack}
     live_keys = _ROOM_KEYS_TYPING.get(room.room_id)
     if live_keys is not None:
         for peer in set(typing_seen) - set(typing_keys):
@@ -3638,7 +3642,7 @@ async def get_session_workspace(
     (see _resolve_session_workspace); an unused one is cleaned up again when
     the chat is deleted.
     """
-    root = _resolve_session_workspace(sessionId, request, create=True)
+    root = await _workspace_root(sessionId, request, create=True)
     if not root:
         # Orphan drill-in (central explorer): the session JSON is gone but the workspace folder may still
         # exist under the caller's OWN uid8 root. Strictly scoped to the requester's own VAF_Projects/<uid8>.
@@ -3708,7 +3712,7 @@ async def upload_session_workspace_file(req: WorkspaceUploadRequest, request: Re
     """Upload a file into the chat's workspace (gives the agent direct access)."""
     # create=True: uploading IS "saving something" - create the folder on
     # demand rather than 404ing on a chat whose workspace was never touched.
-    root = _resolve_session_workspace(req.sessionId, request, create=True)
+    root = await _workspace_root(req.sessionId, request, create=True)
     if not root:
         raise HTTPException(status_code=404, detail="Session has no workspace")
     path = _resolve_workspace_subdir(root, req.subpath)
@@ -3754,7 +3758,7 @@ async def create_session_workspace_folder(req: WorkspaceMkdirRequest, request: R
     the root (_resolve_workspace_subdir). The name is validated the way the
     upload validates filenames - basename only, no dotfiles - because a name
     is the only thing the client contributes here."""
-    root = _resolve_session_workspace(req.sessionId, request, create=True)
+    root = await _workspace_root(req.sessionId, request, create=True)
     if not root:
         raise HTTPException(status_code=404, detail="Session has no workspace")
     path = _resolve_workspace_subdir(root, req.subpath)
@@ -3786,7 +3790,7 @@ async def delete_session_workspace_entry(req: WorkspaceDeleteRequest, request: R
     boundaries: same ownership rules as browsing, the target must stay inside
     the workspace root, and the root itself cannot be deleted.
     """
-    root = _resolve_session_workspace(req.sessionId, request)
+    root = await _workspace_root(req.sessionId, request)
     if not root:
         raise HTTPException(status_code=404, detail="Session has no workspace")
     folder = _resolve_workspace_subdir(root, req.subpath)
@@ -5064,10 +5068,9 @@ def _room_invite_pool():
 # charged, and one account may open many sockets, so its queued reads delay the others' views
 # (measured with each build stubbed to 0.2 s: another account's `open_room` waited 15 ms with
 # no competing sockets, 275 ms with 8 and 1.2 s with 24); a cap of one queued read per account
-# and room is the follow-up. NAMED BOUNDARY, the sidebar: the chat list (`session_mgr.list_ui`,
-# which reads every room of the account through `_room_rows`) is still built on the loop for
-# `get_sessions` and the broadcasts after closing, deleting, renaming, accepting and
-# declining; moving the listing off the loop is its own change.
+# and room is the follow-up. The chat list (`_sidebar_sessions`) and the workspace routes'
+# resolver (`_workspace_root`) run here too: both reach `_room_rows`, which opens every room on
+# this machine to find the account's.
 _ROOM_LANE_POOL = None
 
 
@@ -5077,6 +5080,26 @@ def _room_lane_pool():
         from vaf.core.bounded_run import DaemonPool
         _ROOM_LANE_POOL = DaemonPool(4, "vaf-room-lane")
     return _ROOM_LANE_POOL
+
+
+async def _sidebar_sessions(user_scope_id) -> list:
+    """The chat list's rows (`session_mgr.list_ui`), built on the room lane's threads. The
+    list opens and folds every room on this machine to find the account's rows
+    (`_room_rows`: `joined_rooms` and `invited_rooms` walk `list_rooms`): 150 ms with one
+    room of 400 lines, 300 ms at 800, also for an account in no room. The page asks for it
+    after every room write (the read mark's `rooms_changed`), so on the loop it held every
+    connection that long per line."""
+    return await asyncio.get_running_loop().run_in_executor(
+        _room_lane_pool(),
+        lambda: session_mgr.list_ui(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id))
+
+
+async def _workspace_root(session_id: str, request, create: bool = False) -> str:
+    """`_resolve_session_workspace` on the room lane's threads: an id that is no session falls
+    back to the room workspace, whose membership check reads every room on this machine."""
+    return await asyncio.get_running_loop().run_in_executor(
+        _room_lane_pool(),
+        lambda: _resolve_session_workspace(session_id, request, create=create))
 
 
 # What one account may write into rooms from the browser: lines, reactions and ballots, at
@@ -5425,7 +5448,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
         user_scope_id = manager.get_connection_user(websocket)
         
         # Send initial session list (only Web UI chats; channel sessions appear in their dashboards)
-        web_sessions = session_mgr.list_ui(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
+        web_sessions = await _sidebar_sessions(user_scope_id)
         await websocket.send_json({
             "type": "session_list",
             "sessions": session_list_payload(web_sessions)
@@ -5479,7 +5502,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
             session_mgr.save(new_sess)
             sid = new_sess.id
             # Refresh the list for the client so they see the new session
-            web_sessions = session_mgr.list_ui(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
+            web_sessions = await _sidebar_sessions(user_scope_id)
             await websocket.send_json({
                 "type": "session_list",
                 "sessions": session_list_payload(web_sessions)
@@ -5536,7 +5559,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 if type == "get_sessions":
                     # user_scope_id is required for correct RAG scope and filtered session listing
                     user_scope_id = manager.get_connection_user(websocket)
-                    web_sessions = session_mgr.list_ui(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
+                    web_sessions = await _sidebar_sessions(user_scope_id)
                     await websocket.send_json({
                         "type": "session_list",
                         "sessions": session_list_payload(web_sessions)
@@ -5660,8 +5683,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     # other viewers, and the timestamp expires on its own. The
                     # membership check is the same question room_say asks: a room
                     # the user is not in takes no presence from them either. It
-                    # READS the store (`member_room_ids` reads every room of the
-                    # account: 250-300 ms for one room of 400 lines), so it runs
+                    # READS the store (`member_room_ids` opens every room on this
+                    # machine: 250-300 ms with one room of 400 lines), so it runs
                     # on the room lane's threads, and only the map write stays here.
                     try:
                         user_scope_id = manager.get_connection_user(websocket)
@@ -5693,6 +5716,13 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                                        participant_key)
                         from vaf.core.session import member_room_ids
 
+                        # The page names each write it sends (a UUID, `client_id`): the answer
+                        # to it carries the name back, so the page settles exactly that write
+                        # and never takes an older line of the same text, or another member's,
+                        # for it.
+                        from vaf.core.app_link.room import _client_line_id
+                        write_id = _client_line_id(cmd.get("client_id"))
+
                         # A line, a reaction or a ballot is charged to the account BEFORE any
                         # store work, on the loop: a refused one costs nothing
                         # (`ROOM_WRITES_PER_MINUTE`).
@@ -5700,9 +5730,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 and not _ROOM_WRITES.take(str(user_scope_id or ""),
                                                           limit=ROOM_WRITES_PER_MINUTE):
                             # `code` for the page, which words it from its catalogues
-                            # (`appRoomRateLimited`); `message` for any other client.
+                            # (`appRoomRateLimited`); `message` for any other client;
+                            # `client_id` names the write that was refused.
                             await websocket.send_json({"type": "error", "code": "room_rate",
-                                                       "message": ROOM_WRITES_REFUSED})
+                                                       "message": ROOM_WRITES_REFUSED,
+                                                       "client_id": write_id})
                             continue
 
                         # The store work runs on the room lane's threads (`_room_lane_pool`), not
@@ -5845,7 +5877,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         if type != "delete_room":
                             reopened = await asyncio.get_running_loop().run_in_executor(
                                 _room_lane_pool(), Room.open, wanted)
-                            await _send_room_transcript(websocket, reopened, user_scope_id)
+                            await _send_room_transcript(websocket, reopened, user_scope_id,
+                                                        ack=write_id)
 
                         # Anything that changes what the SIDEBAR says has to push the
                         # sidebar. Closing takes the room out of the list and renaming
@@ -5858,8 +5891,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             await manager.broadcast_to_user(user_scope_id, {
                                 "type": "session_list",
                                 "sessions": session_list_payload(
-                                    session_mgr.list_ui(limit=SESSION_LIST_LIMIT,
-                                                        user_scope_id=user_scope_id)),
+                                    await _sidebar_sessions(user_scope_id)),
                             })
                     except RoomError as e:
                         await websocket.send_json({"type": "error", "message": str(e)})
@@ -5922,8 +5954,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         await manager.broadcast_to_user(user_scope_id, {
                             "type": "session_list",
                             "sessions": session_list_payload(
-                                session_mgr.list_ui(limit=SESSION_LIST_LIMIT,
-                                                    user_scope_id=user_scope_id)),
+                                await _sidebar_sessions(user_scope_id)),
                         })
                         if type == "accept_room_invite":
                             reopened = await asyncio.get_running_loop().run_in_executor(
@@ -6276,7 +6307,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         "id": sid, "deleted": bool(gone), "needsConfirm": False,
                     })
                     # Broadcast update ONLY to this user's connections
-                    web_sessions = session_mgr.list_ui(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
+                    web_sessions = await _sidebar_sessions(user_scope_id)
                     await manager.broadcast_to_user(user_scope_id, {
                         "type": "session_list",
                         "sessions": session_list_payload(web_sessions)
@@ -6313,7 +6344,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         "id": sid, "deleted": hidden, "needsConfirm": False,
                     })
                     if hidden:
-                        web_sessions = session_mgr.list_ui(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
+                        web_sessions = await _sidebar_sessions(user_scope_id)
                         await manager.broadcast_to_user(user_scope_id, {
                             "type": "session_list",
                             "sessions": session_list_payload(web_sessions)
@@ -6333,7 +6364,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     manager.subscribe_to_session(websocket, new_sess.id)
                     
                     # Refresh list
-                    web_sessions = session_mgr.list_ui(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
+                    web_sessions = await _sidebar_sessions(user_scope_id)
                     await websocket.send_json({
                         "type": "session_list",
                         "sessions": session_list_payload(web_sessions)
@@ -6362,7 +6393,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                                user_scope_id=user_scope_id)
                         
                         # Broadcast update ONLY to this user's connections
-                        web_sessions = session_mgr.list_ui(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
+                        web_sessions = await _sidebar_sessions(user_scope_id)
                         await manager.broadcast_to_user(user_scope_id, {
                             "type": "session_list",
                             "sessions": session_list_payload(web_sessions)

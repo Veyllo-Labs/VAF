@@ -399,8 +399,8 @@ Key rules:
   `typing` entry of kind `keys`, and it expires by clock seconds after the last key.
   It writes nothing to the room store or the A2A wire: the protocol deliberately has no
   typing frame kind, and presence must stay off the transcript. It does READ the store:
-  the membership check (`member_room_ids`, the same question `room_say` asks) reads every
-  room of the account, about 0.25 s for one room of 400 lines, so it runs on the room
+  the membership check (`member_room_ids`, the same question `room_say` asks) opens every
+  room on this machine, about 0.25 s with one room of 400 lines, so it runs on the room
   lane's threads and only the map write stays on the loop.
 - `room_say` (`{ room_id, text }`) and `close_room` (`{ room_id }`): the person at the
   browser acting in a room themselves. They act on the **CLI participant lane**, not on
@@ -425,20 +425,27 @@ Key rules:
   `room_react`, `cast_room_vote`) in any minute (`ROOM_WRITES_PER_MINUTE`, a
   `vaf.RateWindow` keyed by the account), asked on the loop before any store work; the 61st
   is answered `{"type": "error", "code": "room_rate", "message": "Too many room messages in
-  a minute. Wait a moment and write again."}` and writes nothing. The page words it from
-  its catalogues by the code: the refused line leaves the pending list and goes back into
-  the box when the box is empty, and the room shows `appRoomRateLimited` above the box (the
-  amber status notice the Veyllo App room uses) until the next line, reaction or ballot. A
-  refused reaction or ballot shows the same notice. The transcript is built for a MEMBER
+  a minute. Wait a moment and write again.", "client_id": "<the refused write's id>"}` and
+  writes nothing. Every `room_say`, `room_react` and `cast_room_vote` the page sends carries
+  `client_id` (a UUID; anything else is echoed as ""), and the `room_transcript` that answers
+  it carries it back as `ack`: the page settles a write only by that id, never by matching
+  text. The page words the refusal from its catalogues by the code: only the named write is
+  settled, a refused line leaves the pending list and goes back into the box when the box is
+  empty, a refused reaction or ballot gives nothing back, and the room shows
+  `appRoomRateLimited` above the box (the amber status notice the Veyllo App room uses)
+  until the next line, reaction or ballot, or until another room is on screen. The transcript is built for a MEMBER
   only: membership is asked again of the room where the transcript is read, so an account
   removed while its build waited for a thread is sent nothing, and an account that is only
   invited gets the door. NAMED BOUNDARY: the four threads are shared by every account, and
   the reads (`open_room`, the 3-second poll) are not charged, so an account with many
   sockets delays the others' refresh (another account's `open_room` waited 0.28 s with 8
   competing sockets and 1.2 s with 24, each build stubbed to 0.2 s); one queued read per
-  account and room is the follow-up. NAMED BOUNDARY: the sidebar listing (`get_sessions`,
-  and the `session_list` broadcast after closing, deleting, renaming, accepting and
-  declining) still reads every room of the account on the loop.
+  account and room is the follow-up. The sidebar list (`get_sessions`, the list on connect
+  and every `session_list` broadcast) is built on the same threads: it opens every room on
+  this machine to find the account's rows (150 ms with one room of 400 lines, 300 ms at 800,
+  also for an account in no room), and the page asks for it after every room write (the read
+  mark's `rooms_changed`). So do the workspace routes, whose fallback for a room id reads
+  every room the same way.
 - `kick_peer` (`{ room_id, peer }`) and `rename_room` (`{ room_id, title }`): the same lane
   and the same membership check. `kick_peer` is decided by the ROOM - a leader in its chain
   or the room's host, never against one of the room's own host handles - so the browser adds

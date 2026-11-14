@@ -180,21 +180,25 @@ many frames have not been read.
   below the transcript, drawn exactly like the delivered message it is about to
   become - their initials, name and role, the text - only dimmed to half
   opacity, with a light band sweeping the text left to right for as long as the
-  send lasts and a small "sending…" note underneath. It is reconciled against
-  the next store answer (compared TRIMMED on both sides, because the server
-  strips what it stores - an untrimmed pending copy used to stand as a duplicate
-  under its own delivered message for 30 seconds) and expired after 30 seconds;
-  the room still trusts only the store for ORDER, so a pending line never takes
+  send lasts and a small "sending…" note underneath. Every write the page sends
+  to an agent room (a line, a reaction, a ballot) carries an id of its own
+  (`client_id`), and the pending copy ends when the server's answer to THAT write
+  arrives (the transcript's `ack` names it), or after 30 seconds; it is never
+  settled by text, so an older line of the same words or another member's line
+  cannot stand in for a new send. The room still trusts only the store for ORDER,
+  so a pending line never takes
   a position among the real messages. When the store confirms it, the delivered
   message blends UP from that dimness (`room-msg-confirm`, keyed on the trimmed
   text having been sent from here within the last minute) instead of drifting
   in like a message that was never on screen. Animations are opacity and
   transform only, per the repaint rule in globals.css. A line, a reaction or a
   ballot the server refuses as too many in a minute (`error` with `code:
-  "room_rate"`, 60 a minute per account) says so: the pending copy goes, the
-  refused text comes back into the box when the box is empty, and the amber status
+  "room_rate"` and the refused write's `client_id`, 60 a minute per account) says
+  so: only that write is settled (every other one stays on its way), a refused
+  line's pending copy goes and its text comes back into the box when the box is
+  empty, a refused reaction or ballot gives nothing back, and the amber status
   notice above the box (the one the Veyllo App room uses for its refusals) shows
-  `appRoomRateLimited` until the next write.
+  `appRoomRateLimited` until the next write or until another room is on screen.
   The sidebar badge counts what the PERSON has not seen - from their own reading
   position (the cli lane the browser shares with the terminal), never from the
   agent's backlog, whose cursor only moves when its turn runs. Looking at the

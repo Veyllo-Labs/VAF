@@ -40,8 +40,8 @@ import { TurnDrafts, UnplacedDrafts, isWaitingDraft, type HeldSendRow } from '@/
 import { useChatDrafts } from '@/components/outbox/useChatDrafts';
 import {
     APP_ROOM_ID, APP_ROOM_TITLE, ROOM_SEND_IDLE, beginSend, clearAfterSend, confirmAfterGiveUp, deliveryOf, emptyKey,
-    goToTakenLine, hintHandle, isAppRoom, lateEffect, lateLine, lineTextKey, newLineId, placeholderKey, refusalKey, roomOpenCommand, roomStillListed, sendWithTimeout,
-    showUnreadDot, toKey, type RoomSend,
+    afterAnswer, afterRefusal, boxAfterRefusal, goToTakenLine, hintHandle, isAppRoom, lateEffect, lateLine, lineTextKey, newLineId, placeholderKey, refusalKey, roomOpenCommand, roomStillListed, sendWithTimeout,
+    showUnreadDot, toKey, type RoomSend, type RoomWrite,
 } from '@/components/chat/appRoom';
 import { draftRefOf, isDraftTurnEnd, DRAFT_WAKE_PREFIX, CONFIRM_WAKE_PREFIX } from '@/components/outbox/draftRefs';
 import AskChoices from '@/components/chat/AskChoices';
@@ -3157,16 +3157,35 @@ function VAFDashboardContent() {
         return () => clearTimeout(t);
     }, [roomOpening]);
     // The person's own room messages between send and store: shown at once as
-    // visibly pending, dropped when the transcript carries them (or after 30s).
+    // visibly pending, dropped when the server's answer to THAT write arrives (the
+    // transcript's `ack` carries its `cid`), or after 30s.
     const [pendingRoomSays, setPendingRoomSays] = useState<Array<{
-        key: number; roomId: string; text: string; ts: number }>>([]);
-    // The same says, as the socket handler reads them: kept in step with the frames as they
-    // arrive (a transcript that carries a say ends it), so a refusal that follows a stored
-    // line never takes that line for the refused one. State would lag a render behind.
-    const roomSaysInFlightRef = useRef<Array<{ roomId: string; text: string }>>([]);
-    // The agent room whose last write (a line, a reaction or a ballot) the server refused
-    // as too many in a minute (`room_rate`): it says so above the box until the next write.
+        key: number; cid: string; roomId: string; text: string; ts: number }>>([]);
+    // Every room write on its way (a line, a reaction, a ballot), by the id it was sent with,
+    // as the socket handler reads them: settled by the answer that names it (`ack`) or by
+    // the refusal that names it (`room_rate`'s `client_id`), never by matching text, so an
+    // older line of the same words or another member's cannot settle a new one. A ref:
+    // state would lag a render behind the frames.
+    const roomWritesInFlightRef = useRef<RoomWrite[]>([]);
+    // The agent room whose last write the server refused as too many in a minute
+    // (`room_rate`): it says so above the box until the next write or another room.
     const [roomRateNotice, setRoomRateNotice] = useState<string | null>(null);
+    // A write of the open agent room, named, so its answer and its refusal find it.
+    const sendRoomWrite = (kind: 'say' | 'react' | 'vote', roomId: string,
+                           payload: Record<string, unknown>, text = ''): string | null => {
+        const sock = wsSocketRef.current;
+        if (!sock || sock.readyState !== WebSocket.OPEN) return null;
+        const cid = newLineId();
+        roomWritesInFlightRef.current = [...roomWritesInFlightRef.current,
+            { cid, roomId, kind, text }].slice(-40);
+        setRoomRateNotice(null);
+        sock.send(JSON.stringify({ ...payload, room_id: roomId, client_id: cid }));
+        return cid;
+    };
+    // Another room on screen: an earlier room's notice does not come back with it.
+    useEffect(() => {
+        setRoomRateNotice(prev => (prev && prev !== roomView?.room.roomId ? null : prev));
+    }, [roomView?.room.roomId]);
     // Trimmed texts sent from here in the last minute (text -> epoch ms). The
     // room view reads it to let a delivered message BLEND UP from its pending
     // copy's dimness instead of drifting in as if it were new to the screen.
@@ -5219,7 +5238,7 @@ function VAFDashboardContent() {
         pendingRoomOpenRef.current = null;
         setRoomOpening(null);
         setPendingRoomSays([]);
-        roomSaysInFlightRef.current = [];
+        roomWritesInFlightRef.current = [];
         setRoomRateNotice(null);
         setRoomView(null);
         setRoomMembersOpen(false);
@@ -6468,17 +6487,15 @@ function VAFDashboardContent() {
                             if (pendingRoomOpenRef.current === rid) pendingRoomOpenRef.current = null;
                             setRoomOpening(null);
                             setRoomView({ room: data.room, messages: data.messages || [] });
-                            // A pending say has arrived when the transcript carries the
-                            // person's text; expired ones go too, so a send the room
-                            // never answered does not sit as "sending" forever.
-                            // Compared TRIMMED on both sides: the server strips what it
-                            // stores, and pending copies written before this build may
-                            // still carry the untrimmed input.
-                            const texts = new Set((data.messages || []).map((m: RoomMessage) => (m.text || '').trim()));
-                            setPendingRoomSays(prev => prev.filter(p =>
-                                p.roomId === rid && Date.now() - p.ts < 30000 && !texts.has(p.text.trim())));
-                            roomSaysInFlightRef.current = roomSaysInFlightRef.current.filter(p =>
-                                p.roomId !== rid || !texts.has(p.text.trim()));
+                            // A pending say has arrived when the answer to THAT write comes
+                            // (`ack`, the id it was sent with), never because some line of the
+                            // same text is in the room: an older one or another member's is not
+                            // this send. Expired ones go too, so a send the room never answered
+                            // does not sit as "sending" forever.
+                            const ack = typeof data.ack === 'string' ? data.ack : '';
+                            setPendingRoomSays(prev => afterAnswer(prev, ack).filter(p =>
+                                p.roomId === rid && Date.now() - p.ts < 30000));
+                            roomWritesInFlightRef.current = afterAnswer(roomWritesInFlightRef.current, ack);
                         }
                         if (rid === APP_ROOM_ID) {
                             const lines: RoomMessage[] = data.messages || [];
@@ -7470,19 +7487,21 @@ function VAFDashboardContent() {
                     }
                 }
                 else if (data.type === 'error') {
-                    // A room write refused as too many in a minute: the refused line leaves the
-                    // pending list and goes back into an empty box, and the room says why.
-                    // Reactions and ballots get the same notice; they carry no text.
+                    // A room write refused as too many in a minute, named by the id it was sent
+                    // with (`client_id`): only THAT write is settled. A refused line leaves the
+                    // pending list and goes back into the box if the box is empty; a refused
+                    // reaction or ballot restores nothing. Every other line on its way stays.
                     if (data.code === 'room_rate') {
-                        const rid = roomViewRef.current?.room.roomId ?? null;
-                        if (rid) {
-                            const mine = roomSaysInFlightRef.current.filter(p => p.roomId === rid);
-                            const refused = mine[mine.length - 1];
-                            roomSaysInFlightRef.current = roomSaysInFlightRef.current.filter(p => p.roomId !== rid);
-                            setPendingRoomSays(prev => prev.filter(p => p.roomId !== rid));
-                            if (refused) setInput(prev => (prev.trim() ? prev : refused.text));
-                            setRoomRateNotice(rid);
+                        const cid = typeof data.client_id === 'string' ? data.client_id : '';
+                        const settled = afterRefusal(roomWritesInFlightRef.current, cid);
+                        const refused = settled.refused;
+                        if (refused) {
+                            roomWritesInFlightRef.current = settled.writes;
+                            setPendingRoomSays(prev => prev.filter(p => p.cid !== refused.cid));
+                            setInput(prev => boxAfterRefusal(prev, refused));
                         }
+                        const rid = refused?.roomId ?? roomViewRef.current?.room.roomId ?? null;
+                        if (rid) setRoomRateNotice(rid);
                     }
                     // The server refused the chat a reconnect asked for again (deleted meanwhile):
                     // the view takes the chat the server auto-loaded for this connection instead
@@ -8506,16 +8525,13 @@ function VAFDashboardContent() {
                 void sendToAppRoom(roomText);
                 return;
             }
-            ws.send(JSON.stringify({
-                type: 'room_say', room_id: roomView.room.roomId, text: roomText,
-            }));
-            roomSaysInFlightRef.current = [...roomSaysInFlightRef.current,
-                { roomId: roomView.room.roomId, text: roomText }].slice(-20);
-            setRoomRateNotice(null);
-            // On screen at once, visibly pending, reconciled against the next
-            // transcript - the wait for the 3s poll made a sent message look lost.
+            const cid = sendRoomWrite('say', roomView.room.roomId,
+                { type: 'room_say', text: roomText }, roomText);
+            if (!cid) return;
+            // On screen at once, visibly pending, settled by the answer that names
+            // it - the wait for the 3s poll made a sent message look lost.
             setPendingRoomSays(prev => [...prev, {
-                key: Date.now() + Math.random(), roomId: roomView.room.roomId,
+                key: Date.now() + Math.random(), cid, roomId: roomView.room.roomId,
                 text: roomText, ts: Date.now(),
             }]);
             // Remembered for the blend-up when the store echoes it back; old
@@ -10397,10 +10413,8 @@ function VAFDashboardContent() {
                                         liveWorker={roomLiveWorker}
                                         connected={isConnected}
                                         onReact={roomView.room.me && !roomView.room.closed && !appRoomWords ? (frameId, emoji) => {
-                                            const sock = wsSocketRef.current;
-                                            if (!sock || sock.readyState !== WebSocket.OPEN) return;
-                                            setRoomRateNotice(null);
-                                            sock.send(JSON.stringify({ type: 'room_react', room_id: roomView.room.roomId, reply_to: frameId, emoji }));
+                                            sendRoomWrite('react', roomView.room.roomId,
+                                                { type: 'room_react', reply_to: frameId, emoji });
                                         } : undefined}
                                         pending={appRoomWords
                                             ? (appRoomSending.busy ? [{ key: 1, text: appRoomSending.text }] : [])
@@ -11399,12 +11413,8 @@ function VAFDashboardContent() {
                                         <RoomVoteDock votes={voteDock.votes} leaving={voteDock.leaving}
                                             widthClass={chatWidthClass}
                                             onVote={(voteId, choice) => {
-                                                setRoomRateNotice(null);
-                                                ws?.send(JSON.stringify({
-                                                    type: 'cast_room_vote',
-                                                    room_id: roomViewRef.current?.room?.roomId ?? '',
-                                                    vote_id: voteId, choice,
-                                                }));
+                                                sendRoomWrite('vote', roomViewRef.current?.room?.roomId ?? '',
+                                                    { type: 'cast_room_vote', vote_id: voteId, choice });
                                             }} />
                                     )}
                                     {roomView && (

@@ -85,7 +85,10 @@ Named boundaries, each with the measurement that supports it:
   processes the browser's holder record answers busy. No live place is shown for a
   waiting browser run: the browser window opens on the run's first frame, and a console
   line would land in a window that is still closed; the model gets the place in the busy
-  text. The preview upload awaits inline in its socket's loop, as it did around the HTTP
+  text. The browser queues admit one person at a time (``one_key_at_a_time``): the
+  shared container has one cookie jar and one Downloads folder, so two people's runs
+  side by side would clear each other's browser and mix their downloads; runs of one
+  person still share the slots. The preview upload awaits inline in its socket's loop, as it did around the HTTP
   call, so a disconnect does not cancel it; the 15 s wait bounds it.
 - The browser pool start never waits (admit, or fall back to the shared container);
   sandbox environments are per-person containers; admin jobs (repair, backup, update)
@@ -374,10 +377,17 @@ _held = threading.local()
 class ResourceQueue:
     """Admission to a resource with ``slots`` parallel places (None: unbounded, a
     pass-through that only measures), at most ``max_waiting`` waiters, of them at most
-    ``max_waiting_per_key`` from one person (None: no share of their own), in fair order."""
+    ``max_waiting_per_key`` from one person (None: no share of their own), in fair order.
+
+    ``one_key_at_a_time=True`` lets the slots be shared only by callers of one key: a
+    caller of another key waits until every running caller has left. For a resource
+    that keeps state per person (a browser's cookie jar). Only the head of the fair
+    order is granted, so a key whose callers keep arriving cannot overtake a waiting
+    key: a slot stays free rather than let a later caller past the head."""
 
     def __init__(self, name: str, *, slots: Optional[int] = 1, max_waiting: int = 12,
                  max_waiting_per_key: Optional[int] = None,
+                 one_key_at_a_time: bool = False,
                  clock: Callable[[], float] = time.monotonic) -> None:
         if slots is not None and slots < 1:
             raise ValueError("slots must be at least 1, or None for unbounded")
@@ -386,12 +396,15 @@ class ResourceQueue:
         self.max_waiting = max(0, int(max_waiting))
         self.max_waiting_per_key = (None if max_waiting_per_key is None
                                     else max(0, int(max_waiting_per_key)))
+        self.one_key_at_a_time = bool(one_key_at_a_time)
         self._clock = clock
         # Set by the registry (resource_queue): whether queue_metrics() reports it.
         self.listed = True
         self._cond = threading.Condition()
         self._order = FairOrder()
         self._running = 0
+        # Running callers per key: what `one_key_at_a_time` admits against.
+        self._running_keys: Dict[str, int] = {}
         self._waits: Deque[Tuple[float, float]] = deque(maxlen=_MAX_SAMPLES)
         self._services: Deque[Tuple[float, float]] = deque(maxlen=_MAX_SAMPLES)
         self._refusals: Deque[Tuple[float, str]] = deque(maxlen=_MAX_SAMPLES)
@@ -401,13 +414,29 @@ class ResourceQueue:
     def _has_room(self) -> bool:
         return self.slots is None or self._running < self.slots
 
+    def _fits(self, key: str) -> bool:
+        """Whether a caller of `key` may run beside the running ones."""
+        if not self.one_key_at_a_time or not self._running_keys:
+            return True
+        return key in self._running_keys and len(self._running_keys) == 1
+
+    def _start(self, key: str) -> None:
+        self._running += 1
+        self._running_keys[key] = self._running_keys.get(key, 0) + 1
+
     def _grant_waiting(self) -> None:
         now = self._clock()
         while self._order and self._has_room():
+            if self.one_key_at_a_time:
+                # The head in fair order, read without moving anyone: it is granted
+                # when it fits, and nobody behind it is while it does not.
+                head = self._order.copy(limit=1).pop()
+                if not self._fits(head.key):
+                    break
             ticket = self._order.pop()
             ticket.granted = True
             ticket.granted_at = now
-            self._running += 1
+            self._start(ticket.key)
         self._cond.notify_all()
 
     def _eta(self, position: int) -> Optional[float]:
@@ -425,10 +454,15 @@ class ResourceQueue:
         return QueueBusy(self.name, reason, position=position, waited_s=waited,
                          eta_s=self._eta(position), own_share=own_share)
 
-    def _release(self, granted_at: float) -> None:
+    def _release(self, granted_at: float, key: str) -> None:
         with self._cond:
             now = self._clock()
             self._running -= 1
+            left = self._running_keys.get(key, 0) - 1
+            if left > 0:
+                self._running_keys[key] = left
+            else:
+                self._running_keys.pop(key, None)
             self._services.append((now, max(0.0, now - granted_at)))
             self._grant_waiting()
 
@@ -436,11 +470,12 @@ class ResourceQueue:
 
     def estimate(self, key: Any = None) -> WaitInfo:
         """What a new caller with this key would face right now."""
+        key = _canonical_key(key)
         with self._cond:
-            if self._has_room() and not self._order:
+            if self._has_room() and not self._order and self._fits(key):
                 return WaitInfo(self.name, 0, None, 0.0)
             probe = object()
-            self._order.push(_canonical_key(key), probe)
+            self._order.push(key, probe)
             try:
                 position = self._order.position(probe)
             finally:
@@ -466,8 +501,8 @@ class ResourceQueue:
             raise RuntimeError(f"this thread already holds a slot of the {self.name!r} queue")
         with self._cond:
             now = self._clock()
-            if self._has_room() and not self._order:
-                self._running += 1
+            if self._has_room() and not self._order and self._fits(key):
+                self._start(key)
                 self._waits.append((now, 0.0))
                 held.add(id(self))
                 return now
@@ -515,10 +550,12 @@ class ResourceQueue:
                 granted = ticket.granted
                 if not granted:
                     self._order.remove(ticket)
-                    self._cond.notify_all()
+                    # A head that did not fit may have held back a caller behind
+                    # it that does (one_key_at_a_time); without it, this only wakes.
+                    self._grant_waiting()
             if granted:
                 # Granted in the instant this thread failed: hand the slot on.
-                self._release(ticket.granted_at)
+                self._release(ticket.granted_at, ticket.key)
             raise
         with self._cond:
             self._waits.append((ticket.granted_at, max(0.0, ticket.granted_at - ticket.enqueued)))
@@ -529,7 +566,7 @@ class ResourceQueue:
         except BaseException:
             # The slot is held but __enter__ never returns, so no __exit__ will free it.
             held.discard(id(self))
-            self._release(ticket.granted_at)
+            self._release(ticket.granted_at, ticket.key)
             raise
         return ticket.granted_at
 
@@ -581,7 +618,7 @@ class _Slot:
         if names is not None:
             names.discard(id(self._queue))
         if self._granted_at is not None:
-            self._queue._release(self._granted_at)
+            self._queue._release(self._granted_at, self._key)
             self._granted_at = None
 
 
@@ -607,7 +644,7 @@ _registry_lock = threading.Lock()
 
 def resource_queue(name: str, *, slots: Optional[int] = 1, max_waiting: int = 12,
                    max_waiting_per_key: Optional[int] = None,
-                   listed: bool = True) -> ResourceQueue:
+                   listed: bool = True, one_key_at_a_time: bool = False) -> ResourceQueue:
     """The process-wide queue for ``name``, created on first use. A later call must ask
     for the same numbers: one with others raises ValueError, because handing back the
     existing queue would silently drop the limits one of the two callers relies on (a
@@ -616,22 +653,26 @@ def resource_queue(name: str, *, slots: Optional[int] = 1, max_waiting: int = 12
     ``listed=False`` keeps the queue out of :func:`queue_metrics`: for a queue that only
     one person can ever wait in (a per-user instance whose name is derived from that
     person's scope), which has no numbers across people worth a health row, and whose
-    name must not reach a numbers payload. It is one of the registration's numbers."""
+    name must not reach a numbers payload. It is one of the registration's numbers, and so
+    is ``one_key_at_a_time`` (see :class:`ResourceQueue`)."""
     wanted = (slots, max(0, int(max_waiting)),
               None if max_waiting_per_key is None else max(0, int(max_waiting_per_key)),
-              bool(listed))
+              bool(listed), bool(one_key_at_a_time))
     with _registry_lock:
         queue = _registry.get(name)
         if queue is None:
             queue = ResourceQueue(name, slots=slots, max_waiting=max_waiting,
-                                  max_waiting_per_key=max_waiting_per_key)
+                                  max_waiting_per_key=max_waiting_per_key,
+                                  one_key_at_a_time=one_key_at_a_time)
             queue.listed = bool(listed)
             return _registry.setdefault(name, queue)
-        held = (queue.slots, queue.max_waiting, queue.max_waiting_per_key, queue.listed)
+        held = (queue.slots, queue.max_waiting, queue.max_waiting_per_key, queue.listed,
+                queue.one_key_at_a_time)
         if held != wanted:
             raise ValueError(
                 f"the queue {name!r} exists with slots, max_waiting, max_waiting_per_key, "
-                f"listed = {held}; a second registration asked for {wanted}")
+                f"listed, one_key_at_a_time = {held}; a second registration asked for "
+                f"{wanted}")
         return queue
 
 

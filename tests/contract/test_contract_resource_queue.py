@@ -139,3 +139,45 @@ def test_a_stranger_keeps_a_private_queue_unlisted(monkeypatch):
     assert outcome == ["full", "admitted"], outcome
     assert places[0] == 1 and places[-1] == 0
     assert "gpu-of-alice" not in [m["name"] for m in vaf.queue_metrics()]
+
+
+def test_a_stranger_serves_one_tenant_at_a_time():
+    """A device that keeps state per tenant (a logged-in session): two slots, but the
+    running callers share one key. alice's two jobs run together; bob waits until both
+    have left, and a third alice job that arrives after bob goes after him."""
+    q = vaf.ResourceQueue("one-session-device", slots=2, one_key_at_a_time=True)
+    order = []
+    let_go = [threading.Event(), threading.Event()]
+    held = [threading.Event(), threading.Event()]
+
+    def alice(i):
+        with q.slot("alice"):
+            held[i].set()
+            let_go[i].wait(5)
+            order.append(f"alice-{i + 1}")
+
+    def job(who, name):
+        with q.slot(who, poll_s=0.01):
+            order.append(name)
+
+    firsts = [threading.Thread(target=alice, args=(i,), daemon=True) for i in (0, 1)]
+    for i, t in enumerate(firsts):
+        t.start()
+        assert held[i].wait(5)
+    assert q.metrics()["running"] == 2
+    later = []
+    for who, name in (("bob", "bob-1"), ("alice", "alice-3")):
+        before = q.metrics()["waiting"]
+        later.append(threading.Thread(target=job, args=(who, name), daemon=True))
+        later[-1].start()
+        end = time.monotonic() + 5
+        while q.metrics()["waiting"] == before and time.monotonic() < end:
+            time.sleep(0.005)
+    let_go[0].set()
+    firsts[0].join(5)
+    time.sleep(0.1)
+    assert order == ["alice-1"], f"someone ran beside the second alice job: {order}"
+    let_go[1].set()
+    for t in (firsts[1], *later):
+        t.join(5)
+    assert order == ["alice-1", "alice-2", "bob-1", "alice-3"]

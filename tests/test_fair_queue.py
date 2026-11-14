@@ -494,3 +494,156 @@ def test_a_failing_grant_report_does_not_leak_the_slot():
     t.join(5)
     assert result == ["boom", "again"]
     assert q.metrics()["running"] == 0
+
+
+# ── one key at a time (a resource that keeps state per person) ───────────────
+
+def _hold(q, key):
+    """A holder of `key` in its own thread; returns it (release() lets go)."""
+    return _Holder(q, key)
+
+
+def test_one_key_at_a_time_shares_slots_within_a_key():
+    """Two callers of one key run side by side on two slots."""
+    q = ResourceQueue("one-key-share", slots=2, one_key_at_a_time=True)
+    a1, a2 = _hold(q, "a"), _hold(q, "a")
+    assert q.metrics()["running"] == 2 and q.metrics()["waiting"] == 0
+    a1.release()
+    a2.release()
+
+
+def test_another_key_waits_until_the_key_drains():
+    """b waits while any caller of a runs, a free slot notwithstanding, and is let in
+    when the last a leaves. MUTATION: drop `_fits` from the fast path (b enters at
+    once) - red."""
+    q = ResourceQueue("one-key-drain", slots=2, one_key_at_a_time=True)
+    a1 = _hold(q, "a")
+    out = []
+    t = _waiter(q, "b", out, "b")
+    assert _wait_until(lambda: q.metrics()["waiting"] == 1)
+    assert q.metrics()["running"] == 1, "b ran beside a"
+    a1.release()
+    t.join(5)
+    assert out == ["b"]
+    assert q.metrics()["running"] == 0
+
+
+def test_another_key_waits_for_every_caller_of_the_key():
+    """With two a running, the first a leaving is not enough: b waits for both."""
+    q = ResourceQueue("one-key-both", slots=2, one_key_at_a_time=True)
+    a1, a2 = _hold(q, "a"), _hold(q, "a")
+    out = []
+    t = _waiter(q, "b", out, "b")
+    assert _wait_until(lambda: q.metrics()["waiting"] == 1)
+    a1.release()
+    time.sleep(0.1)
+    assert out == [] and q.metrics()["running"] == 1, "b ran beside the second a"
+    a2.release()
+    t.join(5)
+    assert out == ["b"]
+
+
+def test_no_barging_past_a_waiting_key():
+    """a0 and a1 run, b waits, then a2 arrives. a0 leaving frees a slot that a2 would
+    fit, but b is ahead of a2 in fair order: the slot stays free, b goes when a1 has
+    left, and a2 after b. MUTATION: grant any waiter that fits instead of only the
+    head (a2 goes first) - red."""
+    q = ResourceQueue("one-key-barge", slots=2, one_key_at_a_time=True)
+    a0, a1 = _hold(q, "a"), _hold(q, "a")
+    out = []
+    threads = _enqueue_in_order(q, [("b", "b"), ("a", "a2")], out)
+    a0.release()
+    time.sleep(0.1)
+    assert out == [] and q.metrics()["waiting"] == 2, f"a2 overtook the waiting b: {out}"
+    a1.release()
+    for t in threads:
+        t.join(5)
+    assert out == ["b", "a2"]
+
+
+def test_a_waiting_key_that_gives_up_lets_the_next_in():
+    """b heads the line and does not fit; a2 waits behind it and would. When b times
+    out, a2 is granted beside a1 at once. MUTATION: only wake the waiters when one
+    leaves, without granting (a2 waits for a1) - red."""
+    q = ResourceQueue("one-key-leave", slots=2, one_key_at_a_time=True)
+    a1 = _hold(q, "a")
+    out = []
+    threads = _enqueue_in_order(q, [("b", "b"), ("a", "a2")], out, b={"deadline_s": 0.3})
+    assert _wait_until(lambda: "a2" in out, timeout=3.0), out
+    assert out == [("b", "timeout"), "a2"]
+    a1.release()
+    for t in threads:
+        t.join(5)
+
+
+def test_the_option_off_admits_any_key():
+    """The default is today's admission: a and b run together."""
+    q = ResourceQueue("one-key-off", slots=2)
+    a1, b1 = _hold(q, "a"), _hold(q, "b")
+    assert q.metrics()["running"] == 2
+    a1.release()
+    b1.release()
+
+
+def test_one_key_at_a_time_is_a_registration_number():
+    """A second registration that differs only in the option raises, and the same
+    numbers hand back the same queue. MUTATION: drop the flag from `wanted` - red."""
+    q = fair_queue.resource_queue("one-key-reg", slots=2, one_key_at_a_time=True)
+    assert fair_queue.resource_queue("one-key-reg", slots=2, one_key_at_a_time=True) is q
+    assert q.one_key_at_a_time is True
+    with pytest.raises(ValueError, match="one_key_at_a_time"):
+        fair_queue.resource_queue("one-key-reg", slots=2)
+    fair_queue.resource_queue("one-key-reg-off", slots=2)
+    with pytest.raises(ValueError):
+        fair_queue.resource_queue("one-key-reg-off", slots=2, one_key_at_a_time=True)
+
+
+def test_the_estimate_knows_another_key_waits():
+    """With a running and a slot free, a caller of b would wait, a caller of a would
+    not. MUTATION: drop `_fits` from estimate()'s fast path - red."""
+    q = ResourceQueue("one-key-estimate", slots=2, one_key_at_a_time=True)
+    a1 = _hold(q, "a")
+    assert q.estimate("a").position == 0
+    assert q.estimate("b").position == 1
+    a1.release()
+    assert q.estimate("b").position == 0
+
+
+@pytest.mark.parametrize("where", ["the waiter's cleanup", "the grant report"])
+def test_a_failure_after_the_grant_gives_the_key_back(where):
+    """A slot handed on through a failing callback also gives its key back: a caller
+    of another key is let straight in afterwards. MUTATION: release under another
+    key on that path (the key stays counted as running) - red."""
+    q = ResourceQueue("one-key-fail", slots=1, one_key_at_a_time=True)
+    holder = _Holder(q, "other")
+    calls = []
+
+    def on_wait(info):
+        calls.append(info.position)
+        if where == "the waiter's cleanup" and info.position == 1 and len(calls) == 1:
+            holder.release()
+            assert _wait_until(lambda: q.metrics()["running"] == 1
+                               and not q.metrics()["waiting"])
+            raise _Boom()
+        if where == "the grant report" and info.position == 0:
+            raise _Boom()
+
+    caught = []
+
+    def run():
+        try:
+            with q.slot("a", on_wait=on_wait, poll_s=0.01):
+                caught.append("entered")
+        except _Boom:
+            caught.append("boom")
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    if where == "the grant report":
+        assert _wait_until(lambda: q.metrics()["waiting"] == 1)
+        holder.release()
+    t.join(5)
+    assert caught == ["boom"]
+    assert q.metrics()["running"] == 0
+    with q.slot("b", deadline_s=0.0):
+        pass

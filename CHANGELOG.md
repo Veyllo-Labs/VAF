@@ -13,6 +13,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Added
 
+- **`vaf.ResourceQueue` and `vaf.resource_queue` take `one_key_at_a_time=True`.** The slots
+  are then shared only by callers of one key, and a caller of another key waits until they
+  have left, without being overtaken. For a resource that keeps state per person.
 - **Veyllo App: tools kept off messaging channels, behind a card on your device.** The host
   shell, host Python, SSH, FTP, the sandbox environments, the browser agent, background
   commands, timers and the tool and workflow builders can now be used through the Veyllo App.

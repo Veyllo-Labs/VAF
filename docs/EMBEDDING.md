@@ -2124,6 +2124,14 @@ def answer(user_scope, prompt, show_place):
   else is refused as `full`; with it, only that person is (`QueueBusy.own_share`), and
   the others are still admitted while total room is left. VAF's speech queues use 12
   and 3.
+- **One key at a time.** `one_key_at_a_time=True` lets the slots be shared only by
+  callers of one key: a caller of another key waits in fair order until every running
+  caller has left. Only the head of the fair order is let in: a slot stays free rather
+  than go to a caller of the running key who stands behind the waiting one, so a key
+  whose callers keep arriving cannot hold another off for good. Use it for a resource
+  that keeps state per tenant, where two tenants side by side would see or clear each
+  other's state; the shared browser's cookie jar and Downloads folder are VAF's use.
+  Callers of one key still share every slot.
 - **`slot(key, *, deadline_s=None, cancelled=None, on_wait=None, poll_s=0.25)`.** The key is
   canonical: no key and the local admin's scope are one bucket. That makes "no key" one
   person: a lane that serves many people (a bridge, a server route) must pass each person's
@@ -2143,9 +2151,9 @@ def answer(user_scope, prompt, show_place):
   Slots of different queues nest.
 - **One queue per name.** `vaf.resource_queue(name, ...)` creates the queue on first
   use and hands the same one out after. A second call with other numbers (`slots`,
-  `max_waiting`, `max_waiting_per_key`) raises `ValueError`: returning the existing queue
-  would silently drop the limits one of the two callers relies on, a per-person share
-  above all. Create a queue in one place and ask for it with the same numbers.
+  `max_waiting`, `max_waiting_per_key`, `listed`, `one_key_at_a_time`) raises
+  `ValueError`: returning the existing queue would silently drop the limits one of the
+  two callers relies on, a per-person share above all. Create a queue in one place and ask for it with the same numbers.
 - **Unlisted queues.** `vaf.resource_queue(name, ..., listed=False)` keeps the queue out
   of `vaf.queue_metrics()`; it admits, waits and refuses like any other. Use it for a
   queue that belongs to one person, such as VAF's per-user browser instances, whose

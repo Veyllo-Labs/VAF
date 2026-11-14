@@ -68,6 +68,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **An automation no longer delivers the model's reasoning as its result.** When a run's reply
+  held nothing but marked reasoning, or its last words never reached the stream (such as the
+  note that a background task started), the result fell back to a guess: it delivered the
+  reasoning with only its tags removed to the chat, the main messenger and the notifications,
+  and it cut answer text at phrases such as "Okay ... let me", "First ... I need" or "it
+  should ... use", and at every bracket, such as a task id `[Task: ...]` or a link label. The
+  fallback now removes only the reasoning the model marked, the same rule as the chat, and
+  delivers nothing rather than the reasoning.
 - **A terminal reply is no longer folded into "thinking" by a guess at its language.** In
   `vaf run` (the prompt interface and the full-screen app), the copy shown in the browser and
   saved in the chat wrapped the start of a longer reply as reasoning when it found a German

@@ -1600,90 +1600,30 @@ vaf automation delete <id>   # Delete task
         except Exception:
             pass
     
-    def _extract_clean_answer(self, raw_response: str, history: List[Dict]) -> str:
+    def _extract_clean_answer(self, history: List[Dict], clean: Callable[[str], str]) -> str:
+        """The newest assistant text of the run, cleaned by the rule the stream got.
+
+        `clean` is the agent's own reply cleaner (`Agent._clean_reasoning`): only the
+        reasoning the model marked and leaked tool-call JSON go, plain text is the answer as
+        written, in any language. Used when nothing unmarked reached the stream: the reply was
+        all marked reasoning, or its last words went to the history only (a background-task
+        acknowledgement, a stop note). The walk goes newest first and passes over a message the
+        cleaner leaves empty, so a run that ended on a reasoning-only round still finds the
+        answer it gave before it.
+
+        Reasoning is never returned with only its tags removed: that text IS the reasoning.
+        Nothing found gives "", which the delivery shows as "Completed".
         """
-        Extract only the final clean answer from agent response.
-        Removes internal thinking, tool calls, and formatting artifacts.
-        
-        Args:
-            raw_response: Raw response string from agent
-            history: Agent history to extract final answer from
-            
-        Returns:
-            Clean final answer without internal thinking
-        """
-        import re
-        
-        # If we have history, try to extract the final assistant message
-        if history:
-            # Find the last assistant message that's not just tool calls
-            for msg in reversed(history):
-                if msg.get('role') == 'assistant' and msg.get('content'):
-                    content = str(msg.get('content', ''))
-                    
-                    # Remove all XML tags (thinking, tool calls, etc.)
-                    clean = re.sub(r'<[^>]*>', '', content)
-                    # Remove Rich markup tags
-                    clean = re.sub(r'\[/?[^\]]+\]', '', clean)
-                    # Remove tool_call blocks
-                    clean = re.sub(r'<tool_call>.*?</tool_call>', '', clean, flags=re.DOTALL)
-                    # Remove code blocks (but keep content if it's the answer)
-                    # Only remove if it's clearly a tool call format
-                    clean = re.sub(r'```json\s*\{[^}]*"name"[^}]*\}\s*```', '', clean, flags=re.DOTALL)
-                    
-                    # Remove common "thinking" patterns
-                    thinking_patterns = [
-                        r'Okay.*?let.*?me',
-                        r'First.*?I.*?need',
-                        r'Wait.*?the.*?user',
-                        r'I.*?should.*?use',
-                        r'Let.*?me.*?check',
-                    ]
-                    for pattern in thinking_patterns:
-                        clean = re.sub(pattern, '', clean, flags=re.IGNORECASE | re.DOTALL)
-                    
-                    # If we have substantial content after cleaning, use it
-                    if len(clean.strip()) > 50:
-                        return clean.strip()
-        
-        # Fallback: Clean the raw response
-        clean = raw_response
-        
-        # Remove Rich markup
-        clean = re.sub(r'\[/?[^\]]+\]', '', clean)
-        # Remove XML tags
-        clean = re.sub(r'<[^>]*>', '', clean)
-        # Remove tool calls
-        clean = re.sub(r'<tool_call>.*?</tool_call>', '', clean, flags=re.DOTALL)
-        # Remove thinking blocks
-        clean = re.sub(r'</?think>', '', clean, flags=re.IGNORECASE)
-        clean = re.sub(r'</?redacted_reasoning>', '', clean, flags=re.IGNORECASE)
-        
-        # Remove leading "thinking" patterns
-        lines = clean.split('\n')
-        filtered_lines = []
-        skip_thinking = True
-        for line in lines:
-            line_lower = line.lower().strip()
-            # Skip obvious thinking lines
-            if skip_thinking and any(pattern in line_lower for pattern in [
-                'okay', 'first', 'wait', 'let me', 'i need', 'i should',
-                'tool_call', 'thinking', 'reasoning'
-            ]):
+        for msg in reversed(history or []):
+            if not isinstance(msg, dict) or msg.get("role") != "assistant":
                 continue
-            # Once we hit real content, stop skipping
-            if len(line.strip()) > 10 and not any(c in line_lower for c in ['[', ']', '<', '>']):
-                skip_thinking = False
-            if not skip_thinking or len(line.strip()) > 0:
-                filtered_lines.append(line)
-        
-        result = '\n'.join(filtered_lines).strip()
-        
-        # If result is still mostly thinking artifacts, return a fallback
-        if len(result) < 50 or result.count('[') > result.count('\n'):
-            return raw_response.strip()  # Return original if cleaning removed too much
-        
-        return result
+            content = msg.get("content")
+            if not isinstance(content, str) or not content:
+                continue
+            text = (clean(content) or "").strip()
+            if text:
+                return text
+        return ""
     
     def _check_cooldown(self) -> tuple[bool, Optional[float]]:
         """
@@ -2039,8 +1979,7 @@ vaf automation delete <id>   # Delete task
                 
                 # Import agent and run
                 from vaf.core.agent import Agent
-                import re
-                
+
                 agent = Agent(verbose=False, run_kind="automation")
                 agent.load_model()
                 # A run a room message started is a room turn: bound before its prompt is
@@ -2088,26 +2027,13 @@ vaf automation delete <id>   # Delete task
                     if agent.history and agent.history[0].get("role") == "system":
                         agent.history[0]["content"] = (agent.history[0]["content"] or "") + automation_notice
 
-                # Capture response. We keep TWO buffers:
-                #  - raw_parts: the untouched stream, so a <think>...</think> block stays INTACT for the
-                #    final reasoning strip. Stripping the tags per-chunk (as below) would only remove the
-                #    markers and leave the reasoning TEXT, which the heuristic cleaner cannot then detect
-                #    (esp. non-English reasoning) — that is exactly how a CoT preamble leaked into a result.
-                #  - response_parts: the legacy tag-stripped buffer, kept only as a fallback.
+                # Capture the stream untouched. The reasoning strip after the run removes whole
+                # marked blocks, so it needs every block whole: a chunk with its tags stripped keeps
+                # the reasoning TEXT and loses the marks that tell it apart from the answer, which is
+                # how a model's reasoning was once delivered as the result.
                 raw_parts = []
-                response_parts = []
                 def capture(text):
                     raw_parts.append(text)
-                    # Filter out internal thinking tags and formatting
-                    # Remove Rich markup tags like [white dim]...[/]
-                    filtered = re.sub(r'\[/?[^\]]+\]', '', text)
-                    # Remove thinking/reasoning tags
-                    filtered = re.sub(r'</?think>', '', filtered, flags=re.IGNORECASE)
-                    filtered = re.sub(r'</?redacted_reasoning>', '', filtered, flags=re.IGNORECASE)
-                    # Remove tool_call XML tags
-                    filtered = re.sub(r'<tool_call>.*?</tool_call>', '', filtered, flags=re.DOTALL)
-                    if filtered.strip():
-                        response_parts.append(filtered)
                     if callback:
                         callback(text)
 
@@ -2188,19 +2114,18 @@ vaf automation delete <id>   # Delete task
                         f"wird, meldet er sich selbst."
                     )
                 else:
-                    raw_result = "".join(response_parts)
-
                     # Deliver only the final clean answer. Use the SAME canonical cleaner the live chat uses
-                    # (agent._clean_reasoning): it removes whole <think>...</think> blocks (content included),
-                    # so reasoning is stripped structurally and language-agnostically — not by brittle, English-
-                    # only phrase heuristics. Fall back to the legacy extractor only if that yields nothing.
+                    # (agent._clean_reasoning): it removes whole marked reasoning blocks (content included),
+                    # so reasoning is stripped structurally and in any language, not by phrase heuristics.
+                    # When nothing unmarked reached the stream, the newest assistant message of the run
+                    # that the same cleaner leaves non-empty is the result, else nothing.
                     result = ""
                     try:
                         result = (agent._clean_reasoning("".join(raw_parts)) or "").strip()
                     except Exception:
                         result = ""
                     if not result:
-                        result = self._extract_clean_answer(raw_result, agent.history)
+                        result = self._extract_clean_answer(agent.history, agent._clean_reasoning)
 
                 agent.shutdown()
 

@@ -430,8 +430,22 @@ class ResourceQueue:
         return share in self._running_shares and len(self._running_shares) == 1
 
     def _start(self, share: Tuple[str, Any]) -> None:
-        self._running += 1
         self._running_shares[share] = self._running_shares.get(share, 0) + 1
+        self._running += 1
+
+    def _check_group(self, group: Any) -> None:
+        """Refuse a group this queue cannot honour, before anything in it changes: one
+        on a queue without one_key_at_a_time (ValueError), and an unhashable one, which
+        would otherwise fail half-way through a grant (TypeError)."""
+        if group is None:
+            return
+        if not self.one_key_at_a_time:
+            raise ValueError(f"the {self.name!r} queue admits any key side by side; "
+                             "a group needs one_key_at_a_time=True")
+        try:
+            hash(group)
+        except TypeError:
+            raise TypeError(f"a group must be hashable, not {type(group).__name__}") from None
 
     def _grant_waiting(self) -> None:
         now = self._clock()
@@ -479,6 +493,7 @@ class ResourceQueue:
 
     def estimate(self, key: Any = None, group: Any = None) -> WaitInfo:
         """What a new caller with this key (and group) would face right now."""
+        self._check_group(group)
         key = _canonical_key(key)
         with self._cond:
             if self._has_room() and not self._order and self._fits((key, group)):
@@ -498,10 +513,9 @@ class ResourceQueue:
         """Hold one slot for the ``with`` block. Raises :class:`QueueBusy` (full, timeout,
         cancelled) instead of entering, and ``RuntimeError`` when this thread already
         holds a slot of this queue. ``group`` needs ``one_key_at_a_time`` (see the class):
-        on a queue without it nobody would honour it, so it raises ``ValueError``."""
-        if group is not None and not self.one_key_at_a_time:
-            raise ValueError(f"the {self.name!r} queue admits any key side by side; "
-                             "a group needs one_key_at_a_time=True")
+        on a queue without it nobody would honour it, so it raises ``ValueError``; an
+        unhashable group raises ``TypeError``. Both before the queue is touched."""
+        self._check_group(group)
         return _Slot(self, _canonical_key(key), group, deadline_s, cancelled, on_wait,
                      poll_s)
 

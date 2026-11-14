@@ -725,3 +725,24 @@ def test_a_group_needs_one_key_at_a_time():
     q = ResourceQueue("group-without", slots=2)
     with pytest.raises(ValueError, match="one_key_at_a_time"):
         q.slot("a", group="shop")
+
+
+@pytest.mark.parametrize("busy", [False, True], ids=["empty queue", "a caller waiting"])
+def test_an_unhashable_group_is_refused_before_the_queue_is_touched(busy):
+    """A group is compared as a dictionary key. An unhashable one used to raise in the
+    middle of the grant, after the running count had gone up, and the slot never came
+    back: every later caller waited for it. It is refused on the way in, and the queue
+    is as it was. MUTATION: drop the hash check in slot() - red."""
+    q = ResourceQueue("group-unhashable", slots=1, one_key_at_a_time=True)
+    holder = _Holder(q, "a") if busy else None
+    with pytest.raises(TypeError, match="hashable"):
+        with q.slot("a", group=[], deadline_s=0.2):
+            pass
+    with pytest.raises(TypeError, match="hashable"):
+        q.estimate("a", group={})
+    assert q.metrics()["waiting"] == 0
+    if holder is not None:
+        holder.release()
+    assert q.metrics()["running"] == 0
+    with q.slot("b", deadline_s=0.0):
+        pass

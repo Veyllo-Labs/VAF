@@ -1349,13 +1349,17 @@ def test_an_abandoned_run_that_had_claimed_releases_its_entry(box):
     caller abandon a run that did claim, its entry goes with the ticket instead of
     staying in the record with no run behind it.
 
-    MUTATION: drop the release in agent_run_abandoned - red."""
+    MUTATIONS: drop the release in agent_run_abandoned (red); keep the run's watch
+    grant there (red)."""
     web = box["web"]
     t = web.stop_for_agent_run()
     web.hand_jar_to_run(user_scope_id="scope-a", run=t)
-    assert len(_run_entries()) == 1
+    web.agent_stream_started("sess-a", run=t)
+    grant = web._agent_stream
+    assert len(_run_entries()) == 1 and grant is not None
     web.agent_run_abandoned(run=t)
     assert _run_entries() == [] and web._runs == {}
+    assert not web.grant_current(grant), "the abandoned run's watch grant stayed valid"
 
 
 def test_abandoning_without_a_ticket_takes_the_newest_run_that_never_claimed(box):

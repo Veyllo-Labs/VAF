@@ -2138,8 +2138,11 @@ def answer(user_scope, prompt, show_place):
   a caller run alone. The key stays the person, for the turns and for
   `max_waiting_per_key`; the group only decides who may share the resource at once. VAF's
   browser runs of one person share a browser only when they use the same saved login
-  session; a run that starts with a clean browser runs alone. A group on a queue
-  without `one_key_at_a_time` raises `ValueError`, because nothing there would honour it.
+  session; a run that starts with a clean browser runs alone. A group must be
+  hashable: it is compared as a dictionary key, and an unhashable one (a list, a
+  dict) raises `TypeError`. A group on a queue without `one_key_at_a_time` raises
+  `ValueError`, because nothing there would honour it. Both are refused before the
+  queue changes, so a refused call costs nobody a slot.
 - **`slot(key, *, deadline_s=None, cancelled=None, on_wait=None, poll_s=0.25,
   group=None)`.** The key is canonical: no key and the local admin's scope are one
   bucket. That makes "no key" one person: a lane that serves many people (a bridge, a

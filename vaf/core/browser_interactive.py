@@ -1899,6 +1899,10 @@ class InteractiveBrowserManager:
             # A run leaves here before its handover, so it holds no entry; should
             # one exist, it goes with the run rather than outlive it.
             token = slot["token"] if slot else None
+            # Its watch grant, should it have one, ends with it, as at a run's end.
+            stream = self._agent_stream
+            if run is not None and stream is not None and stream.run == run:
+                self._agent_stream = None
             self._agent_runs = max(0, self._agent_runs - 1)
             # Unless the run ahead already ended and left its give-back to the last
             # counted run, which this one now is.

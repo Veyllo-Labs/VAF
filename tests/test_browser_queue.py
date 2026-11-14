@@ -77,7 +77,7 @@ def rig(monkeypatch):
     state["results"] = {}
     state["threads"] = []
 
-    def start(task, scope, sid=None, hold=False):
+    def start(task, scope, sid=None, hold=False, **kw):
         if hold:
             state["hold"][task] = threading.Event()
         name = f"run-{task}"
@@ -85,7 +85,8 @@ def rig(monkeypatch):
             state["sids"][name] = sid
 
         def go():
-            state["results"][task] = ba.BrowserAgentTool().run(task=task, user_scope_id=scope)
+            state["results"][task] = ba.BrowserAgentTool().run(task=task, user_scope_id=scope,
+                                                                 **kw)
 
         t = threading.Thread(target=go, name=name, daemon=True)
         state["threads"].append(t)
@@ -166,11 +167,11 @@ def test_two_accounts_take_turns_on_the_shared_browser(rig, monkeypatch):
 
 
 def test_two_runs_of_one_account_run_together(rig, monkeypatch):
-    """With two slots, two runs of one account drive at once, and each ends with its
-    own ticket."""
+    """With two slots, two runs of one account and one saved session drive at once,
+    and each ends with its own ticket."""
     monkeypatch.setattr(ba, "_BROWSER_MAX_PARALLEL", 2)
-    rig["start"]("A1", "scope-a", hold=True)
-    rig["start"]("A2", "scope-a", hold=True)
+    rig["start"]("A1", "scope-a", hold=True, persistent=True, session="shop")
+    rig["start"]("A2", "scope-a", hold=True, persistent=True, session="shop")
     for task in ("A1", "A2"):
         assert rig["entered"].setdefault(task, threading.Event()).wait(5), task
     assert _waiting() == 0
@@ -368,3 +369,27 @@ def test_health_shows_the_shared_browser_and_the_preview(rig, monkeypatch):
     assert check["status"] == health.DEGRADED, check
     assert "gotenberg:" in check["reason"] and "browser:vaf-browser:" in check["reason"], check
     assert "vaf-browser-u-" not in repr(check), check
+
+
+@pytest.mark.parametrize("first,second", [
+    ({"persistent": True, "session": "shop"}, {}),
+    ({}, {"persistent": True, "session": "shop"}),
+    ({}, {}),
+    ({"persistent": True, "session": "shop"}, {"persistent": True, "session": "bank"}),
+], ids=["clean-start-behind-a-session", "a-session-behind-a-clean-start",
+        "two-clean-starts", "two-sessions"])
+def test_a_run_of_one_account_that_would_reset_the_other_waits(rig, monkeypatch, first,
+                                                                second):
+    """A clean start clears the browser's one cookie jar, and a saved session is loaded
+    into it and saved back from it: a run of the same account drives beside another
+    only with the same saved session. MUTATION: drop the group from the gate - red."""
+    monkeypatch.setattr(ba, "_BROWSER_MAX_PARALLEL", 2)
+    rig["start"]("A1", "scope-a", hold=True, **first)
+    assert rig["entered"].setdefault("A1", threading.Event()).wait(5)
+    _queue_up(rig, "A2", "scope-a", **second)
+    time.sleep(0.2)
+    assert rig["order"] == ["A1"], f"A2 drove beside A1: {rig['order']}"
+    rig["hold"]["A1"].set()
+    for t in rig["threads"]:
+        t.join(5)
+    assert rig["order"] == ["A1", "A2"], rig["order"]

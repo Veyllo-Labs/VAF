@@ -173,7 +173,7 @@ def _saved(scope):
 def _tokens(mgr):
     """The holder entries of the manager's live runs."""
     with mgr._lock:
-        return mgr._run_tokens()
+        return [s["token"] for s in mgr._runs.values() if s["token"]]
 
 
 def _wait_until(predicate, timeout=5.0):
@@ -641,8 +641,8 @@ def test_a_run_past_the_gate_is_not_retired_by_the_end_of_the_one_before(box, mo
 
 def test_the_run_passes_its_ticket_to_every_hook():
     """Every hook of a run acts on that run alone: the ticket stop_for_agent_run
-    hands out goes to the spawn lane's end, both abandons, the run's end and the
-    handover. The end still comes before the gate opens. Pinned in the source, so it
+    hands out goes to the spawn lane's end, both abandons, the run's end, the
+    handover and the watch grant. The end still comes before the gate opens. Pinned in the source, so it
     holds where browser-use is not installed and the real-run tests skip; the
     `None` default of the hooks exists for callers that drive one run at a time, and
     a product call that forgot its ticket would fall back to it.
@@ -667,6 +667,7 @@ def test_the_run_passes_its_ticket_to_every_hook():
     assert "run=_run,\n" in run_src.split("self._run_browser(", 1)[1].split(")\n", 1)[0]
     body = inspect.getsource(BrowserAgentTool._run_browser)
     assert body.count("hand_jar_to_run(") == 1
+    assert "agent_stream_started(_session_id, container_name=container_name, run=run)" in body
     assert "continuing=_handover is not None,\n                                run=run)" in body
     assert "run_generation" not in inspect.getsource(ba)
 
@@ -795,10 +796,10 @@ def _two_parallel_runs(box, monkeypatch, scope_b):
     monkeypatch.setattr(bi, "hand_jar_to_run", hand)
     monkeypatch.setattr(bi, "sync_workspace_for_run", mirror)
 
-    def start(name, scope):
+    def start(name, scope, **kw):
         def go():
             st["results"][name] = ba.BrowserAgentTool().run(task="look it up",
-                                                            user_scope_id=scope)
+                                                            user_scope_id=scope, **kw)
         t = threading.Thread(target=go, name=f"run-{name}")
         t.start()
         return t
@@ -832,13 +833,14 @@ def test_two_accounts_take_turns_on_the_shared_browser(box, monkeypatch):
 
 
 def test_two_runs_of_one_account_run_together(box, monkeypatch):
-    """With two slots, two runs of one account both hold the browser at once, and the
-    end of the first neither refuses nor releases the second: B goes on, its entry
-    keeps other processes out until it ends."""
+    """With two slots, two runs of one account and one saved session both hold the
+    browser at once, and the end of the first neither refuses nor releases the
+    second: B goes on, its entry keeps other processes out until it ends."""
     st = _two_parallel_runs(box, monkeypatch, "scope-a")
-    a = st["start"]("a", "scope-a")
+    shop = {"persistent": True, "session": "shop"}
+    a = st["start"]("a", "scope-a", **shop)
     assert st["in_mirror"][0].wait(10), "A never reached the browse phase"
-    b = st["start"]("b", "scope-a")
+    b = st["start"]("b", "scope-a", **shop)
     assert st["in_mirror"][1].wait(10), f"B did not drive beside A: {st['results']}"
     assert len(_run_entries()) == 2
     st["release"][0].set()
@@ -1248,3 +1250,128 @@ def test_a_refresh_start_overtaken_by_a_run_leaves_no_entry(box, monkeypatch, pa
     data = json.loads((bj._state_dir() / "vaf-browser.json").read_bytes())
     assert data["holders"] == [], f"an entry stayed with no lease behind it: {data['holders']}"
     web.agent_run_ended()
+
+
+@pytest.mark.parametrize("a_kw,b_kw", [
+    ({"persistent": True, "session": "shop"}, {}),
+    ({}, {"persistent": True, "session": "shop"}),
+    ({}, {}),
+    ({"persistent": True, "session": "shop"}, {"persistent": True, "session": "bank"}),
+], ids=["clean-start-behind-a-session", "a-session-behind-a-clean-start",
+        "two-clean-starts", "two-sessions"])
+def test_a_run_of_one_account_waits_when_it_would_reset_the_other(box, monkeypatch,
+                                                                  a_kw, b_kw):
+    """Two runs of one account with two slots. A clean start clears the jar at its
+    handover (in full scrub mode it wipes the profile and relaunches Chromium), so a
+    clean-start run beside a running one logged that run out mid-task; a persistent
+    run loads its saved session into the jar and saves the whole jar back, so two
+    sessions side by side fill each other's saved logins. B reaches its handover only
+    after A has ended.
+
+    MUTATION: drop the group from the browser gate (B's handover runs while A drives)
+    - red."""
+    st = _two_parallel_runs(box, monkeypatch, "scope-a")
+    a = st["start"]("a", "scope-a", **a_kw)
+    assert st["in_mirror"][0].wait(10), "A never reached the browse phase"
+    b = st["start"]("b", "scope-a", **b_kw)
+    time.sleep(0.5)
+    assert st["hands"] == ["scope-a"], "B had its handover while A drove"
+    st["release"][0].set()
+    a.join(15)
+    assert st["in_mirror"][1].wait(10), f"B never got the browser: {st['results']}"
+    st["release"][1].set()
+    b.join(15)
+    assert "_Reached" in st["results"]["b"], st["results"]
+
+
+# ── what a run's end may sweep, and whose watch view it may close ──────────────
+
+@pytest.mark.parametrize("lane", ["the spawn lane", "a run refused for a holder elsewhere"])
+def test_a_run_that_never_held_the_browser_sweeps_nothing(box, monkeypatch, lane):
+    """The web process last held the shared browser for scope-x; now a spawned child of
+    scope-b drives it. A run of the web process that ends without having held the
+    browser (the spawn lane hands its run to a child; a run refused because another
+    process holds the browser) used to sweep the container's Downloads to scope-x,
+    this process's memory of the jar's owner, while b was still downloading into it.
+    A run sweeps only what it held, to its own scope.
+
+    MUTATION: sweep to `_last_cookie_scope` at every end again - red."""
+    swept = []
+    monkeypatch.setattr(bi, "_sweep_container_downloads",
+                        lambda name, scope: swept.append(scope) or [])
+    web, child = box["web"], box["child"]
+    x = web.stop_for_agent_run()
+    web.hand_jar_to_run(user_scope_id="scope-x", run=x)
+    web.agent_run_ended(run=x)
+    assert swept == [bi.resolve_browser_scope("scope-x")], "a run that held it swept nothing"
+    swept.clear()
+    with box["procs"].be(CHILD):
+        b = child.stop_for_agent_run()
+        child.hand_jar_to_run(user_scope_id="scope-b", run=b)
+    assert [pid for pid, _ in _run_entries()] == [CHILD]
+
+    t = web.stop_for_agent_run()
+    if lane == "the spawn lane":
+        web.agent_run_ended(notify=False, run=t)
+    else:
+        with pytest.raises(bi.BrowserHeldElsewhere):
+            web.hand_jar_to_run(user_scope_id="scope-a", run=t)
+        web.agent_run_ended(run=t)
+    assert swept == [], f"swept into another account while scope-b drove: {swept}"
+    with box["procs"].be(CHILD):
+        child.agent_run_ended(run=b)
+
+
+def test_one_runs_end_keeps_the_other_runs_watch_view(box):
+    """Two runs of one account; B's window watches B. A's end used to drop the one
+    watch grant of the browser, closing B's view while B drove on. The grant belongs
+    to the run it was minted for, and a run that has already ended gets none.
+
+    MUTATION: clear the grant at every run's end again - red."""
+    web = box["web"]
+    a = web.stop_for_agent_run()
+    b = web.stop_for_agent_run()
+    web.hand_jar_to_run(user_scope_id="scope-a", persistent=True, run=a)
+    web.hand_jar_to_run(user_scope_id="scope-a", persistent=True, run=b)
+    web.agent_stream_started("sess-b", run=b)
+    grant = web._agent_stream
+    assert grant is not None
+    web.agent_run_ended(run=a)
+    assert web.grant_current(grant), "A's end closed B's watch view"
+    web.agent_run_ended(run=b)
+    assert not web.grant_current(grant)
+    web.agent_stream_started("sess-b", run=b)
+    assert web._agent_stream is None, "a run that had ended got a watch grant"
+
+
+def test_an_abandoned_run_that_had_claimed_releases_its_entry(box):
+    """A run gives up at the gate before its handover, so it holds no entry; should a
+    caller abandon a run that did claim, its entry goes with the ticket instead of
+    staying in the record with no run behind it.
+
+    MUTATION: drop the release in agent_run_abandoned - red."""
+    web = box["web"]
+    t = web.stop_for_agent_run()
+    web.hand_jar_to_run(user_scope_id="scope-a", run=t)
+    assert len(_run_entries()) == 1
+    web.agent_run_abandoned(run=t)
+    assert _run_entries() == [] and web._runs == {}
+
+
+def test_abandoning_without_a_ticket_takes_the_newest_run_that_never_claimed(box):
+    """A ticketless caller (one that drives one run at a time) abandons the run that
+    queued last and never reached its handover, never the oldest and never one that
+    holds an entry.
+
+    MUTATIONS: take the oldest unclaimed ticket (red); take the newest ticket of all
+    (red)."""
+    web = box["web"]
+    t1 = web.stop_for_agent_run()
+    t2 = web.stop_for_agent_run()
+    t3 = web.stop_for_agent_run()
+    web.hand_jar_to_run(user_scope_id="scope-a", run=t3)
+    web.agent_run_abandoned()
+    assert sorted(web._runs) == [t1, t3]
+    assert len(_run_entries()) == 1
+    for t in (t1, t3):
+        web.agent_run_ended(run=t)

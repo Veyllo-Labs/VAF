@@ -2131,11 +2131,20 @@ def answer(user_scope, prompt, show_place):
   whose callers keep arriving cannot hold another off for good. Use it for a resource
   that keeps state per tenant, where two tenants side by side would see or clear each
   other's state; the shared browser's cookie jar and Downloads folder are VAF's use.
-  Callers of one key still share every slot.
-- **`slot(key, *, deadline_s=None, cancelled=None, on_wait=None, poll_s=0.25)`.** The key is
-  canonical: no key and the local admin's scope are one bucket. That makes "no key" one
-  person: a lane that serves many people (a bridge, a server route) must pass each person's
-  scope, or they all share that bucket and its `max_waiting_per_key`. A free slot with
+  Callers of one key still share every slot, unless they name a group.
+- **Groups.** On such a queue, `slot(key, group=...)` lets callers of one key run side
+  by side only when they also name the same group; a caller of another group waits like
+  a caller of another key, in the same fair order. A fresh `object()` as the group makes
+  a caller run alone. The key stays the person, for the turns and for
+  `max_waiting_per_key`; the group only decides who may share the resource at once. VAF's
+  browser runs of one person share a browser only when they use the same saved login
+  session; a run that starts with a clean browser runs alone. A group on a queue
+  without `one_key_at_a_time` raises `ValueError`, because nothing there would honour it.
+- **`slot(key, *, deadline_s=None, cancelled=None, on_wait=None, poll_s=0.25,
+  group=None)`.** The key is canonical: no key and the local admin's scope are one
+  bucket. That makes "no key" one person: a lane that serves many people (a bridge, a
+  server route) must pass each person's scope, or they all share that bucket and its
+  `max_waiting_per_key`. A free slot with
   nobody waiting is taken at once and `cancelled` is NOT asked: only a caller that waits can
   be cancelled. Otherwise the caller waits; `on_wait(WaitInfo)` hears its place on entry, on
   every change and with position 0 when the slot is granted. Exceptions in either callback
@@ -2153,7 +2162,8 @@ def answer(user_scope, prompt, show_place):
   use and hands the same one out after. A second call with other numbers (`slots`,
   `max_waiting`, `max_waiting_per_key`, `listed`, `one_key_at_a_time`) raises
   `ValueError`: returning the existing queue would silently drop the limits one of the
-  two callers relies on, a per-person share above all. Create a queue in one place and ask for it with the same numbers.
+  two callers relies on, a per-person share above all. Create a queue in one place and
+  ask for it with the same numbers.
 - **Unlisted queues.** `vaf.resource_queue(name, ..., listed=False)` keeps the queue out
   of `vaf.queue_metrics()`; it admits, waits and refuses like any other. Use it for a
   queue that belongs to one person, such as VAF's per-user browser instances, whose

@@ -88,8 +88,10 @@ Named boundaries, each with the measurement that supports it:
   text. The browser queues admit one person at a time (``one_key_at_a_time``): the
   shared container has one cookie jar and one Downloads folder, so two people's runs
   side by side would clear each other's browser and mix their downloads; runs of one
-  person still share the slots. The preview upload awaits inline in its socket's loop, as it did around the HTTP
-  call, so a disconnect does not cancel it; the 15 s wait bounds it.
+  person share the slots only within one group (``slot(group=...)``): the same saved
+  login session, while a clean-start run runs alone, because its start clears the jar
+  under every other run. The preview upload awaits inline in its socket's loop, as it
+  did around the HTTP call, so a disconnect does not cancel it; the 15 s wait bounds it.
 - The browser pool start never waits (admit, or fall back to the shared container);
   sandbox environments are per-person containers; admin jobs (repair, backup, update)
   refuse a second job, which is correct for them; mail and calendar sync run in the
@@ -339,10 +341,11 @@ class QueueBusy(Exception):
 
 
 class _Ticket:
-    __slots__ = ("key", "enqueued", "granted", "granted_at")
+    __slots__ = ("key", "share", "enqueued", "granted", "granted_at")
 
-    def __init__(self, key: str, enqueued: float) -> None:
+    def __init__(self, key: str, enqueued: float, share: Tuple[str, Any]) -> None:
         self.key = key
+        self.share = share
         self.enqueued = enqueued
         self.granted = False
         self.granted_at = 0.0
@@ -383,7 +386,13 @@ class ResourceQueue:
     caller of another key waits until every running caller has left. For a resource
     that keeps state per person (a browser's cookie jar). Only the head of the fair
     order is granted, so a key whose callers keep arriving cannot overtake a waiting
-    key: a slot stays free rather than let a later caller past the head."""
+    key: a slot stays free rather than let a later caller past the head.
+
+    ``slot(key, group=...)`` narrows that further (only with ``one_key_at_a_time``):
+    callers of one key share the slots only when they also name the same group, and a
+    caller of another group waits like a caller of another key. A fresh ``object()``
+    as the group makes a caller run alone. The key stays the person for fairness and
+    for the per-person share; the group only decides who may run side by side."""
 
     def __init__(self, name: str, *, slots: Optional[int] = 1, max_waiting: int = 12,
                  max_waiting_per_key: Optional[int] = None,
@@ -403,8 +412,8 @@ class ResourceQueue:
         self._cond = threading.Condition()
         self._order = FairOrder()
         self._running = 0
-        # Running callers per key: what `one_key_at_a_time` admits against.
-        self._running_keys: Dict[str, int] = {}
+        # Running callers per (key, group): what `one_key_at_a_time` admits against.
+        self._running_shares: Dict[Tuple[str, Any], int] = {}
         self._waits: Deque[Tuple[float, float]] = deque(maxlen=_MAX_SAMPLES)
         self._services: Deque[Tuple[float, float]] = deque(maxlen=_MAX_SAMPLES)
         self._refusals: Deque[Tuple[float, str]] = deque(maxlen=_MAX_SAMPLES)
@@ -414,15 +423,15 @@ class ResourceQueue:
     def _has_room(self) -> bool:
         return self.slots is None or self._running < self.slots
 
-    def _fits(self, key: str) -> bool:
-        """Whether a caller of `key` may run beside the running ones."""
-        if not self.one_key_at_a_time or not self._running_keys:
+    def _fits(self, share: Tuple[str, Any]) -> bool:
+        """Whether a caller of this (key, group) may run beside the running ones."""
+        if not self.one_key_at_a_time or not self._running_shares:
             return True
-        return key in self._running_keys and len(self._running_keys) == 1
+        return share in self._running_shares and len(self._running_shares) == 1
 
-    def _start(self, key: str) -> None:
+    def _start(self, share: Tuple[str, Any]) -> None:
         self._running += 1
-        self._running_keys[key] = self._running_keys.get(key, 0) + 1
+        self._running_shares[share] = self._running_shares.get(share, 0) + 1
 
     def _grant_waiting(self) -> None:
         now = self._clock()
@@ -431,12 +440,12 @@ class ResourceQueue:
                 # The head in fair order, read without moving anyone: it is granted
                 # when it fits, and nobody behind it is while it does not.
                 head = self._order.copy(limit=1).pop()
-                if not self._fits(head.key):
+                if not self._fits(head.share):
                     break
             ticket = self._order.pop()
             ticket.granted = True
             ticket.granted_at = now
-            self._start(ticket.key)
+            self._start(ticket.share)
         self._cond.notify_all()
 
     def _eta(self, position: int) -> Optional[float]:
@@ -454,25 +463,25 @@ class ResourceQueue:
         return QueueBusy(self.name, reason, position=position, waited_s=waited,
                          eta_s=self._eta(position), own_share=own_share)
 
-    def _release(self, granted_at: float, key: str) -> None:
+    def _release(self, granted_at: float, share: Tuple[str, Any]) -> None:
         with self._cond:
             now = self._clock()
             self._running -= 1
-            left = self._running_keys.get(key, 0) - 1
+            left = self._running_shares.get(share, 0) - 1
             if left > 0:
-                self._running_keys[key] = left
+                self._running_shares[share] = left
             else:
-                self._running_keys.pop(key, None)
+                self._running_shares.pop(share, None)
             self._services.append((now, max(0.0, now - granted_at)))
             self._grant_waiting()
 
     # ── public ──────────────────────────────────────────────────────────────
 
-    def estimate(self, key: Any = None) -> WaitInfo:
-        """What a new caller with this key would face right now."""
+    def estimate(self, key: Any = None, group: Any = None) -> WaitInfo:
+        """What a new caller with this key (and group) would face right now."""
         key = _canonical_key(key)
         with self._cond:
-            if self._has_room() and not self._order and self._fits(key):
+            if self._has_room() and not self._order and self._fits((key, group)):
                 return WaitInfo(self.name, 0, None, 0.0)
             probe = object()
             self._order.push(key, probe)
@@ -485,13 +494,18 @@ class ResourceQueue:
     def slot(self, key: Any = None, *, deadline_s: Optional[float] = None,
              cancelled: Optional[Callable[[], bool]] = None,
              on_wait: Optional[Callable[[WaitInfo], None]] = None,
-             poll_s: float = 0.25) -> "_Slot":
+             poll_s: float = 0.25, group: Any = None) -> "_Slot":
         """Hold one slot for the ``with`` block. Raises :class:`QueueBusy` (full, timeout,
         cancelled) instead of entering, and ``RuntimeError`` when this thread already
-        holds a slot of this queue."""
-        return _Slot(self, _canonical_key(key), deadline_s, cancelled, on_wait, poll_s)
+        holds a slot of this queue. ``group`` needs ``one_key_at_a_time`` (see the class):
+        on a queue without it nobody would honour it, so it raises ``ValueError``."""
+        if group is not None and not self.one_key_at_a_time:
+            raise ValueError(f"the {self.name!r} queue admits any key side by side; "
+                             "a group needs one_key_at_a_time=True")
+        return _Slot(self, _canonical_key(key), group, deadline_s, cancelled, on_wait,
+                     poll_s)
 
-    def _acquire(self, key: str, deadline_s: Optional[float],
+    def _acquire(self, key: str, group: Any, deadline_s: Optional[float],
                  cancelled: Optional[Callable[[], bool]],
                  on_wait: Optional[Callable[[WaitInfo], None]], poll_s: float) -> float:
         held = getattr(_held, "names", None)
@@ -499,10 +513,11 @@ class ResourceQueue:
             held = _held.names = set()
         if id(self) in held:
             raise RuntimeError(f"this thread already holds a slot of the {self.name!r} queue")
+        share = (key, group)
         with self._cond:
             now = self._clock()
-            if self._has_room() and not self._order and self._fits(key):
-                self._start(key)
+            if self._has_room() and not self._order and self._fits(share):
+                self._start(share)
                 self._waits.append((now, 0.0))
                 held.add(id(self))
                 return now
@@ -514,7 +529,7 @@ class ResourceQueue:
                                    own_share=True)
             if len(self._order) >= self.max_waiting:
                 raise self._refuse("full", len(self._order) + 1, 0.0)
-            ticket = _Ticket(key, now)
+            ticket = _Ticket(key, now, share)
             self._order.push(key, ticket)
         last_position: Optional[int] = None
         try:
@@ -555,7 +570,7 @@ class ResourceQueue:
                     self._grant_waiting()
             if granted:
                 # Granted in the instant this thread failed: hand the slot on.
-                self._release(ticket.granted_at, ticket.key)
+                self._release(ticket.granted_at, ticket.share)
             raise
         with self._cond:
             self._waits.append((ticket.granted_at, max(0.0, ticket.granted_at - ticket.enqueued)))
@@ -566,7 +581,7 @@ class ResourceQueue:
         except BaseException:
             # The slot is held but __enter__ never returns, so no __exit__ will free it.
             held.discard(id(self))
-            self._release(ticket.granted_at, ticket.key)
+            self._release(ticket.granted_at, ticket.share)
             raise
         return ticket.granted_at
 
@@ -602,15 +617,16 @@ class ResourceQueue:
 class _Slot:
     """The context manager ``ResourceQueue.slot`` returns."""
 
-    def __init__(self, queue: ResourceQueue, key: str, deadline_s, cancelled, on_wait,
-                 poll_s) -> None:
+    def __init__(self, queue: ResourceQueue, key: str, group: Any, deadline_s, cancelled,
+                 on_wait, poll_s) -> None:
         self._queue = queue
         self._key = key
+        self._group = group
         self._args = (deadline_s, cancelled, on_wait, poll_s)
         self._granted_at: Optional[float] = None
 
     def __enter__(self) -> "_Slot":
-        self._granted_at = self._queue._acquire(self._key, *self._args)
+        self._granted_at = self._queue._acquire(self._key, self._group, *self._args)
         return self
 
     def __exit__(self, *exc) -> None:
@@ -618,7 +634,7 @@ class _Slot:
         if names is not None:
             names.discard(id(self._queue))
         if self._granted_at is not None:
-            self._queue._release(self._granted_at, self._key)
+            self._queue._release(self._granted_at, (self._key, self._group))
             self._granted_at = None
 
 

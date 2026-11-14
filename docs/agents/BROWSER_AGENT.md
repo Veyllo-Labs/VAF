@@ -889,7 +889,17 @@ On it, `browser_agent` serialises all calls - only **one** browser session runs 
   One browser has one cookie jar and one Downloads folder: measured before this
   rule, the second account's handover wiped the first one's browser in the middle
   of its task, and the first task's downloads were swept into the second
-  account's folder at its end. Runs of one account still share the slots.
+  account's folder at its end.
+- **One saved session at a time, a clean start alone.** Runs of one account share the
+  slots only when they use the same saved login session (`persistent=true` with the
+  same `session`), on every browser, a per-user instance included. A run that starts
+  with a clean browser runs alone, and a run of another session waits as well, in the
+  same queue and within the same 120 seconds. One browser has one cookie jar: a clean
+  start clears it at its handover (in full scrub mode it wipes the profile and
+  relaunches Chromium), which logged a running task of the same account out of every
+  site (measured); and a persistent task loads its saved session into the jar at its
+  start and saves the whole jar back into that session at its end, so two sessions
+  side by side would fill each other's saved logins.
 - **No live place in the UI** (a named boundary): the browser window opens on the run's
   first frame, and a console line would land in a window that is still closed. The chat
   shows the running `browser_agent` tool, and the model gets the place in the busy text. A
@@ -904,7 +914,7 @@ timeout or refusal degrades that row for 15 minutes, which is its designed meani
 
 This avoids memory exhaustion and tab interference in the shared Chromium container.
 
-To allow **2 parallel sessions** on the shared container, on a machine with sufficient RAM (≥ 8 GB). They are two tasks of one account; a task of another account waits for them (see "One account at a time" above):
+To allow **2 parallel sessions** on the shared container, on a machine with sufficient RAM (≥ 8 GB). They are two tasks of one account and one saved session; any other task waits for them (see "One account at a time" above):
 
 ```bash
 # System environment before starting VAF (see "Where these settings go" below)
@@ -916,16 +926,19 @@ The practical limits are:
 | `VAF_BROWSER_MAX_PARALLEL` | Recommended host RAM | Notes |
 |---|---|---|
 | `1` (default) | 4 GB+ | Safe for single-user or small teams |
-| `2` | 8 GB+ | Two browser tasks at once. On the shared container they belong to one account at a time: a task of another account waits in the queue until those end. On a per-user instance both are that person's. See the browser passage of [USER_ISOLATION.md](../security/USER_ISOLATION.md) |
+| `2` | 8 GB+ | Two browser tasks at once, of one account and one saved session. A task of another account, of another session or with a clean start waits in the queue until those end. On a per-user instance all of them are that person's. See the browser passage of [USER_ISOLATION.md](../security/USER_ISOLATION.md) |
 | `3+` | 16 GB+ | Not recommended; Chromium memory adds up fast |
 
 Named boundaries of two tasks at once:
 
-- **Two tasks of one account share that account's browser.** They use one cookie jar
-  and one set of tabs. A task that starts clean (not `persistent`) clears the
-  cookies at its start, so it logs the other task of the same account out of
-  every site (measured). A Stop that escalates to the container restart (see
-  "Stopping a run") ends both tasks.
+- **Two tasks of one saved session share that session's browser.** They use one cookie
+  jar and one set of tabs, and each saves the jar back into the session at its end,
+  so the later end decides what the session keeps. A Stop that escalates to the
+  container restart (see "Stopping a run") ends both tasks.
+- **One live view per browser.** The watch-only stream belongs to the task it was
+  granted for: another task's end leaves it open. A task that starts later takes the
+  browser's one stream over: the earlier task's live view ends, and its screenshots
+  keep streaming as for every lane without a grant.
 - **A task does not survive a relaunch of its Chromium.** After any relaunch (the
   profile wipe at a change of account, a crash, a container restart) the running
   task cannot attach to the new browser: measured against the browser image, the
@@ -1123,14 +1136,15 @@ too little for another 2 GB reservation beyond the first two), docker
 unreachable, the shared container missing as the image template, or no user scope on
 the call - the caller falls back to the shared container and its verified handover
 wipe. That fallback is also where the shared container's named residuals apply (one
-account at a time, whose parallel runs share its jar, and a second installation keeping
-its own owner record), so a machine that runs the pool at capacity is not uniformly partitioned; see
-[USER_ISOLATION.md](../security/USER_ISOLATION.md). An idle instance is stopped (never
-removed: the container and its profile volume stay) and wakes on the next use, and VAF's
-quit stops the instances its pool started or adopted (`stop_known_instances`), including
-one that started but never became healthy - before, a running one outlived VAF for days,
-because the idle reaper ends with the process. The pool closes first, so an allocation still
-under way stops its own container instead of registering it after the quit looked. Not every
+account at a time, whose parallel runs of one saved session share its jar, and a second
+installation keeping its own owner record), so a machine that runs the pool at capacity
+is not uniformly partitioned; see [USER_ISOLATION.md](../security/USER_ISOLATION.md). An
+idle instance is stopped (never removed: the container and its profile volume stay) and
+wakes on the next use, and VAF's quit stops the instances its pool started or adopted
+(`stop_known_instances`), including one that started but never became healthy - before,
+a running one outlived VAF for days, because the idle reaper ends with the process. The
+pool closes first, so an allocation still under way stops its own container instead of
+registering it after the quit looked. Not every
 `vaf-browser-u-*` by name, and not one another VAF process is connected to right now: the
 container name comes from the user scope, so a `vaf run` session can use the same one. NAMED
 BOUNDARY: an instance orphaned by a crash runs until its scope uses the browser again and it

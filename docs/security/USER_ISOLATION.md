@@ -1155,24 +1155,30 @@ partition:
   shared container still serves one account at a time. Its fair queue admits a task
   of another account only once the running tasks have ended (`one_key_at_a_time` on
   `vaf.ResourceQueue`), so it waits there, up to 120 seconds, and no later task of
-  the running account overtakes it. The tasks that do run at once are one account's,
-  and they share that account's jar: a task that starts clean clears the other's
-  cookies, and a Stop that escalates to the container restart ends both. Because the
-  tasks of two accounts never overlap, the jar, the downloads swept at a task's end
-  and the workspace mirror are never shared between two accounts at the same moment
-  (measured before: the second account's handover wiped the profile under the first
-  task, and the first task's downloads were swept into the second account's folder).
-  Each task holds an entry of its own in the cross-process record, so other VAF
-  processes see the browser busy until the last one has ended, and the end of one
-  task neither refuses another that still waits for its change of hands nor releases
-  its entry. A task whose Chromium is relaunched under it (a wipe, a crash, a
-  restart) does not go on in the new browser: measured, the old DevTools address
-  answers 404 on the relaunched Chromium and browser-use's reconnect attempts fail,
-  so the task ends with an error. A task that is stopped during its own change of
-  hands from another account is refused, fail-closed: if the stop lands before the browser's record of whose state
-  the profile holds was cleared, that record still names the previous holder; if it
-  lands after, it names nobody. Either way every account the record does not name
-  wipes the profile first on its next use of the browser.
+  the running account overtakes it. The tasks that do run at once are one account's
+  and use one saved login session (a clean-start task, or a task of another session,
+  waits too, because a clean start clears the jar and a session is saved back from
+  it); they share that session's jar, and a Stop that escalates to the container
+  restart ends both. Because the tasks of two accounts never overlap, the jar and the
+  workspace mirror are never shared between two accounts at the same moment (measured
+  before: the second account's handover wiped the profile under the first task, and
+  the first task's downloads were swept into the second account's folder). A task's
+  end sweeps the Downloads only when that task held the browser, to the account of
+  its own handover and while its entry still keeps every other holder out; a task
+  that never held it (handed to a spawned child, refused because another process
+  holds the browser, stopped before its handover) sweeps nothing, so a run of another
+  process and another account never has its downloads delivered elsewhere. Each task
+  holds an entry of its own in the cross-process record, so other VAF processes see
+  the browser busy until the last one has ended, and the end of one task neither
+  refuses another that still waits for its change of hands nor releases its entry. A
+  task whose Chromium is relaunched under it (a wipe, a crash, a restart) does not go
+  on in the new browser: measured, the old DevTools address answers 404 on the
+  relaunched Chromium and browser-use's reconnect attempts fail, so the task ends with
+  an error. A task that is stopped during its own change of hands from another
+  account is refused, fail-closed: if the stop lands before the browser's record of
+  whose state the profile holds was cleared, that record still names the previous
+  holder; if it lands after, it names nobody. Either way every account the record does
+  not name wipes the profile first on its next use of the browser.
   Downloads are not a residual: finished ones are swept to their owner's
   `VAF_Projects/<uid8>/Downloads`
   through the threat funnel (origin `browser_download`), only while that folder is an

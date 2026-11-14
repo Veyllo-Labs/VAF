@@ -15,7 +15,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 - **`vaf.ResourceQueue` and `vaf.resource_queue` take `one_key_at_a_time=True`.** The slots
   are then shared only by callers of one key, and a caller of another key waits until they
-  have left, without being overtaken. For a resource that keeps state per person.
+  have left, without being overtaken. For a resource that keeps state per person. On such a
+  queue, `slot(key, group=...)` narrows it further: callers of one key share the slots only
+  when they name the same group, and a fresh `object()` as the group runs alone.
 - **Veyllo App: tools kept off messaging channels, behind a card on your device.** The host
   shell, host Python, SSH, FTP, the sandbox environments, the browser agent, background
   commands, timers and the tool and workflow builders can now be used through the Veyllo App.
@@ -299,8 +301,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   than one browser task allowed at a time (`VAF_BROWSER_MAX_PARALLEL`), a task of another
   account now waits for the shared browser until the running ones end. Before, it ran beside
   them in the same browser: it cleared the other task's browser and could receive its
-  downloads. A task that is still starting is no longer refused when another task finishes,
-  and other parts of VAF no longer take the browser from a task that is still running.
+  downloads. Two tasks of one account run side by side only when they use the same saved
+  login session; a task that starts with a clean browser waits for the others (and they for
+  it), because its start used to log the running task out of every site. A task that is
+  still starting is no longer refused when another task finishes, and other parts of VAF no
+  longer take the browser from a task that is still running. A browser task that never got
+  the browser (handed to a workflow's child process, or refused because the browser was in
+  use elsewhere) no longer moves the browser's downloads to the account that used it
+  before, while someone else's task is downloading there.
 - **The coding agent no longer treats a refused file as read or written.** When the file tools
   refused a write or an edit (a project's `.env`, a file in `.git` or `node_modules`, VAF's own
   data, or a file outside your account's folders), the coding agent used to tell itself the file

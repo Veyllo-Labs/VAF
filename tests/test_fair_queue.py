@@ -569,11 +569,14 @@ def test_a_waiting_key_that_gives_up_lets_the_next_in():
     a1 = _hold(q, "a")
     out = []
     threads = _enqueue_in_order(q, [("b", "b"), ("a", "a2")], out, b={"deadline_s": 0.3})
+    # a2 enters while a1 still holds its slot. b's refusal and a2's entry are
+    # reported by two threads, so their order in `out` is not the queue's.
     assert _wait_until(lambda: "a2" in out, timeout=3.0), out
-    assert out == [("b", "timeout"), "a2"]
-    a1.release()
+    assert a1._t.is_alive(), "a2 entered only after a1 had left"
     for t in threads:
         t.join(5)
+    assert sorted(out, key=str) == sorted([("b", "timeout"), "a2"], key=str)
+    a1.release()
 
 
 def test_the_option_off_admits_any_key():
@@ -647,3 +650,78 @@ def test_a_failure_after_the_grant_gives_the_key_back(where):
     assert q.metrics()["running"] == 0
     with q.slot("b", deadline_s=0.0):
         pass
+
+
+# ── groups: who of one key may run side by side ──────────────────────────────
+
+def _hold_group(q, key, group):
+    """Like _Holder, with a group."""
+    release, held = threading.Event(), threading.Event()
+
+    def run():
+        with q.slot(key, group=group):
+            held.set()
+            release.wait(10)
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    assert held.wait(5)
+    return release, t
+
+
+def test_a_group_shares_the_slots_only_with_itself():
+    """Callers of one key and one group run together; the same key with another group
+    waits until they have left. MUTATION: compare only the key in `_fits` - red."""
+    q = ResourceQueue("group-share", slots=3, one_key_at_a_time=True)
+    r1, t1 = _hold_group(q, "a", "shop")
+    r2, t2 = _hold_group(q, "a", "shop")
+    assert q.metrics()["running"] == 2
+    out = []
+
+    def other():
+        with q.slot("a", group="bank", poll_s=0.01):
+            out.append("bank")
+
+    t = threading.Thread(target=other, daemon=True)
+    t.start()
+    assert _wait_until(lambda: q.metrics()["waiting"] == 1)
+    r1.set()
+    t1.join(5)
+    time.sleep(0.1)
+    assert out == [], "another group ran beside the shop callers"
+    r2.set()
+    t2.join(5)
+    t.join(5)
+    assert out == ["bank"]
+
+
+def test_a_fresh_group_runs_alone_both_ways():
+    """`group=object()` runs alone: it waits for the running callers of its own key,
+    and a caller of that key arriving while it runs waits for it."""
+    q = ResourceQueue("group-alone", slots=2, one_key_at_a_time=True)
+    r1, t1 = _hold_group(q, "a", None)
+    out = []
+
+    def alone():
+        with q.slot("a", group=object(), poll_s=0.01):
+            out.append("alone")
+            time.sleep(0.2)
+
+    t = threading.Thread(target=alone, daemon=True)
+    t.start()
+    assert _wait_until(lambda: q.metrics()["waiting"] == 1)
+    assert out == []
+    r1.set()
+    t1.join(5)
+    assert _wait_until(lambda: out == ["alone"])
+    assert q.estimate("a").position == 1, "a caller of the key would run beside it"
+    t.join(5)
+    assert q.estimate("a").position == 0
+
+
+def test_a_group_needs_one_key_at_a_time():
+    """A queue that admits any key side by side cannot honour a group: asking for one
+    there is an error, not a silent no-op."""
+    q = ResourceQueue("group-without", slots=2)
+    with pytest.raises(ValueError, match="one_key_at_a_time"):
+        q.slot("a", group="shop")

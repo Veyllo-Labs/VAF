@@ -371,7 +371,9 @@ def _sweep_stale_session_tmp(sessions_dir: str) -> None:
 # The slots are shared by one person at a time (one_key_at_a_time): a browser has one
 # cookie jar and one Downloads folder, so a second person's run beside the first would
 # wipe the first one's browser at its handover and could receive its downloads. A
-# per-user instance only ever queues its own person, so there the rule never binds.
+# per-user instance only ever queues its own person, so there that half never binds.
+# Within one person the runs share only by `_jar_group` (on every browser, a per-user
+# instance included): one saved session together, a clean start alone.
 import functools
 import os as _os
 
@@ -400,6 +402,20 @@ def _browser_queue(container_name: str) -> ResourceQueue:
                           max_waiting_per_key=BROWSER_MAX_WAITING_PER_KEY,
                           listed=(container_name == _SHARED_BROWSER),
                           one_key_at_a_time=True)
+
+
+def _jar_group(persistent: bool, session: str):
+    """Which runs of one person may share a browser at once (the queue's `group`).
+
+    One browser has one cookie jar. A clean-start run clears it at its handover (in full
+    scrub mode it wipes the profile and relaunches Chromium), so it logged out every run
+    of the same person beside it; and a persistent run loads its saved session into the
+    jar at its start and saves the whole jar back into that session at its end, so two
+    runs of different sessions would fill each other's saved logins. Runs of the same
+    saved session share; a clean-start run gets a group of its own and runs alone."""
+    if persistent:
+        return ("persistent", session)
+    return object()
 
 
 def _stop_requested(session_id: Optional[str]) -> bool:
@@ -1273,7 +1289,8 @@ class BrowserAgentTool(BaseTool):
         gate = _browser_queue(_container).slot(
             resolve_browser_scope(kwargs.get("user_scope_id")),
             deadline_s=BROWSER_WAIT_S,
-            cancelled=functools.partial(_stop_requested, _session_id))
+            cancelled=functools.partial(_stop_requested, _session_id),
+            group=_jar_group(persistent, session))
         try:
             gate.__enter__()
         except QueueBusy as busy:
@@ -1467,7 +1484,7 @@ class BrowserAgentTool(BaseTool):
         # spawned child, where the ticket would validate against the wrong
         # process. Never raises.
         from vaf.core.browser_interactive import agent_stream_started
-        agent_stream_started(_session_id, container_name=container_name)
+        agent_stream_started(_session_id, container_name=container_name, run=run)
         # The owner's files, mirrored into this browser: the container paths
         # double as browser-use's upload whitelist, so "fill the form and
         # attach my report.pdf" actually can - the file picker and the

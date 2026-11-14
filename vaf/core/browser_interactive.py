@@ -999,6 +999,9 @@ class AgentStream:
     started_at: float
     stream_connections: int = 0
     pixels_seen: int = 0
+    # The run ticket it was minted for: only that run's end ends it (None: the
+    # grant of a ticketless caller, which any run's end ends).
+    run: Optional[int] = None
 
 
 class InteractiveBrowserManager:
@@ -1264,10 +1267,6 @@ class InteractiveBrowserManager:
         if self._runs:
             return min(self._runs)
         return self._mint_run()
-
-    def _run_tokens(self) -> List[str]:
-        """The holder entries of this browser's live runs (caller holds `_lock`)."""
-        return [s["token"] for s in self._runs.values() if s["token"]]
 
     def evict_for_run_elsewhere(self) -> None:
         """A run pinned to ANOTHER browser takes this one's lease (see the module
@@ -1838,21 +1837,23 @@ class InteractiveBrowserManager:
         the meantime: a lease claim of the same process answers with the existing
         entry's token, so a new lease that started while the old one was still
         releasing holds that very token, and releasing it would leave the new
-        lease without its entry - open to a holder of another process. One step
-        with the claim (`_claim_mutex`). An entry whose release a running transfer
-        holds back is left to that transfer (`pending_ok` is the transfer's own
-        release of it)."""
+        lease without its entry - open to a holder of another process. A run's
+        entry is never handed out again (every run claims a new one), so only the
+        lease's is asked for. One step with the claim (`_claim_mutex`). An entry
+        whose release a running transfer holds back is left to that transfer
+        (`pending_ok` is the transfer's own release of it)."""
         if not token:
             return
         with self._claim_mutex:
             with self._lock:
-                if token == self._lease_token or token in self._run_tokens():
+                if token == self._lease_token:
                     return
                 if not pending_ok and token in self._release_when_drained:
                     return
             self._release_shared(token)
 
-    def agent_stream_started(self, session_id: Optional[str]) -> None:
+    def agent_stream_started(self, session_id: Optional[str],
+                             run: Optional[int] = None) -> None:
         """Grant the run's own chat window a watch-only live stream of the run.
 
         Called once the run HOLDS the browser, right after its handover
@@ -1865,15 +1866,19 @@ class InteractiveBrowserManager:
         there would be a link to a 403 - the child lane keeps the screenshot
         view. Emitted only to the session that owns the run; the ticket IS the
         capability, so nobody else may receive it. A grant replaced here ends,
-        and so do the sockets opened on it (`grant_current`)."""
+        and so do the sockets opened on it (`grant_current`). The grant belongs
+        to `run`: another run's end leaves it standing, and a run that has
+        already ended gets none."""
         if not session_id:
             return
         if os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip().lower() in ("1", "true", "yes"):
             return
         with self._lock:
+            if run is not None and run not in self._runs:
+                return
             stream = AgentStream(session_id=str(session_id),
                                  ticket=secrets.token_urlsafe(24),
-                                 started_at=time.time())
+                                 started_at=time.time(), run=run)
             self._agent_stream = stream
             payload = self._agent_payload(stream)
         self._emit(payload, str(session_id))
@@ -1934,9 +1939,12 @@ class InteractiveBrowserManager:
                 remaining = {s["scope"] for s in self._runs.values() if s["scope"]}
                 if self._dedicated_scope is None and remaining != {self._xfer_scope}:
                     self._xfer_scope = None
-            # The watch-only ticket dies with the run; a stream that outlives
+            # The watch-only ticket dies with its run; a stream that outlives
             # it would keep showing the browser to a window with no run behind.
-            self._agent_stream = None
+            # Another run's grant stays: that run still drives.
+            stream = self._agent_stream
+            if stream is not None and stream.run in (None, run):
+                self._agent_stream = None
             sid = self._last_session_id
             # Who settles the give-back: the last counted run's end. A spawned run's
             # end (notify=False) settles one only when a run ahead of it already ended
@@ -1950,15 +1958,23 @@ class InteractiveBrowserManager:
                 self._giveback_deferred = False
             elif notify:
                 self._giveback_deferred = True
-            run_scope = self._last_cookie_scope
-            # The sweep below counts as a transfer from this lock step on.
-            self._xfers += 1
+            # Only a run that held the browser sweeps, and to the scope of its own
+            # handover. This process's memory of the jar's owner is not that: a
+            # run that never held the browser (the spawn lane, whose child sweeps
+            # in its own process; a run refused or stopped before its handover)
+            # would sweep the Downloads of whoever drives the browser now, a run
+            # of another process and another account included.
+            run_scope = slot["scope"] if notify and slot else None
+            if run_scope:
+                # The sweep below counts as a transfer from this lock step on.
+                self._xfers += 1
         # A run downloads too (the agent saves a PDF for the person): drain to
-        # the run's OWN scope - the jar owner at this moment is that run's.
-        try:
-            self.sweep_downloads(run_scope)
-        finally:
-            self._transfer_done()
+        # the run's OWN scope, while its holder entry still keeps others out.
+        if run_scope:
+            try:
+                self.sweep_downloads(run_scope)
+            finally:
+                self._transfer_done()
         # After the run's own mirror, which a stopped run may have left running in
         # an executor thread.
         self._release_after_transfers(run_token)
@@ -2882,12 +2898,13 @@ def give_back_pending(container_name: Optional[str] = None) -> bool:
 
 
 def agent_stream_started(session_id: Optional[str],
-                         container_name: Optional[str] = None) -> None:
+                         container_name: Optional[str] = None,
+                         run: Optional[int] = None) -> None:
     """Hook for BrowserAgentTool._run_browser, right after the run's handover (the
     in-process lane): grant the run's own window a watch-only live stream of the
-    run's own browser. Never raises."""
+    run's own browser, bound to the run's ticket. Never raises."""
     try:
-        _manager_for_run(container_name).agent_stream_started(session_id)
+        _manager_for_run(container_name).agent_stream_started(session_id, run=run)
     except Exception:
         pass
 

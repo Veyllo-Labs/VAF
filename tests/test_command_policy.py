@@ -1026,6 +1026,26 @@ def test_no_refusal_of_the_base_is_lost():
     assert lost == []
 
 
+def test_no_refusal_of_the_previous_reading_is_lost(monkeypatch):
+    """`previous` and `previous_categories` record every row's verdict before the grammar
+    reading was joined (compound commands, comments and heredocs as bash reads them, the
+    additive checks). Whatever was refused then is refused now, on each lane, with every
+    category it had.
+    MUTATION: take the grammar reading's verdict instead of joining it - red."""
+    from vaf.core import command_policy
+    monkeypatch.setattr(command_policy, "_windows_host", lambda: False)
+    lost = []
+    for row in _corpus():
+        for k, profile in enumerate(("host", "jailed", "remote")):
+            if not row["previous"][k] and not row["previous_categories"][k]:
+                continue
+            v = classify_command(row["command"], profile=profile)
+            if (row["previous"][k] and not v.blocked) or not set(
+                    row["previous_categories"][k]) <= set(v.categories):
+                lost.append((profile, row["command"]))
+    assert lost == []
+
+
 def test_the_corpus_verdicts_and_categories_hold(monkeypatch):
     """Every verdict and every category of the corpus as recorded, per lane. A change of the
     splitter or the classifier that moves one fails here and is decided, then recorded in
@@ -1593,7 +1613,9 @@ def _hundred_functions() -> str:
     "cat >> ~/.bashrc <<'EOF'\neval \"$(pyenv init -)\"\nEOF",
     "git apply <<'EOF'\n+$(foo)\nEOF",
     "cat <<EOF\nBuilt on $(date)\nEOF",
-    "cat <<-EOF\n\tfetch(`/a/${b}`)\n\tEOF",
+    # Unquoted, bash runs the template literal as a command named by a variable: refused
+    # (tests/test_command_grammar_reading.py), the quoted delimiter passes.
+    "cat <<-'EOF'\n\tfetch(`/a/${b}`)\n\tEOF",
     "__hundred__",
 ])
 def test_a_file_written_through_a_heredoc_passes(cmd):

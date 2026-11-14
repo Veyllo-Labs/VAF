@@ -667,6 +667,40 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   or a network share is never kept. Neither is a link whose label is partly hidden, by
   `[conceal]` or by a background colour, so it cannot open a different file than the one
   you read.
+- **The command check reads a command the way bash reads it.** Host commands, the coding
+  agent's shell and SSH commands are now also checked where a command used to hide from the
+  check: inside braces, `if`/`for`/`while`/`case` and functions, after a comment that holds
+  an apostrophe, after a heredoc with any delimiter (`<<.`, `<<1`, `<<$'EOF'`, also one
+  without its closing line), inside `$'...'` strings, across line continuations, behind a
+  redirection in front of the program (`>f mkfs x`), in text piped into a shell by `echo`,
+  `printf` or a heredoc (`cat <<'EOF' | bash`), and in the commands `env -S`, `watch`,
+  `find -exec` and `find -delete` run. A program named by a variable, a glob or a brace
+  expansion, decoded text piped into a shell (`base64 -d | sh`) and PowerShell's
+  `-EncodedCommand` are refused, and each refusal names the plain way to write the command.
+  These refusals hold in every lane, also after a yes in the chat. Everyday commands that are
+  refused now, and how to write them instead:
+  - `$EDITOR notes.md`, `$PYTHON -m pytest`, `"$PYTHON" -m pytest`, `${CC:-gcc} -o app app.c`,
+    `$SHELL -c '...'`: write the program out (`python3 -m pytest`).
+  - `$HOME/.local/bin/uv sync`: `"$HOME/.local/bin/uv" sync` or `~/.local/bin/uv sync`.
+  - `for t in black ruff; do $t --version; done`: write each command.
+  - `eval "$cmd"`, `bash -c "$cmd"`, `echo "$SCRIPT" | bash`: save the text to a file, read
+    it, then run the file.
+  - `uv run --with "$PKG" pytest`: `uv run --with="$PKG" pytest`.
+  - `./build/*/tool`: write the path out.
+  - `... | base64 -d | sh`, `xxd -r -p | sh`, `... | rev | sh`: decode into a file, read it,
+    then run it.
+  - `powershell -EncodedCommand ...` (also `-enc`, `-e`, `-ec`): `-Command` with the text.
+  - `xargs -I{} sh -c '... {} ...'` and `xargs sh -c` without a script: hand the item over as
+    an argument (`xargs -I{} sh -c 'black "$1"' _ {}`) or run the program directly
+    (`xargs -I{} black {}`).
+  - An unquoted heredoc whose body holds a backtick span with a variable, such as a template
+    literal (`` fetch(`/api/${id}`) ``): quote the delimiter (`<<'EOF'`).
+  - An inline script fed to a shell through a heredoc that names its programs by variables
+    (`$INSTALL_CMD`): write it to a file and run the file.
+
+  `find / -delete` and `find / -exec rm -rf {} +` are refused too; a `find` with a test
+  before its `-exec` (`find ~ -name '*.tmp' -exec rm -rf {} +`) passes as before. Takes
+  effect after a restart of VAF.
 
 ## [0.1.0a36] - 2026-11-09
 

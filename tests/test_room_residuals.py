@@ -197,6 +197,39 @@ def test_the_transcript_is_built_on_the_room_lane(tmp_path, monkeypatch):
     assert marked and all(n.startswith("vaf-room-lane") for n in marked), marked
 
 
+def test_a_viewer_no_longer_in_the_room_is_sent_nothing(tmp_path, monkeypatch):
+    """Membership is decided again where the transcript is read: a member removed while the
+    build waited for a thread is sent nothing, and an account that is only invited gets the
+    door, never a line. MUTATION: drop the check in `_build` - red."""
+    from vaf.core.session import _room_rows
+    from vaf.core.web_server import _send_room_transcript
+    monkeypatch.setattr(store_mod, "rooms_root",
+                        lambda base=None: Path(base) if base else tmp_path)
+    room = Room.create(kind="round", owner_scope=SCOPE_A, base=tmp_path, room_id="room-gone",
+                       multi_scope=True)
+    host = room.join(display="Alice", scope_id=SCOPE_A,
+                     peer_id=derive_peer_id(participant_key("cli", SCOPE_A), "room-gone"))
+    room.say(host, "the secret plan")
+    room.invite_account(host, SCOPE_B, display="bob")
+    gone = room.accept_invitation(SCOPE_B, display="Bob")
+    socket = _RecordingSocket()
+    asyncio.run(_send_room_transcript(socket, Room.open("room-gone", base=tmp_path), SCOPE_B))
+    assert socket.sent and socket.sent[0]["messages"], "a member is sent the room"
+    room.kick(host, gone.peer_id)
+    socket = _RecordingSocket()
+    asyncio.run(_send_room_transcript(socket, Room.open("room-gone", base=tmp_path), SCOPE_B))
+    assert socket.sent == [], "a removed member was sent the room"
+
+    third = "0a0b0c0d-0000-4000-8000-0000000000c3"
+    room.invite_account(host, third, display="carol")
+    assert any(r.get("invited") for r in _room_rows(third))
+    socket = _RecordingSocket()
+    asyncio.run(_send_room_transcript(socket, Room.open("room-gone", base=tmp_path), third))
+    [door] = socket.sent
+    assert door["messages"] == [] and door["room"]["invited"]
+    assert "secret plan" not in str(door)
+
+
 SECRET = "f308-test-secret-of-at-least-thirty-two-bytes"
 
 
@@ -241,12 +274,12 @@ def ws_world(tmp_path, monkeypatch):
     web_server._ROOM_WRITES.clear()
 
 
-def _answer(socket, payload) -> dict:
+def _answer(socket, payload, kinds=("room_transcript", "error")) -> dict:
     """Send one command and read up to its answer (a room view or an error)."""
     socket.send_json(payload)
     while True:
         frame = socket.receive_json()
-        if frame.get("type") in ("room_transcript", "error"):
+        if frame.get("type") in kinds:
             return frame
 
 
@@ -278,6 +311,8 @@ def test_the_sixty_first_write_in_a_minute_is_refused(ws_world):
     from vaf.core.web_server import ROOM_WRITES_PER_MINUTE, ROOM_WRITES_REFUSED
     assert ROOM_WRITES_PER_MINUTE == 60
     window = ws_world.server._ROOM_WRITES
+    asker = Room.open("room-a").identity_for(participant_key("cli", SCOPE_A))
+    vote = Room.open("room-a").open_vote(asker, "Deploy today?", options=["yes", "no"])
     for _ in range(57):
         assert window.take(SCOPE_A, limit=ROOM_WRITES_PER_MINUTE)
     with ws_world.connect(SCOPE_A) as socket:
@@ -286,16 +321,100 @@ def test_the_sixty_first_write_in_a_minute_is_refused(ws_world):
                                      "text": f"zeile {number}"})
             assert frame["type"] == "room_transcript", frame
         before = _frames("room-a")
+        refusal = {"type": "error", "code": "room_rate", "message": ROOM_WRITES_REFUSED}
         refused = _answer(socket, {"type": "room_say", "room_id": "room-a", "text": "zu viel"})
-        assert refused == {"type": "error", "message": ROOM_WRITES_REFUSED}
+        assert refused == refusal
         target = Room.open("room-a").transcript()[-1]["id"]
         reacted = _answer(socket, {"type": "room_react", "room_id": "room-a",
                                    "reply_to": target, "emoji": "+1"})
-        assert reacted == {"type": "error", "message": ROOM_WRITES_REFUSED}
+        assert reacted == refusal
+        voted = _answer(socket, {"type": "cast_room_vote", "room_id": "room-a",
+                                 "vote_id": vote.id, "choice": "yes"})
+        assert voted == refusal, "a ballot is a write of the same window"
         assert _frames("room-a") == before, "a refused write was stored"
     with ws_world.connect(SCOPE_B) as other:
         assert _answer(other, {"type": "room_say", "room_id": "room-b",
                                "text": "hallo"})["type"] == "room_transcript"
+
+
+def test_every_room_store_path_of_the_socket_runs_on_the_room_lane(ws_world, monkeypatch):
+    """Typing, the task record and the invitation commands read or write a room's store; each
+    runs on `vaf-room-lane` threads, never on the loop. MUTATION: call the store work of one
+    of them inline again - red."""
+    import vaf.core.session as session_module
+    host_scope = SCOPE_A
+    shared = Room.create(kind="round", owner_scope=host_scope, room_id="room-shared",
+                         multi_scope=True)
+    host = shared.join(display="Alice", scope_id=host_scope,
+                       peer_id=derive_peer_id(participant_key("cli", host_scope), "room-shared"))
+    revoked = shared.invite_account(host, SCOPE_B, display="bob")
+    member_reads = _record_threads(monkeypatch, session_module, "member_room_ids")
+    tasks = _record_threads(monkeypatch, Room, "tasks")
+    revokes = _record_threads(monkeypatch, Room, "revoke_invitation")
+    listings = _record_threads(monkeypatch, Room, "invitations")
+    accepts = _record_threads(monkeypatch, Room, "accept_invitation")
+    declines = _record_threads(monkeypatch, Room, "decline_invitation")
+    standings = _record_threads(monkeypatch, Room, "invitation_for")
+    import vaf.core.tool_dispatch as tool_dispatch
+    monkeypatch.setattr(tool_dispatch, "resolve_account_directory", lambda: [
+        {"username": "bob", "user_scope_id": SCOPE_B, "active": True}])
+    with ws_world.connect(host_scope) as socket:
+        socket.send_json({"type": "room_typing", "room_id": "room-a"})
+        # One socket's commands run in order: the next answer comes after the typing.
+        assert _answer(socket, {"type": "open_room", "room_id": "room-a"})["type"] \
+            == "room_transcript"
+        assert member_reads, "the typing never asked whether the person is in the room"
+        assert ws_world.server._ROOM_KEYS_TYPING.get("room-a"), "the keypress was not kept"
+        assert _answer(socket, {"type": "room_task_history", "room_id": "room-a"},
+                       kinds=("room_task_history", "error"))["type"] == "room_task_history"
+        assert _answer(socket, {"type": "room_invitation_text", "room_id": "room-shared",
+                                "invitation_id": "none"})["type"] == "error"
+        assert _answer(socket, {"type": "revoke_room_invite", "room_id": "room-shared",
+                                "invitation_id": revoked["id"]})["type"] == "room_transcript"
+        # Recorded around this command alone: the sidebar listing reads invitations on the
+        # loop too (a named boundary of its own).
+        standings.clear()
+        listed = _answer(socket, {"type": "room_invite_candidates", "room_id": "room-shared"},
+                         kinds=("room_invite_candidates", "error"))
+        assert [a["username"] for a in listed["accounts"]] == ["bob"]
+        assert standings and all(n.startswith("vaf-room-lane") for n in standings), standings
+    shared.invite_account(host, SCOPE_B, display="bob")
+    with ws_world.connect(SCOPE_B) as guest:
+        # A decline answers with the sidebar only; the next command's answer comes after it.
+        guest.send_json({"type": "decline_room_invite", "room_id": "room-shared"})
+        assert _answer(guest, {"type": "open_room", "room_id": "room-shared"})["type"] \
+            == "error"
+    shared.invite_account(host, SCOPE_B, display="bob")
+    with ws_world.connect(SCOPE_B) as guest:
+        assert _answer(guest, {"type": "accept_room_invite",
+                               "room_id": "room-shared"})["type"] == "room_transcript"
+    for name, seen in (("typing", member_reads), ("history", tasks), ("revoke", revokes),
+                       ("invitations", listings), ("accept", accepts), ("decline", declines)):
+        assert seen and all(n.startswith("vaf-room-lane") for n in seen), (name, seen)
+
+
+def test_the_page_says_a_refused_room_write_and_keeps_its_text():
+    """The page handles the `room_rate` code: the refused line leaves the pending list and
+    goes back into an empty box, and the agent room shows the catalogue's notice in the amber
+    status style; a reaction and a ballot clear it before they go. MUTATION: drop the branch,
+    the text's return, or the notice - red."""
+    page = (Path(__file__).resolve().parents[1] / "web" / "app" / "page.tsx").read_text(
+        encoding="utf-8")
+    branch = page.split("else if (data.type === 'error') {", 1)[1].split(
+        "// The server refused the chat a reconnect asked for again", 1)[0]
+    assert "if (data.code === 'room_rate') {" in branch
+    assert "setPendingRoomSays(prev => prev.filter(p => p.roomId !== rid));" in branch
+    assert "if (refused) setInput(prev => (prev.trim() ? prev : refused.text));" in branch
+    assert "setRoomRateNotice(rid);" in branch
+    notice = page.split("{roomView && !appRoomWords && roomRateNotice === roomView.room.roomId && (",
+                        1)[1][:700]
+    assert 'role="status"' in notice and "{tMain('appRoomRateLimited')}" in notice
+    assert "border-amber-200 bg-amber-50 text-amber-800" in notice
+    sender = page.split("type: 'room_say', room_id: roomView.room.roomId, text: roomText,", 1)[1][:400]
+    assert "roomSaysInFlightRef.current = [...roomSaysInFlightRef.current," in sender
+    transcript = page.split("else if (data.type === 'room_transcript') {", 1)[1][:4000]
+    assert "roomSaysInFlightRef.current = roomSaysInFlightRef.current.filter(p =>" in transcript
+    assert page.count("setRoomRateNotice(null);") >= 4, "a write or a switch keeps a stale notice"
 
 
 # ── item 4: labels keep their numbers when a member joins or renames into a collision ────
@@ -364,6 +483,20 @@ def test_joining_or_renaming_into_a_collision_takes_the_next_number(tmp_path):
         assert room.peers_named(label) == [peer]
 
 
+def test_a_rename_a_mention_cannot_tell_apart_keeps_the_number(tmp_path):
+    """"Bob" renaming to "bob" (or "Bob.") stays in the same collision: it keeps its place
+    there, and nobody else's number moves."""
+    room = Room.create(kind="round", owner_scope="s", base=tmp_path, room_id="room-case")
+    first = room.join(display="Bob", scope_id="s", peer_id="p-b")
+    room.join(display="Bob", scope_id="s", peer_id="p-a")
+    assert room.labels() == {"p-b": "Bob1", "p-a": "Bob2"}
+    room.introduce(first, display="bob")
+    assert room.labels() == {"p-b": "bob1", "p-a": "Bob2"}
+    assert room.peers_named("Bob2") == ["p-a"]
+    room.introduce(first, display="Bob.")
+    assert room.labels()["p-a"] == "Bob2"
+
+
 def test_a_rejoin_under_the_same_name_keeps_when_it_was_taken(tmp_path):
     room = Room.create(kind="round", owner_scope="s", base=tmp_path, room_id="room-rejoin")
     room.join(display="Bob", scope_id="s", peer_id="p-b")
@@ -423,10 +556,13 @@ def test_labels_fuzz():
 
 # ── item 6: a refused Veyllo App turn answers the device ─────────────────────────────────
 
-REFUSAL = "No model is set up."
+# The admin's reason, with a provider's error text in it: it stays on VAF.
+REFUSAL = "The API provider x is not set up (RuntimeError: key 1234 rejected). Check its key."
 
 
 def test_a_refused_line_to_vafs_agent_answers_the_device(room_home):
+    """The device gets the short fixed sentence; the detailed reason (a profile, a command, a
+    provider's error text) stays in the room. MUTATION: send `why` to the device - red."""
     import vaf.core.headless_runner as hr
     from vaf.core.session import get_manager
     client, _pipe, _row = _capable()
@@ -436,7 +572,9 @@ def test_a_refused_line_to_vafs_agent_answers_the_device(room_home):
     hr.refuse_turn_without_backend(task, REFUSAL, get_manager())
     client.pump()
     [done] = client.of("done")
-    assert done["final_text"] == REFUSAL
+    assert done["final_text"] == hr.APP_NO_MODEL_REPLY
+    assert "RuntimeError" not in done["final_text"] and "1234" not in done["final_text"]
+    assert app_room.transcript(SCOPE_A)[-1]["text"] == REFUSAL, "the room lost the reason"
     assert done["id"] in [e["id"] for e in devices.get(away["device_id"])["outbox"]], \
         "the absent device does not get the reason after its next welcome"
     assert devices.held_in_outbox(SCOPE_A, done["id"])
@@ -451,7 +589,8 @@ def test_a_refused_request_answers_the_asker_and_frees_its_place(app_link_home, 
     hr.refuse_turn_without_backend(task, REFUSAL, get_manager())
     world.client.pump()
     world.other_client.pump()
-    assert world.client.of("done") == [{"t": "done", "id": A1, "final_text": REFUSAL}]
+    assert world.client.of("done") == [{"t": "done", "id": A1,
+                                         "final_text": hr.APP_NO_MODEL_REPLY}]
     assert not world.other_client.of("done"), "another device got an answer it never asked for"
     assert A1 not in bridge._asks.get(world.row["device_id"], {})
 
@@ -635,7 +774,9 @@ def _doc(path: str) -> str:
         "show any other value as from an unknown party and answer nothing.",
         "the account's app chat answers its turns one after another in the order they "
         "arrived, so place it by time.",
-        "the Veyllo App gets that reason as the agent's reply",
+        "the Veyllo App gets a short fixed sentence as the agent's reply",
+        "The detailed reason (a profile, a command, a provider's error text) stays in the room "
+        "and the log.",
         "A zero-width space (U+200B), which some keyboards put after a name they completed, "
         "counts as a space"], []),
     ("docs/EMBEDDING.md", [
@@ -655,8 +796,13 @@ def _doc(path: str) -> str:
      ["update_card", "not across a join, a leave or a rename"]),
     ("docs/web-ui/WEBUI_WEBSOCKET_FLOW.md", [
         "run on a pool of their own (`vaf-room-lane`, four threads)",
-        "\"Too many room messages in a minute. Wait a moment and write again.\""], []),
-    ("docs/web-ui/WEB_UI.md", ["**A follow yields to the person.**"], []),
+        "`room_task_history`, the invitation commands and the answer at the door",
+        "so it runs on the room lane's threads and only the map write stays on the loop.",
+        "the room shows `appRoomRateLimited` above the box",
+        "\"Too many room messages in a minute. Wait a moment and write again.\""],
+     ["never touches the room store", "the page ignores `error` frames"]),
+    ("docs/web-ui/WEB_UI.md", ["**A follow yields to the person.**",
+                               "`appRoomRateLimited` until the next write"], []),
 ])
 def test_the_docs_say_what_the_rooms_do(path, sentences, gone):
     """MUTATION: delete one of these sentences from its doc - red."""

@@ -3160,6 +3160,13 @@ function VAFDashboardContent() {
     // visibly pending, dropped when the transcript carries them (or after 30s).
     const [pendingRoomSays, setPendingRoomSays] = useState<Array<{
         key: number; roomId: string; text: string; ts: number }>>([]);
+    // The same says, as the socket handler reads them: kept in step with the frames as they
+    // arrive (a transcript that carries a say ends it), so a refusal that follows a stored
+    // line never takes that line for the refused one. State would lag a render behind.
+    const roomSaysInFlightRef = useRef<Array<{ roomId: string; text: string }>>([]);
+    // The agent room whose last write (a line, a reaction or a ballot) the server refused
+    // as too many in a minute (`room_rate`): it says so above the box until the next write.
+    const [roomRateNotice, setRoomRateNotice] = useState<string | null>(null);
     // Trimmed texts sent from here in the last minute (text -> epoch ms). The
     // room view reads it to let a delivered message BLEND UP from its pending
     // copy's dimness instead of drifting in as if it were new to the screen.
@@ -5212,6 +5219,8 @@ function VAFDashboardContent() {
         pendingRoomOpenRef.current = null;
         setRoomOpening(null);
         setPendingRoomSays([]);
+        roomSaysInFlightRef.current = [];
+        setRoomRateNotice(null);
         setRoomView(null);
         setRoomMembersOpen(false);
         if (currentSessionId === id) return;
@@ -6468,6 +6477,8 @@ function VAFDashboardContent() {
                             const texts = new Set((data.messages || []).map((m: RoomMessage) => (m.text || '').trim()));
                             setPendingRoomSays(prev => prev.filter(p =>
                                 p.roomId === rid && Date.now() - p.ts < 30000 && !texts.has(p.text.trim())));
+                            roomSaysInFlightRef.current = roomSaysInFlightRef.current.filter(p =>
+                                p.roomId !== rid || !texts.has(p.text.trim()));
                         }
                         if (rid === APP_ROOM_ID) {
                             const lines: RoomMessage[] = data.messages || [];
@@ -7459,6 +7470,20 @@ function VAFDashboardContent() {
                     }
                 }
                 else if (data.type === 'error') {
+                    // A room write refused as too many in a minute: the refused line leaves the
+                    // pending list and goes back into an empty box, and the room says why.
+                    // Reactions and ballots get the same notice; they carry no text.
+                    if (data.code === 'room_rate') {
+                        const rid = roomViewRef.current?.room.roomId ?? null;
+                        if (rid) {
+                            const mine = roomSaysInFlightRef.current.filter(p => p.roomId === rid);
+                            const refused = mine[mine.length - 1];
+                            roomSaysInFlightRef.current = roomSaysInFlightRef.current.filter(p => p.roomId !== rid);
+                            setPendingRoomSays(prev => prev.filter(p => p.roomId !== rid));
+                            if (refused) setInput(prev => (prev.trim() ? prev : refused.text));
+                            setRoomRateNotice(rid);
+                        }
+                    }
                     // The server refused the chat a reconnect asked for again (deleted meanwhile):
                     // the view takes the chat the server auto-loaded for this connection instead
                     // of keeping a picture of a chat it no longer shows. (A reconnect of another
@@ -8484,6 +8509,9 @@ function VAFDashboardContent() {
             ws.send(JSON.stringify({
                 type: 'room_say', room_id: roomView.room.roomId, text: roomText,
             }));
+            roomSaysInFlightRef.current = [...roomSaysInFlightRef.current,
+                { roomId: roomView.room.roomId, text: roomText }].slice(-20);
+            setRoomRateNotice(null);
             // On screen at once, visibly pending, reconciled against the next
             // transcript - the wait for the 3s poll made a sent message look lost.
             setPendingRoomSays(prev => [...prev, {
@@ -10371,6 +10399,7 @@ function VAFDashboardContent() {
                                         onReact={roomView.room.me && !roomView.room.closed && !appRoomWords ? (frameId, emoji) => {
                                             const sock = wsSocketRef.current;
                                             if (!sock || sock.readyState !== WebSocket.OPEN) return;
+                                            setRoomRateNotice(null);
                                             sock.send(JSON.stringify({ type: 'room_react', room_id: roomView.room.roomId, reply_to: frameId, emoji }));
                                         } : undefined}
                                         pending={appRoomWords
@@ -11354,15 +11383,29 @@ function VAFDashboardContent() {
                                         </div>
                                     </div>
                                 )}
+                                {/* An agent room's write refused as too many in a minute (`room_rate`):
+                                    the same words and the same place as the Veyllo App room's notice. */}
+                                {roomView && !appRoomWords && roomRateNotice === roomView.room.roomId && (
+                                    <div className={cn(chatWidthClass, "mb-2 flex items-center gap-2")}>
+                                        <div className="w-9 shrink-0" aria-hidden="true" />
+                                        <div role="status" data-room-rate-notice
+                                            className="flex-1 min-w-0 text-xs px-3 py-2 rounded-xl border border-amber-200 bg-amber-50 text-amber-800 dark:border-[#564529] dark:bg-[#292114] dark:text-amber-300">
+                                            {tMain('appRoomRateLimited')}
+                                        </div>
+                                    </div>
+                                )}
 
                                     {voteDockOpen && (
                                         <RoomVoteDock votes={voteDock.votes} leaving={voteDock.leaving}
                                             widthClass={chatWidthClass}
-                                            onVote={(voteId, choice) => ws?.send(JSON.stringify({
-                                                type: 'cast_room_vote',
-                                                room_id: roomViewRef.current?.room?.roomId ?? '',
-                                                vote_id: voteId, choice,
-                                            }))} />
+                                            onVote={(voteId, choice) => {
+                                                setRoomRateNotice(null);
+                                                ws?.send(JSON.stringify({
+                                                    type: 'cast_room_vote',
+                                                    room_id: roomViewRef.current?.room?.roomId ?? '',
+                                                    vote_id: voteId, choice,
+                                                }));
+                                            }} />
                                     )}
                                     {roomView && (
                                         <RoomWorkDock tasks={roomView.room?.tasks ?? []}

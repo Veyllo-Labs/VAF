@@ -360,23 +360,31 @@ async def _room_invite_candidates(room, user_scope_id, *, is_admin: bool) -> dic
     except Exception:
         pass
     from vaf.core.a2a.room import PARTICIPANT_LANES, derive_peer_id, participant_key
-    out = []
-    for entry in rows:
-        username, scope, active = entry["username"], entry["user_scope_id"], entry["active"]
-        if not scope or not active or scope == str(user_scope_id or ""):
-            continue
-        state = "open"
-        expires_at = 0.0
-        if any(room.role_of(derive_peer_id(participant_key(lane, scope), room.room_id))
-               for lane in PARTICIPANT_LANES):
-            state = "member"
-        else:
-            pending = room.invitation_for(scope)
-            if pending is not None:
-                state = "invited"
-                expires_at = float(pending.get("expires_at") or 0.0)
-        out.append({"username": str(username), "online": scope in online,
-                    "state": state, "expiresAt": expires_at})
+
+    def _standing():
+        # Where each account stands with the room: role and invitation reads fold the
+        # room's files, so this runs on the room lane's threads (`_room_lane_pool`).
+        found = []
+        for entry in rows:
+            username, scope, active = (entry["username"], entry["user_scope_id"],
+                                       entry["active"])
+            if not scope or not active or scope == str(user_scope_id or ""):
+                continue
+            state = "open"
+            expires_at = 0.0
+            if any(room.role_of(derive_peer_id(participant_key(lane, scope), room.room_id))
+                   for lane in PARTICIPANT_LANES):
+                state = "member"
+            else:
+                pending = room.invitation_for(scope)
+                if pending is not None:
+                    state = "invited"
+                    expires_at = float(pending.get("expires_at") or 0.0)
+            found.append({"username": str(username), "online": scope in online,
+                          "state": state, "expiresAt": expires_at})
+        return found
+
+    out = await asyncio.get_running_loop().run_in_executor(_room_lane_pool(), _standing)
     out.sort(key=lambda a: (a["state"] == "member", not a["online"], a["username"].lower()))
     return {"accounts": out, "directory": directory}
 
@@ -417,7 +425,7 @@ def _room_invitations(room, user_scope_id) -> list:
     ][:60]
 
 
-async def _send_room_door(websocket, room, row: dict) -> None:
+def _room_door_payload(room, row: dict) -> dict:
     """The room as an INVITEE sees it: the door, not the transcript.
 
     Same message type as the transcript so the browser opens it in the same place,
@@ -427,11 +435,11 @@ async def _send_room_door(websocket, room, row: dict) -> None:
     the card says "3 members, among them Alice" and that much the inviter chose
     to reveal by inviting.
 
-    Read on the room lane's threads (`_room_lane_pool`), like the transcript.
+    Blocking file work: built on the room lane's threads (`_room_lane_pool`).
     """
-    labels, members = await asyncio.get_running_loop().run_in_executor(
-        _room_lane_pool(), lambda: (room.labels(), room.members()))
-    await websocket.send_json({
+    labels = room.labels()
+    members = room.members()
+    return {
         "type": "room_transcript",
         "room": {
             "id": row.get("id") or f"room:{room.room_id}",
@@ -461,7 +469,14 @@ async def _send_room_door(websocket, room, row: dict) -> None:
             ],
         },
         "messages": [],
-    })
+    }
+
+
+async def _send_room_door(websocket, room, row: dict) -> None:
+    """The door (`_room_door_payload`), built on the room lane's threads."""
+    payload = await asyncio.get_running_loop().run_in_executor(
+        _room_lane_pool(), _room_door_payload, room, row)
+    await websocket.send_json(payload)
 
 
 def _automation_wire(task) -> Dict[str, Any]:
@@ -508,6 +523,15 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
 
     def _build():
         row = next((r for r in _room_rows(user_scope_id) if r["room_id"] == room.room_id), {})
+        # Membership is decided again HERE, where the transcript is read: the command that
+        # asked was checked on the loop, and the account may have been removed (or have left
+        # on another screen) while this waited for a thread. Asked of the room itself, by the
+        # viewer's two lanes, so a room that was just closed still answers its closer. A
+        # viewer who is only invited gets the door; anybody else gets nothing.
+        if _room_actor(room, user_scope_id) is None:
+            if row.get("invited"):
+                return _room_door_payload(room, row), ""
+            return None, ""
         entries = room.transcript()[-ROOM_TRANSCRIPT_LIMIT:]
         members, labels, hosts = room.members(), room.labels(), room.host_peers()
         # Who belongs to whom, once for the whole payload rather than per member: it is a
@@ -757,6 +781,8 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
 
     loop = asyncio.get_running_loop()
     payload, acting = await loop.run_in_executor(_room_lane_pool(), _build)
+    if payload is None:
+        return
     live_keys = _ROOM_KEYS_TYPING.get(room.room_id)
     if live_keys is not None:
         for peer in set(typing_seen) - set(typing_keys):
@@ -5021,8 +5047,10 @@ def _room_invite_pool():
     return _ROOM_INVITE_POOL
 
 
-# The room lane (`open_room`, the acting room commands and the transcript every one of them
-# answers with) runs on threads of its own as well. Room calls are blocking file work that
+# The room lane runs on threads of its own as well: every room command of the socket that
+# reads or writes a room's store (`open_room`, `room_typing`'s membership check, the acting
+# commands, `room_task_history`, the invitation commands and the answer at the door) and the
+# transcript every one of them answers with. Room calls are blocking file work that
 # grows with the room: `ingest` reads and decrypts every frame of the room several times, and
 # the transcript, the members and the labels read them again. Measured on one process with a
 # scratch home (median of 3): `ingest` with the addressee 37 ms in a room of 2 members and 100
@@ -5032,8 +5060,14 @@ def _room_invite_pool():
 # which the uploads, the voice feed and many routes share. Four at a time. NAMED BOUNDARY, as
 # for the invitations: the four are shared by every account with no count per account, so one
 # account's long room delays another's refresh; one socket's commands still run one at a time,
-# in order. Out of this lane, one click each and never polled: `room_task_history`, the
-# invitation commands and the answer at the door.
+# in order. NAMED BOUNDARY, work in flight per account: `open_room` and the reads are not
+# charged, and one account may open many sockets, so its queued reads delay the others' views
+# (measured with each build stubbed to 0.2 s: another account's `open_room` waited 15 ms with
+# no competing sockets, 275 ms with 8 and 1.2 s with 24); a cap of one queued read per account
+# and room is the follow-up. NAMED BOUNDARY, the sidebar: the chat list (`session_mgr.list_ui`,
+# which reads every room of the account through `_room_rows`) is still built on the loop for
+# `get_sessions` and the broadcasts after closing, deleting, renaming, accepting and
+# declining; moving the listing off the loop is its own change.
 _ROOM_LANE_POOL = None
 
 
@@ -5515,27 +5549,34 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     # are not a member yet, which is right for speaking and wrong for
                     # looking - opening a record must not make anybody a member of
                     # anything. Membership is decided by the same function that decided
-                    # the sidebar, exactly as `open_room` does.
+                    # the sidebar, exactly as `open_room` does. Read on the room lane's
+                    # threads (`_room_lane_pool`): the record folds the whole room.
                     user_scope_id = manager.get_connection_user(websocket)
                     wanted = str(cmd.get("room_id") or "")
                     try:
                         from vaf.core.a2a.room import Room
                         from vaf.core.session import member_room_ids
 
-                        if wanted not in member_room_ids(user_scope_id):
+                        def _history():
+                            if wanted not in member_room_ids(user_scope_id):
+                                return None
+                            room = Room.open(wanted)
+                            return [
+                                {"id": t["id"], "title": t["title"], "status": t["status"],
+                                 "assignee": t["assignee_label"],
+                                 "requester": t["requester_label"],
+                                 "result": str(t.get("result") or "")[:400],
+                                 "reports": t["reports"],
+                                 "started": t["created_ts"], "ts": t["updated_ts"]}
+                                for t in room.tasks()
+                            ][:400]
+
+                        history = await asyncio.get_running_loop().run_in_executor(
+                            _room_lane_pool(), _history)
+                        if history is None:
                             await websocket.send_json({"type": "error",
                                                        "message": "Access denied"})
                             continue
-                        room = Room.open(wanted)
-                        history = [
-                            {"id": t["id"], "title": t["title"], "status": t["status"],
-                             "assignee": t["assignee_label"],
-                             "requester": t["requester_label"],
-                             "result": str(t.get("result") or "")[:400],
-                             "reports": t["reports"],
-                             "started": t["created_ts"], "ts": t["updated_ts"]}
-                            for t in room.tasks()
-                        ][:400]
                     except Exception as _hist_err:
                         log("API", f"room_task_history failed: {_hist_err}")
                         history = []
@@ -5617,15 +5658,18 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     # protocol deliberately has no typing frame kind). Fire and
                     # forget - no reply, the poll carries the effect to the
                     # other viewers, and the timestamp expires on its own. The
-                    # membership check is the same question room_say asks,
-                    # answered the cheap way: a room the user is not in takes
-                    # no presence from them either.
+                    # membership check is the same question room_say asks: a room
+                    # the user is not in takes no presence from them either. It
+                    # READS the store (`member_room_ids` reads every room of the
+                    # account: 250-300 ms for one room of 400 lines), so it runs
+                    # on the room lane's threads, and only the map write stays here.
                     try:
                         user_scope_id = manager.get_connection_user(websocket)
                         wanted = str(cmd.get("room_id") or "")
                         from vaf.core.a2a.room import derive_peer_id, participant_key
                         from vaf.core.session import member_room_ids
-                        if wanted and wanted in member_room_ids(user_scope_id):
+                        if wanted and wanted in await asyncio.get_running_loop().run_in_executor(
+                                _room_lane_pool(), member_room_ids, user_scope_id):
                             peer = derive_peer_id(
                                 participant_key("cli", user_scope_id), wanted)
                             import time as _time
@@ -5655,7 +5699,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         if type in ("room_say", "room_react", "cast_room_vote") \
                                 and not _ROOM_WRITES.take(str(user_scope_id or ""),
                                                           limit=ROOM_WRITES_PER_MINUTE):
-                            await websocket.send_json({"type": "error",
+                            # `code` for the page, which words it from its catalogues
+                            # (`appRoomRateLimited`); `message` for any other client.
+                            await websocket.send_json({"type": "error", "code": "room_rate",
                                                        "message": ROOM_WRITES_REFUSED})
                             continue
 
@@ -5834,32 +5880,42 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         from vaf.core.a2a.room import Room, RoomError, TicketInvalid
                         from vaf.core.session import _room_rows
 
-                        row = next((r for r in _room_rows(user_scope_id)
-                                    if r["room_id"] == wanted and r.get("invited")), None)
-                        if row is None:
+                        # The invitation check, the answer and the account lookup are
+                        # store work: on the room lane's threads (`_room_lane_pool`). None
+                        # when there is no invitation to answer.
+                        def _answer():
+                            row = next((r for r in _room_rows(user_scope_id)
+                                        if r["room_id"] == wanted and r.get("invited")), None)
+                            if row is None:
+                                return None
+                            opened = Room.open(wanted)
+                            if type == "accept_room_invite":
+                                # THIS account's name, resolved the way the room commands
+                                # resolve it when a person first speaks (one lookup, once).
+                                from vaf.core.config import resolve_caller_username
+                                display = str(resolve_caller_username(
+                                    None, user_scope_id, allow_lookup=True) or "user")
+                                opened.accept_invitation(user_scope_id, display=display)
+                                try:
+                                    from vaf.core.security_events import log_security_event
+                                    log_security_event(
+                                        "room_account_admitted", username=display,
+                                        path=opened.room_id,
+                                        detail=f"accepted the invitation from "
+                                               f"{row.get('invited_by') or 'a member'}")
+                                except Exception:
+                                    pass
+                            else:
+                                opened.decline_invitation(user_scope_id)
+                            return opened
+
+                        room = await asyncio.get_running_loop().run_in_executor(
+                            _room_lane_pool(), _answer)
+                        if room is None:
                             await websocket.send_json({
                                 "type": "error",
                                 "message": "There is no open invitation for you here"})
                             continue
-                        room = Room.open(wanted)
-                        if type == "accept_room_invite":
-                            # THIS account's name, resolved the way the room commands
-                            # resolve it when a person first speaks (one lookup, once).
-                            from vaf.core.config import resolve_caller_username
-                            display = str(resolve_caller_username(
-                                None, user_scope_id, allow_lookup=True) or "user")
-                            room.accept_invitation(user_scope_id, display=display)
-                            try:
-                                from vaf.core.security_events import log_security_event
-                                log_security_event(
-                                    "room_account_admitted", username=display,
-                                    path=room.room_id,
-                                    detail=f"accepted the invitation from "
-                                           f"{row.get('invited_by') or 'a member'}")
-                            except Exception:
-                                pass
-                        else:
-                            room.decline_invitation(user_scope_id)
                         # The sidebar first: the row changes from a door into a room
                         # (or leaves the list), and the same person may have the app
                         # open twice. Then the room itself, for whoever accepted.
@@ -5870,8 +5926,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                                     user_scope_id=user_scope_id)),
                         })
                         if type == "accept_room_invite":
-                            await _send_room_transcript(websocket, Room.open(wanted),
-                                                        user_scope_id)
+                            reopened = await asyncio.get_running_loop().run_in_executor(
+                                _room_lane_pool(), Room.open, wanted)
+                            await _send_room_transcript(websocket, reopened, user_scope_id)
                         # The inviter reads the answer through the room's 3s poll;
                         # their sidebar count of members changed too, so nudge it.
                         try:
@@ -5900,13 +5957,19 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         from vaf.core.a2a.room import Room, RoomError
                         from vaf.core.session import member_room_ids
 
-                        if wanted not in member_room_ids(user_scope_id):
-                            log("API", f"Access denied: {type} for a room the user is not in")
-                            await websocket.send_json({"type": "error", "message": "Access denied"})
-                            continue
-                        room = Room.open(wanted)
-                        identity = _room_actor(room, user_scope_id)
-                        if identity is None:
+                        # Every store read and write of this branch runs on the room
+                        # lane's threads (`_room_lane_pool`); the invitation's own host
+                        # choice keeps its pool (`_room_invite_pool`).
+                        def _enter():
+                            if wanted not in member_room_ids(user_scope_id):
+                                log("API", f"Access denied: {type} for a room the user is not in")
+                                return None, None
+                            opened = Room.open(wanted)
+                            return opened, _room_actor(opened, user_scope_id)
+
+                        room, identity = await asyncio.get_running_loop().run_in_executor(
+                            _room_lane_pool(), _enter)
+                        if room is None or identity is None:
                             await websocket.send_json({"type": "error", "message": "Access denied"})
                             continue
 
@@ -5951,21 +6014,27 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             # panel's note), so this is the decision the note named
                             # and not a side effect: the room's host does it here, in
                             # one place, and the framework refuses everybody else.
-                            if not room.manifest.get("multi_scope"):
-                                room.open_to_accounts(identity)
-                            invitation_row = room.invite_account(
-                                identity, scope, display=account, ttl_s=float(ttl))
-                            try:
-                                from vaf.core.web_interface import announce_room_invitation
-                                announce_room_invitation(
-                                    room, invitation_row, inviter_scope=user_scope_id,
-                                    invitee_scope=scope,
-                                    inviter_name=str(resolve_caller_username(
-                                        None, user_scope_id, allow_lookup=True) or ""))
-                            except Exception:
-                                pass
+                            def _invite():
+                                if not room.manifest.get("multi_scope"):
+                                    room.open_to_accounts(identity)
+                                invitation_row = room.invite_account(
+                                    identity, scope, display=account, ttl_s=float(ttl))
+                                try:
+                                    from vaf.core.web_interface import announce_room_invitation
+                                    announce_room_invitation(
+                                        room, invitation_row, inviter_scope=user_scope_id,
+                                        invitee_scope=scope,
+                                        inviter_name=str(resolve_caller_username(
+                                            None, user_scope_id, allow_lookup=True) or ""))
+                                except Exception:
+                                    pass
+
+                            await asyncio.get_running_loop().run_in_executor(
+                                _room_lane_pool(), _invite)
                         elif type == "revoke_room_invite":
-                            room.revoke_invitation(identity, str(cmd.get("invitation_id") or ""))
+                            await asyncio.get_running_loop().run_in_executor(
+                                _room_lane_pool(), room.revoke_invitation, identity,
+                                str(cmd.get("invitation_id") or ""))
                         elif type == "room_invite_agent":
                             from vaf.core.a2a.invite import invitation
                             display = str(cmd.get("display") or "guest").strip() or "guest"
@@ -5995,8 +6064,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         elif type == "room_invitation_text":
                             from vaf.core.a2a.invite import invitation_text
                             invitation_id = str(cmd.get("invitation_id") or "")
-                            record = next((r for r in room.invitations(identity)
-                                           if r["id"] == invitation_id), None)
+                            listed = await asyncio.get_running_loop().run_in_executor(
+                                _room_lane_pool(), room.invitations, identity)
+                            record = next((r for r in listed if r["id"] == invitation_id), None)
                             if record is None:
                                 await websocket.send_json({
                                     "type": "error",
@@ -6024,7 +6094,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                         # The panel repaints from the store, exactly as the acting
                         # commands do: the invitation list rides in the transcript.
-                        await _send_room_transcript(websocket, Room.open(wanted), user_scope_id)
+                        reopened = await asyncio.get_running_loop().run_in_executor(
+                            _room_lane_pool(), Room.open, wanted)
+                        await _send_room_transcript(websocket, reopened, user_scope_id)
                     except RoomError as e:
                         await websocket.send_json({"type": "error", "message": str(e)})
                     except Exception as e:

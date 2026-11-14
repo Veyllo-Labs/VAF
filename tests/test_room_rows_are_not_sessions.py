@@ -1235,11 +1235,22 @@ def test_the_payload_names_the_viewers_own_agent_and_nobody_else(tmp_path, monke
                                       "scope-a"))
     assert ws.sent[0]["room"]["agentPeer"] == agent_peer
 
-    # Another account looking at a room their agent is NOT in: no face for anybody.
+    # Another account, in none of the room's seats: it is not shown the room at all.
     ws2 = _WS()
     asyncio.run(_send_room_transcript(ws2, Room.open("room-face", base=tmp_path),
                                       "scope-b"))
-    assert ws2.sent[0]["room"]["agentPeer"] == ""
+    assert ws2.sent == []
+
+    # A member whose agent is NOT in the room (the person's own seat only): no face.
+    plain = Room.create(kind="round", owner_scope="scope-a", base=tmp_path,
+                        room_id="room-noface")
+    plain.join(display="Alice", scope_id="scope-a",
+               peer_id=derive_peer_id(participant_key("cli", "scope-a"), "room-noface"))
+    plain.join(display="Codex", scope_id=None, peer_id="p-codex")
+    ws3 = _WS()
+    asyncio.run(_send_room_transcript(ws3, Room.open("room-noface", base=tmp_path),
+                                      "scope-a"))
+    assert ws3.sent[0]["room"]["agentPeer"] == ""
 
 
 def test_the_badge_counts_what_the_person_has_not_seen_and_looking_clears_it(tmp_path, monkeypatch):
@@ -1314,7 +1325,10 @@ def test_the_task_board_travels_with_the_transcript(tmp_path, monkeypatch):
                         lambda base=None: Path(base) if base else tmp_path)
     room = Room.create(kind="round", owner_scope="scope-a", base=tmp_path,
                        room_id="room-boardpay")
-    alice = room.join(display="Alice", scope_id="scope-a", peer_id="p-alice")
+    # The viewer is a member (the transcript is built for members only): her handle is the
+    # one her account derives on the person's lane.
+    alice = room.join(display="Alice", scope_id="scope-a",
+                      peer_id=derive_peer_id(participant_key("cli", "scope-a"), "room-boardpay"))
     nobel = room.join(display="Nobel", scope_id=None, peer_id="p-nobel")
     ask = room.say(alice, "build the site")
     room.ingest({"kind": "report", "reply_to": ask.id,

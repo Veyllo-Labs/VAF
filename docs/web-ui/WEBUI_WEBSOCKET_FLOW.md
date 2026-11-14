@@ -397,8 +397,11 @@ Key rules:
   only while the box carries text. Fire and forget - no reply; the signal lands in an
   in-memory map, the 3-second room poll carries it to the room's other viewers as a
   `typing` entry of kind `keys`, and it expires by clock seconds after the last key.
-  It never touches the room store or the A2A wire: the protocol deliberately has no
-  typing frame kind, and presence must stay off the transcript.
+  It writes nothing to the room store or the A2A wire: the protocol deliberately has no
+  typing frame kind, and presence must stay off the transcript. It does READ the store:
+  the membership check (`member_room_ids`, the same question `room_say` asks) reads every
+  room of the account, about 0.25 s for one room of 400 lines, so it runs on the room
+  lane's threads and only the map write stays on the loop.
 - `room_say` (`{ room_id, text }`) and `close_room` (`{ room_id }`): the person at the
   browser acting in a room themselves. They act on the **CLI participant lane**, not on
   a lane of their own: the lanes separate the human from the agent, and a browser and a
@@ -409,9 +412,11 @@ Key rules:
   the room's host (the account that opened it) nor a leader; a redeemed ticket sets a
   guest's scope to None, so no guest can ever be the host. Both answer with a fresh
   `room_transcript` read from the store rather than an echo of what was sent.
-  The store work of every acting room command (`room_say`, `close_room`, `delete_room`,
-  `kick_peer`, `rename_room`, `set_room_agent_mode`, `cast_room_vote`, `room_react`) and
-  the `room_transcript` it answers with run on a pool of their own (`vaf-room-lane`, four
+  The store work of every room command of the socket (`open_room`, `room_typing`'s
+  membership check, `room_say`, `close_room`, `delete_room`, `kick_peer`, `rename_room`,
+  `set_room_agent_mode`, `cast_room_vote`, `room_react`, `room_task_history`, the
+  invitation commands and the answer at the door) and the `room_transcript` it answers with
+  run on a pool of their own (`vaf-room-lane`, four
   threads), not on the server's event loop and not on the default executor: room calls read
   and decrypt the room's files and grow with its length (a room of 800 lines costs about
   0.16 s per line written and 0.12 s per view), and on the loop five lines into a long room
@@ -419,11 +424,21 @@ Key rules:
   order. One account writes at most 60 lines, reactions and ballots (`room_say`,
   `room_react`, `cast_room_vote`) in any minute (`ROOM_WRITES_PER_MINUTE`, a
   `vaf.RateWindow` keyed by the account), asked on the loop before any store work; the 61st
-  is answered `{"type": "error", "message": "Too many room messages in a minute. Wait a
-  moment and write again."}` and writes nothing. NAMED BOUNDARY: the page ignores `error`
-  frames of the room lane today, so a refused line shows as pending and drops from the view
-  after 30 seconds without a sentence; 60 a minute is out of a person's reach. The four threads are
-  shared by every account, so one account's long room delays another's 3-second refresh.
+  is answered `{"type": "error", "code": "room_rate", "message": "Too many room messages in
+  a minute. Wait a moment and write again."}` and writes nothing. The page words it from
+  its catalogues by the code: the refused line leaves the pending list and goes back into
+  the box when the box is empty, and the room shows `appRoomRateLimited` above the box (the
+  amber status notice the Veyllo App room uses) until the next line, reaction or ballot. A
+  refused reaction or ballot shows the same notice. The transcript is built for a MEMBER
+  only: membership is asked again of the room where the transcript is read, so an account
+  removed while its build waited for a thread is sent nothing, and an account that is only
+  invited gets the door. NAMED BOUNDARY: the four threads are shared by every account, and
+  the reads (`open_room`, the 3-second poll) are not charged, so an account with many
+  sockets delays the others' refresh (another account's `open_room` waited 0.28 s with 8
+  competing sockets and 1.2 s with 24, each build stubbed to 0.2 s); one queued read per
+  account and room is the follow-up. NAMED BOUNDARY: the sidebar listing (`get_sessions`,
+  and the `session_list` broadcast after closing, deleting, renaming, accepting and
+  declining) still reads every room of the account on the loop.
 - `kick_peer` (`{ room_id, peer }`) and `rename_room` (`{ room_id, title }`): the same lane
   and the same membership check. `kick_peer` is decided by the ROOM - a leader in its chain
   or the room's host, never against one of the room's own host handles - so the browser adds

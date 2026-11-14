@@ -189,7 +189,12 @@ many frames have not been read.
   message blends UP from that dimness (`room-msg-confirm`, keyed on the trimmed
   text having been sent from here within the last minute) instead of drifting
   in like a message that was never on screen. Animations are opacity and
-  transform only, per the repaint rule in globals.css.
+  transform only, per the repaint rule in globals.css. A line, a reaction or a
+  ballot the server refuses as too many in a minute (`error` with `code:
+  "room_rate"`, 60 a minute per account) says so: the pending copy goes, the
+  refused text comes back into the box when the box is empty, and the amber status
+  notice above the box (the one the Veyllo App room uses for its refusals) shows
+  `appRoomRateLimited` until the next write.
   The sidebar badge counts what the PERSON has not seen - from their own reading
   position (the cli lane the browser shares with the terminal), never from the
   agent's backlog, whose cursor only moves when its turn runs. Looking at the

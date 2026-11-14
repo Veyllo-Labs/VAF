@@ -883,8 +883,10 @@ Before the lookups were shared and the failures held, the same loads cost 12 s a
 (SERVFAIL after 1.5 s), and a resolver that failed in 0.05 s got about 230 queries/s.
 
 The rest of the web UI's room lane runs on a pool of its own as well (`vaf-room-lane`, four
-threads): opening a room, the acting commands (`room_say`, `room_react`, `cast_room_vote`,
-closing, renaming, removing a member, the agent's mode) and the room view every one of them
+threads): every room command of the socket that reads or writes a room's store (opening a
+room, the typing signal's membership check, the acting commands `room_say`, `room_react`,
+`cast_room_vote`, closing, renaming, removing a member and the agent's mode, the task record,
+the invitation commands and the answer at the door) and the room view every one of them
 answers with. Room calls are blocking file work that grows with the room: `ingest` reads and
 decrypts every frame several times, and the view reads them again. Measured on one process
 (median of 3): `ingest` with the addressee 37 ms in a room of 2 members and 100 lines, 157 ms
@@ -892,8 +894,12 @@ with 200 members, 160 ms at 800 lines; the view 16 ms at 100 lines and 116 ms at
 lines into a room of 806 lines stalled the server's event loop, and with it every connection,
 for 1.4 s; on the pool, the loop's longest gap was 8.5 ms. One account writes at most 60 lines,
 reactions and ballots a minute from the browser (`ROOM_WRITES_PER_MINUTE`, `vaf.RateWindow`);
-the 61st is refused before any store work. NAMED BOUNDARY, as for the invitations: the four
-threads are shared by every account, so one account's long room delays another's refresh.
+the 61st is refused before any store work, and the page says so (`room_rate`). The view is
+built for a member only, asked of the room again where it is read. NAMED BOUNDARY, as for the
+invitations: the four threads are shared by every account and the reads are not charged, so
+an account with many sockets delays another's refresh; one queued read per account and room
+is the follow-up. NAMED BOUNDARY: the sidebar listing still reads every room of the account
+on the event loop.
 
 The joining machine's network must resolve the name to the host. When the certificate names
 none, the invitation carries no lane for other machines: its briefing says so and why,
@@ -1175,13 +1181,17 @@ look-alike names). Names are compared NFC-normalised and case-folded (`fold_name
 names "Straße", a decomposed "e" + U+0308 names "Zoë"); combining marks stay with their letter
 (`@राम`). A symbol or a letter of a script written without spaces continues the word, so
 `@Mia你好`, `@Mia♥` and `@Mia😊` name nobody called "Mia" and the person puts a space after the
-name. A zero-width space (U+200B, which some keyboards put after a name they completed) counts
-as a space: it is skipped before the "@" and between the "@" and the word, and the word cut at
-its first U+200B gives its forms too, beside the forms of the whole word. So `@Mia` followed by
-U+200B and "hi" names Mia, with or without a space after the U+200B; with members "Mia" and
+name.
+
+A zero-width space (U+200B, which some keyboards put after a name they completed) counts as a
+space: it is skipped before the "@" and between the "@" and the word, and the word cut at its
+first U+200B gives its forms too, beside the forms of the whole word. So `@Mia` followed by
+U+200B and "hi" names Mia, with or without a space after the U+200B. With members "Mia" and
 "Mia" + U+200B + "X", that longer name typed after "@" gives both names and goes to the room.
 Joiners (U+2060 WORD JOINER, U+FEFF, ZWJ, ZWNJ) continue the word, as they shape scripts and
-emoji. A line without U+200B gives exactly what it gave before. `Room.address_from_mention` asks it with the member table (`Room.peers_named`: display
+emoji. A line without U+200B gives exactly what it gave before.
+
+`Room.address_from_mention` asks the rule with the member table (`Room.peers_named`: display
 names and labels together). Members of one collision keep a label each and are reachable by
 it: with "Bob" and "bob" in a room `@bob` goes to the room and `@Bob1` and `@bob2` reach one
 member each; with "Bob" and "Bob." `@Bob` still reaches Bob, `@Bob.` goes to the room, and

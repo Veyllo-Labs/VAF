@@ -1302,6 +1302,15 @@ def _refused_kind(task) -> "str | None":
     return None
 
 
+#: What the Veyllo App shows when a turn is refused for want of a model. Fixed and short: the
+#: detailed reason is the admin's setup (a profile, a CLI command, a provider's error text),
+#: read in the room and the log on VAF; the device only learns that VAF cannot answer and
+#: where that is set up.
+APP_NO_MODEL_REPLY = ("VAF has no AI model set up yet, so it cannot answer. Set one up under "
+                      "Settings, AI & Model, on the computer where VAF runs, or ask whoever "
+                      "runs it.")
+
+
 def refuse_turn_without_backend(task, why: str, session_mgr, text: "str | None" = None) -> None:
     """Close a turn that has no backend on this installation (inference_profile = api and
     no provider yet): the reason goes to the chat and the turn ends. The exchange is
@@ -1316,10 +1325,10 @@ def refuse_turn_without_backend(task, why: str, session_mgr, text: "str | None" 
     agent in their own app, the same as on the web, where they read the same reason. The app
     chat is the record the Veyllo App room shows (vaf/core/app_link/room.py), so the pair is
     stored; without it the person's line vanished from the room once its turn left the queue.
-    And the reason is the turn's reply on the device (``done`` with it, stored once with an
-    outbox entry per device; a request of the app's agent gets it under its own id on the
-    device that asked, and its place is freed at once), so the device is not left waiting for
-    an answer that never comes.
+    And the device gets the turn's reply, ``APP_NO_MODEL_REPLY`` (``done`` with it, stored once
+    with an outbox entry per device; a request of the app's agent gets it under its own id on
+    the device that asked, and its place is freed at once), so it is not left waiting for an
+    answer that never comes. The detailed reason stays in the room and the log.
 
     ``text`` is what the turn would have read (a confirmed action's report instead of the
     queued text); the question is stored under the same author kind the turn's own save
@@ -1372,7 +1381,7 @@ def refuse_turn_without_backend(task, why: str, session_mgr, text: "str | None" 
         try:
             from vaf.core.app_link import bridge as app_bridge
             meta = task.metadata if isinstance(getattr(task, "metadata", None), dict) else {}
-            app_bridge.finish_reply(meta, _prepare_channel_outbound(why))
+            app_bridge.finish_reply(meta, APP_NO_MODEL_REPLY)
         except Exception as e:
             append_domain_log_always("headless", f"refused turn not sent to the device for "
                                                  f"{task.session_id}: {type(e).__name__}: {e}")

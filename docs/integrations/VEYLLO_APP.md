@@ -474,10 +474,13 @@ sentence that a newer Veyllo App is needed. A device that has not connected sinc
 is told "open it once" instead, because VAF does not know yet what it supports. A line to your
 VAF agent (`@` and its name) still works and its answer reaches the older app as an ordinary
 reply. On an installation with no model set up, such a line stays in the room with the
-reason it got no answer under it, and the Veyllo App gets that reason as the agent's reply
-(`done` with it, as for any answer), so it is not left waiting. The same holds for a message
-typed in the app and for a request of the app's agent (`agent_ask`), which gets the reason
-under its own id and has its place freed at once. An app that answers a room
+reason it got no answer under it, and the Veyllo App gets a short fixed sentence as the
+agent's reply (`done` with it, as for any answer), so it is not left waiting: "VAF has no AI
+model set up yet, so it cannot answer. Set one up under Settings, AI & Model, on the computer
+where VAF runs, or ask whoever runs it." The detailed reason (a profile, a command, a
+provider's error text) stays in the room and the log. The same holds for a message typed in
+the app and for a request of the app's agent (`agent_ask`), which gets the sentence under its
+own id and has its place freed at once. An app that answers a room
 line with "unknown type" is treated as an older app until it announces the room again.
 
 **Where it lives.** The room has no store of its own. Its record is the two sessions that

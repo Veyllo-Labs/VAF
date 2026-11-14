@@ -85,11 +85,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **Agent rooms in the web UI no longer hold up the whole server** while a long room is written
   to or refreshed: the room's work runs on threads of its own, and one account writes at most
   60 room messages a minute.
+- **A message you send too fast to a room now says so and keeps your text.**
 - **A message to your VAF agent from the Veyllo App on an installation with no model set up**
-  now gets the reason as the reply on the device, not only in the room.
-- **In rooms, a name followed by a zero-width space is a mention** (`@Name` as some keyboards
-  complete it), and members of a name collision keep their numbers when another member joins
-  or takes the same name.
+  now gets a reply on the device saying that no AI model is set up yet and where to set one
+  up; the detailed reason stays in the room on VAF.
+- **In rooms, a name that a keyboard completed with a zero-width space (`@Name`) is still a
+  mention**, and members of a name collision keep their numbers when another member joins or
+  takes the same name.
 - **Scrolling up right after sending keeps the view where you put it**, in a chat and in the
   Veyllo App room.
 - **A terminal reply is no longer folded into "thinking" by a guess at its language.** In

@@ -808,8 +808,8 @@ def test_every_tool_list_is_built_by_one_projection():
     from vaf.core.tool_contract import tool_list_entry
     from vaf.tools.ssh import SshTool
     assert tool_list_entry("ssh", SshTool)["account_opt_in"] is True
-    modal = (root / "web/components/SettingsModal.tsx").read_bytes().decode("utf-8")
-    assert modal.count("!t.account_opt_in") == 2, "a preset of everything must leave it out"
+    presets = (root / "web/lib/accessPresets.ts").read_bytes().decode("utf-8")
+    assert presets.count("!t.account_opt_in") == 2, "a preset of everything must leave it out"
 
 
 def test_an_unreadable_store_is_named_as_such_not_as_a_missing_key(lab, monkeypatch):

@@ -50,6 +50,7 @@ import { PickerSelect } from '@/components/ui/PickerDialog';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import Skeleton, { SkeletonBar, SkeletonRows } from '@/components/ui/Skeleton';
 import { groupToolsIntoBundles, bundleColor, bundleLabel, bundleIconKey } from '@/lib/toolBundles';
+import { type AccessPreset, mergePickerTools, resolveAccessPreset } from '@/lib/accessPresets';
 import { deepseekInUse, effortSelectValue } from '@/lib/deepseekEffort';
 import type { SkillSaveData } from './settings/SkillsEditor';
 import type { CreateAutomationPayload } from './CreateAutomationPopup';
@@ -346,27 +347,6 @@ const DATE_TIME_TIME_FORMATS: { value: string; label: string }[] = [
     { value: '12h', label: '12-hour (AM/PM)' },
 ];
 
-
-type AccessPreset = 'standard' | 'full' | 'readonly' | 'custom';
-
-// Pattern-based so presets also cover the admin's CUSTOM tools (matched on the tool name, not a fixed list).
-const WW_DESTRUCTIVE_RE = /(^|_)(delete|remove|drop|clear|reset|uninstall|kill|destroy|wipe|purge|revoke)(_|$)/i;
-const WW_READABLE_RE = /(^|_)(list|read|get|search|view|show|fetch|find|query|describe|status|info|count)(_|$)/i;
-
-/** Resolve a preset to concrete tool names + workflow ids from the live lists. Returns null for 'custom'
- *  (the caller keeps the manual selection). 'full' selects literally everything. A tool that
- *  declares `account_opt_in` (e.g. `ssh`) is granted only by name, so 'standard' and 'readonly'
- *  leave it out; 'full' and a custom selection can grant it. */
-function resolveAccessPreset(
-    preset: AccessPreset,
-    tools: { name: string; account_opt_in?: boolean }[],
-    workflows: { id: string }[],
-): { tools: string[]; workflows: string[] } | null {
-    if (preset === 'full') return { tools: tools.map(t => t.name), workflows: workflows.map(w => w.id) };
-    if (preset === 'readonly') return { tools: tools.filter(t => !t.account_opt_in && WW_READABLE_RE.test(t.name) && !WW_DESTRUCTIVE_RE.test(t.name)).map(t => t.name), workflows: [] };
-    if (preset === 'standard') return { tools: tools.filter(t => !t.account_opt_in && !WW_DESTRUCTIVE_RE.test(t.name)).map(t => t.name), workflows: workflows.map(w => w.id) };
-    return null;
-}
 
 /** Apple-simple access picker: preset chips (Standard / Full / Read-only / Custom); the granular tool +
  *  workflow grids appear only for 'Custom'. Used by both Add User and Edit User. Pure presentation —
@@ -1518,7 +1498,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // a name the picker never showed. Served by the backend from the coder's own declaration.
     const [coderOnlyTools, setCoderOnlyTools] = useState<string[]>([]);
     useEffect(() => {
-        if (activeTab !== 'users' || currentUser?.role !== 'admin') return;
+        // 'local_network' is the tab that renders the user manager and its picker.
+        if (activeTab !== 'local_network' || currentUser?.role !== 'admin') return;
         fetch('/api/users/tool-universe', { credentials: 'include' })
             .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
             .then(d => setCoderOnlyTools(Array.isArray(d.coder_only) ? d.coder_only : []))
@@ -1526,9 +1507,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     }, [activeTab, currentUser?.role]);
     // One merged list for BOTH the preset expansion and the picker grid - two lists would
     // let 'full' omit what the grid shows, and a full-preset user would silently lose bash.
-    const pickerTools = useMemo(
-        () => [...tools, ...coderOnlyTools.map(n => ({ name: n, description: 'Coder sub-agent tool' }))],
-        [tools, coderOnlyTools]);
+    // Merged by name: the git tools, update_codex and add_memory are in both lists.
+    const pickerTools = useMemo(() => mergePickerTools(tools, coderOnlyTools), [tools, coderOnlyTools]);
 
     const [toolsSearch, setToolsSearch] = useState('');
 
@@ -2166,7 +2146,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         const resolved = resolveAccessPreset(accessPreset, pickerTools, workflows);
         if (!resolved) return; // 'custom' keeps the manual grid selection
         setNewUser(prev => ({ ...prev, tools: resolved.tools, workflows: resolved.workflows }));
-    }, [accessPreset, tools, workflows]);
+        // pickerTools, not tools: the coder's names arrive in a later render, after this ran once.
+    }, [accessPreset, pickerTools, workflows]);
 
     // Edit User: same preset mechanic, applied to the user being edited. Reset to 'custom' on open (below)
     // so the admin first sees the user's CURRENT tools/workflows, then can re-pick a preset or fine-tune.
@@ -2196,7 +2177,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         if (!resolved) return;
         setEditingUser((prev: any) => prev ? { ...prev, tools: resolved.tools, workflows: resolved.workflows } : prev);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [editAccessPreset, editingUser?.id, tools, workflows]);
+    }, [editAccessPreset, editingUser?.id, pickerTools, workflows]);
 
     // VAF version for the About tab — single source of truth is the backend
     // /api/version endpoint, which returns vaf/version.py. Never hardcode here.
@@ -2812,8 +2793,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 setShowAddUserModal(false);
                 loadUsers();
 
-                // Reset form
-                setNewUser({ username: '', email: '', role: 'User', password: '', tools: [], workflows: [], createDb: true });
+                // Reset form to the Standard preset, resolved here: when the preset already was
+                // 'standard' the preset effect does not run again, and an empty list is stored
+                // as NO restriction, so the next account created in a row would be unrestricted.
+                // Only 'custom' resolves to null.
+                const standard = resolveAccessPreset('standard', pickerTools, workflows)!;
+                setNewUser({ username: '', email: '', role: 'User', password: '', tools: standard.tools, workflows: standard.workflows, createDb: true });
                 setAccessPreset('standard');
                 setShowNewUserPassword(false);
             } else {

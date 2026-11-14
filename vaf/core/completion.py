@@ -74,6 +74,29 @@ def is_stop_note(text) -> bool:
     return head.startswith(LOOP_PROTECTION)
 
 
+def split_control_head(text) -> tuple:
+    """`(marker, rest)` for a turn's return value that begins with one of the engine's two
+    control heads, `[ASYNC_ACK]` or `[SYSTEM_LOG_ONLY]` (`vaf.markers`), after leading
+    whitespace; `rest` is everything after the marker. `("", text)` with the text unchanged
+    for every other text, `("", "")` for None.
+
+    Only the head counts: a reply that quotes a marker further in, explaining it, is text.
+    These two are status for the host, never words for the person: the engine hands them back
+    in its return channel and never streams them, and its own history holds the
+    acknowledgement without the marker. `[Generation stopped by user]` and
+    `[LOOP_PROTECTION]` are not control heads: the person sees both as written while the turn
+    runs, so a stored copy keeps them too."""
+    if text is None:
+        return "", ""
+    text = text if isinstance(text, str) else str(text)
+    from vaf.markers import ASYNC_ACK, SYSTEM_LOG_ONLY
+    head = text.lstrip()
+    for marker in (ASYNC_ACK, SYSTEM_LOG_ONLY):
+        if head.startswith(marker):
+            return marker, head[len(marker):]
+    return "", text
+
+
 def is_failure_chunk(chunk) -> bool:
     """True for the content chunk a provider yields in place of an answer when it fails: the
     `[API Error from <provider>: ...]` sentinel, which api_backend yields as one whole chunk,

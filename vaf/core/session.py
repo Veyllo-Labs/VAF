@@ -220,7 +220,7 @@ def failed_turn_meta(failed, failure="") -> Optional[Dict[str, Any]]:
     followed an answer when only `failure` is given, else None (an ordinary answer keeps the
     shape it always had). A host whose copy is the cleaned stream gets it from
     `stored_turn_copy`; one whose copy is the turn's return value, which never holds a
-    failure that followed an answer, passes `last_turn.failed` alone (`model_text`)."""
+    failure that followed an answer, from `returned_turn_copy` (`model_text`)."""
     if failed:
         return {FAILED_TURN_KEY: True}
     if failure:
@@ -265,8 +265,9 @@ def stored_turn_copy(stream, turn: TurnStatus,
     failure has been changed after the engine's last chunk, and whether the cleanup kept
     failure text across the boundary cannot be told, so the copy is marked as a failed turn:
     no reader takes any of it. Returns (copy, `failed_turn_meta(...)`); `model_text` reads
-    the pair back. A copy that is the turn's RETURN value needs neither: it never holds a
-    failure that followed an answer, and only `turn.failed` applies to it."""
+    the pair back. A copy that is the turn's RETURN value is built by `returned_turn_copy`:
+    it never holds a failure that followed an answer, but it can begin with a control
+    head."""
     if clean is None:
         def clean(text):
             return text
@@ -280,13 +281,37 @@ def stored_turn_copy(stream, turn: TurnStatus,
     return clean(stream) or "", failed_turn_meta(turn.failed or bool(failure))
 
 
+def returned_turn_copy(answer, turn: TurnStatus,
+                       clean: Optional[Callable[[str], str]] = None
+                       ) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """A stored copy of a turn whose copy is its RETURN value, and the metadata to store it
+    with: the counterpart of `stored_turn_copy` for a host that keeps what the turn returned
+    rather than what it streamed.
+
+    A return value never holds a failure that followed an answer, so there is no tail to
+    record. It can begin with one of the engine's control heads (`completion.split_control_head`),
+    which is status for the host and never streamed: the head is taken off, so the stored
+    copy reads the way the live history does. A `[SYSTEM_LOG_ONLY]` head is the engine's
+    status after its retries ran out, not an answer: the copy keeps the notice, so the
+    transcript shows what happened, and is marked as a failed turn, so no model reads it
+    (`model_text`). `turn.failed` marks it too. `clean` is the host's own cleanup of the rest
+    (None keeps it as it was). Returns (copy, `failed_turn_meta(...)`)."""
+    from vaf.core.completion import split_control_head
+    from vaf.markers import SYSTEM_LOG_ONLY
+    head, rest = split_control_head(answer)
+    copy = (clean(rest) if clean is not None else rest) or ""
+    return copy, failed_turn_meta(turn.failed or head == SYSTEM_LOG_ONLY)
+
+
 def is_failed_turn(msg) -> bool:
     """True for a stored assistant message that is a failed turn's text, not an answer.
 
     A message with the mark is one. So is an unmarked message whose text, reasoning removed,
-    BEGINS with the engine's status, a provider's failure or a loop-protection stop note
-    (`completion.is_stop_note`): transcripts stored before the mark existed hold those as
-    plain answers. A real answer that merely quotes a status or the stop marker further in
+    BEGINS with the engine's status, a provider's failure, a loop-protection stop note
+    (`completion.is_stop_note`) or the `[SYSTEM_LOG_ONLY]` head (the engine's notice after
+    its retries ran out, which a copy of the return value kept before `returned_turn_copy`
+    took it off): transcripts stored before the mark existed hold those as plain answers.
+    A real answer that merely quotes a status or the stop marker further in
     is kept. Named boundary: an unmarked message from before the mark whose failure followed
     streamed text ("One moment.\\n[API Error from ...]") is not recognised, and neither is an
     interactive CLI copy from before the mark, whose markup cleanup of that time deleted the
@@ -302,8 +327,10 @@ def is_failed_turn(msg) -> bool:
     import re
 
     from vaf.core.completion import _ENGINE_ERROR, _ERROR_SENTINEL, is_stop_note
+    from vaf.markers import SYSTEM_LOG_ONLY
     text = re.sub(r"<think>.*?</think>", "", str(get("content") or ""), flags=re.DOTALL).lstrip()
-    return text.startswith((_ENGINE_ERROR, _ERROR_SENTINEL)) or is_stop_note(text)
+    return (text.startswith((_ENGINE_ERROR, _ERROR_SENTINEL, SYSTEM_LOG_ONLY))
+            or is_stop_note(text))
 
 
 def model_text(msg) -> Optional[str]:
@@ -318,8 +345,11 @@ def model_text(msg) -> Optional[str]:
     safe side: the stored copy altered it, or the rest cannot be told from failure text, and
     an altered failure need not carry any signature (a cleanup that deletes every `[...]` group
     takes `[Error]` and the head of `[API Error from ...` with it and keeps the rest). So a
-    host builds its copy and its metadata with `stored_turn_copy`, or records no failure when
-    its copy is the turn's return value. Every other message: its content, as stored.
+    host builds its copy and its metadata with `stored_turn_copy`, or with `returned_turn_copy`
+    when its copy is the turn's return value. An assistant message that begins with the
+    `[ASYNC_ACK]` head (a copy of the return value stored before `returned_turn_copy` took it
+    off) is read without it, as the live history holds it. Every other message: its content,
+    as stored.
 
     Asked by everything that builds a model's context, or a tool result a model reads, from
     a stored chat: the replay in `CoreAgent.load_session_context`, `Session.get_history`, the
@@ -363,6 +393,13 @@ def model_text(msg) -> Optional[str]:
         if kind == _origin.APP_ROOM_IN_KIND:
             return _origin.app_room_text(content)
         return None
+    if get("role") == "assistant":
+        # A copy of the return value stored before `returned_turn_copy` existed can begin
+        # with the delegation's `[ASYNC_ACK]` head; the live history never held it.
+        from vaf.core.completion import split_control_head
+        head, rest = split_control_head(content)
+        if head:
+            content = rest
     meta = get("metadata")
     failure = meta.get(TURN_FAILURE_KEY) if isinstance(meta, dict) else None
     if isinstance(failure, str) and failure:

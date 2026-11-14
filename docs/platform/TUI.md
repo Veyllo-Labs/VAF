@@ -185,13 +185,17 @@ the saved chat unchanged, where the browser renders them as it renders a web cha
 VAF wrote (`file_link`) appears there as the path it opens (`own_links_as_labels` in
 `vaf/core/terminal_text.py`), the same rule a web chat's own reply, the messenger replies and
 the Veyllo App follow; any other link stays as written, its address visible. A chat reloaded
-in the browser is shown through the web server's transcript projection
-(`_clean_history_text` in `vaf/core/web_server.py`), which still removes every `[...]` group
-from a stored reply: the saved chat keeps the brackets, a reload does not show them. Before,
+in the browser shows that copy unchanged too: the web server's transcript projection
+(`_stored_reply_text` in `vaf/core/web_server.py`) keeps every bracket of a stored reply. Before,
 this copy deleted every `[...]` group and turned a bracket holding "dim" into hidden
 reasoning; chats saved before the change keep what they lost, because the file does not
 hold the deleted text. A local model's English reasoning before a German answer without
-`<think>` tags is still folded away as reasoning in that copy.
+`<think>` tags is still folded away as reasoning in that copy. Named boundary: the
+full-screen app's transcript replay (`_transcript_entries` in
+`vaf/cli/tui_app/agent_bridge.py`), the prompt interface's chat switch and `/export` show a
+stored reply exactly as stored and never cleaned it; replies are stored without VAF's
+`[ASYNC_ACK]` status tag (`returned_turn_copy` in `vaf/core/session.py`), and only a chat saved
+before that still shows the tag there. A model reads such a chat without it (`model_text`).
 
 ## Keys and commands
 

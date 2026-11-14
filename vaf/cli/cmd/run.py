@@ -15,7 +15,9 @@ import subprocess
 from datetime import datetime
 from rich.panel import Panel
 from vaf.core.agent import Agent
-from vaf.core.session import failed_turn_meta, stored_turn_copy
+from vaf.core.completion import split_control_head
+from vaf.core.session import returned_turn_copy, stored_turn_copy
+from vaf.markers import ASYNC_ACK
 from vaf.core.channel_ingress_policy import CHANNEL_TASK_SOURCES, MAIL_CHANNEL
 from vaf.core.channels import channel_label
 from vaf.cli.ui import UI
@@ -944,10 +946,10 @@ def prompt_once(prompt: str, output_format: str = "text", session: str = None,
             if save_session:
                 s = mgr.new(model=agent.config.get("model", ""), project_path=os.getcwd())
                 s.add_message("user", prompt)
-                # The stored text is the turn's return value, which never holds a failure
-                # that followed an answer: only the failed-turn mark applies.
-                s.add_message("assistant", result_text or "",
-                              metadata=failed_turn_meta(agent.last_turn.failed))
+                # The stored text is the turn's return value: its control head comes off and
+                # only the failed-turn mark applies.
+                copy, meta = returned_turn_copy(result_text, agent.last_turn)
+                s.add_message("assistant", copy, metadata=meta)
                 mgr.save(s)
             raise typer.Exit(0)
 
@@ -957,8 +959,8 @@ def prompt_once(prompt: str, output_format: str = "text", session: str = None,
     if save_session:
         s = mgr.new(model=agent.config.get("model", ""), project_path=os.getcwd())
         s.add_message("user", prompt)
-        s.add_message("assistant", result_text or "",
-                      metadata=failed_turn_meta(agent.last_turn.failed))
+        copy, meta = returned_turn_copy(result_text, agent.last_turn)
+        s.add_message("assistant", copy, metadata=meta)
         mgr.save(s)
         ndjson_emit({"type": "session_saved", "id": s.id})
 
@@ -2712,10 +2714,10 @@ def _process_agent_message(agent, user_input: str, tui, session):
         result_text = agent.chat_step(user_input, stream_callback=stream_callback)
         
         # Recognize special async acknowledgment marker
-        is_async_ack = False
-        if result_text and str(result_text).startswith("[ASYNC_ACK]"):
-            is_async_ack = True
-            result_text = str(result_text).replace("[ASYNC_ACK]", "")
+        head, rest = split_control_head(result_text)
+        is_async_ack = head == ASYNC_ACK
+        if is_async_ack:
+            result_text = rest
             
             # FIX: Ensure Web UI gets this update (since it wasn't streamed)
             # The async ack bypasses the normal stream loop in chat_step

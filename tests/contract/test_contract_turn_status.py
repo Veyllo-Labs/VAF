@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Contract: `Agent.last_turn` / `CoreAgent.last_turn`, `vaf.TurnStatus`,
-`vaf.stored_turn_copy` and `vaf.model_text` (docs/EMBEDDING.md, "A complete example, with
+`vaf.stored_turn_copy`, `vaf.returned_turn_copy` and `vaf.model_text` (docs/EMBEDDING.md, "A complete example, with
 error handling" and "What is and isn't stable").
 
 `run()` returns a failed turn's text instead of raising, and a turn that answered before a
@@ -169,9 +169,41 @@ def test_your_own_cleanup_runs_on_the_answer_and_the_failure_apart(monkeypatch):
     assert _readable(copy, metadata) == "<think>x</think>" + _ANSWER
 
 
+def test_a_returned_answer_is_stored_without_its_control_head(monkeypatch):
+    """A delegation comes back as `[ASYNC_ACK]...` and is never streamed: the copy of the
+    return value reads as the person was shown it, a model reads it as an answer, and a
+    marker quoted further in is text. MUTATION: drop the head step - red."""
+    agent, answer, streamed = _run(monkeypatch, [], vaf.markers.ASYNC_ACK + "On it.",
+                                   vaf.TurnStatus())
+    assert streamed == "" and answer.startswith(vaf.markers.ASYNC_ACK)
+    copy, metadata = vaf.returned_turn_copy(answer, agent.last_turn)
+    assert (copy, metadata) == ("On it.", None)
+    assert _readable(copy, metadata) == "On it."
+    quoted = "Quote: " + vaf.markers.ASYNC_ACK + " means the task runs on."
+    assert vaf.returned_turn_copy(quoted, vaf.TurnStatus()) == (quoted, None)
+    assert vaf.returned_turn_copy(None, vaf.TurnStatus()) == ("", None)
+    assert vaf.returned_turn_copy(" <b>x</b> ", vaf.TurnStatus(), str.strip) == ("<b>x</b>", None)
+
+
+def test_a_system_log_only_return_is_stored_as_a_failed_turn(monkeypatch):
+    """The notice after exhausted retries is status, not an answer: the copy keeps it
+    without its head, so the record shows what happened, and no model reads it; a turn the
+    engine reports failed is marked the same way. MUTATION: drop the
+    `head == SYSTEM_LOG_ONLY` term - red."""
+    notice = "API returned empty responses repeatedly. Please try again."
+    agent, answer, _ = _run(monkeypatch, [], vaf.markers.SYSTEM_LOG_ONLY + notice,
+                            vaf.TurnStatus())
+    copy, metadata = vaf.returned_turn_copy(answer, agent.last_turn)
+    assert copy == notice and _readable(copy, metadata) is None
+    copy, metadata = vaf.returned_turn_copy("[LOOP_PROTECTION] Hard stop.",
+                                            vaf.TurnStatus(failed=True))
+    assert copy == "[LOOP_PROTECTION] Hard stop." and _readable(copy, metadata) is None
+
+
 def test_they_are_the_engine_objects_themselves():
     import vaf.core.session as session  # re-export source named in EMBEDDING.md
 
     assert vaf.TurnStatus is session.TurnStatus
     assert vaf.stored_turn_copy is session.stored_turn_copy
+    assert vaf.returned_turn_copy is session.returned_turn_copy
     assert vaf.model_text is session.model_text

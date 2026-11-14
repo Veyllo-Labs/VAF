@@ -119,3 +119,32 @@ def test_text_output_prints_the_answer_once(fake_cli_agent, capsys):
         run_mod.prompt_once("Was ist die Antwort?", "text")
     out = capsys.readouterr().out
     assert out.count("Die Antwort ist 42.") == 1 and "<think>" not in out
+
+
+@pytest.mark.parametrize("fmt", ["json", "stream-json"])
+def test_saved_prompt_session_stores_the_ack_without_its_head(fake_cli_agent, monkeypatch,
+                                                              tmp_path, capsys, fmt):
+    """A delegation returns `[ASYNC_ACK]...`: the saved chat holds the acknowledgement the
+    way the live history does, without the marker, in both formats that save. MUTATION:
+    store `result_text or ""` again in either save - red."""
+    import typer
+
+    import vaf.core.session as session_mod
+    monkeypatch.setattr(session_mod, "default_sessions_dir", lambda: tmp_path / "sessions")
+    saved = []
+    real_save = session_mod.SessionManager.save
+
+    def record(self, s, *a, **k):
+        saved.append(s)
+        return real_save(self, s, *a, **k)
+    monkeypatch.setattr(session_mod.SessionManager, "save", record)
+    monkeypatch.setattr(fake_cli_agent, "chat_step",
+                        lambda prompt, stream_callback=None: "[ASYNC_ACK]On it.")
+    try:
+        run_mod.prompt_once("Bau mir eine Seite.", fmt, save_session=True)
+    except typer.Exit:
+        pass
+    capsys.readouterr()
+    [s] = saved
+    answer = s.messages[-1]
+    assert (answer.role, answer.content, answer.metadata) == ("assistant", "On it.", None)

@@ -18,6 +18,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   have left, without being overtaken. For a resource that keeps state per person. On such a
   queue, `slot(key, group=...)` narrows it further: callers of one key share the slots only
   when they name the same group, and a fresh `object()` as the group runs alone.
+- **`vaf.returned_turn_copy(answer, turn, clean=None)`** for applications that store what
+  `run()` returned: it takes off VAF's own status tag at the start and marks a handled
+  failure, so the stored answer reads like the streamed one.
 - **Veyllo App: tools kept off messaging channels, behind a card on your device.** The host
   shell, host Python, SSH, FTP, the sandbox environments, the browser agent, background
   commands, timers and the tool and workflow builders can now be used through the Veyllo App.
@@ -65,6 +68,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **A chat reloaded in the browser shows its replies as they were written.** Opening a chat
+  again deleted everything in square brackets from the agent's replies: `arr[i]` became
+  `arr`, a route like `app/[id]/page.tsx` lost its folder, a task list lost its boxes, a
+  stopped reply ended in `**`, and a text such as `a[0] and the dimension[1]` folded the rest
+  of the reply away as reasoning. The reply now looks the same after a reload as while it
+  streamed. VAF's own status tags (the note that a sub-agent took over, the notice after
+  repeated empty answers) are no longer stored with the reply, and chats saved before this
+  change are shown without them.
 - **A file link VAF wrote shows as its path in the web chat, the messengers and the Veyllo
   App.** When the agent passed on what the coding agent reported, the web chat showed
   `[link=file:///...]/path[/link]` around the path, and Telegram, WhatsApp, Discord and the

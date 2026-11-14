@@ -84,6 +84,7 @@ EXPORTED = [
     "remove_revocation_listener",
     "resource_queue",
     "restore_account",
+    "returned_turn_copy",
     "revoke_account",
     "revoke_standing_grants",
     "room_invitation",

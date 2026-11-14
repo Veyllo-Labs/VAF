@@ -17,7 +17,9 @@ import os
 import time
 import queue
 import functools
+import re
 from collections import deque
+from datetime import date as _date, datetime as _datetime
 log("WebServer", "Basic imports done")
 
 from vaf.core.web_interface import get_web_interface
@@ -1180,23 +1182,45 @@ def _session_record_exists(session_id) -> bool:
         return True          # cannot tell -> treat as present -> ask
 
 
-def _clean_history_text(text: str) -> str:
-    """Strip legacy rich-markup from a stored assistant message.
+# The engine streamed reasoning as Rich markup, `[white dim]...[/]`, until 2026-01-29, and copies
+# stored from that stream kept it; no writer has stored it since. A chat message dated before
+# this day can hold it, a later one cannot, so `[dim]` in a later reply is text the model wrote.
+_LEGACY_DIM_BEFORE = _date(2026, 2, 1)
+_LEGACY_DIM_PAIR = re.compile(r"\[(?:white )?dim\](.*?)\[/(?:dim)?\]", re.DOTALL | re.IGNORECASE)
 
-    Old sessions carry terminal markup ([dim] ... [/dim]) where the web UI
-    expects think tags, so a reloaded chat would otherwise show the markup as
-    literal text.
-    """
-    import re as _re
+
+def _stored_before_legacy_dim_end(timestamp) -> bool:
+    """True when a stored message's timestamp is an ISO date before `_LEGACY_DIM_BEFORE`;
+    False for a later one, a missing one and one that cannot be read."""
+    if not timestamp:
+        return False
+    try:
+        return _datetime.fromisoformat(str(timestamp)).date() < _LEGACY_DIM_BEFORE
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def _stored_reply_text(text, timestamp=None) -> str:
+    """A stored assistant reply, or a stored round's text, as the reloaded chat shows it: as
+    it was written, so the reload shows what the live chat showed (`arr[i]`, a Markdown link,
+    a task list's `[x]`, the stop notice). Three things are done to it, all for chats stored
+    before the stored copies were cleaned at write time:
+
+    - a leading control head (`[ASYNC_ACK]`, `[SYSTEM_LOG_ONLY]`, `completion.split_control_head`)
+      is taken off: a copy of the turn's return value kept it before `returned_turn_copy`;
+    - VAF's own file link shows as the path it opens (`own_links_as_labels`), as the live chat
+      showed it;
+    - in a message dated before `_LEGACY_DIM_BEFORE`, each balanced `[dim]...[/dim]` or
+      `[white dim]...[/]` pair becomes a `<think>` block.
+
+    Nothing else is removed, escaped or converted."""
     if not text:
         return ""
-    text = _re.sub(r'\[dim\]', '<think>', text, flags=_re.IGNORECASE)
-    text = _re.sub(r'\[white dim\]', '<think>', text, flags=_re.IGNORECASE)
-    text = _re.sub(r'\[.*?dim.*?\]', '<think>', text, flags=_re.IGNORECASE)
-    text = text.replace('[/dim]', '</think>')
-    if '<think>' in text and '</think>' not in text:
-        text = text.replace('[/]', '</think>')
-    text = _re.sub(r'\[\/?[^\]]+\]', '', text)
+    from vaf.core.completion import split_control_head
+    from vaf.core.terminal_text import own_links_as_labels
+    text = own_links_as_labels(split_control_head(text)[1])
+    if _stored_before_legacy_dim_end(timestamp):
+        text = _LEGACY_DIM_PAIR.sub(lambda m: f"<think>{m.group(1)}</think>", text)
     return text
 
 
@@ -1273,7 +1297,7 @@ def _expand_turn_rounds(out: list, aux: list) -> list:
             if not isinstance(r, dict):
                 continue
             number = _round_number(r)
-            text = _clean_history_text(str(r.get("text") or ""))
+            text = _stored_reply_text(str(r.get("text") or ""), entry.get("timestamp"))
             if text.strip():
                 round_entry = {
                     "role": "assistant",
@@ -1385,7 +1409,7 @@ def _history_projection(loaded, sid) -> list:
         timestamp = msg.get("timestamp") if isinstance(msg, dict) else getattr(msg, "timestamp", None)
         meta = (msg.get("metadata") if isinstance(msg, dict) else getattr(msg, "metadata", None)) or {}
         if role == "assistant":
-            content = _clean_history_text(content)
+            content = _stored_reply_text(content, timestamp)
         entry = {"role": role, "content": content, "timestamp": timestamp}
         _kind = msg.get("kind") if isinstance(msg, dict) else getattr(msg, "kind", None)
         if _kind:

@@ -609,7 +609,7 @@ def test_the_hosts_that_store_the_stream_mark_a_failed_turn():
     """Every host that stores a turn marks its copy from the engine's flags, read before
     anything else runs a chat_step on that agent, and records a failure that followed an
     answer the way the copy holds it (`stored_turn_copy` with the host's own cleanup), or
-    none when the copy is the turn's return value:
+    none when the copy is the turn's return value (`returned_turn_copy`):
     - the runner's chat lane (both save branches; the stream, or the return value when
       nothing streamed or the turn ended at a draft), which hands the same reading to
       delivery;
@@ -638,7 +638,8 @@ def test_the_hosts_that_store_the_stream_mark_a_failed_turn():
     assert 'add_message( role="assistant", content=_clean_result, metadata=_drain_meta)' in loop
 
     once = " ".join(inspect.getsource(run.prompt_once).split())
-    assert once.count("metadata=failed_turn_meta(agent.last_turn.failed))") == 2
+    assert once.count("copy, meta = returned_turn_copy(result_text, agent.last_turn)") == 2
+    assert once.count('add_message("assistant", copy, metadata=meta)') == 2
     assert once.count('add_message("assistant"') == 2 and "last_turn.failure" not in once
     classic = " ".join(inspect.getsource(run._process_agent_message).split())
     assert ("full_response_clean, _turn_meta = stored_turn_copy( full_response_raw, "

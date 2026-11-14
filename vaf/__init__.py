@@ -19,7 +19,8 @@ if TYPE_CHECKING:
     from .core.fair_queue import QueueBusy, ResourceQueue, WaitInfo, queue_metrics, resource_queue
     from .core.git_runner import run_project_git
     from .core.pdf_extract import extract_pdf_markdown
-    from .core.session import TurnRound, TurnStatus, model_text, stored_turn_copy
+    from .core.session import (TurnRound, TurnStatus, model_text, returned_turn_copy,
+                               stored_turn_copy)
     from .core.revocation import (add_revocation_listener, remove_revocation_listener,
                                   restore_account, revoke_account, stop_account_work,
                                   stop_session)
@@ -64,7 +65,7 @@ __all__ = ["__version__", "Agent", "AuditFinding", "AuditReport", "BOOKKEEPING_K
            "open_for_write", "own_links_as_labels",
            "participant_key", "project_dir_refusal", "queue_metrics", "record_threat",
            "remove_revocation_listener",
-           "resource_queue", "restore_account", "revoke_account", "revoke_standing_grants",
+           "resource_queue", "restore_account", "returned_turn_copy", "revoke_account", "revoke_standing_grants",
            "room_invitation",
            "run_project_git", "safe_entry_name", "set_account_allowlist_resolver",
            "set_account_directory_resolver",
@@ -207,13 +208,15 @@ def __getattr__(name):
         # engine's) shown as the path it opens, every other character kept: for text shown
         # anywhere but a Rich console. Exported because the facade's own outputs carry that
         # markup (a workflow's run() answer, an inline coder result the model repeats) and
-        # VAF's own lanes need it at eleven sites: the browser bridge, the stored chat copies,
-        # the messenger and Veyllo App chain and the main-messenger lane. The same object as
+        # VAF's own lanes need it at twelve sites: the browser bridge, the stored chat copies,
+        # the messenger and Veyllo App chain, the main-messenger lane and the reloaded
+        # transcript. The same object as
         # vaf.core.terminal_text.own_links_as_labels, no wrapper. See docs/EMBEDDING.md,
         # "Showing text on a terminal".
         from .core.terminal_text import own_links_as_labels
         return own_links_as_labels
-    if name in ("TurnRound", "TurnStatus", "model_text", "stored_turn_copy"):
+    if name in ("TurnRound", "TurnStatus", "model_text", "returned_turn_copy",
+                "stored_turn_copy"):
         # How a turn ended, beside its text, and the rule for keeping its failure out of
         # what a model reads later. `Agent.last_turn` / `CoreAgent.last_turn` hand out the
         # TurnStatus; a transcript kept from the stream is stored with `stored_turn_copy`
@@ -224,9 +227,16 @@ def __getattr__(name):
         # imports are stdlib, typer (a base dependency) and the channel registry, so the
         # slim base is unaffected. `TurnRound` is one generation round in
         # `TurnStatus.rounds`: the web chat lane and the TUI each need to tell a turn's
-        # rounds apart to show them in order. See docs/EMBEDDING.md.
-        from .core.session import TurnRound, TurnStatus, model_text, stored_turn_copy
+        # rounds apart to show them in order. `returned_turn_copy` is the stored copy of a
+        # turn's RETURN value: it takes off the engine's leading `[ASYNC_ACK]` /
+        # `[SYSTEM_LOG_ONLY]` head and marks the latter failed. Three in-tree copies stored the
+        # return value by hand, head included: the queue runner's chat lane when
+        # nothing streamed and both formats of `vaf run -p --save-session`. See
+        # docs/EMBEDDING.md.
+        from .core.session import (TurnRound, TurnStatus, model_text, returned_turn_copy,
+                                   stored_turn_copy)
         return {"TurnRound": TurnRound, "TurnStatus": TurnStatus, "model_text": model_text,
+                "returned_turn_copy": returned_turn_copy,
                 "stored_turn_copy": stored_turn_copy}[name]
     if name == "ToolRequest":
         # What an authorizer is handed: the caller's identity, which is trustworthy, and the

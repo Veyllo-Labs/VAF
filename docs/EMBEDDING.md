@@ -179,7 +179,10 @@ Handled failures and control-flow outcomes come back as strings inside the
 normal return channel. Compare against the constants in `vaf.markers`
 (`SYSTEM_LOG_ONLY`, `GENERATION_STOPPED`, `LOOP_PROTECTION`, `ASYNC_ACK`,
 `TOOL_CONFIRMATION_REQUIRED`) instead of copying string literals from the
-docs - a CI guard keeps the constants in sync with the engine.
+docs - a CI guard keeps the constants in sync with the engine. If you store
+what `run()` returned, store it with `vaf.returned_turn_copy(answer,
+agent.last_turn)`: it takes a leading `ASYNC_ACK` or `SYSTEM_LOG_ONLY` off and
+marks the latter as a failed turn (see "Your own transcript of the stream").
 
 ---
 
@@ -579,7 +582,9 @@ Notes:
   internal retries (e.g. a provider returning empty responses), `run()` returns a
   short status string - currently prefixed `[SYSTEM_LOG_ONLY]` - rather than
   raising. If you must distinguish a real answer from such a handled failure,
-  check the returned string for that marker. A provider failure is the other
+  check the returned string for that marker; to store the returned answer, use
+  `vaf.returned_turn_copy`, which keeps the notice without the marker as a failed
+  turn. A provider failure is the other
   string `run()` returns instead of raising; `vaf.is_error_reply()` (above) is
   the check for it, and `on_token` has already streamed its text by then.
   `agent.last_turn.failed` says the same without reading the text, and also covers a
@@ -638,6 +643,14 @@ argument, `vaf.stored_turn_copy("".join(streamed), agent.last_turn, clean)`: the
 and the failure are cleaned apart, so the failure stays the copy's exact tail and still
 comes off. Cleaning the stored copy afterwards can change the failure, and a message whose
 recorded failure is no longer its tail is left out entirely, the safe side.
+
+If your transcript keeps what `run()` returned rather than what streamed, store it with
+`copy, metadata = vaf.returned_turn_copy(answer, agent.last_turn, clean)` (`clean` optional, as
+above). A returned answer never holds a failure that followed it, but it can begin with
+`vaf.markers.ASYNC_ACK` (a delegation was accepted) or `vaf.markers.SYSTEM_LOG_ONLY` (the
+notice after exhausted retries), which are never streamed: the head is taken off, so the copy
+reads like the streamed one, and a `SYSTEM_LOG_ONLY` notice, like a turn `last_turn.failed`
+reports, is stored as a failed turn that `vaf.model_text` leaves out.
 
 ---
 
@@ -3317,13 +3330,18 @@ Stable public surface (safe to build on):
 - `last_turn` on both `Agent` and `CoreAgent`, a frozen `vaf.TurnStatus(failed, failure,
   rounds)` with `rounds` a tuple of frozen `vaf.TurnRound(round, tool_call_ids, answer)`
   (outside equality, see "Streaming"),
-  with `vaf.stored_turn_copy(stream, turn, clean=None) -> (copy, metadata)` and
+  with `vaf.stored_turn_copy(stream, turn, clean=None) -> (copy, metadata)`,
+  `vaf.returned_turn_copy(answer, turn, clean=None) -> (copy, metadata)` and
   `vaf.model_text(message) -> Optional[str]` - how the most recent turn ended, beside its
-  text, and the rule for a transcript kept from the stream. The promise: the two fields
-  and what they mean, `last_turn` is empty before the first turn and reset by every turn,
-  the copy keeps the whole stream, and `model_text` (a `{"role", "content", "metadata"}`
-  dict) returns None for a failed turn, the answer without its failure for a turn that
-  answered first and the content otherwise; a user message with `kind="app_agent"` comes back
+  text, and the rule for a transcript kept from the stream or from the return value. The
+  promise: the two fields and what they mean, `last_turn` is empty before the first turn and
+  reset by every turn, the stream copy keeps the whole stream, the return-value copy takes
+  off only a leading `ASYNC_ACK` or `SYSTEM_LOG_ONLY` and marks the latter (and a
+  `turn.failed` turn) failed, and `model_text` (a `{"role", "content", "metadata"}`
+  dict) returns None for a failed turn (an unmarked assistant message that begins with
+  `SYSTEM_LOG_ONLY` is one), the answer without its failure for a turn that
+  answered first, an assistant message without a leading `ASYNC_ACK`, and the content
+  otherwise; a user message with `kind="app_agent"` comes back
   inside its fence (the fence's wording is not part of the promise). The metadata's keys are
   not.
 - The `vaf.tools` entry-point group.
@@ -3338,7 +3356,7 @@ one lazy branch away, and it is not being added on speculation.
 `vaf.ToolCaller`, `vaf.ToolCallOutcome`, `vaf.advise_tools`, `vaf.ToolRequest`, `vaf.set_account_allowlist_resolver`,
 `vaf.extract_pdf_markdown`, `vaf.install_thread_excepthook`, `vaf.is_error_reply`,
 `vaf.terminal_text`, `vaf.own_links_as_labels`, `vaf.TurnStatus`, `vaf.TurnRound`,
-`vaf.stored_turn_copy` and `vaf.model_text` are the deliberate exceptions: they live in `vaf.core` but are re-exported on the façade, and the
+`vaf.stored_turn_copy`, `vaf.returned_turn_copy` and `vaf.model_text` are the deliberate exceptions: they live in `vaf.core` but are re-exported on the façade, and the
 façade names are the ones to import.
 
 ### Breaking-change tests you can run in your own CI

@@ -159,8 +159,8 @@ DRAFT_KINDS = ("mail", "call")
 #: The assistant message a turn ends with when it stopped at a draft. It is what the history
 #: and the session file hold for that turn, and the browser shows nothing for it: the card is
 #: the answer. A fixed sentence on purpose - the browser hides exactly this text, never a
-#: prefix, so a real answer can never be mistaken for it - and plain words, because a stored
-#: assistant message loses anything in square brackets on reload (`_clean_history_text`).
+#: prefix, so a real answer can never be mistaken for it - and plain words, because the
+#: sentence is matched whole and must not look like any of the engine's markers.
 TURN_ENDS_AT_DRAFT = "Draft waiting for the user's decision; the turn ended here."
 
 #: The first line of the wake turn a sent draft queues. The browser draws that turn as a wake

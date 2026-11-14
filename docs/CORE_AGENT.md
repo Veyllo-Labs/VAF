@@ -188,11 +188,17 @@ the answer and returns it:
   store it with through `vaf.stored_turn_copy(stream, agent.last_turn, clean)`: the answer
   and the failure are cleaned apart with the caller's own cleanup (None keeps the stream),
   the failure is recorded as the copy's tail, and a stream that does not end with its
-  failure is marked failed. A copy that is the return value needs `last_turn.failed`
-  alone: it never holds a failure that followed an answer. Whatever builds a model's
+  failure is marked failed. A copy that is the return value is built with
+  `vaf.returned_turn_copy(answer, agent.last_turn, clean)`: it never holds a failure that
+  followed an answer, but it can begin with `[ASYNC_ACK]` or `[SYSTEM_LOG_ONLY]`, status for
+  the host that is never streamed. The head is taken off, so the copy reads as the live
+  history does, and a `[SYSTEM_LOG_ONLY]` notice is kept as a failed turn, like
+  `last_turn.failed`. Whatever builds a model's
   context from a stored chat reads each message through `vaf.model_text()`, which leaves a
   failed turn out, takes the failure off as the copy's tail and drops a message whose
-  recorded failure it cannot take off there. VAF's own readers and hosts do exactly this.
+  recorded failure it cannot take off there; an assistant message stored with a leading
+  `[ASYNC_ACK]` before the head was taken off is read without it, and one with a leading
+  `[SYSTEM_LOG_ONLY]` counts as a failed turn. VAF's own readers and hosts do exactly this.
 
 There is no public `stop()`; a running turn is stopped via
 `TaskQueue().request_stop(session_id)` (polled between chunks and tools).

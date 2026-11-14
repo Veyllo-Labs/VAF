@@ -28,8 +28,9 @@ from vaf.core.task_queue import WAKE_KINDS, TaskQueue, is_system_command
 from vaf.core.turn_binding import (TurnBinding, TurnRefused, bind_turn, end_turn,
                                    room_turn_marker)
 from vaf.core.subagent_ipc import take_result_notification
+from vaf.core.completion import split_control_head
 from vaf.core.session import (ASKED_AT_KEY, TURN_ID_KEY, TURN_ROUNDS_KEY, SessionManager, Session, TurnStatus,
-                              failed_turn_meta, stored_turn_copy,
+                              returned_turn_copy, stored_turn_copy,
                               turn_context_messages_since_last_user)
 from vaf.core.tray_context import TrayContext
 from vaf.core.web_interface import get_web_interface
@@ -618,11 +619,13 @@ def _chat_turn_copy(response_parts, response_text, *, ends_at_draft, turn):
     is its tail, cleaned apart and recorded the way the copy holds it (`stored_turn_copy`).
     When nothing streamed, or the turn ended at a draft (what streamed before the draft is in
     the tool-call message, and the turn's own answer is the fixed sentence the browser
-    hides), the copy is the turn's return value, which never holds such a failure: nothing
-    is recorded, only the failed-turn mark can apply."""
+    hides), the copy is the turn's return value (`returned_turn_copy`), which never holds
+    such a failure: nothing is recorded, its control head is taken off (a delegation's
+    acknowledgement is stored as the person read it), and a `[SYSTEM_LOG_ONLY]` notice is
+    kept as a failed turn."""
     if response_parts and not ends_at_draft:
         return stored_turn_copy("".join(response_parts), turn, _clean_for_session)
-    return _clean_for_session(str(response_text or "")), failed_turn_meta(turn.failed)
+    return returned_turn_copy(response_text, turn, _clean_for_session)
 
 
 def _drain_turn_copy(response_parts, *, turn):
@@ -3205,7 +3208,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # system note shows one message and is stored as one.
                     _rounds_meta = None
                     if response_text.startswith("[ASYNC_ACK]"):
-                        clean_ack = response_text.replace("[ASYNC_ACK]", "").strip()
+                        clean_ack = split_control_head(response_text)[1].strip()
                         final_text = clean_ack or response_text
                         if clean_ack:
                             get_web_interface().emit_agent_message(
@@ -3216,7 +3219,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     elif _is_system_log_only:
                         # Agent already sent this as system log; do NOT add assistant bubble
                         # and do NOT send to any external channel (Telegram/WhatsApp/Discord)
-                        final_text = response_text.replace("[SYSTEM_LOG_ONLY]", "").strip()
+                        final_text = split_control_head(response_text)[1].strip()
                     elif _turn_ends_at_draft:
                         # The turn stopped at a draft (vaf/core/outbound_hold.py): the card is
                         # the answer. The fixed sentence goes out as the turn's final message,

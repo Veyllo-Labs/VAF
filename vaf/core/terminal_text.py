@@ -67,7 +67,7 @@ embedder lane has shown a Rich console or a JSON writer of its own, and an embed
 prints through Rich has Rich's own `rich.markup.escape` and `markup=False` (docs/EMBEDDING.md
 names them). `own_links_as_labels` is on the facade: VAF's own answers carry its file link
 (a workflow's `run()` answer, an inline coder result the embedder's model repeats), and
-VAF's own lanes call it at eleven sites in six modules (RICH MARKUP below lists them). Log
+VAF's own lanes call it at twelve sites in seven modules (RICH MARKUP below lists them). Log
 records written before
 `vaf.main.main` runs (the dependency bootstrap, module imports) and in a process that does
 not start through it are formatted by whatever handler Python has then. The cleaning covers
@@ -109,7 +109,9 @@ chat's and the sub-agent drain's stored copies and the drain's fallback message
 (`_prepare_channel_outbound`; the Veyllo App's live deltas hold back a link until it closes,
 `before_open_link`), the main-messenger lane (`send_to_main_messenger`), an
 automation's result (`vaf.core.automation._push_result_to_web_ui`) and a question the agent
-asks in the web chat (`vaf.core.thinking_mode.emit_message_to_web_ui`). The label is plain
+asks in the web chat (`vaf.core.thinking_mode.emit_message_to_web_ui`), and a chat reloaded
+in the browser (`_stored_reply_text` in `vaf/core/web_server.py`, for a chat stored before
+those copies converted the link). The label is plain
 text there, never a web link: the link's shape does not prove VAF wrote it,
 the main one names a folder, and the files the coder writes reach the browser as download
 chips of their own.
@@ -119,10 +121,7 @@ the markup in the tool result it was given, so a tool card's Output in the brows
 raw result. The contact send tools (`send_telegram`, `send_whatsapp`, `send_discord`,
 `send_veyllo_app`) send the argument the model wrote, byte for byte as a held send is approved,
 and no VAF code puts `file_link` there. An automation's notification summary is a short
-preview. A chat reloaded in the browser goes through the web server's transcript projection
-(`_clean_history_text` in `vaf/core/web_server.py`), which removes every `[...]` group of a
-stored reply, the link's markup included. The Veyllo App room's lines are stored as they
-were exchanged with the app's agent.
+preview. The Veyllo App room's lines are stored as they were exchanged with the app's agent.
 
 VAF's own file link is `file_link(path)`: the `file:` URI of an absolute local path,
 labelled with that path, raw (`_own_file_link` is the check; the coder's

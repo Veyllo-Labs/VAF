@@ -33,6 +33,7 @@ with their own collectors, frozen in tests/test_completion_call_baseline.py. The
 one-shot hand-rolls inside vaf/core/agent.py are the named follow-up recorded there.
 """
 import contextvars
+import re
 from typing import Optional
 
 _ERROR_SENTINEL = "[API Error from"
@@ -119,24 +120,56 @@ def is_metadata_frame(chunk: str) -> bool:
     )
 
 
-def strip_think_blocks(text: str) -> str:
+_THINK_TAG = re.compile(r"<(/?)think>", re.IGNORECASE)
+
+
+def strip_think_blocks(text: str, *, greedy: bool = False) -> str:
     """Remove model reasoning from a one-shot result, strictly.
 
     Closed ``<think>...</think>`` blocks are removed; an UNCLOSED ``<think>`` truncates
     from the marker to the end (a result that is all reasoning must become empty, not
     leak); stray close markers are dropped. Case-insensitive, like the models are.
-    """
-    import re
 
+    ``greedy``: one block from the FIRST ``<think>`` to the LAST ``</think>``, for a turn's
+    reply, where a weak model sometimes quotes a ``</think>`` mid-reasoning (an earlier
+    reply) and a block closed at the first one would leak the rest of its reasoning.
+
+    Linear in the text: one pass over the tags (one more only when dropping a block joins
+    two fragments into a new tag). A lazy ``<think>.*?</think>`` rescans to the end from
+    every unclosed opener, 9.7 s on 128 KB of them where this takes milliseconds.
+    """
     if not text:
         return text
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
-    lower = text.lower()
-    open_idx = lower.find("<think>")
-    if open_idx != -1:
-        text = text[:open_idx]
-    text = re.sub(r"</?think>", "", text, flags=re.IGNORECASE)
-    return text.strip()
+    if greedy:
+        tags = [(m.start(), m.end(), bool(m.group(1))) for m in _THINK_TAG.finditer(text)]
+        first_open = next((t for t in tags if not t[2]), None)
+        last_close = next((t for t in reversed(tags) if t[2]), None)
+        if first_open and last_close and last_close[0] > first_open[0]:
+            # Before the block only stray closers; after it no closer at all, so an
+            # opener there is unclosed: both are handled by the walk below.
+            text = text[:first_open[0]] + text[last_close[1]:]
+    return _drop_think_tags(text).strip()
+
+
+def _drop_think_tags(text: str) -> str:
+    """Closed blocks out, an unclosed opener truncates, stray tags dropped; not stripped."""
+    while True:
+        kept, pos, inside = [], 0, False
+        for m in _THINK_TAG.finditer(text):
+            if not inside:
+                kept.append(text[pos:m.start()])  # the tag is dropped: a stray closer or an opener
+                inside = not m.group(1)
+            elif m.group(1):
+                inside = False
+            pos = m.end()
+        if not inside:
+            kept.append(text[pos:])
+        out = "".join(kept)
+        # Dropping a block can join two fragments into a new tag ("<" + block + "think>");
+        # such a tag is a marker too. One more pass per joined tag, none for ordinary output.
+        if out == text or not _THINK_TAG.search(out):
+            return out
+        text = out
 
 
 def _collect(chunks) -> tuple:

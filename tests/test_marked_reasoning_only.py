@@ -20,10 +20,19 @@ MUTATIONS, each turns the named test red:
 - restore the phrase list and the "Answer in" cut in `_clean_reasoning`
   -> test_plain_text_is_the_answer (every row), test_api_turn_returns_its_answer_whole,
      test_cleaners_keep_unmarked_text (every seed), test_no_phrase_list_in_the_cleaners;
-- delete the greedy `<think>...</think>` line of `_clean_reasoning`
-  -> test_marked_reasoning_is_still_removed;
+- call `strip_think_blocks` without `greedy=True` in `_clean_reasoning`
+  -> test_marked_reasoning_is_still_removed[greedy-to-last-close];
+- keep the text after an unclosed opener in `strip_think_blocks`
+  -> the unclosed rows, test_strip_think_blocks_keeps_its_rule, test_cleaners_keep_unmarked_text;
+- drop re.IGNORECASE from `_THINK_TAG` -> the upper and mixed-case rows, the fuzz;
+- drop the `<thinking>` alias in `_clean_reasoning` -> the thinking rows, the fuzz;
+- drop the second pass for a joined tag -> test_strip_think_blocks_rows[joined-tag] (the
+  greedy row joins its tag in the slice, which the first pass already sees);
+- restore the lazy-regex `strip_think_blocks` -> test_strip_think_blocks_is_linear and
+  test_strip_think_blocks_rows[length-changing-lower];
 - build the kept answer from `full_response` again
-  -> test_local_turn_returns_content_not_the_reasoning_channel (the German rows);
+  -> test_local_turn_returns_content_not_the_reasoning_channel (all four rows: the reasoning
+     comes back glued in front of the answer);
 - restore the phrase list or the "Answer in" cut in `_clean_markdown`
   -> test_tts_speaks_the_answer_as_written, test_cleaners_keep_unmarked_text,
      test_no_phrase_list_in_the_cleaners.
@@ -41,6 +50,7 @@ import pytest
 from tests.test_chat_step_return import TASK, _Install
 from tests.test_outbound_sanitizer import LEAKED
 from vaf.core.agent import Agent
+from vaf.core.completion import strip_think_blocks
 from vaf.core.speech import SpeechManager
 
 # Plain answers: every one of them lost text to the phrase guess.
@@ -112,10 +122,79 @@ def test_plain_text_is_the_answer(row):
     ("<redacted_reasoning>A</redacted_reasoning>B", "B"),
     ("<think>Okay, the user greets me.</think>\n\nHallo! Wie geht es dir?", "Hallo! Wie geht es dir?"),
     ('Done, the file is saved. {"name": "x", "arguments": {}}', "Done, the file is saved."),
+    ("Here is the summary for Bob.\n<think>\nOkay, the user also mentioned the private note.",
+     "Here is the summary for Bob."),
+    ("<THINK>Plan.</THINK>Answer.", "Answer."),
+    ("<Think>Plan.</think>Answer.", "Answer."),
+    ("Answer.\n<THINK>never closed", "Answer."),
+    ("<thinking>Plan.</thinking>Answer.", "Answer."),
+    ("<THINKING>Plan.</Thinking>\n\nAnswer.", "Answer."),
+    ("Answer.\n<thinking>never closed", "Answer."),
 ], ids=["block", "doubled-tags", "greedy-to-last-close", "stray-tag", "redacted", "marked-okay-user",
-        "leaked-tool-json"])
+        "leaked-tool-json", "unclosed-after-answer", "upper", "mixed-case", "upper-unclosed",
+        "thinking", "thinking-upper", "thinking-unclosed"])
 def test_marked_reasoning_is_still_removed(text, expected):
     assert _clean(text) == expected
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# strip_think_blocks, the primitive behind step 1: the same rule as before, linear, and greedy
+# for a turn's reply
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _reference_strip(text: str) -> str:
+    """The regex form strip_think_blocks had before it became linear: its semantics."""
+    if not text:
+        return text
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    m = re.search(r"<think>", text, flags=re.IGNORECASE)
+    if m:
+        text = text[:m.start()]
+    return re.sub(r"</?think>", "", text, flags=re.IGNORECASE).strip()
+
+
+def _reference_greedy(text: str) -> str:
+    return _reference_strip(re.sub(r"<think>[\s\S]*</think>", "", text, flags=re.IGNORECASE))
+
+
+_TAG_TOKENS = ["<think>", "</think>", "<THINK>", "</Think>", "a", "b ", " ", "\n", "x y",
+               "think", "ok.", "\u00c4"]
+
+
+@pytest.mark.parametrize("seed", [1, 2, 3])
+def test_strip_think_blocks_keeps_its_rule(seed):
+    rng = random.Random(seed)
+    bad = []
+    for _ in range(500):
+        t = "".join(rng.choice(_TAG_TOKENS) for _ in range(rng.randint(0, 30)))
+        if strip_think_blocks(t) != _reference_strip(t):
+            bad.append(("default", t))
+        if strip_think_blocks(t, greedy=True) != _reference_greedy(t):
+            bad.append(("greedy", t))
+    assert bad == [], f"{len(bad)} mismatches, first: {bad[:3]}"
+
+
+@pytest.mark.parametrize("text, greedy, expected", [
+    ("<think>A</think>B</think>C", False, "BC"),
+    ("<think>A</think>B</think>C", True, "C"),
+    ("x <thi<think>a</think>nk>secret", False, "x"),
+    ("x <thi<think>a</think>nk>secret", True, "x"),
+    ("\u0130 <think>a", False, "\u0130"),
+    ("keep <THINK>drop", True, "keep"),
+], ids=["closes-at-first", "greedy-to-last", "joined-tag", "joined-tag-greedy",
+        "length-changing-lower", "upper-unclosed-greedy"])
+def test_strip_think_blocks_rows(text, greedy, expected):
+    assert strip_think_blocks(text, greedy=greedy) == expected
+
+
+def test_strip_think_blocks_is_linear():
+    """128 KB of unclosed openers: the lazy regex took 9.7 s here, the walk 0.02 s (measured)."""
+    import time
+    text = "Answer. " + "<think>a " * 14500
+    started = time.perf_counter()
+    assert strip_think_blocks(text) == "Answer."
+    assert _clean(text) == "Answer."
+    assert time.perf_counter() - started < 2.0
 
 
 @pytest.mark.parametrize("name", list(ANSWERS))
@@ -308,6 +387,11 @@ FUZZ_TOKENS = [
 ]
 
 
+# Every way a model marks its reasoning that the chat also treats as reasoning.
+FUZZ_MARKS = [("<think>", "</think>"), ("<THINK>", "</THINK>"), ("<Think>", "</think>"),
+              ("<thinking>", "</thinking>"), ("<THINKING>", "</Thinking>")]
+
+
 def fuzz_text(rng: random.Random) -> str:
     return "".join(rng.choice(FUZZ_TOKENS) for _ in range(rng.randint(0, 60)))
 
@@ -323,8 +407,11 @@ def fuzz_mismatches(rng: random.Random, draws: int) -> list:
             raise AssertionError(f"the fuzz alphabet produced a TTS filler phrase: {t!r}")
         if _clean(t) != t.strip():
             bad.append((1, t))
-        if _clean(t + "<think>" + r + "</think>" + b) != (t + b).strip():
+        opener, closer = rng.choice(FUZZ_MARKS)
+        if _clean(t + opener + r + closer + b) != (t + b).strip():
             bad.append((2, t, r, b))
+        if _clean(t + opener + r) != t.strip():
+            bad.append((5, t, r))
         if _speak(t).split() != t.split():
             bad.append((3, t))
         if _speak("<think>" + r + "</think>" + t).split() != t.split():

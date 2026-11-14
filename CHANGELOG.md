@@ -100,7 +100,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   "Okay, the user", and everything before "answer in ..." or "respond in ...": a one-line
   answer like "I will send the report tomorrow." came back empty. With a local reasoning model
   the returned answer could also carry the model's reasoning in front of it. Reasoning is now
-  removed only where the model marked it as reasoning, as in the chat.
+  removed only where the model marked it as reasoning: `<think>` or `<thinking>` in any
+  case, and a `<think>` the model never closed ends the answer there.
 - **A file link VAF wrote shows as its path in the web chat, the messengers and the Veyllo
   App.** When the agent passed on what the coding agent reported, the web chat showed
   `[link=file:///...]/path[/link]` around the path, and Telegram, WhatsApp, Discord and the

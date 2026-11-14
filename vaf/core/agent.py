@@ -6787,7 +6787,8 @@ class Agent:
     def _clean_reasoning(self, text: str) -> str:
         """Remove leaked tool-call JSON and the reasoning the model MARKED as reasoning.
 
-        Marked means `<think>` blocks (doubled tags collapsed, stray tags dropped) and
+        Marked means `<think>` and `<thinking>` blocks in any case (first opener to last
+        closer; an unclosed opener cuts to the end; stray tags dropped) and
         `<redacted_reasoning>` blocks. Plain text is the answer, in any language: a phrase
         list cannot tell a model's reasoning from an answer that starts "I will" or quotes
         what "the user wants", and deleting by such a guess emptied whole replies.
@@ -6797,14 +6798,14 @@ class Agent:
         # First, apply the JSON sanitizer to catch leaked tool calls
         t = self._sanitize_response(text)
         
-        # 1. Remove XML-style thinking blocks. Collapse doubled/nested tags first (weak local models
-        # sometimes emit <think><think>...), remove complete blocks, then drop any stray unpaired tag.
-        t = re.sub(r'<think>(?:\s*<think>)+', '<think>', t, flags=re.IGNORECASE)
-        t = re.sub(r'</think>(?:\s*</think>)+', '</think>', t, flags=re.IGNORECASE)
-        # Greedy: first <think> .. LAST </think>. Weak models sometimes quote a </think> mid-reasoning
-        # (e.g. quoting an earlier reply), so a non-greedy strip would stop early and leak the rest.
-        t = re.sub(r'<think>[\s\S]*</think>', '', t)
-        t = re.sub(r'</?think>', '', t)  # drop any stray unpaired <think> / </think>
+        # 1. Remove the marked reasoning, in any case. <thinking> is the same marker to the chat
+        # (parseThinkBlocks in web/app/page.tsx). Greedy, first <think> .. LAST </think>: weak
+        # models sometimes quote a </think> mid-reasoning (an earlier reply), so a block closed
+        # at the first one would leak the rest. Doubled tags fall inside that block. An
+        # UNCLOSED <think> cuts to the end, as in _final_answer_probe: a model that never
+        # closed its reasoning gave no answer after that point. Stray tags are dropped.
+        t = re.sub(r'<(/?)thinking>', r'<\1think>', t, flags=re.IGNORECASE)
+        t = strip_think_blocks(t, greedy=True)
         t = re.sub(r'<redacted_reasoning>.*?</redacted_reasoning>', '', t, flags=re.DOTALL)
 
         return t.strip()
@@ -13918,9 +13919,9 @@ class Agent:
                     continue
 
             self.history.append({"role": "assistant", "content": history_content})
-            # Captured NOW (the next round's reset wipes it), from full_content: the reply
-            # as shown, inline <think> included. full_response also holds a local
-            # engine's reasoning channel without its marks, never the answer.
+            # Captured NOW (the next round's reset wipes it), from full_content: the answer
+            # text, inline <think> tags included, without the reasoning channel's text
+            # (full_response also holds that, unmarked).
             kept_turn_answers.append(self._clean_reasoning(full_content))
             _last_kept_is_final = True
             # Only this path marks a round as an answer: a reply a guard kept on screen and

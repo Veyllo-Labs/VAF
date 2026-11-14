@@ -349,7 +349,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   agent, of the main agent and of `vaf audit` now reads the project's files, its review rules
   and its saved review notes only in the folder it settled on when it started, and fails
   instead of going on when that folder is replaced with a link, moved away or replaced by
-  another folder while it runs. Before, a program of the account that swapped its project
+  another folder while it runs, or when git refuses to work there (the reason says why). Before, a program of the account that swapped its project
   folder for a link could have another account's code sent to the model, or leave review
   notes in another project. Needs a restart of VAF.
 - **The agent's file tools stay out of VAF's own data and your shell start files.** Reading

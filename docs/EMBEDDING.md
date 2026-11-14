@@ -1026,7 +1026,13 @@ it once and pass that text both as `root` and as `expect_folder`: the folder mus
 that real path and hold its own `.git`. With or without it, a run decides its folder once
 and checks every git call, file read and state write against it; a folder swapped for a
 link, moved away or replaced while the run works makes it `failed`, with no findings and
-nothing saved, so a swap never turns into another repository's code sent to your `ask`.
+nothing saved. That check has platform limits: on Windows (no folder handles) a read
+compares the file's resolved folder after the open, so a link in place for the open and
+gone again before that comparison is still read (`vaf.core.path_jail.open_for_read`), and
+where git runs without its private view (macOS, Windows, Linux without a working
+bubblewrap, a linked worktree) git turns the work tree into a path for a moment
+(`vaf.run_project_git` below). Where those limits apply, stop every other writer of the
+folder (a sandbox with it mounted, a build in it) for the length of the review.
 Size `batch_chars` to your model's window, pass `parallel` > 1 only for an API that serves
 concurrent requests, and give it a `should_stop` if a person can cancel. A repository can
 tune it with `.vaf/code-audit.json` (profile, path filters, path instructions, plain-language

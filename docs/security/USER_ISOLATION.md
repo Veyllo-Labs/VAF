@@ -591,7 +591,10 @@ commit in 21 of 300 calls, and a new notes manager whose `.vaf` was missing left
   through a file the audit read in 11 runs before (3 more through git's output alone, from
   a start that followed a link already in place) and its state was written there in 8; with
   `expect_folder` 0, 0 and 0. `vaf audit` without it works on the folder the typed path
-  leads to when the run starts (1 of 1000 runs started through the racer's link).
+  leads to when the run starts (1 of 1000 runs started through the racer's link), reviews
+  that repository and saves its notes there. The state is written only into the folder the
+  run decided on (its identity is compared when the state folder is opened), and any other
+  refusal of the git runner ends the run instead of reading as an empty answer.
 
 NAMED BOUNDARY, what remains, with the numbers above:
 - no lane: macOS, Windows, and Linux where bubblewrap is missing or cannot make a user

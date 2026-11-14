@@ -184,19 +184,23 @@ def run_git(args: List[str], cwd: str = ".", timeout: float = 60) -> tuple[int, 
 
 
 def resolve_commit(rev: str, cwd: str = ".", *, linked_worktree: bool = False,
-                   expect_folder=None) -> Optional[str]:
+                   expect_folder=None, errors: Optional[List[str]] = None) -> Optional[str]:
     """The full id of the commit `rev` names, or None when it names none.
 
     A revision a caller hands in goes through here before it reaches any other git command
     line. git reads an argument that starts with a dash as an option wherever it stands, and
     `git diff --output=<file>` writes over any file the process may write; the id that comes
     back is hex only, so it is safe in every position. ``expect_folder`` as for
-    `run_project_git`."""
+    `run_project_git`. ``errors``: a list that gets the runner's own sentence when it refused
+    or could not run git (returncode -1), so a caller can tell that from a revision that names
+    no commit."""
     rev = (rev or "").strip()
     if not rev or rev.startswith("-"):
         return None
     proc = run_project_git(["rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}"], cwd=cwd,
                            linked_worktree=linked_worktree, expect_folder=expect_folder)
+    if errors is not None and proc.returncode == -1:
+        errors.append(proc.stderr or "")
     out = (proc.stdout or "").strip()
     return out if proc.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", out) else None
 

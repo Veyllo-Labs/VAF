@@ -18,6 +18,7 @@ import ast
 import json
 import os
 import shutil
+import subprocess
 import threading
 from pathlib import Path
 
@@ -307,7 +308,7 @@ def test_the_state_is_not_written_through_a_swapped_folder(pair, monkeypatch, ha
 
     monkeypatch.setattr(ca, "_save_state", _swapped)
     report = _audit(pair.a, _Stub(), expect_folder=str(pair.a))
-    assert report.status == "complete", report.status_reason
+    assert report.status == "failed" and report.status_reason == ca.FOLDER_CHANGED
     assert _no_state(pair.b)
     _restore(pair.a)
     assert _no_state(pair.a)
@@ -374,8 +375,8 @@ def test_a_linked_state_folder_is_neither_read_nor_written(pair, monkeypatch):
 def test_a_folder_replaced_at_its_name_before_the_end_fails_the_run(pair, monkeypatch):
     """Another repository is moved to A's name between the review and the end of the run; it
     has audit state of its own, so nothing on the way to the save notices a missing file.
-    MUTATION: drop the end check (_check_top after the findings) - red (complete, and the
-    new folder's state is overwritten)."""
+    MUTATION: `_state_handle` without the identity comparison - red (the new folder's state
+    is overwritten; the check on the way out still fails the run)."""
     aside = pair.a.with_name(pair.a.name + "-aside")
     real = ca._dedupe
     kept = {"text": "OTHER's own last audit"}
@@ -396,6 +397,173 @@ def test_a_folder_replaced_at_its_name_before_the_end_fails_the_run(pair, monkey
     assert _no_state(aside)
     shutil.rmtree(pair.a)
     os.rename(aside, pair.a)
+
+
+def _replace_with_repo(folder: Path, kept: dict) -> Path:
+    """Move ``folder`` aside and put another repository at its name, with audit state of
+    its own (``kept`` as its last.json). Returns the aside path."""
+    aside = folder.with_name(folder.name + "-aside")
+    os.rename(folder, aside)
+    _repo(folder, "OTHER", "OTHER_ONLY")
+    (folder / ".git" / "vaf-audit").mkdir()
+    (folder / ".git" / "vaf-audit" / "last.json").write_text(json.dumps(kept), encoding="utf-8")
+    return aside
+
+
+def _put_back(folder: Path, aside: Path) -> None:
+    shutil.rmtree(folder)
+    os.rename(aside, folder)
+
+
+@_HANDLES
+def test_a_folder_replaced_after_the_end_check_gets_no_state(pair, monkeypatch):
+    """Another repository is moved to A's name at `_save_state`'s entry, after the end check:
+    its state is not overwritten and the run fails. MUTATION: `_state_handle` without the
+    identity comparison (.git opened by its real path alone) - red."""
+    kept = {"text": "OTHER's own last audit"}
+    real = ca._save_state
+    moved = {}
+
+    def _replaced(top, name, data):
+        if not moved:
+            moved["aside"] = _replace_with_repo(pair.a, kept)
+        return real(top, name, data)
+
+    monkeypatch.setattr(ca, "_save_state", _replaced)
+    report = _audit(pair.a, _Stub(), expect_folder=str(pair.a))
+    assert report.status == "failed" and report.status_reason == ca.FOLDER_CHANGED
+    state = pair.a / ".git" / "vaf-audit"
+    assert sorted(os.listdir(state)) == ["last.json"]
+    assert json.loads((state / "last.json").read_text(encoding="utf-8")) == kept
+    assert _no_state(moved["aside"])
+    _put_back(pair.a, moved["aside"])
+
+
+@_HANDLES
+def test_the_state_file_is_written_only_in_the_held_folder(pair, monkeypatch):
+    """Another repository is moved to A's name after the state folder's handle was taken and
+    before the file is opened by its path (the same real path): nothing is written there,
+    not even the temporary file. MUTATION: drop the samestat comparison in _save_state - red
+    (the other repository keeps a last.json.tmp)."""
+    kept = {"text": "OTHER's own last audit"}
+    real = ca._state_handle
+    moved = {}
+
+    def _then_replaced(top, d, folder):
+        fd = real(top, d, folder)
+        if not moved:
+            moved["aside"] = _replace_with_repo(pair.a, kept)
+        return fd
+
+    monkeypatch.setattr(ca, "_state_handle", _then_replaced)
+    report = _audit(pair.a, _Stub(), expect_folder=str(pair.a))
+    assert report.status == "failed"
+    state = pair.a / ".git" / "vaf-audit"
+    assert sorted(os.listdir(state)) == ["last.json"]
+    assert json.loads((state / "last.json").read_text(encoding="utf-8")) == kept
+    _put_back(pair.a, moved["aside"])
+
+
+def test_a_dismissal_is_not_written_into_a_folder_moved_to_the_name(pair, monkeypatch):
+    """MUTATION: `_state_handle` without the identity comparison - red (the other
+    repository gets dismissed.json and the call says True)."""
+    kept = {"text": "OTHER's own last audit"}
+    real = ca._save_state
+    moved = {}
+
+    def _replaced(top, name, data):
+        if not moved:
+            moved["aside"] = _replace_with_repo(pair.a, kept)
+        return real(top, name, data)
+
+    monkeypatch.setattr(ca, "_save_state", _replaced)
+    assert ca.dismiss_finding(str(pair.a), "abc", "no") is False
+    assert not (pair.a / ".git" / "vaf-audit" / "dismissed.json").exists()
+    _put_back(pair.a, moved["aside"])
+
+
+def test_an_empty_listing_from_a_replaced_folder_is_not_a_clean_result(pair, monkeypatch):
+    """The folder is replaced while the listing comes back empty: the run must not end as
+    "nothing to review", complete. MUTATION: drop the check on the common exit path - red."""
+    real = ca._collect
+    moved = {}
+
+    def _replaced(*args, **kwargs):
+        real(*args, **kwargs)
+        moved["aside"] = _replace_with_repo(pair.a, {"text": "x"})
+        return [], [], None
+
+    monkeypatch.setattr(ca, "_collect", _replaced)
+    report = _audit(pair.a, _Stub(), expect_folder=str(pair.a))
+    assert report.status == "failed" and report.status_reason == ca.FOLDER_CHANGED
+    _put_back(pair.a, moved["aside"])
+
+
+def test_a_refused_git_call_is_never_read_as_an_empty_answer(pair, monkeypatch):
+    """A link planted inside `.git` during the run makes the runner refuse every later call;
+    `check-ignore` read as "not ignored" sent a git-ignored guideline file to the model.
+    MUTATION: only the moved-folder words count as a refusal in `_git` - red."""
+    (pair.a / ".gitignore").write_text("sub/AGENTS.md\n", encoding="utf-8")
+    (pair.a / "sub" / "AGENTS.md").write_text("PRIVATE_NOTES of the person\n", encoding="utf-8")
+    (pair.a / "sub" / "x.txt").write_text("x2\n", encoding="utf-8")
+    real = ca._guidelines
+
+    def _planting(top, files):
+        _symlink_or_skip(pair.a / ".git" / "evil", pair.b / ".git")
+        return real(top, files)
+
+    monkeypatch.setattr(ca, "_guidelines", _planting)
+    stub = _Stub()
+    report = _audit(pair.a, stub, expect_folder=str(pair.a))
+    assert "PRIVATE_NOTES" not in stub.text
+    assert report.status == "failed" and report.status_reason.startswith("git refused")
+    assert "is a link" in report.status_reason
+    os.unlink(pair.a / ".git" / "evil")
+
+
+def _runner_answering(monkeypatch, when, stderr):
+    """`run_project_git` answers returncode -1 with ``stderr`` for the call one of whose
+    arguments ends with ``when``; every other call runs."""
+    import vaf.core.git_runner as gr
+    real = gr.run_project_git
+
+    def _run(args, *a, **kw):
+        if any(str(a).endswith(when) for a in args):
+            return subprocess.CompletedProcess(["git", *args], -1, "", stderr)
+        return real(args, *a, **kw)
+
+    monkeypatch.setattr(gr, "run_project_git", _run)
+
+
+def test_a_private_view_that_cannot_start_is_reported_as_it_is(pair, monkeypatch):
+    """bubblewrap failing on this host is no moved folder. MUTATION: count "could not start
+    in a private view" as a moved folder again - red (the reason says the folder changed)."""
+    _runner_answering(monkeypatch, "merge-base", "could not start in a private view of "
+                      f"{pair.a} (exit 1). Try again")
+    report = _audit(pair.a, _Stub(), expect_folder=str(pair.a))
+    assert report.status == "failed"
+    assert report.status_reason.startswith("git refused the folder under review (could not "
+                                           "start in a private view")
+
+
+def test_a_refusal_while_the_base_is_resolved_is_not_a_missing_commit(pair, monkeypatch):
+    """The runner refuses the base's rev-parse (the folder was away for that call and back
+    by the next check). MUTATION: ignore resolve_commit's errors - red ("names no commit")."""
+    _runner_answering(monkeypatch, "^{commit}", f"{pair.a}: its folder is /elsewhere, not "
+                      f"{pair.a} (a link on the way)")
+    report = _audit(pair.a, _Stub(), expect_folder=str(pair.a))
+    assert report.status == "failed" and report.status_reason == ca.FOLDER_CHANGED
+
+
+def test_a_search_that_timed_out_still_finds_nothing(pair, monkeypatch):
+    """A timeout is no refusal: the reference search (git grep) finds nothing and the run goes
+    on. MUTATION: drop the timeout from _NOT_REFUSALS - red."""
+    (pair.a / "app.py").write_text("def total_of(xs):\n    return 'A_OWN_CODE'\n",
+                                   encoding="utf-8")
+    _runner_answering(monkeypatch, "grep", "Command '['git', 'grep']' timed out after 20 "
+                      "seconds")
+    report = _audit(pair.a, _Stub(), expect_folder=str(pair.a))
+    assert report.status == "complete", report.status_reason
 
 
 # ── 9. the callers pass the folder they judged ──────────────────────────────

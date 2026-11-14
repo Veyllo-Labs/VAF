@@ -108,17 +108,19 @@ contract a failed run cannot pass.
 7. **Memory per repository**, under the git directory (`.git/vaf-audit/`, never committed):
    which findings were open last time (named as addressed when they are gone) and which a
    person dismissed with a reason (not reported again). It is read through
-   `path_jail.open_for_read` and written relative to checked folder handles: the git directory
-   opened with its decided real path, `vaf-audit` made and opened relative to it
-   (`open_folder(create=True)`), the file written through `open_for_write` and renamed into
-   place on that handle. A `vaf-audit` that is a link (into another repository's memory) is
-   neither read nor written, so another repository's dismissals hide nothing here. Ids are a hash of file, category and
-   the quoted line, so the same problem in the same code keeps its id across runs. Not the
-   title: a model words one finding differently every time (a live loop of four rounds never
-   produced the same title twice), and an id built on it let a dismissed finding come back.
-   VAF's own bookkeeping in a project (`.vaf/`: the coder's task list, codex and memory) is
-   never reviewed: on a live loop it put the coder's task text into the review, and the
-   reviewer then argued against the fixes it had asked for.
+   `path_jail.open_for_read` and written relative to checked folder handles: `.git` opened
+   relative to a handle of the top folder, which must still be the folder the run decided on
+   (by identity: another repository moved to the same name has the same path), `vaf-audit`
+   made and opened relative to it (`open_folder(create=True)`), the file written through
+   `open_for_write` only when it is the file in that held folder, and renamed into place on
+   its handle. A `vaf-audit` that is a link (into another repository's memory) is neither
+   read nor written, so another repository's dismissals hide nothing here. Ids are a hash of
+   file, category and the quoted line, so the same problem in the same code keeps its id
+   across runs. Not the title: a model words one finding differently every time (a live loop
+   of four rounds never produced the same title twice), and an id built on it let a
+   dismissed finding come back. VAF's own bookkeeping in a project (`.vaf/`: the coder's
+   task list, codex and memory) is never reviewed: on a live loop it put the coder's task
+   text into the review, and the reviewer then argued against the fixes it had asked for.
 8. **Checks in plain language** from the repository's configuration, each `passed`, `failed`
    or `inconclusive`; a failed check in `error` mode fails the run like a finding.
 
@@ -315,30 +317,36 @@ the next run.
   files the model or the deep check names) resolves the name inside the repository, requires
   the result under that folder as text and opens it with `path_jail.open_for_read`, whose
   folder handle must have the real path that was resolved; the state is written as in step
-  7; and the folder must still be the same one at the end, before anything is reported or
-  remembered. A folder swapped for a link, renamed away or replaced by another folder while
-  the run works ends it as `failed` ("the folder changed while it was being reviewed"), with
-  no findings, nothing listed as reviewed and no state saved: the project may be a coding
-  agent's, whose sandbox code can rename its own folder and put a link to another account's
-  repository in its place. Measured with a racer doing exactly that (aside for 1 ms, link,
-  back), 1000 audits each: before, with each git call pinned on its own and the reads and
-  the state by path, the other repository's text reached the model through a file the audit
-  read in 11 runs and through git's output alone in 3 (the start followed a link already in
-  place, and the whole run worked on the other repository), and its state was written there
-  in 8; with `expect_folder` (the tool, the coder) 0, 0 and 0. The racer keeps the folder
-  away half of the time, so 508 of those 1000 runs failed (117 before): every refusal inside
-  its windows ends the run, and none of them reports a clean result; without a racer none
-  fails. Without `expect_folder` (`vaf audit`, a person naming a path) the run works on the
-  folder its name leads to when it starts: in 1 of 1000 runs that was the racer's link, and
-  the run reviewed the other repository as a whole, consistently. Named boundaries: the check is per
-  operation by real path plus the identity at the start and the end, so a folder swapped
-  and restored between two operations, or replaced at its name by another folder of the
-  account in between, holds only what the account itself could write there; a file whose
-  folder is renamed away only for the moment it is read, and back before the folder is
-  checked again, reads as "not readable" and is listed as skipped (the config read that way
-  is missing for that run); git's own walk of the work tree is the runner's boundary above;
-  on Windows the reads and the state go through the branches without folder handles
-  (`open_for_read`, `_save_state`).
+  7; and the folder must still be the same one before anything is remembered and on every
+  way out of the run, an empty listing included. A folder swapped for a link, renamed away
+  or replaced by another folder while the run works ends it as `failed` ("the folder changed
+  while it was being reviewed"), with no findings, nothing listed as reviewed and no state
+  saved: the project may be a coding agent's, whose sandbox code can rename its own folder
+  and put a link to another account's repository in its place. Any other refusal of the git
+  runner (a link planted inside `.git`, a private view that could not start on this host)
+  ends the run as well, worded with the runner's own sentence ("git refused the folder under
+  review (...)"); only a timeout and a missing git keep their old meaning (a search that
+  timed out finds nothing). Read as an empty answer, a refused `check-ignore` let a
+  git-ignored guideline file through. Measured with a racer (aside for 1 ms, link, back):
+  with `expect_folder` (the tool, the coder) nothing of the other repository reached the
+  model or got its state in 1000 audits; the numbers before and after are in
+  [USER_ISOLATION.md](../security/USER_ISOLATION.md). The racer keeps the folder away half
+  of the time, so about half of those runs failed: every refusal inside its windows ends the
+  run, and none of them reports a clean result; without a racer none fails. Named
+  boundaries:
+  - without `expect_folder` (`vaf audit`, a person naming a path) the run works on the folder
+    the name leads to when it starts, a link included: it reviews that repository as a whole
+    and saves its notes there;
+  - the check is per operation by real path plus the identity at the start, at the save and
+    at the end, so a folder swapped and restored between two operations, or replaced at its
+    name by another folder of the account in between, holds only what the account itself
+    could write there;
+  - a file whose folder is renamed away only for the moment it is read, and back before the
+    folder is checked again, reads as "not readable" and is listed as skipped (the config
+    read that way is missing for that run);
+  - git's own walk of the work tree is the runner's boundary above;
+  - on Windows the reads and the state go through the branches without folder handles
+    (`open_for_read`, `_save_state`).
 - **Stop in the chat** ends the review before its next model call; a call already in flight
   finishes in the background (an in-process tool cannot be killed), and its answer is
   discarded.

@@ -366,6 +366,7 @@ def _strip_marked_reasoning(text: str, *, greedy: bool) -> str:
     t = strip_think_blocks(t, greedy=greedy)
     if _REDACTED_OPEN in t:
         t = strip_think_blocks(_drop_redacted_blocks(t, cut_unclosed=True), greedy=greedy)
+        t = t.split(_REDACTED_OPEN, 1)[0]  # an opener that this cleanup itself joined
     return t.strip()
 
 # How often one turn may re-generate because loop protection refused every call of a
@@ -6858,7 +6859,10 @@ class Agent:
         redacted block pairing with one outside it
         (`<redacted_reasoning><think></redacted_reasoning>Q</think>`), have no right reading;
         the redacted block goes first and Q is kept as text (about 2 in 1,000 adversarial
-        fuzz draws, all of this class).
+        fuzz draws, all of this class). Likewise text after `<redacted_reasoning>...</think>`
+        is the answer, as the chat shows it: a think closer quoted inside a redacted block the
+        model never closed cannot be told from that shape, which the empty-answer probe must
+        count as an answer so a guard keeps the bubble.
         """
         # First, apply the JSON sanitizer to catch leaked tool calls
         t = self._sanitize_response(text)

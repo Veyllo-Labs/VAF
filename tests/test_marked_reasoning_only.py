@@ -46,6 +46,8 @@ MUTATIONS, each turns the named test red:
   -> test_probe_counts_the_answer_the_chat_shows[stray-closer-after-redacted];
 - skip strip_think_blocks after the second redacted pass
   -> test_marked_reasoning_is_still_removed[think-joined-by-redacted-pass];
+- skip the cut at a redacted opener that cleanup joined
+  -> test_marked_reasoning_is_still_removed[redacted-joined-by-cleanup];
 - strip redacted blocks with the lazy regex again -> test_redacted_strip_is_linear;
 - build the kept answer from `full_response` again
   -> test_local_turn_returns_content_not_the_reasoning_channel (all four rows: the reasoning
@@ -157,11 +159,13 @@ def test_plain_text_is_the_answer(row):
     ("<redacted_reasoning>SECRET</redacted_<think>x</think>reasoning>Answer", "Answer"),
     ("Answer <redacted_reasoning>SECRET, never closed", "Answer"),
     ("<thi<redacted_<think>x</think>reasoning>hidden</redacted_reasoning>nk>SECRET", ""),
+    ("<redacted_reasoning<redact<think>x</think>ed_reasoning></redacted_reasoning>>SECRET door code 4711",
+     ""),
 ], ids=["block", "doubled-tags", "greedy-to-last-close", "stray-tag", "redacted", "marked-okay-user",
         "leaked-tool-json", "unclosed-after-answer", "upper", "mixed-case", "upper-unclosed",
         "thinking", "thinking-upper", "thinking-unclosed", "think-quoted-in-redacted",
         "think-quoted-in-redacted-long", "redacted-opener-joined", "redacted-closer-joined",
-        "redacted-unclosed", "think-joined-by-redacted-pass"])
+        "redacted-unclosed", "think-joined-by-redacted-pass", "redacted-joined-by-cleanup"])
 def test_marked_reasoning_is_still_removed(text, expected):
     assert _clean(text) == expected
 

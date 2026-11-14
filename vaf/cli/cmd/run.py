@@ -1078,6 +1078,19 @@ def _terminal_chat(agent, session_mgr, chat_id):
     return session
 
 
+def _bind_terminal_chat(agent, session_mgr, chat_id, tui):
+    """`_terminal_chat`, or None with the reason shown when the chat cannot be opened. Only a
+    model turn needs the chat: the commands run without it, so `session <id>` and `quit`
+    still work while the chat is unreadable, and no message is run until it can be read."""
+    try:
+        return _terminal_chat(agent, session_mgr, chat_id)
+    except Exception as exc:
+        tui.error(f"This chat cannot be opened ({chat_id}): {type(exc).__name__}: {exc}. "
+                  "Messages are not sent until it can be; switch with `session <id>` "
+                  "or quit.")
+        return None
+
+
 def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None, web_enabled: bool = False):
     """Run with modern TUI interface."""
     global global_agent
@@ -1461,6 +1474,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
     # The chat typed turns run in and are saved into: the one this run opened (`--session`
     # or the new chat saved above) until `session <id>` switches it (_terminal_chat).
     terminal_chat_id = current_session.id
+    terminal_session = None
 
     # Interactive loop
     console_broken = False
@@ -1916,8 +1930,13 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                 # Start listening UI immediately
                 captured = tui.listen_overlay()
                 if captured:
-                    tui.event("User (Voice)", captured, style="normal")
-                    _process_agent_message(agent, captured, tui, current_session)
+                    # Spoken at this terminal: a turn of the terminal's chat, like a typed one.
+                    terminal_session = _bind_terminal_chat(agent, session_mgr,
+                                                           terminal_chat_id, tui)
+                    if terminal_session is not None:
+                        current_session = terminal_session
+                        tui.event("User (Voice)", captured, style="normal")
+                        _process_agent_message(agent, captured, tui, current_session)
                 
                 # Loop back immediately to skip normal input prompt logic
                 continue
@@ -1995,8 +2014,12 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
             # Ensure we are in the correct session context.
             if not is_web_input:
                 # A queued web task ran on its own chat and left the agent and
-                # current_session there: a typed turn returns to the terminal's chat.
-                current_session = _terminal_chat(agent, session_mgr, terminal_chat_id)
+                # current_session there: a typed turn returns to the terminal's chat. A
+                # chat that cannot be read stops the message below, never the commands.
+                terminal_session = _bind_terminal_chat(agent, session_mgr, terminal_chat_id,
+                                                       tui)
+                if terminal_session is not None:
+                    current_session = terminal_session
             
             # ═══════════════════════════════════════════════════════════════
             # KEYBOARD SHORTCUTS (single letters)
@@ -2465,7 +2488,12 @@ Created: {current_session.created_at}
                 else:
                     tui.warning(f"Unknown command: /{cmd}")
                     continue
-            
+
+            # A message, not a command: it runs only in the terminal's own chat, and when
+            # that chat could not be opened above, the reason is on screen and nothing runs.
+            if terminal_session is None:
+                continue
+
             # File attachments
             typed_input = user_input
             if "@" in user_input:

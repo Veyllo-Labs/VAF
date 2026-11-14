@@ -942,3 +942,67 @@ def test_a_chat_switch_leaves_the_agent_claiming_the_chat_it_holds(modern_lane, 
     assert rec["chat_steps"] == ["erste Frage", "zweite Frage"]
     expected = [{"role": "system", "content": f"history of {chats['A']}"}]
     assert rec["turn_history"][1] == expected, "A's second turn ran on another chat's history"
+
+
+def _unreadable_terminal_chat(lane):
+    """Every session the run did not create in the test reads; the chat this terminal opened
+    at start cannot be read any more (a damaged file, a key that no longer opens it)."""
+    from vaf.core.session import SessionManager
+    real_load = SessionManager.load
+    readable = set()
+
+    def load(self, session_id, *a, **k):
+        if session_id not in readable:
+            raise ValueError("cannot decrypt")
+        return real_load(self, session_id, *a, **k)
+    lane.monkeypatch.setattr(SessionManager, "load", load)
+    lane.monkeypatch.setattr(_FakeTUI, "confirm", lambda self, *a, **k: True)
+    return readable
+
+
+def test_an_unreadable_terminal_chat_still_switches_and_quits(modern_lane):
+    """The terminal's chat cannot be read: a message is not run, and the commands still are,
+    so `session <id>` switches away, the next message runs and is saved in the chat switched
+    to, and `quit` ends the loop. MEASURED BEFORE THE FIX: the chat was opened before the
+    command dispatch and raised, so the switch and quit failed the same way and the loop
+    never ended on its own. MUTATION: open the chat without catching its failure - red; run
+    the message although the chat could not be opened - red."""
+    from vaf.core.session import SessionManager
+    readable = _unreadable_terminal_chat(modern_lane)
+    mgr = SessionManager()
+    other = mgr.new(name="Other", user_scope_id=_owner_scope())
+    other.add_message("user", "LINE-OF-OTHER")
+    mgr.save(other)
+    readable.add(other.id)
+    modern_lane.rec["script"] = ["Erste Frage", f"/session {other.id}", "Zweite Frage", "quit",
+                                 "never read"]
+    rec = modern_lane.run(console_breaks=True)
+    assert rec["chat_steps"] == ["Zweite Frage"]
+    assert rec["prompts"] == 4, "the loop did not end at quit"
+    assert rec["loaded"][-1] == other.id
+    held = [m.content for m in mgr.load(other.id).messages]
+    assert held[:2] == ["LINE-OF-OTHER", "Zweite Frage"], held
+    failures = [e for e in rec["errors"] if e.startswith("This chat cannot be opened")]
+    assert len(failures) == 2 and rec["errors"] == failures, rec["errors"]
+    assert not [w for w in rec["warnings"] if "standard input" in w], rec["warnings"]
+
+
+def test_a_spoken_turn_after_a_browser_chat_runs_in_the_terminal_chat(modern_lane):
+    """A turn spoken at this terminal after the loop answered a browser chat belongs to the
+    terminal's chat, like a typed one. MUTATION: run the spoken turn without binding the
+    terminal's chat - red (it ran on, and its answer was saved in, the browser's chat).
+    The spoken words themselves are not stored as a message on this lane, only the answer."""
+    _queue("web", "Hallo", contact=False, sid="web-chat-0061")
+    modern_lane.monkeypatch.setattr(_FakeTUI, "listen_overlay", lambda self, *a, **k: "Sprachfrage")
+    modern_lane.rec["script"] = [WAKE, None]
+    from vaf.core.session import SessionManager
+    mgr = SessionManager()
+    rec = modern_lane.run()
+    assert rec["chat_steps"] == ["Hallo", "Sprachfrage"]
+    [terminal] = [p.stem for p in Path(mgr.storage_dir).glob("*.json")
+                  if p.stem != "web-chat-0061"]
+    assert rec["loaded"] == ["web-chat-0061", terminal]
+    # The spoken turn's answer (the stream copy; this agent streams nothing).
+    assert [m.role for m in mgr.load(terminal).messages] == ["assistant"]
+    held = [(m.role, m.content) for m in mgr.load("web-chat-0061").messages]
+    assert held == [("user", "Hallo"), ("assistant", "")], held

@@ -87,16 +87,36 @@ def test_a_chat_that_cannot_be_read_is_not_replaced(store, monkeypatch):
     assert agent.bound == []
 
 
+def test_an_unreadable_chat_is_reported_and_binds_nothing(store, monkeypatch):
+    """MUTATION: let the failure through - red."""
+    chat = _chat(store, "Broken")
+
+    def fail(*a, **k):
+        raise ValueError("cannot decrypt")
+    monkeypatch.setattr(store, "load", fail)
+    shown = []
+    agent = _Agent()
+    tui = type("T", (), {"error": lambda self, msg: shown.append(msg)})()
+    assert run_mod._bind_terminal_chat(agent, store, chat, tui) is None
+    assert agent.bound == [] and len(shown) == 1 and chat in shown[0]
+    assert "session <id>" in shown[0]
+
+
 def test_the_loop_runs_typed_turns_in_the_terminal_chat():
     """The wiring in the prompt interface: the terminal's chat starts as the chat the run
-    opened, `session <id>` switches it through the engine's replay, and every typed turn
-    binds the agent and the saved session to it. MUTATION: drop the switch's assignment -
-    red; put the fixed `cli-main` id back - red; put the hand-written replay back - red."""
+    opened, `session <id>` switches it through the engine's replay, and every typed and
+    spoken turn binds the agent and the saved session to it (the real loop's behaviour is
+    pinned in tests/test_cli_web_lane_queue_tasks.py). MUTATION: drop the switch's
+    assignment - red; put the fixed `cli-main` id back - red; put the hand-written replay
+    back - red."""
     src = (ROOT / "vaf" / "cli" / "cmd" / "run.py").read_text(encoding="utf-8")
     loop = src[src.index("def _run_modern("):]
     loop = loop[:loop.index("\ndef ", 1)]
     assert "terminal_chat_id = current_session.id" in loop
-    assert "current_session = _terminal_chat(agent, session_mgr, terminal_chat_id)" in loop
+    flat = " ".join(loop.split())
+    assert flat.count("terminal_session = _bind_terminal_chat(agent, session_mgr, "
+                      "terminal_chat_id, tui)") == 2
+    assert "if terminal_session is None: continue" in flat
     assert '"cli-main"' not in loop
 
     start = loop.index('tui.confirm("Switch to this session?"')

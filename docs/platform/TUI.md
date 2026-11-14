@@ -202,10 +202,11 @@ through the engine's replay (`load_session_context`), which reads each message t
 
 The prompt interface keeps one chat for what you type (`_terminal_chat` in
 `vaf/cli/cmd/run.py`): the chat the run opened (`vaf run --session <id>`, or the new chat it
-starts with) until `session <id>` switches to another. Every typed turn binds the agent and
-the saved chat to that one chat, also after the same loop answered a queued message from the
-browser on the browser's chat. A chat whose file is gone is created again under its id; a
-chat that cannot be read is not replaced, and the turn is not run.
+starts with) until `session <id>` switches to another. Every typed or spoken turn binds the
+agent and the saved chat to that one chat, also after the same loop answered a queued message
+from the browser on the browser's chat. A chat whose file is gone is created again under its
+id. A chat that cannot be read is not replaced: the terminal says so, runs no message, and
+still runs every command, so `session <id>` switches away and `quit` ends the session.
 
 ## Keys and commands
 

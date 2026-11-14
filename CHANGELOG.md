@@ -703,7 +703,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   - A script fed to a shell through an unquoted heredoc or a double-quoted here-string with a
     variable in it (`bash <<EOF` ... `echo $NAME`, `bash <<< "echo $NAME"`): bash fills the
     variable in before the shell reads the script, so quote it (`<<'EOF'`, `<<< '...'`) and
-    the shell reads the variable itself.
+    the shell reads the variable itself (export a variable the script needs, a variable
+    that is not exported is empty there), or escape it (`\$NAME`).
   - `uv run "$TOOL" ...`, `find ... -exec "$TOOL" ...` (a program named by a variable that a
     runner or find starts): write the program out.
   - On Windows, cmd.exe's `for %i in (*.txt) do ...`: use PowerShell

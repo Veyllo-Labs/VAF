@@ -182,6 +182,11 @@ _FORMS = [
     # trap runs its first argument
     ("trap 'rm -rf /' EXIT", "destructive_removal", ""),
     ("trap -- 'rm -rf /' INT TERM", "destructive_removal", ""),
+    # a group read as bash reads it hands its output on through text a command runs (the
+    # grammar reading's output joined with the reading's own)
+    ('bash -c "{ echo \'rm -rf /\'; }" | bash', "destructive_removal", ""),
+    ('eval "{ echo \'rm -rf /\'; }" | bash', "destructive_removal", ""),
+    ('uv run bash -c "{ echo \'rm -rf /\'; }" | bash', "destructive_removal", ""),
 ]
 
 
@@ -239,6 +244,8 @@ _WRAPS = [
     "2>/dev/null @", "</dev/null @", ">f @", "x=1 @", "@ 2>&1", "{ @; } 2>/dev/null",
     "@ # it's", "@ &>/dev/null", "x=$(@)", "[ -n x ] && @", "[[ -n x || -z $y ]] && @",
     "sudo -n true 2>/dev/null; @", "command @", "exec 3>&1; @",
+    "echo `echo " + B + "`@" + B + "``", "x=`(@)`", ": `( >o.txt @ )`",
+    "( echo '@'; echo x ) | bash", "{ echo '@'; } 2>&1 | bash", "a+=1 @", "bash -c -e '@'",
 ]
 _NOISE = [
     "echo hi # it's", "# don't", "#'", ": # x " + B, "echo a # x " + B, "true",
@@ -252,6 +259,7 @@ _NOISE = [
     "x=$'" + B + "''", "echo }", "echo {", "echo then", "echo fi", "echo esac", "{ :; }",
     "if :; then :; fi", "case a in b) ;; esac", "(( 1 < 2 ))", "echo ${x:-a}",
     "cat <<EOF $(echo a)" + NL + "it's" + NL + "EOF",
+    "echo `echo it's`", "( cat <<. )" + NL + "it's" + NL + ".",
 ]
 _SEPARATORS = [NL, "; ", " && ", NL + NL, " ;" + NL, " || "]
 _GLUE = ["'", '"', B, "#", NL, ";", "{", "}", "(", ")", "`", "$", "$'", "<<", "<<.", " ", "|",
@@ -579,6 +587,20 @@ _NEIGHBOURS = [
     'name=report.txt; echo "${name: -3}" ${name:0:6} ${x:-\'$(date)\'}',
     "(cat <<'EOF') | sort" + NL + "it's fine" + NL + "EOF" + NL + "echo ok",
     "echo $((echo a; echo b) | sort)",
+    # a subshell's output sent elsewhere, escaped variables in a heredoc, `-c` options, a
+    # subscript or an extglob group in an array, plain printf, `$$`
+    "( echo 'rm -rf /' ) >/dev/null | cat; echo done",
+    "( echo 'rm -rf /' ) >/dev/null | bash",
+    "{ echo hi; echo there; } | sort",
+    "bash <<EOF" + NL + "echo \\$HOME" + NL + "EOF",
+    "bash <<EOF" + NL + "for f in *; do echo \\$f; done" + NL + "EOF",
+    "bash <<EOF" + NL + "x=1; echo \\${x}" + NL + "EOF",
+    "bash -c -- 'echo hi' x",
+    "declare -A m=( [a;b]=1 )",
+    "shopt -s extglob" + NL + "x=(@(a|b))",
+    "printf '%-10s|%5.2f\\n' name 3.14159",
+    'echo `date +%s` $$ "$$" ${$}',
+    'bash "$SCRIPT" --verbose', "echo ${x:-a<b} ${y//;/,}",
 ]
 
 
@@ -709,6 +731,88 @@ def test_harmless_neighbours_still_pass(cmd):
     # a heredoc in a subshell keeps its renamed delimiter, its body after the subshell
     ("( cat <<. )\nit's\n.\nrm -rf /", "destructive_removal"),
     ("( cat <<2 )\nit's\n2\nrm -rf /", "destructive_removal"),
+    # what a subshell, a group or a list writes: every command's output, in order and joined,
+    # also with redirections after the closer that leave the standard output where it is
+    ("( echo 'rm -rf /'; echo x ) | bash", "destructive_removal"),
+    ("( echo 'rm -rf /' && true ) | bash", "destructive_removal"),
+    ("( echo 'rm -rf /' ) 2>&1 | bash", "destructive_removal"),
+    ("{ echo 'rm -rf /'; } 2>&1 | bash", "destructive_removal"),
+    ("(echo 'rm -rf /')>&1|sh", "destructive_removal"),
+    ("while true; do echo 'rm -rf /'; break; done | bash", "destructive_removal"),
+    ("{ echo 'rm -rf /'; echo ls; } | bash", "destructive_removal"),
+    ("{ echo 'rm -rf /'; :; } | sh", "destructive_removal"),
+    ('bash -c "echo \'rm -rf /\'; echo ls" | bash', "destructive_removal"),
+    ("echo ls | { echo 'rm -rf /'; cat; } | bash", "destructive_removal"),
+    ("(printf 'r'; printf 'm -rf /') | bash", "destructive_removal"),
+    # backticks: an apostrophe, a nested backtick, a subshell inside; `$$` before `(`
+    ("echo `echo it's`; rm -rf /", "destructive_removal"),
+    ("echo `'`; rm -rf /", "destructive_removal"),
+    ("x=`'`\nrm -rf /", "destructive_removal"),
+    ("o `'`\"$(rm -rf /)\"", "destructive_removal"),
+    ("o $()`'`;rm -rf /", "destructive_removal"),
+    ('echo "$$("\nrm -rf /', "destructive_removal"),
+    ("echo `echo \\`rm -rf /\\``", "destructive_removal"),
+    (": `: \\`command r'm' -rf /\\``", "destructive_removal"),
+    (": `: \\`env $(echo rm) -rf /\\``", "opaque_command"),
+    (": `( >o.txt $(echo rm) -rf / )`", "opaque_command"),
+    ("x=`(>o.txt $(echo rm) -rf /)`", "opaque_command"),
+    (": $(echo `( >o.txt $(echo rm) -rf / )`)", "opaque_command"),
+    ("x=`cat <<E\necho # it's\nE`\nbash -c \"x=1 \\\"rm\\\" -rf '/'\"", "destructive_removal"),
+    # an unquoted heredoc expands a `$` after an even run of backslashes
+    ("P='rm -rf /'; bash <<EOF\n\\\\$P\nEOF", "opaque_command"),
+    ("P='rm -rf /'; cat <<EOF | bash\n\\\\$P\nEOF", "opaque_command"),
+    # a heredoc in a subshell or `$( )`: an unquoted body's substitutions after an
+    # apostrophe, a `$(` inside double quotes, the empty delimiter `<<''`
+    ("( cat <<EOF )\ndon't $(rm -rf /)\nEOF", "destructive_removal"),
+    ("( cat <<. )\nit's `rm -rf /`\n.", "destructive_removal"),
+    ("(<<.)\n'$(rm -rf /)", "destructive_removal"),
+    ("echo \"$(cat <<'E'\n\"$('\nE\n)\"\nrm -rf /", "destructive_removal"),
+    ("echo \"$(cat <<''\n(\n)\"\nrm -rf /", "destructive_removal"),
+    ("o \"$(<<''\n'\n)\"\nrm -rf /", "destructive_removal"),
+    # assignment words before a program; a shell's options after `-c`
+    ("a+=1 rm -rf /", "destructive_removal"),
+    ("a+= rm -rf /", "destructive_removal"),
+    ("a[0]=1 rm -rf /", "destructive_removal"),
+    ("a[x]+=y rm -rf /", "destructive_removal"),
+    ("bash -c -- 'rm -rf /'", "destructive_removal"),
+    ("bash -c - 'rm -rf /'", "destructive_removal"),
+    ("bash -c -e 'rm -rf /'", "destructive_removal"),
+    ("bash -c +e 'rm -rf /'", "destructive_removal"),
+    ("bash -c -o errexit 'rm -rf /'", "destructive_removal"),
+    ("sh -c -x 'rm -rf /'", "destructive_removal"),
+    ("sh -c - 'e;rm -rf /'\"\"", "destructive_removal"),
+    ("xargs -0 bash -c <<< 'rm -rf /'", "opaque_command"),
+    # printf: `\c` in `%b` ends all output; precision, `%c` and `*`
+    ("env printf '%b%s' 'rm -rf /\\c' x | bash", "destructive_removal"),
+    ("printf '%.1s%.1s -rf /' rx mx | bash", "destructive_removal"),
+    ("printf '%c%c -rf /' rat mouse | bash", "destructive_removal"),
+    ("printf '%*s -rf /' 1 rm | bash", "destructive_removal"),
+    ("printf '%.*s -rf /' 2 rmxx | bash", "destructive_removal"),
+    # a named descriptor across a line continuation; an unclosed `$[` inside `for (( ))`; a
+    # blank inside `${...}` before the program word
+    ("{d\\\n}>o rm -rf /", "destructive_removal"),
+    ("{\\\nfd}>f rm -rf /", "destructive_removal"),
+    ("{fd\\\n}>f rm -rf /", "destructive_removal"),
+    ("{fd}\\\n>f rm -rf /", "destructive_removal"),
+    ("for((;;$[))do rm -rf /;done", "destructive_removal"),
+    ("${x#'/' }rm -rf /", "opaque_command"),
+    # the 300 000-draw run of this round: a substitution inside `${...}` in a subshell's
+    # heredoc body, a quoted `-c` script that starts like a redirection, a line continuation
+    # in a comment inside backticks, a script word that expands to nothing, a backtick in a
+    # heredoc delimiter, and operators inside `${...}`
+    ("( cat <<. )\nit's\n. && echo \"${u:-$(env \"rm\" -rf '/')}\"", "destructive_removal"),
+    ("bash -c -e '2>/dev/null r\\\nm -rf /' ;\ntrue", "destructive_removal"),
+    ("cat <<-EOF\n\tit's\n\tEOF && : `#( >\\\no.txt bash <<EOF\nr\\\nm -rf /\nEOF )` && echo $'a\\x27b'", "destructive_removal"),
+    ("bash $!<<< 'r\\m -rf /'", "destructive_removal"),
+    ("echo <<.`echo it's`; echo `echo \\`x=$(rm -rf /)\\``", "destructive_removal"),
+    ("X=${x#'rm -rf /'; bash <<< {fd}>o rm -rf /", "destructive_removal"),
+    # an unclosed `(` inside backticks, an array inside an array, an empty process
+    # substitution (bash expands it to nothing), env's program by a variable under find -exec
+    ("x=`(echo `2>/dev/null $'\\x72m' -rf /`|}\n)`", "destructive_removal"),
+    ("x=(a=(a 'rm -rf /\n\necho a; rm -rf /", "opaque_command"),
+    ("x=(a 'b c' x=(a 'b \"d\")\nrm -rf /", "opaque_command"),
+    ("eval 'rm -rf /<()'", "destructive_removal"),
+    ("echo ! ;\nfind . -maxdepth 0 -exec env X=1 $exec rm -rf / \\; | cat || : <<E\nit's\nE", "opaque_command"),
 ])
 def test_what_the_differential_found_is_read(cmd, category):
     """Each row is a class the bash differential found while the grammar reading was built:
@@ -720,6 +824,19 @@ def test_what_the_differential_found_is_read(cmd, category):
     for profile in ("host", "jailed", "remote"):
         v = classify_command(cmd, profile=profile)
         assert v.blocked and category in v.categories, (profile, cmd, v.categories)
+
+
+# Refused at the base and found passing by a fuzz run of this reading: kept refused (bash
+# reads `<<` before an operator as a syntax error, so nothing runs; the base read the
+# here-string as the shell's script).
+_BASE_REFUSALS = ["bash << <<< 'rm -rf /'"]
+
+
+@pytest.mark.parametrize("cmd", _BASE_REFUSALS)
+def test_a_refusal_of_the_base_stays(cmd):
+    """MUTATION: take the word after `<<` as its delimiter even when it is an operator - red."""
+    for profile in ("host", "jailed", "remote"):
+        assert classify_command(cmd, profile=profile).blocked, (profile, cmd)
 
 
 def test_eval_keeps_the_earlier_reading_of_its_words():
@@ -756,6 +873,14 @@ def test_the_new_shapes_name_their_way_out():
         ('eval "$cmd"', "the command itself", "eval 'echo hi'"),
         ("xargs -I{} sh -c 'wc -l {}'", "hand each item over as an argument",
          "xargs -I{} sh -c 'wc -l \"$1\"' _ {}"),
+        ("for %i in (*.txt) do echo %i", "use PowerShell",
+         'powershell -Command "Get-ChildItem *.txt | ForEach-Object { $_.Name }"'),
+        ("rm -rf ~/.cache/$X", "the folder itself is deleted, so write the path out",
+         "rm -rf ~/.cache/myapp"),
+        ('rm -rf "$HOME/$X"', "write the path out", 'rm -rf "$HOME/.cache/myapp"'),
+        ('P=foo; bash <<< "echo $P"', "is not exported is empty in that shell",
+         "export P=foo; bash <<< 'echo $P'"),
+        ("x=(a;b)", "quote that element", "x=('a;b')"),
     ]:
         v = classify_command(cmd, profile="host")
         assert v.blocked and words in v.reason, (cmd, v.reason)

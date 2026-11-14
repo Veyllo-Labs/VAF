@@ -1128,9 +1128,13 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   script (`bash`, `sh -s`, `. /dev/stdin`): what `echo`, `printf` and `yes` print into the
   pipe (`echo 'rm -rf /' | bash`; dash's echo decodes escapes, so both spellings are read;
   printf's format is used again while arguments are left, as printf does, `%b` decodes its
-  argument's escapes, and output past a bound is refused as unreadable text), what a
-  subshell, a group or a command run from text prints (`( echo '...' ) | sh`,
-  `bash -c "echo '...'" | bash`), a heredoc
+  argument's escapes, `\c` there ends all of printf's output, and precision, `%c` and a `*`
+  width are followed; output past a bound is refused as unreadable text), what a subshell, a
+  group, a loop or a command run from text prints, every command's output in it and those
+  writes joined (`( echo '...'; echo x ) | sh`, `(printf 'r'; printf 'm ...') | bash`,
+  `bash -c "echo '...'" | bash`), also with redirections after its closer that leave the
+  standard output where it is (`( ... ) 2>&1 | bash`; `( ... ) >f | bash` hands on
+  nothing), a heredoc
   or a here-string, also passed on through a filter (`cat <<'EOF' | sort | bash`) or a
   command that runs another one (`eval`, `sh -c`, `env -S`, a runner), and into a carried
   command or a subshell. Text from double quotes is read the way bash hands it over:
@@ -1143,7 +1147,12 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   a double-quoted here-string or an unquoted heredoc before the shell reads it is refused as
   `expanded_input` (`bash <<< "echo $P"`, `bash <<EOF` with `echo $P` in the body, also
   passed on through `cat <<EOF | bash`): quote it (`<<'EOF'`, `<<< '...'`), so the shell
-  reads the variables itself; a quoted heredoc passes. A newline right after a `|`
+  reads the variables itself (a variable that is not exported is empty in that shell: export
+  it, or write its value in), or escape it (`\$P`, which an unquoted heredoc hands on as
+  `$P`; `\\$P` expands); a quoted heredoc passes. Assignment words before a program are
+  stepped over in every form bash takes (`a+=1 cmd`, `a[0]=1 cmd`), and a shell reads its
+  options after `-c` too and runs the first word that is none (`bash -c -e '...'`,
+  `sh -c - '...'`). A newline right after a `|`
   continues the pipeline, as bash reads it.
 - **Bounds.** Every reading, the command itself included, spends one of
   `MAX_NESTED_COMMANDS` (64), so one command carries at most 63 nested readings, each
@@ -1205,10 +1214,24 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   heredoc ends with that text); a heredoc in a subshell keeps a renamed delimiter whose body
   comes after the subshell (`( cat <<. )` NL ...); arithmetic reads its text as if in double
   quotes, so a `'` quotes nothing in `$((...))`, `((...))`, `for ((...))`, `$[...]` and a
-  substring's offset and length (`${x:'$(cmd)'}` runs cmd); an operator, a redirection or a
-  `(` inside an array assignment's parentheses (`x=(a;` NL `cmd`) is a syntax error after
-  which bash drops that line and runs the next one, so such a command is refused (quote the
-  element: `arr=('a;b' c)`);
+  substring's offset and length (`${x:'$(cmd)'}` runs cmd), and an unclosed `$[` there ends
+  at the arithmetic's own `)`; an operator, a redirection or a `(` inside an array
+  assignment's parentheses (`x=(a;` NL `cmd`) is a syntax error after which bash drops that
+  line and runs the next one, so such a command is refused (quote the element:
+  `arr=('a;b' c)`), while a subscript (`m=([a;b]=1)`) and an extglob group in a text that
+  turns extglob on (`x=(@(a|b))`) pass; a blank or an operator character inside `${...}`
+  stays in its word (`${x#'/' }cmd`); a backtick pair is written as `$(...)` when its text
+  holds a nested backtick, leaves a quote open (closed at its end) or starts with `(`, its
+  line continuations joined first (also in a comment there) and a parenthesis it leaves open
+  closed as well, and `$$(` as `${$}(`; an array inside an array is the same syntax error,
+  and an empty process substitution expands to nothing (`/<()` is `/`); a shell
+  whose script name is an expansion reads its input as well (`bash $! <<< '...'`); a
+  heredoc delimiter word may hold a backtick pair; a named descriptor `{fd}>` holds across a
+  line continuation; inside `$( )` a
+  heredoc body ends early only at a line that starts with its delimiter and holds a `)`
+  (with `<<''` every line starts with it), and a heredoc in a subshell or `$( )` has its
+  unquoted body's substitutions written once more at its start, and what its body leaves
+  open for the readings above (a quote, a parenthesis, a `$(` in double quotes) closed;
   redirections move behind the last word of their simple command (`>f mkfs x`,
   `sudo >f rm -rf /`, `rm -rf ~>/dev/null`, `{fd}>f rm -rf /`). The text `bash -c`, `eval`,
   `ssh`, `trap` or a runner runs is written out the same way, and the program a runner or
@@ -1217,11 +1240,15 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   continuations, every reserved word and brace form, `!`, `time`, `coproc`, functions,
   leading redirections, pipes into groups, `env -S`, `find -exec`) through bash with a marker
   program in the dangerous one's place, and checks the twin with `rm -rf` in its place:
-  300 000 draws, 178 814 of which ran the marker, and every one of their twins refused on
+  300 000 draws, 179 173 of which ran the marker, and every one of their twins refused on
   host, jailed and remote; two further generators (nested quote levels, carriers, arrays,
-  arithmetic and heredocs inside substitutions) ran 60 000 and 15 000 draws, 39 609 and
-  3 497 of which ran the marker, again with no twin let through (bash 5.3; the suite runs
-  1 600 draws). The classes the differential found on the way are each pinned in
+  arithmetic and heredocs inside substitutions) ran 60 000 and 15 000 draws, 39 656 and
+  3 444 of which ran the marker, again with no twin let through; a generator that mutates
+  working commands (inserted operators, reserved words and quotes, cut and swapped spans)
+  ran 200 000 draws, 49 729 of which ran the marker: 7 twins passed, six only through a
+  glob that a file an earlier draw left behind turned into `-rf` and one through an empty
+  substitution glued to the option, both named below (bash 5.3; the suite runs 1 600
+  draws). The classes the differential found on the way are each pinned in
   `tests/test_command_grammar_reading.py`.
 - **Named boundary: what it does not read.** cmd.exe's and PowerShell's own grammar (`%VAR%`
   as the program, the text `pwsh -Command` runs); dash's differences from bash, read as bash,
@@ -1237,7 +1264,13 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   text and run it later or elsewhere: `alias` with `expand_aliases`, `${x@P}`, `PS4` with
   `set -x`, `PROMPT_COMMAND`, `BASH_ENV`, `mapfile`/`readarray -C`, `complete -C`, `bind -x`
   (`trap`'s command is read); the output of other programs piped into a shell beyond those
-  named above. A `case` statement inside a substitution stays refused as unreadable (see
+  named above, also text `sed` or `cut` changes on its way in; a function used as the shell
+  for its input (`f() { bash; }; echo ... | f`); an empty substitution glued to an option
+  (`rm $()-rf /`); an unset variable before a `/` (`rm -rf $X/`, a variable's value) and a glob
+  a file name turns into an option (`rm *` beside a file named `-rf`), both the state of the
+  machine rather than the text; a shell's own error messages fed into a shell (`cmd 2>&1 |
+  bash` hands on `command not found` lines that quote the command word). A
+  `case` statement inside a substitution stays refused as unreadable (see
   `case` above).
 - **Comments and heredocs in the other two readings.** Neither takes a `#` as a comment, so
   for them an apostrophe in a comment or a heredoc body opens a quote that swallows the later

@@ -105,7 +105,12 @@ refuses, with its categories: a union like the frozen one, so it only adds refus
   A substitution in a heredoc body that the reading above cannot read (a `case` in it)
   refuses as unreadable, as in a command.
   A heredoc's body waits for the end of the line that wrote it, also past a newline inside a
-  `$( )` on that line. Inside `((...))` a `<<` is a shift and a `#` no
+  `$( )` on that line. Inside `$( )` a body ends early only at a line that starts with
+  its delimiter and holds a `)` (`EOFx)` runs `x`, `EOFx` is body; with `<<''` every line
+  starts with it). For a heredoc read or written inside `$( )` or a subshell, an unquoted
+  body's substitutions are written once more on a line of their own at its start, and what
+  the body leaves open for the reading above (a quote, a parenthesis, a `$(` inside double
+  quotes) is closed at its end. Inside `((...))` a `<<` is a shift and a `#` no
   comment, once its `))` is found; without one bash reads two subshells (`((echo a) # x`).
   A `$((` without its `))` ends where its parentheses balance, and the text between is read
   as a command substitution of its own, where a heredoc ends with that text (`$(( 1 << 2 )`
@@ -114,7 +119,13 @@ refuses, with its categories: a union like the frozen one, so it only adds refus
   `$\\` NL `'...'`, `2\\` NL `>&1`, a pipe that goes on in the next line); a backslash at the
   very end lost its newline to the check's strip().
 - G4: `$'...'` is decoded with bash's escapes into one single-quoted word, `$"..."` is
-  `"..."`, and an escaped letter or digit loses its backslash (`r\\m` is `rm`).
+  `"..."`, and an escaped letter or digit loses its backslash (`r\\m` is `rm`). A backtick
+  pair is written as `$(...)` whenever its text changed when unescaped (a nested backtick),
+  leaves a quote open (an apostrophe, closed at its end) or starts with `(` (written `$( (`,
+  never `$((`; a parenthesis it leaves open is closed too); bash joins a backtick text's
+  line continuations first, also in a comment there. `$$` before a `(` is written `${$}`.
+  A named descriptor `{fd}>` is one also across
+  a line continuation, and a heredoc delimiter word may hold a backtick pair.
 - G5: reserved words count where a command starts. `!`, `time [-p]`, `coproc [NAME]`,
   `function NAME` and `NAME ()` are dropped (a function's body is read where it stands). A
   compound command (`{ }`, `if`, `while`/`until`, `for`/`select`, `case`) becomes a list:
@@ -132,7 +143,13 @@ refuses, with its categories: a union like the frozen one, so it only adds refus
   length (`${x:'$(cmd)'}` runs cmd). An operator, a redirection or a `(` inside an array
   assignment's parentheses (`x=(a;` NL `cmd`) is a syntax error after which bash drops the
   line and reads on at the next one, outside any compound that held it: refused as
-  "broken_array", since no text the reading writes places that next line.
+  "broken_array", since no text the reading writes places that next line. A subscript
+  (`m=([a;b]=1)`) is read up to its `]`, and an extglob group (`x=(@(a|b))`) as a word when
+  the text turns extglob on; an array inside an array (`x=(a=(b))`) is that syntax error too.
+  An empty process substitution expands to nothing (`/<()` is `/`). Inside arithmetic an
+  unclosed `$[` or `${` ends at that arithmetic's own `)` (`for((;;$[))`),
+  and a blank or an operator character inside
+  `${...}` is part of its word, written quoted (`${x#'/' }cmd`, `${x#a; b <<< c}`).
 - G6: redirections move behind the last word of their simple command, in their order
   (`>f mkfs x`, `sudo >f rm -rf /`, `rm -rf ~>/dev/null`, `{fd}>f rm -rf /`); `>|` is
   written `>`, an escaped blank quoted.
@@ -154,7 +171,8 @@ so no existing reason changes.
   stands where the reading above sees a program; elsewhere only `$'..'` and `$".."`. Not
   under an evaluated `$((...))`, where a variable is an operand. Also the program a runner
   or `find -exec` starts, in its spelling as written (`uv run "$TOOL" -rf ~`; the text it
-  hands on is joined back with shlex, which quotes the variable into a literal).
+  hands on is joined back with shlex, which quotes the variable into a literal), also the
+  program after its wrappers and assignments (`find . -exec env X=1 $CMD ...`).
 - B2: what reaches a shell's input as its script (`bash`, `sh -s`, `. /dev/stdin`) is read as
   that script: what `echo`, `printf` and `yes` print (dash's echo always decodes escapes,
   so both spellings; printf's format used again while arguments are left, `%b` with its
@@ -190,11 +208,23 @@ so no existing reason changes.
   runs it once the string is an array reference (`x='a[$(...)]'; echo $((x))`, `printf -v`,
   `let`). A `$(` there ends where its parentheses balance and where the grammar reading ends
   it (a case pattern's `)` closes nothing); both texts are read.
+- Output (B2): what a text writes is what every pipeline in it ends with, in order, and
+  those writes joined (`(printf 'r'; printf 'm ...') | bash`): a sequential list, a group or a
+  subshell hands on every command's output, also when redirections after its closer leave
+  the standard output where it is (`( echo ... ) 2>&1 | bash`; `>f` hands on nothing).
+  printf's precision, `%c` and a `*` width or precision are followed, and `\\c` in a `%b`
+  argument ends all of its output. An unquoted heredoc expands a `$` after an even run of
+  backslashes (`\\\\$P`), not after an odd one (`\\$HOME` hands on `$HOME`).
 Also: eval's own redirections are no words of the text it runs (`eval bash <<EOF`; its words
 with them, as read before, are read as well); a
 variable after a protected root in a removal target is judged by the root (`rm -rf /$X`,
 `"$HOME/$X"`), one that starts the target is not (`rm -rf "$BUILD_DIR"`); `&>file` written
-against its target is no script name.
+against its target is no script name. Assignment words before a program are stepped over in
+every form bash takes (`a+=1`, `a[0]=1`, `a[k]+=v`). A shell reads options after `-c` too, up
+to `-`, `--` or the first word that is none, and runs that word (`bash -c -e '...'`); its own
+redirections are no script (`xargs -0 bash -c <<< '...'` leaves the script to xargs). An
+expansion where a shell's script name stands may expand to nothing, so the shell's input is
+read as its script as well (`bash $! <<< '...'`).
 
 NAMED BOUNDARY: cmd.exe's and PowerShell's own grammar (`%VAR%` as the program, the text
 `pwsh -Command` runs); dash's differences from bash, read as bash, the larger grammar;
@@ -207,10 +237,17 @@ command text and run it later or elsewhere: `alias` with `expand_aliases`, `${x@
 with `set -x`, `PROMPT_COMMAND`, `BASH_ENV`, `mapfile`/`readarray -C`, `complete -C`,
 `bind -x` (`trap` is read); a descriptor named through a variable (`exec {fd}< ...; bash
 /dev/fd/$fd`); a coprocess's or a named pipe's text; the file names `find` or `xargs` hands a
-command; the output of other programs piped into a shell beyond those above. On Windows,
-cmd.exe's `for %i in (*.txt) do ...` reads as bash and is refused (a bash `for` there takes
-`(*.txt)` for a subshell running a glob). The reserved word `case` where a command starts inside a substitution refuses the
-command in the reading above, since a pattern's `)` would close the substitution early:
+command; the output of other programs piped into a shell beyond those above, also text
+`sed` or `cut` changes on its way in; a function used as the shell for its input
+(`f() { bash; }; echo ... | f`); an empty substitution glued to an option (`rm $()-rf /`, or
+two backticks there); an unset variable before a `/` (`rm -rf $X/`, a variable's value) and a
+glob a file name turns into an option (`rm *` beside a file named `-rf`), both the state of the
+machine, not the text; a shell's own error messages fed into a shell (`cmd 2>&1 | bash`
+hands on `command not found` lines that quote the command word). On
+Windows, cmd.exe's `for %i in (*.txt) do ...` reads as bash and is refused, its reason naming
+PowerShell (a bash `for` there takes `(*.txt)` for a subshell running a glob). The reserved
+word `case` where a command starts inside a substitution refuses the command in the reading
+above, since a pattern's `)` would close the substitution early:
 `case`, one shell word (quote-aware) and `in`; the word elsewhere, also at the start of a
 line of prose ("case 2 is covered"), does not.
 
@@ -517,7 +554,9 @@ _OPAQUE_REASONS = {
     "expanded_input": "feeds a shell text in which bash expands variables before the shell reads "
                       "it (an unquoted heredoc, a here-string in double quotes), so the text being "
                       "approved is not the text that will run; quote it (`<<'EOF'`, "
-                      "`<<< '...'`) so the shell reads the variables itself",
+                      "`<<< '...'`) so the shell reads the variables itself (a variable that "
+                      "is not exported is empty in that shell: export it, or write its value "
+                      "in), or escape the variable (`\\$P`)",
     "xargs_text": "lets xargs fill in the script a shell's `-c` runs, so the text being approved "
                   "does not show what runs; hand each item over as an argument instead "
                   "(`xargs -I{} sh -c 'wc -l \"$1\"' _ {}`), or run the program directly "
@@ -775,6 +814,9 @@ def _split_segments(command: str) -> List[tuple]:
                 # What the body supplies: an unquoted one after its own escapes are removed.
                 target.append(("heredoc_u" if found else "heredoc_q",
                                text if quoted else _heredoc_supplied(text)))
+                # And the body as written, for what bash expands in it (a backslash run's
+                # parity decides, which the supplied text no longer shows).
+                target.append(("heredoc_raw", text))
                 pos = span[1] + 1
             pending = []
             _flush()
@@ -1192,9 +1234,10 @@ def _executable_at(tokens: List[str]) -> tuple:
                 continue
             i += 1
             continue
-        if "=" in tok and tok.split("=", 1)[0].isidentifier():
+        if "=" in tok and (tok.split("=", 1)[0].isidentifier()
+                           or _ASSIGNMENT_WORD_RE.match(tok)):
             i += 1
-            continue  # VAR=value prefix
+            continue  # VAR=value prefix, also `a+=1`, `a[0]=1`, `a[k]+=v`
         if leading_argument_due:
             leading_argument_due = False
             i += 1
@@ -1352,12 +1395,19 @@ def _nested_commands(exe: str, args: List[str], reparse: bool = True) -> Iterabl
         parsed = _reparsed(text) if reparse else plain
         return [(where, parsed)] + ([(where, plain)] if plain != parsed else [])
     if exe in _COMMAND_STRING_SHELLS:
+        found: List[tuple] = []
         for pos, tok in enumerate(args):
             if tok in ("-o", "+o"):           # `bash -o pipefail -c ...`: -o takes a word
                 continue
             if tok.startswith("-") and not tok.startswith("--") and "c" in tok[1:]:
-                return again("local", args[pos + 1]) if pos + 1 < len(args) else []
-        return []
+                found = again("local", args[pos + 1]) if pos + 1 < len(args) else []
+                break
+        # bash reads options after `-c` too, up to `-`, `--` or a word that is none
+        # (`bash -c -e '...'`, `bash -c -- '...'`): that word is the script, read as well.
+        script = _shell_c_script(args)
+        if isinstance(script, str):
+            found += [entry for entry in again("local", script) if entry not in found]
+        return found
     if exe == "su":
         for pos, tok in enumerate(args):
             if tok in ("-c", "--command") and pos + 1 < len(args):
@@ -1923,10 +1973,15 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
     """
     if _budget is None and _depth == 0:
         try:
-            return _read(command, profile=profile, _depth=0, _budget=None,
-                         _stdin_fetch=_stdin_fetch, _arithmetic=_arithmetic,
-                         _stdin_opaque=_stdin_opaque, _stdin_texts=_stdin_texts,
-                         _normalized=_normalized, _in_arith=_in_arith)
+            verdict = _read(command, profile=profile, _depth=0, _budget=None,
+                            _stdin_fetch=_stdin_fetch, _arithmetic=_arithmetic,
+                            _stdin_opaque=_stdin_opaque, _stdin_texts=_stdin_texts,
+                            _normalized=_normalized, _in_arith=_in_arith)
+            if verdict.blocked and verdict.opaque_shape == "expansion" and \
+                    _CMD_FOR not in verdict.reason and _CMD_FOR_RE.search(command):
+                # Refused by the reading of the glob in its `(...)`, which has no `for`.
+                verdict.reason += _CMD_FOR
+            return verdict
         except Exception as exc:        # noqa: BLE001 - fail closed, whatever went wrong
             # The type and the place only: an exception's message can quote the command,
             # and a command can carry a secret.
@@ -2010,6 +2065,8 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[List[int
     pipeline_opaque = _stdin_opaque
     pipeline_texts: List[str] = list(_stdin_texts)
     exec_input: Optional[tuple] = None          # `exec <...`: the input of every later segment
+    closer_output: Optional[tuple] = None       # what the subshell just closed writes
+    text_output: tuple = ("", ())               # what this whole text writes (verdict.output)
     # The shapes of the additive checks, made `opaque_command` after the loop, so a shape an
     # existing check named stays the one the refusal names.
     late: List[str] = []
@@ -2192,7 +2249,7 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[List[int
         # and classify one candidate per segment, past the bound the budget sets per call.
         def _carried():
             for kind, inner in carried:
-                if kind in ("heredoc_q", "heredoc_u"):
+                if kind in ("heredoc_q", "heredoc_u", "heredoc_raw"):
                     continue                # a heredoc body: data, its substitutions apart
                 if kind == "unreadable":
                     yield kind, "", inner
@@ -2317,7 +2374,24 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[List[int
         elif carried_output is not None and printed is None and not decodes:
             out_input = (carried_output[0] or out_input[0],
                          list(carried_output[1]) + list(out_input[1]))
+        elif (toks and connector != "pipe" and closer_output is not None
+              and _only_redirections(toks)):
+            # The redirections after a subshell's or a group's closer stand in a segment of
+            # their own: what it writes goes on unless they move the standard output away
+            # (`( echo ... ) 2>&1 | bash`, `{ ...; } >&1 | sh`; `( ... ) >f | bash` hands on
+            # nothing).
+            out_input = ("", []) if _moves_stdout(toks) else closer_output
+        closer_output = (out_input[0], list(out_input[1])) if not toks and (
+            subshell_output is not None) else None
         pipeline_opaque, pipeline_texts = out_input
+        # The text's own output: every pipeline's last segment writes to it, in order (a
+        # sequential list, a group or a subshell prints what each of its commands prints, and
+        # bash joins the writes: `(printf 'r'; printf 'm -rf ~')`). A subshell whose
+        # redirections stand in the next segment hands its output to that segment.
+        nxt = triples[index + 1] if index + 1 < len(triples) else None
+        if nxt is None or nxt[0] != "pipe" and not (
+                closer_output is not None and _only_redirections(_tokens(nxt[1]))):
+            text_output = _output_union(text_output, out_input)
         if toks and _exe_base(toks[0]) == "exec" and _only_redirections(toks[1:]):
             # `exec < <(curl x)`: every later segment of this text reads that input (B6).
             exec_shape, exec_texts, exec_redirected = _input_of(toks[1:], carried)
@@ -2395,7 +2469,11 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[List[int
     if "opaque_command" in cats:
         verdict.opaque_shape = opaque_shape or "program"
     verdict.share_piece = share_piece
-    verdict.output = (pipeline_opaque, tuple(pipeline_texts))
+    out_texts = text_output[1]
+    if len(out_texts) > 1:
+        # The writes as bash joins them, one after the other (`printf 'r'; printf 'm ...'`).
+        out_texts = out_texts + ("".join(out_texts),)
+    verdict.output = (text_output[0], out_texts)
     if blocking:
         verdict.blocked = True
         verdict.reason = _refusal(blocking[0], verdict.opaque_shape, text,
@@ -2445,6 +2523,8 @@ def _refusal(category: str, opaque_shape: str, text: str, *, share_piece: str = 
         elif opaque_shape in ("program", "frozen") and "\n" in text:
             sentence += _OPAQUE_REASONS["lines"]    # perhaps a code fence or a continued line
     sentence += _WAY_OUT.get(category, "")
+    if category == "destructive_removal" and _ROOT_THEN_VARIABLE_RE.search(text):
+        sentence += _ROOT_THEN_VARIABLE
     if quote_cure and opaque_shape == "shell_text":
         sentence += _QUOTE_THE_DELIMITER
     if heredoc and (category in _HEREDOC_LINE_CATEGORIES or (
@@ -2455,6 +2535,16 @@ def _refusal(category: str, opaque_shape: str, text: str, *, share_piece: str = 
                      "text into a file use the file tool, and for a commit or pull request "
                      "message `git commit -F FILE` or `gh pr create --body-file FILE`")
     return f"Command contains a forbidden pattern: it {sentence}"
+# A removal target with a variable after a protected folder (`~/.cache/$X`, `"$HOME/$X"`,
+# `/var/tmp/$USER`): judged by that folder, since the variable may be empty.
+_ROOT_THEN_VARIABLE_RE = re.compile(
+    r"(?:^|[\s;&|(])[\"']?(?:~|/|\$HOME\b|\$\{HOME\})[^\s;&|$]*\$[A-Za-z_{]")
+_ROOT_THEN_VARIABLE = ("; a variable after a folder may be empty, and then the folder itself "
+                       "is deleted, so write the path out (`rm -rf ~/.cache/myapp`)")
+# cmd.exe's `for %i in (...)`, which a bash reading takes for a subshell running a glob.
+_CMD_FOR_RE = re.compile(r"(?i)(?:^|[\s;&|(])for\s+(?:/[a-z]\s+(?:\S+\s+)?)*%%?[a-z]\s+in\s*\(")
+_CMD_FOR = ("; cmd.exe's `for %i in (...)` is read as bash here, so use PowerShell "
+            "(`powershell -Command \"Get-ChildItem *.txt | ForEach-Object { ... }\"`)")
 # Offered only while the frozen reading lets the command pass (_join_the_frozen_reading
 # takes both out otherwise): that reading reads every line, quoted delimiter or not.
 _QUOTE_THE_DELIMITER = ("; or, if the heredoc's text must not be expanded, quote its delimiter "
@@ -2482,7 +2572,7 @@ def _heredoc_writes_text(text: str) -> bool:
     triples = _split_segments(text)
     lines = "\n".join([seg for _, seg, _ in triples] + [
         body for _, _, carried in triples for kind, body in carried
-        if kind not in ("heredoc_q", "heredoc_u")])
+        if kind not in ("heredoc_q", "heredoc_u", "heredoc_raw")])
     words = {w.replace("\\", "").rsplit("/", 1)[-1]
              for w in re.split(r"[\s;&|()<>`'\"{}:=]+", lines) if w}
     if words & _HEREDOC_SCRIPT_READERS or _VARIABLE_COMMAND_RE.search(lines):
@@ -2576,8 +2666,9 @@ def _join_the_grammar_reading(verdict: CommandVerdict, g_text: str, *, profile: 
     if "opaque_command" in grammar.categories and not verdict.opaque_shape:
         verdict.opaque_shape = grammar.opaque_shape
     verdict.share_piece = verdict.share_piece or grammar.share_piece
-    if verdict.output == ("", ()):
-        verdict.output = grammar.output         # `{ echo ...; } | sh`, a group as bash reads it
+    # What the text writes, as either reading has it (`{ echo ...; } | sh`: a group as bash
+    # reads it).
+    verdict.output = _output_union(verdict.output, grammar.output)
     if grammar.blocked and not verdict.blocked:
         verdict.blocked = True
         verdict.reason = grammar.reason
@@ -2599,7 +2690,7 @@ _ARITH_SCAN = 4096
 # or backtick. Read in one step each, so a long word costs one match, not one loop per character.
 _GRAMMAR_PLAIN_RE = re.compile(r"[^ \t\n;&|()<>'\"\\$`]+")
 _GRAMMAR_DQ_RE = re.compile(r"[^\"\\$`]+")
-_GRAMMAR_BRACE_RE = re.compile(r"[^{}\[\]\\'\"$`<>]+")
+_GRAMMAR_BRACE_RE = re.compile(r"[^{}\[\]\\'\"$`<>();&| \t\n]+")
 _GRAMMAR_BODY_RE = re.compile(r"[^\\$`]+")
 _GRAMMAR_BLANKS_RE = re.compile(r"[ \t]+")
 _GRAMMAR_DIGITS_RE = re.compile(r"[0-9]+")
@@ -2635,52 +2726,44 @@ _ANSI_C_ESCAPES = {"a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f", "n
                    "r": "\r", "t": "\t", "v": "\v", "\\": "\\", "'": "'", '"': '"', "?": "?"}
 
 
-def _open_quote(text: str) -> str:
-    """The quote character a shell reading `text` is still inside at its end (`'`, `"` or a
-    backtick), else "". One pass: a backslash escapes outside single quotes."""
-    quote = ""
+def _reader_contexts(text: str) -> tuple:
+    """(still open, lowest) for `text` as the reading above counts it: the quotes (`'`, `"`, a
+    backtick) and parentheses (`(` for a plain one, a `$(`, also one inside double quotes) open
+    at its end, innermost last, and how far a `)` with nothing to close went below zero. A
+    backslash escapes the next character outside single quotes."""
+    stack: List[str] = []
+    lowest = depth = 0
     i, n = 0, len(text)
     while i < n:
         c = text[i]
-        if quote == "'":
+        top = stack[-1] if stack else ""
+        if top == "'":
             if c == "'":
-                quote = ""
+                stack.pop()
         elif c == "\\":
             i += 1
-        elif quote:
-            if c == quote:
-                quote = ""
+        elif top == '"':
+            if c == '"':
+                stack.pop()
+            elif c == "$" and text.startswith("(", i + 1):
+                stack.append("(")
+                i += 1
+            elif c == "`":
+                stack.append("`")
+        elif c == "`" and top == "`":
+            stack.pop()
         elif c in ("'", '"', "`"):
-            quote = c
-        i += 1
-    return quote
-
-
-def _paren_balance(text: str) -> tuple:
-    """(lowest, final) depth of the parentheses in `text` as the reading above counts them:
-    outside quotes, a backslash escaping the next character."""
-    quote = ""
-    depth = lowest = 0
-    i, n = 0, len(text)
-    while i < n:
-        c = text[i]
-        if quote == "'":
-            if c == "'":
-                quote = ""
-        elif c == "\\":
-            i += 1
-        elif quote:
-            if c == quote:
-                quote = ""
-        elif c in ("'", '"'):
-            quote = c
+            stack.append(c)
         elif c == "(":
-            depth += 1
+            stack.append("(")
         elif c == ")":
-            depth -= 1
-            lowest = min(lowest, depth)
+            if top == "(":
+                stack.pop()
+            elif not stack:
+                depth -= 1
+                lowest = min(lowest, depth)
         i += 1
-    return lowest, depth
+    return stack, lowest
 
 
 class _GrammarTooDeep(Exception):
@@ -2765,6 +2848,9 @@ class _GrammarText:
         self.indexes: dict = {}
         self.closed = False                 # whether the last nested list found its `)`
         self.operators = False              # whether it held an operator at its own level
+        self.array_level = -1               # the depth of the array elements being read
+        # extglob patterns (`@(a|b)`) are words only once the text turns extglob on.
+        self.extglob = "extglob" in self.names[2]
         # Inside `((...))`, `$((...))` or `for ((...))`: bash evaluates it, so a `<<` there
         # is a shift, not a heredoc, and a `#` is no comment.
         self.arith = 0
@@ -2797,8 +2883,9 @@ class _GrammarText:
     def run(self) -> str:
         return self._list("")
 
-    def body(self) -> str:
-        """An unquoted heredoc body: text, its substitutions written like the command's."""
+    def body(self, subs: Optional[List[str]] = None) -> str:
+        """An unquoted heredoc body: text, its substitutions written like the command's (and
+        each command substitution also added to `subs`)."""
         s, n, parts = self.s, self.n, []
         while self.i < n:
             m = _GRAMMAR_BODY_RE.match(s, self.i)
@@ -2812,8 +2899,14 @@ class _GrammarText:
                 self.i += 2
             elif ch == "$":
                 parts.append(self._dollar(True))
+                if subs is not None and ("$(" in parts[-1] or "`" in parts[-1]):
+                    # Written for the body, where it stands as in double quotes (also one
+                    # inside `${...}`: `${u:-$(cmd)}`).
+                    subs.append('"' + parts[-1] + '"')
             else:
                 parts.append(self._backtick(False))
+                if subs is not None:
+                    subs.append(parts[-1])
         return "".join(parts)
 
     # -- nesting ---------------------------------------------------------------------------
@@ -2872,6 +2965,8 @@ class _GrammarText:
                     top is None or top.kind != "{"):
                 # The end of `${ cmd; }`: bash closes it at a `}` where a command starts,
                 # whatever follows (`}x`, `}` and a carriage return), unlike a group's `}`.
+                # This and the newline before a heredoc's delimiter line (_bodies) overlap:
+                # either alone keeps `${| ...; }` CR-ended in a body readable; both are kept.
                 self.i = at + 1
                 closed = True
                 break
@@ -3236,7 +3331,8 @@ class _GrammarText:
             end = _GRAMMAR_DIGITS_RE.match(head).end()
             return head[end:end + 1] in ("<", ">") and head[end + 1:end + 2] != "("
         if ch == "{":
-            return bool(_NAMED_FD_RE.match(s, at))   # `{fd}>f rm -rf /`
+            # `{fd}>f rm -rf /`, also with a line continuation inside (`{fd\` NL `}>f`).
+            return bool(_NAMED_FD_RE.match(self._logical(at, 80)[0]))
         return False
 
     def _redirection(self, lv: _Level) -> None:
@@ -3245,7 +3341,7 @@ class _GrammarText:
         if m and "\\" not in s[self.i:m.end() + 1]:
             op, self.i = m.group(), m.end()     # no line continuation inside the operator
         else:
-            head, ends = self._logical(self.i, 24)
+            head, ends = self._logical(self.i, 80)
             op = _GRAMMAR_REDIRECT_RE.match(head).group()
             self.i = ends[len(op) - 1]
         if op.endswith(">|"):
@@ -3278,8 +3374,9 @@ class _GrammarText:
                 quoted, j = True, j + 2
                 continue
             head, ends = self._logical(j, 2) if ch == "$" else ("", [])
-            if head[1:2] == "(":
-                # `<<a$(b)c`: the substitution is part of the word, taken literally.
+            if head[1:2] == "(" or ch == "`":
+                # `<<a$(b)c`, `<<.\`b\``: the substitution is part of the word, taken
+                # literally (a quote inside it is no quote of the word).
                 end = _substitution_end(s, j)
                 parts.append(s[j:end])
                 j = end
@@ -3330,11 +3427,11 @@ class _GrammarText:
 
     def _prefix_line(self, delim: str, pos: int, strip_tabs: bool) -> Optional[tuple]:
         """For a heredoc written inside `$( )`, bash ends the body at the first line that STARTS
-        with the delimiter and reads the rest of that line as commands (`EOF)`, `EOF) ; echo`,
-        `EOFx)` runs `x`; measured with bash 5.3): (start of that line, end of the delimiter in
-        it). One pass from `pos`; the caller consumes what it passed over."""
-        if not delim:
-            return None
+        with the delimiter and holds a `)` after it, and reads the rest of that line as commands
+        (`EOF)`, `EOF) ; echo`, `EOFx)` runs `x`, `EOFx` alone is body; an empty delimiter
+        `<<''` starts every line, so its body ends at the first line with a `)`; measured with
+        bash 5.3): (start of that line, end of the delimiter in it). One pass from `pos`; the
+        caller consumes what it passed over."""
         s, p = self.s, pos
         while p <= len(s):
             e = s.find("\n", p)
@@ -3342,7 +3439,7 @@ class _GrammarText:
             q = p
             while strip_tabs and q < e and s[q] == "\t":
                 q += 1
-            if s.startswith(delim, q) and q + len(delim) <= e:
+            if s.startswith(delim, q) and q + len(delim) <= e and ")" in s[q + len(delim):e]:
                 return p, q + len(delim)
             p = e + 1
         return None
@@ -3386,29 +3483,38 @@ class _GrammarText:
                 line = name
             # Only a substitution in an unquoted body is written anew; text without one is kept.
             plain_body = quoted or ("$" not in body and "`" not in body)
-            written = body if plain_body else _GrammarText(body, self.depth + 1, self.names).body()
+            # Inside `$( )` or a subshell (where the body is read, or where its heredoc stands:
+            # `( cat <<. )` NL ...) the reading above counts quotes and parentheses across the
+            # body, or reads its lines as commands.
+            nested = self.depth > 1 or at > 1
+            subs: List[str] = []
+            if plain_body:
+                written = body
+            else:
+                writer = _GrammarText(body, self.depth + 1, self.names)
+                written = writer.body(subs)
+            if nested and subs:
+                # An unquoted body's substitutions run whatever its quotes: written once more
+                # on a line of their own at its start, before any apostrophe of the body can
+                # hide them from that reading (`don't $(cmd)`, `it's \`cmd\``).
+                written = ": " + " ".join(subs) + "\n" + written
             if written and not written.endswith("\n"):
-                written += "\n"                 # the delimiter on a line of its own, also after
-                                                # a body a nested heredoc left unended
-            if self.depth > 1 or at > 1:
-                # Inside `$( )` or a subshell (where the body is read, or where its heredoc
-                # stands: `( cat <<. )` NL ...) the reading above counts quotes across the body
-                # (`"$(cat <<'EOF'` NL `it's` ... `)"; rm -rf ~`): a quote the body leaves open
-                # is closed at its end, where bash would refuse that last line anyway.
-                still_open = _open_quote(written)
-                if still_open:
-                    written = (written[:-1] + still_open + "\n" if written.endswith("\n")
-                               else written + still_open)
-                # Its parentheses too: a case pattern's `)` in the body would close the
-                # substitution early for that count. Comment lines balance them; bash and the
-                # grammar reading of a script skip a comment.
-                lowest, final = _paren_balance(written)
+                # The delimiter on a line of its own, also after a body a nested heredoc left
+                # unended; overlaps with the `${ cmd; }` close in _list (either alone suffices
+                # for the forms measured, both are kept).
+                written += "\n"
+            if nested:
+                # What the body leaves open for that reading is closed at its end, where bash
+                # would refuse that last line anyway: a quote, and a parenthesis (also a `$(`
+                # inside double quotes, which that reading counts), by a comment line, which
+                # bash and the grammar reading of a script skip. A `)` too many (a case
+                # pattern's) is balanced by a comment line in front.
+                still_open, lowest = _reader_contexts(written)
                 if lowest < 0:
                     written = "#" + "(" * -lowest + "\n" + written
-                    final -= lowest
-                if final > 0:
-                    written += ("" if written.endswith("\n") or not written else "\n") + \
-                        "#" + ")" * final + "\n"
+                if still_open:
+                    closing = "".join(c if c != "(" else "\n#)" for c in reversed(still_open))
+                    written = written[:-1] + closing + "\n"
             out.append(written)
             out.append(line)
             if resume >= 0:
@@ -3425,9 +3531,38 @@ class _GrammarText:
 
     # -- words -----------------------------------------------------------------------------
 
+    def _group_end(self, at: int, opener: str, closer: str) -> int:
+        """Where the bracket group opened at `at` closes (after its closer; the end of the text
+        when it does not): nested ones counted, quoted spans and escaped characters skipped."""
+        s, n = self.s, self.n
+        depth, k = 0, at
+        while k < n:
+            c = s[k]
+            if c == "\\":
+                k += 2
+                continue
+            if c in ("'", '"'):
+                close = s.find(c, k + 1)
+                k = n if close < 0 else close + 1
+                continue
+            if c == opener:
+                depth += 1
+            elif c == closer:
+                depth -= 1
+                if depth == 0:
+                    return k + 1
+            k += 1
+        return n
+
     def _word(self) -> str:
         s, n = self.s, self.n
         parts: List[str] = []
+        if self.depth == self.array_level and s.startswith("[", self.i):
+            # An element's subscript (`m=([a;b]=1)`): bash reads it up to its `]`, operators
+            # and blanks in it included.
+            end = self._group_end(self.i, "[", "]")
+            parts.append(s[self.i:end])
+            self.i = end
         while self.i < n:
             m = _GRAMMAR_PLAIN_RE.match(s, self.i)
             if m:
@@ -3473,12 +3608,23 @@ class _GrammarText:
                 inner = self._list(")")
                 self.comsub -= 1
                 self.arith = saved
-                parts.append(ch + "(" + inner + (")" if self.closed else ""))
+                if not (self.closed and not inner.strip()):
+                    parts.append(ch + "(" + inner + (")" if self.closed else ""))
+                # else `<()`: bash expands an empty one to nothing (`/<()` is `/`; measured).
+            elif ch == "(" and parts and self.extglob and self.depth == self.array_level \
+                    and parts[-1][-1:] in ("@", "!", "+", "*", "?"):
+                end = self._group_end(self.i, "(", ")")   # `x=(@(a|b))` with extglob on
+                parts.append(s[self.i:end])
+                self.i = end
             elif ch == "(" and parts and _GRAMMAR_ARRAY_RE.match("".join(parts)):
+                if self.depth == self.array_level and not self.arith:
+                    raise _GrammarBrokenArray()   # `x=(a=(b))`: no array inside an array
                 self.i += 1                     # `arr=(...)`: its elements
                 saved, self.arith = self.arith, 0
+                saved_level, self.array_level = self.array_level, self.depth + 1
                 inner = self._list(")")
                 self.arith = saved
+                self.array_level = saved_level
                 if self.operators and not saved:
                     # An operator, a redirection or a `(` among the elements is a syntax error
                     # after which bash drops that line and reads on at the next one, outside
@@ -3570,7 +3716,9 @@ class _GrammarText:
         nxt = head[1:2]
         if nxt == "$":
             self.i = ends[1]
-            return "$$"                         # the process id; a quote after it is a quote
+            # The process id; a quote after it is a quote. Before a `(` it is written `${$}`,
+            # so the readings above do not take `$(` for a substitution (`"$$("`).
+            return "${$}" if self.s.startswith("(", self.i) else "$$"
         if nxt == "(" and head[2:3] == "(" and not self._arith_closes(ends[2]):
             # `$((` with no `))` where its parentheses balance: bash finds its end by those
             # parentheses first, then reads the text between as a command substitution of its
@@ -3624,6 +3772,10 @@ class _GrammarText:
         # Text bash evaluates as arithmetic, where a `'` quotes nothing: `$[...]`, a substring's
         # offset and length (`${x:'$(cmd)'}`), and anything inside arithmetic.
         arith = bool(self.arith) or opener == "[" or bool(_SUBSTRING_RE.match(s, start))
+        # Inside `((...))` or `$((...))` bash ends the arithmetic text by its parentheses before
+        # it reads what is inside: an unclosed `$[` or `${` there ends at that text's `)`
+        # (`for((;;$[))do cmd;done` runs cmd).
+        parens = 0
         self.i = start
         depth = 0
         while self.i < n:
@@ -3637,6 +3789,20 @@ class _GrammarText:
                 parts.append(ch)
                 self.i += 1
                 break
+            if ch in " \t\n;&|" or (ch in "()" and not self.arith):
+                # `${x#'/' }rm`, `${x#a;b}`: a blank or an operator character inside `${...}`
+                # is part of the one word bash reads, written quoted so the reading above does
+                # not cut the word there.
+                parts.append("'" + ch + "'" if opener == "{" and not in_dq else ch)
+                self.i += 1
+                continue
+            if ch in "()":
+                if ch == ")" and parens == 0:
+                    break                       # the arithmetic's own `)`, left to it
+                parens += 1 if ch == "(" else -1
+                parts.append(ch)
+                self.i += 1
+                continue
             if ch in "{[":
                 # `$[ a[1] ]` counts its subscripts; `${x:-a{}` ends at the first `}`.
                 depth += ch == opener == "["
@@ -3677,7 +3843,8 @@ class _GrammarText:
                 self.arith = saved
                 parts.append(ch + "(" + inner + (")" if self.closed else ""))
             elif ch in "<>":
-                parts.append(ch)
+                # Text of the word, quoted like a blank: the reading above takes no `<<<` in it.
+                parts.append("'" + ch + "'" if opener == "{" and not in_dq else ch)
                 self.i += 1
             else:
                 parts.append(self._backtick(in_dq))
@@ -3698,12 +3865,23 @@ class _GrammarText:
         if j >= n:
             return raw          # unclosed: bash refuses the line; left as the current reading has it
         special = "\\`$\"" if in_dq else "\\`$"
-        unescaped = re.sub(r"\\([%s])" % re.escape(special), r"\1", inner) if "\\" in inner else inner
+        # A backslash-newline goes too: bash joins the lines of a backtick text before it reads
+        # it, also inside a comment (`#a \` NL `cmd` is one comment there; measured).
+        unescaped = re.sub(r"\\([%s\n])" % re.escape(special),
+                           lambda m: "" if m.group(1) == "\n" else m.group(1),
+                           inner) if "\\" in inner else inner
         text = _GrammarText(unescaped, self.depth + 1, self.names).run()
-        if text == unescaped:
+        still_open = _reader_contexts(text)[0]
+        if text == unescaped == inner and not still_open:
             return raw
-        # A heredoc's delimiter line may end the text: the `)` goes on a line of its own.
-        return "$(" + text + ("\n)" if "\n" in text else ")")
+        # Written as `$(...)`: the readings above take an escaped backtick inside a backtick
+        # pair for a character, and a quote or a parenthesis the text leaves open (an
+        # apostrophe, `(echo `, which bash refuses inside) would swallow the lines after it, so
+        # it is closed at its end. A blank keeps a leading `(` from making it `$((`, and a
+        # heredoc's delimiter line that may end the text gets the `)` on a line of its own.
+        text += "".join(")" if c == "(" else c for c in reversed(still_open))
+        return "$(" + (" " if text.startswith("(") else "") + text + (
+            "\n)" if "\n" in text else ")")
 
     def _ansi_c(self, start: int) -> str:
         """`$'...'` decoded with bash's escapes (its text from `start`), as one single-quoted
@@ -3849,7 +4027,8 @@ def _script_input(exe: str, args: List[str], carried: List[tuple]) -> tuple:
         if _HEREDOC_OP_RE.match(tok):
             # `bash << EOF`: the delimiter is no script, the heredoc is the input.
             stdin_redirected = stdin_redirected or tok in ("<<", "<<-", "0<<", "0<<-")
-            pos += 2
+            # An operator after it is no delimiter (`bash << <<< '...'`): read as it stands.
+            pos += 1 if _HERE_OPERATOR_RE.match(nxt) or _HEREDOC_OP_RE.match(nxt) else 2
             continue
         if _REDIRECT_RE.match(tok):
             if _stdin_descriptor(tok, nxt):
@@ -3885,6 +4064,12 @@ def _script_input(exe: str, args: List[str], carried: List[tuple]) -> tuple:
             takes_value = (tok in _SHELL_VALUE_OPTIONS and not _HERE_OPERATOR_RE.match(nxt)
                            and not _REDIRECT_RE.match(nxt) and nxt[:1] not in ("<", ">"))
             pos += 2 if takes_value else 1
+            continue
+        if script is None and shell and (tok.startswith("$") or tok.startswith(_SUBST_BARE)):
+            # An expansion where the script name stands may expand to nothing (`bash $! <<<
+            # ...` with no background job reads its input): the input is read as well.
+            from_stdin = True
+            pos += 1
             continue
         if script is None:
             script = tok
@@ -4122,13 +4307,17 @@ def _word_expands(word: str) -> bool:
 # Escapes echo (dash's always, bash's with -e) and printf decode in the text they print.
 _PRINT_ESCAPES = {"a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f", "n": "\n",
                   "r": "\r", "t": "\t", "v": "\v", "\\": "\\", '"': '"'}
-_PRINTF_DIRECTIVE_RE = re.compile(r"%%|%[-+ #0-9.*]*[a-zA-Z]")
+# A printf directive: its flags, width and precision (a number or `*`, which takes an argument)
+# and its conversion letter.
+_PRINTF_DIRECTIVE_RE = re.compile(r"%%|%([-+ #0']*)(\*|[0-9]+)?(?:\.(\*|[0-9]*))?([a-zA-Z])")
 _ECHO_OPTION_RE = re.compile(r"^-[neE]+$")
 
 
-def _unescape_printed(text: str, *, echo: bool, any_octal: bool = False) -> str:
+def _unescape_printed(text: str, *, echo: bool, any_octal: bool = False,
+                      stopped: Optional[List[bool]] = None) -> str:
     """`text` after echo's (`\\0NNN`, `\\c` ends it) or printf's (`\\NNN`) backslash escapes;
-    `any_octal`: printf's `%b`, which takes both `\\0NNN` and `\\NNN` (measured with bash)."""
+    `any_octal`: printf's `%b`, which takes both `\\0NNN` and `\\NNN` (measured with bash).
+    `stopped` gets a True when a `\\c` ended the text (in `%b` it ends all of printf's output)."""
     if "\\" not in text:
         return text
     out: List[str] = []
@@ -4144,6 +4333,8 @@ def _unescape_printed(text: str, *, echo: bool, any_octal: bool = False) -> str:
             out.append(_PRINT_ESCAPES[e])
             i += 2
         elif e == "c" and echo:
+            if stopped is not None:
+                stopped.append(True)
             break
         elif e in "01234567" and (e == "0" or not echo or any_octal):
             first = i + 2 if echo and e == "0" else i + 1
@@ -4224,22 +4415,62 @@ def _printf_output(fmt: str, args: List[str], *, limit: int) -> Optional[str]:
     form = _unescape_printed(fmt, echo=False)
     queue = list(args)
     taken = [0]
+    stopped: List[bool] = []
+    too_wide: List[bool] = []
+
+    def _next() -> str:
+        value = queue[taken[0]] if taken[0] < len(queue) else ""
+        taken[0] += 1
+        return value
+
+    def _number(spec: Optional[str]) -> Optional[int]:
+        if spec is None or spec == "":
+            return None if spec is None else 0
+        if spec == "*":                         # `*` takes the number from an argument
+            try:
+                return int(_next())
+            except ValueError:
+                return 0
+        return int(spec)
 
     def _fill(m) -> str:
         if m.group() == "%%":
             return "%"
-        value = queue[taken[0]] if taken[0] < len(queue) else ""
-        taken[0] += 1
-        return _unescape_printed(value, echo=True, any_octal=True) if m.group().endswith("b") \
-            else value
+        flags, width, precision, conversion = m.groups()
+        width_n = _number(width)
+        precision_n = _number(precision) if m.group().find(".") >= 0 else None
+        value = _next()
+        if conversion == "b":
+            value = _unescape_printed(value, echo=True, any_octal=True, stopped=stopped)
+        elif conversion == "c":
+            value = value[:1]
+        if precision_n is not None and conversion in ("s", "b", "q"):
+            value = value[:max(precision_n, 0)]
+        if width_n and abs(width_n) > limit:
+            too_wide.append(True)               # past the bound: opaque, never padded
+            return ""
+        if width_n:
+            value = value.ljust(abs(width_n)) if "-" in flags or width_n < 0 \
+                else value.rjust(width_n)
+        return value
 
     parts: List[str] = []
     size = 0
     while True:
         before = taken[0]
-        piece = _PRINTF_DIRECTIVE_RE.sub(_fill, form)
-        parts.append(piece)
-        size += len(piece)
+        at = 0
+        for m in _PRINTF_DIRECTIVE_RE.finditer(form):
+            filled = _fill(m)
+            if too_wide:
+                return None
+            parts.append(form[at:m.start()])
+            parts.append(filled)
+            size += m.start() - at + len(filled)
+            at = m.end()
+            if stopped:                         # `%b` met `\\c`: printf prints nothing more
+                return "".join(parts)
+        parts.append(form[at:])
+        size += len(form) - at
         if size > limit:
             return None
         if taken[0] >= len(queue) or taken[0] == before:
@@ -4337,8 +4568,10 @@ def _env_split_texts(toks: List[str], exe_at: int) -> List[str]:
     return []
 
 
-# A variable an unquoted heredoc's body expands before the shell reads it.
-_HEREDOC_EXPANSION_RE = re.compile(r"(?<!\\)\$[A-Za-z_{0-9@*#?!$-]")
+# A variable an unquoted heredoc's body expands before the shell reads it, on the body as
+# written: a `$` after an odd run of backslashes is escaped (`\$HOME` hands on `$HOME`), after
+# an even one it expands (`\\$P` hands on a backslash and the value).
+_HEREDOC_EXPANSION_RE = re.compile(r"(\\*)\$[A-Za-z_{0-9@*#?!$-]")
 
 
 def _expanded_input(raws: List[str], toks: List[str], carried: List[tuple]) -> bool:
@@ -4346,7 +4579,7 @@ def _expanded_input(raws: List[str], toks: List[str], carried: List[tuple]) -> b
     command reads it: a here-string word with a `$` outside single quotes (`bash <<< "echo
     $P"`) or an unquoted heredoc whose body holds one (`bash <<EOF` ... `echo $P`). Such text is
     not the script approved; a quoted heredoc (`<<'EOF'`) leaves the variables to the shell."""
-    bodies = [body for kind, body in carried if kind in ("heredoc_q", "heredoc_u")]
+    bodies = [body for kind, body in carried if kind == "heredoc_raw"]
     k = 0
     for i, raw in enumerate(raws):
         tok = toks[i]
@@ -4362,18 +4595,28 @@ def _expanded_input(raws: List[str], toks: List[str], carried: List[tuple]) -> b
             word = raws[i + 1]                  # `<< EOF`: the delimiter is the next word
         body = bodies[k] if k < len(bodies) else ""
         k += 1
-        if not any(q in word for q in ("'", '"', "\\")) and _HEREDOC_EXPANSION_RE.search(body):
+        if not any(q in word for q in ("'", '"', "\\")) and any(
+                len(m.group(1)) % 2 == 0 for m in _HEREDOC_EXPANSION_RE.finditer(body)):
             return True
     return False
 
 
 def _started_programs(exe: str, args: List[str]) -> List[int]:
     """Where in `args` the program word stands that a runner (its command, not an option's
-    possible value) or `find -exec`/`-execdir`/`-ok`/`-okdir` starts."""
+    possible value) or `find -exec`/`-execdir`/`-ok`/`-okdir` starts, and the program after
+    the wrappers and assignments in front of it (`find . -exec env X=1 $CMD ...`)."""
     if exe == "find":
-        return [k + 1 for k, a in enumerate(args[:-1]) if a in _FIND_RUNNERS]
-    candidates = _runner_commands(exe, args)
-    return candidates[-1:] if candidates else []
+        starts = [k + 1 for k, a in enumerate(args[:-1]) if a in _FIND_RUNNERS]
+    else:
+        candidates = _runner_commands(exe, args)
+        starts = candidates[-1:] if candidates else []
+    found: List[int] = []
+    for start in starts:
+        found.append(start)
+        rel = _executable_at(args[start:])[0]
+        if rel > 0:
+            found.append(start + rel)
+    return found
 
 
 def _env_assignment_texts(toks: List[str], exe_at: int) -> List[str]:
@@ -4469,14 +4712,45 @@ def _watch_text(args: List[str]) -> str:
 _SCRIPT_MISSING = object()
 
 
+# A shell's options that take the next word as their value.
+_SHELL_VALUE_OPTIONS = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
+
+
 def _shell_c_script(args: List[str]):
-    """The script a shell's `-c` runs, `_SCRIPT_MISSING` when `-c` has none, None without `-c`."""
-    for pos, tok in enumerate(args):
-        if tok in ("-o", "+o"):
+    """The script a shell's `-c` runs, `_SCRIPT_MISSING` when `-c` has none, None without `-c`.
+    bash reads options after `-c` as well, up to `-` or `--` (both taken) or the first word
+    that is no option, and runs that word (`bash -c -e '...'`, `sh -c - '...'`); its own
+    redirections are no words (`xargs -0 bash -c <<< '...'` has no script, xargs supplies it)."""
+    # A word with a blank or a newline in it was quoted (`-c '2>/dev/null cmd'`): a script, never
+    # a redirection, which shlex would have cut there.
+    kept: List[str] = []
+    k = 0
+    while k < len(args):
+        width = 0 if any(c in args[k] for c in " \t\n") else _redirection_width(args, k)
+        if width:
+            k += width
             continue
-        if tok.startswith("-") and not tok.startswith("--") and "c" in tok[1:]:
-            return args[pos + 1] if pos + 1 < len(args) else _SCRIPT_MISSING
-    return None
+        kept.append(args[k])
+        k += 1
+    args = kept
+    has_c = False
+    k = 0
+    while k < len(args):
+        tok = args[k]
+        if tok in ("-", "--"):
+            k += 1
+            break
+        if tok in _SHELL_VALUE_OPTIONS:
+            k += 2
+            continue
+        if tok[:1] in ("-", "+") and len(tok) > 1:
+            has_c = has_c or (tok.startswith("-") and not tok.startswith("--") and "c" in tok[1:])
+            k += 1
+            continue
+        break
+    if not has_c:
+        return None
+    return args[k] if k < len(args) else _SCRIPT_MISSING
 
 
 def _xargs_runs_its_input(toks: List[str], exe_at: int, args: List[str]) -> bool:
@@ -4538,6 +4812,31 @@ def _only_redirections(toks: List[str]) -> bool:
             return False
         k += width
     return bool(toks)
+
+
+# A redirection of the standard output: `>f`, `1>>f`, `>|f`, `&>f`, `>&2` (a copy onto itself,
+# `>&1`, moves nothing).
+_STDOUT_REDIRECT_RE = re.compile(r"^(1?|&)(>&|>\||>>?)(.*)$")
+
+
+def _moves_stdout(toks: List[str]) -> bool:
+    """Whether these redirections send the standard output elsewhere (`( echo x ) >f | bash`
+    hands the pipe nothing; `2>&1`, `>&1` keep it)."""
+    for k, tok in enumerate(toks):
+        m = _STDOUT_REDIRECT_RE.match(tok)
+        if not m:
+            continue
+        target = m.group(3) or (toks[k + 1] if k + 1 < len(toks) else "")
+        if m.group(2) == ">&" and m.group(1) != "&" and target == "1":
+            continue
+        return True
+    return False
+
+
+def _output_union(first: tuple, second: tuple) -> tuple:
+    """Two outputs (shape, texts) as one: the first opaque shape, every text once."""
+    texts = list(first[1]) + [t for t in second[1] if t not in first[1]]
+    return (first[0] or second[0], tuple(texts))
 
 
 def _without_redirections(toks: List[str], raws: Optional[List[str]] = None) -> List[str]:

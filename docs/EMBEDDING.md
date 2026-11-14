@@ -1475,6 +1475,18 @@ it by anchored belts only (a document is not a failure for containing the word
 "failed"). Observation is unaffected either way: the event stream caps tool
 results independently.
 
+**How a failed call is told apart from content.** A tool whose answer IS content
+(a note, a file, a page; usually also `result_is_deliverable`) can name the exact
+openers its own failure answers start with: `failure_openers = ("Error:",)` on a
+notes tool. VAF's loops that book a call as done, the workflow engine's step
+outcome and the coding loop, then count a call of that tool as failed only when its
+answer opens with one of those, or with the funnel's own `Tool Error:` /
+`Security Error:`; a note that begins with "Failed attempts" is a successful call.
+Without the declaration the shared classifier decides; a workflow step is judged
+by the answer's opening only (`Error`, `Access denied:`, `Cannot `, `Failed` and the
+rest of its list), because a step's answer is data for the next step.
+VAF's `read_file` declares `("Access denied:", "Invalid path", "Error:", "Error reading ")`.
+
 **An argument that is a credential.** A tool that takes a password, a token or a
 login as an argument declares it: `secret_args = ("password",)`. The funnel then
 never lets the value reach the tool-use log, the event stream or the confirmation
@@ -2912,7 +2924,10 @@ usable from an embedded engine too, documented in their own pages:
 - **Custom workflows** - a file in `~/.vaf/workflows/` holding a module-level `WORKFLOW`
   dict written as a plain literal. These files are read as DATA (`ast.literal_eval` of the
   `WORKFLOW = {...}` value, never executed), so the dict must be a literal, not computed; a
-  file that is not is skipped with a log line. See
+  file that is not is skipped with a log line. A step fails when its tool's answer OPENS
+  with a failure (`Error:`, `Access denied:`, `Tool Error:` and the other shared openers, or
+  the tool's own `failure_openers`), never because of words later in the answer, so a tool
+  you run as a step must open its failure answers with one. See
   [WORKFLOW_SELECTION.md](agents/WORKFLOW_SELECTION.md).
 - **Skills** - reusable prompt/procedure packages, see [SKILLS.md](agents/SKILLS.md).
 - **MCP servers** - register external MCP tool servers in `mcp_servers.json`,

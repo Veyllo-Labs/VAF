@@ -120,6 +120,13 @@ workflow-success path, which returns earlier), follows the task into and out of
 the trash, and is read back with `load_run_log`. A missing log is normal: it
 only starts existing once the task has run again.
 
+NAMED BOUNDARY: an automation that runs a workflow whose run FAILED is still recorded as a
+success. Its report says `# Workflow Failed`, but that path falls through to
+`_stamp_successful_run`, and the run log's status is read from the report's opening (`Error:`),
+which that report does not have. A failed step (a refused write, a helper that crashed) makes
+the workflow fail and the report say so; the record has to take its status from the workflow
+result instead, and what happens to a failed one-time task is part of that change.
+
 A run log is never a task. Every reader of an automation directory takes its files through
 `_task_files`, which leaves out `*.runs.json`, and `_read_task_record` refuses a record without
 an `id`. Before, every reader globbed `*.json`, and a run log loaded as a nameless daily 06:00

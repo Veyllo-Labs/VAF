@@ -76,6 +76,7 @@ def test_basetool_ships_the_documented_declaration_defaults():
     assert BaseTool.file_access is None
     assert BaseTool.input_examples == []
     assert BaseTool.result_is_deliverable is False
+    assert BaseTool.failure_openers == ()
     assert BaseTool.category == "general"
     assert isinstance(BaseTool.parameters, dict)
 

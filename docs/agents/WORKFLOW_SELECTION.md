@@ -223,6 +223,56 @@ Who continues a paused run is documented in
 [SUBAGENT_IPC.md](SUBAGENT_IPC.md#who-resumes-and-how-far): the CLI drain runs the remaining
 steps, while the Web UI drain currently only closes a run whose awaited step was the last one.
 
+### How a step's outcome is decided
+
+A step failed when its tool did not do its work, and the engine decides that with ONE rule,
+`_step_answer_failed` in `vaf/workflows/engine.py`, which asks the shared
+`vaf.core.tool_dispatch.tool_call_failed` (the coding loop asks the same function). It reads
+the OPENING of the step tool's answer only, because a step's answer is data that later steps
+receive: a page, a file or a report that mentions "Task Failed" or a `❌` further down did its
+work.
+
+- **A refusal is a failed step.** `Access denied: ...` (VAF's own data, a protected folder,
+  outside your account's folders), `Invalid path`, `Source Error: ...`, the funnel's `Tool
+  Error:` / `Security Error:`, `[ERROR] python_sandbox: ...` and the other openers of the
+  shared classifier (`_ERROR_PREFIXES` in `vaf/core/context.py`). Before, the engine had a
+  hand list of its own that knew none of the refusals: a `write_file` step refused with
+  `Access denied:` was booked as done and the run reported success with nothing written.
+- **A tool whose answer is content declares its failure openers.** `read_file` declares
+  `failure_openers` (`Access denied:`, `Invalid path`, `Error:`, `Error reading `), so a file
+  that begins with "Failed attempts" is a successful read; only those openers and the funnel's
+  two fail it. A file whose first line opens with exactly one of them (a log that starts with
+  `Error: `) is read as a failed step.
+- **The coding agent's failure reports** open with `[VAF_CODING_AGENT_STATUS: FAILED]` or
+  `### ❌` (`Task Failed`, `Repeated Error Detected`); both are shared openers. A `PARTIAL` or
+  `COMPLETE` report is not a failure.
+- **A spawned helper that failed or timed out in the queue is a failed step.** The sub-agent
+  wait (`_await_subagent`) reads the IPC status and answers `Error: <tool> did not finish:
+  <reason>`, whatever the child's text was.
+- **A resumed run judges the awaited step the same way.** A child that finished but answered
+  with its failure report fails the step: the run ends there, or, for an `optional` step, goes
+  on and reports failed at the end. Its report is not handed to the next step. NAMED BOUNDARY:
+  resume applies no `on_success` / `on_failure` jump for the awaited step, so a failed awaited
+  step with `on_failure` ends the run rather than running the next step.
+- **A failure is never retried.** The same arguments meet the same screen, and for a send or
+  write tool a second run can double the effect. Assertions and validation retry only a
+  SUCCESSFUL answer whose content is wrong. The context-overflow retry (truncated inputs, at
+  most three runs) fires only on a FAILED answer that names the context; a successful answer
+  that mentions a context size runs once (a send step whose message said so used to be sent
+  three times). When those runs are used up, the last answer is booked as a failed step like
+  any other.
+
+A failed step then does what the step says: the run stops (`stop_on_error`), goes on
+(`optional`, the step stays failed and the run reports failed), or jumps (`on_failure`, the
+step counts as handled and the run can still succeed).
+
+NAMED BOUNDARIES, each its own change: a `bash` step whose command exits non-zero still counts
+as done, because its answer opens with `$ <command>` and the exit line comes after the output
+(and `grep`, `diff` or `test` exit 1 as an answer, not a failure; the exit status has to come
+back as data, not as another text rule). And a workflow automation whose run failed is still
+recorded as a successful run (see "Run log" in
+[AUTOMATIONS.md](../platform/AUTOMATIONS.md)), although its report says `# Workflow Failed`.
+
 ### `create_agent_workflow` - runtime workflow creation
 
 The agent can define and run its own workflows at runtime without any human involvement. Two modes:
@@ -379,8 +429,8 @@ create_agent_workflow(
 | `output` | string | Variable name for this step's result. Default: `step_N_output`. |
 | `description` | string | Label shown in progress display. |
 | `on_success` | string | Jump to this step's `output` name on success. |
-| `on_failure` | string | Jump to this step's `output` name on failure (suppresses abort). |
-| `optional` | bool | Skip on failure instead of aborting. |
+| `on_failure` | string | Jump to this step's `output` name on failure (suppresses abort); the failed step counts as handled (skipped), so the run can still succeed. |
+| `optional` | bool | Go on after a failure instead of aborting; the step stays failed, so the run reports failed at the end. |
 | `assertions` | list | Output checks - failed assertions retry only this step (not the whole workflow). |
 | `max_assertion_retries` | int | How many times to retry on assertion failure. Default: `1`. |
 | `validate` | bool | Opt-in: LLM-check this content/agent step's output against its goal, retry with a correction up to 3× then accept. See **Per-step output validation** below. Default: `false`. |
@@ -597,4 +647,4 @@ After `execute_workflow` is called and a workflow begins execution, VAF applies 
 
 ---
 
-*Last updated: 2026-07-13*
+*Last updated: 2026-11-14*

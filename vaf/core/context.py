@@ -166,6 +166,10 @@ def resolve_context_effort(config: Optional[Dict[str, Any]] = None) -> Dict[str,
 # second detector.
 _ERROR_PREFIXES = (
     "❌",
+    # The coding agent's failure reports (vaf/tools/coder.py) open with these, so every
+    # lane reads them by their opening and none by a substring further down the answer.
+    "### ❌",
+    "[vaf_coding_agent_status: failed]",
     "error",
     "failed",
     "tool error",

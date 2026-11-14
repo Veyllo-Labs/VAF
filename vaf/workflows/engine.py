@@ -570,6 +570,16 @@ def identity_for_engine(user_scope_id: Optional[str] = None, username: Optional[
     return out
 
 
+def _step_answer_failed(tool, result) -> bool:
+    """Whether a step's tool did not do its work: the shared rule
+    (``vaf.core.tool_dispatch.tool_call_failed``), always content-carrying. A step's answer
+    is chained into later steps as data (a page, a file, a report), so only its OPENING says
+    it failed, never a word further down; a tool that declares ``failure_openers`` is judged
+    by those alone."""
+    from vaf.core.tool_dispatch import tool_call_failed
+    return tool_call_failed(tool, result, content_carrying=True)
+
+
 def _workflow_step_timeout(tool_name: str, default: float | None = None) -> float:
     """Worst-case hard cap for one workflow step.
 
@@ -1518,14 +1528,17 @@ class WorkflowEngine:
                                 poll=_stop_poll,
                             )
                         
-                        # Check if result contains context overflow error (like main agent)
+                        # A FAILED answer that names the context is an overflow (like the
+                        # main agent). Only a failure is re-run: a successful answer that
+                        # merely mentions a context size (a file, a message that was sent)
+                        # did its work, and running a send step again sends it again.
                         result_str = str(result)
-                        is_context_error_in_result = (
-                            "context" in result_str.lower() and 
+                        is_context_error_in_result = _step_answer_failed(tool, result) and ((
+                            "context" in result_str.lower() and
                             ("exceed" in result_str.lower() or "size" in result_str.lower() or "token" in result_str.lower())
                         ) or (
                             "400" in result_str and "context" in result_str.lower()
-                        )
+                        ))
                         
                         # If context error in result, retry with more aggressive truncation
                         if is_context_error_in_result:
@@ -1548,21 +1561,11 @@ class WorkflowEngine:
                                 
                                 # Continue retry loop
                                 continue
-                            else:
-                                # Max retries reached - treat as error
-                                step.status = StepStatus.FAILED
-                                step.error = f"Context size error after {max_retries} retries"
-                                step.result = result
-                                step.duration = time.time() - step_start
-                                error = step.error
-                                
-                                UI.error(f"  [FAIL] {step.error}")
-                                self.callback("error", step, i, len(steps))
-                                
-                                if stop_on_error and not step.optional:
-                                    break
-                                continue
-                        
+                            # Retries exhausted: leave the retry loop with the last failure
+                            # answer. The step outcome below books it FAILED and applies
+                            # stop_on_error, optional and on_failure like any failed step.
+                            break
+
                         # Success - exit retry loop
                         break
                         
@@ -1774,23 +1777,14 @@ class WorkflowEngine:
                     continue
 
                 result_str = str(result)
-                # A tool that raised is wrapped by execute_tool as "Tool Error: …"; tools
-                # also surface failures as "Security Error: …". These do NOT start with a
-                # bare "Error:", so without the explicit prefixes below the step was scored
-                # as a success and the workflow continued (and reported "completed") on top
-                # of a failed step.
-                _result_lower = result_str.lower()
-                is_error_result = (
-                    result_str.startswith("### ❌") or
-                    result_str.startswith("❌") or
-                    result_str.startswith("Error:") or
-                    _result_lower.startswith("tool error:") or
-                    _result_lower.startswith("security error:") or
-                    "Task Failed" in result_str or
-                    "task failed" in _result_lower or
-                    (result_str.startswith("###") and "❌" in result_str[:200]) or
-                    ("error:" in _result_lower and _result_lower.startswith("error"))
-                )
+                # The step outcome: the one shared rule (_step_answer_failed). A refusal the
+                # tool answers from inside its run ("Access denied: ...", "Source Error:
+                # ...", "[ERROR] python_sandbox: ...") is a failed step, so the run stops or
+                # goes on as the step says instead of reporting "completed" on top of a
+                # write that never happened. It reads the answer's opening only: a step
+                # result is data for the next step, and a page or file that mentions "Task
+                # Failed" further down did its work.
+                is_error_result = _step_answer_failed(tool, result)
 
                 if is_error_result:
                     step.status = StepStatus.FAILED
@@ -1993,8 +1987,10 @@ class WorkflowEngine:
         its own process, so this is a clean kill — no abandoned thread).
 
         If the spawn fell back to in-process (no marker), `spawn_output` already IS the result.
-        Returns the sub-agent's result string, or a bounded_run sentinel on stop/timeout
-        (the caller treats it as a hard workflow abort via ``is_abort_sentinel``).
+        Returns the sub-agent's result string; an ``Error: <tool> did not finish: ...``
+        answer when its IPC status is ``failed`` or ``timeout`` (so the step fails, whatever
+        the child wrote); or a bounded_run sentinel on stop/timeout (the caller treats it as
+        a hard workflow abort via ``is_abort_sentinel``).
         """
         import time as _time
         from vaf.core.bounded_run import TIMEOUT_PREFIX, STOPPED_PREFIX
@@ -2047,10 +2043,18 @@ class WorkflowEngine:
             except Exception:
                 task = None
             if task is not None:
+                _status = getattr(task, "status", "") or ""
+                _status = str(getattr(_status, "value", _status))
                 # If the result is a failure (incl. a zombie failed by check_zombies below),
                 # reap any lingering process; on success there is nothing to kill.
-                if str(getattr(task, "status", "") or "") == "failed" or getattr(task, "error", None):
+                if _status == "failed" or getattr(task, "error", None):
                     _kill_child()
+                # The child's outcome is data in the queue: a failed or timed-out child is a
+                # failed step whatever its text says (a crash report opens with anything).
+                if _status in ("failed", "timeout"):
+                    _why = (getattr(task, "error", None) or getattr(task, "result", None)
+                            or "it ended without a result")
+                    return f"Error: {tool_name} did not finish: {_why}"
                 return getattr(task, "result", None) or getattr(task, "error", None) or ""
 
             # User pressed Stop → kill the child and abort.
@@ -2152,17 +2156,29 @@ class WorkflowEngine:
         outputs = dict(paused_wf.outputs)
         current_step = steps[paused_wf.current_step_index]
         
-        # Update the current step with the result
-        current_step.status = StepStatus.SUCCESS
+        # The awaited step is judged by the same rule as a step run in execute(): a child
+        # that finished but answered with its failure report ("### ❌ Repeated Error
+        # Detected", "[VAF_CODING_AGENT_STATUS: FAILED]") is a failed step, and its report
+        # is not handed to the next step as its output.
+        # NAMED BOUNDARY: resume applies no on_success / on_failure jump for the awaited
+        # step. A failed awaited step with on_failure therefore ends the run (unless it is
+        # optional) rather than running the next step, which its author did not want after
+        # a failure.
+        _awaited_failed = _step_answer_failed(self.tools.get(current_step.tool), subagent_result)
         current_step.result = subagent_result
-        outputs[current_step.output_name] = subagent_result
-        
-        UI.event("Workflow", f"  ✓ Got result for step: {current_step.tool}", style="success")
-        
+        if _awaited_failed:
+            current_step.status = StepStatus.FAILED
+            current_step.error = f"Tool returned error message: {str(subagent_result)[:200]}"
+            UI.error(f"  [FAIL] {current_step.error}")
+        else:
+            current_step.status = StepStatus.SUCCESS
+            outputs[current_step.output_name] = subagent_result
+            UI.event("Workflow", f"  ✓ Got result for step: {current_step.tool}", style="success")
+
         # Remove from paused workflows
         ipc = get_ipc()
         ipc.remove_paused_workflow(paused_wf.workflow_id)
-        
+
         # Continue with remaining steps
         remaining_steps = steps[paused_wf.current_step_index + 1:]
         
@@ -2175,6 +2191,20 @@ class WorkflowEngine:
         _project_path = outputs.get("workflow_project_path")
         _stored = getattr(paused_wf, "preexisting_files", ())
         _preexisting = None if _stored is None else tuple(_stored or ())
+
+        if _awaited_failed and (not current_step.optional or not remaining_steps):
+            # A failed step ends the run as in execute() (stop_on_error), and a failed
+            # optional last step leaves the run failed as there.
+            return WorkflowResult(
+                success=False,
+                outputs=outputs,
+                final_output=None,
+                steps=steps,
+                total_duration=0.0,  # Can't track across pause
+                error=current_step.error,
+                project_path=_project_path,
+                preexisting_files=_preexisting,
+            )
 
         if not remaining_steps:
             # Workflow is complete
@@ -2210,12 +2240,13 @@ class WorkflowEngine:
         all_outputs = {**outputs, **remaining_result.outputs}
         
         return WorkflowResult(
-            success=remaining_result.success,
+            # A failed optional awaited step leaves the run failed, as in execute().
+            success=remaining_result.success and not _awaited_failed,
             outputs=all_outputs,
             final_output=remaining_result.final_output,
             steps=all_steps,
             total_duration=remaining_result.total_duration,
-            error=remaining_result.error,
+            error=remaining_result.error or (current_step.error if _awaited_failed else None),
             project_path=remaining_result.project_path,
             preexisting_files=remaining_result.preexisting_files,
         )

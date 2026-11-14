@@ -3252,20 +3252,11 @@ def _remote_path_refusal(fn_name: str, fn_args) -> Optional[str]:
     return None
 
 
-# What a refused or failed read answers, as the read tool (`is_safe_path`'s refusals, its
-# own "Error: ..." and "Error reading ...") and the funnel ("Tool Error:", "Security Error:",
-# "Error: Unknown tool") write it, case for case. A read's answer IS the file's text, so the
-# shared classifier's wide openers ("failed", "cannot ", "exception", "error" in any case)
-# would book a file that merely starts with such a word as a failed read, and read-before-edit,
-# which has no stand-down, would then never let that file be edited in the run.
-_READ_FAILURE_OPENERS = ("Access denied:", "Invalid path", "Error:", "Error reading ",
-                         "Tool Error:", "Security Error:")
-
-
 def _loop_call_failed(tools, fn_name: str, result) -> bool:
-    """Whether the coder loop's call did not do its work: the classifier every lane shares
-    (`vaf.core.context.tool_result_is_error`), plus an aborted call (`abort_kind`), whose
-    outcome is unknown and so is never booked as done.
+    """Whether the coder loop's call did not do its work: the rule every loop that books a
+    call as done shares (`vaf.core.tool_dispatch.tool_call_failed`): an aborted call, whose
+    outcome is unknown, is never booked as done; a tool that declares `failure_openers`
+    fails only on those; every other answer goes to the shared classifier.
 
     A refusal the file tools give from inside their run (`Access denied: ...`, `Invalid
     path`) is a failure here: the funnel dispatched the call, so its `dispatched` flag cannot
@@ -3275,17 +3266,12 @@ def _loop_call_failed(tools, fn_name: str, result) -> bool:
     the start of the answer only: write_file and edit_file name the model's path in their
     success answer (a path with "failed" and "tool" in it is still a write) and every failure
     they give opens the answer, so the classifier runs content-carrying for them; read_file's
-    answer is the file itself, so only the openers the read tool and the funnel write count."""
-    from vaf.core.context import tool_result_is_error
-    from vaf.core.tool_dispatch import abort_kind
-    text = str(result or "")
-    if abort_kind(text) is not None:
-        return True
-    if fn_name == "read_file":
-        return text.startswith(_READ_FAILURE_OPENERS)
-    tool = (tools or {}).get(fn_name)
-    carrying = fn_name in _LOOP_PATH_TOOLS or bool(getattr(tool, "result_is_deliverable", False))
-    return tool_result_is_error(text, content_carrying=carrying)
+    answer is the file itself, so only the openers it declares (`ReadFileTool.failure_openers`)
+    and the funnel's own count. A file that starts with "Failed" is a read, and
+    read-before-edit, which has no stand-down, lets it be edited."""
+    from vaf.core.tool_dispatch import tool_call_failed
+    return tool_call_failed((tools or {}).get(fn_name), result,
+                            content_carrying=True if fn_name in _LOOP_PATH_TOOLS else None)
 
 
 def _project_read_path(path: str, base_dir: str) -> str:

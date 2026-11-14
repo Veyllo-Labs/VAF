@@ -23,7 +23,7 @@ MUTATIONS, each turns the named test red:
   test_successes_stay_successes (the `blocked_locked.html` write);
 - `content_carrying=` dropped, or write_file/edit_file no longer judged content-carrying
   -> test_a_write_whose_path_has_failure_words_is_a_write;
-- the read_file branch dropped (a read judged by the shared classifier's wide openers)
+- `ReadFileTool.failure_openers` emptied (a read judged by the shared classifier's wide openers)
   -> test_a_read_of_any_text_is_a_read;
 - the guard's write branch opened with `if True:` (or not on the helper's answer), or its read
   branch without `not _gfailed` -> test_the_guard_books_only_what_the_helper_calls_done;
@@ -36,7 +36,7 @@ MUTATIONS, each turns the named test red:
 - the duplicate-write shortcut without the dispatch refusal in front of it
   -> test_the_duplicate_write_shortcut_asks_the_dispatch_first;
 - ReadFileTool answering a read the OS refused with the bare exception text again, or
-  "Tool Error:" dropped from `_READ_FAILURE_OPENERS`
+  "Tool Error:" dropped from `tool_dispatch.FUNNEL_FAILURE_OPENERS`
   -> test_every_failed_read_opens_with_an_opener;
 - the call site's `if fn_name == "read_file" and fn_args.get("path"):` turned off
   -> test_a_relative_read_is_the_projects_file;

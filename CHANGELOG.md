@@ -57,6 +57,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **A workflow no longer reports success when a step was refused or failed.** A step whose
+  file was refused (VAF's own data, a protected folder, outside your account's folders), a
+  sandbox step that could not start, and a helper that crashed or timed out used to count as
+  done, so the workflow said it completed although nothing was written. Those steps now fail,
+  and the workflow stops or goes on as the step says (`optional`, `on_failure`). The other way
+  round, a step whose result merely mentions "Task Failed" no longer fails, and a step whose
+  result mentions a context size is no longer run three times (a send step sent its message
+  three times). Needs a restart of VAF.
 - **User manager: the coding agent's shell, test runner and project history can be granted
   per account again, and every tool is listed once.** The tool list never loaded the coding
   agent's own tools, so an account saved with any preset got a coding agent without a shell or

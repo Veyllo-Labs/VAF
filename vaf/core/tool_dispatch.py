@@ -683,6 +683,44 @@ def abort_kind(result) -> str | None:
     return None
 
 
+# What the funnel itself answers when it did not run a call or the call raised (the
+# argument check, the policy and authorizer stages, a tool that raised). A tool that
+# declares its own failure openers is still judged failed on these.
+FUNNEL_FAILURE_OPENERS = ("Tool Error:", "Security Error:")
+
+
+def tool_call_failed(tool: Any, result: Any, *, content_carrying: bool | None = None) -> bool:
+    """Whether one tool call did not do its work, judged from its answer.
+
+    - An aborted call (``abort_kind``) failed: its outcome is unknown, so it is never booked
+      as done.
+    - A tool that declares ``failure_openers`` (``BaseTool``) failed exactly when the answer
+      opens with one of them or with the funnel's own ``FUNNEL_FAILURE_OPENERS``. Such a
+      tool's answer is content whose first word may be anything (a file that starts with
+      "Failed"), so the shared classifier's wide openers are not asked.
+    - Otherwise the shared classifier (``vaf.core.context.tool_result_is_error``) decides,
+      content-carrying as the caller says, or as the tool declares through
+      ``result_is_deliverable`` when the caller passes None.
+
+    Every loop that books a call as done asks this one rule: the coding loop
+    (``_loop_call_failed``) and the workflow engine's step outcome.
+
+    NAMED BOUNDARY: internal, not on the facade. No embedder contract asks for it; a loop of
+    your own around ``ToolCaller`` reads ``ToolCallOutcome.dispatched`` and its own answers,
+    and the declaration it reads (``failure_openers``) is on ``BaseTool``.
+    """
+    text = str(result or "")
+    if abort_kind(text) is not None:
+        return True
+    openers = tuple(getattr(tool, "failure_openers", None) or ())
+    if openers:
+        return text.startswith(openers + FUNNEL_FAILURE_OPENERS)
+    from vaf.core.context import tool_result_is_error
+    carrying = (bool(getattr(tool, "result_is_deliverable", False))
+                if content_carrying is None else bool(content_carrying))
+    return tool_result_is_error(text, content_carrying=carrying)
+
+
 def run_tool_bounded(tool: Any, args: dict, *, tool_name: str,
                      timeout_for=None, self_supervised=None, stop_check=None,
                      poll: float | None = None):

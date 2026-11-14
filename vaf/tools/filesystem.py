@@ -957,6 +957,10 @@ For semantic analysis across many files, consider librarian_agent instead."""
     # error classifier judges results by anchored prefixes only, so file CONTENT
     # containing the word "failed" cannot paint a successful read as an error.
     result_is_deliverable = True
+    # What a refused or failed read answers, case for case: is_safe_path's refusals, this
+    # tool's own "Error: ..." and "Error reading ...". The answer of a read is the file
+    # itself, so a file that starts with "Failed" or "Cannot" is still a read.
+    failure_openers = ("Access denied:", "Invalid path", "Error:", "Error reading ")
 
     # One ceiling for every branch (was three byte-similar hand copies in the
     # docx/xlsx/pptx branches, each ending in a factless "... (truncated)").

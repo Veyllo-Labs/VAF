@@ -198,7 +198,10 @@ Heavy sub-agents run as their own process and report back through the file-based
 `WorkflowEngine._await_subagent` waits for the result **bounded and stop-aware**, in priority order
 each tick:
 
-1. return as soon as the IPC result arrives (`consume_result`),
+1. return as soon as the IPC result arrives (`consume_result`); a result whose IPC status is
+   `failed` or `timeout` comes back as `Error: <tool> did not finish: <reason>`, so the step
+   fails whatever the child wrote (see "How a step's outcome is decided" in
+   [WORKFLOW_SELECTION.md](WORKFLOW_SELECTION.md)),
 2. on Stop, kill the child and abort,
 3. **liveness**: a spawned sub-agent pulses a heartbeat roughly every 3 s; if none arrives for
    `subagent_liveness_timeout_seconds`, the unit is treated as dead/stuck and reaped

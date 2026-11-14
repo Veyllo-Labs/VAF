@@ -135,7 +135,9 @@ def strip_think_blocks(text: str, *, greedy: bool = False) -> str:
 
     ``greedy``: one block from the FIRST opener to the LAST closer, for a turn's reply,
     where a weak model sometimes quotes a ``</think>`` mid-reasoning (an earlier reply)
-    and a block closed at the first one would leak the rest of its reasoning.
+    and a block closed at the first one would leak the rest of its reasoning. A tag that
+    forms where that slice joins the text ("a</th" + block + "ink>b") is read by the walk
+    like any other: a closer there is dropped as a stray one ("ab"), an opener cuts.
 
     Linear in the text: at most three passes over it. A lazy ``<think>.*?</think>``
     rescans to the end from every unclosed opener (9.7 s on 128 KB of them), and a

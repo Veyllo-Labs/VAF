@@ -35,6 +35,13 @@ MUTATIONS, each turns the named test red:
   -> test_marked_reasoning_is_still_removed[think-quoted-in-redacted*];
 - give `_final_answer_probe` its own <think> regexes again -> test_probe_reads_the_cleaner_rule,
   test_a_turn_with_only_marked_reasoning_is_asked_again;
+- skip the second redacted pass in `_strip_marked_reasoning`
+  -> test_marked_reasoning_is_still_removed[redacted-*-joined];
+- skip the cut at a redacted opener left unclosed -> [redacted-unclosed];
+- let the probe call strip_think_blocks without the redacted pass
+  -> test_probe_counts_the_answer_the_chat_shows[thinking-quoted-in-redacted],
+     test_probe_reads_the_cleaner_rule[redacted-only];
+- make the probe greedy -> test_probe_counts_the_answer_the_chat_shows[answer-between-blocks];
 - build the kept answer from `full_response` again
   -> test_local_turn_returns_content_not_the_reasoning_channel (all four rows: the reasoning
      comes back glued in front of the answer);
@@ -140,10 +147,15 @@ def test_plain_text_is_the_answer(row):
      "<think> tag, but keep it short.</redacted_reasoning>Hello Bob, models mark their "
      "reasoning with a special tag.",
      "Hello Bob, models mark their reasoning with a special tag."),
+    ("<redacted_<think>x</think>reasoning>SECRET door code 4711</redacted_reasoning>Answer",
+     "Answer"),
+    ("<redacted_reasoning>SECRET</redacted_<think>x</think>reasoning>Answer", "Answer"),
+    ("Answer <redacted_reasoning>SECRET, never closed", "Answer"),
 ], ids=["block", "doubled-tags", "greedy-to-last-close", "stray-tag", "redacted", "marked-okay-user",
         "leaked-tool-json", "unclosed-after-answer", "upper", "mixed-case", "upper-unclosed",
         "thinking", "thinking-upper", "thinking-unclosed", "think-quoted-in-redacted",
-        "think-quoted-in-redacted-long"])
+        "think-quoted-in-redacted-long", "redacted-opener-joined", "redacted-closer-joined",
+        "redacted-unclosed"])
 def test_marked_reasoning_is_still_removed(text, expected):
     assert _clean(text) == expected
 
@@ -233,12 +245,25 @@ def test_strip_think_blocks_is_linear(text, expected):
     "<thinking>Private plan.</thinking>",
     "<THINK>Private plan.</THINK>",
     "<Thinking>Private plan, never closed",
-], ids=["thinking", "upper", "thinking-unclosed"])
+    "<redacted_reasoning>Private plan.</redacted_reasoning>",
+], ids=["thinking", "upper", "thinking-unclosed", "redacted-only"])
 def test_probe_reads_the_cleaner_rule(text):
     """The empty-response check sees no answer exactly where the cleaner returns none."""
     from vaf.core.agent import _final_answer_probe
     assert _clean(text) == ""
     assert _final_answer_probe(text) == ""
+
+
+@pytest.mark.parametrize("text", [
+    "<redacted_reasoning><thinking>R</redacted_reasoning>Die Zahl ist 42.",
+    "<think>a</think>Hello<think>b</think>",
+], ids=["thinking-quoted-in-redacted", "answer-between-blocks"])
+def test_probe_counts_the_answer_the_chat_shows(text):
+    """No retry for a reply with an answer on screen. The second row is why the probe is not
+    greedy: the chat shows "Hello" (it closes a leading block at its first </think>), and a
+    probe that called it empty would let a guard retract a bubble the person sees."""
+    from vaf.core.agent import _final_answer_probe
+    assert _final_answer_probe(text) != ""
 
 
 @pytest.mark.parametrize("name", list(ANSWERS))

@@ -53,6 +53,10 @@ MUST_REFUSE = [
     r"type \\evil.example\(share)\x",
     "curl file://localhost//evil.example/share/x",
     "curl file://localhost/%5C%5Cevil.example%5Cshare%5Cx",
+    # A `file:` URL behind an option's colon; backslash lookalikes NFKC turns into `\`.
+    "iwr -Uri:file://h/s/x",
+    "dir \uff3c\uff3ch\uff3cs",
+    "dir \ufe68\ufe68h\ufe68s",
 ]
 
 # On a Windows host: a host alone (the login happens at the host) and a share after two
@@ -61,7 +65,10 @@ WINDOWS_ONLY = [r"net view \\h", r"explorer \\h", r"sc \\h query", "net view \\\
                 r"dir \\nas\\share"]
 
 # A share only where the OS reads `//host/share` as one.
-FORWARD_SLASH = ["git clone //h/share/repo.git", "ls //h/share"]
+FORWARD_SLASH = ["git clone //h/share/repo.git", "ls //h/share",
+                 # Behind an option's colon, and the fullwidth slash NFKC turns into `/`.
+                 "powershell -c gc -Path://h/s/x", "gc FileSystem:://h/s/x",
+                 "dir \uff0f\uff0fh\uff0fs"]
 
 MUST_PASS = [
     "curl -sS https://example.com/x -o x",
@@ -89,6 +96,12 @@ MUST_PASS = [
     "curl -H 'Accept: */*' https://x/y",
     # An escaped backslash before a shell expansion is no host.
     r"echo \\$(date) \\$HOME",
+    # A URL scheme before `://` is no option's colon.
+    "psql postgres://u@localhost:5432/db",
+    "git clone ssh://git@github.com/a/b.git",
+    "docker cp c:/tmp/x .",
+    "echo a:/b c::/d",
+    "echo \u00e9t\u00e9 // caf\u00e9",
 ]
 
 SHARE_CODE = [
@@ -175,6 +188,61 @@ def test_in_the_chat_a_share_is_a_note_the_dialog_shows(cmd, windows):
     for profile in ("jailed", "remote"):
         assert "share_path" not in classify_command(cmd, profile=profile).categories, \
             (cmd, profile)
+
+
+def _best_of_three(fn, text):
+    import time
+    times = []
+    for _ in range(3):
+        t = time.perf_counter()
+        fn(text)
+        times.append(time.perf_counter() - t)
+    return min(times)
+
+
+@pytest.mark.parametrize("unit", [
+    "\\\\h\\s:",                # a share before every colon: each colon's suffix is one
+    ":\\",                      # a colon before every backslash, no share at all
+    '"\\\\h\\s:',               # the same behind quotes the Windows shells take out
+    "\uff3c\uff3ch\uff3cs:",    # the NFKC spelling
+    "-P://h/s:",                # a slash after an option's colon
+])
+def test_the_share_reading_stays_linear_in_the_length(unit, monkeypatch):
+    """The reading runs before anyone is asked (host_bash, the dialog's preview, a sandbox
+    environment's bash), in the server process. A colon's suffix that ran to the end of the
+    piece made it quadratic: 130 K characters of `\\\\h\\s:` took 27.6 s and 2.7 GB, now
+    about 0.3 s. As the other timing tests: 8 times the length may take at most about 20 times
+    as long (quadratic would be 64), and the 128 K cap stays well under a second.
+    MUTATION: read a colon's suffix to the end of the piece - red."""
+    monkeypatch.setattr(command_policy, "_windows_host", lambda: True)
+
+    def text(n):
+        return "dir " + unit * (n // len(unit))
+
+    def classify(t):
+        classify_command(t, profile="host_unattended")
+
+    small, large = _best_of_three(classify, text(8192)), _best_of_three(classify, text(65536))
+    assert large <= 20 * small + 0.05, (small, large)
+    assert _best_of_three(share_paths, text(128 * 1024 - 8)) < 1.0
+
+
+def test_many_different_pieces_stay_linear(monkeypatch):
+    """Every piece is judged once: the pieces already read are kept in a set.
+    MUTATION: keep them in a list - red (a lookup per piece over all before it)."""
+    monkeypatch.setattr(command_policy, "_windows_host", lambda: True)
+
+    def text(n):
+        words, size, i = [], 0, 0
+        while size < n:
+            words.append("w%d:%d" % (i, i))
+            size += len(words[-1]) + 1
+            i += 1
+        return " ".join(words)
+
+    small, large = _best_of_three(share_paths, text(8192)), _best_of_three(share_paths,
+                                                                         text(65536))
+    assert large <= 20 * small + 0.05, (small, large)
 
 
 def test_share_paths_reports_the_pieces(posix):

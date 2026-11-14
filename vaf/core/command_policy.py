@@ -155,6 +155,7 @@ import posixpath
 import re
 import shlex
 import traceback
+import unicodedata
 import urllib.parse
 import warnings
 from dataclasses import dataclass, field
@@ -1212,17 +1213,57 @@ def _is_share_piece(piece: str, windows: bool) -> bool:
     return False
 
 
+# The text before a `:` that makes `x://...` a URL, not a path after an option's colon.
+_URL_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*$")
+
+
+def _colon_suffixes(piece: str) -> Iterable[str]:
+    r"""A piece's text after each `:`, up to the next `:`, where it may be a path written
+    behind an option's colon: one that starts with a backslash (`-Path:\\h\s`,
+    `/out:\\h\s\x.exe`), a `file:` URL (`-Uri:file://h/s`), or one that starts with `/` when
+    the text in front is no URL scheme (`-Path://h/s`, `FileSystem:://h/s`; `https://h/s` is
+    a URL and read as one). Up to the next colon so each character is read a fixed number of
+    times: a suffix to the end of the piece made the reading quadratic (130 K characters of
+    `\\h\s:`: 27.6 s and 2.7 GB)."""
+    if ":" not in piece or _FILE_URL_RE.match(piece):
+        return
+    before = 0
+    at = piece.find(":")
+    while at >= 0:
+        nxt = piece.find(":", at + 1)
+        suffix = piece[at + 1:nxt if nxt >= 0 else len(piece)]
+        if suffix.startswith("\\"):
+            yield suffix
+        elif suffix.lower() == "file" and nxt >= 0:
+            # `file:` ends the slice at its own colon: the URL runs to the colon after it.
+            after = piece.find(":", nxt + 1)
+            yield piece[at + 1:after if after >= 0 else len(piece)]
+        elif suffix.startswith("/") and not _URL_SCHEME_RE.match(piece[before:at]):
+            yield suffix
+        before = at + 1
+        at = nxt
+
+
 def _share_candidates(text: str) -> Iterable[str]:
     r"""Every piece the share reading judges, each spelling of the text in turn: as written;
     without quotes, carets and backticks; with each doubled backslash read as one (a share in
-    a one-liner's C-style string, `"open('\\\\h\\s')"`); both. A piece's text after a `:` that
-    starts with a backslash is a piece too (`-Path:\\h\s`, `/out:\\h\s\x.exe`)."""
-    stripped = _SHARE_QUOTING_RE.sub("", text)
+    a one-liner's C-style string, `"open('\\\\h\\s')"`); both; and, for a text that is not
+    ASCII, the same four of its NFKC form (the fullwidth `＼` and `／` and the small `﹨` are
+    a backslash and a slash there). A piece's text after a `:` may be a piece too
+    (`_colon_suffixes`). Linear in the text: every spelling, piece and suffix is a slice read
+    once."""
+    bases = [text]
+    if not text.isascii():
+        normal = unicodedata.normalize("NFKC", text)
+        if normal != text:
+            bases.append(normal)
     spellings = []
-    for spelling in (text, stripped, text.replace("\\\\", "\\"),
-                     stripped.replace("\\\\", "\\")):
-        if spelling not in spellings:
-            spellings.append(spelling)
+    for base in bases:
+        stripped = _SHARE_QUOTING_RE.sub("", base)
+        for spelling in (base, stripped, base.replace("\\\\", "\\"),
+                         stripped.replace("\\\\", "\\")):
+            if spelling not in spellings:
+                spellings.append(spelling)
     for spelling in spellings:
         for whole in _SHARE_PIECE_SPLIT_RE.split(spelling):
             parts = [whole]
@@ -1232,12 +1273,28 @@ def _share_candidates(text: str) -> Iterable[str]:
                 if not piece:
                     continue
                 yield piece
-                if ":" in piece and not _FILE_URL_RE.match(piece):
-                    at = piece.find(":")
-                    while at >= 0:
-                        if piece[at + 1:at + 2] == "\\":
-                            yield piece[at + 1:]
-                        at = piece.find(":", at + 1)
+                yield from _colon_suffixes(piece)
+
+
+def _shares(text: str, windows: Optional[bool]) -> Iterable[str]:
+    """Each piece of `text` that names a share, once, in order (share_paths' reading)."""
+    if windows is None:
+        windows = _windows_host()
+    seen = set()
+    for piece in _share_candidates(str(text or "")):
+        if piece not in seen:
+            seen.add(piece)
+            if _is_share_piece(piece, windows):
+                yield piece
+
+
+def first_share_path(text: str, *, windows: Optional[bool] = None) -> str:
+    """The first piece of `text` that names a share or a device path, or "" (share_paths'
+    reading, stopped at the first answer: what a yes or no and a refusal need)."""
+    try:
+        return next(iter(_shares(text, windows)), "")
+    except Exception:                   # noqa: BLE001 - a reading aid, never a crash
+        return ""
 
 
 def share_paths(text: str, *, windows: Optional[bool] = None) -> List[str]:
@@ -1250,8 +1307,10 @@ def share_paths(text: str, *, windows: Optional[bool] = None) -> List[str]:
     name may hold (`\\h\(share)`). The text is read in four spellings (`_share_candidates`):
     as written, without the quoting cmd.exe and PowerShell take out (`dir "\\h"\s`,
     `dir \\h^\s`, PowerShell's backtick), with each doubled backslash read as one
-    (`python -c "open('\\\\h\\s')"`, `node -e`, `perl -e`), and both; a piece's text after a
-    `:` counts too (`-Path:\\h\s`, `/out:\\h\s\x.exe`). A piece counts when it has
+    (`python -c "open('\\\\h\\s')"`, `node -e`, `perl -e`), and both; a text that is not ASCII
+    also in its NFKC form (`＼＼h＼s`, `／／h／s`, `﹨﹨h﹨s`). A piece's text after a `:`
+    counts too (`-Path:\\h\s`, `/out:\\h\s\x.exe`, `-Uri:file://h/s`, `-Path://h/s`,
+    `FileSystem:://h/s`; `_colon_suffixes`). A piece counts when it has
     - the backslash UNC shape, a host and a share (`\\host\share`, `\\%VAR%\s`, `\\h@80\s`),
       or a device prefix (`\\?\`, `\\.\`, `\??\`), on every host;
     - on a Windows host (`windows`, default: this machine), also the forward-slash shape
@@ -1264,25 +1323,26 @@ def share_paths(text: str, *, windows: Optional[bool] = None) -> List[str]:
       UNC path (`file://localhost//h/s`), as written and percent-decoded, on every host.
     `path_jail.is_remote_path` judges every piece of the path shapes; the shape filter in
     front keeps `//`, `//tmp`, `// TODO`, `\\n`, `\\d+\\.`, `\\w\.`, `C:\x` and `https://...`
-    out, several of which it answers True alone. Never raises.
+    out, several of which it answers True alone. Linear in the text's length (each piece is
+    read once, a colon's suffix only up to the next colon); `first_share_path` stops at the
+    first answer. Never raises.
 
     NAMED BOUNDARY: text only, and on POSIX the host-alone and two-separator spellings are not
     read (a POSIX shell has no SMB client of its own; refusing them there would refuse
-    `printf '\\nDone'` for nothing). Not seen anywhere: a share built at run time (a variable,
-    a string joined in PowerShell, `[char]92`, an environment variable's value), one inside a
-    script file, text decoded before it runs (`base64 -d | sh`, `powershell
-    -EncodedCommand`), Windows name resolution of a bare name, and an HTTP client told to log
-    in as the Windows account (`curl --ntlm`, `-UseDefaultCredentials`). The text is read as
-    a whole, so a share named in data (an `echo`, a heredoc body, the text `ssh host '...'`
-    runs on another machine) counts as well."""
+    `printf '\\nDone'` for nothing). On Windows a host alone shaped like an escape or an
+    expansion (`\\a`, `\\n`, `\\xface`, `\\012`, `\\$evil`) is not refused, even where such a
+    host exists. Not seen anywhere: a share built at run time (a variable, a string joined in
+    PowerShell, also through an empty `$()` as in `\\$()h\s`, `[char]92`, an environment
+    variable's value such as `%CD:~0,0%`), one inside a script file, text decoded before it
+    runs (`base64 -d | sh`, `powershell -EncodedCommand`), escapes a program decodes itself
+    outside a doubled backslash (Python's `\x5c` in a one-liner cmd hands over unquoted or in
+    its `""` form, node's `\x5c` and `\u005c`, perl's `\134`), backslash lookalikes NFKC keeps
+    (`∖` U+2216, `⧵` U+29F5), Windows name resolution of a bare name, and an HTTP client told
+    to log in as the Windows account (`curl --ntlm`, `-UseDefaultCredentials`). The text is
+    read as a whole, so a share named in data (an `echo`, a heredoc body, the text
+    `ssh host '...'` runs on another machine) counts as well."""
     try:
-        if windows is None:
-            windows = _windows_host()
-        found = []
-        for piece in _share_candidates(str(text or "")):
-            if piece not in found and _is_share_piece(piece, windows):
-                found.append(piece)
-        return found
+        return list(_shares(text, windows))
     except Exception:                   # noqa: BLE001 - a reading aid, never a crash
         return []
 
@@ -1318,7 +1378,7 @@ def python_code_categories(code: str, *, _depth: int = 0) -> List[str]:
     def _as_text() -> List[str]:
         if _PYTHON_FTP_TEXT_RE.search(text):
             found.add("ftp_transfer")
-        if share_paths(text):
+        if first_share_path(text):
             found.add("share_path")
         return _ordered()
 
@@ -1350,7 +1410,7 @@ def python_code_categories(code: str, *, _depth: int = 0) -> List[str]:
                     _is_ftplib(value)
                     or value.lstrip().lower().startswith(("ftp://", "ftps://"))):
                 found.add("ftp_transfer")
-            if share_paths(value.strip()):
+            if first_share_path(value.strip()):
                 found.add("share_path")
         if len(found) == 2:
             break
@@ -1820,16 +1880,19 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[List[int
 
     # One scan of the whole raw text covers every nested `bash -c`, substitution and runner;
     # shlex has already dropped the backslashes from the tokens read above.
-    if (_depth == 0 and profile in _SHARE_PROFILES and "share_path" not in cats
-            and share_paths(text)):
-        cats.append("share_path")
+    share_piece = ""
+    if _depth == 0 and profile in _SHARE_PROFILES and "share_path" not in cats:
+        share_piece = first_share_path(text)
+        if share_piece:
+            cats.append("share_path")
     blocking = [c for c in cats if c in _BLOCKING.get(profile, _BLOCKING["host"])]
     verdict.categories = cats + [c for c in remote_cats if c not in cats]
     if "opaque_command" in cats:
         verdict.opaque_shape = opaque_shape or "program"
     if blocking:
         verdict.blocked = True
-        verdict.reason = _refusal(blocking[0], verdict.opaque_shape, text)
+        verdict.reason = _refusal(blocking[0], verdict.opaque_shape, text,
+                                  share_piece=share_piece)
     elif nested_refusal:
         verdict.blocked = True
         verdict.reason = nested_refusal
@@ -1843,8 +1906,10 @@ def _clip_piece(piece: str, limit: int = 120) -> str:
     return piece if len(piece) <= limit else piece[:limit] + "..."
 
 
-def _refusal(category: str, opaque_shape: str, text: str) -> str:
-    """The refusal sentence for `category`, with the way out where one exists."""
+def _refusal(category: str, opaque_shape: str, text: str, *, share_piece: str = "") -> str:
+    """The refusal sentence for `category`, with the way out where one exists. `share_piece`
+    is the piece the reading already took for a share; without it the text is read once
+    more, stopping at the first share."""
     sentence = CATEGORY_REASONS[category]
     heredoc = "<<" in text.replace("<<<", "")
     # An unquoted heredoc's body is expanded as it is written: quoting its delimiter makes it
@@ -1855,10 +1920,10 @@ def _refusal(category: str, opaque_shape: str, text: str) -> str:
     if category == "share_path":
         # Which piece it read as a share, so the model can tell the person, and a false
         # refusal is visible as one.
-        pieces = share_paths(text)
-        if pieces:
+        piece = share_piece or first_share_path(text)
+        if piece:
             sentence = sentence.replace(
-                "device path", f"device path ({_clip_piece(pieces[0])})", 1)
+                "device path", f"device path ({_clip_piece(piece)})", 1)
     if category == "opaque_command":
         sentence = _OPAQUE_REASONS.get(opaque_shape, sentence)
         if quote_cure and opaque_shape == "program":

@@ -131,9 +131,9 @@ class PythonExecTool(BaseTool):
         # to it, and no person saw the code. A yes to THIS call keeps it (the same rule
         # host_bash applies).
         if "share_path" in code_categories and kwargs.get("_call_confirmed") is not True:
-            from vaf.core.command_policy import share_paths
-            pieces = share_paths(code)
-            named = f" ({pieces[0][:120]})" if pieces else ""
+            from vaf.core.command_policy import first_share_path
+            piece = first_share_path(code)
+            named = f" ({piece[:120]})" if piece else ""
             return (f"[BLOCKED] python_exec: this code names a network share or a Windows "
                     f"device path{named}, and on Windows opening a share on another computer "
                     f"sends this account's login to that computer. Nobody confirmed this call, "

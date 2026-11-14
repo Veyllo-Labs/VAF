@@ -979,9 +979,16 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   without the quoting cmd.exe and PowerShell take out of a word before the program sees it
   (`dir "\\h"\s`, `dir \\h""\s`, cmd's caret `dir \\h^\s`, PowerShell's backtick); with each
   doubled backslash read as one, for a one-liner's C-style string
-  (`python -c "open('\\\\h\\s')"`, `node -e`, `perl -e`); and both. A piece's text after a
-  `:` counts too (`-Path:\\h\s`, `/out:\\h\s\x.exe`). A
-  shape filter in front of `is_remote_path` keeps `//`, `//tmp`, `// TODO`, `\\n`, `\\d+\\.`,
+  (`python -c "open('\\\\h\\s')"`, `node -e`, `perl -e`); and both; a text that is not ASCII
+  also in its NFKC form, where the fullwidth and small backslash and slash (`＼＼h＼s`,
+  `﹨﹨h﹨s`, `／／h／s`) are plain ones. A piece's text after a `:`, up to the next one,
+  counts too when it starts with a backslash (`-Path:\\h\s`, `/out:\\h\s\x.exe`), is a
+  `file:` URL (`-Uri:file://h/s`), or starts with `/` behind no URL scheme (`-Path://h/s`,
+  `FileSystem:://h/s`; `https://h/s` is a URL). The reading is linear in the command's
+  length, and it runs before anyone is asked (host_bash, the dialog's preview, a sandbox
+  environment's `bash`): a colon's suffix read to the end of its piece made it quadratic
+  (130 K characters of `\\h\s:`: 27.6 s and 2.7 GB in the server process, now 0.3 s and
+  26 MB). A shape filter in front of `is_remote_path` keeps `//`, `//tmp`, `// TODO`, `\\n`, `\\d+\\.`,
   `\\w\.`, `C:\x`, `https://...`, `file:///x` and `file://localhost/x` out; a host holds no
   regular-expression operator, and the Windows-only host-alone and two-separator readings
   skip a host that looks like an escape (`\\n`, `\\t`, `\\x41`, `\\012`) or a shell expansion
@@ -991,11 +998,17 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   Windows the doubled-backslash spelling above is what covers the double-quoted one-liner.
   Named boundary: text only. On POSIX the host-alone and two-separator spellings are not read
   (a POSIX shell has no SMB client of its own, and they would refuse `printf '\\nDone'` for
-  nothing). Not seen anywhere: a share built at run time (a variable or an environment
-  variable's value, a string joined in PowerShell, `[char]92`), one inside a script file,
-  text decoded before it runs (`echo ... | base64 -d | sh`, `powershell -EncodedCommand`,
-  which also hide every other category and are a change of their own), Windows name
-  resolution of a bare name, and an HTTP client told to log in as the Windows account
+  nothing). On Windows a host alone shaped like an escape or an expansion (`\\a`, `\\n`,
+  `\\xface`, `\\012`, `\\$evil`) is not refused either, even where a host of that name
+  exists. Not seen anywhere: a share built at run time (a variable or an environment
+  variable's value such as `%CD:~0,0%`, a string joined in PowerShell, also through an empty
+  `$()` as in `\\$()h\s`, `[char]92`), one inside a script file, text decoded before it runs
+  (`echo ... | base64 -d | sh`, `powershell -EncodedCommand`, which also hide every other
+  category and are a change of their own), escapes a program decodes itself outside a
+  doubled backslash (Python's `\x5c` in a one-liner cmd hands over unquoted or in its `""`
+  form, node's `\x5c` and `\u005c`, perl's `\134`), backslash lookalikes NFKC keeps as they
+  are (`∖` U+2216, `⧵` U+29F5, which an ANSI program may still receive as a backslash),
+  Windows name resolution of a bare name, and an HTTP client told to log in as the Windows account
   (`curl --ntlm`, `-UseDefaultCredentials`); the Windows-side control for that class is the
   operating system's outgoing-NTLM restriction, which needs admin rights and which VAF does
   not set. Accepted cost: the scan does not tell data from a command, so a heredoc body, an

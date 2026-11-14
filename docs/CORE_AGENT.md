@@ -140,7 +140,10 @@ starts from a measurement rather than a hunch.
 **Return contract - read this before using the value.** `chat_step` streams
 the answer and returns it:
 
-- On a normal completion it returns the turn's answer, reasoning stripped: every
+- On a normal completion it returns the turn's answer, reasoning stripped where the
+  model marked it (its reasoning channel, which a local engine streams as `<think>`, or
+  its own `<think>` tags); the answer is the text the person saw, never the reasoning
+  channel's text, and plain text is never guessed away as reasoning. It is every
   answer of the turn that passed the final-answer path, joined with a blank line
   (the pending-task auto-continue can add a second). Narration before a tool call
   ("I will check...") is streamed but is not part of it. Only a loop that ended

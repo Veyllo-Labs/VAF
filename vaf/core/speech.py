@@ -1175,27 +1175,6 @@ $player.Close()
             t = re.sub(r' +', ' ', t).strip()
         except Exception:
             pass
-        # 2. Remove VQ-1 specific thinking patterns
-        thought_patterns = [
-            r'^Okay, the user.*?(?:\n\n|\n|\Z)',
-            r'^First, I should.*?(?:\n\n|\n|\Z)',
-            r'^Let me check.*?(?:\n\n|\n|\Z)',
-            r'^I need to.*?(?:\n\n|\n|\Z)',
-            r'^I will.*?(?:\n\n|\n|\Z)',
-            r'^The user wants.*?(?:\n\n|\n|\Z)',
-        ]
-        for pattern in thought_patterns:
-            # Loop to remove multiple paragraphs of thinking
-            while re.search(pattern, t, flags=re.DOTALL | re.MULTILINE | re.IGNORECASE):
-                t = re.sub(pattern, '', t, count=1, flags=re.DOTALL | re.MULTILINE | re.IGNORECASE).strip()
-
-        # 2b. Aggressive Reasoning Filter: "Answer in [Lang]"
-        # If the model explicitly tells itself to answer in a language, 
-        # everything BEFORE that instruction is likely reasoning/garbage.
-        answer_instruction = re.search(r'(?:Answer|Antworte|Respond) (?:in|auf) [A-Z][a-z]+(?: \([A-Z][a-z]+\))?[\.:]?\s*', t, flags=re.IGNORECASE)
-        if answer_instruction:
-            # Keep only what comes AFTER "Answer in German."
-            t = t[answer_instruction.end():].strip()
 
         # 3. Remove introductory labels (Answer:, Antwort:, etc.)
         # Only at the very start of the string

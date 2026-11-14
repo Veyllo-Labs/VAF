@@ -94,6 +94,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   not left without an answer. VAF's own status tags (the note that a sub-agent took over, that
   notice) are no longer stored with the reply, and chats saved before this change are shown
   without them.
+- **A reply is no longer cut by a guess at what sounds like reasoning.** The answer returned
+  to `vaf run -p`, `vaf prompt`, the Python `Agent.run()`, agent rooms and automations, and the
+  text read aloud, dropped every line that began with phrases such as "I will", "I need to" or
+  "Okay, the user", and everything before "answer in ..." or "respond in ...": a one-line
+  answer like "I will send the report tomorrow." came back empty. With a local reasoning model
+  the returned answer could also carry the model's reasoning in front of it. Reasoning is now
+  removed only where the model marked it as reasoning, as in the chat.
 - **A file link VAF wrote shows as its path in the web chat, the messengers and the Veyllo
   App.** When the agent passed on what the coding agent reported, the web chat showed
   `[link=file:///...]/path[/link]` around the path, and Telegram, WhatsApp, Discord and the

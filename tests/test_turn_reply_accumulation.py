@@ -92,11 +92,12 @@ def _agent_source() -> str:
 
 def test_the_final_append_feeds_the_accumulator():
     """MUTATION: drop the kept_turn_answers.append line and this goes red, and
-    the displaced-answer defect is back."""
+    the displaced-answer defect is back. Built from full_content: full_response also holds a
+    local engine's reasoning channel without its marks (tests/test_marked_reasoning_only.py)."""
     src = _agent_source()
     i = src.index('self.history.append({"role": "assistant", "content": history_content})')
     following = src[i:i + 400]
-    assert "kept_turn_answers.append(self._clean_reasoning(full_response))" in following, (
+    assert "kept_turn_answers.append(self._clean_reasoning(full_content))" in following, (
         "the validated final answer is no longer captured at the moment it is "
         "committed to history; the next auto-continue round will displace it")
 

@@ -121,6 +121,9 @@ Before TTS playback, content is cleaned via `_clean_markdown()`:
 - **Removed:** Code blocks, thinking tags (`<think>`, `<redacted_reasoning>`), emojis, markdown formatting, long URLs
 - **Kept:** Pure answer text (the "blue text" in TUI)
 
+Reasoning is removed only where it is marked; answer text is spoken as written, also when it
+starts with "I will" or quotes "the user".
+
 ---
 
 ## Speech-to-Text (STT)

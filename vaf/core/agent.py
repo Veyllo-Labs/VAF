@@ -6785,7 +6785,13 @@ class Agent:
         return cleaned.strip()
 
     def _clean_reasoning(self, text: str) -> str:
-        """Removes internal reasoning/CoT blocks from the model response."""
+        """Remove leaked tool-call JSON and the reasoning the model MARKED as reasoning.
+
+        Marked means `<think>` blocks (doubled tags collapsed, stray tags dropped) and
+        `<redacted_reasoning>` blocks. Plain text is the answer, in any language: a phrase
+        list cannot tell a model's reasoning from an answer that starts "I will" or quotes
+        what "the user wants", and deleting by such a guess emptied whole replies.
+        """
         import re
         
         # First, apply the JSON sanitizer to catch leaked tool calls
@@ -6800,30 +6806,7 @@ class Agent:
         t = re.sub(r'<think>[\s\S]*</think>', '', t)
         t = re.sub(r'</?think>', '', t)  # drop any stray unpaired <think> / </think>
         t = re.sub(r'<redacted_reasoning>.*?</redacted_reasoning>', '', t, flags=re.DOTALL)
-        
-        # 2. Remove VQ-1 specific thinking patterns
-        # These are patterns where the model "talks to itself" at the start of a response
-        thought_patterns = [
-            r'^Okay, the user.*?(?:\n\n|\n|\Z)',
-            r'^First, I should.*?(?:\n\n|\n|\Z)',
-            r'^Let me check.*?(?:\n\n|\n|\Z)',
-            r'^I need to.*?(?:\n\n|\n|\Z)',
-            r'^I will.*?(?:\n\n|\n|\Z)',
-            r'^The user wants.*?(?:\n\n|\n|\Z)',
-        ]
-        for pattern in thought_patterns:
-            # Loop to remove multiple paragraphs of thinking
-            while re.search(pattern, t, flags=re.DOTALL | re.MULTILINE | re.IGNORECASE):
-                t = re.sub(pattern, '', t, count=1, flags=re.DOTALL | re.MULTILINE | re.IGNORECASE).strip()
 
-        # 3. Aggressive Reasoning Filter: "Answer in [Lang]"
-        # If the model explicitly tells itself to answer in a language, 
-        # everything BEFORE that instruction is likely reasoning/garbage.
-        answer_instruction = re.search(r'(?:Answer|Antworte|Respond) (?:in|auf) [A-Z][a-z]+(?: \([A-Z][a-z]+\))?[\.:]?\s*', t, flags=re.IGNORECASE)
-        if answer_instruction:
-             # Keep only what comes AFTER "Answer in German."
-             t = t[answer_instruction.end():].strip()
-        
         return t.strip()
 
     def _detect_user_language(self, text: str) -> str:
@@ -13935,9 +13918,10 @@ class Agent:
                     continue
 
             self.history.append({"role": "assistant", "content": history_content})
-            # The same expression the return uses, captured NOW: the auto-continue
-            # below may loop again, and the next round's reset wipes full_response.
-            kept_turn_answers.append(self._clean_reasoning(full_response))
+            # Captured NOW (the next round's reset wipes it), from full_content: the reply
+            # as shown, inline <think> included. full_response also holds a local
+            # engine's reasoning channel without its marks, never the answer.
+            kept_turn_answers.append(self._clean_reasoning(full_content))
             _last_kept_is_final = True
             # Only this path marks a round as an answer: a reply a guard kept on screen and
             # sent back (the model-health re-run, a grounding correction) stays unmarked.

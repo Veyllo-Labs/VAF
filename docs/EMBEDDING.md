@@ -98,7 +98,9 @@ agent.run("Explain async/await.",
 `on_token` receives text deltas as they arrive. For reasoning models the deltas
 may include the model's `<think>...</think>` block; the value returned by `run()`
 is always the cleaned final answer: every answer of the turn, without the narration the
-model streamed before a tool call ("I will check..."). A turn's failure reaches `on_token` too;
+model streamed before a tool call ("I will check..."). Reasoning is removed where the model
+marked it, through its reasoning channel or its own `<think>` tags; plain text is the answer,
+in any language. A turn's failure reaches `on_token` too;
 `agent.last_turn` says whether one did (see "A complete example, with error handling").
 
 One turn can be several generations: an answer, a tool call, another answer, or a

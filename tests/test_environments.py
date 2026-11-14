@@ -49,6 +49,7 @@ class FakeDocker:
         self.mount_identity = None
         self.shares_kernel = True
         self.fail_stop = False     # `stop` and `kill` leave the container running
+        self.fail_rm = False       # `rm -f` leaves the container listed
         self.identity_calls = []
 
     def mounted_identity(self, container, inside=envmod.WORKSPACE):
@@ -168,6 +169,8 @@ class FakeDocker:
                 c["state"] = "exited"
             return _done(0)
         if head == "rm":
+            if self.fail_rm:
+                return _done(1, "", "cannot remove container: permission denied")
             return _done(0) if self.containers.pop(args[-1], None) is not None else _done(1, "", "no such container")
         if head == "inspect":
             name = args[1]
@@ -410,7 +413,7 @@ def test_a_start_that_mounted_another_folder_is_stopped_and_refused(docker, mgr,
     MUTATION: skip the comparison in _check_mount - red."""
     proj = _project(tmp_path, monkeypatch)
     docker.mount_identity = "1:2"
-    with pytest.raises(EnvironmentRefused, match="it was moved or replaced by a link while"):
+    with pytest.raises(EnvironmentRefused, match="it was moved or replaced while"):
         mgr.create(ALICE, kind="project", project_path=str(proj))
     assert ["stop", "-t", "0"] in [c[:3] for c in docker.calls]
     assert not [n for n in docker.containers if n.startswith("vaf-env-")]   # create removed it
@@ -506,6 +509,120 @@ def test_a_second_command_waits_for_the_check_of_a_start_in_progress(docker, mgr
         release.set()
         t.join(10)
     assert first_error and ran == []
+
+
+def test_a_refused_start_whose_container_cannot_be_removed_keeps_its_record_and_mark(
+        docker, mgr, tmp_path, monkeypatch):
+    """create refuses the mount and removes the environment; when docker keeps the container
+    (stop, kill and rm all fail), the record and the mark stay, so the running container is
+    still checked and refused. MUTATION: delete record and mark whatever rm answered - red."""
+    proj = _project(tmp_path, monkeypatch)
+    ran = []
+    monkeypatch.setattr(containers, "exec_bounded",
+                        lambda *a, **k: ran.append(a) or (0, "", "", False, False))
+    docker.mount_identity = "1:2"
+    docker.fail_stop = docker.fail_rm = True
+    with pytest.raises(EnvironmentRefused):
+        mgr.create(ALICE, kind="project", project_path=str(proj))
+    (name,) = [n for n in docker.containers if n.startswith("vaf-env-")]
+    env_id = name.rsplit("-", 1)[1]
+    assert docker.containers[name]["state"] == "running"
+    assert mgr._read_state(env_id) is not None and mgr._unverified_file(env_id).exists()
+    with pytest.raises(EnvironmentRefused):
+        mgr.exec(ALICE, env_id, "ls")
+    assert ran == []
+    with pytest.raises(EnvironmentRefused, match="could not be removed"):
+        mgr.delete(ALICE, env_id)
+
+
+def test_a_second_request_compares_with_the_folder_held_for_the_start(docker, mgr, tmp_path,
+                                                                     monkeypatch):
+    """The folder is replaced by another real folder (renamed into place) between the first
+    request's open and docker's start. A second request that opened the path again would hold
+    the new folder, find it mounted and let its command run; it compares with the identity
+    held for the start instead. MUTATION: verify against a folder opened again - red."""
+    import threading
+    proj = _project(tmp_path, monkeypatch)
+    other = tmp_path / "other"
+    other.mkdir()
+    ran = []
+    monkeypatch.setattr(containers, "exec_bounded",
+                        lambda *a, **k: ran.append(a) or (0, "", "", False, False))
+    env = mgr.create(ALICE, kind="project", project_path=str(proj))
+    mgr.stop(ALICE, env.id)
+    real_call = docker.__class__.__call__
+
+    def _swapping_start(self, args, *a, **k):
+        if args and args[0] == "start":
+            os.rename(proj, tmp_path / "proj-aside")
+            os.rename(other, proj)                  # a real folder, no link on the way
+        return real_call(self, args, *a, **k)
+
+    monkeypatch.setattr(docker.__class__, "__call__", _swapping_start)
+    paused, release = threading.Event(), threading.Event()
+    real = docker.mounted_identity
+    calls = []
+
+    def _slow_first(container, inside=envmod.WORKSPACE):
+        calls.append(container)
+        if len(calls) == 1:
+            paused.set()
+            release.wait(10)
+        return real(container, inside)
+
+    monkeypatch.setattr(EnvironmentManager, "_mounted_identity", staticmethod(_slow_first))
+    errors = []
+    t = threading.Thread(target=lambda: _catch(errors, mgr.exec, ALICE, env.id, "ls"))
+    t.start()
+    try:
+        assert paused.wait(10)
+        with pytest.raises(EnvironmentRefused, match="is not"):
+            mgr.exec(ALICE, env.id, "ls")
+        assert ran == []
+    finally:
+        release.set()
+        t.join(10)
+    assert errors and ran == []
+
+
+def _catch(errors, fn, *args):
+    try:
+        fn(*args)
+    except EnvironmentRefused as e:
+        errors.append(e)
+
+
+def test_a_late_check_never_clears_a_newer_starts_mark(docker, mgr, tmp_path, monkeypatch):
+    """Ordering: start 1 is checked and pauses before it clears its mark; start 2 marks itself
+    (and its check refuses); start 1 then clears. Only start 1's mark may go.
+    MUTATION: clear whatever mark is there - red."""
+    from vaf.core.folder_mount import HeldFolder
+    proj = _project(tmp_path, monkeypatch)
+    env = mgr.create(ALICE, kind="project", project_path=str(proj))
+    with HeldFolder(proj) as held:
+        first = mgr._mark_unverified(env, held)
+        second = mgr._mark_unverified(env, held)
+    assert first and second and first != second
+    mgr._clear_unverified(env, first)
+    assert mgr._read_mark(env.id)["token"] == second
+    mgr._clear_unverified(env, second)
+    assert mgr._read_mark(env.id) is None
+    # The same through the lifecycle: a late completion of an older start leaves the newer
+    # (refused, still running) start marked, so a command is checked and refused.
+    ran = []
+    monkeypatch.setattr(containers, "exec_bounded",
+                        lambda *a, **k: ran.append(a) or (0, "", "", False, False))
+    mgr.stop(ALICE, env.id)
+    with HeldFolder(proj) as held:
+        older = mgr._mark_unverified(env, held)
+    docker.mount_identity = "1:2"
+    docker.fail_stop = True
+    with pytest.raises(EnvironmentRefused):
+        mgr.exec(ALICE, env.id, "ls")               # the newer start: refused, still running
+    mgr._clear_unverified(env, older)               # the older check completes late
+    with pytest.raises(EnvironmentRefused):
+        mgr.exec(ALICE, env.id, "ls")
+    assert ran == []
 
 
 def test_a_daemon_on_another_kernel_is_not_asked(docker, mgr, tmp_path, monkeypatch):

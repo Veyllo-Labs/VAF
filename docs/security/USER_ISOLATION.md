@@ -554,8 +554,10 @@ commit in 21 of 300 calls, and a new notes manager whose `.vaf` was missing left
   writes the files, and `git init` writes by path. The git command of every call now starts
   in a namespace whose root is its own tmpfs, with the top folder bound at its real path and
   checked inside, before git starts, to be the folder the handle holds (`dev:ino`); the
-  read-only config and index reads before it stay on the handles, which pin them fully. Under
-  the same racer, 1000 status calls: 0 leaks of 944 answered (2 of 957 with the handles
+  read of the repository's own drivers starts in the same view (a read outside missed a
+  filter an include through `/proc/self/task/2/` defines, and the command ran it, measured),
+  and only the global and system config and the index are read on the handles. Under
+  the same racer, 1000 status calls: 0 leaks of 963 answered (2 of 957 with the handles
   alone), and `reset --hard` wrote into the other folder in 0 of 300 calls (2 of 247 before).
   The person's global ignore and attributes files are bound too, so the agent's commits skip
   what they hide, as before.
@@ -589,8 +591,8 @@ NAMED BOUNDARY, what remains, with the numbers above:
   there, and the shell takes its container.
 - a docker daemon in a VM (Docker Desktop, Rancher Desktop): containers see other folder
   numbers, so the shell's fallback and an environment mount by name, unchecked. A daemon that
-  runs containers under another user (rootless, userns-remap) cannot be checked from the
-  host: an environment start with a project folder is refused there.
+  runs containers under another user (rootless, userns-remap): whether the host can read the
+  container's root is unmeasured; where it cannot, a start with a project folder is refused.
 - the `:z` relabel at docker's start: docker relabels the source it resolved before the check
   can refuse, so a folder swapped in during the moment between VAF's open and docker's start
   is relabelled (`container_file_t`). A relabel through the held handle would close it and
@@ -598,7 +600,8 @@ NAMED BOUNDARY, what remains, with the numbers above:
 - what runs at an environment's start, before the check: the container's own command. An
   environment keeps its filesystem, so a program a root command left there in place of
   `sleep` runs then; together with a folder swapped in during that moment, it could reach the
-  swapped-in folder for the few milliseconds until the check stops the container. It needs
+  swapped-in folder, whatever folder the link names, until the check stops the container,
+  about 100 ms later (114 ms measured). It needs
   the root lane and a process winning that moment. A `docker start` made outside VAF is not
   checked.
 - `-v` creates a missing source as an empty root-owned folder: a folder renamed away in the

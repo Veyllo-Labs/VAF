@@ -306,23 +306,29 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   folder that was checked, so a program of the account that replaces its project folder with
   a link no longer redirects git's history or commits; project notes no longer leave an empty
   `.vaf` folder in another folder, and git no longer runs on a repository above the checked
-  folder when that folder has no repository of its own. On Linux with bubblewrap, git and the
-  coding agent's shell now also check, inside their own private view and before anything
-  runs, that the folder they got is the one that was checked, so such a program can no
-  longer redirect them for that moment either. A sandbox environment with a project folder
-  checks the folder before and after each start, a restart included, and refuses to run
-  anything in it otherwise. What stays open: on macOS and Windows, on Linux without a working
-  bubblewrap and for a linked worktree, git still runs on the folder's name; with Docker
-  Desktop or another Docker in a virtual machine the shell's Docker fallback and environments
-  are not checked; with a Docker that runs containers under another user (rootless or
-  userns-remap), environments with a project folder are refused; and on SELinux hosts a
-  folder swapped in at the very moment an environment starts is still relabelled, and a
-  program the agent installed as root in the environment runs once before the check. In a
-  coding run git can no longer write outside the project folder (for example `git worktree
-  add` into another folder fails with "Read-only file system"), and each git call takes
-  about 5 ms longer. Where bubblewrap is installed but cannot start (inside a container, for
-  example), the coding agent's shell now uses its Docker fallback, or says why no sandbox is
-  available, instead of failing every command.
+  folder when that folder has no repository of its own.
+  - On Linux with bubblewrap, git and the coding agent's shell now also check, inside their
+    own private view and before anything runs, that the folder they got is the one that was
+    checked, so such a program can no longer redirect them for that moment either. A sandbox
+    environment with a project folder checks the folder before and after each start, a
+    restart included, and runs nothing in it otherwise.
+  - What changes in a coding run: git can no longer write outside the project folder (for
+    example `git worktree add` into another folder fails with "Read-only file system"), your
+    own global ignore file still keeps the files it lists out of the agent's commits, and
+    each git call takes about 10 ms longer.
+  - What stays open: on macOS and Windows, on Linux without a working bubblewrap, and for a
+    git worktree you created with `git worktree add`, git still runs on the folder's name.
+    With Docker Desktop or another Docker in a virtual machine, the shell's Docker fallback
+    and sandbox environments are not checked. With a Docker that runs containers under
+    another user (rootless Docker), environments with a project folder may be refused; this
+    is not measured. On SELinux hosts, SELinux relabels a folder swapped in at the very
+    moment an environment starts. And on every Linux host, a program the agent put into an
+    environment as root runs when the environment starts, before the check: if a folder was
+    swapped in at that very moment, it can reach that folder for about a tenth of a second,
+    until the check stops the environment.
+  - Where bubblewrap is installed but cannot start (inside a container, for example), the
+    coding agent's shell now uses its Docker fallback, or says why no sandbox is available,
+    instead of failing every command.
   Needs a restart of VAF.
 - **The agent's file tools stay out of VAF's own data and your shell start files.** Reading
   VAF's data and settings folders (messages, mail, contacts, key files, the MCP server list,

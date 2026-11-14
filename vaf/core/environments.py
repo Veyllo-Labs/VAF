@@ -56,19 +56,24 @@ ISOLATION, measured on Docker 29.7 before this was written
   never a tool inside the container, which a root command could replace), and it must be
   the handle's (`_check_mount`), else the container is stopped (killed if a stop does not
   take) and the start refused. Until that check passed the start is marked unverified in a
-  file beside the record, and every command path (`_ensure_running`) that finds the
-  container running and still marked checks the mount itself first: a second request, or
-  another process, cannot slip a command in between `docker start` and the check, and a
-  container whose stop failed stays refused.
+  file beside the record, with the identity held for that start and a token of the start,
+  and every command path (`_ensure_running`) that finds the container running and still
+  marked checks the mount itself first, against that identity: a second request, or another
+  process, cannot slip a command in between `docker start` and the check, a check that
+  finishes late clears only its own start's mark, and a container whose stop failed (or
+  whose removal did not take, which keeps its record and mark) stays refused.
   NAMED BOUNDARIES (and those of `vaf.core.folder_mount`):
   - the container's own command runs at the start, before the check: a project environment
     keeps its writable layer, so a program the root lane put in place of `sleep` (or a
     library it loads) runs then. With a folder swapped in during the moment between VAF's
-    open and docker's start, it could reach that folder until the check stops the container,
-    a few milliseconds later. It needs the root lane AND a process winning that moment.
-  - a daemon in a VM (Docker Desktop) is not checked after the start (other numbers); a
-    daemon on this kernel that runs containers under another user (rootless, userns-remap)
-    cannot be checked and is refused (measured readable on a native rootful daemon);
+    open and docker's start, it can reach that folder, whatever folder the link names, until
+    the check stops the container: about 100 ms later (114 ms measured under the lowest CPU
+    priority). It needs the root lane AND a process winning that moment; a start lane that
+    runs nothing from the writable layer would close it.
+  - a daemon in a VM (Docker Desktop) is not checked after the start (other numbers); for a
+    daemon on this kernel that runs containers under another user (rootless, userns-remap),
+    whether the host can read `/proc/<pid>/root` is unmeasured: where it cannot, the start is
+    refused (measured readable on a native rootful daemon);
   - `:z` relabels what docker resolved before the check can refuse;
   - a `docker start` made outside VAF (a person at the terminal) is not checked.
 - Network profiles, each on the environment's own network:
@@ -749,20 +754,21 @@ class EnvironmentManager:
                 pass
         return False
 
-    def _check_mount(self, env: Environment, held) -> None:
-        """Right after a start: /workspace must be the held folder (same `dev:ino`, read from
-        the host, `_mounted_identity`). Asked only of a daemon on this kernel
-        (`containers.docker_shares_kernel`); a daemon in a VM shows other numbers, and its
-        mount stays by name. Anything else stops the container and refuses; the start's
-        unverified mark (`_mark_unverified`) stays, so no command runs in it until a check
-        passes, whatever docker says about its state."""
-        if held is None or not containers.docker_shares_kernel():
+    def _check_mount(self, env: Environment, identity: Optional[str],
+                     path: Optional[str] = None) -> None:
+        """Right after a start: /workspace must be the folder held for that start (its
+        ``identity``, `dev:ino`, read from the host, `_mounted_identity`). Asked only of a
+        daemon on this kernel (`containers.docker_shares_kernel`); a daemon in a VM shows
+        other numbers, and its mount stays by name. Anything else stops the container and
+        refuses; the start's unverified mark (`_mark_unverified`) stays, so no command runs in
+        it until a check passes, whatever docker says about its state."""
+        if not identity or not containers.docker_shares_kernel():
             return
         try:
             seen, why = self._mounted_identity(env.container), ""
         except OSError as e:
             seen, why = "", (e.strerror or str(e))
-        if seen == held.identity:
+        if seen == identity:
             return
         stopped = self._quarantine(env.container)
         state = ("the environment was stopped" if stopped else
@@ -773,39 +779,81 @@ class EnvironmentManager:
                 f"could not check which folder is mounted at {WORKSPACE} ({why}); {state} and "
                 f"nothing was run in it. Run the command again; if this keeps happening, the "
                 f"docker daemon may run containers under another user (rootless or "
-                f"userns-remap), where VAF cannot check the mount")
+                f"userns-remap), where VAF may not be able to check the mount")
         raise EnvironmentRefused(
-            f"the folder mounted at {WORKSPACE} is not {env.project_path}: it was moved or "
-            f"replaced by a link while the environment started; {state} and nothing was run "
+            f"the folder mounted at {WORKSPACE} is not {path or env.project_path}: it was "
+            f"moved or replaced while the environment started; {state} and nothing was run "
             f"in it. Check the folder, then run the command again")
 
     # The start of an environment with a project folder is marked unverified, in a file of its
     # own beside the record, until `_check_mount` passed: a command of another request or
     # another process that finds the container already running checks the mount itself
-    # first (`_ensure_running`), instead of running in a mount nobody checked yet. A file
-    # of its own, because `_touch` and other writers rewrite the record from memory.
+    # first (`_ensure_running`), instead of running in a mount nobody checked yet. A file of
+    # its own, because `_touch` and other writers rewrite the record from memory. The mark
+    # carries the identity held for THAT start, so the other request compares with what was
+    # judged, never with a folder it opens again (a folder renamed into place before the
+    # start would pass that), and a token of the start: a check clears only its own start's
+    # mark, so a check that finishes late never clears a newer start's.
     def _unverified_file(self, env_id: str) -> Path:
         return self._state_dir() / f"{env_id}.mount-unverified"
 
-    def _mark_unverified(self, env: Environment) -> None:
-        if env.project_path:
-            with self._locked():
-                self._unverified_file(env.id).write_text("", encoding="utf-8")
+    def _read_mark(self, env_id: str) -> Optional[Dict[str, Any]]:
+        """The start's mark, or None. A file that is there but unreadable counts as a mark
+        with nothing to compare with (refused, never passed)."""
+        path = self._unverified_file(env_id)
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return None
+        except OSError:
+            return {"token": "", "identity": "", "path": ""}
+        try:
+            mark = json.loads(raw)
+            if isinstance(mark, dict):
+                return {k: str(mark.get(k) or "") for k in ("token", "identity", "path")}
+        except ValueError:
+            pass
+        return {"token": "", "identity": "", "path": ""}
 
-    def _clear_unverified(self, env: Environment) -> None:
+    def _mark_unverified(self, env: Environment, held) -> Optional[str]:
+        """Mark a start unverified before docker starts it; returns the start's token."""
+        if not env.project_path or held is None:
+            return None
+        token = secrets.token_hex(8)
+        data = json.dumps({"token": token, "identity": held.identity, "path": env.project_path})
         with self._locked():
-            try:
-                self._unverified_file(env.id).unlink()
-            except FileNotFoundError:
-                pass
+            path = self._unverified_file(env.id)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(data, encoding="utf-8")
+            os.replace(tmp, path)
+        return token
+
+    def _clear_unverified(self, env: Environment, token: Optional[str]) -> None:
+        """Remove the mark of the start ``token`` names, and only that start's."""
+        if not token:
+            return
+        with self._locked():
+            mark = self._read_mark(env.id)
+            if mark is not None and mark["token"] == token:
+                try:
+                    self._unverified_file(env.id).unlink()
+                except FileNotFoundError:
+                    pass
 
     def _verify_running(self, env: Environment) -> None:
         """A running environment whose start is not checked yet (another request is between
         `docker start` and its check, or a check refused and the stop did not take): check
-        the mount now, before the caller's command."""
-        with (self._held_mount(env) or contextlib.nullcontext()) as held:
-            self._check_mount(env, held)
-        self._clear_unverified(env)
+        the mount now, against the identity held for that start, before the caller's
+        command."""
+        mark = self._read_mark(env.id)
+        if mark is None:
+            return
+        if not mark["identity"]:
+            raise EnvironmentRefused(
+                f"environment {env.id} was started without a check that can be repeated; "
+                f"stop it and run the command again")
+        self._check_mount(env, mark["identity"], mark["path"])
+        self._clear_unverified(env, mark["token"])
 
     def _start_new(self, env: Environment, *, memory_mb: int, cpus: float,
                    host_gateway: bool = False) -> None:
@@ -819,7 +867,7 @@ class EnvironmentManager:
 
     def _start_new_held(self, env: Environment, held, *, memory_mb: int, cpus: float,
                         host_gateway: bool) -> None:
-        self._mark_unverified(env)
+        token = self._mark_unverified(env, held)
         labels = self._labels(env)
         if env.network in ("none", "registries"):
             ok = containers.ensure_network(env.net, internal=True, labels=labels,
@@ -877,8 +925,8 @@ class EnvironmentManager:
         if r.returncode != 0:
             raise EnvironmentRefused(f"the environment could not be started: "
                                      f"{(r.stderr or '').strip()[:300]}")
-        self._check_mount(env, held)
-        self._clear_unverified(env)
+        self._check_mount(env, held.identity if held is not None else None)
+        self._clear_unverified(env, token)
         env.state = "running"
         if env.network == "registries":
             self._attach_proxy(env)
@@ -1035,7 +1083,9 @@ class EnvironmentManager:
 
     # -- running -------------------------------------------------------------------
     def _ensure_running(self, env: Environment) -> None:
-        if env.state == "running" and env.project_path and self._unverified_file(env.id).exists():
+        # Not asked of the record's project path: a record that is gone (a removal that did
+        # not take) must not turn a marked start into an unchecked one.
+        if env.state == "running" and self._unverified_file(env.id).exists():
             self._verify_running(env)
         if env.state == "running":
             if env.network == "registries":
@@ -1055,13 +1105,13 @@ class EnvironmentManager:
                                          f"floor is {setting('min_free_mb')} MB)")
         # A restart after an idle stop resolves the stored path again, like a new start.
         with (self._held_mount(env) or contextlib.nullcontext()) as held:
-            self._mark_unverified(env)
+            token = self._mark_unverified(env, held)
             r = containers.docker(["start", env.container], timeout=60)
             if r.returncode != 0:
                 raise EnvironmentRefused(f"the environment could not be started: "
                                          f"{(r.stderr or '').strip()[:200]}")
-            self._check_mount(env, held)
-        self._clear_unverified(env)
+            self._check_mount(env, held.identity if held is not None else None)
+        self._clear_unverified(env, token)
         env.state = "running"
         if env.network == "registries":
             self._attach_proxy(env)
@@ -1084,11 +1134,26 @@ class EnvironmentManager:
         """Container, volume, network and state, all of them. Idempotent: what is
         already gone is skipped, so racing reapers and a person clicking twice agree."""
         env = self.get(owner_scope, env_id, admin=admin)
-        self._remove(env)
+        if not self._remove(env):
+            raise EnvironmentRefused(f"environment {env_id} could not be removed: docker still "
+                                     f"lists its container; try again")
         return env
 
-    def _remove(self, env: Environment) -> None:
-        containers.docker(["rm", "-f", env.container], timeout=60)
+    def _remove(self, env: Environment) -> bool:
+        """Container, then volume, network, record and mark. False, with the record and the
+        mark kept, when docker still lists the container afterwards: a container whose mount
+        a check refused may still run, and without its record a later `get` would rebuild it
+        without the project folder that marks it for a check."""
+        try:
+            containers.docker(["rm", "-f", env.container], timeout=60)
+        except Exception:
+            pass
+        try:
+            gone = containers.container_state(env.container) is None
+        except Exception:
+            gone = False
+        if not gone:
+            return False
         if env.network == "registries" and env.net:
             containers.docker(["network", "disconnect", "-f", env.net, PROXY_CONTAINER], timeout=30)
         if env.volume:
@@ -1097,6 +1162,7 @@ class EnvironmentManager:
             containers.docker(["network", "rm", env.net], timeout=30)
         with self._locked():
             self._delete_state(env.id)
+        return True
 
     # -- the scratch environment ---------------------------------------------------
     def scratch_for(self, owner_scope: Any) -> Environment:
@@ -1965,8 +2031,8 @@ class EnvironmentManager:
                 self._watch_processes(env, now)
                 if env.kind in ("temporary", SCRATCH_KIND):
                     if env.expires and env.expires < now and not self.busy(env):
-                        self._remove(env)
-                        summary["removed"] += 1
+                        if self._remove(env):
+                            summary["removed"] += 1
                 elif env.kind == "project" and env.state == "running":
                     idle = now - float(env.last_used or env.created or now)
                     if idle > float(setting("idle_stop_minutes")) * 60 and not self.busy(env):

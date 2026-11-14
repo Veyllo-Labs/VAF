@@ -320,6 +320,21 @@ def test_a_failed_start_is_probed_again_later_a_missing_bwrap_is_not(monkeypatch
     assert len(probes) == 3                                     # final: not installed
 
 
+@_LINUX
+def test_the_probe_reason_is_bwraps_own_line(monkeypatch, fresh_probe):
+    """The no-sandbox refusal and the log carry the probe's reason: bwrap's words, not the
+    sentence for a moved folder with VAF's own probe folder in it.
+    MUTATION: take the last line of the refusal's stderr again - red."""
+    monkeypatch.setattr(folder_mount.sys, "platform", "linux")
+    monkeypatch.setattr(folder_mount.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(folder_mount, "namespace_argv", lambda *a, **k: [
+        "/bin/sh", "-c", "echo 'bwrap: No permissions to create new namespace' >&2; exit 1", "x"])
+    assert folder_mount.namespace_available() is False
+    assert folder_mount.namespace_unavailable_reason() == (
+        "bubblewrap is installed but cannot start a namespace here: "
+        "bwrap: No permissions to create new namespace")
+
+
 def test_a_probe_folder_that_cannot_be_made_is_an_answer_not_an_error(monkeypatch, fresh_probe):
     """MUTATION: make the folder outside the try - red (the OSError reaches every git call)."""
     monkeypatch.setattr(folder_mount.sys, "platform", "linux")
@@ -354,25 +369,29 @@ def _record(monkeypatch):
 
 
 @_LANE
-@pytest.mark.parametrize("args, reads", [(["status", "--porcelain"], 3), (["add", "-A"], 4)])
+@pytest.mark.parametrize("args, reads", [(["status", "--porcelain"], 2), (["add", "-A"], 3)])
 def test_one_namespace_start_per_call_and_the_reads_through_the_handles(world, monkeypatch,
                                                                        args, reads):
-    """The command starts in the namespace; the read-only config and index reads (the global,
-    system and effective driver reads, which also name the global ignore file, and the
-    gitlinks read for add) run through the handles, which pin them fully (no work tree is set up), so a call pays
-    one namespace start. MUTATION: start the reads in the namespace too - red; start the
-    command outside it - red."""
+    """The command and the read of the repository's own drivers start in the namespace (the
+    same view, see the next test); the reads whose answer does not depend on the view (the
+    global and system config, which also name the global ignore file, and the gitlinks read
+    for add) run through the handles, which pin them fully (no work tree is set up).
+    MUTATION: start every read in the namespace too - red; start the command outside it -
+    red."""
     seen = _record(monkeypatch)
     a = str(world.a)
     proc = gr.run_project_git(args, cwd=a, expect_folder=a)
     assert proc.returncode == 0, proc.stderr
     starts = [(argv, kw) for argv, kw in seen if argv[0] == "bwrap"]
     rest = [(argv, kw) for argv, kw in seen if argv[0] != "bwrap"]
-    assert len(starts) == 1 and seen[-1][0][0] == "bwrap" and len(rest) == reads
+    assert len(starts) == 2 and seen[-1][0][0] == "bwrap" and len(rest) == reads
+    effective = starts[0][0]
+    assert "config" in effective and "--global" not in effective and "--system" not in effective
     for argv, kw in rest:
-        assert any(x in ("config", "ls-files") for x in argv), argv
+        assert ("--global" in argv or "--system" in argv or "ls-files" in argv), argv
         assert kw["cwd"].startswith("/proc/self/fd/") and kw["real_cwd"] == a
         assert f"--work-tree={kw['cwd']}" in argv
+    starts = starts[1:]
     argv, kw = starts[0]
     home = os.path.expanduser("~")
     assert kw["cwd"] == "/"
@@ -390,6 +409,27 @@ def test_one_namespace_start_per_call_and_the_reads_through_the_handles(world, m
     assert f"--work-tree={a}" in git
     assert kw["env"]["GIT_COMMON_DIR"] == git_dir
     assert sorted(kw["pass_fds"]) == sorted((int(git_dir.rsplit("/", 1)[1]), started))
+
+
+@_LANE
+@pytest.mark.parametrize("include", ["/proc/self/task/2/cwd/.git/x.conf",
+                                     "/proc/self/task/2/fd/4/x.conf"])
+def test_a_driver_only_the_namespace_can_see_is_switched_off(world, include):
+    """git is task 2 inside the namespace, so an include through /proc/self/task/2 exists only
+    there: a driver read outside missed the filter it defines and the command inside ran it
+    (measured). The repository's own drivers are read in the command's view.
+    MUTATION: read the repository's drivers through the handles - red (the filter runs)."""
+    ran = world.a / "FILTER-RAN"     # inside: the namespace's root is read-only
+    (world.a / ".git" / "x.conf").write_text(
+        f'[filter "ev"]\n\tclean = "touch {ran}; cat"\n', encoding="utf-8")
+    with open(world.a / ".git" / "config", "a", encoding="utf-8") as f:
+        f.write(f"[include]\n\tpath = {include}\n")
+    (world.a / ".gitattributes").write_text("*.txt filter=ev\n", encoding="utf-8")
+    (world.a / "a.txt").write_text("hi\n", encoding="utf-8")
+    a = str(world.a)
+    proc = gr.run_project_git(["add", "-A"], cwd=a, expect_folder=a)
+    assert proc.returncode == 0, proc.stderr
+    assert not ran.exists(), "the repository's own filter ran"
 
 
 @_LANE
@@ -710,7 +750,8 @@ def test_a_shell_jail_that_cannot_start_says_why(tmp_path, monkeypatch):
         1, "", "bwrap: No permissions to create new namespace\n"))
     rc, out, err, mode = wx.run_in_workspace(str(tmp_path), "true", **_NO_ACCOUNT)
     assert (rc, mode) == (-2, "refused")
-    assert "No permissions to create new namespace" in err and "try again" in err
+    assert "No permissions to create new namespace" in err and "try again" in err.lower()
+    assert "vaf health" in err
 
 
 @pytest.mark.parametrize("installed", [True, False])

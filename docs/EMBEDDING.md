@@ -1126,12 +1126,15 @@ in a mount namespace whose root is its own tmpfs, with the system folders, the h
 the person's global git config and the global ignore and attributes files it names read-only,
 and your top folder bound at its real path; a check inside, before git starts, compares that
 folder's `dev:ino` with the handle's, and git then works there with `--work-tree=<top>`. The
-read-only config and index reads before it run through the handles, which pin them fully. A
-swap on the host after that does not reach the namespace: 0 leaks of 944 answered status
+read of the repository's own drivers starts in that same view (an include of the repository's
+config can name a path that exists only inside, so a read outside could miss a filter the
+command then runs); the global and system config and the index are read through the
+handles, which pin them fully. A
+swap on the host after that does not reach the namespace: 0 leaks of 963 answered status
 calls and 0 writes in 300 `reset --hard` calls under the same racer. A start the check
 refused is repeated at most twice, never once git ran, and then refused (`returncode` -1)
 with the last start's cause ("could not start in a private view of ..."). The price is one
-namespace start per call, about 5 ms (10 against 5.5 ms for a status). A folder inside a
+namespace starts per call, about 10 ms (15 against 5 ms for a status). A folder inside a
 folder the namespace binds read-only (/opt, a git install prefix) keeps the handles alone. In that view git can write only inside your folder (the rest is
 read-only, with no scratch `/tmp`): a command that writes elsewhere, such as `worktree add
 <path outside>`, `archive -o` or `bundle create` with a path outside, fails with "Read-only
@@ -1192,7 +1195,7 @@ envs.delete("scope-of-alice", env.id)          # container, volume, network and 
 
 - **Kinds.**
   - `temporary`: removed whole when it expires (`sandbox_env_temp_ttl_hours`, default 24, counted from the last use).
-  - `project`: kept until deleted, stopped when idle; `project_path=` mounts a host directory at `/workspace`. The resolved path is stored, and every start of the environment (the first one, a restore's `readopt`, a restart after an idle stop) opens it again as a handle with itself as the expected real path, so a folder replaced by a link meanwhile is refused instead of mounted; on a docker daemon that shares this kernel, the host's kernel is then asked what is mounted at `/workspace` (through the container's process, never a tool inside it) and it must be that handle's `dev:ino`, or the container is stopped and the start refused. Until that check passed, a command from another request or process that finds the container running checks the mount itself first. On a daemon in a VM (Docker Desktop) the mount is by name, unchecked after the start; a daemon that runs containers under another user (rootless, userns-remap) cannot be checked, and such a start is refused. The container's own command runs before the check, so a program a root command left in the environment in place of `sleep` runs then.
+  - `project`: kept until deleted, stopped when idle; `project_path=` mounts a host directory at `/workspace`. The resolved path is stored, and every start of the environment (the first one, a restore's `readopt`, a restart after an idle stop) opens it again as a handle with itself as the expected real path, so a folder replaced by a link meanwhile is refused instead of mounted; on a docker daemon that shares this kernel, the host's kernel is then asked what is mounted at `/workspace` (through the container's process, never a tool inside it) and it must be that handle's `dev:ino`, or the container is stopped and the start refused. Until that check passed, a command from another request or process that finds the container running checks the mount itself first. On a daemon in a VM (Docker Desktop) the mount is by name, unchecked after the start; for a daemon that runs containers under another user (rootless, userns-remap) it is unmeasured whether the host can read the container's root, and a start it cannot read is refused. The container's own command runs before the check, so a program a root command left in the environment in place of `sleep` runs then, for about 100 ms, and can reach whatever folder was swapped in.
   - `scratch_for(scope)`: the one scratch environment per person that `python_sandbox` uses.
 - **Networks** (`network=`): `none` (no route out, the host unreachable), `registries` (only package registries, through a filtering proxy) or `open`. The admin key `sandbox_env_network_max` caps what may be asked for. `open` reaches the LAN and whatever listens on the host's `0.0.0.0`; `registries` does not stop data leaving through the registries themselves. Both are said in the tools' descriptions too.
 - **Ownership.** Every call takes the owner's scope first. Another person's environment answers like a missing one; `admin=True` on `get`, `stop` and `delete` reaches it, and nothing runs code in someone else's environment. A scope of `None` means the machine owner, as everywhere in VAF; with no owner configured, the call is refused.

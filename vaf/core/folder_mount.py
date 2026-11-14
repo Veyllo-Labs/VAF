@@ -123,8 +123,12 @@ SYSTEM_DIRS: Tuple[str, ...] = ("/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc
 
 
 class HandoverRefused(subprocess.CompletedProcess):
-    """`run_guarded`'s answer when no start reached the payload: returncode -1, the reason in
-    stderr. A class of its own, so a caller tells it from a payload's own exit code."""
+    """`run_guarded`'s answer when no start reached the payload: returncode -1, the sentence
+    for a person in stderr, and ``cause`` the last start's own last line (bwrap's or the
+    guard's words, or "exit <n>"). A class of its own, so a caller tells it from a payload's
+    own exit code."""
+
+    cause = ""
 
 
 def guard_refused(proc) -> bool:
@@ -267,8 +271,8 @@ def run_guarded(argv_prefix: Sequence[str], held: HeldFolder, inside_path: str,
     ``runner(argv, pass_fds=..., **run_kwargs)`` and returns a CompletedProcess.
 
     A start whose pipe stayed empty ran nothing of the payload and is repeated, up to
-    ``attempts`` starts; then a `HandoverRefused` (returncode -1, "a link on the way") comes
-    back. A start that reached the payload is returned as it is, never repeated. Exceptions of
+    ``attempts`` starts; then a `HandoverRefused` (returncode -1, the last start's cause in
+    ``cause`` and a sentence with it in stderr) comes back. A start that reached the payload is returned as it is, never repeated. Exceptions of
     the runner (a timeout) pass through; every pipe end is closed on every path."""
     run = runner or subprocess.run
     extra_fds = tuple(run_kwargs.pop("pass_fds", ()) or ())
@@ -297,10 +301,13 @@ def run_guarded(argv_prefix: Sequence[str], held: HeldFolder, inside_path: str,
             err = err.decode("utf-8", "replace")
         lines = [ln for ln in err.strip().splitlines() if ln.strip()]
         last = lines[-1][:200] if lines else f"exit {proc.returncode}"
-    return HandoverRefused(argv, -1, "",
-                           f"could not start in a private view of {inside_path} ({last}). If "
-                           f"the folder was just moved or replaced by a link, check it and "
-                           f"try again")
+    refused = HandoverRefused(argv, -1, "",
+                              f"could not start in a private view of {inside_path} ({last}). "
+                              f"Try again; if it keeps failing, check that the folder was not "
+                              f"moved or replaced by a link, and check the sandbox "
+                              f"(`vaf health`)")
+    refused.cause = last
+    return refused
 
 
 _LOCK = threading.Lock()
@@ -326,9 +333,10 @@ def _probe() -> Tuple[bool, str, bool]:
                                stdin=subprocess.DEVNULL)
         if proc.returncode == 0:
             return True, "", True
-        detail = (proc.stderr or "").strip().splitlines()
-        return False, ("bubblewrap is installed but cannot start a namespace here: "
-                       + (detail[-1][:200] if detail else f"exit {proc.returncode}")), False
+        # bwrap's own words, never the sentence for a moved folder: the probe folder is
+        # VAF's own, and the advice there would contradict this refusal's.
+        cause = getattr(proc, "cause", "") or f"exit {proc.returncode}"
+        return False, f"bubblewrap is installed but cannot start a namespace here: {cause}", False
     except Exception as e:
         return False, f"bubblewrap is installed but cannot start a namespace here: {e}", False
     finally:

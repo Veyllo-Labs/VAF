@@ -59,15 +59,21 @@ before git starts, that this path is the very folder the top handle holds (`dev:
 runs there with `--work-tree=<top>` and the git handle as before. A start the guard refused is
 repeated (at most three starts, never once git ran) and then refused with the last start's
 cause. Inside the namespace the path names only the bound folder: a rename or a link on the
-host after the mount does not reach it. The read-only reads before the command (the driver
-names, the gitlinks) run through the handles as in the fallback: they set up no work tree, so
-the text walk does not happen there (measured fully pinned), and they see the same files the
-namespace binds, and more (an include elsewhere), which can only switch more drivers off.
-Measured, the same racer, 1000 status calls: 0 leaks of 944 answered with the lane (2 of 957
-with the handles alone), and `reset --hard` wrote into the other folder in 0 of 300 calls. The
-price is one namespace start per call: about 10 against 5.5 ms for a status, and a coding
-run's state update for the SubAgent window (about a dozen calls) 135 against 65 ms, measured
-under the lowest CPU priority on four cores. A top inside a folder the namespace binds
+host after the mount does not reach it. The read of the repository's own drivers starts in
+the same view as the command: an include in the project's config can name a path that exists
+only inside the namespace (`/proc/self/task/2/...`, git's own task there), and a read outside
+missed the filter it defines while the command inside ran it, a filter that could reach the
+host's loopback (measured). The reads whose answer does not depend on the view, the person's
+global and system config (the project cannot write them) and the index (the gitlinks), run
+through the handles as in the fallback: they set up no work tree, so the text walk does not
+happen there (measured fully pinned). The namespace shares the network, so a git-lfs smudge
+of the person's own config can download; only drivers of the global and system config run
+in it, the repository's are switched off by the read above. Measured, the same racer, 1000
+status calls: 0 leaks of 963 answered with the lane (2 of 957 with the handles alone), and
+`reset --hard` wrote into the other folder in 0 of 300 calls. The price is two namespace
+starts per call: about 15 against 5 ms for a status, and a coding run's state update for the
+SubAgent window (about a dozen calls) 190 against 65 ms, measured under the lowest CPU
+priority on four cores. A top inside a folder the namespace binds
 read-only (a git install prefix, /opt) keeps the handles alone: its view there would not be
 private (`folder_mount.overlaps_ro`).
 
@@ -513,12 +519,15 @@ class _Pin:
 
     def run(self, argv: Sequence[str], env: Dict[str, str], timeout: float, *,
             read: bool = False):
-        """Start one git process of the call. ``read=True`` is a config or index read (the
-        driver names, the gitlinks, the trusted files): it runs through the handles, never in
-        the namespace. Neither sets up a work tree, so git's text walk does not happen there
-        (measured fully pinned under the racer), and it sees at least what the command will
-        see: the namespace binds a subset of the same files. That keeps one namespace start
-        per call instead of four or five."""
+        """Start one git process of the call. ``read=True`` runs it through the handles, never
+        in the namespace: for the reads whose answer cannot depend on the view, the person's
+        global and system config (the project cannot write them) and the index (the gitlinks).
+        They set up no work tree, so git's text walk does not happen there (measured fully
+        pinned under the racer). The read of the repository's own drivers is NOT one of them:
+        an include in the project's config can name a path that exists only inside the
+        namespace (`/proc/self/task/2/...`, git's own task there), and a read outside missed
+        the filter it defines while the command inside ran it (measured). It runs in the same
+        view as the command. Two namespace starts per call instead of four or five."""
         self.check()
         if self.by_handle and self.git_fd >= 0:
             # After project_git_env removed every layout variable: the common directory
@@ -721,7 +730,8 @@ def _split_args(args: Sequence[str]) -> Tuple[List[str], List[str], List[str]]:
 
 
 def _untrusted_drivers(pin: _Pin, env: Dict[str, str], timeout: float,
-                       layout: Sequence[str] = ()) -> Dict[str, List[str]]:
+                       layout: Sequence[str] = (),
+                       command_layout: Optional[Sequence[str]] = None) -> Dict[str, List[str]]:
     """Driver names per section ("filter", "diff", "merge") whose effective config is not
     entirely the person's global or system config (see _TRUSTED_READS).
 
@@ -744,7 +754,10 @@ def _untrusted_drivers(pin: _Pin, env: Dict[str, str], timeout: float,
             if os.path.isabs(path) and path not in pin.namespace_ro:
                 pin.namespace_ro.append(path)
     found: Dict[str, List[str]] = {}
-    for key, value in sorted(_driver_pairs([], pin, env, timeout, layout), key=str):
+    # The effective read sees exactly what the command will see: same view, same layout.
+    effective = _driver_pairs([], pin, env, timeout,
+                              layout if command_layout is None else command_layout, read=False)
+    for key, value in sorted(effective, key=str):
         if (key, value) in trusted:
             continue
         section, _, rest = key.partition(".")
@@ -758,12 +771,14 @@ def _untrusted_drivers(pin: _Pin, env: Dict[str, str], timeout: float,
 
 
 def _driver_pairs(scope: Sequence[str], pin: _Pin, env: Dict[str, str], timeout: float,
-                  layout: Sequence[str], keys: Optional[str] = None) -> set:
+                  layout: Sequence[str], keys: Optional[str] = None, *,
+                  read: bool = True) -> set:
     """The (key, value) pairs one `git config --get-regexp` read returns; value None for a key
-    written without one. Exit 1 is "no such key" (or no such file); anything else raises."""
+    written without one. Exit 1 is "no such key" (or no such file); anything else raises.
+    ``read=False`` starts it where the command will start (see `_Pin.run`)."""
     argv = [resolve_git(), *layout, "config", *scope, "--includes", "-z", "--get-regexp",
             keys or _DRIVER_KEYS]
-    proc = pin.run(argv, env, timeout, read=True)
+    proc = pin.run(argv, env, timeout, read=read)
     if proc.returncode not in (0, 1):
         raise RuntimeError(f"cannot read the repository's drivers: "
                            f"{(proc.stderr or '').strip()[:200]}")
@@ -793,7 +808,7 @@ def _command(args: Sequence[str], pin: _Pin, env: Dict[str, str], timeout: float
     pinned: List[str] = ["-c", f"core.hooksPath={empty_hooks_dir()}"]
     for key, value in PROJECT_GIT_CONFIG:
         pinned += ["-c", f"{key}={value}"]
-    for section, names in _untrusted_drivers(pin, env, timeout, reads).items():
+    for section, names in _untrusted_drivers(pin, env, timeout, reads, layout).items():
         for name in names:
             if _UNSAFE_DRIVER_NAME.search(name):
                 raise ValueError(f"the repository defines a {section} driver whose name cannot "

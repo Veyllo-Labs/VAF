@@ -2742,6 +2742,8 @@
       "preset_readonly_desc": "Wählt nur Lese- und Anzeige-Tools aus, keine Workflows.",
       "preset_custom_desc": "Wähle genau, welche Tools und Workflows.",
       "accessSummary": "{tools} Tools, {workflows} Workflows ausgewählt",
+      "toolUniverseLoading": "Die eigenen Tools des Coding-Agenten werden geladen…",
+      "toolUniverseFailed": "Die eigenen Tools des Coding-Agenten (Shell, Tests, Projektverlauf) konnten nicht geladen werden. Standard, Voll und Nur Lesen lassen sich deshalb noch nicht speichern.",
       "availableTools": "Verfügbare Tools",
       "availableToolsDesc": "Wähle aus, welche Tools für diesen Nutzer vorgesehen sind",
       "noToolsAvailable": "Keine Tools verfügbar",

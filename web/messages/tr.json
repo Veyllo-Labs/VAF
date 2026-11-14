@@ -2742,6 +2742,8 @@
       "preset_readonly_desc": "Yalnızca görüntüleme ve okuma araçlarını seçer, iş akışı seçmez.",
       "preset_custom_desc": "Hangi araç ve iş akışları olacağını tam olarak sen seç.",
       "accessSummary": "{tools} araç, {workflows} iş akışı seçildi",
+      "toolUniverseLoading": "Kodlama ajanının kendi araçları yükleniyor…",
+      "toolUniverseFailed": "Kodlama ajanının kendi araçları (kabuk, testler, proje geçmişi) yüklenemedi; bu yüzden Standart, Tam ve Salt okunur henüz kaydedilemez.",
       "availableTools": "Kullanılabilir araçlar",
       "availableToolsDesc": "Bu kullanıcı için hangi araçların öngörüldüğünü seç",
       "noToolsAvailable": "Kullanılabilir araç yok",

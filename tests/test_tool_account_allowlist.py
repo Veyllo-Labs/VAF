@@ -367,6 +367,68 @@ def test_the_universe_endpoint_offers_bash():
     assert "bash" in out["coder_only"]
 
 
+def test_the_universe_endpoint_reports_a_failure_instead_of_an_empty_list(monkeypatch):
+    """The picker takes a list as loaded; an empty one would let a preset be saved without
+    the coder's tools."""
+    import asyncio
+    import sys
+    import types
+
+    from fastapi import HTTPException
+
+    from vaf.api.user_routes import tool_universe
+
+    # A coder module without the declaration: the route's import fails.
+    monkeypatch.setitem(sys.modules, "vaf.tools.coder", types.ModuleType("vaf.tools.coder"))
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(tool_universe(_={"role": "admin"}))
+    assert exc.value.status_code == 503
+
+
+def test_a_coder_tool_the_main_registry_lacks_is_never_granted_by_name_only():
+    """The picker's row for a coder name the main registry lacks carries no `account_opt_in`
+    flag (the route returns bare names), so Standard grants it by name. A coder-only tool that
+    must be granted only by name would slip into every Standard account; such a tool needs the
+    route to carry the flag first."""
+    import importlib
+    import inspect
+    import pkgutil
+    import re
+    from pathlib import Path
+
+    import vaf.tools
+    from vaf.tools.base import BaseTool
+    from vaf.tools.coder import CODER_ONLY_TOOL_NAMES
+
+    agent_src = (Path(__file__).resolve().parents[1] / "vaf" / "core" / "agent.py").read_bytes().decode("utf-8")
+    excluded_block = re.search(r"MAIN_AGENT_EXCLUDED_TOOLS = \[(.*?)\]", agent_src, flags=re.S)
+    assert excluded_block, "Agent._load_tools no longer names the tools it keeps from the main agent"
+    excluded = set(re.findall(r'"(\w+)"', excluded_block.group(1)))
+
+    classes = {}
+    for _, name, _ in pkgutil.iter_modules(vaf.tools.__path__):
+        try:
+            module = importlib.import_module(f"vaf.tools.{name}")
+        except Exception:
+            continue
+        for _, obj in inspect.getmembers(module, inspect.isclass):
+            if issubclass(obj, BaseTool) and obj is not BaseTool and isinstance(getattr(obj, "name", None), str):
+                classes.setdefault(obj.name, set()).add(obj)
+
+    coder_only_rows = set()
+    for name in CODER_ONLY_TOOL_NAMES:
+        found = classes.get(name)
+        assert found, f"no tool class declares the coder name {name!r}"
+        if name in excluded or all(getattr(c, "coder_only", False) for c in found):
+            coder_only_rows.add(name)
+            opt_in = sorted(c.__name__ for c in found if getattr(c, "account_opt_in", False))
+            assert not opt_in, (
+                f"{name!r} is granted only by name ({opt_in}) but the picker's row for it has no flag, "
+                f"so Standard would grant it; carry account_opt_in through GET /api/users/tool-universe first")
+    # The guard must cover the rows that exist today, or it checks nothing.
+    assert {"bash", "run_tests", "project_history", "project_rollback"} <= coder_only_rows
+
+
 # ── a tool that is not in "everything" (BaseTool.account_opt_in) ─────────────
 
 class _OptInProbe(_Probe):

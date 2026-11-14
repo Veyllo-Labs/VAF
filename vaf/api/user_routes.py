@@ -220,12 +220,17 @@ async def tool_universe(_: dict = Depends(require_admin)):
     allowlist could never contain or omit a name the admin was never shown. `coder_only`
     names come from the coder module's own declaration, so the picker cannot drift from
     what the child actually runs.
+
+    A failure is a 503, never an empty list: the picker would take an empty list as loaded
+    and save a preset without the coder's tools.
     """
     try:
         from vaf.tools.coder import CODER_ONLY_TOOL_NAMES
         return {"coder_only": sorted(CODER_ONLY_TOOL_NAMES)}
-    except Exception:
-        return {"coder_only": []}
+    except Exception as exc:
+        logger.warning("tool-universe: the coder's tool names could not be read: %s", exc)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="The coding agent's tool list is not available.") from exc
 
 
 @router.get("")

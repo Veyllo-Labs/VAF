@@ -60,10 +60,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **User manager: the coding agent's shell, test runner and project history can be granted
   per account again, and every tool is listed once.** The tool list never loaded the coding
   agent's own tools, so an account saved with any preset got a coding agent without a shell or
-  tests. They are now listed and included in Standard and Full, each tool appears once, and a
-  second account created in a row gets the Standard preset instead of an empty list (which
-  meant no restriction). Accounts saved before keep their list: open the account and choose
-  the preset again to add the new tools.
+  tests. They are now listed and included in Standard and Full, and each tool appears once. A
+  second account created in a row used to be created with no tool restriction at all; it now
+  gets the Standard preset. A preset can be saved only once the coding agent's tools have
+  loaded, and if they cannot be loaded the dialog says so and offers to try again. Accounts
+  saved before keep their list: open the account and either choose the preset again, which
+  replaces its current selection, or tick `bash`, `run_tests`, `project_history` and
+  `project_rollback` under Custom.
 - **A link to a file in a reply opens the file.** A link to a file the agent made in the
   sandbox, or to a Windows path, was shown without a target and did nothing; it now opens
   the file from your VAF, the same way a link to any other file on your VAF does. File

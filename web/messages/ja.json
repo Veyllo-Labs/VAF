@@ -2742,6 +2742,8 @@
       "preset_readonly_desc": "表示と読み取りのツールだけを選び、ワークフローは選びません。",
       "preset_custom_desc": "どのツールとワークフローを使えるかを個別に選びます。",
       "accessSummary": "ツール{tools}個、ワークフロー{workflows}個を選択中",
+      "toolUniverseLoading": "コーディングエージェント専用のツールを読み込んでいます…",
+      "toolUniverseFailed": "コーディングエージェント専用のツール（シェル、テスト、プロジェクト履歴）を読み込めませんでした。そのため、標準・すべて・読み取り専用ではまだ保存できません。",
       "availableTools": "利用できるツール",
       "availableToolsDesc": "このユーザーが使えるツールを選んでください。",
       "noToolsAvailable": "利用できるツールはありません",

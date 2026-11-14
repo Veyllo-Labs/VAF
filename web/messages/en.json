@@ -2742,6 +2742,8 @@
       "preset_readonly_desc": "Selects viewing and reading tools only, no workflows.",
       "preset_custom_desc": "Pick exactly which tools and workflows.",
       "accessSummary": "{tools} tools, {workflows} workflows selected",
+      "toolUniverseLoading": "Loading the coding agent's own tools…",
+      "toolUniverseFailed": "The coding agent's own tools (shell, tests, project history) could not be loaded, so Standard, Full and Read-only cannot be saved yet.",
       "availableTools": "Available Tools",
       "availableToolsDesc": "Select which tools are intended for this user",
       "noToolsAvailable": "No tools available",

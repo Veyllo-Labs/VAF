@@ -50,7 +50,7 @@ import { PickerSelect } from '@/components/ui/PickerDialog';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import Skeleton, { SkeletonBar, SkeletonRows } from '@/components/ui/Skeleton';
 import { groupToolsIntoBundles, bundleColor, bundleLabel, bundleIconKey } from '@/lib/toolBundles';
-import { type AccessPreset, mergePickerTools, resolveAccessPreset } from '@/lib/accessPresets';
+import { type AccessPreset, type ToolUniverseState, mergePickerTools, presetSaveBlocked, useAccessPreset, useToolUniverse } from '@/lib/accessPresets';
 import { deepseekInUse, effortSelectValue } from '@/lib/deepseekEffort';
 import type { SkillSaveData } from './settings/SkillsEditor';
 import type { CreateAutomationPayload } from './CreateAutomationPopup';
@@ -353,6 +353,7 @@ const DATE_TIME_TIME_FORMATS: { value: string; label: string }[] = [
  *  the preset->selection recompute lives in the parent. */
 function AccessPresetSection({
     tools, workflows, preset, selectedTools, selectedWorkflows, onPresetChange, onToolsChange, onWorkflowsChange,
+    universe, onRetryUniverse,
 }: {
     tools: { name: string; description?: string }[];
     workflows: { id: string; name: string; steps: number }[];
@@ -362,6 +363,9 @@ function AccessPresetSection({
     onPresetChange: (p: AccessPreset) => void;
     onToolsChange: (t: string[]) => void;
     onWorkflowsChange: (w: string[]) => void;
+    /** Where the coding agent's own tool names stand; until 'ready' the list lacks them. */
+    universe: ToolUniverseState;
+    onRetryUniverse: () => void;
 }) {
     const tModals = useTranslations('modals');
     const tCommon = useTranslations('common');
@@ -416,6 +420,20 @@ function AccessPresetSection({
                             : preset === 'custom' ? tModals('addUser.preset_custom_desc')
                                 : tModals('addUser.preset_standard_desc')}
                 </p>
+                {universe === 'failed' ? (
+                    <div role="alert" className="flex items-center justify-between gap-3 text-xs text-amber-700 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl max-md:flex-col max-md:items-stretch">
+                        <span>{tModals('addUser.toolUniverseFailed')}</span>
+                        <button
+                            type="button"
+                            onClick={onRetryUniverse}
+                            className="text-xs px-3 py-1 rounded-lg bg-white border border-amber-200 hover:border-amber-300 text-amber-700 transition-colors whitespace-nowrap shrink-0"
+                        >
+                            {tModals('updateRepair.retry')}
+                        </button>
+                    </div>
+                ) : universe !== 'ready' && (
+                    <p role="status" className="text-xs text-gray-400">{tModals('addUser.toolUniverseLoading')}</p>
+                )}
                 {preset !== 'custom' && (
                     <div className="text-xs text-gray-500 px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl">
                         {tModals('addUser.accessSummary', { tools: selectedTools.length, workflows: selectedWorkflows.length })}
@@ -1496,19 +1514,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // Several, bash above all, are deliberately NOT in the main registry, so without this
     // the admin could never express "this user does not get bash": the allowlist cannot omit
     // a name the picker never showed. Served by the backend from the coder's own declaration.
-    const [coderOnlyTools, setCoderOnlyTools] = useState<string[]>([]);
-    useEffect(() => {
-        // 'local_network' is the tab that renders the user manager and its picker.
-        if (activeTab !== 'local_network' || currentUser?.role !== 'admin') return;
-        fetch('/api/users/tool-universe', { credentials: 'include' })
-            .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
-            .then(d => setCoderOnlyTools(Array.isArray(d.coder_only) ? d.coder_only : []))
-            .catch(() => setCoderOnlyTools([]));
-    }, [activeTab, currentUser?.role]);
+    // 'local_network' is the tab that renders the user manager and its picker.
+    const toolUniverse = useToolUniverse(activeTab === 'local_network' && currentUser?.role === 'admin');
     // One merged list for BOTH the preset expansion and the picker grid - two lists would
     // let 'full' omit what the grid shows, and a full-preset user would silently lose bash.
     // Merged by name: the git tools, update_codex and add_memory are in both lists.
-    const pickerTools = useMemo(() => mergePickerTools(tools, coderOnlyTools), [tools, coderOnlyTools]);
+    const pickerTools = useMemo(() => mergePickerTools(tools, toolUniverse.names), [tools, toolUniverse.names]);
 
     const [toolsSearch, setToolsSearch] = useState('');
 
@@ -2141,13 +2152,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         loadUsers();
     }, [isOpen, activeTab, loadUsers]);
 
-    // Apply the chosen access preset to the new user's tool/workflow lists (covers custom tools too).
-    useEffect(() => {
-        const resolved = resolveAccessPreset(accessPreset, pickerTools, workflows);
-        if (!resolved) return; // 'custom' keeps the manual grid selection
-        setNewUser(prev => ({ ...prev, tools: resolved.tools, workflows: resolved.workflows }));
-        // pickerTools, not tools: the coder's names arrive in a later render, after this ran once.
-    }, [accessPreset, pickerTools, workflows]);
+    // Apply the chosen access preset to the new user's tool/workflow lists (covers custom tools
+    // too); 'custom' keeps the manual grid selection. Over pickerTools, not tools: the coder's
+    // names arrive in a later render.
+    const reapplyNewUserPreset = useAccessPreset(accessPreset, pickerTools, workflows,
+        (resolved) => setNewUser(prev => ({ ...prev, tools: resolved.tools, workflows: resolved.workflows })));
 
     // Edit User: same preset mechanic, applied to the user being edited. Reset to 'custom' on open (below)
     // so the admin first sees the user's CURRENT tools/workflows, then can re-pick a preset or fine-tune.
@@ -2171,13 +2180,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         setTwoFaResetDone(false);
         setSignedOutCount(null);
     }, []);
-    useEffect(() => {
-        if (!editingUser || editAccessPreset === 'custom') return;
-        const resolved = resolveAccessPreset(editAccessPreset, pickerTools, workflows);
-        if (!resolved) return;
-        setEditingUser((prev: any) => prev ? { ...prev, tools: resolved.tools, workflows: resolved.workflows } : prev);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [editAccessPreset, editingUser?.id, pickerTools, workflows]);
+    useAccessPreset(editAccessPreset, pickerTools, workflows,
+        (resolved) => setEditingUser((prev: any) => prev ? { ...prev, tools: resolved.tools, workflows: resolved.workflows } : prev),
+        editingUser?.id);
 
     // VAF version for the About tab — single source of truth is the backend
     // /api/version endpoint, which returns vaf/version.py. Never hardcode here.
@@ -2759,6 +2764,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     };
 
     const handleCreateUser = async () => {
+        if (presetSaveBlocked(accessPreset, toolUniverse.state)) return;
         if (!newUser.username) {
             alert('Username is required');
             return;
@@ -2793,13 +2799,14 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 setShowAddUserModal(false);
                 loadUsers();
 
-                // Reset form to the Standard preset, resolved here: when the preset already was
-                // 'standard' the preset effect does not run again, and an empty list is stored
-                // as NO restriction, so the next account created in a row would be unrestricted.
-                // Only 'custom' resolves to null.
-                const standard = resolveAccessPreset('standard', pickerTools, workflows)!;
-                setNewUser({ username: '', email: '', role: 'User', password: '', tools: standard.tools, workflows: standard.workflows, createDb: true });
+                // Reset form to the Standard preset. Never to an empty list, which is stored as
+                // NO restriction, and never resolved here: this handler holds the lists of the
+                // render that sent the request, and the coder's names may have arrived since.
+                // reapply resolves on the next render, also when the preset already was
+                // 'standard' (setting it again would not run the preset hook).
+                setNewUser(prev => ({ username: '', email: '', role: 'User', password: '', tools: prev.tools, workflows: prev.workflows, createDb: true }));
                 setAccessPreset('standard');
+                reapplyNewUserPreset();
                 setShowNewUserPassword(false);
             } else {
                 const err = await res.json().catch(() => ({}));
@@ -2812,7 +2819,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     };
 
     const handleUpdateUser = async () => {
-        if (!editingUser) return;
+        if (!editingUser || presetSaveBlocked(editAccessPreset, toolUniverse.state)) return;
 
         try {
             const res = await fetch(`/api/users/${editingUser.id}`, {
@@ -8275,6 +8282,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             <AccessPresetSection
                                 tools={pickerTools}
                                 workflows={workflows}
+                                universe={toolUniverse.state}
+                                onRetryUniverse={toolUniverse.retry}
                                 preset={accessPreset}
                                 selectedTools={newUser.tools}
                                 selectedWorkflows={newUser.workflows}
@@ -8320,7 +8329,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             >
                                 {tCommon('cancel')}
                             </button>
-                            <button onClick={handleCreateUser} className="bg-gray-900 dark:bg-[#e6e6e6] hover:bg-gray-800 dark:hover:bg-[#f5f5f5] text-white dark:text-[#181818] px-6 py-2 rounded-lg font-medium flex items-center gap-2 transition-colors">
+                            <button onClick={handleCreateUser} disabled={presetSaveBlocked(accessPreset, toolUniverse.state)} className="bg-gray-900 dark:bg-[#e6e6e6] hover:bg-gray-800 dark:hover:bg-[#f5f5f5] text-white dark:text-[#181818] px-6 py-2 rounded-lg font-medium flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
                                 <Plus size={18} />
                                 {tModals('addUser.createUser')}
                             </button>
@@ -8392,6 +8401,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     <AccessPresetSection
                                         tools={pickerTools}
                                         workflows={workflows}
+                                        universe={toolUniverse.state}
+                                        onRetryUniverse={toolUniverse.retry}
                                         preset={editAccessPreset}
                                         selectedTools={editingUser.tools || []}
                                         selectedWorkflows={editingUser.workflows || []}
@@ -8497,7 +8508,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 <button onClick={() => setEditingUser(null)} className="px-4 py-2 text-gray-600 hover:bg-gray-200 font-medium rounded-lg transition-colors">
                                     {tCommon('cancel')}
                                 </button>
-                                <button onClick={handleUpdateUser} className="px-6 py-2 rounded-lg font-medium bg-gray-900 dark:bg-[#e6e6e6] text-white dark:text-[#181818] hover:bg-black dark:hover:bg-[#f5f5f5] shadow-sm hover:shadow dark:shadow-none transition-all flex items-center gap-2">
+                                <button onClick={handleUpdateUser} disabled={presetSaveBlocked(editAccessPreset, toolUniverse.state)} className="px-6 py-2 rounded-lg font-medium bg-gray-900 dark:bg-[#e6e6e6] text-white dark:text-[#181818] hover:bg-black dark:hover:bg-[#f5f5f5] shadow-sm hover:shadow dark:shadow-none transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
                                     <Save size={16} /> {tCommon('saveChanges')}
                                 </button>
                             </div>

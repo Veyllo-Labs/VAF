@@ -2742,6 +2742,8 @@
       "preset_readonly_desc": "只勾选查看和读取类的工具，不含工作流。",
       "preset_custom_desc": "由你精确决定哪些工具和工作流。",
       "accessSummary": "已选 {tools} 个工具、{workflows} 个工作流",
+      "toolUniverseLoading": "正在加载编程智能体自己的工具…",
+      "toolUniverseFailed": "编程智能体自己的工具（命令行、测试、项目历史）未能加载，因此暂时无法按标准、完全或只读保存。",
       "availableTools": "可用工具",
       "availableToolsDesc": "勾选打算给这个用户使用的工具",
       "noToolsAvailable": "没有可用工具",

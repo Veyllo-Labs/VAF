@@ -3,10 +3,12 @@
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 
 /**
- * The per-user access picker's rules: which tools the picker lists, and what each access
- * preset grants from that list. Pure functions, so the user manager and its tests run the
- * same code (tests/test_user_access_picker_web.py).
+ * The per-user access picker's rules: which tools the picker lists, what each access preset
+ * grants from that list, and the two hooks that keep a form's selection on that list. The user
+ * manager and its tests run the same code (tests/test_user_access_picker_web.py).
  */
+
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export type AccessPreset = 'standard' | 'full' | 'readonly' | 'custom';
 
@@ -58,4 +60,64 @@ export function mergePickerTools<T extends PickerTool>(
         merged.push({ name, description: 'Coder sub-agent tool' });
     }
     return merged;
+}
+
+/** Where the coding agent's own tool names stand. 'idle' before the first request. */
+export type ToolUniverseState = 'idle' | 'loading' | 'ready' | 'failed';
+
+/** The coding agent's own tool names from `GET /api/users/tool-universe`, fetched once while
+ *  `enabled`, with the request's state kept apart from its result: an empty or missing list
+ *  is not a loaded one, and a preset resolved before the list arrived leaves `bash` and the
+ *  test runner out of the account. A failed request stays 'failed' until `retry`. */
+export function useToolUniverse(enabled: boolean): { names: string[]; state: ToolUniverseState; retry: () => void } {
+    const [names, setNames] = useState<string[]>([]);
+    const [state, setState] = useState<ToolUniverseState>('idle');
+    const [attempt, setAttempt] = useState(0);
+    const loaded = state === 'ready';
+    useEffect(() => {
+        if (!enabled || loaded) return;
+        let current = true;
+        setState('loading');
+        fetch('/api/users/tool-universe', { credentials: 'include' })
+            .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
+            .then(d => {
+                if (!current) return;
+                if (!Array.isArray(d?.coder_only)) throw new Error('tool-universe: no coder_only list');
+                setNames(d.coder_only);
+                setState('ready');
+            })
+            .catch(() => { if (current) setState('failed'); });
+        return () => { current = false; };
+    }, [enabled, loaded, attempt]);
+    const retry = useCallback(() => setAttempt(a => a + 1), []);
+    return { names, state, retry };
+}
+
+/** A preset (anything but 'custom') resolves over the picker list, so it can be saved only
+ *  once the coding agent's names are in that list. A custom selection saves what was ticked. */
+export function presetSaveBlocked(preset: AccessPreset, universe: ToolUniverseState): boolean {
+    return preset !== 'custom' && universe !== 'ready';
+}
+
+/** Keeps a form's tool and workflow selection on `preset`, resolved over the LATEST lists:
+ *  whenever the preset, either list or `key` (the account being edited) changes, `apply`
+ *  receives the resolution; 'custom' leaves the selection alone. The returned `reapply`
+ *  asks for the same again on the next render. It never resolves itself: a caller holding
+ *  it across an await (the create handler) would otherwise resolve over the lists of the
+ *  render that started the request, and a list that arrived meanwhile would be lost. */
+export function useAccessPreset(
+    preset: AccessPreset,
+    tools: { name: string; account_opt_in?: boolean }[],
+    workflows: { id: string }[],
+    apply: (resolved: { tools: string[]; workflows: string[] }) => void,
+    key?: unknown,
+): () => void {
+    const applyRef = useRef(apply);
+    applyRef.current = apply;
+    const [epoch, setEpoch] = useState(0);
+    useEffect(() => {
+        const resolved = resolveAccessPreset(preset, tools, workflows);
+        if (resolved) applyRef.current(resolved);
+    }, [preset, tools, workflows, key, epoch]);
+    return useCallback(() => setEpoch(e => e + 1), []);
 }

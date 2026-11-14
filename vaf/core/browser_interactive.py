@@ -1883,6 +1883,15 @@ class InteractiveBrowserManager:
             payload = self._agent_payload(stream)
         self._emit(payload, str(session_id))
 
+    def _end_watch_grant_of(self, run: Optional[int]) -> None:
+        """A run leaves (it ended, or gave up before it drove): end the watch grant
+        that was minted for it, and a ticketless one, which belongs to no run and so
+        ends with any (`AgentStream.run`). Another run's grant stays. The one rule
+        for every exit of a run. Caller holds `_lock`."""
+        stream = self._agent_stream
+        if stream is not None and stream.run in (None, run):
+            self._agent_stream = None
+
     def agent_run_abandoned(self, run: Optional[int] = None) -> None:
         """A run that evicted (stop_for_agent_run) and then left before it drove -
         it gave up at the gate (timed out, refused or stopped): it gives its place
@@ -1900,9 +1909,7 @@ class InteractiveBrowserManager:
             # one exist, it goes with the run rather than outlive it.
             token = slot["token"] if slot else None
             # Its watch grant, should it have one, ends with it, as at a run's end.
-            stream = self._agent_stream
-            if run is not None and stream is not None and stream.run == run:
-                self._agent_stream = None
+            self._end_watch_grant_of(run)
             self._agent_runs = max(0, self._agent_runs - 1)
             # Unless the run ahead already ended and left its give-back to the last
             # counted run, which this one now is.
@@ -1946,9 +1953,7 @@ class InteractiveBrowserManager:
             # The watch-only ticket dies with its run; a stream that outlives
             # it would keep showing the browser to a window with no run behind.
             # Another run's grant stays: that run still drives.
-            stream = self._agent_stream
-            if stream is not None and stream.run in (None, run):
-                self._agent_stream = None
+            self._end_watch_grant_of(run)
             sid = self._last_session_id
             # Who settles the give-back: the last counted run's end. A spawned run's
             # end (notify=False) settles one only when a run ahead of it already ended

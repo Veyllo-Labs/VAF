@@ -1362,6 +1362,23 @@ def test_an_abandoned_run_that_had_claimed_releases_its_entry(box):
     assert not web.grant_current(grant), "the abandoned run's watch grant stayed valid"
 
 
+@pytest.mark.parametrize("end", ["agent_run_ended", "agent_run_abandoned"])
+def test_any_runs_exit_ends_a_ticketless_watch_grant(box, end):
+    """A grant minted without a ticket belongs to no run, so the exit of any run ends
+    it (the AgentStream contract), whether the run ended or left before it drove: a
+    grant that outlives the run behind it keeps showing the browser to a window.
+
+    MUTATION: end only a grant of the leaving run's own ticket in agent_run_abandoned
+    - red."""
+    web = box["web"]
+    t = web.stop_for_agent_run()
+    web.agent_stream_started("sess-a")
+    grant = web._agent_stream
+    assert grant is not None and grant.run is None
+    getattr(web, end)(run=t)
+    assert not web.grant_current(grant), f"{end} left a ticketless grant valid"
+
+
 def test_abandoning_without_a_ticket_takes_the_newest_run_that_never_claimed(box):
     """A ticketless caller (one that drives one run at a time) abandons the run that
     queued last and never reached its handover, never the oldest and never one that

@@ -368,6 +368,10 @@ def _sweep_stale_session_tmp(sessions_dir: str) -> None:
 # share per person, a place a refused run can name. Runs on different pooled
 # instances proceed in parallel, which is the point of the pool.
 # Override the slots via env var:  VAF_BROWSER_MAX_PARALLEL=2
+# The slots are shared by one person at a time (one_key_at_a_time): a browser has one
+# cookie jar and one Downloads folder, so a second person's run beside the first would
+# wipe the first one's browser at its handover and could receive its downloads. A
+# per-user instance only ever queues its own person, so there the rule never binds.
 import functools
 import os as _os
 
@@ -394,7 +398,8 @@ def _browser_queue(container_name: str) -> ResourceQueue:
     return resource_queue("browser:" + container_name, slots=_BROWSER_MAX_PARALLEL,
                           max_waiting=BROWSER_MAX_WAITING,
                           max_waiting_per_key=BROWSER_MAX_WAITING_PER_KEY,
-                          listed=(container_name == _SHARED_BROWSER))
+                          listed=(container_name == _SHARED_BROWSER),
+                          one_key_at_a_time=True)
 
 
 def _stop_requested(session_id: Optional[str]) -> bool:
@@ -1204,9 +1209,10 @@ class BrowserAgentTool(BaseTool):
         # the manager singleton is empty and this is a no-op). The eviction
         # only - the cookie-jar handover waits for the concurrency gate below,
         # because here another run may still be driving this browser and a
-        # scrub would log it out mid-task. Never raises.
+        # scrub would log it out mid-task. Never raises. The ticket it returns names
+        # THIS run to every later hook, so another run's end never ends this one.
         from vaf.core.browser_interactive import stop_for_agent_run, agent_run_ended
-        stop_for_agent_run(container_name=_container)
+        _run = stop_for_agent_run(container_name=_container)
 
         # Optionally run as a separate, killable CHILD PROCESS. Workflows opt in via
         # VAF_SPAWN_BROWSER_SUBAGENT so a long browser run can be supervised/killed cleanly
@@ -1242,7 +1248,7 @@ class BrowserAgentTool(BaseTool):
                     # notification: the run is only STARTING, and from here
                     # is_agent_active() answers through the IPC scan of the
                     # spawned task, which lives exactly as long as the child.
-                    agent_run_ended(notify=False, container_name=_container)
+                    agent_run_ended(notify=False, container_name=_container, run=_run)
                     return spawned.marker
                 # spawn failed (task already cancelled) -> fall through to in-process
             except Exception:
@@ -1272,17 +1278,17 @@ class BrowserAgentTool(BaseTool):
             gate.__enter__()
         except QueueBusy as busy:
             # The run leaves without driving: its place in the browser's run count
-            # goes back, and only that - the run ahead is still driving, and the
-            # generation and the holder entry are its own. Without this the browser
-            # counted as driven for the life of the process.
-            agent_run_abandoned(container_name=_container)
+            # and its ticket go back, and only those - the run ahead is still
+            # driving, and its ticket and holder entry are its own. Without this the
+            # browser counted as driven for the life of the process.
+            agent_run_abandoned(container_name=_container, run=_run)
             if busy.reason == "cancelled":
                 return "Browser task stopped by user."
             return _busy_text(busy)
         except RuntimeError:
             # This thread already holds this browser's slot (a run inside a run):
             # waiting would wait on itself forever.
-            agent_run_abandoned(container_name=_container)
+            agent_run_abandoned(container_name=_container, run=_run)
             return ("Error (browser_agent): this run already drives this browser; a "
                     "browser run cannot start another one on it.")
         # The try opens right after the gate: whatever follows, the finally ends
@@ -1301,6 +1307,7 @@ class BrowserAgentTool(BaseTool):
                     session_id=_session_id,
                     cdp_base=_cdp_base,
                     container_name=_container,
+                    run=_run,
                 )
             )
         except ImportError as e:
@@ -1339,15 +1346,15 @@ class BrowserAgentTool(BaseTool):
                         "container.")
             return f"Error (browser_agent): {type(e).__name__}: {e}"
         finally:
-            # The run's end BEFORE the gate opens: agent_run_ended moves the run
-            # generation on, releases this run's holder entry and gives back its
-            # place in the run count, and a run queued at the gate that got past
-            # it first would have its entry released and its handover refused by
-            # this end although it is the current run by then. A run still queued
-            # keeps its own place in the count, so the browser stays marked as
-            # driven across the hand from one run to the next.
+            # The run's end BEFORE the gate opens: agent_run_ended sweeps this
+            # run's downloads, releases its holder entry and gives back its place
+            # in the run count. The gate admits one person at a time, so a run of
+            # another person is let in only once this person's files have left
+            # the browser and its entry is gone. A run still queued keeps its own
+            # place in the count, so the browser stays marked as driven across the
+            # hand from one run to the next.
             try:
-                agent_run_ended(container_name=_container)
+                agent_run_ended(container_name=_container, run=_run)
             finally:
                 gate.__exit__(None, None, None)
 
@@ -1364,6 +1371,7 @@ class BrowserAgentTool(BaseTool):
         session_id: Optional[str] = None,
         cdp_base: Optional[str] = None,
         container_name: str = "vaf-browser",
+        run: Optional[int] = None,
     ) -> str:
         import os
         from browser_use import Agent
@@ -1420,28 +1428,21 @@ class BrowserAgentTool(BaseTool):
         # the task gains the instruction to CONTINUE there. Without it the run
         # opened the site fresh in a tab of its own while the person's tab
         # stood right beside it (measured live on a marketplace session).
-        from vaf.core.browser_interactive import (hand_jar_to_run, run_generation,
-                                                  take_agent_handover)
+        from vaf.core.browser_interactive import hand_jar_to_run, take_agent_handover
         _handover = await asyncio.get_running_loop().run_in_executor(
             None,
             lambda: take_agent_handover(user_scope_id=user_scope_id,
                                         container_name=container_name),
         )
-        # Which run this is, read here: after the concurrency gate, because a run
-        # queued there becomes the current run only once the one ahead of it has
-        # ended (that end moves the generation on); and before the executor,
-        # because a Stop does not wait for the executor thread, and a claim that
-        # lands after this run's own end must not take the browser.
-        _run_gen = run_generation(container_name=container_name)
         # The executor threads below outlive a Stop: the cancel lands at the
         # await, not in the thread. Each wait in them (the handover's drain,
         # mutex and probe wait, every CDP resolve) asks the thread's cancel flag,
         # armed here with THIS run's end: its task is done before run() returns.
-        # Not the generation: every run's end moves that, so with
-        # VAF_BROWSER_MAX_PARALLEL above 1 one run's normal end would cut a
-        # second run's wait. Measured before: a stopped run's thread dialed a
-        # browser that was not answering for 29.1 s and held the handover mutex
-        # as long.
+        # The handover carries this run's ticket: a claim that lands after this
+        # run's own end finds it gone and does not take the browser, and another
+        # run's end leaves it alone. Measured before: a stopped run's thread
+        # dialed a browser that was not answering for 29.1 s and held the
+        # handover mutex as long.
         from vaf.core.bounded_run import cancel_when
         _this_run_over = _outer_task.done
 
@@ -1451,7 +1452,7 @@ class BrowserAgentTool(BaseTool):
                                 persistent=persistent,
                                 container_name=container_name,
                                 continuing=_handover is not None,
-                                run_generation=_run_gen)
+                                run=run)
 
         await asyncio.get_running_loop().run_in_executor(None, _hand_jar_for_this_run)
         # Grant the run's own chat window a watch-only live stream of this run

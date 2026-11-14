@@ -170,6 +170,30 @@ def _saved(scope):
     return [c["name"] for c in state["cookies"]]
 
 
+def _tokens(mgr):
+    """The holder entries of the manager's live runs."""
+    with mgr._lock:
+        return mgr._run_tokens()
+
+
+def _wait_until(predicate, timeout=5.0):
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def _run_entries():
+    """The run entries in the shared browser's record, as (pid, token)."""
+    path = bj._state_dir() / "vaf-browser.json"
+    if not path.exists():
+        return []
+    return [(h["pid"], h["token"]) for h in json.loads(path.read_bytes())["holders"]
+            if h["kind"] == bj.KIND_RUN]
+
+
 # ── (a) a probe in another process meets a live lease ────────────────────────
 
 def test_a_coder_render_in_another_process_does_not_touch_a_live_lease(box):
@@ -489,42 +513,39 @@ def test_a_run_stopped_while_it_waits_leaves_no_holder(box):
     thread, and a Stop does not wait for that thread: run() returned, its
     agent_run_ended ran, and the late claim then took the browser for a run that
     no longer existed and kept its entry for the life of the process - every
-    coder render busy, every workflow browser run refused. A run carries the
-    generation it began in, and a claim that lands after its end is released.
+    coder render busy, every workflow browser run refused. A run carries its
+    ticket, and a claim that lands after the ticket's end is released.
 
-    MUTATION: drop the generation check after the claim - red."""
+    MUTATION: drop the live-ticket check after the claim - red."""
     web = box["web"]
     with box["procs"].be(CHILD):
         token, _ = bj.record_for("vaf-browser").claim(bj.KIND_PROBE, "scope-b")
-    web.stop_for_agent_run()
-    generation = web.run_generation()
+    run = web.stop_for_agent_run()
     refused = []
 
     def _handover():
         try:
-            web.hand_jar_to_run(user_scope_id="scope-c", persistent=False,
-                                run_generation=generation)
+            web.hand_jar_to_run(user_scope_id="scope-c", persistent=False, run=run)
         except bi.BrowserHandoverError as e:
             refused.append(e)
 
     worker = threading.Thread(target=_handover)
     worker.start()
     time.sleep(0.3)
-    web.agent_run_ended()                       # Stop: run() returns, its finally runs
+    web.agent_run_ended(run=run)                # Stop: run() returns, its finally runs
     bj.record_for("vaf-browser").release(token)  # the probe ends, the claim lands
     worker.join(10)
     assert refused, "the late handover took the browser for a run that had ended"
     data = json.loads((bj._state_dir() / "vaf-browser.json").read_bytes())
     assert not [h for h in data["holders"] if h["pid"] == WEB], data["holders"]
-    assert web._run_token is None
+    assert _tokens(web) == [] and web._runs == {}
     assert "wipe" not in box["events"]
 
-    # The next run, a new generation, gets the browser as usual.
-    web.stop_for_agent_run()
-    web.hand_jar_to_run(user_scope_id="scope-c", persistent=False,
-                        run_generation=web.run_generation())
+    # The next run, a ticket of its own, gets the browser as usual.
+    run = web.stop_for_agent_run()
+    web.hand_jar_to_run(user_scope_id="scope-c", persistent=False, run=run)
     assert "wipe" in box["events"]
-    web.agent_run_ended()
+    web.agent_run_ended(run=run)
 
 
 class _Reached(Exception):
@@ -554,10 +575,10 @@ def _two_runs_through_the_gate(box, monkeypatch, *, a_end_waits_for_b_claim):
         if kwargs.get("user_scope_id") == "scope-b":
             b_claimed.set()
 
-    def end(notify=True, container_name=None):
+    def end(notify=True, container_name=None, run=None):
         if threading.current_thread().name == "run-a" and a_end_waits_for_b_claim:
             b_claimed.wait(1.0)
-        real_end(notify=notify, container_name=container_name)
+        real_end(notify=notify, container_name=container_name, run=run)
         if threading.current_thread().name == "run-a":
             a_ended.set()
 
@@ -567,7 +588,7 @@ def _two_runs_through_the_gate(box, monkeypatch, *, a_end_waits_for_b_claim):
         else:
             a_ended.wait(3)
             data = json.loads((bj._state_dir() / "vaf-browser.json").read_bytes())
-            b_view.update(token=web._run_token,
+            b_view.update(tokens=_tokens(web),
                           runs=[h for h in data["holders"] if h["kind"] == bj.KIND_RUN])
         raise _Reached(user_scope_id)
 
@@ -582,7 +603,7 @@ def _two_runs_through_the_gate(box, monkeypatch, *, a_end_waits_for_b_claim):
     a = threading.Thread(target=run, args=("scope-a",), name="run-a")
     a.start()
     for _ in range(100):                       # A holds the gate, past its handover
-        if web._run_token is not None:
+        if _tokens(web):
             break
         time.sleep(0.05)
     b = threading.Thread(target=run, args=("scope-b",), name="run-b")
@@ -596,11 +617,11 @@ def _two_runs_through_the_gate(box, monkeypatch, *, a_end_waits_for_b_claim):
 
 def test_a_run_queued_at_the_gate_gets_the_browser_when_the_run_ahead_ends(box, monkeypatch):
     """With one slot (the default) a second run waits at the gate. The end of the
-    run ahead of it moves the run generation on; a generation read before the gate
-    then retired the queued run as if it had been stopped, and the person got "the
-    browser could not be cleaned for this user change". It is read after the gate.
+    run ahead of it used to retire the queued run as if it had been stopped (a run
+    generation shared by every run), and the person got "the browser could not be
+    cleaned for this user change". Each run carries its own ticket now.
 
-    MUTATION: read the generation in run() before the gate again - red."""
+    MUTATION: let agent_run_ended end every live ticket - red."""
     out, _view = _two_runs_through_the_gate(box, monkeypatch, a_end_waits_for_b_claim=False)
     assert "_Reached" in out, f"the queued run was refused: {out}"
 
@@ -614,30 +635,223 @@ def test_a_run_past_the_gate_is_not_retired_by_the_end_of_the_one_before(box, mo
     MUTATION: release the gate before agent_run_ended in run()'s finally - red."""
     out, view = _two_runs_through_the_gate(box, monkeypatch, a_end_waits_for_b_claim=True)
     assert "_Reached" in out, f"the queued run was refused: {out}"
-    assert view.get("token") is not None and len(view.get("runs") or []) == 1, (
+    assert len(view.get("tokens") or []) == 1 and len(view.get("runs") or []) == 1, (
         f"the run past the gate lost its holder entry to the end of the one before: {view}")
 
 
-def test_the_run_reads_its_generation_after_the_gate_and_ends_before_opening_it():
-    """The two orderings above, pinned in the source as well, so they hold where
-    browser-use is not installed and the real-run tests skip.
+def test_the_run_passes_its_ticket_to_every_hook():
+    """Every hook of a run acts on that run alone: the ticket stop_for_agent_run
+    hands out goes to the spawn lane's end, both abandons, the run's end and the
+    handover. The end still comes before the gate opens. Pinned in the source, so it
+    holds where browser-use is not installed and the real-run tests skip; the
+    `None` default of the hooks exists for callers that drive one run at a time, and
+    a product call that forgot its ticket would fall back to it.
 
-    MUTATIONS: read the generation in run() again (red); release the gate before
+    MUTATIONS: drop `run=_run` from one hook call (red); release the gate before
     agent_run_ended (red)."""
     import inspect
 
+    import vaf.tools.browser_agent as ba
     from vaf.tools.browser_agent import BrowserAgentTool
 
     run_src = inspect.getsource(BrowserAgentTool.run)
-    assert "run_generation(" not in run_src, "run() reads the generation before the gate"
-    assert run_src.count("agent_run_ended(container_name=_container)") == 1
-    assert (run_src.index("agent_run_ended(container_name=_container)")
-            < run_src.index("gate.__exit__(None, None, None)")), (
+    assert "_run = stop_for_agent_run(container_name=_container)" in run_src
+    assert run_src.count("agent_run_ended(notify=False, container_name=_container, "
+                         "run=_run)") == 1
+    assert run_src.count("agent_run_abandoned(container_name=_container, run=_run)") == 2
+    assert run_src.count("agent_run_abandoned(") == 2
+    end = "agent_run_ended(container_name=_container, run=_run)"
+    assert run_src.count(end) == 1 and run_src.count("agent_run_ended(") == 2
+    assert run_src.index(end) < run_src.index("gate.__exit__(None, None, None)"), (
         "the gate opens before the run has ended")
+    assert "run=_run,\n" in run_src.split("self._run_browser(", 1)[1].split(")\n", 1)[0]
     body = inspect.getsource(BrowserAgentTool._run_browser)
-    read = body.index("_run_gen = run_generation(container_name=container_name)")
-    assert read < body.index("hand_jar_to_run(user_scope_id=user_scope_id"), body[read - 200:read]
-    assert "run_generation=_run_gen" in body
+    assert body.count("hand_jar_to_run(") == 1
+    assert "continuing=_handover is not None,\n                                run=run)" in body
+    assert "run_generation" not in inspect.getsource(ba)
+
+
+# ── two runs of one browser at once (VAF_BROWSER_MAX_PARALLEL above 1) ─────────
+
+@pytest.mark.parametrize("waits_for", ["the handover mutex", "the previous transfer"])
+@pytest.mark.parametrize("where", ["shared", "dedicated"])
+def test_one_runs_end_does_not_refuse_a_parallel_run(box, monkeypatch, where, waits_for):
+    """Runs A and B of one account are counted in one process; A has its handover,
+    B waits for the handover mutex (a probe of this process holds it) or for a file
+    transfer to drain. A ends normally. B then gets the browser: the end of one run
+    used to move a generation every run shared, and B was refused with "the run
+    ended before it held the browser", on the shared container and on a per-user
+    instance alike.
+
+    MUTATIONS: let agent_run_ended end every live ticket (red); let the handover act
+    for the oldest live ticket instead of its own (red)."""
+    if where == "shared":
+        mgr, scope = box["web"], "scope-a"
+    else:
+        mgr, _name = _dedicated(monkeypatch)
+        scope = "scope-x"
+    a = mgr.stop_for_agent_run()
+    b = mgr.stop_for_agent_run()
+    mgr.hand_jar_to_run(user_scope_id=scope, run=a)
+    outcome = []
+    if waits_for == "the handover mutex":
+        mgr._handover_mutex.acquire()
+    else:
+        with mgr._lock:
+            mgr._xfers += 1                   # a transfer still running
+
+    def _b():
+        try:
+            mgr.hand_jar_to_run(user_scope_id=scope, run=b)
+            outcome.append("handed over")
+        except bi.BrowserHandoverError as e:
+            outcome.append(f"refused: {e}")
+
+    t = threading.Thread(target=_b)
+    t.start()
+    time.sleep(0.3)
+    assert outcome == [], outcome
+    # A ends normally, in a thread of its own as a run does: its end waits for the
+    # running transfer before it gives its entry up.
+    a_end = threading.Thread(target=mgr.agent_run_ended, kwargs={"run": a})
+    a_end.start()
+    assert _wait_until(lambda: a not in mgr._runs)
+    if waits_for == "the handover mutex":
+        mgr._handover_mutex.release()
+    else:
+        mgr._transfer_done()
+    a_end.join(10)
+    t.join(10)
+    assert not a_end.is_alive() and not t.is_alive()
+    assert outcome == ["handed over"], outcome
+    assert list(mgr._runs) == [b]
+    if where == "shared":
+        assert len(_run_entries()) == 1 and _tokens(mgr) == [_run_entries()[0][1]]
+    mgr.agent_run_ended(run=b)
+    assert mgr._runs == {} and _run_entries() == []
+
+
+def test_each_parallel_run_holds_its_own_entry(box):
+    """Two runs of one account drive the shared browser at once. Each has an entry
+    of its own in the record, so when A ends, B's entry keeps every other process
+    out (a run of another process, and a page check), and B's workspace mirror still
+    runs. Before, the two shared one entry: A's end released it, and another
+    process's claim succeeded under B.
+
+    MUTATIONS: claim only when no run of this process holds an entry (red); clear
+    `_xfer_scope` at every run's end (red)."""
+    web = box["web"]
+    a = web.stop_for_agent_run()
+    b = web.stop_for_agent_run()
+    web.hand_jar_to_run(user_scope_id="scope-a", run=a)
+    web.hand_jar_to_run(user_scope_id="scope-a", run=b)
+    entries = _run_entries()
+    assert len(entries) == 2 and {pid for pid, _ in entries} == {WEB}, entries
+
+    web.agent_run_ended(run=a)
+    assert len(_run_entries()) == 1, _run_entries()
+    with box["procs"].be(CHILD):
+        run_token, other = bj.record_for("vaf-browser").claim(bj.KIND_RUN, "scope-x")
+        probe_token, _ = bj.record_for("vaf-browser").claim(bj.KIND_PROBE, "scope-x")
+    assert run_token is None and (other or {}).get("kind") == bj.KIND_RUN
+    assert probe_token is None, "a page check of another process got the browser under B"
+    assert web._xfer_scope == bi.resolve_browser_scope("scope-a")
+    box["workspace"].clear()
+    web._ws_sig = None
+    paths = bi.sync_workspace_for_run(user_scope_id="scope-a", container_name="vaf-browser")
+    assert paths and box["workspace"], "B's workspace mirror was refused after A's end"
+
+    web.agent_run_ended(run=b)
+    data = json.loads((bj._state_dir() / "vaf-browser.json").read_bytes())
+    assert data["holders"] == []
+    assert web._xfer_scope is None
+
+
+def _two_parallel_runs(box, monkeypatch, scope_b):
+    """Two REAL BrowserAgentTool.run calls on the shared browser with two slots,
+    through the real queue and the real _run_browser up to the workspace mirror,
+    which holds each run there until the test lets it go. Returns a dict of helpers."""
+    pytest.importorskip("browser_use", exc_type=ImportError)
+    import vaf.tools.browser_agent as ba
+
+    monkeypatch.setattr(ba, "_BROWSER_MAX_PARALLEL", 2)
+    st = {"mirrors": [], "hands": [], "release": [threading.Event(), threading.Event()],
+          "in_mirror": [threading.Event(), threading.Event()], "results": {}}
+    real_hand = bi.hand_jar_to_run
+    lock = threading.Lock()
+
+    def hand(**kwargs):
+        st["hands"].append(kwargs.get("user_scope_id"))
+        real_hand(**kwargs)
+
+    def mirror(user_scope_id=None, container_name=None):
+        with lock:
+            n = len(st["mirrors"])
+            st["mirrors"].append(user_scope_id)
+        st["in_mirror"][n].set()
+        st["release"][n].wait(10)
+        raise _Reached(user_scope_id)
+
+    monkeypatch.setattr(bi, "hand_jar_to_run", hand)
+    monkeypatch.setattr(bi, "sync_workspace_for_run", mirror)
+
+    def start(name, scope):
+        def go():
+            st["results"][name] = ba.BrowserAgentTool().run(task="look it up",
+                                                            user_scope_id=scope)
+        t = threading.Thread(target=go, name=f"run-{name}")
+        t.start()
+        return t
+
+    st["start"] = start
+    return st
+
+
+def test_two_accounts_take_turns_on_the_shared_browser(box, monkeypatch):
+    """With two slots, a run of scope-b does not reach its handover while a run of
+    scope-a drives the shared browser: its handover would wipe the profile under A
+    (measured before: B's handover purged and wiped mid-run), and A's downloads would
+    be swept to whoever held the jar at A's end, scope-b. B drives once A has ended.
+
+    MUTATION: register the browser queue with one_key_at_a_time=False - red."""
+    st = _two_parallel_runs(box, monkeypatch, "scope-b")
+    a = st["start"]("a", "scope-a")
+    assert st["in_mirror"][0].wait(10), "A never reached the browse phase"
+    mark = len(box["events"])
+    b = st["start"]("b", "scope-b")
+    time.sleep(0.5)
+    assert st["hands"] == ["scope-a"], f"B had its handover while A drove: {st['hands']}"
+    assert "wipe" not in box["events"][mark:], box["events"][mark:]
+    st["release"][0].set()
+    a.join(15)
+    assert st["in_mirror"][1].wait(10), f"B never got the browser: {st['results']}"
+    st["release"][1].set()
+    b.join(15)
+    assert "_Reached" in st["results"]["a"] and "_Reached" in st["results"]["b"], st["results"]
+    assert st["hands"] == ["scope-a", "scope-b"]
+
+
+def test_two_runs_of_one_account_run_together(box, monkeypatch):
+    """With two slots, two runs of one account both hold the browser at once, and the
+    end of the first neither refuses nor releases the second: B goes on, its entry
+    keeps other processes out until it ends."""
+    st = _two_parallel_runs(box, monkeypatch, "scope-a")
+    a = st["start"]("a", "scope-a")
+    assert st["in_mirror"][0].wait(10), "A never reached the browse phase"
+    b = st["start"]("b", "scope-a")
+    assert st["in_mirror"][1].wait(10), f"B did not drive beside A: {st['results']}"
+    assert len(_run_entries()) == 2
+    st["release"][0].set()
+    a.join(15)
+    assert b.is_alive() and "b" not in st["results"]
+    assert len(_run_entries()) == 1, "A's end released B's entry"
+    with box["procs"].be(CHILD):
+        token, _ = bj.record_for("vaf-browser").claim(bj.KIND_RUN, "scope-x")
+    assert token is None, "another process got the browser while B drove"
+    st["release"][1].set()
+    b.join(15)
+    assert "_Reached" in st["results"]["a"] and "_Reached" in st["results"]["b"], st["results"]
+    assert _run_entries() == []
 
 
 def _dedicated(monkeypatch, scope="scope-x", name="vaf-browser-u-0123456789ab"):
@@ -654,8 +868,7 @@ def test_a_run_ending_on_another_browser_leaves_the_shared_run_alone(box, monkey
     """Run B drives the SHARED browser (it evicted Y's lease there); run P runs and
     ends on X's own instance. The module hook used to call the full
     agent_run_ended on every manager remembering an evicted lease - so P's end
-    released B's holder entry, moved the shared generation on and cleared its
-    flag while B still drove, and a coder child's render would have wiped under
+    released B's holder entry and cleared its flag while B still drove, and a coder child's render would have wiped under
     B. Other managers get the give-back only, and only for a lease THIS run
     evicted.
 
@@ -664,24 +877,24 @@ def test_a_run_ending_on_another_browser_leaves_the_shared_run_alone(box, monkey
     emitted = []
     web._emit = lambda payload, session_id: emitted.append((dict(payload), session_id))
     assert web.start("scope-y", "sess-y", save=False)["status"] == "active"
-    bi.stop_for_agent_run(container_name="vaf-browser")
+    b_run = bi.stop_for_agent_run(container_name="vaf-browser")
     bi.hand_jar_to_run(user_scope_id="scope-y", persistent=True, container_name="vaf-browser",
-                       run_generation=bi.run_generation(container_name="vaf-browser"))
-    generation = web.run_generation()
+                       run=b_run)
+    tokens = _tokens(web)
 
     _ded, name = _dedicated(monkeypatch)
-    bi.stop_for_agent_run(container_name=name)
+    p_run = bi.stop_for_agent_run(container_name=name)
     bi.hand_jar_to_run(user_scope_id="scope-x", persistent=True, container_name=name,
-                       run_generation=bi.run_generation(container_name=name))
-    bi.agent_run_ended(container_name=name)
+                       run=p_run)
+    bi.agent_run_ended(container_name=name, run=p_run)
 
     data = json.loads((bj._state_dir() / "vaf-browser.json").read_bytes())
     assert [h["kind"] for h in data["holders"]] == [bj.KIND_RUN], data["holders"]
-    assert web._run_token is not None and web._agent_active is True
-    assert web.run_generation() == generation
+    assert tokens and _tokens(web) == tokens and web._agent_active is True
+    assert b_run in web._runs
     assert not [p for p, _ in emitted if p.get("resumable")], "Y was told to resume while B drives"
 
-    bi.agent_run_ended(container_name="vaf-browser")           # B ends
+    bi.agent_run_ended(container_name="vaf-browser", run=b_run)  # B ends
     data = json.loads((bj._state_dir() / "vaf-browser.json").read_bytes())
     assert data["holders"] == []
     assert [sid for p, sid in emitted if p.get("resumable")] == ["sess-y"]
@@ -784,7 +997,7 @@ def test_a_queued_run_keeps_the_browser_marked_as_driven(box, monkeypatch, momen
             for s in ("scope-a", "scope-b")]
     runs[0].start()
     for _ in range(100):
-        if web._run_token is not None:
+        if _tokens(web):
             break
         time.sleep(0.05)
     runs[1].start()
@@ -805,12 +1018,12 @@ def test_a_queued_run_keeps_the_browser_marked_as_driven(box, monkeypatch, momen
 
 def test_a_run_whose_gate_times_out_gives_its_count_back(box, monkeypatch):
     """A run that evicted and then gave up at the gate never drives: it gives back
-    its place in the count, and nothing else - the run ahead still drives, so its
-    generation and its holder entry stay. Without the give-back the browser
-    counted as driven for the life of the process and refused every start.
+    its place in the count and its ticket, and nothing else - the run ahead still
+    drives, so its ticket and its holder entry stay. Without the give-back the
+    browser counted as driven for the life of the process and refused every start.
 
-    MUTATIONS: no give-back on the timeout (red: the count stays up); end the run
-    instead (red: the run ahead's generation and entry are gone)."""
+    MUTATIONS: no give-back on the timeout (red: the count stays up); give back the
+    oldest ticket instead of the run's own (red: the run ahead's ticket is gone)."""
     import vaf.tools.browser_agent as ba
 
     monkeypatch.setattr(ba, "BROWSER_WAIT_S", 0.2)
@@ -828,21 +1041,22 @@ def test_a_run_whose_gate_times_out_gives_its_count_back(box, monkeypatch):
     holder = threading.Thread(target=ahead, daemon=True)
     holder.start()
     assert holding.wait(5)
-    bi.stop_for_agent_run(container_name="vaf-browser")
+    ahead = bi.stop_for_agent_run(container_name="vaf-browser")
     bi.hand_jar_to_run(user_scope_id="scope-a", persistent=True, container_name="vaf-browser",
-                       run_generation=bi.run_generation(container_name="vaf-browser"))
-    token, generation = web._run_token, web.run_generation()
-    assert web._agent_runs == 1
+                       run=ahead)
+    tokens = _tokens(web)
+    assert web._agent_runs == 1 and list(web._runs) == [ahead]
 
     out = ba.BrowserAgentTool().run(task="look it up", user_scope_id="scope-b")
     assert out.startswith("Browser agent is busy"), out
     assert "place 1" in out, out
     assert web._agent_runs == 1, "the timed-out run kept its place in the count"
-    assert web._run_token == token and web.run_generation() == generation
+    assert list(web._runs) == [ahead], "the timed-out run's ticket stayed, or took another's"
+    assert tokens and _tokens(web) == tokens
     data = json.loads((bj._state_dir() / "vaf-browser.json").read_bytes())
     assert [h["kind"] for h in data["holders"]] == [bj.KIND_RUN]
 
-    bi.agent_run_ended(container_name="vaf-browser")   # ...and ends
+    bi.agent_run_ended(container_name="vaf-browser", run=ahead)   # ...and ends
     let_go.set()
     holder.join(5)
     assert web._agent_runs == 0 and not web.has_activity()
@@ -889,8 +1103,7 @@ def _drive_and_look(seen, web):
     async def _drive(self, **kw):
         container = kw["container_name"]
         bi.hand_jar_to_run(user_scope_id=kw["user_scope_id"], persistent=True,
-                           container_name=container,
-                           run_generation=bi.run_generation(container_name=container))
+                           container_name=container, run=kw["run"])
         pooled = bi._pool_managers.get(container)
         seen.update(container=container, shared_runs=web._agent_runs,
                     pooled_runs=pooled._agent_runs if pooled else None,
@@ -969,16 +1182,15 @@ def test_a_start_still_in_its_handover_when_a_run_begins_is_refused(box):
         t = threading.Thread(target=y_start)
         t.start()
         assert wiping.wait(5)
-        web.stop_for_agent_run()                  # run B begins mid-handover
+        b_run = web.stop_for_agent_run()          # run B begins mid-handover
         bi.verified_profile_wipe = real_wipe
-        web.hand_jar_to_run(user_scope_id="scope-b", persistent=True,
-                            run_generation=web.run_generation())
+        web.hand_jar_to_run(user_scope_id="scope-b", persistent=True, run=b_run)
         t.join(5)
         assert result.get("status") == "agent_active", result
         assert web._lease is None and web._lease_token is None
         data = json.loads((bj._state_dir() / "vaf-browser.json").read_bytes())
         assert [h["kind"] for h in data["holders"]] == [bj.KIND_RUN], data["holders"]
-        web.agent_run_ended()
+        web.agent_run_ended(run=b_run)
     finally:
         bi.verified_profile_wipe = real_wipe
 

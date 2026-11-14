@@ -49,6 +49,7 @@ evict the interactive lease when a run starts.
 from __future__ import annotations
 
 import contextlib
+import itertools
 import json
 import os
 import re
@@ -1134,10 +1135,17 @@ class InteractiveBrowserManager:
         self._claim_mutex = threading.Lock()
         self._janitor_alive = False
         # This process's entries in the shared browser's cross-process holder
-        # record (vaf.core.browser_jar): the lease's and the in-process run's.
+        # record (vaf.core.browser_jar): the lease's here, and one per run in
+        # `_runs`.
         self._lease_token: Optional[str] = None
-        self._run_token: Optional[str] = None
-        self._run_generation = 0
+        # The runs of this browser, by the ticket stop_for_agent_run hands out:
+        # {"token": the run's own holder entry, "scope": whose handover it had}.
+        # Only the run's OWN end takes its ticket out, so with
+        # VAF_BROWSER_MAX_PARALLEL above 1 the end of one run neither refuses
+        # another run's handover nor releases its entry. A handover without a
+        # ticket of its own acts for the oldest one (see `_resolve_run`).
+        self._runs: Dict[int, dict] = {}
+        self._run_seq = itertools.count(1)
         # The lease a run on ANOTHER browser evicted here: (scope, session), for
         # that run's give-back. Kept apart from _pre_agent_holder, which belongs
         # to a run of this browser.
@@ -1193,8 +1201,11 @@ class InteractiveBrowserManager:
         return False
 
     def stop_for_agent_run(self, user_scope_id: Optional[str] = None,
-                           persistent: bool = False) -> None:
+                           persistent: bool = False) -> int:
         """The agent is about to use the browser: evict any interactive lease.
+        Returns the run's ticket, which the run hands to every later hook
+        (hand_jar_to_run, agent_run_ended, agent_run_abandoned) so that each
+        of them acts on this run and on no other.
 
         Whoever held the lease is remembered: the agent may take the browser,
         but a window the person opened themselves gets it back when the run
@@ -1209,6 +1220,7 @@ class InteractiveBrowserManager:
         the gate."""
         with self._lock:
             self._agent_runs += 1
+            run = self._mint_run()
             lease = self._lease
             # Only an eviction names a holder. A run queued behind one that is still
             # driving finds no lease, and clearing the holder there took the give-back
@@ -1219,7 +1231,10 @@ class InteractiveBrowserManager:
             # Capture WHERE the person is before the eviction, so the run can
             # continue there. Best-effort and bounded; a takeover of an idle
             # browser (no lease) has nobody to hand anything over.
-            page = _current_page(self.cdp_base())
+            try:
+                page = _current_page(self.cdp_base())
+            except Exception:
+                page = None
             if page and page.get("url"):
                 with self._lock:
                     self._handover = {"scope": lease.user_scope_id,
@@ -1229,14 +1244,38 @@ class InteractiveBrowserManager:
         except Exception:
             # An interactive-manager failure must never fail an agent run.
             pass
+        return run
+
+    def _mint_run(self) -> int:
+        """A new run ticket (caller holds `_lock`)."""
+        run = next(self._run_seq)
+        self._runs[run] = {"token": None, "scope": None}
+        return run
+
+    def _resolve_run(self, run: Optional[int]) -> int:
+        """The ticket a handover acts for (caller holds `_lock`). An explicit
+        ticket is taken as it is: one that is no longer live is a run that has
+        ended. None is a caller that drives one run at a time and keeps no
+        ticket: it acts for the oldest live run, or for a ticket minted here
+        when none is live (a handover without a counted run, as a direct call
+        makes; not counted in `_agent_runs`)."""
+        if run is not None:
+            return run
+        if self._runs:
+            return min(self._runs)
+        return self._mint_run()
+
+    def _run_tokens(self) -> List[str]:
+        """The holder entries of this browser's live runs (caller holds `_lock`)."""
+        return [s["token"] for s in self._runs.values() if s["token"]]
 
     def evict_for_run_elsewhere(self) -> None:
         """A run pinned to ANOTHER browser takes this one's lease (see the module
         stop_for_agent_run): evict it and remember the holder for the give-back,
         and nothing else. No agent drives this browser, so it is not marked as
-        driven, and this manager's own run state (`_agent_active`, its holder
-        entry in the cross-process record, its run generation) is left alone: it
-        may belong to a run of its own that is still driving."""
+        driven, and this manager's own run state (`_agent_active`, its runs and
+        their holder entries in the cross-process record) is left alone: it may
+        belong to a run of its own that is still driving."""
         with self._lock:
             lease = self._lease
             if lease is None:
@@ -1327,19 +1366,10 @@ class InteractiveBrowserManager:
             self._handover = None
             return dict(h)
 
-    def run_generation(self) -> int:
-        """Which run of this browser is current: agent_run_ended moves it on. A run
-        reads it once it has passed its concurrency gate, right before it hands it
-        to hand_jar_to_run - not earlier: the end of the run ahead of a run still
-        queued at the gate moves it on, and the queued run's handover would then
-        be refused as if it had been stopped."""
-        with self._lock:
-            return self._run_generation
-
     def hand_jar_to_run(self, user_scope_id: Optional[str] = None,
                         persistent: bool = False,
                         continuing: bool = False,
-                        run_generation: Optional[int] = None) -> None:
+                        run: Optional[int] = None) -> None:
         """Hand the browser's cookie jar over to the run that is about to use it.
 
         Called AFTER the concurrency gate, by the process that actually drives
@@ -1362,34 +1392,34 @@ class InteractiveBrowserManager:
         (vaf.core.browser_jar): a probe of another process is waited out, a
         lease or a run there refuses this one with BrowserHeldElsewhere, and the
         owner the handover compares with is the record's, never this process's
-        memory alone. Named boundary: within one process the queue admits
-        VAF_BROWSER_MAX_PARALLEL runs at once, and above 1 they share one jar,
-        as they always have, and one holder entry: the first run to end releases
-        it, so other processes see the browser free while the second run still
-        drives it (and that end also retires a second run that has not yet
-        passed the generation check below: one still waiting for a probe, the
-        handover mutex or the previous holder's transfer). The pool is the
-        answer to that, since a per-user instance is only
-        ever driven by that user's runs.
+        memory alone.
 
-        `run_generation` is what run_generation() answered after the run passed
-        its concurrency gate (BrowserAgentTool._run_browser reads it there, and
-        run() ends a run before it opens the gate for the next one, so the end of
-        the run ahead of a queued run neither refuses its handover nor releases
-        its holder entry; and the queued run's own place in `_agent_runs`, taken
-        at its eviction, keeps the browser marked as driven in between). The wait for a
-        probe of another process runs in the run's executor thread, and
-        a Stop cancels the run without waiting for that thread: agent_run_ended
-        had already run when the late claim landed, so the run's entry stayed in
-        the record for the life of the process and every other process saw the
-        browser busy (measured: a coder's render_check busy until a restart). A
-        run that is no longer current when its claim lands releases it and
-        raises BrowserHandoverError before it touches the jar. Without the
-        argument the generation is read here, on entry.
+        `run` is the ticket stop_for_agent_run handed out. Each run claims an
+        entry of its own in that record, and only its own end
+        (agent_run_ended with the same ticket) takes the ticket out and
+        releases the entry. With VAF_BROWSER_MAX_PARALLEL above 1, the end of
+        one run therefore neither refuses another run that is still waiting
+        here (for a probe, the handover mutex or the previous holder's
+        transfer) nor releases the entry of a run that still drives, and other
+        processes see the browser busy until the last run has ended. On the
+        shared container the runs that overlap are one person's: its fair
+        queue lets one person at a time in (`one_key_at_a_time`), because one
+        jar and one Downloads folder cannot keep two people apart. Named
+        boundary: a second VAF installation under another OS account keeps a
+        record of its own; the pool is the answer to that.
+
+        The wait for a probe of another process runs in the run's executor
+        thread, and a Stop cancels the run without waiting for that thread:
+        agent_run_ended had already run when the late claim landed, so the
+        run's entry stayed in the record for the life of the process and every
+        other process saw the browser busy (measured: a coder's render_check
+        busy until a restart). A run whose ticket is no longer live when its
+        claim lands releases it and raises BrowserHandoverError before it
+        touches the jar. Without a ticket (a caller that drives one run at a
+        time) the handover acts for the oldest live run, see `_resolve_run`.
 
         The caller arms bounded_run.cancel_when with its OWN end around this
-        call (BrowserAgentTool._run_browser: the run's task is done), never with
-        the generation, which every run's end moves, a parallel run's too. Inside
+        call (BrowserAgentTool._run_browser: the run's task is done). Inside
         that scope every wait here ends within about 0.1 s of the run's end: the
         drain of the previous holder's transfers and the mutex (nothing held or
         written yet), the wait for another process's probe (no claim taken), and
@@ -1408,19 +1438,19 @@ class InteractiveBrowserManager:
         promise, not isolation) and are only logged."""
         scope = resolve_browser_scope(user_scope_id)
         with self._lock:
-            generation = self._run_generation if run_generation is None else run_generation
+            run = self._resolve_run(run)
         self._wait_for_previous_holder(scope)
         with self._handover_unless_cancelled():
             with self._lock:
-                claimed = self._run_token is not None
-                current = self._run_generation == generation
-            if not current:
+                slot = self._runs.get(run)
+                claimed = slot is not None and slot["token"] is not None
+            if slot is None:
                 raise BrowserHandoverError("the run ended before it held the browser")
             if self._dedicated_scope is None and not claimed:
                 # The run is claimed in the cross-process record before it takes
                 # the jar: a probe of another process is waited out, a lease or a
                 # run there refuses this one (BrowserHeldElsewhere). Released by
-                # agent_run_ended, like the in-process flag.
+                # this run's own agent_run_ended.
                 from vaf.core.browser_jar import KIND_RUN
                 token, other = self._claim_shared(KIND_RUN, scope, wait_s=self.PROBE_WAIT_S)
                 if token is None and cancel_requested():
@@ -1436,17 +1466,19 @@ class InteractiveBrowserManager:
                     raise BrowserHeldElsewhere(
                         f"shared browser in use by another VAF process ({(other or {}).get('kind')})")
                 with self._lock:
-                    current = self._run_generation == generation
-                    if current:
-                        self._run_token = token
-                if not current:
+                    slot = self._runs.get(run)
+                    if slot is not None:
+                        slot["token"] = token
+                if slot is None:
                     self._release_shared(token)
                     append_domain_log("webui", "[browser_interactive] the run ended while it "
                                                "waited for the shared browser; claim released")
                     raise BrowserHandoverError("the run ended while it waited for the browser")
             self._hand_jar_locked(scope, persistent=persistent, continuing=continuing)
             with self._lock:
-                if self._run_generation == generation:
+                slot = self._runs.get(run)
+                if slot is not None:
+                    slot["scope"] = scope
                     self._xfer_scope = scope
 
     @contextlib.contextmanager
@@ -1814,7 +1846,7 @@ class InteractiveBrowserManager:
             return
         with self._claim_mutex:
             with self._lock:
-                if token in (self._lease_token, self._run_token):
+                if token == self._lease_token or token in self._run_tokens():
                     return
                 if not pending_ok and token in self._release_when_drained:
                     return
@@ -1846,12 +1878,22 @@ class InteractiveBrowserManager:
             payload = self._agent_payload(stream)
         self._emit(payload, str(session_id))
 
-    def agent_run_abandoned(self) -> None:
+    def agent_run_abandoned(self, run: Optional[int] = None) -> None:
         """A run that evicted (stop_for_agent_run) and then left before it drove -
         it gave up at the gate (timed out, refused or stopped): it gives its place
-        in `_agent_runs` back, and nothing else. The run ahead of it is still driving, so the run
-        generation, the holder entry and the give-back are that run's to settle."""
+        in `_agent_runs` and its ticket back, and nothing else. The run ahead of it
+        is still driving, so its ticket, holder entry and the give-back are that
+        run's to settle. Without a ticket, the newest live run that holds no entry
+        is the one that left (it never reached its handover)."""
+        token = None
         with self._lock:
+            if run is None:
+                idle = [r for r, s in self._runs.items() if s["token"] is None]
+                run = max(idle) if idle else None
+            slot = self._runs.pop(run, None) if run is not None else None
+            # A run leaves here before its handover, so it holds no entry; should
+            # one exist, it goes with the run rather than outlive it.
+            token = slot["token"] if slot else None
             self._agent_runs = max(0, self._agent_runs - 1)
             # Unless the run ahead already ended and left its give-back to the last
             # counted run, which this one now is.
@@ -1861,10 +1903,13 @@ class InteractiveBrowserManager:
                 self._giveback_deferred = False
                 holder, self._pre_agent_holder = self._pre_agent_holder, None
                 sid = self._last_session_id
+        self._release_unless_reclaimed(token)
         if settle:
             self._announce_run_end(holder, sid)
 
-    def agent_run_ended(self, notify: bool = True) -> None:
+    def agent_run_ended(self, notify: bool = True, run: Optional[int] = None) -> None:
+        """The run with this ticket is over (None: the oldest live run). Its ticket
+        and its own holder entry go; another run's are left alone."""
         with self._lock:
             # This run's place in the count, in both modes; a run queued behind it
             # keeps the browser marked as driven.
@@ -1872,16 +1917,23 @@ class InteractiveBrowserManager:
             # The browser is handed back, and its window told it is free, only when
             # the LAST run ends: a run queued behind this one drives next.
             last_run = self._agent_runs == 0
+            if run is None and self._runs:
+                run = min(self._runs)
+            # The run is over: a handover of it still under way in an executor
+            # thread (stopped while it waited) finds its ticket gone and does not
+            # take the browser now.
+            slot = self._runs.pop(run, None) if run is not None else None
             # The spawn lane (notify=False) never claimed: its child does, in its
             # own process, and releases there.
             run_token = None
             if notify:
-                run_token, self._run_token = self._run_token, None
-                if self._dedicated_scope is None:
+                run_token = slot["token"] if slot else None
+                # Transfers stay allowed only for a scope a run that still drives
+                # had its handover for; anything else (no such run, or runs of
+                # two scopes) refuses them.
+                remaining = {s["scope"] for s in self._runs.values() if s["scope"]}
+                if self._dedicated_scope is None and remaining != {self._xfer_scope}:
                     self._xfer_scope = None
-                # The run is over: a handover of it still under way in an executor
-                # thread (stopped while it waited) must not take the browser now.
-                self._run_generation += 1
             # The watch-only ticket dies with the run; a stream that outlives
             # it would keep showing the browser to a window with no run behind.
             self._agent_stream = None
@@ -2736,9 +2788,10 @@ def get_manager_for_stop(user_scope_id: Optional[str],
     return get_interactive_manager()
 
 
-def stop_for_agent_run(container_name: Optional[str] = None) -> None:
+def stop_for_agent_run(container_name: Optional[str] = None) -> Optional[int]:
     """Hook for BrowserAgentTool.run(): evict the interactive lease on the
-    run's own browser. No jar work - see hand_jar_to_run. Never raises.
+    run's own browser, and return the run's ticket (None when the manager could
+    not be reached). No jar work - see hand_jar_to_run. Never raises.
 
     The lease can sit on a DIFFERENT manager than the one this run pinned. The
     pool resolves a scope to an instance twice, at different moments: once when
@@ -2757,7 +2810,11 @@ def stop_for_agent_run(container_name: Optional[str] = None) -> None:
     """
     try:
         run_mgr = _manager_for_run(container_name)
-        run_mgr.stop_for_agent_run()
+    except Exception:
+        return None
+    run = None
+    try:
+        run = run_mgr.stop_for_agent_run()
         for mgr in _all_managers():
             if mgr is run_mgr:
                 continue
@@ -2770,31 +2827,24 @@ def stop_for_agent_run(container_name: Optional[str] = None) -> None:
                 mgr.evict_for_run_elsewhere()
     except Exception:
         pass
-
-
-def run_generation(container_name: Optional[str] = None) -> int:
-    """Hook for BrowserAgentTool._run_browser, after the concurrency gate and right
-    before hand_jar_to_run: which run of the run's browser is current. Never raises."""
-    try:
-        return _manager_for_run(container_name).run_generation()
-    except Exception:
-        return 0
+    return run
 
 
 def hand_jar_to_run(user_scope_id: Optional[str] = None,
                     persistent: bool = False,
                     container_name: Optional[str] = None,
                     continuing: bool = False,
-                    run_generation: Optional[int] = None) -> None:
+                    run: Optional[int] = None) -> None:
     """Hook for BrowserAgentTool.run(), AFTER the concurrency gate: hand the
-    browser's jar to this run's scope.
+    browser's jar to this run's scope. `run` is the ticket stop_for_agent_run
+    returned.
 
     Raises BrowserHandoverError when a CROSS-SCOPE handover could not be made
     safe - the run must refuse instead of browsing over the previous holder's
     logins. The old "Never raises" contract swallowed exactly that case."""
     _manager_for_run(container_name).hand_jar_to_run(
         user_scope_id=user_scope_id, persistent=persistent,
-        continuing=continuing, run_generation=run_generation)
+        continuing=continuing, run=run)
 
 
 def take_agent_handover(user_scope_id: Optional[str] = None,
@@ -2842,32 +2892,34 @@ def agent_stream_started(session_id: Optional[str],
         pass
 
 
-def agent_run_abandoned(container_name: Optional[str] = None) -> None:
+def agent_run_abandoned(container_name: Optional[str] = None,
+                        run: Optional[int] = None) -> None:
     """Hook for BrowserAgentTool.run(): the run evicted and then left before it
     drove (it gave up at the gate: timed out, refused or stopped). Gives back its
-    count only. Never raises."""
+    count and its ticket only. Never raises."""
     try:
-        _manager_for_run(container_name).agent_run_abandoned()
+        _manager_for_run(container_name).agent_run_abandoned(run=run)
     except Exception:
         pass
 
 
 def agent_run_ended(notify: bool = True,
-                    container_name: Optional[str] = None) -> None:
+                    container_name: Optional[str] = None,
+                    run: Optional[int] = None) -> None:
     """Hook for BrowserAgentTool.run()'s finally. Never raises.
 
     Mirrors stop_for_agent_run: the run's own manager ends the run, and every
     other manager whose lease this run evicted is told to hand back - the
     give-back only (give_back_elsewhere). Another manager's `_agent_active`, its
-    holder entry in the cross-process record and its run generation belong to
-    that browser's own run, which may still be driving: ending them here was the
+    runs and their holder entries in the cross-process record belong to that
+    browser's own runs, which may still be driving: ending them here was the
     asymmetry `_manager_for_run` exists to prevent, one level up. notify=False
     (the spawn lane) leaves the remembered holders for the run that ends with a
     notification.
     """
     try:
         run_mgr = _manager_for_run(container_name)
-        run_mgr.agent_run_ended(notify=notify)
+        run_mgr.agent_run_ended(notify=notify, run=run)
         if not notify:
             return
         for mgr in _all_managers():
@@ -2875,8 +2927,8 @@ def agent_run_ended(notify: bool = True,
                 continue
             # The give-back only. The full agent_run_ended on another manager
             # ended THAT browser's run too: measured, a run ending on a dedicated
-            # instance released the shared browser's holder entry and moved its
-            # generation on while another run still drove it there, so a coder
+            # instance released the shared browser's holder entry while another
+            # run still drove it there, so a coder
             # child's render would wipe under that run.
             mgr.give_back_elsewhere()
     except Exception:

@@ -2603,11 +2603,11 @@ def test_a_grant_ends_before_its_holder_entry_is_released(mgr, monkeypatch):
     mgr.stop("user", requester_scope="scope-a")
     assert seen == [False], "the lease's holder entry was released while its grant stood"
     seen.clear()
-    mgr.stop_for_agent_run()
-    mgr.hand_jar_to_run(user_scope_id="scope-b", run_generation=mgr.run_generation())
+    run = mgr.stop_for_agent_run()
+    mgr.hand_jar_to_run(user_scope_id="scope-b", run=run)
     mgr.agent_stream_started("sess-run")
     held["grant"] = mgr._agent_stream
-    mgr.agent_run_ended()
+    mgr.agent_run_ended(run=run)
     assert seen == [False], "the run's holder entry was released while its watch grant stood"
 
 
@@ -2836,15 +2836,14 @@ def _stopped_handover(mgr, stop_after_s=0.3):
     ends after `stop_after_s`. Returns (seconds the thread stayed after the end,
     the exception it raised)."""
     from vaf.core.bounded_run import cancel_when
-    mgr.stop_for_agent_run()
-    generation = mgr.run_generation()
+    run = mgr.stop_for_agent_run()
     ended = threading.Event()
     box = {}
 
     def _handover():
         try:
             with cancel_when(ended.is_set):
-                mgr.hand_jar_to_run(user_scope_id="scope-b", run_generation=generation)
+                mgr.hand_jar_to_run(user_scope_id="scope-b", run=run)
         except BaseException as e:  # noqa: BLE001 - asserted by the caller
             box["error"] = e
         box["left"] = time.monotonic()
@@ -2856,7 +2855,7 @@ def _stopped_handover(mgr, stop_after_s=0.3):
     stop = time.monotonic()
     t.join(2.0)
     assert not t.is_alive(), "the stopped run's handover thread is still waiting"
-    mgr.agent_run_ended()
+    mgr.agent_run_ended(run=run)
     return box["left"] - stop, box.get("error")
 
 
@@ -2943,18 +2942,18 @@ def test_a_stopped_handover_does_not_queue_for_the_mutex(mgr, monkeypatch):
 
 
 def test_a_handover_whose_run_already_ended_starts_nothing(mgr, monkeypatch):
-    """The run's own end, not the generation, decides: the generation is still
-    current here (nothing moved it), only the run's end signal is set.
+    """The run's own end signal decides: the run's ticket is still live here
+    (nothing ended it), only the run's end signal is set.
     MUTATION: drop the cancel check on entry of `_handover_unless_cancelled`."""
     from vaf.core.bounded_run import cancel_when
     _no_ipc_tasks(monkeypatch)
     instance = _owned_by_scope_a(mgr)
     wipes = len(mgr._test_wipes)
-    mgr.stop_for_agent_run()
+    run = mgr.stop_for_agent_run()
     with cancel_when(lambda: True):
         with pytest.raises(bi.BrowserHandoverError):
-            mgr.hand_jar_to_run(user_scope_id="scope-b", run_generation=mgr.run_generation())
-    mgr.agent_run_ended()
+            mgr.hand_jar_to_run(user_scope_id="scope-b", run=run)
+    mgr.agent_run_ended(run=run)
     _cut_left_nothing_and_the_next_holder_wipes(mgr, instance, wipes)
 
 
@@ -2981,11 +2980,11 @@ def _cross_user_handover_events(mgr, monkeypatch, *, wipe_confirms, clear_cookie
 
     monkeypatch.setattr(bi, "verified_profile_wipe", _wipe)
     monkeypatch.setattr(bi, "_cookie_op", clear_cookies)
-    mgr.stop_for_agent_run()
+    run = mgr.stop_for_agent_run()
     with cancel_when(ended.is_set):
         with pytest.raises(bi.BrowserHandoverError):
-            mgr.hand_jar_to_run(user_scope_id="scope-b", run_generation=mgr.run_generation())
-    mgr.agent_run_ended()
+            mgr.hand_jar_to_run(user_scope_id="scope-b", run=run)
+    mgr.agent_run_ended(run=run)
     return events
 
 
@@ -3042,11 +3041,11 @@ def test_a_run_that_ends_during_the_wipes_readiness_wait_is_an_unconfirmed_wipe(
     monkeypatch.setattr(bi, "_wipe_exec", _EndsAtConfirmation())
     monkeypatch.setattr(bi, "verified_profile_wipe", bi._real_verified_profile_wipe)
     monkeypatch.setattr(bi, "resolve_cdp_ws_url", _real_resolve_cdp_ws_url)
-    mgr.stop_for_agent_run()
+    run = mgr.stop_for_agent_run()
     with cancel_when(ended.is_set):
         with pytest.raises(bi.BrowserHandoverError, match="profile wipe not confirmed"):
-            mgr.hand_jar_to_run(user_scope_id="scope-b", run_generation=mgr.run_generation())
-    mgr.agent_run_ended()
+            mgr.hand_jar_to_run(user_scope_id="scope-b", run=run)
+    mgr.agent_run_ended(run=run)
     assert ended.is_set(), "the run's end never landed in the readiness wait"
     assert events == [("browser_handover_failed", "profile wipe not confirmed")], events
     assert not browser_jar.record_for("vaf-browser").owner_is("scope-b", instance)

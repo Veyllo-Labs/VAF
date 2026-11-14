@@ -243,8 +243,8 @@ def _another_run_ends_while_this_one_waits(monkeypatch, sid):
     """Run A of another account drives the same browser in parallel and ends
     normally while run B (this test's, session `sid`) waits for the browser's
     DevTools port. A is its run hooks around B's wait: the eviction at its start
-    and agent_run_ended at its end, which is what moves the browser's run
-    generation. B must go on waiting; then B is stopped and ends."""
+    and agent_run_ended at its end, which ends A's ticket and no other. B must go
+    on waiting; then B is stopped and ends."""
     import threading
     import time as _time
     import urllib.request as _req
@@ -287,15 +287,15 @@ def _another_run_ends_while_this_one_waits(monkeypatch, sid):
 
 
 def test_another_runs_end_does_not_cut_this_runs_handover(monkeypatch):
-    """MUTATION: arm the handover with the shared run generation again
-    (`run_generation(...) != _run_gen`): every run's end moves it, so with
-    VAF_BROWSER_MAX_PARALLEL above 1 one account's normal end cut another
-    account's handover, which then refused the run."""
+    """MUTATION: arm the handover with "a run of this browser has ended" instead of
+    this run's own end: with VAF_BROWSER_MAX_PARALLEL above 1 one run's normal end
+    then cuts another run's handover, which refuses the run."""
     _another_run_ends_while_this_one_waits(monkeypatch, "browseragent-parallel-handover")
 
 
 def test_another_runs_end_does_not_cut_this_runs_own_cdp_wait(monkeypatch):
-    """MUTATION: arm the run's own CDP resolve with the shared run generation again."""
+    """MUTATION: arm the run's own CDP resolve with "a run of this browser has ended"
+    instead of this run's own end."""
     import vaf.core.browser_interactive as bi
 
     monkeypatch.setattr(bi, "hand_jar_to_run", lambda **kwargs: None)

@@ -177,7 +177,7 @@ The closing awaits (`export_storage_state`, `browser.stop()`) are bounded too, s
 
 **The executor threads end with the run.** The watchdog's cancel lands at an `await`, not inside the executor thread the run is waiting on, and a stop does not wait for that thread. Two of those threads can wait a long time: the cookie-jar handover (`hand_jar_to_run`, which hands the shared browser from its previous user to this run) and the run's own CDP resolve (finding the browser's DevTools address before it starts).
 
-`_run_browser` runs both inside `bounded_run.cancel_when`, armed with the end of THIS run: its asyncio task is done, which happens before `run()` returns. It is deliberately not the browser's run generation (a counter that moves on whenever any run of that browser ends): with `VAF_BROWSER_MAX_PARALLEL` above 1, one run's normal end would cut another run's wait. (What stays, as before this change: a parallel run that has not yet passed the handover's generation check is refused when another run ends; `hand_jar_to_run` names that boundary.) Inside that scope these waits ask the flag and give up within about 0.1 s of the run's end:
+`_run_browser` runs both inside `bounded_run.cancel_when`, armed with the end of THIS run: its asyncio task is done, which happens before `run()` returns. It is deliberately not "a run of that browser has ended": with `VAF_BROWSER_MAX_PARALLEL` above 1, one run's normal end would cut another run's wait. For the same reason each run carries a ticket of its own, handed out by `stop_for_agent_run` at its start, into its handover and its end: another run's end neither refuses its handover (while it still waits for the previous holder's transfer, the handover mutex or a page check of another process) nor releases its holder entry. Inside that scope these waits ask the flag and give up within about 0.1 s of the run's end:
 
 - every DevTools wait (`resolve_cdp_ws_url`, before every attempt and every 0.1 s of its pause, with no further dial), in the handover and in the run's own resolve;
 - in the handover only: the wait for a previous holder's file transfer, the wait for the handover mutex (the lock that lets one handover at a time change the browser's user), and the wait for a page check of another VAF process (up to 60 s).
@@ -882,6 +882,14 @@ On it, `browser_agent` serialises all calls - only **one** browser session runs 
   another chat does not touch it.
 - **Per process**, as before. A spawned browser child and the server do not share the
   queue; across processes the holder record below answers busy.
+- **One account at a time.** With more than one slot (`VAF_BROWSER_MAX_PARALLEL`
+  below), the shared container still serves one account at a time
+  (`one_key_at_a_time`): a run of another account waits in the queue until the
+  running ones have ended, and no later run of the running account overtakes it.
+  One browser has one cookie jar and one Downloads folder: measured before this
+  rule, the second account's handover wiped the first one's browser in the middle
+  of its task, and the first task's downloads were swept into the second
+  account's folder at its end. Runs of one account still share the slots.
 - **No live place in the UI** (a named boundary): the browser window opens on the run's
   first frame, and a console line would land in a window that is still closed. The chat
   shows the running `browser_agent` tool, and the model gets the place in the busy text. A
@@ -896,7 +904,7 @@ timeout or refusal degrades that row for 15 minutes, which is its designed meani
 
 This avoids memory exhaustion and tab interference in the shared Chromium container.
 
-To allow **2 parallel sessions** on the shared container, on a machine with sufficient RAM (≥ 8 GB):
+To allow **2 parallel sessions** on the shared container, on a machine with sufficient RAM (≥ 8 GB). They are two tasks of one account; a task of another account waits for them (see "One account at a time" above):
 
 ```bash
 # System environment before starting VAF (see "Where these settings go" below)
@@ -908,8 +916,22 @@ The practical limits are:
 | `VAF_BROWSER_MAX_PARALLEL` | Recommended host RAM | Notes |
 |---|---|---|
 | `1` (default) | 4 GB+ | Safe for single-user or small teams |
-| `2` | 8 GB+ | Two browser tasks at once. On the shared container they use one browser with one cookie jar, also when they belong to two accounts: see the browser passage of [USER_ISOLATION.md](../security/USER_ISOLATION.md) before raising it |
+| `2` | 8 GB+ | Two browser tasks at once. On the shared container they belong to one account at a time: a task of another account waits in the queue until those end. On a per-user instance both are that person's. See the browser passage of [USER_ISOLATION.md](../security/USER_ISOLATION.md) |
 | `3+` | 16 GB+ | Not recommended; Chromium memory adds up fast |
+
+Named boundaries of two tasks at once:
+
+- **Two tasks of one account share that account's browser.** They use one cookie jar
+  and one set of tabs. A task that starts clean (not `persistent`) clears the
+  cookies at its start, so it logs the other task of the same account out of
+  every site (measured). A Stop that escalates to the container restart (see
+  "Stopping a run") ends both tasks.
+- **A task does not survive a relaunch of its Chromium.** After any relaunch (the
+  profile wipe at a change of account, a crash, a container restart) the running
+  task cannot attach to the new browser: measured against the browser image, the
+  old DevTools address answers 404 on the relaunched Chromium, and browser-use's
+  three reconnect attempts fail the same way. The task ends with an error and never
+  goes on in the new browser with the next holder's state.
 
 ---
 
@@ -1101,8 +1123,8 @@ too little for another 2 GB reservation beyond the first two), docker
 unreachable, the shared container missing as the image template, or no user scope on
 the call - the caller falls back to the shared container and its verified handover
 wipe. That fallback is also where the shared container's named residuals apply (one
-jar for parallel runs within a process, a second installation keeping its own owner
-record), so a machine that runs the pool at capacity is not uniformly partitioned; see
+account at a time, whose parallel runs share its jar, and a second installation keeping
+its own owner record), so a machine that runs the pool at capacity is not uniformly partitioned; see
 [USER_ISOLATION.md](../security/USER_ISOLATION.md). An idle instance is stopped (never
 removed: the container and its profile volume stay) and wakes on the next use, and VAF's
 quit stops the instances its pool started or adopted (`stop_known_instances`), including

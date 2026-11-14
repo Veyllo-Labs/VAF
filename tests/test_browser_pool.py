@@ -800,7 +800,7 @@ def test_the_watch_grant_is_minted_after_the_handover():
         "the watch grant is minted before the run's handover"
     inner = src.split("    async def _run_browser", 1)[1]
     grant = inner.index("agent_stream_started(")
-    assert inner.index("run_generation=_run_gen") < grant, \
+    assert inner.index("continuing=_handover is not None,\n                                run=run)") < grant, \
         "the watch grant must follow the handover"
     assert grant < inner.index("sync_workspace_for_run("), \
         "the watch grant must exist by the browse phase"

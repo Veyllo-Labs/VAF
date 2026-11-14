@@ -1148,26 +1148,28 @@ partition:
   store, so saved passwords belong on a dedicated per-user instance, never on the
   shared fallback. Its saved passwords therefore live only until the next
   cross-user handover on the shared container, and indefinitely on a dedicated pool
-  instance. What remains on the shared container is named in `hand_jar_to_run`:
-  within one process `VAF_BROWSER_MAX_PARALLEL` above 1 lets that many runs share one
-  jar and one holder entry (the first run to end releases it, so other processes see
-  the browser free while the second run still drives it), and a second VAF
-  installation under another OS account that drives the same container keeps a
-  record of its own - the pool is the answer to both. For an admin deciding whether to
-  allow two browser tasks at once, the plain fact first: above 1, the tasks that run at
-  the same time on the shared container, also those of two different accounts, use one
-  browser with one cookie jar, so each can reach the logins and pages of the other.
-  Keep the default of 1, or give each user a dedicated instance from the pool, unless
-  every account that may start a browser task is trusted with the others' browsing.
-  What this section adds to that: a task that is already browsing is not cut when
-  another task ends. A second task that is still waiting when the first one ends (for
-  the browser's handover lock, for a page check of another VAF process, or for the
-  previous holder's file transfer to finish) is refused, and the person sees "Error
-  (browser_agent): the browser could not be cleaned for this user change, so the run
-  was refused. Try again in a moment; if it persists, check the vaf-browser
-  container." and starts it again; nothing of the other account is exposed. A task
-  that is stopped during its own change of hands from another account is refused the
-  same fail-closed way: if the stop lands before the browser's record of whose state
+  instance. What remains on the shared container is named in `hand_jar_to_run`: a
+  second VAF installation under another OS account that drives the same container
+  keeps a record of its own - the pool is the answer to that. For an admin deciding
+  whether to allow two browser tasks at once (`VAF_BROWSER_MAX_PARALLEL` above 1): the
+  shared container still serves one account at a time. Its fair queue admits a task
+  of another account only once the running tasks have ended (`one_key_at_a_time` on
+  `vaf.ResourceQueue`), so it waits there, up to 120 seconds, and no later task of
+  the running account overtakes it. The tasks that do run at once are one account's,
+  and they share that account's jar: a task that starts clean clears the other's
+  cookies, and a Stop that escalates to the container restart ends both. Because the
+  tasks of two accounts never overlap, the jar, the downloads swept at a task's end
+  and the workspace mirror are never shared between two accounts at the same moment
+  (measured before: the second account's handover wiped the profile under the first
+  task, and the first task's downloads were swept into the second account's folder).
+  Each task holds an entry of its own in the cross-process record, so other VAF
+  processes see the browser busy until the last one has ended, and the end of one
+  task neither refuses another that still waits for its change of hands nor releases
+  its entry. A task whose Chromium is relaunched under it (a wipe, a crash, a
+  restart) does not go on in the new browser: measured, the old DevTools address
+  answers 404 on the relaunched Chromium and browser-use's reconnect attempts fail,
+  so the task ends with an error. A task that is stopped during its own change of
+  hands from another account is refused, fail-closed: if the stop lands before the browser's record of whose state
   the profile holds was cleared, that record still names the previous holder; if it
   lands after, it names nobody. Either way every account the record does not name
   wipes the profile first on its next use of the browser.

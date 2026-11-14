@@ -295,6 +295,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   login to it. The refusal names the path, so the agent can ask you for it. In the chat the
   confirmation dialog shows it as "share path" and runs it on a yes. Other network access from
   those runs (downloads, local services) is unchanged.
+- **Two browser tasks at once no longer mix two accounts on the shared browser.** With more
+  than one browser task allowed at a time (`VAF_BROWSER_MAX_PARALLEL`), a task of another
+  account now waits for the shared browser until the running ones end. Before, it ran beside
+  them in the same browser: it cleared the other task's browser and could receive its
+  downloads. A task that is still starting is no longer refused when another task finishes,
+  and other parts of VAF no longer take the browser from a task that is still running.
 - **The coding agent no longer treats a refused file as read or written.** When the file tools
   refused a write or an edit (a project's `.env`, a file in `.git` or `node_modules`, VAF's own
   data, or a file outside your account's folders), the coding agent used to tell itself the file

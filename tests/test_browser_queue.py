@@ -53,13 +53,15 @@ def rig(monkeypatch):
 
     monkeypatch.setattr(bp, "get_browser_pool", lambda: _Pool())
     monkeypatch.setattr(bi, "register_run_browser", lambda endpoint: None)
-    monkeypatch.setattr(bi, "stop_for_agent_run", lambda container_name=None: None)
+    # The ticket of a run is the name of its thread, and the hooks record the ticket
+    # they were handed: every assert on them also says each run passed its own.
+    monkeypatch.setattr(bi, "stop_for_agent_run",
+                        lambda container_name=None: threading.current_thread().name)
     monkeypatch.setattr(bi, "agent_run_abandoned",
-                        lambda container_name=None: state["abandoned"].append(
-                            threading.current_thread().name))
+                        lambda container_name=None, run=None: state["abandoned"].append(run))
     monkeypatch.setattr(bi, "agent_run_ended",
-                        lambda notify=True, container_name=None: state["ended"].append(
-                            threading.current_thread().name))
+                        lambda notify=True, container_name=None, run=None: state["ended"].append(
+                            run))
     monkeypatch.setattr(ipc_mod, "get_current_session_id",
                         lambda: state["sids"].get(threading.current_thread().name))
 
@@ -142,6 +144,42 @@ def test_every_call_for_a_browser_passes_the_same_numbers(monkeypatch):
     assert shared.listed is True and pooled.listed is False
     assert shared.max_waiting == ba.BROWSER_MAX_WAITING
     assert shared.max_waiting_per_key == ba.BROWSER_MAX_WAITING_PER_KEY
+    assert shared.one_key_at_a_time is True and pooled.one_key_at_a_time is True
+
+
+def test_two_accounts_take_turns_on_the_shared_browser(rig, monkeypatch):
+    """With two slots, A1 drives the shared browser and B1 of another account waits
+    although a slot is free: one jar and one Downloads folder cannot keep two
+    accounts apart, so B1 drives only once A1 has ended. MUTATION: register the
+    browser queue with one_key_at_a_time=False (B1 drives beside A1) - red."""
+    monkeypatch.setattr(ba, "_BROWSER_MAX_PARALLEL", 2)
+    rig["start"]("A1", "scope-a", hold=True)
+    assert rig["entered"].setdefault("A1", threading.Event()).wait(5)
+    _queue_up(rig, "B1", "scope-b")
+    time.sleep(0.2)
+    assert rig["order"] == ["A1"], f"another account drove beside A1: {rig['order']}"
+    rig["hold"]["A1"].set()
+    for t in rig["threads"]:
+        t.join(5)
+    assert rig["order"] == ["A1", "B1"], rig["order"]
+    assert rig["ended"] == ["run-A1", "run-B1"], rig["ended"]
+
+
+def test_two_runs_of_one_account_run_together(rig, monkeypatch):
+    """With two slots, two runs of one account drive at once, and each ends with its
+    own ticket."""
+    monkeypatch.setattr(ba, "_BROWSER_MAX_PARALLEL", 2)
+    rig["start"]("A1", "scope-a", hold=True)
+    rig["start"]("A2", "scope-a", hold=True)
+    for task in ("A1", "A2"):
+        assert rig["entered"].setdefault(task, threading.Event()).wait(5), task
+    assert _waiting() == 0
+    rig["hold"]["A1"].set()
+    assert _wait_until(lambda: rig["ended"] == ["run-A1"])
+    rig["hold"]["A2"].set()
+    for t in rig["threads"]:
+        t.join(5)
+    assert sorted(rig["ended"]) == ["run-A1", "run-A2"]
 
 
 def test_runs_on_one_browser_take_turns_by_person(rig):

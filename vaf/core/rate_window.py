@@ -206,7 +206,9 @@ class RateWindow:
 
     def used(self, key: Hashable, *, now: Optional[float] = None) -> float:
         """The units ``key`` has spent within the window up to ``now``. Only reads: a ``now``
-        ahead of the window's time counts the charges live then, and forgets none of them."""
+        ahead of the window's time counts the charges live then, and forgets none of them.
+        O(charges held for the key) per call, under the lock, expired ones included until a
+        ``take`` of the key prunes them; a read for reports and tests, not for a hot path."""
         with self._lock:
             moment = max(self._moment(now), self._latest)
             charges = self._keys.get(key)

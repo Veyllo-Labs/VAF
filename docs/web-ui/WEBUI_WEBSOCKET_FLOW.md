@@ -431,7 +431,8 @@ Key rules:
   it carries it back as `ack`: the page settles a write only by that id, never by matching
   text. The page words the refusal from its catalogues by the code: only the named write is
   settled, a refused line leaves the pending list and goes back into the box when the box is
-  empty, a refused reaction or ballot gives nothing back, and the room shows
+  empty and its own room is still on screen (never into another room's box), a refused
+  reaction or ballot gives nothing back, and the room shows
   `appRoomRateLimited` above the box (the amber status notice the Veyllo App room uses)
   until the next line, reaction or ballot, or until another room is on screen. The transcript is built for a MEMBER
   only: membership is asked again of the room where the transcript is read, so an account

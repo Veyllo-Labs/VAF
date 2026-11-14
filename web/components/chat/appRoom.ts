@@ -221,8 +221,28 @@ export function newLineId(): string {
 }
 
 /** A write of an agent room on its way (a line, a reaction, a ballot), by the id it was sent
- *  with (`client_id`, a `newLineId`). */
-export type RoomWrite = { cid: string; roomId: string; kind: 'say' | 'react' | 'vote'; text: string };
+ *  with (`client_id`, a `newLineId`), and when it was sent (`ts`, epoch ms). */
+export type RoomWrite = { cid: string; roomId: string; kind: 'say' | 'react' | 'vote'; text: string; ts: number };
+
+/** How long a write waits for its answer before the page lets it go: the server answers a
+ *  write at once (a refusal on the loop, a stored line with its view), so a write still open
+ *  after this was lost with its socket. Its pending copy stops showing "sending" then. */
+export const ROOM_WRITE_TTL_MS = 30000;
+
+/** The writes (or pending copies) that are still waiting at `now`. The only bound on the list:
+ *  a record leaves when it is settled or by age, never because newer ones arrived, so a write
+ *  still open always finds its record. */
+export function liveWrites<T extends { ts: number }>(writes: ReadonlyArray<T>, now: number): T[] {
+    return writes.filter(w => now - w.ts < ROOM_WRITE_TTL_MS);
+}
+
+/** Milliseconds until the first of `items` expires (0 when one already has), or null when
+ *  there is none: when the page looks again, even if no transcript arrives (a dropped socket). */
+export function nextExpiryIn(items: ReadonlyArray<{ ts: number }>, now: number): number | null {
+    if (!items.length) return null;
+    const first = Math.min(...items.map(i => i.ts));
+    return Math.max(0, first + ROOM_WRITE_TTL_MS - now);
+}
 
 /** The writes still on their way once the server answered the one named `ack` (the view that
  *  answers a write carries its id). Only that write is settled: a line of the same text never
@@ -240,12 +260,24 @@ export function afterRefusal(writes: ReadonlyArray<RoomWrite>, cid: string):
     return { writes: refused ? writes.filter(w => w.cid !== cid) : [...writes], refused };
 }
 
-/** What the box holds after a refusal: the refused line's text when it was a line and the box
- *  is empty; a reaction or a ballot restores nothing, and a box the person started writing in
- *  keeps what they wrote. */
-export function boxAfterRefusal(box: string, refused: RoomWrite | null): string {
+/** What the box holds after a refusal: the refused line's text when it was a line, it was
+ *  written in the room on screen (`openRoomId`) and the box is empty. A refusal that arrives
+ *  after a switch to another room puts nothing into that room's box, where it could be sent to
+ *  the wrong room; a reaction or a ballot restores nothing, and a box the person started
+ *  writing in keeps what they wrote. */
+export function boxAfterRefusal(box: string, refused: RoomWrite | null,
+                                openRoomId: string | null): string {
     if (!refused || refused.kind !== 'say' || !refused.text) return box;
+    if (!openRoomId || refused.roomId !== openRoomId) return box;
     return box.trim() ? box : refused.text;
+}
+
+/** The room whose notice a refusal raises: the room of the refused write when it is the one on
+ *  screen, nothing when another room is on screen now; the room on screen for a refusal naming
+ *  no write this page knows. */
+export function refusalNotice(refused: RoomWrite | null, openRoomId: string | null): string | null {
+    if (!refused) return openRoomId;
+    return refused.roomId === openRoomId ? openRoomId : null;
 }
 
 /** A line of the room as the check reads it: the person's line keeps the page's id as its

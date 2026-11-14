@@ -674,9 +674,13 @@ def _deliver(scope: str, target: Dict[str, Any], line_id: str, text: str, ts: fl
 def _client_line_id(client_id: Any) -> str:
     """The id the person's page chose for a line, when it is a UUID (canonical form), else "".
     The page names its line so that, when it stopped waiting for the answer, it can find out
-    whether the line was stored anyway (`msg` of a line); an id is unique per page send."""
+    whether the line was stored anyway (`msg` of a line); an id is unique per page send.
+    Only a string of at most 64 characters is read: any other JSON value (a number, a list, an
+    object) or a longer string names no id and is never turned into text."""
+    if not isinstance(client_id, str) or len(client_id) > 64:
+        return ""
     try:
-        return str(uuid.UUID(str(client_id or "").strip()))
+        return str(uuid.UUID(client_id.strip()))
     except (ValueError, AttributeError, TypeError):
         return ""
 

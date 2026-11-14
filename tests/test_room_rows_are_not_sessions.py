@@ -1972,5 +1972,9 @@ def test_loading_shows_the_shape_of_what_is_coming_in_both_lanes():
     assert "scaleX" in css.split("@keyframes loadCrawl")[1][:200], \
         "the bar animates transform only - the repaint rule"
     assert "setPendingRoomSays" in page
-    assert "Date.now() - p.ts < 30000" in page, \
+    # The expiry rule lives in appRoom.ts (`liveWrites`, run in node by
+    # test_app_link_room_web.py); the page applies it on a timer of its own.
+    room_rules = (ROOT / "web" / "components" / "chat" / "appRoom.ts").read_text(encoding="utf-8")
+    assert "export const ROOM_WRITE_TTL_MS = 30000;" in room_rules
+    assert "setPendingRoomSays(prev => liveWrites(prev, Date.now()))" in page, \
         "a pending echo must expire instead of accumulating"

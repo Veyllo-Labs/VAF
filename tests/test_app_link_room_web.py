@@ -465,9 +465,9 @@ def test_a_give_up_without_the_line_says_it_may_still_come():
 
 # ── an agent room's writes, settled by the id each was sent with ──────────────────────────
 
-_WRITES = ("[{cid: 'c1', roomId: 'r1', kind: 'say', text: 'OK'},"
-           " {cid: 'c2', roomId: 'r1', kind: 'say', text: 'Second'},"
-           " {cid: 'c3', roomId: 'r1', kind: 'react', text: '+1'}]")
+_WRITES = ("[{cid: 'c1', roomId: 'r1', kind: 'say', text: 'OK', ts: 1000},"
+           " {cid: 'c2', roomId: 'r1', kind: 'say', text: 'Second', ts: 2000},"
+           " {cid: 'c3', roomId: 'r1', kind: 'react', text: '+1', ts: 3000}]")
 
 
 def test_an_answer_settles_only_the_write_it_names():
@@ -492,14 +492,52 @@ def test_a_refusal_settles_only_the_refused_write():
     assert out == [None, 3]
 
 
-@pytest.mark.parametrize("box, cid, want", [
-    ("", "c1", "OK"),                  # a refused line goes back into an empty box
-    ("  ", "c2", "Second"),            # a box of spaces counts as empty
-    ("new words", "c1", "new words"),  # what the person started writing stays
-    ("", "c3", ""),                    # a refused reaction restores nothing, text or not
+@pytest.mark.parametrize("box, cid, room, want", [
+    ("", "c1", "r1", "OK"),                  # a refused line goes back into an empty box
+    ("  ", "c2", "r1", "Second"),            # a box of spaces counts as empty
+    ("new words", "c1", "r1", "new words"),  # what the person started writing stays
+    ("", "c3", "r1", ""),                    # a refused reaction restores nothing
+    ("", "c1", "r2", ""),                    # another room on screen: its box stays empty
+    ("", "c1", None, ""),                      # no room on screen: nothing to restore into
 ])
-def test_the_box_after_a_refusal(box, cid, want):
-    """MUTATION: restore for a reaction or a ballot, or over a box the person writes in -
-    red."""
-    expr = (f"m.boxAfterRefusal({json.dumps(box)}, m.afterRefusal({_WRITES}, '{cid}').refused)")
+def test_the_box_after_a_refusal(box, cid, room, want):
+    """A refusal that arrives after a switch to another room puts nothing into that room's
+    box, where the line could be sent to the wrong room. MUTATION: restore for a reaction or a
+    ballot, over a box the person writes in, or in another room - red."""
+    expr = (f"m.boxAfterRefusal({json.dumps(box)}, m.afterRefusal({_WRITES}, '{cid}').refused, "
+            f"{json.dumps(room)})")
     assert _call(expr) == want
+
+
+@pytest.mark.parametrize("cid, room, want", [
+    ("c1", "r1", "r1"),        # the refused write's room is on screen: it says so there
+    ("c1", "r2", None),        # another room is on screen: nothing is shown in it
+    ("unknown", "r2", "r2"),   # a refusal naming no known write: the room on screen
+])
+def test_the_notice_of_a_refusal_stays_in_its_room(cid, room, want):
+    """MUTATION: raise the notice in whatever room is on screen - red."""
+    expr = (f"m.refusalNotice(m.afterRefusal({_WRITES}, '{cid}').refused, {json.dumps(room)})")
+    assert _call(expr) == want
+
+
+def test_writes_leave_by_age_alone():
+    """A record leaves when it is settled or after `ROOM_WRITE_TTL_MS`, never because newer
+    writes arrived: a line followed by a hundred reactions keeps its record. MUTATION: keep only
+    the newest records, or keep expired ones - red."""
+    assert _call("m.ROOM_WRITE_TTL_MS") == 30000
+    many = ("[{cid: 'line', roomId: 'r1', kind: 'say', text: 'x', ts: 0},"
+            " ...Array.from({length: 100}, (_, i) => ({cid: 'r' + i, roomId: 'r1', kind: 'react',"
+            " text: '', ts: 1 + i}))]")
+    kept = _call(f"m.liveWrites({many}, 29000).map(w => w.cid)")
+    assert len(kept) == 101 and kept[0] == "line"
+    assert _call(f"m.liveWrites({many}, 30000).map(w => w.cid)")[0] == "r0"
+    assert _call(f"m.liveWrites({_WRITES}, 40000)") == []
+
+
+def test_the_next_expiry_comes_without_a_transcript():
+    """The page looks again when the first pending copy expires, whether or not a transcript
+    arrives. MUTATION: wait for the newest, or never fire - red."""
+    assert _call(f"m.nextExpiryIn({_WRITES}, 1000)") == 30000
+    assert _call(f"m.nextExpiryIn({_WRITES}, 25000)") == 6000
+    assert _call(f"m.nextExpiryIn({_WRITES}, 99999)") == 0
+    assert _call("m.nextExpiryIn([], 0)") is None

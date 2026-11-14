@@ -183,7 +183,8 @@ many frames have not been read.
   send lasts and a small "sending…" note underneath. Every write the page sends
   to an agent room (a line, a reaction, a ballot) carries an id of its own
   (`client_id`), and the pending copy ends when the server's answer to THAT write
-  arrives (the transcript's `ack` names it), or after 30 seconds; it is never
+  arrives (the transcript's `ack` names it), or after 30 seconds, on a timer of
+  its own, also when no transcript arrives any more (a dropped socket); it is never
   settled by text, so an older line of the same words or another member's line
   cannot stand in for a new send. The room still trusts only the store for ORDER,
   so a pending line never takes
@@ -196,7 +197,9 @@ many frames have not been read.
   "room_rate"` and the refused write's `client_id`, 60 a minute per account) says
   so: only that write is settled (every other one stays on its way), a refused
   line's pending copy goes and its text comes back into the box when the box is
-  empty, a refused reaction or ballot gives nothing back, and the amber status
+  empty and the line's own room is still on screen (a refusal that arrives after
+  a switch puts nothing into the other room's box), a refused reaction or ballot
+  gives nothing back, and the amber status
   notice above the box (the one the Veyllo App room uses for its refusals) shows
   `appRoomRateLimited` until the next write or until another room is on screen.
   The sidebar badge counts what the PERSON has not seen - from their own reading

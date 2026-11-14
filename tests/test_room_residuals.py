@@ -405,6 +405,24 @@ def test_every_room_store_path_of_the_socket_runs_on_the_room_lane(ws_world, mon
         assert seen and all(n.startswith("vaf-room-lane") for n in seen), (name, seen)
 
 
+@pytest.mark.parametrize("value, want", [
+    ("8B0B1D7E-1C2A-4D3B-9E4F-5A6B7C8D9E0F", "8b0b1d7e-1c2a-4d3b-9e4f-5a6b7c8d9e0f"),
+    (" 8b0b1d7e-1c2a-4d3b-9e4f-5a6b7c8d9e0f ", "8b0b1d7e-1c2a-4d3b-9e4f-5a6b7c8d9e0f"),
+    # A JSON number whose text is 32 digits would read as a UUID if it were turned into text.
+    (12345678901234567890123456789012, ""),
+    (["8b0b1d7e-1c2a-4d3b-9e4f-5a6b7c8d9e0f"], ""),
+    ({"id": "8b0b1d7e-1c2a-4d3b-9e4f-5a6b7c8d9e0f"}, ""),
+    (True, ""), (None, ""),
+    (" " * 40 + "8b0b1d7e-1c2a-4d3b-9e4f-5a6b7c8d9e0f", ""),   # longer than 64 characters
+    ("not an id", ""),
+])
+def test_a_write_id_is_read_only_from_a_short_string(value, want):
+    """The id a page names a write with is read only from a string of at most 64 characters;
+    any other JSON value names nothing and is never turned into text. MUTATION: drop the type
+    or the length check - red."""
+    assert app_room._client_line_id(value) == want
+
+
 def test_the_sidebar_and_the_workspace_resolver_run_on_the_room_lane(ws_world, monkeypatch):
     """The chat list opens every room on this machine (`_room_rows`) and the page asks for it
     after every room write: the list on connect, `get_sessions` and the broadcast after a room
@@ -445,9 +463,12 @@ def test_the_page_says_a_refused_room_write_and_keeps_its_text():
     branch = page.split("else if (data.type === 'error') {", 1)[1].split(
         "// The server refused the chat a reconnect asked for again", 1)[0]
     assert "if (data.code === 'room_rate') {" in branch
-    assert "const settled = afterRefusal(roomWritesInFlightRef.current, cid);" in branch
+    assert "const settled = afterRefusal(liveWrites(roomWritesInFlightRef.current, Date.now()), cid);" \
+        in branch
     assert "setPendingRoomSays(prev => prev.filter(p => p.cid !== refused.cid));" in branch
-    assert "setInput(prev => boxAfterRefusal(prev, refused));" in branch
+    assert "setInput(prev => boxAfterRefusal(prev, refused, openRoom));" in branch
+    assert "const openRoom = roomViewRef.current?.room.roomId ?? null;" in branch
+    assert "const rid = refusalNotice(refused, openRoom);" in branch
     assert "setRoomRateNotice(rid);" in branch
     assert "p.roomId !== rid" not in branch, "a refusal drops every line of the room again"
     notice = page.split("{roomView && !appRoomWords && roomRateNotice === roomView.room.roomId && (",
@@ -455,12 +476,21 @@ def test_the_page_says_a_refused_room_write_and_keeps_its_text():
     assert 'role="status"' in notice and "{tMain('appRoomRateLimited')}" in notice
     assert "border-amber-200 bg-amber-50 text-amber-800" in notice
     transcript = page.split("else if (data.type === 'room_transcript') {", 1)[1][:4000]
-    assert "setPendingRoomSays(prev => afterAnswer(prev, ack).filter(p =>" in transcript
-    assert "roomWritesInFlightRef.current = afterAnswer(roomWritesInFlightRef.current, ack);" \
-        in transcript
+    assert "setPendingRoomSays(prev => liveWrites(afterAnswer(prev, ack), Date.now())" in transcript
+    assert "afterAnswer(roomWritesInFlightRef.current, ack), Date.now());" in transcript
     assert "texts.has(" not in transcript, "a pending line is settled by its text again"
     writer = page.split("const sendRoomWrite = (", 1)[1].split("\n    };", 1)[0]
     assert "const cid = newLineId();" in writer
+    assert "roomWritesInFlightRef.current = [...liveWrites(roomWritesInFlightRef.current, now)," \
+        in writer
+    assert ".slice(" not in writer, "records of open writes are dropped by count again"
+    # Pending copies expire on a timer of their own, also when no transcript arrives.
+    timer = page.split("const wait = nextExpiryIn(pendingRoomSays, Date.now());", 1)
+    assert len(timer) == 2, "pending lines wait for a transcript to expire"
+    assert "setTimeout(() => setPendingRoomSays(prev => liveWrites(prev, Date.now())), wait + 50);" \
+        in timer[1][:400]
+    assert "return () => clearTimeout(timer);" in timer[1][:500]
+    assert "}, [pendingRoomSays]);" in timer[1][:600]
     assert "sock.send(JSON.stringify({ ...payload, room_id: roomId, client_id: cid }));" in writer
     assert "setRoomRateNotice(null);" in writer
     for kind, command in (("say", "room_say"), ("react", "room_react"), ("vote", "cast_room_vote")):
@@ -861,7 +891,10 @@ def _doc(path: str) -> str:
       "every room of the account"]),
     ("docs/web-ui/WEB_UI.md", ["**A follow yields to the person.**",
                                "`appRoomRateLimited` until the next write",
-                               "it is never settled by text"], ["compared TRIMMED"]),
+                               "it is never settled by text",
+                               "also when no transcript arrives any more (a dropped socket)",
+                               "a refusal that arrives after a switch puts nothing into the "
+                               "other room's box"], ["compared TRIMMED"]),
 ])
 def test_the_docs_say_what_the_rooms_do(path, sentences, gone):
     """MUTATION: delete one of these sentences from its doc - red."""

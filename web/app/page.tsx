@@ -40,7 +40,7 @@ import { TurnDrafts, UnplacedDrafts, isWaitingDraft, type HeldSendRow } from '@/
 import { useChatDrafts } from '@/components/outbox/useChatDrafts';
 import {
     APP_ROOM_ID, APP_ROOM_TITLE, ROOM_SEND_IDLE, beginSend, clearAfterSend, confirmAfterGiveUp, deliveryOf, emptyKey,
-    afterAnswer, afterRefusal, boxAfterRefusal, goToTakenLine, hintHandle, isAppRoom, lateEffect, lateLine, lineTextKey, newLineId, placeholderKey, refusalKey, roomOpenCommand, roomStillListed, sendWithTimeout,
+    afterAnswer, afterRefusal, boxAfterRefusal, goToTakenLine, liveWrites, nextExpiryIn, refusalNotice, hintHandle, isAppRoom, lateEffect, lateLine, lineTextKey, newLineId, placeholderKey, refusalKey, roomOpenCommand, roomStillListed, sendWithTimeout,
     showUnreadDot, toKey, type RoomSend, type RoomWrite,
 } from '@/components/chat/appRoom';
 import { draftRefOf, isDraftTurnEnd, DRAFT_WAKE_PREFIX, CONFIRM_WAKE_PREFIX } from '@/components/outbox/draftRefs';
@@ -3158,7 +3158,8 @@ function VAFDashboardContent() {
     }, [roomOpening]);
     // The person's own room messages between send and store: shown at once as
     // visibly pending, dropped when the server's answer to THAT write arrives (the
-    // transcript's `ack` carries its `cid`), or after 30s.
+    // transcript's `ack` carries its `cid`), or after `ROOM_WRITE_TTL_MS` (the timer below,
+    // also when no transcript arrives any more, a dropped socket).
     const [pendingRoomSays, setPendingRoomSays] = useState<Array<{
         key: number; cid: string; roomId: string; text: string; ts: number }>>([]);
     // Every room write on its way (a line, a reaction, a ballot), by the id it was sent with,
@@ -3176,12 +3177,24 @@ function VAFDashboardContent() {
         const sock = wsSocketRef.current;
         if (!sock || sock.readyState !== WebSocket.OPEN) return null;
         const cid = newLineId();
-        roomWritesInFlightRef.current = [...roomWritesInFlightRef.current,
-            { cid, roomId, kind, text }].slice(-40);
+        const now = Date.now();
+        // Bounded by age alone (`liveWrites`): a record leaves when its write is settled or
+        // has waited too long, never because newer writes arrived.
+        roomWritesInFlightRef.current = [...liveWrites(roomWritesInFlightRef.current, now),
+            { cid, roomId, kind, text, ts: now }];
         setRoomRateNotice(null);
         sock.send(JSON.stringify({ ...payload, room_id: roomId, client_id: cid }));
         return cid;
     };
+    // A pending line stops showing "sending" when it has waited too long, also when no
+    // transcript arrives to filter it (a dropped socket). One timer for the first to expire;
+    // a settle or a cleared view changes the list and replaces it.
+    useEffect(() => {
+        const wait = nextExpiryIn(pendingRoomSays, Date.now());
+        if (wait === null) return;
+        const timer = setTimeout(() => setPendingRoomSays(prev => liveWrites(prev, Date.now())), wait + 50);
+        return () => clearTimeout(timer);
+    }, [pendingRoomSays]);
     // Another room on screen: an earlier room's notice does not come back with it.
     useEffect(() => {
         setRoomRateNotice(prev => (prev && prev !== roomView?.room.roomId ? null : prev));
@@ -6493,9 +6506,10 @@ function VAFDashboardContent() {
                             // this send. Expired ones go too, so a send the room never answered
                             // does not sit as "sending" forever.
                             const ack = typeof data.ack === 'string' ? data.ack : '';
-                            setPendingRoomSays(prev => afterAnswer(prev, ack).filter(p =>
-                                p.roomId === rid && Date.now() - p.ts < 30000));
-                            roomWritesInFlightRef.current = afterAnswer(roomWritesInFlightRef.current, ack);
+                            setPendingRoomSays(prev => liveWrites(afterAnswer(prev, ack), Date.now())
+                                .filter(p => p.roomId === rid));
+                            roomWritesInFlightRef.current = liveWrites(
+                                afterAnswer(roomWritesInFlightRef.current, ack), Date.now());
                         }
                         if (rid === APP_ROOM_ID) {
                             const lines: RoomMessage[] = data.messages || [];
@@ -7492,15 +7506,19 @@ function VAFDashboardContent() {
                     // pending list and goes back into the box if the box is empty; a refused
                     // reaction or ballot restores nothing. Every other line on its way stays.
                     if (data.code === 'room_rate') {
+                        // Only in the room it was written in: a refusal that arrives after a
+                        // switch drops the pending copy and puts nothing into the other room's
+                        // box, where it could go to the wrong room (`boxAfterRefusal`).
                         const cid = typeof data.client_id === 'string' ? data.client_id : '';
-                        const settled = afterRefusal(roomWritesInFlightRef.current, cid);
+                        const openRoom = roomViewRef.current?.room.roomId ?? null;
+                        const settled = afterRefusal(liveWrites(roomWritesInFlightRef.current, Date.now()), cid);
                         const refused = settled.refused;
                         if (refused) {
                             roomWritesInFlightRef.current = settled.writes;
                             setPendingRoomSays(prev => prev.filter(p => p.cid !== refused.cid));
-                            setInput(prev => boxAfterRefusal(prev, refused));
+                            setInput(prev => boxAfterRefusal(prev, refused, openRoom));
                         }
-                        const rid = refused?.roomId ?? roomViewRef.current?.room.roomId ?? null;
+                        const rid = refusalNotice(refused, openRoom);
                         if (rid) setRoomRateNotice(rid);
                     }
                     // The server refused the chat a reconnect asked for again (deleted meanwhile):

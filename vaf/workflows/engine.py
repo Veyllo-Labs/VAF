@@ -1520,6 +1520,14 @@ class WorkflowEngine:
                     # retry loop (idempotent) so a context-error retry keeps the routing.
                     # All branches: paths are args plumbing, not identity.
                     _inject_workflow_paths(step.tool, args, _workflow_project_path)
+                    # Nobody confirmed a step, and only the funnel may say otherwise: a
+                    # step's own `_call_confirmed` (model-written, or an earlier step's
+                    # output) is removed before ANY branch, the spawn and the legacy lane
+                    # call the tool without the funnel (a model-written `_call_confirmed:
+                    # true` passed python_exec's grant check in the legacy lane).
+                    from vaf.core.tool_dispatch import CALL_CONFIRMATION_KEYS
+                    for _key in CALL_CONFIRMATION_KEYS:
+                        args.pop(_key, None)
                     try:
                         if _spawn_and_wait:
                             # Spawn the sub-agent as a killable child process (returns
@@ -1542,13 +1550,8 @@ class WorkflowEngine:
                         else:
                             # The pre-C2 lane, VERBATIM: the shipped rollback
                             # (workflow_identity_injection = legacy/off), minus a step's
-                            # own identity values and its own confirmation: nobody confirmed
-                            # a step, and only the funnel may say otherwise (a model-written
-                            # `_call_confirmed: true` passed python_exec's grant check here).
+                            # own identity values and its own confirmation (above).
                             _drop_step_identity(step.tool, args)
-                            from vaf.core.tool_dispatch import CALL_CONFIRMATION_KEYS
-                            for _key in CALL_CONFIRMATION_KEYS:
-                                args.pop(_key, None)
                             _inject_user_scope(step.tool, args)
                             result = run_tool_bounded(
                                 tool, args, tool_name=step.tool,

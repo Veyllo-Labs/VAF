@@ -57,6 +57,8 @@ MUST_REFUSE = [
     "iwr -Uri:file://h/s/x",
     "dir \uff3c\uff3ch\uff3cs",
     "dir \ufe68\ufe68h\ufe68s",
+    # An option's letter before the colon is no drive.
+    r"tool -P:\\h\s",
 ]
 
 # On a Windows host: a host alone (the login happens at the host) and a share after two
@@ -102,6 +104,15 @@ MUST_PASS = [
     "docker cp c:/tmp/x .",
     "echo a:/b c::/d",
     "echo \u00e9t\u00e9 // caf\u00e9",
+    # A drive-qualified path written with doubled backslashes.
+    r"""python -c "open('C:\\Users\\alice\\x.txt')" """,
+    r"powershell -c Get-Content -Path:C:\\Users\\x",
+    # rsync's and git's remote path behind a user name.
+    "rsync ./a user@example.com://srv/x",
+    "git clone user@example.com://srv/repo",
+    # A drive after `file://` behind an option's colon is a local file.
+    "iwr -Uri:file://C:/x",
+    "iwr -Uri:file:///C:/x",
 ]
 
 SHARE_CODE = [
@@ -270,6 +281,62 @@ def test_a_protocol_relative_url_is_a_share_only_on_windows(monkeypatch):
     assert python_code_categories('open("//h/s/x")') == ["share_path"]
 
 
+def test_python_exec_names_the_share_only_its_escapes_spell(monkeypatch, posix):
+    """MUTATION: name the path from the code's raw text again - red (no path named)."""
+    from vaf.tools import python_exec
+    _Runners(monkeypatch)
+    monkeypatch.setattr(python_exec, "get_tool_policy", lambda *a, **k: "allow")
+    out = python_exec.PythonExecTool().run(code='open("\\x5c\\x5ch\\x5cs")',
+                                           _call_confirmed=False)
+    assert out.startswith("[BLOCKED]") and r"(\\h\s)" in out, out
+
+
+def test_the_nfkc_folds_are_every_character_that_folds_to_a_separator():
+    """Only a text holding one of these is read in its NFKC form. Recomputed over all of
+    Unicode, so a new Python with new folds fails here instead of passing them.
+    MUTATION: drop one character from _NFKC_FOLDS - red."""
+    import sys
+    import unicodedata
+    folds = {c for c in map(chr, range(0x80, sys.maxunicode + 1))
+             if any(x in unicodedata.normalize("NFKC", c) for x in "\\/:")}
+    assert folds <= command_policy._NFKC_FOLDS, sorted(folds - command_policy._NFKC_FOLDS)
+    # And the table reads each exactly as NFKC does.
+    for c in command_policy._NFKC_FOLDS:
+        assert command_policy._NFKC_FOLD_TABLE[ord(c)] == unicodedata.normalize("NFKC", c), c
+
+
+def test_the_text_is_never_normalised_as_a_whole(monkeypatch, posix):
+    """NFKC can make one character eighteen (U+FDFA: 1 M characters of it in python_exec's
+    code took 2.84 s and 349 MB), and older CPython patch releases sort a run of combining
+    marks in quadratic time. The folding characters are read through a fixed table instead.
+    MUTATION: normalise a text that holds a folding character - red."""
+    calls = []
+    real = command_policy.unicodedata.normalize
+
+    class _Counting:
+        @staticmethod
+        def normalize(form, text):
+            calls.append(len(text))
+            return real(form, text)
+
+    monkeypatch.setattr(command_policy, "unicodedata", _Counting)
+    assert share_paths("echo " + "\ufdfa" * 1000 + " caf\u00e9") == []
+    assert share_paths("dir \uff3c\uff3ch\uff3cs") == ["\\\\h\\s"]
+    assert share_paths("dir \uff3c" + "\u0315" * 3000 + "\u0300" * 3000) == []
+    assert calls == []
+
+
+def test_combining_marks_beside_a_folding_character_stay_linear(posix):
+    """The shape that is quadratic in older CPython's NFKC: one folding character, then long
+    runs of combining marks of two classes."""
+    def text(n):
+        return "dir \uff3c" + "\u0315" * (n // 2) + "\u0300" * (n // 2)
+
+    small, large = _best_of_three(share_paths, text(8192)), _best_of_three(share_paths,
+                                                                         text(65536))
+    assert large <= 20 * small + 0.05, (small, large)
+
+
 def test_a_bytes_constant_naming_a_share(posix):
     """MUTATION: read str constants only - red."""
     assert python_code_categories('open(b"\\\\\\\\h\\\\s\\\\x")') == ["share_path"]
@@ -319,6 +386,12 @@ def test_python_dash_c_naming_a_share_is_not_called_ftp(posix):
     for profile in ("host", "host_unattended"):
         assert "share_path" in classify_command(escaped, profile=profile).categories, profile
     assert "share_path" not in classify_command(escaped, profile="jailed").categories
+    # The refusal names the share as the code's string holds it, also one shell deeper.
+    # MUTATION: keep the code reading's path out of the refusal - red.
+    nested = r"""bash -c "python3 -c 'open(\"\x5c\x5ch\x5cs\")'" """
+    for cmd in (escaped, nested):
+        reason = classify_command(cmd, profile="host_unattended").reason
+        assert r"(\\h\s)" in reason, (cmd, reason)
 
 
 # -- host_bash through the funnel ---------------------------------------------------------
@@ -411,6 +484,7 @@ def test_python_exec_under_a_standing_grant_refuses_an_unconfirmed_share(code, m
     out = python_exec.PythonExecTool().run(code=code, _call_confirmed=False)
     assert out.startswith("[BLOCKED]") and "network share" in out, out
     assert "tell the person which path you need" in out, out
+    assert "(" in out.split("device path", 1)[1][:3], "the refusal names no path: " + out
     assert runners.calls == []
     out = python_exec.PythonExecTool().run(code=code, _call_confirmed=True)
     assert "ran" in out, out
@@ -445,5 +519,44 @@ def test_the_legacy_workflow_lane_drops_a_steps_own_confirmation():
                                 user_scope_id=None, username="tenant", user_role="user")
         engine.execute([WorkflowStep(tool="probe", input_template="x", output_name="o",
                                      args_template=dict(forged))], variables={})
+    assert seen, "the step did not run"
+    assert not set(forged) & set(seen), seen
+
+
+@pytest.mark.parametrize("mode", ["declared", "legacy"])
+def test_a_spawned_step_never_sees_a_steps_own_confirmation(mode, monkeypatch):
+    """A step that waits for its sub-agent calls the tool without the funnel in both modes. A
+    confirmation-aware tool registered under a spawnable name (an embedder's own) must not
+    receive a step's `_call_confirmed` either.
+    MUTATION: remove the keys only in the legacy branch again - red."""
+    from unittest.mock import patch
+
+    from vaf.workflows.engine import WorkflowEngine, WorkflowStep
+    # The engine sets and removes these for a sub-agent step; restored after the test.
+    for name in ("VAF_IN_SUBAGENT_TERMINAL", "VAF_AGENT_TYPE", "VAF_TASK_ID",
+                 "VAF_SPAWN_BROWSER_SUBAGENT"):
+        monkeypatch.setenv(name, "")
+        monkeypatch.delenv(name)
+    seen = {}
+
+    class _Recording:
+        name = "coding_agent"
+        identity_kwargs = ()
+        accepts_call_confirmation = True
+
+        def run(self, **kwargs):
+            seen.update(kwargs)
+            return "ok"
+
+    forged = {"_call_confirmed": True, "_call_question": "", "_call_subject": "x"}
+    with patch("vaf.core.config.Config.get",
+               side_effect=lambda k, d=None: mode if k == "workflow_identity_injection"
+               else d):
+        engine = WorkflowEngine(tools={"coding_agent": _Recording()},
+                                callback=lambda *a, **k: None,
+                                user_scope_id=None, username="tenant", user_role="user")
+        engine.execute([WorkflowStep(tool="coding_agent", input_template="x", output_name="o",
+                                     args_template=dict(forged))],
+                       variables={}, wait_for_subagents=True)
     assert seen, "the step did not run"
     assert not set(forged) & set(seen), seen

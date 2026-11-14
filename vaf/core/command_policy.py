@@ -439,6 +439,9 @@ class CommandVerdict:
     # Which way of hiding the program made it `opaque_command` ("program", "shell_text",
     # "unreadable"), so the reason can name the way out.
     opaque_shape: str = field(default="", repr=False)
+    # The piece read as a share (`share_path`), so a refusal names it; also one only the
+    # `python -c` code's own escapes spell, which the raw text does not show.
+    share_piece: str = field(default="", repr=False)
 
     @property
     def warning(self) -> str:
@@ -1213,6 +1216,19 @@ def _is_share_piece(piece: str, windows: bool) -> bool:
     return False
 
 
+# Every character whose NFKC form holds a backslash, a slash or a colon (computed over all of
+# Unicode; tests/test_unattended_host_share_paths.py recomputes it), and the table that reads
+# each as its NFKC form. A text holding one is read a second time through the table, not
+# through unicodedata.normalize: NFKC makes one character up to eighteen (U+FDFA), and older
+# CPython patch releases sort a run of combining marks in quadratic time; the table is linear
+# on every interpreter and gives these characters exactly what NFKC gives them.
+_NFKC_FOLDS = frozenset("\u2100\u2101\u2105\u2106\u2a74\ufe13\ufe55\ufe68\uff0f\uff1a\uff3c")
+_NFKC_FOLD_TABLE = {ord(c): unicodedata.normalize("NFKC", c) for c in _NFKC_FOLDS}
+# What a `file:` URL holds up to a drive's colon: `//C`, `///C` (`file://C:/x`, `file:///C:/x`).
+_FILE_DRIVE_RE = re.compile(r"[\\/]{2,3}[A-Za-z]$")
+# What may stand in front of a drive letter at the start of a word inside a piece (a call's
+# parenthesis, a list, an argument's comma, an assignment); never `-` or `/`, an option's.
+_DRIVE_WORD_STARTS = frozenset("([{,;=")
 # The text before a `:` that makes `x://...` a URL, not a path after an option's colon.
 _URL_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*$")
 
@@ -1222,9 +1238,11 @@ def _colon_suffixes(piece: str) -> Iterable[str]:
     behind an option's colon: one that starts with a backslash (`-Path:\\h\s`,
     `/out:\\h\s\x.exe`), a `file:` URL (`-Uri:file://h/s`), or one that starts with `/` when
     the text in front is no URL scheme (`-Path://h/s`, `FileSystem:://h/s`; `https://h/s` is
-    a URL and read as one). Up to the next colon so each character is read a fixed number of
-    times: a suffix to the end of the piece made the reading quadratic (130 K characters of
-    `\\h\s:`: 27.6 s and 2.7 GB)."""
+    a URL and read as one). Not after a drive letter (`C:\\Users\\x` in a one-liner is a
+    local path written with doubled backslashes) nor after a user name (`user@host://srv/x`
+    is rsync's or git's remote path). Up to the next colon so each character is read a fixed
+    number of times: a suffix to the end of the piece made the reading quadratic (130 K
+    characters of `\\h\s:`: 27.6 s and 2.7 GB)."""
     if ":" not in piece or _FILE_URL_RE.match(piece):
         return
     before = 0
@@ -1232,13 +1250,23 @@ def _colon_suffixes(piece: str) -> Iterable[str]:
     while at >= 0:
         nxt = piece.find(":", at + 1)
         suffix = piece[at + 1:nxt if nxt >= 0 else len(piece)]
-        if suffix.startswith("\\"):
+        front = piece[before:at]
+        # A drive letter: one letter at the start of a word (`C:`, `open(C:`, `-Path:C:`),
+        # never an option's letter (`-P:\\h\s` names the share).
+        drive = (front[-1:].isascii() and front[-1:].isalpha()
+                 and (len(front) == 1 or front[-2] in _DRIVE_WORD_STARTS))
+        if suffix.startswith("\\") and not drive:
             yield suffix
         elif suffix.lower() == "file" and nxt >= 0:
-            # `file:` ends the slice at its own colon: the URL runs to the colon after it.
+            # `file:` ends the slice at its own colon: the URL runs to the colon after it, or
+            # past one more when that colon is a drive's (`-Uri:file://C:/x` is a local file,
+            # `file://C` would name host C). At most two colons on: still linear.
             after = piece.find(":", nxt + 1)
+            if after >= 0 and _FILE_DRIVE_RE.match(piece, nxt + 1, after):
+                after = piece.find(":", after + 1)
             yield piece[at + 1:after if after >= 0 else len(piece)]
-        elif suffix.startswith("/") and not _URL_SCHEME_RE.match(piece[before:at]):
+        elif (suffix.startswith("/") and not _URL_SCHEME_RE.match(front)
+              and "@" not in front):
             yield suffix
         before = at + 1
         at = nxt
@@ -1247,16 +1275,15 @@ def _colon_suffixes(piece: str) -> Iterable[str]:
 def _share_candidates(text: str) -> Iterable[str]:
     r"""Every piece the share reading judges, each spelling of the text in turn: as written;
     without quotes, carets and backticks; with each doubled backslash read as one (a share in
-    a one-liner's C-style string, `"open('\\\\h\\s')"`); both; and, for a text that is not
-    ASCII, the same four of its NFKC form (the fullwidth `＼` and `／` and the small `﹨` are
-    a backslash and a slash there). A piece's text after a `:` may be a piece too
+    a one-liner's C-style string, `"open('\\\\h\\s')"`); both; and, for a text that holds a
+    character NFKC folds into a backslash, a slash or a colon (_NFKC_FOLDS), the same four
+    with those characters read as NFKC reads them (the fullwidth `＼` and `／` and the small
+    `﹨` are a backslash and a slash there; _NFKC_FOLD_TABLE, never the whole text's NFKC). A piece's text after a `:` may be a piece too
     (`_colon_suffixes`). Linear in the text: every spelling, piece and suffix is a slice read
     once."""
     bases = [text]
-    if not text.isascii():
-        normal = unicodedata.normalize("NFKC", text)
-        if normal != text:
-            bases.append(normal)
+    if not _NFKC_FOLDS.isdisjoint(text):
+        bases.append(text.translate(_NFKC_FOLD_TABLE))
     spellings = []
     for base in bases:
         stripped = _SHARE_QUOTING_RE.sub("", base)
@@ -1307,10 +1334,13 @@ def share_paths(text: str, *, windows: Optional[bool] = None) -> List[str]:
     name may hold (`\\h\(share)`). The text is read in four spellings (`_share_candidates`):
     as written, without the quoting cmd.exe and PowerShell take out (`dir "\\h"\s`,
     `dir \\h^\s`, PowerShell's backtick), with each doubled backslash read as one
-    (`python -c "open('\\\\h\\s')"`, `node -e`, `perl -e`), and both; a text that is not ASCII
-    also in its NFKC form (`＼＼h＼s`, `／／h／s`, `﹨﹨h﹨s`). A piece's text after a `:`
-    counts too (`-Path:\\h\s`, `/out:\\h\s\x.exe`, `-Uri:file://h/s`, `-Path://h/s`,
-    `FileSystem:://h/s`; `_colon_suffixes`). A piece counts when it has
+    (`python -c "open('\\\\h\\s')"`, `node -e`, `perl -e`), and both; a text that holds a
+    character NFKC folds into a backslash, a slash or a colon (_NFKC_FOLDS) also with those
+    characters read as NFKC reads them (`＼＼h＼s`, `／／h／s`, `﹨﹨h﹨s`; a fixed table,
+    never the whole text's NFKC, which is not linear on every interpreter). A piece's text after a `:` counts too
+    (`-Path:\\h\s`, `/out:\\h\s\x.exe`, `-Uri:file://h/s`, `-Path://h/s`,
+    `FileSystem:://h/s`), not after a drive letter or a user name (`open('C:\\Users\\x')`,
+    `user@host://srv/x`; `_colon_suffixes`). A piece counts when it has
     - the backslash UNC shape, a host and a share (`\\host\share`, `\\%VAR%\s`, `\\h@80\s`),
       or a device prefix (`\\?\`, `\\.\`, `\??\`), on every host;
     - on a Windows host (`windows`, default: this machine), also the forward-slash shape
@@ -1355,7 +1385,8 @@ _CODE_FILENAME = "<python-code-check>"
 warnings.filterwarnings("ignore", category=SyntaxWarning, module=re.escape(_CODE_FILENAME))
 
 
-def python_code_categories(code: str, *, _depth: int = 0) -> List[str]:
+def python_code_categories(code: str, *, found_paths: Optional[List[str]] = None,
+                           _depth: int = 0) -> List[str]:
     r"""What Python `code` does that a host lane judges, in a fixed order: "ftp_transfer" when
     it moves files over FTP, "share_path" when a string constant names a network share or a
     Windows device path (`share_paths` on its value: `open(r"\\h\s\x")`,
@@ -1367,7 +1398,9 @@ def python_code_categories(code: str, *, _depth: int = 0) -> List[str]:
     getattr of `__import__`, `-m ftplib` in a subprocess argument list), or a string that starts
     with ftp:// or ftps:// (urllib's FTP, an f-string's literal part). A constant string handed
     to exec, eval or compile is read as code too, a few levels deep. Code that does not parse,
-    or nests deeper, is searched as text. Never raises."""
+    or nests deeper, is searched as text. `found_paths`, when given, receives the share as
+    the code's string holds it, after Python's own escapes (`"\x5c\x5ch\x5cs"` is `\\h\s`),
+    so a refusal can name what the raw text does not show. Never raises."""
     import ast
     text = code.decode("utf-8", "replace") if isinstance(code, bytes) else str(code or "")
     found = set()
@@ -1378,8 +1411,11 @@ def python_code_categories(code: str, *, _depth: int = 0) -> List[str]:
     def _as_text() -> List[str]:
         if _PYTHON_FTP_TEXT_RE.search(text):
             found.add("ftp_transfer")
-        if first_share_path(text):
+        piece = first_share_path(text)
+        if piece:
             found.add("share_path")
+            if found_paths is not None:
+                found_paths.append(piece)
         return _ordered()
 
     if _depth > _MAX_CODE_DEPTH:
@@ -1402,7 +1438,8 @@ def python_code_categories(code: str, *, _depth: int = 0) -> List[str]:
             if called in _CODE_STRING_CALLS:
                 inner = _call_argument(node, "source")
                 if isinstance(inner, (str, bytes)):
-                    found.update(python_code_categories(inner, _depth=_depth + 1))
+                    found.update(python_code_categories(inner, found_paths=found_paths,
+                                                        _depth=_depth + 1))
         elif isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)):
             value = (node.value.decode("latin-1") if isinstance(node.value, bytes)
                      else node.value)
@@ -1410,8 +1447,11 @@ def python_code_categories(code: str, *, _depth: int = 0) -> List[str]:
                     _is_ftplib(value)
                     or value.lstrip().lower().startswith(("ftp://", "ftps://"))):
                 found.add("ftp_transfer")
-            if first_share_path(value.strip()):
+            piece = "" if "share_path" in found else first_share_path(value.strip())
+            if piece:
                 found.add("share_path")
+                if found_paths is not None:
+                    found_paths.append(piece)
         if len(found) == 2:
             break
     return _ordered()
@@ -1529,7 +1569,8 @@ def _exe_base(word: str) -> str:
     return base[:-4] if base.endswith((".exe", ".cmd", ".ps1", ".bat")) else base
 
 
-def _python_command_categories(args: List[str]) -> List[str]:
+def _python_command_categories(args: List[str], *,
+                                found_paths: Optional[List[str]] = None) -> List[str]:
     """What `python [options] -c CODE` or `python -m MODULE` does, judged like python_exec's
     code: `-c` as its own word, at the end of a short cluster (`-Ic CODE`) or with the code in
     the same word (`-cCODE`); `-m ftplib` is ftplib's own command-line client. A script file
@@ -1549,7 +1590,7 @@ def _python_command_categories(args: List[str]) -> List[str]:
             if letter in ("c", "m"):
                 value = rest if rest else (args[i + 1] if i + 1 < len(args) else "")
                 if letter == "c":
-                    return python_code_categories(value)
+                    return python_code_categories(value, found_paths=found_paths)
                 return ["ftp_transfer"] if _is_ftplib(value) else []
             if letter in _PYTHON_VALUE_LETTERS:
                 step = 1 if rest else 2
@@ -1652,6 +1693,7 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[List[int
                           + CATEGORY_REASONS["nested_too_deep"])
         return verdict
     opaque_shape = ""
+    share_piece = ""
 
     triples = _split_segments(text)
     verdict.segments = [seg for _, seg, _ in triples if seg]
@@ -1815,6 +1857,8 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[List[int
                 # `bash <(curl x)` reads it as a file; `bash <<< "$(curl x)"` as its input.
                 if kind == "process_in" or (kind == "command" and "<<<" in seg):
                     input_fetch = True
+            if local and sub.share_piece and not share_piece:
+                share_piece = sub.share_piece       # `bash -c 'python -c ...'`
             if sub.blocked and not nested_refusal:
                 nested_refusal = sub.reason
             # The budget is spent and this refusal is recorded: the remaining candidates
@@ -1832,7 +1876,9 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[List[int
             cats.append("remote_login")
         # Asked by name, not by truthiness: `python -c` code that names a share is
         # `share_path`, not an FTP transfer.
-        py_cats = _python_command_categories(args) if _PYTHON_EXE_RE.match(exe) else []
+        py_paths: List[str] = []
+        py_cats = (_python_command_categories(args, found_paths=py_paths)
+                   if _PYTHON_EXE_RE.match(exe) else [])
         if (exe in _FTP_CLIENTS or (exe in _NETWORK_FETCHERS
                                     and any(_FTP_URL_RE.match(a) for a in args))
                 or "ftp_transfer" in py_cats) \
@@ -1842,6 +1888,7 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[List[int
         # raw scan below does not undo.
         if "share_path" in py_cats and profile in _SHARE_PROFILES and "share_path" not in cats:
             cats.append("share_path")
+            share_piece = share_piece or (py_paths[0] if py_paths else "")
 
         if exe in _NETWORK_FETCHERS:
             pipeline_fetch = True
@@ -1880,7 +1927,6 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[List[int
 
     # One scan of the whole raw text covers every nested `bash -c`, substitution and runner;
     # shlex has already dropped the backslashes from the tokens read above.
-    share_piece = ""
     if _depth == 0 and profile in _SHARE_PROFILES and "share_path" not in cats:
         share_piece = first_share_path(text)
         if share_piece:
@@ -1889,6 +1935,7 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[List[int
     verdict.categories = cats + [c for c in remote_cats if c not in cats]
     if "opaque_command" in cats:
         verdict.opaque_shape = opaque_shape or "program"
+    verdict.share_piece = share_piece
     if blocking:
         verdict.blocked = True
         verdict.reason = _refusal(blocking[0], verdict.opaque_shape, text,

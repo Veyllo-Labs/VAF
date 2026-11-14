@@ -979,12 +979,23 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   without the quoting cmd.exe and PowerShell take out of a word before the program sees it
   (`dir "\\h"\s`, `dir \\h""\s`, cmd's caret `dir \\h^\s`, PowerShell's backtick); with each
   doubled backslash read as one, for a one-liner's C-style string
-  (`python -c "open('\\\\h\\s')"`, `node -e`, `perl -e`); and both; a text that is not ASCII
-  also in its NFKC form, where the fullwidth and small backslash and slash (`＼＼h＼s`,
-  `﹨﹨h﹨s`, `／／h／s`) are plain ones. A piece's text after a `:`, up to the next one,
+  (`python -c "open('\\\\h\\s')"`, `node -e`, `perl -e`); and both; a text that holds one
+  of the eleven characters NFKC folds into a backslash, a slash or a colon is read once more
+  with those characters as NFKC reads them, so the fullwidth and small backslash and slash
+  (`＼＼h＼s`, `﹨﹨h﹨s`, `／／h／s`) are plain ones. Through a fixed table, never the
+  whole text's NFKC: NFKC makes one character up to eighteen (U+FDFA; 1 M characters of it in
+  `python_exec`'s code took 2.84 s and 349 MB when every non-ASCII text was normalised, now
+  0.08 s), and older CPython patch releases sort a run of combining marks in quadratic time
+  (not measurable here: 3.13.16 normalises two runs of 30 000 in under 0.01 s). Fullwidth
+  letters around them stay as written (`ｆｉｌｅ：／／ｈ／ｓ` is then read as `//ｈ/ｓ`
+  behind a colon, a share on Windows). A piece's text after a `:`, up to the next one,
   counts too when it starts with a backslash (`-Path:\\h\s`, `/out:\\h\s\x.exe`), is a
-  `file:` URL (`-Uri:file://h/s`), or starts with `/` behind no URL scheme (`-Path://h/s`,
-  `FileSystem:://h/s`; `https://h/s` is a URL). The reading is linear in the command's
+  `file:` URL (`-Uri:file://h/s`; `-Uri:file://C:/x` keeps its drive and is local), or starts with `/` behind no URL scheme and no user
+  name (`-Path://h/s`, `FileSystem:://h/s`; `https://h/s` is a URL, `user@host://srv/x` is
+  rsync's or git's remote path); not after a drive letter at the start of a word
+  (`open('C:\\Users\\x')` is a local path, `-P:\\h\s` an option naming a share). A
+  refusal names the share as the code's own string holds it, also one only Python's escapes
+  spell (`"\x5c\x5ch\x5cs"` names `\\h\s`). The reading is linear in the command's
   length, and it runs before anyone is asked (host_bash, the dialog's preview, a sandbox
   environment's `bash`): a colon's suffix read to the end of its piece made it quadratic
   (130 K characters of `\\h\s:`: 27.6 s and 2.7 GB in the server process, now 0.3 s and
@@ -1015,7 +1026,8 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   `echo`, or the text `ssh host '...'` runs on another machine (`ssh box 'net use
   \\nas\x'`) is refused unattended when it names a share, and so is a WSL path typed as one
   (`\\wsl$\...`, local on Windows), as is, on Windows, a one-liner's text that starts with a
-  doubled backslash and a word (`print('\\nDone')`).
+  doubled backslash and a word (`print('\\nDone')`) and text whose NFKC form reads as a path
+  behind a colon (`参照：／／共有／資料`).
 - **Arithmetic is read both ways.** Whether bash evaluates `$((...))` or runs it as a
   command substitution holding a subshell depends on more than its parentheses (a `#`
   comment or a backtick holding a `)` moves where it closes), so every `$((`, and an

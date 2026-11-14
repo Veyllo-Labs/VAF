@@ -105,7 +105,8 @@ class PythonExecTool(BaseTool):
         # out of its environment (measured: the model did exactly that once host_bash refused
         # curl). The same check host_bash applies to `python -c` (vaf/core/command_policy.py).
         from vaf.core.command_policy import python_code_categories
-        code_categories = python_code_categories(code)
+        code_paths: list = []
+        code_categories = python_code_categories(code, found_paths=code_paths)
         if "ftp_transfer" in code_categories:
             return ("[BLOCKED] python_exec: this code moves files over FTP (ftplib or an ftp:// "
                     "address). Use the ftp tool: it asks before a new server, checks the "
@@ -131,8 +132,9 @@ class PythonExecTool(BaseTool):
         # to it, and no person saw the code. A yes to THIS call keeps it (the same rule
         # host_bash applies).
         if "share_path" in code_categories and kwargs.get("_call_confirmed") is not True:
-            from vaf.core.command_policy import first_share_path
-            piece = first_share_path(code)
+            # The share as the code's string holds it, after Python's escapes
+            # (`"\x5c\x5ch\x5cs"` names `\\h\s`, which the code's text does not show).
+            piece = code_paths[0] if code_paths else ""
             named = f" ({piece[:120]})" if piece else ""
             return (f"[BLOCKED] python_exec: this code names a network share or a Windows "
                     f"device path{named}, and on Windows opening a share on another computer "

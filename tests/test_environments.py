@@ -11,6 +11,7 @@ together and can run twice, that the reaper asks docker whether an environment i
 that the scratch environment converges on one container, and that a missing scope means
 the machine owner, never a shared bucket."""
 import json
+import os
 import re
 import shlex
 import types
@@ -42,6 +43,10 @@ class FakeDocker:
         self.fail_isolated = False
         self.fail_run = False
         self.image_ids = {}    # tag -> image id, for `image inspect` and a container's .Image
+        # What `stat -L -c %d:%i /workspace` answers inside: None is the mount source's own
+        # identity, resolved at the time of the call (as docker resolves `-v` at every start).
+        self.mount_identity = None
+        self.shares_kernel = True
 
     @staticmethod
     def _labels(args):
@@ -163,6 +168,14 @@ class FakeDocker:
             return _done(0, "\n")
         if head == "exec":
             name = next(a for a in args[1:] if a in self.containers)
+            if args[-5:] == ["stat", "-L", "-c", "%d:%i", envmod.WORKSPACE]:
+                if self.mount_identity is not None:
+                    return _done(0, self.mount_identity + "\n")
+                c_args = self.containers[name]["args"]
+                src = next(c_args[i + 1] for i, a in enumerate(c_args)
+                           if a == "-v" and c_args[i + 1].endswith(f":{envmod.WORKSPACE}:z"))
+                st = os.stat(src.rsplit(":", 2)[0])
+                return _done(0, f"{st.st_dev}:{st.st_ino}\n")
             if containers.MARKED_PROCESSES_CMD in args:
                 seen = self.busy_root if args[1:3] == ["-u", "0:0"] else self.busy
                 return _done(0, "42\n" if name in seen else "")
@@ -174,6 +187,7 @@ class FakeDocker:
 def docker(monkeypatch, tmp_path):
     fake = FakeDocker()
     monkeypatch.setattr(containers, "docker", fake)
+    monkeypatch.setattr(containers, "docker_shares_kernel", lambda: fake.shares_kernel)
     monkeypatch.setattr(containers, "mem_available_mb", lambda: 16000)
     monkeypatch.setattr(environment_image, "image_present", lambda tag=None: True)
     monkeypatch.setattr(environment_image, "usable_image", lambda: "vaf-sandbox-env:test")
@@ -324,6 +338,110 @@ def test_a_project_mount_must_be_the_persons_own_and_safe(docker, mgr, monkeypat
         mgr.create(ALICE, kind="project", project_path=str(workspace_guard._VAF_ROOT))
     with pytest.raises(EnvironmentRefused, match="not a directory"):
         mgr.create(ALICE, kind="project", project_path=str(tmp_path / "missing"))
+
+
+# -- the mounted folder is the folder that was checked, at every start --------------
+
+def _symlink_or_skip(link, target):
+    try:
+        os.symlink(target, link, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available here")
+
+
+def _project(tmp_path, monkeypatch, name="proj"):
+    import vaf.core.workspace_guard as wg
+    monkeypatch.setattr(wg, "is_unsafe_project_dir", lambda p: False)
+    folder = tmp_path / name
+    folder.mkdir()
+    return folder
+
+
+def _stat_execs(fake):
+    return [c for c in fake.calls if c[0] == "exec" and "%d:%i" in c]
+
+
+def test_a_restart_refuses_a_folder_swapped_while_the_environment_was_stopped(
+        docker, mgr, tmp_path, monkeypatch):
+    """`docker start` resolves the stored path again (measured: it mounted, and relabelled, a
+    folder linked in while the environment was stopped). MUTATION: drop _held_mount in
+    _ensure_running - red (a start is issued)."""
+    proj = _project(tmp_path, monkeypatch)
+    other = tmp_path / "other"
+    other.mkdir()
+    env = mgr.create(ALICE, kind="project", project_path=str(proj))
+    mgr.stop(ALICE, env.id)
+    os.rename(proj, tmp_path / "proj-aside")
+    _symlink_or_skip(proj, other)
+    docker.calls.clear()
+    with pytest.raises(EnvironmentRefused, match="a link on the way"):
+        mgr.exec(ALICE, env.id, "ls")
+    assert not [c for c in docker.calls if c[0] == "start"]
+    assert docker.containers[env.container]["state"] == "exited"
+
+
+def test_a_restart_on_the_checked_folder_passes_the_check(docker, mgr, tmp_path, monkeypatch):
+    proj = _project(tmp_path, monkeypatch)
+    env = mgr.create(ALICE, kind="project", project_path=str(proj))
+    mgr.stop(ALICE, env.id)
+    docker.calls.clear()
+    mgr._ensure_running(mgr.get(ALICE, env.id))
+    assert [c[0] for c in docker.calls if c[0] in ("start", "exec")] == ["start", "exec"]
+    assert docker.containers[env.container]["state"] == "running"
+
+
+def test_a_start_that_mounted_another_folder_is_stopped_and_refused(docker, mgr, tmp_path,
+                                                                    monkeypatch):
+    """After `docker run`, /workspace must show the held folder's dev:ino before anything
+    runs. MUTATION: skip the comparison in _check_mount - red."""
+    proj = _project(tmp_path, monkeypatch)
+    docker.mount_identity = "1:2"
+    with pytest.raises(EnvironmentRefused, match="it changed while the environment started"):
+        mgr.create(ALICE, kind="project", project_path=str(proj))
+    assert ["stop", "-t", "0"] in [c[:3] for c in docker.calls]
+    assert not [n for n in docker.containers if n.startswith("vaf-env-")]   # create removed it
+    execs = [c for c in docker.calls if c[0] == "exec"]
+    assert execs == _stat_execs(docker) and len(execs) == 1
+    assert not list(mgr._state_dir().glob("*.json"))
+    # The same check after a restart: stopped again, the state stays not running.
+    docker.mount_identity = None
+    env = mgr.create(ALICE, kind="project", project_path=str(proj))
+    mgr.stop(ALICE, env.id)
+    docker.mount_identity = "1:2"
+    with pytest.raises(EnvironmentRefused, match="nothing ran in it"):
+        mgr.exec(ALICE, env.id, "ls")
+    assert docker.containers[env.container]["state"] == "exited"
+
+
+def test_a_daemon_on_another_kernel_is_not_asked(docker, mgr, tmp_path, monkeypatch):
+    """A daemon in a VM shows other numbers: the mount stays by name there.
+    MUTATION: always run the check - red."""
+    proj = _project(tmp_path, monkeypatch)
+    docker.shares_kernel = False
+    docker.mount_identity = "1:2"
+    env = mgr.create(ALICE, kind="project", project_path=str(proj))
+    assert env.state == "running" and _stat_execs(docker) == []
+    # Nothing to check without a project folder either.
+    docker.shares_kernel = True
+    mgr.create(ALICE, kind="temporary")
+    assert _stat_execs(docker) == []
+
+
+def test_a_restored_record_whose_folder_is_a_link_now_is_not_started(docker, mgr, tmp_path,
+                                                                    monkeypatch):
+    """MUTATION: drop _held_mount in _start_new - red (a run is issued)."""
+    monkeypatch.setattr(environment_image, "ensure_image", lambda: "vaf-sandbox-env:test")
+    proj = _project(tmp_path, monkeypatch)
+    other = tmp_path / "other"
+    other.mkdir()
+    env = mgr.create(ALICE, kind="project", project_path=str(proj))
+    docker.containers.clear()                      # the new machine: no containers
+    os.rename(proj, tmp_path / "proj-aside")
+    _symlink_or_skip(proj, other)
+    docker.calls.clear()
+    report = mgr.readopt()
+    assert report["failed"] == [env.id]
+    assert not [c for c in docker.calls if c[0] == "run"]
 
 
 # -- owning --------------------------------------------------------------------------

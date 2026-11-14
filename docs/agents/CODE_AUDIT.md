@@ -297,7 +297,9 @@ the next run.
   says, and a `.git` that leads into another repository is refused; `linked_worktree=True`
   (`vaf audit --linked-worktree`) accepts a person's own linked worktree, and the main agent's
   `code_audit` tool never passes it. Each git call holds its folder by handle for that call
-  (on Linux git runs through `/proc/self/fd`, see the runner's docstring). Named boundary: the
+  (on Linux git runs through `/proc/self/fd`, and where bubblewrap can start a namespace in a
+  private mount of that folder, unless `--linked-worktree`; see the runner's docstring and
+  `vaf/core/folder_mount.py`). Named boundary: the
   audit's own file reads (`_read_text`) and its state under `.git/vaf-audit` go by path, so
   a folder swapped for a link between two of its calls is not caught by the per-call pin;
   pinning the audit's root once for git, the reads and the state is a follow-up.

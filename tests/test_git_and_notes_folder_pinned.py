@@ -22,7 +22,7 @@ from types import SimpleNamespace
 import pytest
 
 import vaf.core.git_runner as gr
-from vaf.core import path_jail
+from vaf.core import folder_mount, path_jail
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
 
@@ -111,6 +111,13 @@ def _swap_mid_call(monkeypatch, folder: Path, target: Path):
     return done
 
 
+@pytest.fixture
+def no_namespace(monkeypatch):
+    """The handle pin as it runs where the private mount namespace does not
+    (`vaf.core.folder_mount`, tested with the lane on in tests/test_folder_mount.py)."""
+    monkeypatch.setattr(folder_mount, "namespace_available", lambda: False)
+
+
 # ── 1. the primitive ─────────────────────────────────────────────────────────
 
 @_HANDLES
@@ -152,7 +159,8 @@ def test_the_two_hand_copies_use_the_primitive():
 
 @_PROC
 @pytest.mark.parametrize("args, count", [(["status", "--porcelain"], 4), (["add", "-A"], 5)])
-def test_every_git_process_of_a_call_runs_through_the_handles(world, monkeypatch, args, count):
+def test_every_git_process_of_a_call_runs_through_the_handles(world, monkeypatch, args, count,
+                                                              no_namespace):
     """The global, system and effective config reads, the gitlinks read (add) and the command,
     called from a subfolder: all in the top folder's handle, with the git directory's handle.
     MUTATION: start the config reads with cwd=<path> (one process unpinned) - red."""
@@ -188,7 +196,7 @@ def test_every_git_process_of_a_call_runs_through_the_handles(world, monkeypatch
     (["status", "--porcelain", "--untracked-files=all"], "A_ONLY", "B_ONLY"),
 ])
 def test_a_folder_swapped_after_it_was_opened_is_not_followed(world, monkeypatch, args, own,
-                                                             other):
+                                                             other, no_namespace):
     """MUTATION: layout and working folder by path text again - red (B's output)."""
     done = _swap_mid_call(monkeypatch, world.a, world.b)
     proc = gr.run_project_git(args, cwd=str(world.a))

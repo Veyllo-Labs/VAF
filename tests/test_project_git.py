@@ -223,7 +223,10 @@ def test_history_and_rollback_run_the_git_vaf_resolved(monkeypatch, project):
     through the project runner, which starts the resolved one.
     MUTATION: start "git" instead of resolve_git() in vaf.core.git_runner."""
     import vaf.core.git_runner as gr
+    from vaf.core import folder_mount
     ran = []
+    # The argv as started outside a namespace (where the lane runs, it is bwrap's payload).
+    monkeypatch.setattr(folder_mount, "namespace_available", lambda: False)
     monkeypatch.setattr(gr, "resolve_git", lambda: "/opt/vaf/git/bin/git")
     monkeypatch.setattr(gr.subprocess, "run",
                         lambda argv, **kw: ran.append(argv) or subprocess.CompletedProcess(argv, 0, "", ""))

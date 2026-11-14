@@ -306,10 +306,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   folder that was checked, so a program of the account that replaces its project folder with
   a link no longer redirects git's history or commits; project notes no longer leave an empty
   `.vaf` folder in another folder, and git no longer runs on a repository above the checked
-  folder when that folder has no repository of its own. Still open: for commands that read
-  or write the files of the project (status, diff, add, undo, rollback) git looks the folder
-  up again by name for a moment of its own, so such a program can still redirect that one
-  moment, and on macOS and Windows git still runs on the folder's name.
+  folder when that folder has no repository of its own. On Linux git, the coding agent's
+  shell and sandbox environments now also check, inside their own view and before anything
+  runs, that the folder they got is the one that was checked, so such a program can no longer
+  redirect them, not even for a moment; a sandbox environment checks this again each time it
+  starts. On macOS and Windows, and on Linux without a working bubblewrap, git still runs on
+  the folder's name. Where bubblewrap is installed but cannot start (inside a container, for
+  example), the coding agent's shell now uses its Docker fallback, or says that no sandbox is
+  available, instead of failing every command.
   Needs a restart of VAF.
 - **The agent's file tools stay out of VAF's own data and your shell start files.** Reading
   VAF's data and settings folders (messages, mail, contacts, key files, the MCP server list,

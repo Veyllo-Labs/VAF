@@ -12,9 +12,18 @@ shell is not real security, so we confine with the KERNEL instead:
   workspace is bind-mounted read-write (edits persist); the system is read-only; the
   VAF repo, the home directory, ~/.vaf, secrets and the docker socket are NOT mounted,
   so they simply do not exist for the command. FS writes are kernel-confined to the
-  workspace. Host tools are available; the network is not (see below).
-- Otherwise (no bwrap / macOS-todo / Windows): fall back to a container with ONLY the
-  workspace mounted and no network. Same confinement.
+  workspace. Host tools are available; the network is not (see below). The jail is built
+  by `vaf.core.folder_mount`: the judged workspace is held as a handle, bound by name on the
+  jail's own root, and checked inside the jail, before the command, to be the folder that
+  was judged (a folder swapped for a link in that moment is refused, rc -2). Measured under a
+  racer looping rename-and-link: the plain `--bind <path>` showed the other folder in 3 of
+  1000 starts, with the check in 0 of 300 shell starts (and 0 of 1000 git starts). Whether the jail can start at all is that module's
+  one probe (`namespace_available`), so a host whose bwrap cannot make a namespace takes the
+  container below instead of failing every command.
+- Otherwise (no working bwrap / macOS / Windows): fall back to a container with ONLY the
+  workspace mounted and no network. Same confinement. On a docker daemon that shares this
+  kernel the same check runs in the container before the command; NAMED BOUNDARY: a daemon in
+  a VM (Docker Desktop) shows other folder numbers, so there the mount stays by name.
 - No sandbox available at all: refuse. We never run a raw, unconfined host shell,
   which had no path guard and could overwrite VAF's core.
 
@@ -42,6 +51,8 @@ import subprocess
 import uuid
 from typing import Tuple
 
+from vaf.core import folder_mount
+
 # The workspace guard (VAF's code, VAF's state, the home directory's configuration, HOME and
 # / are refused) is the core one, shared with the sandbox environments' project mount.
 from vaf.core.workspace_guard import assert_safe_workspace as _assert_safe_workspace  # noqa: E402
@@ -57,7 +68,7 @@ def _docker_kwargs() -> dict:
 
 
 def _bwrap_available() -> bool:
-    return platform.system() == "Linux" and shutil.which("bwrap") is not None
+    return folder_mount.namespace_available()
 
 
 def _docker_available() -> bool:
@@ -97,33 +108,21 @@ def _wrap_timeout(command: str, timeout: int) -> str:
     return f"timeout -s KILL {int(timeout)} sh -c {shlex.quote(command)}"
 
 
-def _build_bwrap_argv(workspace: str, command: str, timeout: int) -> list:
-    argv = [
-        "bwrap",
-        "--clearenv",                     # drop the tray env (API keys/tokens) - re-inject basics below
-        "--die-with-parent",
-        "--unshare-pid",
-        "--unshare-net",                  # no host loopback: the memory DB / VAF API / secrets are unreachable
-        "--proc", "/proc",
-        "--dev", "/dev",
-        "--tmpfs", "/tmp",
-        "--bind", workspace, workspace,   # the workspace: read-write, persists to host
-        "--chdir", workspace,
-        "--setenv", "HOME", workspace,    # so ~/... resolves inside the jail, not the host home
-        "--setenv", "PYTHONIOENCODING", "utf-8",
-    ]
+def _build_bwrap_argv(held: "folder_mount.HeldFolder", workspace: str) -> list:
+    """The jail around the command: `folder_mount.namespace_argv` (system folders read-only,
+    the held workspace read-write at its own path, the jail's own root) plus what the shell
+    adds. --clearenv drops the tray's environment (API keys, tokens) and only the basics are
+    set again; --unshare-net keeps the host loopback (the memory DB, the VAF API) out of
+    reach. The VAF repo, the real HOME, ~/.vaf and the docker socket are deliberately NOT
+    bound: they do not exist for the command."""
+    setenv = [("HOME", workspace),               # ~/... resolves inside the jail
+              ("PYTHONIOENCODING", "utf-8")]
     for var in _ENV_ALLOWLIST:
         val = os.environ.get(var)
         if val is not None:
-            argv += ["--setenv", var, val]
-    # System dirs, read-only. Bind only those that exist (usrmerge layouts vary).
-    for d in ("/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/opt"):
-        if os.path.isdir(d):
-            argv += ["--ro-bind", d, d]
-    # NOTE: the VAF repo, the real HOME, ~/.vaf and the docker socket are deliberately NOT
-    # bound -> invisible/unreachable. Host FS writes are kernel-confined to the workspace.
-    argv += ["--", "/bin/sh", "-c", _wrap_timeout(command, timeout)]
-    return argv
+            setenv.append((var, val))
+    return folder_mount.namespace_argv(held, workspace, unshare_net=True, clearenv=True,
+                                       chdir=workspace, setenv=setenv)
 
 
 def run_in_workspace(base_dir: str, command: str, timeout: int = 180, *, user_scope_id,
@@ -166,13 +165,35 @@ def run_in_workspace(base_dir: str, command: str, timeout: int = 180, *, user_sc
             "with the user's explicit confirmation, not from the coder's workspace shell."
         ), "refused"
 
-    if _bwrap_available():
-        rc, out, err = _run(_build_bwrap_argv(ws, command, timeout), timeout + 20)
-        return rc, out, err, "host-jail (bwrap)"
+    # The folder that was judged, held until the command ends: the jail and the container
+    # check inside, before the command, that the name still shows this very folder.
+    from vaf.core.path_jail import PathEscape
+    moved = (f"Refused: cannot run in {ws}: the folder changed after it was checked "
+             "(a link on the way).")
+    try:
+        held = folder_mount.HeldFolder(ws, expect_folder=ws)
+    except (PathEscape, OSError):
+        return -2, "", moved, "refused"
+    with held:
+        if _bwrap_available():
+            def _start(argv, **kwargs):
+                rc, out, err = _run(argv, timeout + 20, **kwargs)
+                return subprocess.CompletedProcess(argv, rc, out, err)
 
-    if _docker_available():
-        rc, out, err = _run_in_container(ws, command, timeout)
-        return rc, out, err, "container"
+            proc = folder_mount.run_guarded(_build_bwrap_argv(held, ws), held, ws,
+                                            ["/bin/sh", "-c", _wrap_timeout(command, timeout)],
+                                            runner=_start)
+            if folder_mount.guard_refused(proc):
+                return -2, "", moved, "refused"
+            return proc.returncode, proc.stdout, proc.stderr, "host-jail (bwrap)"
+
+        if _docker_available():
+            from vaf.core.containers import docker_shares_kernel
+            identity = held.identity if docker_shares_kernel() else None
+            rc, out, err = _run_in_container(ws, command, timeout, identity=identity)
+            if identity is not None and rc == 125 and folder_mount.GUARD_MARKER in err:
+                return -2, "", moved, "refused"
+            return rc, out, err, "container"
 
     return -2, "", (
         "Refused: no sandbox available (bubblewrap or Docker required). A raw host shell "
@@ -180,15 +201,22 @@ def run_in_workspace(base_dir: str, command: str, timeout: int = 180, *, user_sc
     ), "refused"
 
 
-def _run_in_container(ws: str, command: str, timeout: int) -> Tuple[int, str, str]:
-    """Fallback: fresh container with ONLY the workspace mounted (rw). No host docker."""
+def _run_in_container(ws: str, command: str, timeout: int, *,
+                      identity: str | None = None) -> Tuple[int, str, str]:
+    """Fallback: fresh container with ONLY the workspace mounted (rw). No host docker.
+    With ``identity`` (a daemon on this kernel) the command is led by
+    `folder_mount`'s guard: /workspace must be that folder, or exit 125 and nothing ran.
+    No retry: no pipe crosses into a container, so a refusal cannot be told from a start."""
     name = f"vaf_ws_{uuid.uuid4().hex[:8]}"
+    payload = ["sh", "-c", _wrap_timeout(command, timeout)]
+    if identity is not None:
+        payload = folder_mount.guard_argv("/workspace", identity, payload)
     argv = [
         "docker", "run", "--rm", "--name", name,
         "--user", f"{os.getuid()}:{os.getgid()}" if hasattr(os, "getuid") else "0:0",
         "--network", "none",                       # no host loopback from the fallback container either
         "-v", f"{ws}:/workspace:z", "-w", "/workspace",  # :z relabels for SELinux hosts
-        SANDBOX_IMAGE, "sh", "-c", _wrap_timeout(command, timeout),
+        SANDBOX_IMAGE, *payload,
     ]
     try:
         return _run(argv, timeout + 20)
@@ -199,9 +227,10 @@ def _run_in_container(ws: str, command: str, timeout: int) -> Tuple[int, str, st
             pass
 
 
-def _run(argv: list, hard_timeout: int) -> Tuple[int, str, str]:
+def _run(argv: list, hard_timeout: int, **kwargs) -> Tuple[int, str, str]:
     try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=hard_timeout, **_docker_kwargs())
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=hard_timeout,
+                           **_docker_kwargs(), **kwargs)
         rc = -1 if r.returncode in (124, 137) else r.returncode
         return rc, r.stdout or "", r.stderr or ""
     except subprocess.TimeoutExpired:

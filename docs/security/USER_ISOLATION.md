@@ -548,18 +548,42 @@ commit in 21 of 300 calls, and a new notes manager whose `.vaf` was missing left
 - `.vaf` (and a missing project folder) is made relative to the checked handle of the folder
   above it (`mkdir` with `dir_fd`), so a swap at that moment leaves nothing in the other
   folder (`vaf/core/persistence.py`).
+- git's own text walk, where the private mount lane runs (Linux with a bubblewrap that can
+  start a namespace; `vaf/core/folder_mount.py`): git keeps the git directory as the handle
+  but turns the work tree into a path and changes into it for every command that reads or
+  writes the files, and `git init` writes by path. Every git process now starts in a
+  namespace whose root is its own tmpfs, with the top folder bound at its real path and
+  checked inside, before git starts, to be the folder the handle holds (`dev:ino`). Under the
+  same racer, 1000 status calls: 0 leaks of 958 answered (2 of 957 with the handles alone),
+  and `reset --hard` wrote into the other folder in 0 of 300 calls (2 of 247 before).
+- the jailed shell's `--bind <path>`: the coder's `bash` jail binds the same held folder and
+  runs the same check before the command (0 of 289 starts showed the other folder under the
+  racer; 3 of 1000 with the plain bind), and its docker fallback runs the check in the
+  container on a daemon that shares this kernel.
+- a sandbox environment's mount: every start (create, a restore's `readopt`, a restart after
+  an idle stop, which resolved the stored path anew and mounted whatever it named) opens the
+  stored path as a handle with itself as the expected real path, and on a daemon that shares
+  this kernel `/workspace` must show the handle's `dev:ino` before anything runs, else the
+  container is stopped and the start refused.
 
 NAMED BOUNDARY, what remains, with the numbers above:
-- git's own text walk: git keeps the git directory as the handle, but it turns the work tree
-  into a path and changes into it for every command that reads or writes the files
-  (status, diff, add, checkout, reset, revert), which is where the status and diff leaks
-  above happen. It writes too: a command that writes the work tree (`/undo`,
-  `project_rollback`) can write the project's own files over the swapped-in folder's in
-  that moment; measured, 300 calls each, `reset --hard` wrote into the other folder in 2 of
-  247 answered calls and `checkout -- .` in 0 of 255. `git init`
-  writes the new repository by path too. The fix is a mount namespace that binds the judged
-  folder by handle, built once for the git runner, the jailed shell's `--bind <path>` and a
-  sandbox environment's mount; a follow-up, not built here.
+- no lane: macOS, Windows, and Linux where bubblewrap is missing or cannot make a user
+  namespace (measured: refused inside a default Docker container; Ubuntu's AppArmor
+  restriction on unprivileged user namespaces is unmeasured). git's own text walk then stays
+  as the handles leave it: status 3 of 570 and diff 10 of 868 leaked, `reset --hard` wrote
+  into the other folder in 2 of 247 answered calls, `git init` writes by path. The same holds
+  for a linked worktree (`linked_worktree=True`), which git reaches through its `.git` file.
+- inside the namespace git reads only the person's global config files it is given: an
+  include in them that points elsewhere, or a `core.excludesFile` outside them, is not read
+  there (status may list a file that would be hidden).
+- a docker daemon in a VM (Docker Desktop, Rancher Desktop): containers see other folder
+  numbers, so the shell's fallback and an environment mount by name, unchecked.
+- the `:z` relabel at docker's start: docker relabels the source it resolved before the check
+  inside can refuse, so a folder swapped in during the moment between VAF's open and docker's
+  start is relabelled (`container_file_t`), though nothing runs in it. A relabel through the
+  held handle would close it and needs its own SELinux measurement.
+- `-v` creates a missing source as an empty root-owned folder: a folder renamed away in the
+  moment between VAF's open and docker's start can leave one behind (the start is refused).
 - an entry written inside `.git` after the runner scanned it: an `objects/info/alternates`
   can let `cat-file` read the other repository's object for that call, a `commondir` file
   makes `rev-parse HEAD` print the other repository's commit id (its objects stay out of
@@ -571,8 +595,8 @@ NAMED BOUNDARY, what remains, with the numbers above:
   into it). Neither is measured on its own platform.
 - the code audit (`code_audit` tool, the coder's audit after each commit) gets the per-call
   pin of its git calls only; its file reads and its state writes under `.git/vaf-audit` go by
-  path, and pinning its root once for all three is a follow-up. So do the jailed shell's
-  `--bind <path>` and an environment's mount.
+  path, and pinning its root once for all three is a follow-up. So do the test runner's copy
+  of the project (`sandbox_test_runner`) and `sandbox_transfer`, which read by path.
 
 The chat's own store tools (`update_intent`, `update_working_memory`, `add_task`, and the
 coder's `request_clarification`) used to take a `base_dir` from the call as well: one account

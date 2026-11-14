@@ -48,6 +48,12 @@ ISOLATION, measured on Docker 29.7 before this was written
   what it builds, and nothing reaches the host as root. The scratch environment has none.
   No docker socket and no host path besides the project are ever mounted, and no host
   secret is passed in.
+- The project folder is mounted by name (`-v`, which `:z` needs) and checked at EVERY start
+  (create, `readopt`, a restart after an idle stop, which resolves the stored path anew):
+  before it, the stored path is held as a handle with itself as the expected real path
+  (`_held_mount`); after it, on a daemon that shares this kernel, /workspace must show that
+  handle's `dev:ino` before anything runs (`_check_mount`), else the container is stopped
+  and the start refused. Named boundaries in `vaf.core.folder_mount`.
 - Network profiles, each on the environment's own network:
   - `none`: an `--internal` network created with
     `com.docker.network.bridge.gateway_mode_ipv4=isolated`. A plain internal network
@@ -105,6 +111,7 @@ LIFECYCLE
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import logging
@@ -665,8 +672,62 @@ class EnvironmentManager:
             raise EnvironmentRefused(str(e))
         return p
 
+    @staticmethod
+    def _held_mount(env: Environment):
+        """The project folder held for one start (`vaf.core.folder_mount.HeldFolder`), or None
+        without one. The record stores the resolved path, which is opened with itself as
+        `expect_folder`: a folder swapped for a link anywhere on the way, or gone, is refused
+        before docker resolves the name. `docker start` resolves the stored path again on
+        every start (measured: a folder renamed aside and linked elsewhere while the
+        environment was stopped was mounted, and relabelled with `:z`, at the next start)."""
+        if not env.project_path:
+            return None
+        from vaf.core.folder_mount import HeldFolder
+        from vaf.core.path_jail import PathEscape
+        try:
+            return HeldFolder(env.project_path, expect_folder=env.project_path)
+        except (PathEscape, OSError):
+            raise EnvironmentRefused(f"{env.project_path} is not the folder this environment "
+                                     f"was made for (a link on the way, or it is gone); "
+                                     f"nothing was started") from None
+
+    @staticmethod
+    def _check_mount(env: Environment, held) -> None:
+        """Right after a start, before anything else runs in the container: /workspace must
+        be the held folder (same `dev:ino`). Asked only of a daemon on this kernel
+        (`containers.docker_shares_kernel`); a daemon in a VM shows other numbers, and its
+        mount stays by name. On any other answer the container is stopped at once and the
+        start refused. The container's own process is `sleep infinity` under `--init`, so
+        nothing of the account has run before this check."""
+        if held is None or not containers.docker_shares_kernel():
+            return
+        try:
+            r = containers.docker(["exec", env.container, "stat", "-L", "-c", "%d:%i", WORKSPACE],
+                                  timeout=30)
+            seen = (r.stdout or "").strip() if r.returncode == 0 else ""
+        except Exception:
+            seen = ""
+        if seen != held.identity:
+            try:
+                containers.docker(["stop", "-t", "0", env.container], timeout=60)
+            except Exception:
+                pass
+            raise EnvironmentRefused(f"the folder mounted at {WORKSPACE} is not "
+                                     f"{env.project_path} (it changed while the environment "
+                                     f"started); nothing ran in it")
+
     def _start_new(self, env: Environment, *, memory_mb: int, cpus: float,
                    host_gateway: bool = False) -> None:
+        held = self._held_mount(env)
+        try:
+            self._start_new_held(env, held, memory_mb=memory_mb, cpus=cpus,
+                                 host_gateway=host_gateway)
+        finally:
+            if held is not None:
+                held.close()
+
+    def _start_new_held(self, env: Environment, held, *, memory_mb: int, cpus: float,
+                        host_gateway: bool) -> None:
         labels = self._labels(env)
         if env.network in ("none", "registries"):
             ok = containers.ensure_network(env.net, internal=True, labels=labels,
@@ -704,7 +765,10 @@ class EnvironmentManager:
         if env.project_path:
             # :z relabels the project for SELinux (enforcing on this kind of host);
             # assert_safe_workspace already refused HOME and /, which must never be
-            # relabelled.
+            # relabelled. The source stays a name (`:z` needs `-v`); `_check_mount` asks
+            # afterwards what docker mounted. NAMED BOUNDARY: docker relabels before that
+            # check, so a folder swapped in during the moment between `_held_mount` and
+            # docker's start is relabelled, though nothing runs in it.
             args += ["-v", f"{env.project_path}:{WORKSPACE}:z"]
         elif env.volume:
             args += ["-v", f"{env.volume}:{WORKSPACE}"]
@@ -721,6 +785,7 @@ class EnvironmentManager:
         if r.returncode != 0:
             raise EnvironmentRefused(f"the environment could not be started: "
                                      f"{(r.stderr or '').strip()[:300]}")
+        self._check_mount(env, held)
         env.state = "running"
         if env.network == "registries":
             self._attach_proxy(env)
@@ -893,10 +958,13 @@ class EnvironmentManager:
             if free is not None and free < int(setting("min_free_mb")):
                 raise EnvironmentRefused(f"not enough free memory to start it ({free} MB, the "
                                          f"floor is {setting('min_free_mb')} MB)")
-        r = containers.docker(["start", env.container], timeout=60)
-        if r.returncode != 0:
-            raise EnvironmentRefused(f"the environment could not be started: "
-                                     f"{(r.stderr or '').strip()[:200]}")
+        # A restart after an idle stop resolves the stored path again, like a new start.
+        with (self._held_mount(env) or contextlib.nullcontext()) as held:
+            r = containers.docker(["start", env.container], timeout=60)
+            if r.returncode != 0:
+                raise EnvironmentRefused(f"the environment could not be started: "
+                                         f"{(r.stderr or '').strip()[:200]}")
+            self._check_mount(env, held)
         env.state = "running"
         if env.network == "registries":
             self._attach_proxy(env)
@@ -1909,7 +1977,12 @@ class EnvironmentManager:
                     raise EnvironmentRefused("the environment image could not be built")
                 fields = {k: v for k, v in st.items() if k in Environment.__dataclass_fields__}
                 env = Environment(**fields)
-                env.id, env.owner, env.project_path = env_id, owner, mount
+                # The record's own spelling, not the resolved one: it stores the resolved path,
+                # so one that leads through a link now is refused by `_held_mount` in
+                # `_start_new` instead of followed.
+                env.id, env.owner = env_id, owner
+                env.project_path = (os.path.abspath(os.path.expanduser(str(st["project_path"])))
+                                    if mount else "")
                 env.container, env.volume, env.net = self._names(env_id, owner, mount)
                 network = env.network if env.network in NETWORKS else NETWORKS[0]
                 cap = self._network_cap()

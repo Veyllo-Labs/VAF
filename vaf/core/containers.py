@@ -154,6 +154,36 @@ def mem_available_mb() -> Optional[int]:
     return None
 
 
+_SHARES_KERNEL: Optional[bool] = None
+_SHARES_KERNEL_LOCK = threading.Lock()
+
+
+def docker_shares_kernel() -> bool:
+    """True when the docker daemon runs on this very kernel (Linux, `KernelVersion` equal to
+    `platform.release()`). Only then does a container see a bind mount with the host's
+    `st_dev:st_ino` numbers (measured equal on a native daemon), so only then can
+    `vaf.core.folder_mount`'s guard check inside a container that it got the folder that was
+    checked. A daemon in a VM (Docker Desktop, Rancher Desktop) shows other numbers and the
+    guard would refuse every mount: there the mount stays by name (a named boundary of
+    `folder_mount`). An answer of the daemon is kept for the process; no answer is False and
+    is asked again next time."""
+    global _SHARES_KERNEL
+    if not sys.platform.startswith("linux"):
+        return False
+    with _SHARES_KERNEL_LOCK:
+        if _SHARES_KERNEL is not None:
+            return _SHARES_KERNEL
+        try:
+            r = docker(["info", "--format", "{{.KernelVersion}}"], timeout=20)
+        except Exception:
+            return False
+        if r.returncode != 0 or not (r.stdout or "").strip():
+            return False
+        import platform
+        _SHARES_KERNEL = (r.stdout or "").strip() == platform.release()
+        return _SHARES_KERNEL
+
+
 # -- running inside a container ----------------------------------------------------
 # A run started with `docker exec` keeps running when the docker client is killed, so
 # a timeout or a Stop has to end it INSIDE the container. Every run VAF starts carries

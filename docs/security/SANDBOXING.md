@@ -357,7 +357,7 @@ services (`vaf repair --check`, `vaf top`, the Update and Repair dialog; see
 | **Ownership** | The owner label, checked on every operation. Another person's environment answers like a missing one, so ids cannot be probed. An admin may list and delete it, never run anything in it. A missing scope means the machine owner (the rule of `config.resolve_caller_username`); with no owner configured the call is refused. The shared "no scope" bucket of the old sandbox does not come back. |
 | **Process** | Non-root: the caller's uid:gid on Linux, so files in a mounted project stay theirs, and the image's uid 10001 elsewhere. `--init`, `--cap-drop ALL`, `no-new-privileges`, `--pids-limit`, `--memory`, `--cpus`. No docker socket, no host path besides the project, no host secret. |
 | **Root lane** | For the coder only: `bash(as_root=true)` runs ONE command as root inside a temporary or project environment, so it can install system packages for what it builds. Such an environment is created with six capabilities added back (`ROOT_LANE_CAPS`: CHOWN, DAC_OVERRIDE, FOWNER, FSETID, SETUID, SETGID), which only a root process can use: the environment's own user has no ambient capabilities and `no-new-privileges` keeps setuid from granting any. Measured: with every capability dropped a root `apt-get` fails; with these six it updates and installs, while the environment's user still cannot write a system folder. What a root command leaves in `/workspace` is handed back to the environment's user at once, because a mounted project is the person's own folder and a root-owned file there could not be removed without sudo. First the setuid and setgid bits come off every file there, whoever owns it: a mounted project is a folder on the host, and a setuid file left in it would be a way to root on this machine (measured: a root-copied `sh` with mode 4755 ends up the person's, without the bit). A give-back that fails is reported in the command's result, never swallowed. The root command and its give-back carry a run marker like every other run, and the reaper asks for markers as root as well as as the environment's user, because each reads only its own processes' environment (no `CAP_SYS_PTRACE`): asked as the user alone, it stopped an environment in the middle of a root `apt-get`. The `registries` network lets the image's own apt sources through (`deb.debian.org`, `security.debian.org`). **Named boundaries:** the main agent's `sandbox_exec` and `vaf env exec` have no root lane, the scratch environment has none, an environment created before the lane existed refuses (create a new one), and nothing ever runs as root on the host. |
-| **Project mount** | `-v <project>:/workspace:z`. `:z` relabels the directory for SELinux, which is enforcing on Fedora-family hosts. The path must pass `is_unsafe_project_dir`, `assert_safe_workspace` (VAF's code and VAF's own state, each in either direction, the home directory, every folder above it such as `/home`, and `/` are refused, which is what keeps `:z` away from them) and the person's file jail. |
+| **Project mount** | `-v <project>:/workspace:z`. `:z` relabels the directory for SELinux, which is enforcing on Fedora-family hosts. The path must pass `is_unsafe_project_dir`, `assert_safe_workspace` (VAF's code and VAF's own state, each in either direction, the home directory, every folder above it such as `/home`, and `/` are refused, which is what keeps `:z` away from them) and the person's file jail. The record stores the resolved path, and every start checks it again (`vaf.core.folder_mount`): a new one (create, a restore's `readopt`) and a restart after an idle stop, because `docker start` resolves the stored path anew each time (measured: a folder renamed aside and linked elsewhere while the environment was stopped was mounted, and relabelled, at the next start). Before the start the path is opened as a handle with itself as the expected real path, so a link anywhere on the way, or a missing folder, refuses with nothing started; after it, on a daemon that shares this kernel, `/workspace` must show the handle's `dev:ino` before anything runs in the container, else the container is stopped and the start refused (`EnvironmentRefused`). Named boundaries: a daemon in a VM (Docker Desktop) shows other numbers, so there the mount is not checked after the start; and docker relabels the source it resolved before that check can refuse, so a folder swapped in during the moment between VAF's open and docker's start is relabelled, though nothing runs in it. |
 | **Limits** | `sandbox_env_*` in [CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md), all admin-only. A refusal names its reason. |
 
 **Network profiles, measured on Docker 29.7.** Every environment has its own network.
@@ -629,9 +629,20 @@ command is confined by the **kernel**:
   docker socket are simply **not mounted** - they do not exist for the command. The environment
   is `--clearenv`'d and only non-secret basics (`PATH`, `LANG`, ...) are re-injected, so tray
   API keys never leak. The network is `--unshare-net`'d, so host-loopback services (the memory
-  DB on `5432`, the VAF API) are unreachable from the jail.
-- **Fallback (no bwrap):** a fresh container with **only** the workspace mounted (`-v ws:/workspace`)
-  and `--network none`. Same confinement, minus host access.
+  DB on `5432`, the VAF API) are unreachable from the jail. The workspace is the folder that
+  was judged: it is held as a handle, bound by name on the jail's own root
+  (`vaf.core.folder_mount`), and checked inside the jail, before the command, to show the
+  handle's `dev:ino`; a folder swapped for a link in that moment is refused (rc -2), and a
+  start the check refused is repeated at most twice, never once the command ran. Measured
+  under a process looping rename-and-link: the plain `--bind <path>` showed the other folder
+  in 3 of 1000 starts, with the check 0 of 289. Whether the jail can start at all is one real
+  probe start per process (`namespace_available`), so a host whose bwrap cannot make a
+  namespace takes the fallback below instead of failing every command.
+- **Fallback (no working bwrap):** a fresh container with **only** the workspace mounted
+  (`-v ws:/workspace`) and `--network none`. Same confinement, minus host access. On a docker
+  daemon that shares this kernel the same check runs in the container before the command;
+  named boundary: a daemon in a VM (Docker Desktop) shows other folder numbers, so there the
+  mount is by name.
 - **No sandbox at all:** the tool **refuses**. A raw, unconfined host shell is never run, and
   `bash` also refuses if no project workspace is bound (it would otherwise root the jail at `$HOME`).
 - **No network, also not for a dependency repository** (named boundary, in the module docstring
@@ -711,7 +722,12 @@ the real path the caller judged (`expect_folder`), the top and its `.git` are op
 `/proc/self/fd/<top>` with `--git-dir=/proc/self/fd/<git>` and `GIT_COMMON_DIR` on that handle
 (`pass_fds`). A process in a sandbox environment that renamed the project folder aside and
 linked another account's repository in its place made `git log` print that history in 21 of
-300 calls before; with the pin, 0 of 930. A repository
+300 calls before; with the pin, 0 of 930. Where the private mount lane runs (Linux with a
+bubblewrap that can start a namespace, not for a linked worktree), every git process starts in
+a namespace of its own instead: its root is its own tmpfs, the top folder is bound at its
+real path and checked inside, before git starts, to be the folder the handle holds (the same
+check as the jailed shell's), and git works there with `--work-tree=<top>` and the git
+handle. A repository
 the model makes inside the project with `git init` would have git start a child git there,
 reading that repository's own config; status and diff ignore submodules, `add` excludes every
 gitlink and `stash create` is refused while one exists. The full list is in
@@ -728,20 +744,24 @@ fallback is `--rm`), but a process in a running sandbox environment with the pro
 can. Hooks, the fsmonitor, textconv, external diff and signing are pinned without a name and
 do not race.
 
-Named boundary: the folder pin stops at git's own text walk. git turns the work tree into a
-path and changes into it for every command that reads or writes the files, so under a racer
-looping rename-and-link `git status` still leaked in 3 of 570 calls and `git diff` in 10 of
-868 (`git log` 0 of 930), and a command that writes the work tree can write the project's
-own files into the swapped-in folder: `reset --hard` (`project_rollback`) did in 2 of 247
-answered calls, `checkout -- .` (as `/undo` runs it) in 0 of 255. `git init` writes the new
-repository by path. With `expect_folder` the checked folder must hold its own `.git`, decided
-once: git never runs on a repository above it, not even when `.git` disappears during the
-call. An entry written inside `.git` right after the runner scanned it (alternates, a
-`commondir`) is read for that
-call. macOS and Windows run git by path after a comparison before each process. The jailed
-shell's `--bind <path>` and an environment's mount are by path as well; one mount-namespace
-primitive that binds the judged folder by handle would close all three, and it is a
-follow-up. Details and numbers: the `vaf/core/git_runner.py` docstring.
+git's own text walk is closed where that lane runs. git turns the work tree into a path and
+changes into it for every command that reads or writes the files; under a racer looping
+rename-and-link, the handle pin alone still let `git status` leak in 3 of 570 calls (2 of
+957 in this round's run) and `git diff` in 10 of 868, and `reset --hard` (`project_rollback`)
+wrote the project's files into the swapped-in folder in 2 of 247 answered calls. Inside the
+namespace the path names only the bound folder: 0 leaks of 958 answered status calls and 0
+writes in 300 `reset --hard` calls under the same racer, at about 20 ms more per git call.
+With `expect_folder` the checked folder must hold its own `.git`, decided once: git never
+runs on a repository above it, not even when `.git` disappears during the call.
+
+Named boundary, what remains: where the lane does not run (macOS, Windows, Linux without a
+working bubblewrap, a linked worktree) git's text walk stays as measured above, and `git
+init` writes the new repository by path; macOS and Windows run git by path after a
+comparison before each process. An entry written inside `.git` right after the runner
+scanned it (alternates, a `commondir`) is read for that call. Inside the namespace git reads
+only the global config files it is given, so an include of them that points elsewhere is not
+there. Details and numbers: the `vaf/core/git_runner.py` and `vaf/core/folder_mount.py`
+docstrings.
 
 **In a sandbox environment** (the coder bound with `coding_agent(environment=...)`, or one
 exists for its project folder) none of the above applies as written: `bash` runs in that

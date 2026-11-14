@@ -16,9 +16,9 @@ from types import SimpleNamespace
 import pytest
 
 import vaf.tools.workspace_exec as wx
+from vaf.core import folder_mount
 from vaf.tools.workspace_exec import (
     _assert_safe_workspace,
-    _build_bwrap_argv,
     _invokes_docker,
     run_in_workspace,
 )
@@ -83,18 +83,45 @@ def test_refuses_when_no_sandbox_available(tmp_path, monkeypatch):
     assert "no sandbox" in err.lower()
 
 
-def test_bwrap_argv_is_locked_down(tmp_path):
-    ws = str(tmp_path)
-    argv = _build_bwrap_argv(ws, "echo x", 60)
-    # workspace is a read-write bind
-    assert any(a == "--bind" and argv[i + 1] == ws for i, a in enumerate(argv)), "workspace must be --bind (rw)"
+def _starting_run(ran):
+    """A stand-in for `_run` that records and reports a start the way the folder guard does:
+    one byte into the started pipe (`folder_mount.run_guarded` repeats a start without it)."""
+    def _run(argv, hard_timeout, **kwargs):
+        ran.append(argv)
+        for fd in kwargs.get("pass_fds", ()):
+            os.write(fd, b"x")
+        return 0, "ok", ""
+    return _run
+
+
+def test_bwrap_argv_is_locked_down(tmp_path, monkeypatch):
+    """The argv the shell really starts. MUTATION: start the jail without the folder guard -
+    red."""
+    ws = os.path.realpath(tmp_path)
+    ran = []
+    monkeypatch.setattr(wx, "_bwrap_available", lambda: True)
+    monkeypatch.setattr(wx, "_run", _starting_run(ran))
+    rc, out, err, mode = run_in_workspace(ws, "echo x", **_NO_ACCOUNT)
+    assert (rc, mode) == (0, "host-jail (bwrap)") and len(ran) == 1
+    argv = ran[0]
+    # workspace is a read-write bind, on the jail's own root
+    bind = argv.index("--bind")
+    assert argv[bind + 1:bind + 3] == [ws, ws], "workspace must be --bind (rw)"
+    assert "--dev-bind" not in argv
+    # the guard runs first inside, with the held folder's identity, then the command
+    cut = argv.index("--")
+    assert cut > bind
+    assert argv[cut + 1:cut + 4] == ["/bin/sh", "-c", folder_mount.GUARD]
+    st = os.stat(ws)
+    assert argv[cut + 5:cut + 7] == [ws, f"{st.st_dev}:{st.st_ino}"]
+    assert argv[cut + 8:cut + 10] == ["/bin/sh", "-c"] and "echo x" in argv[cut + 10]
     # VAF source and docker socket are never mounted; env is cleared; network is unshared
     assert VAF_ROOT not in argv
     assert not any("docker.sock" in a for a in argv)
     assert "--clearenv" in argv, "env must be cleared so tray secrets do not leak"
+    assert argv.index("--clearenv") < argv.index("--setenv"), "bwrap applies them in order"
     assert "--unshare-net" in argv, "host loopback (memory DB / API / secrets) must be unreachable"
-    # no secret env var is re-injected
-    assert not any(str(v).lower() in ("--setenv",) and False for v in argv)
+    assert "--unshare-pid" in argv and "--die-with-parent" in argv
 
 
 # --- real confinement (bubblewrap required) --------------------------------
@@ -195,7 +222,7 @@ def accounts(tmp_path, monkeypatch):
     b_proj.mkdir(parents=True)
     ran = []
     monkeypatch.setattr(wx, "_bwrap_available", lambda: True)
-    monkeypatch.setattr(wx, "_run", lambda argv, *a, **k: ran.append(argv) or (0, "ok", ""))
+    monkeypatch.setattr(wx, "_run", _starting_run(ran))
     yield SimpleNamespace(a_proj=a_proj, b_proj=b_proj, systemp=systemp, ran=ran)
     fs._shared_room_roots_cache.clear()
 

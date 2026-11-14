@@ -7,6 +7,7 @@ the dismiss/show round trip. The model is the fake reviewer of test_code_audit.p
 """
 import json
 import shutil
+import subprocess
 
 import pytest
 from typer.testing import CliRunner
@@ -144,7 +145,10 @@ def test_a_linked_worktree_is_audited_only_with_the_flag(repo, model, tmp_path):
     """A `.git` file can point anywhere, so a linked worktree is refused unless the person says
     it is theirs. MUTATION: do not pass --linked-worktree on to code_audit."""
     wt = tmp_path / "wt"
-    ca._git(str(repo), "worktree", "add", "-q", "-b", "side", str(wt))
+    # Plain git: the project runner writes only inside the folder it holds, and the new
+    # worktree lies outside it.
+    subprocess.run(["git", "worktree", "add", "-q", "-b", "side", str(wt)], cwd=str(repo),
+                   check=True, capture_output=True)
     _change(wt, "app.py", BUGGY)
     refused = _run(wt, "--uncommitted")
     assert refused.exit_code == 2 and "linked worktree" in refused.output, refused.output

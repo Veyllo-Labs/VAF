@@ -43,19 +43,40 @@ is refused). Measured with a racer looping
 rename-and-link, 1000 calls each: log 0 leaks of 930 answered (6 of 992 before), status 3 of
 570 (10 of 629), diff 10 of 868 (20 of 865).
 
-NAMED BOUNDARY, what the handles do not reach, with those numbers:
-- git's own text walk of the work tree. git keeps `--git-dir=/proc/self/fd/<n>` as given, but
-  it turns the work tree into a path (a realpath of the magic link) and every command that
-  sets up a work tree (status, diff, add, checkout, revert, reset) then changes into that
-  path: the status and diff leaks above are in the microseconds between the two (strace).
-  That moment reads AND writes: a command that writes the work tree (checkout, reset,
-  revert; `/undo` and `project_rollback`) can write the project's own files into the
-  swapped-in folder. Measured, 300 calls each with `expect_folder`: `reset --hard` wrote into
-  the other folder in 2 of 247 answered calls, `checkout -- .` in 0 of 255. A log,
-  rev-parse, cat-file or config call stays fully pinned. `git init` writes the new
-  repository by path too. Closing that needs the folder bound by handle in a mount namespace
-  of git's own, one primitive for this runner, the jailed shell's `--bind <path>` and a
-  sandbox environment's mount; not built here.
+git's own text walk is closed where the private mount lane runs (Linux with a bubblewrap that
+can start a namespace, `vaf.core.folder_mount.namespace_available`; not for
+`linked_worktree`). git keeps `--git-dir=/proc/self/fd/<n>` as given, but it turns the work
+tree into a path and every command that sets up a work tree (status, diff, add, checkout,
+revert, reset) changes into that path, and `git init` writes the new repository by path. So
+every process of the call starts in a bwrap namespace whose root is its own tmpfs, holding the
+system folders read-only, the hooks folder and the person's global git config read-only, and
+the top folder bound read-write at its real path, the only place git can write there (the
+root is read-only, with no scratch /tmp, so a command that writes outside the folder, such as
+`worktree add <elsewhere>`, fails instead of writing into the namespace's memory and losing
+it); `vaf.core.folder_mount`'s guard checks
+inside, before git starts, that this path is the very folder the top handle holds (`dev:ino`),
+and git runs there with `--work-tree=<top>` and the git handle as before. A start the guard
+refused is repeated (at most three starts, never once git ran) and then refused, "a link on
+the way". Inside the namespace the path names only the bound folder: a rename or a link on the
+host after the mount does not reach it. Measured, the same racer, 1000 status calls: 0 leaks
+of 958 answered with the lane (2 of 957 with the handles alone), and `reset --hard` wrote into
+the other folder in 0 of 300 calls. The price is one namespace start per git process: about 20
+ms more per call (24 against 5 ms for a status, four processes, measured under the lowest CPU
+priority on four cores).
+
+NAMED BOUNDARY, what the handles do not reach where the lane does not run (macOS, Windows,
+Linux without a working bubblewrap, `linked_worktree`), with the numbers above:
+- git's own text walk of the work tree, as described above: the status and diff leaks above
+  are in the microseconds between git's realpath and its change into the path (strace). That
+  moment reads AND writes: a command that writes the work tree (checkout, reset, revert;
+  `/undo` and `project_rollback`) can write the project's own files into the swapped-in
+  folder. Measured, 300 calls each with `expect_folder`: `reset --hard` wrote into the other
+  folder in 2 of 247 answered calls, `checkout -- .` in 0 of 255. A log, rev-parse, cat-file
+  or config call stays fully pinned. `git init` writes the new repository by path.
+- where the lane runs, git reads only the global config files it is given: an include in
+  them that points elsewhere, or a `core.excludesFile` outside them, is not there inside the
+  namespace (status may then list a file that file would hide; a driver such an include
+  names does not run, in the reads and the command alike).
 - entries written inside `.git` after `_foreign_link` scanned it: an `objects/info/alternates`
   written in that moment let `cat-file` read the other repository's object; a `commondir`
   file makes `rev-parse HEAD` print the other repository's commit id (its objects stay out
@@ -71,7 +92,7 @@ NAMED BOUNDARY, what the handles do not reach, with those numbers:
   to `expect_folder`, when one is given; git runs by path.
 - `rev-parse --git-dir` and `--git-common-dir` print the handle spelling (`/proc/self/fd/<n>`,
   meaningless outside that git process); `--absolute-git-dir` and `--show-toplevel` print
-  the real paths.
+  the real paths, inside the namespace too.
 
 NAMED BOUNDARY, the driver race: the names of the filter and merge drivers are read in one git
 call and switched off in the next, and a process writing `.git/config` at the same time can add
@@ -383,6 +404,9 @@ class _Pin:
     - by handle (Linux): the top folder and its `.git` are open handles, and every process
       runs in `/proc/self/fd/<top>` with `--git-dir=/proc/self/fd/<git>`,
       `--work-tree=/proc/self/fd/<top>` and `GIT_COMMON_DIR` on the git handle (`pass_fds`);
+      where the private mount lane runs (`namespace`), every process starts in that
+      namespace instead, with the top bound at its real path and checked inside to be the
+      held folder, `--work-tree=<top>` and the same git handle;
     - by path with handles (macOS: handles and a kernel path, no `/proc`): the folders are
       opened and compared the same way, and before each process the path must still name
       the opened folder (`samestat`), else the call is refused; git then runs by path;
@@ -401,6 +425,9 @@ class _Pin:
         # A linked worktree with expect_folder: git finds the `.git` file itself, and must
         # not search above the judged folder when it is gone (GIT_CEILING_DIRECTORIES).
         self.ceiling: Optional[str] = None
+        # The top held for the private mount namespace (`vaf.core.folder_mount`), set where
+        # that lane runs; git then works on the top bound at its own path.
+        self.namespace = None
         self._fds: List[int] = []
 
     def own(self, fd: int) -> int:
@@ -417,6 +444,10 @@ class _Pin:
             os.close(self._fds.pop())
 
     def work_tree(self) -> str:
+        if self.namespace is not None:
+            # Inside the namespace the real path names only the bound folder; git realpaths
+            # it to the same text, so `--show-toplevel` and a subfolder's pathspec stay real.
+            return self.top
         return f"/proc/self/fd/{self.top_fd}" if self.by_handle else Path(self.top).as_posix()
 
     def git_dir(self) -> str:
@@ -460,6 +491,22 @@ class _Pin:
             env = {**env, "GIT_COMMON_DIR": self.git_dir()}
         if self.ceiling is not None:
             env = {**env, "GIT_CEILING_DIRECTORIES": self.ceiling}
+        if self.namespace is not None:
+            from vaf.core import folder_mount
+            if shutil.which(argv[0], path=env.get("PATH")) is None:
+                # Started inside the jail a missing git is the guard's exit 127; outside it
+                # was FileNotFoundError, which the caller reports as "Git is not installed."
+                raise FileNotFoundError(argv[0])
+            kwargs = _popen_kwargs("/", env, timeout)
+            if self.git_fd >= 0:
+                kwargs["pass_fds"] = (self.git_fd,)
+            proc = folder_mount.run_guarded(
+                folder_mount.namespace_argv(self.namespace, self.top, extra_ro=_namespace_ro(),
+                                            scratch_tmp=False, readonly_root=True),
+                self.namespace, self.top, list(argv), **kwargs)
+            if folder_mount.guard_refused(proc):
+                raise ProjectGitRefused(proc.stderr)
+            return proc
         kwargs = _popen_kwargs(self.work_tree(), env, timeout)
         if self.by_handle:
             kwargs["pass_fds"] = tuple(fd for fd in (self.top_fd, self.git_fd) if fd >= 0)
@@ -555,6 +602,50 @@ def _pin_by_handle(pin: _Pin, sub: str, linked_worktree: bool, expect_folder) ->
         problem = _foreign_link(pin.git_dir() if pin.by_handle else os.path.join(real, ".git"))
         if problem:
             raise ProjectGitRefused(f"{top}: {problem}")
+    if pin.by_handle and not linked_worktree:
+        from vaf.core import folder_mount
+        if folder_mount.namespace_available():
+            # The handle the pin judged, so the identity the guard checks is that folder's.
+            pin.namespace = folder_mount.HeldFolder.adopt(pin.top_fd, pin.top)
+
+
+def _namespace_ro() -> List[str]:
+    """What git reads outside the project inside its namespace, bound read-only where it
+    exists: the empty hooks folder, a git installed outside the system folders (its install
+    prefix, `<prefix>/bin/git`, so its helpers and libraries come along; the executable alone
+    when that prefix is the home folder or above it), and the person's global (and a moved
+    system) config, so the driver reads and the command see the same trusted files as on the
+    host. `/etc/gitconfig` is in /etc."""
+    from vaf.core.folder_mount import SYSTEM_DIRS
+    ro = [empty_hooks_dir()]
+    home = os.path.expanduser("~")
+
+    def _outside_system(path: str) -> bool:
+        return not any(path == d or path.startswith(d + "/") for d in SYSTEM_DIRS + ("/dev", "/proc"))
+
+    def _install_root(path: str) -> str:
+        root = os.path.dirname(os.path.dirname(path))
+        real_home = os.path.realpath(home)
+        if root in ("", "/") or real_home == root or real_home.startswith(root.rstrip("/") + "/"):
+            return path
+        return root
+
+    exe = resolve_git()
+    if os.path.isabs(exe):
+        for p in dict.fromkeys((exe, os.path.realpath(exe))):
+            if _outside_system(p):
+                ro.append(_install_root(p))
+    global_config = os.environ.get("GIT_CONFIG_GLOBAL")
+    if global_config:
+        ro.append(os.path.abspath(os.path.expanduser(global_config)))
+    else:
+        ro.append(os.path.join(home, ".gitconfig"))
+        xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.join(home, ".config")
+        ro.append(os.path.join(xdg, "git"))
+    system_config = os.environ.get("GIT_CONFIG_SYSTEM")
+    if system_config:
+        ro.append(os.path.abspath(os.path.expanduser(system_config)))
+    return [p for p in ro if os.path.isabs(p) and _outside_system(p)]
 
 
 def _pin_by_path(pin: _Pin, sub: str, linked_worktree: bool) -> None:
@@ -687,7 +778,9 @@ def project_git_command(args: Sequence[str], cwd: str, *, env: Optional[Dict[str
     the runner holds the folders by handle (Linux), it starts this same argv with
     `/proc/self/fd/<n>` in place of the two paths. Raises ValueError (ProjectGitRefused among
     them) for a layout the runner will not follow or a driver name that cannot be pinned on a
-    command line, RuntimeError when the names cannot be read."""
+    command line, RuntimeError when the names cannot be read. Where the private mount lane
+    runs (`vaf.core.folder_mount`), the runner starts it inside that namespace, with the top's
+    real path as the work tree and the git directory's handle."""
     env = project_git_env() if env is None else env
     pin = _Pin(cwd)
     _, sub, _ = _split_args(args)

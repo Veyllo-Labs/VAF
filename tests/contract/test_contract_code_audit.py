@@ -70,3 +70,19 @@ def test_a_model_that_answers_nothing_usable_fails_the_run(tmp_path):
 def test_it_never_raises_outside_a_repository(tmp_path):
     report = vaf.code_audit(str(tmp_path), ask=_ask)
     assert report.status == "failed"
+
+
+def test_expect_folder_pins_the_folder_that_was_judged(tmp_path):
+    """`expect_folder` is the real path the caller judged: the same folder audits as before,
+    any other folder fails the run instead of being audited."""
+    import os
+    repo = os.path.realpath(str(_repo(tmp_path)))
+    report = vaf.code_audit(repo, scope="uncommitted", ask=_ask, remember=False,
+                            expect_folder=repo)
+    assert report.status == "complete" and report.exit_code() == 1
+    other = tmp_path / "other"
+    other.mkdir()
+    refused = vaf.code_audit(repo, scope="uncommitted", ask=_ask, remember=False,
+                             expect_folder=os.path.realpath(str(other)))
+    assert isinstance(refused, vaf.AuditReport)
+    assert refused.status == "failed" and refused.findings == [] and refused.exit_code() == 2

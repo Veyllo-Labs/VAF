@@ -147,10 +147,14 @@ def test_open_folder_returns_the_kernel_path_and_refuses_a_link_on_the_way(world
 
 def test_the_two_hand_copies_use_the_primitive():
     from vaf.core.persistence import PersistenceManager
-    for fn in (path_jail._open_in_folder, PersistenceManager._read_file):
+    for fn in (path_jail._open_in_folder, path_jail.open_for_read):
         src = inspect.getsource(fn)
         assert "open_folder(" in src, fn.__qualname__
         assert "O_DIRECTORY" not in src and "_fd_path" not in src, fn.__qualname__
+    # The notes reader holds no copy of its own: the read primitive carries both branches.
+    src = inspect.getsource(PersistenceManager._read_file)
+    assert "open_for_read(" in src
+    assert "os.open(" not in src and "lstat" not in src and "samestat" not in src
     import vaf
     assert not hasattr(vaf, "open_folder") and "open_folder" not in vaf.__all__
 

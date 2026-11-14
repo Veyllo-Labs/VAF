@@ -168,20 +168,6 @@ class PersistenceManager:
         from vaf.core import path_jail
         return path_jail._DIR_FD and _MKDIR_DIR_FD
 
-    @staticmethod
-    def _made_in(dir_fd: int, parent_real: str, name: str):
-        """``(fd, real)`` of the folder ``name`` inside the open folder ``dir_fd`` (real path
-        ``parent_real``), made there first when it is missing. A link at ``name`` is refused,
-        and so is anything whose kernel path is not ``parent_real/name``. Raises OSError or
-        `PathEscape` (a ValueError)."""
-        from vaf.core.path_jail import open_folder
-        try:
-            os.mkdir(name, dir_fd=dir_fd)
-        except FileExistsError:
-            pass
-        return open_folder(name, dir_fd=dir_fd, follow=False,
-                           expect_folder=os.path.join(parent_real, name))
-
     def _open_base(self):
         """``(fd, real)`` of the project folder; folders missing at its end are made, each
         relative to the handle of the one above. With ``expect_folder`` the existing folder
@@ -202,7 +188,8 @@ class PersistenceManager:
         fd, real = open_folder(head, expect_folder=expect)
         try:
             for name in reversed(missing):
-                child, child_real = self._made_in(fd, real, name)
+                child, child_real = open_folder(name, dir_fd=fd, follow=False, create=True,
+                                                expect_folder=os.path.join(real, name))
                 os.close(fd)
                 fd, real = child, child_real
             return fd, real
@@ -221,7 +208,9 @@ class PersistenceManager:
             from vaf.core.path_jail import open_folder
             pfd, real = open_folder(parent, expect_folder=parent)
             try:
-                vfd, _ = self._made_in(pfd, real, os.path.basename(folder))
+                name = os.path.basename(folder)
+                vfd, _ = open_folder(name, dir_fd=pfd, follow=False, create=True,
+                                     expect_folder=os.path.join(real, name))
                 os.close(vfd)
             finally:
                 os.close(pfd)
@@ -233,9 +222,11 @@ class PersistenceManager:
         if not self._by_handle():
             return self._own_folder_by_path()
         try:
+            from vaf.core.path_jail import open_folder
             bfd, base_real = self._open_base()
             try:
-                vfd, real = self._made_in(bfd, base_real, self.VAF_DIR)
+                vfd, real = open_folder(self.VAF_DIR, dir_fd=bfd, follow=False, create=True,
+                                        expect_folder=os.path.join(base_real, self.VAF_DIR))
                 os.close(vfd)
                 return real
             finally:
@@ -358,63 +349,22 @@ class PersistenceManager:
         this project's own .vaf folder. The coder reads codex and memory into its prompt, so
         a link to another account's file would carry that file into the run.
 
-        The folder is opened first (`vaf.core.path_jail.open_folder`, no link as its last
-        part), its handle's kernel path compared with `notes_folder`, and the file opened
-        relative to that handle with ``O_NOFOLLOW``: a ``.vaf`` swapped for a link and back
-        around the open cannot leave the read on a file outside. Windows (no folder handles,
-        no ``O_NOFOLLOW``): a link at the name is refused, the opened file must be the very
-        file checked before the open (``samestat``: a file or folder link swapped in only
-        for the moment of the open opens another file and is refused), and the folder's
-        resolved path is compared after the open. NAMED BOUNDARY, Windows: a ``.vaf`` folder
-        link in place over both the check and the open, and gone again before the folder
-        comparison, is still read; simulated on Linux with this branch forced and a racer
-        exchanging ``.vaf`` and a link in one step, 635 of 20000 reads (7053 without the
-        ``samestat``). Closing it means comparing the opened handle's final path
-        (``GetFinalPathNameByHandleW``), which needs a Windows host to verify. NAMED
-        BOUNDARY: a hard link is the same file under a second name and passes, as for every
-        writer."""
+        Read through `vaf.core.path_jail.open_for_read` with ``expect_folder`` the judged
+        `notes_folder`: the folder is opened first and its handle's kernel path compared, and
+        the file is opened relative to that handle with ``O_NOFOLLOW``, so a ``.vaf`` swapped
+        for a link and back around the open cannot leave the read on a file outside. The
+        Windows branch (no folder handles) and its named boundary are in that docstring."""
         folder = self.notes_folder()
         if folder is None:
             return ""
-        name = os.path.basename(path)
-        from vaf.core import path_jail
-        cloexec = getattr(os, "O_CLOEXEC", 0)
-        fd = -1
+        import io
+        from vaf.core.path_jail import open_for_read
         try:
-            if path_jail._DIR_FD:
-                dfd, _ = path_jail.open_folder(folder, expect_folder=folder, follow=False)
-                try:
-                    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | cloexec,
-                                 dir_fd=dfd)
-                finally:
-                    os.close(dfd)
-            else:
-                import stat as _stat
-                full = os.path.join(folder, name)
-                checked = os.lstat(full)
-                if not _stat.S_ISREG(checked.st_mode):
-                    return ""           # a link, or not a regular file
-                fd = os.open(full, os.O_RDONLY | getattr(os, "O_BINARY", 0))
-                # The file that was opened must be the one just checked: a link swapped in
-                # for the file, or for the folder, for the moment of the open opens another
-                # file, even when the name is restored before the comparison below.
-                if not os.path.samestat(os.fstat(fd), checked):
-                    return ""
-                real = os.path.dirname(os.path.realpath(full))
-                if os.path.normcase(real) != os.path.normcase(folder):
-                    return ""
-            import stat as _stat
-            if not _stat.S_ISREG(os.fstat(fd).st_mode):
-                return ""
-            f = os.fdopen(fd, "r", encoding="utf-8")
-            fd = -1
-            with f:
-                return f.read()
+            with open_for_read(os.path.join(folder, os.path.basename(path)),
+                               expect_folder=folder) as f:
+                return io.TextIOWrapper(f, encoding="utf-8").read()
         except (OSError, ValueError):
             return ""
-        finally:
-            if fd >= 0:
-                os.close(fd)
 
     def _write_file(self, path: str, content: str):
         try:

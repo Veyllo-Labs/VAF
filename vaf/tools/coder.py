@@ -6266,9 +6266,11 @@ Task {task_idx + 1}: {current_task}
 
             # The snapshot of the tree at run start (`git stash create`), not HEAD: what a
             # previous run or the person left uncommitted is not this run's change.
+            # The run's resolved folder, as every git call of the run pins it: the audit's
+            # git calls, reads and state stay in that folder, and a swap fails the review.
             return code_audit(base_dir, scope=scope, base=_diff_baseline_sha or EMPTY_TREE,
                               ask=_coder_audit_ask, batch_chars=_au_batch,
-                              progress=_au_progress)
+                              progress=_au_progress, expect_folder=base_dir)
 
         def _audit_refusal() -> str:
             return _audit_round_refusal(enabled=_audit_enabled, content_only=bool(skip_template),

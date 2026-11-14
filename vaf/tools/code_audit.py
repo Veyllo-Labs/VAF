@@ -122,9 +122,12 @@ class CodeAuditTool(BaseTool):
             from vaf.core.task_queue import TaskQueue
             return TaskQueue().should_stop(session_id)
 
+        # `path` is the resolved folder _resolve_project and the jail judged: the audit runs on
+        # that folder only, and a folder swapped for a link afterwards fails the review.
         report = code_audit(path, scope=scope, base=(kwargs.get("base") or None), paths=paths,
                             profile=profile, ask=ask_via_complete(caller="tool:code_audit"),
-                            max_files=40, parallel=parallel_for(), should_stop=_stopped)
+                            max_files=40, parallel=parallel_for(), should_stop=_stopped,
+                            expect_folder=path)
         return self.render(report, path)
 
     @staticmethod

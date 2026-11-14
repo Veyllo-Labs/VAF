@@ -107,7 +107,12 @@ contract a failed run cannot pass.
    and trivial findings.
 7. **Memory per repository**, under the git directory (`.git/vaf-audit/`, never committed):
    which findings were open last time (named as addressed when they are gone) and which a
-   person dismissed with a reason (not reported again). Ids are a hash of file, category and
+   person dismissed with a reason (not reported again). It is read through
+   `path_jail.open_for_read` and written relative to checked folder handles: the git directory
+   opened with its decided real path, `vaf-audit` made and opened relative to it
+   (`open_folder(create=True)`), the file written through `open_for_write` and renamed into
+   place on that handle. A `vaf-audit` that is a link (into another repository's memory) is
+   neither read nor written, so another repository's dismissals hide nothing here. Ids are a hash of file, category and
    the quoted line, so the same problem in the same code keeps its id across runs. Not the
    title: a model words one finding differently every time (a live loop of four rounds never
    produced the same title twice), and an id built on it let a dismissed finding come back.
@@ -192,7 +197,9 @@ Configuration (both admin-only, every round is model calls on the instance's acc
 [vaf/tools/code_audit.py](../../vaf/tools/code_audit.py). Read-only (`permission_level`
 read, `file_access` read): the project path is resolved like the coder's project tools
 (this chat's project when none is given), refused for VAF's own source and the standard
-folders, and asked against the account's file jail before anything is read. Parameters:
+folders, and asked against the account's file jail before anything is read. The resolved
+folder is what the review runs on (`expect_folder`); the coding agent's audit rounds pass the
+run's resolved folder the same way. Parameters:
 `project_path`, `scope`, `base`, `paths`, `profile`. At most 40 files per call, four model
 calls at once for an API provider. Stop in the chat ends the review before its next model
 call (`session_id` is in its `identity_kwargs`).
@@ -285,7 +292,8 @@ the next run.
 - **Reading stays inside the repository**, because what is read goes to a model provider: a
   symlink out of it is skipped and listed, a file the model names outside the change is read
   only when git tracks it, and a guideline file git ignores is someone's private notes and
-  stays out.
+  stays out. The folder is decided once per run and every read is checked against it (see
+  "One folder per run" below).
 - **git starts no program the repository's own config names.** Every call goes through
   `vaf.core.git_runner.run_project_git`: no hook, no fsmonitor, no external diff or textconv,
   and the clean, smudge and merge drivers the repository's config defines are switched off by
@@ -299,10 +307,38 @@ the next run.
   `code_audit` tool never passes it. Each git call holds its folder by handle for that call
   (on Linux git runs through `/proc/self/fd`, and where bubblewrap can start a namespace in a
   private mount of that folder, unless `--linked-worktree`; see the runner's docstring and
-  `vaf/core/folder_mount.py`). Named boundary: the
-  audit's own file reads (`_read_text`) and its state under `.git/vaf-audit` go by path, so
-  a folder swapped for a link between two of its calls is not caught by the per-call pin;
-  pinning the audit's root once for git, the reads and the state is a follow-up.
+  `vaf/core/folder_mount.py`).
+- **One folder per run.** The top git names is decided once at the start (with
+  `expect_folder` it must be the folder the caller judged, holding its own `.git`) and held
+  to its identity (device and inode). Every later git call passes it as `expect_folder`;
+  every file read (the changed and untracked files, the guideline files, the config, the
+  files the model or the deep check names) resolves the name inside the repository, requires
+  the result under that folder as text and opens it with `path_jail.open_for_read`, whose
+  folder handle must have the real path that was resolved; the state is written as in step
+  7; and the folder must still be the same one at the end, before anything is reported or
+  remembered. A folder swapped for a link, renamed away or replaced by another folder while
+  the run works ends it as `failed` ("the folder changed while it was being reviewed"), with
+  no findings, nothing listed as reviewed and no state saved: the project may be a coding
+  agent's, whose sandbox code can rename its own folder and put a link to another account's
+  repository in its place. Measured with a racer doing exactly that (aside for 1 ms, link,
+  back), 1000 audits each: before, with each git call pinned on its own and the reads and
+  the state by path, the other repository's text reached the model through a file the audit
+  read in 11 runs and through git's output alone in 3 (the start followed a link already in
+  place, and the whole run worked on the other repository), and its state was written there
+  in 8; with `expect_folder` (the tool, the coder) 0, 0 and 0. The racer keeps the folder
+  away half of the time, so 508 of those 1000 runs failed (117 before): every refusal inside
+  its windows ends the run, and none of them reports a clean result; without a racer none
+  fails. Without `expect_folder` (`vaf audit`, a person naming a path) the run works on the
+  folder its name leads to when it starts: in 1 of 1000 runs that was the racer's link, and
+  the run reviewed the other repository as a whole, consistently. Named boundaries: the check is per
+  operation by real path plus the identity at the start and the end, so a folder swapped
+  and restored between two operations, or replaced at its name by another folder of the
+  account in between, holds only what the account itself could write there; a file whose
+  folder is renamed away only for the moment it is read, and back before the folder is
+  checked again, reads as "not readable" and is listed as skipped (the config read that way
+  is missing for that run); git's own walk of the work tree is the runner's boundary above;
+  on Windows the reads and the state go through the branches without folder handles
+  (`open_for_read`, `_save_state`).
 - **Stop in the chat** ends the review before its next model call; a call already in flight
   finishes in the background (an in-process tool cannot be killed), and its answer is
   discarded.

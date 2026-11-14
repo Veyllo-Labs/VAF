@@ -581,6 +581,17 @@ commit in 21 of 300 calls, and a new notes manager whose `.vaf` was missing left
   the start refused. Until the check passed, the start is marked unverified, and any other
   request or process that finds the container running checks the mount itself before its
   command; a container whose stop failed stays refused.
+- the code audit (`code_audit` tool, the coder's audit after each commit, `vaf audit`): a run
+  decides its folder once (the tool and the coder pass the folder they judged as
+  `expect_folder`) and checks every git call, every file read (`path_jail.open_for_read`,
+  the file's folder compared by its kernel path) and its state under `.git/vaf-audit` (made
+  and written relative to checked folder handles) against that one folder, which must also
+  be the same folder at the end; a swap fails the review with nothing reported or saved.
+  Under the same racer, 1000 audits each: the other repository's text reached the model
+  through a file the audit read in 11 runs before (3 more through git's output alone, from
+  a start that followed a link already in place) and its state was written there in 8; with
+  `expect_folder` 0, 0 and 0. `vaf audit` without it works on the folder the typed path
+  leads to when the run starts (1 of 1000 runs started through the racer's link).
 
 NAMED BOUNDARY, what remains, with the numbers above:
 - no lane: macOS, Windows, and Linux where bubblewrap is missing or cannot make a user
@@ -621,10 +632,12 @@ NAMED BOUNDARY, what remains, with the numbers above:
   the folder must still resolve to the judged text before each git process, and `.vaf` is
   still made by path (an empty one can appear in a swapped-in folder; nothing is written
   into it). Neither is measured on its own platform.
-- the code audit (`code_audit` tool, the coder's audit after each commit) gets the per-call
-  pin of its git calls only; its file reads and its state writes under `.git/vaf-audit` go by
-  path, and pinning its root once for all three is a follow-up. So do the test runner's copy
-  of the project (`sandbox_test_runner`) and `sandbox_transfer`, which read by path.
+- the code audit checks each operation by real path plus the folder's identity at the start
+  and the end: a folder swapped and restored between two of its operations, or replaced at
+  its name by another folder of the account in between, holds only what the account itself
+  could write there, and a file whose folder is renamed away only for the moment it is read
+  is listed as not readable. The test runner's copy of the project (`sandbox_test_runner`)
+  and `sandbox_transfer` still read by path.
 
 The chat's own store tools (`update_intent`, `update_working_memory`, `add_task`, and the
 coder's `request_clarification`) used to take a `base_dir` from the call as well: one account

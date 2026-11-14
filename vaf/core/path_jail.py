@@ -35,7 +35,8 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 __all__ = ["FolderMoved", "PathEscape", "WriteRefused", "contained_path", "discard_written",
-           "is_remote_path", "is_rooted", "open_folder", "open_for_write", "safe_entry_name"]
+           "is_remote_path", "is_rooted", "open_folder", "open_for_read", "open_for_write",
+           "safe_entry_name"]
 
 
 class PathEscape(ValueError):
@@ -411,7 +412,7 @@ def _folder_moved(raw: str, real: str, expected: str) -> "WriteRefused":
 
 
 def open_folder(path, *, dir_fd: Optional[int] = None, expect_folder=None,
-                follow: bool = True) -> Tuple[int, str]:
+                follow: bool = True, create: bool = False) -> Tuple[int, str]:
     """``path`` opened as a folder handle: ``(fd, real)``, ``real`` being the kernel's path
     for the handle. The caller closes ``fd``.
 
@@ -426,6 +427,10 @@ def open_folder(path, *, dir_fd: Optional[int] = None, expect_folder=None,
       link on the way"). A link swapped in for the folder or any folder above it changes ``real``.
     - ``follow=False``: a link as the last part is refused (`PathEscape`), never followed;
       so is an entry that is not a folder.
+    - ``create=True`` (only with ``dir_fd`` and ``follow=False``): a missing folder is made
+      first, relative to ``dir_fd`` (``mkdir`` with ``dir_fd``), never by path, so a folder
+      above it swapped for a link at that moment gets nothing; an entry already there is
+      opened as above (a link refused).
 
     Any other ``OSError`` (missing, not a folder, no permission) is raised as it is. Only
     where `_DIR_FD` holds (no folder handles on Windows): callers branch on it.
@@ -433,13 +438,22 @@ def open_folder(path, *, dir_fd: Optional[int] = None, expect_folder=None,
     NAMED BOUNDARY, the facade: not on ``vaf/__init__.py``. Measured: no module outside
     ``vaf/core`` needs a raw folder handle, and the two public lanes that carry one are
     ``vaf.open_for_write(expect_folder=)`` and ``vaf.run_project_git(expect_folder=)``. Its
-    users are `open_for_write`, the project git runner (`vaf.core.git_runner`) and the
-    project notes (`vaf.core.persistence.PersistenceManager`)."""
+    users are `open_for_write`, `open_for_read`, the project git runner
+    (`vaf.core.git_runner`), the project notes (`vaf.core.persistence.PersistenceManager`)
+    and the code audit's state (`vaf.core.code_audit`)."""
     import errno
     spelled = os.fspath(path)
     flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0)
     if not follow:
         flags |= os.O_NOFOLLOW
+    if create:
+        if dir_fd is None or follow:
+            raise ValueError("open_folder(create=True) makes a folder relative to dir_fd, "
+                             "with follow=False")
+        try:
+            os.mkdir(spelled, dir_fd=dir_fd)
+        except FileExistsError:
+            pass
     try:
         if dir_fd is None:
             fd = os.open(spelled, flags)
@@ -461,6 +475,86 @@ def open_folder(path, *, dir_fd: Optional[int] = None, expect_folder=None,
             if os.path.normcase(real) != expected:
                 raise FolderMoved(f"its folder is {real}, not {expected} (a link on the way)")
         return fd, real
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def open_for_read(path, *, expect_folder=None):
+    """Open ``path`` to read it, as a binary file object, or raise `PathEscape` (`FolderMoved`
+    for a folder that is not ``expect_folder``) or ``OSError`` (missing, no permission).
+
+    The read twin of `open_for_write`, for a file in a folder somebody else can fill with
+    links (a project a sandbox environment mounts) whose text goes somewhere that matters, a
+    model's prompt above all. Reading by path decides on one thing and reads another: ``open``
+    follows a link in the last component, and a folder on the way can be swapped for a link
+    between the caller's check and the read. So:
+
+    - The file's folder is opened first (`open_folder`) and, with ``expect_folder``, its
+      handle's kernel path must be that REAL path (compared as given, never resolved). A link
+      swapped in for the folder or any folder above it is refused (`FolderMoved`).
+    - The file is opened relative to that handle with ``O_NOFOLLOW``: a link as the last
+      component is refused, never followed.
+    - Only a regular file is read; a pipe or a device is refused without blocking
+      (``O_NONBLOCK`` for the open, blocking again before the file object is returned).
+
+    NAMED BOUNDARY, Windows (no folder handles, no ``O_NOFOLLOW``): a link at the name is
+    refused (``lstat``), the opened file must be the very file checked before the open
+    (``samestat``: a file or folder link swapped in only for the moment of the open opens
+    another file and is refused), and with ``expect_folder`` the file's resolved folder is
+    compared after the open. A folder link in place over both the check and the open, and gone
+    again before that comparison, is still read; simulated on Linux with this branch forced
+    and a racer exchanging the folder and a link in one step, 635 of 20000 reads of the
+    project notes (7053 without the ``samestat``). Closing it means comparing the opened
+    handle's final path (``GetFinalPathNameByHandleW``), which needs a Windows host to verify.
+    NAMED BOUNDARY: a hard link is the same file under a second name and passes, as for every
+    writer.
+
+    NAMED BOUNDARY, the facade: not on ``vaf/__init__.py``. Measured: no module outside
+    ``vaf/core`` calls it; the public lane that carries it is ``vaf.code_audit(expect_folder=)``.
+    It joins the facade with its first caller outside the core (the file tools' read is the
+    named candidate). Its users are the project notes (`vaf.core.persistence`) and the code
+    audit (`vaf.core.code_audit`)."""
+    import errno
+    import stat as _stat
+    raw = os.path.abspath(os.fspath(path))
+    parent, name = os.path.split(raw)
+    if not name:
+        raise PathEscape(f"{raw} names a folder, not a file")
+    if _DIR_FD:
+        dfd, _real = open_folder(parent, expect_folder=expect_folder)
+        try:
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+                         | getattr(os, "O_CLOEXEC", 0), dir_fd=dfd)
+        except OSError as e:
+            if e.errno in (errno.ELOOP, errno.EMLINK):   # EMLINK: FreeBSD's O_NOFOLLOW
+                raise PathEscape(f"{raw} is a link") from None
+            raise
+        finally:
+            os.close(dfd)
+    else:
+        checked = os.lstat(raw)
+        if not _stat.S_ISREG(checked.st_mode):
+            raise PathEscape(f"{raw} is a link or not a regular file")
+        fd = os.open(raw, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+    try:
+        info = os.fstat(fd)
+        if not _stat.S_ISREG(info.st_mode):
+            raise PathEscape(f"{raw} is not a regular file")
+        if not _DIR_FD:
+            # The file that was opened must be the one just checked: a link swapped in for the
+            # file, or for the folder, for the moment of the open opens another file, even
+            # when the name is restored before the comparison below.
+            if not os.path.samestat(info, checked):
+                raise PathEscape(f"{raw} changed while it was opened")
+            if expect_folder is not None:
+                expected = os.path.normcase(os.path.abspath(os.fspath(expect_folder)))
+                real = os.path.normcase(os.path.dirname(os.path.realpath(raw)))
+                if real != expected:
+                    raise FolderMoved(f"its folder is {real}, not {expected} (a link on the way)")
+        elif hasattr(os, "set_blocking"):
+            os.set_blocking(fd, True)
+        return os.fdopen(fd, "rb")
     except BaseException:
         os.close(fd)
         raise

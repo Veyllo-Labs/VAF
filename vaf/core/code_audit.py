@@ -60,6 +60,28 @@ NAMED BOUNDARIES:
   global config defines (git-lfs) still runs. A linked worktree (`.git` is a file) is refused
   unless the caller passes `linked_worktree=True`, which `vaf audit --linked-worktree` does
   for a person's own checkout; the model's `code_audit` tool never does.
+- ONE FOLDER per run. The top git names is decided once (`_decide`; with `expect_folder` it
+  must be the folder the caller judged) and held to its identity, and every git call
+  (`expect_folder=top`), every file read (`path_jail.open_for_read`, the file's folder
+  compared by its kernel path) and the state under `.git/vaf-audit` (made and written
+  relative to checked folder handles) is checked against that folder. A folder swapped for a
+  link, renamed away or replaced while the run works ends it as `failed`, nothing reported,
+  no state saved: the project may be a coding agent's, whose sandbox code can rename its own
+  folder and put a link into another account's repository in its place. Measured with a
+  racer doing exactly that during 1000 audits each: with each git call pinned on its own and
+  the reads and the state by path, text of the other repository reached the model through a
+  file the audit read in 11 runs, through git's output alone in 3, and its state was written
+  there in 8; with `expect_folder` 0, 0 and 0 (508 runs failed inside the racer's windows,
+  117 before; none without a racer).
+  Named boundaries: without `expect_folder` (`vaf audit`, a typed path) the run works on the
+  folder the name leads to when it starts, a link included (1 of 1000 runs under the racer);
+  the check is by real path per operation plus the identity at the start and the end, so a folder swapped and restored between two operations, or replaced at the
+  same path by another folder of the account in between, holds only what the account itself
+  could write there; git's own walk of the work tree is the runner's boundary
+  (`vaf.core.git_runner`, closed where its private mount lane runs); on Windows the reads
+  and the state go through the branches without folder handles (see `open_for_read` and
+  `_save_state`); and a file whose folder is renamed away only for the moment it is read,
+  and back before the top is checked, reads as "not readable" and is listed as skipped.
 """
 from __future__ import annotations
 
@@ -68,6 +90,7 @@ import fnmatch
 import hashlib
 import json
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -370,23 +393,107 @@ def _rank(f: AuditFinding):
 # public call and read by every git call in it; _parallel_map hands it to its threads.
 _LINKED_WORKTREE: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
     "code_audit_linked_worktree", default=False)
+# The folder this run decided on, once: (top, (st_dev, st_ino)). Every git call, read and
+# state write of the run is checked against it (_check_top); set for the length of one
+# public call, like _LINKED_WORKTREE, and handed to _parallel_map's threads with it.
+_DECIDED: "contextvars.ContextVar[Optional[Tuple[str, Tuple[int, int]]]]" = (
+    contextvars.ContextVar("code_audit_decided", default=None))
+
+FOLDER_CHANGED = ("the folder changed while it was being reviewed (a link on the way); "
+                  "nothing from it is reported as reviewed")
+# What `run_project_git` answers (returncode -1) when the folder it was given is not the one
+# that was judged any more: swapped for a link ("a link on the way", the private view's
+# guard included), gone ("Not a directory"), or without its own `.git` now. The runner never
+# raises, so its refusal is told apart from a timeout or a git error by these words.
+_SWAP_MARKERS = ("a link on the way", "could not start in a private view")
+_MOVED_MARKERS = _SWAP_MARKERS + ("Not a directory: ", "holds no .git of its own",
+                                  ".git is not a folder")
 
 
-def _git(root: str, *args: str, timeout: float = 60) -> Tuple[int, str]:
+class _FolderChanged(Exception):
+    """The folder under review is not the one the run decided on any more: a link swapped in
+    for it (or for a folder inside it), or another folder at its name. The run fails; nothing
+    it read is reported (see FOLDER_CHANGED)."""
+
+
+def _identity(top: str) -> Tuple[int, int]:
+    """(st_dev, st_ino) of the folder at `top`, which must be that very real path: opened as
+    a handle whose kernel path is compared (`open_folder`), or, without folder handles,
+    resolved and compared. Anything else raises _FolderChanged."""
+    from vaf.core import path_jail
+    try:
+        if path_jail._DIR_FD:
+            fd, _real = path_jail.open_folder(top, expect_folder=top)
+            try:
+                info = os.fstat(fd)
+            finally:
+                os.close(fd)
+        else:
+            if (os.path.normcase(os.path.realpath(top))
+                    != os.path.normcase(os.path.abspath(top))):
+                raise _FolderChanged(f"{top} resolves elsewhere")
+            info = os.stat(top)
+    except (path_jail.PathEscape, OSError) as exc:
+        raise _FolderChanged(str(exc)) from None
+    return info.st_dev, info.st_ino
+
+
+def _check_top() -> None:
+    """The decided folder is still at its name, the same folder (device and inode): else
+    _FolderChanged. A no-op outside a run (no folder decided)."""
+    decided = _DECIDED.get()
+    if decided is not None and _identity(decided[0]) != decided[1]:
+        raise _FolderChanged(f"{decided[0]} is another folder now")
+
+
+def _git(top: str, *args: str, timeout: float = 60) -> Tuple[int, str]:
+    """git in the decided top folder, pinned to it (`expect_folder=top`): a folder swapped for
+    a link, renamed away or replaced since is refused by the runner, and that refusal ends the
+    run (_FolderChanged) instead of reading as an empty answer."""
     from vaf.core.git_runner import run_project_git
     # A repository's own config can name programs that git runs on a read (an fsmonitor
     # hook, an external diff, a textconv or clean filter); the project runner starts none.
     # core.quotepath=false: a non-ASCII path is printed as itself, not as an octal-escaped
     # quoted string the file system has never heard of.
-    proc = run_project_git(["-c", "core.quotepath=false", *args], cwd=root, timeout=timeout,
-                           linked_worktree=_LINKED_WORKTREE.get())
+    proc = run_project_git(["-c", "core.quotepath=false", *args], cwd=top, timeout=timeout,
+                           linked_worktree=_LINKED_WORKTREE.get(), expect_folder=top)
     code, out, err = proc.returncode, proc.stdout or "", proc.stderr or ""
+    if code == -1:
+        _check_top()
+        if any(m in err for m in _MOVED_MARKERS):
+            raise _FolderChanged(err.strip()[:300])
     return code, out if code == 0 else (err or out)
 
 
-def _repo_top(root: str) -> Optional[str]:
-    code, out = _git(root, "rev-parse", "--show-toplevel")
-    return out.strip() if code == 0 and out.strip() else None
+def _repo_top(root: str, expect_folder=None) -> Optional[str]:
+    """The top of the repository at or above `root` as git names it (its real path), or None.
+    With `expect_folder` (the real path a caller judged) `root` must be that folder and hold
+    its own `.git`; a folder that is not it any more raises _FolderChanged."""
+    from vaf.core.git_runner import run_project_git
+    proc = run_project_git(["rev-parse", "--show-toplevel"], cwd=root,
+                           linked_worktree=_LINKED_WORKTREE.get(), expect_folder=expect_folder)
+    out, err = (proc.stdout or "").strip(), proc.stderr or ""
+    if expect_folder is None:
+        return out if proc.returncode == 0 and out else None
+    # A folder that is no repository reads as one ("not a git repository"); one that is not
+    # the judged folder any more is a moved folder.
+    if proc.returncode == -1 and any(m in err for m in _SWAP_MARKERS):
+        raise _FolderChanged(err.strip()[:300])
+    if proc.returncode != 0 or not out:
+        return None
+    judged = os.path.normcase(os.path.abspath(os.fspath(expect_folder)))
+    if os.path.normcase(os.path.abspath(out)) != judged:
+        raise _FolderChanged(f"git names {out}, not the folder that was checked")
+    return out
+
+
+def _decide(root: str, expect_folder=None) -> Optional[str]:
+    """Decide the run's folder once: the top git names, held to its identity (_DECIDED) for
+    every later git call, read and write. None when `root` is no repository."""
+    top = _repo_top(root, expect_folder)
+    if top:
+        _DECIDED.set((top, _identity(top)))
+    return top
 
 
 def _default_base(top: str) -> str:
@@ -410,14 +517,39 @@ def _inside(top: str, rel: str) -> Optional[Path]:
         return None
 
 
-def _read_text(path: Path) -> Optional[str]:
+def _read_in_repo(top: str, rel: str, *, limit: int = MAX_FILE_BYTES,
+                  cut: bool = False) -> Tuple[Optional[str], str]:
+    """(text, "") of the file `rel` names in the decided folder, else (None, the reason it is
+    skipped). `_inside` decides which file that is (an in-repository link is followed to its
+    target, one out of the repository is skipped); the target must then lie under `top` as
+    text (a top that is a link now resolves elsewhere), and it is opened with
+    `path_jail.open_for_read`, its folder's kernel path compared with the folder that was
+    resolved: a folder swapped for a link in between is not followed, and the run ends
+    (_FolderChanged). Larger than `limit`: skipped, or with `cut` the first `limit` bytes."""
+    from vaf.core.path_jail import FolderMoved, PathEscape, open_for_read
+    full = _inside(top, rel)
+    if full is None:
+        return None, "points outside the repository"
+    target = os.fspath(full)
+    base = os.path.normcase(os.path.abspath(top))
+    if os.path.normcase(target) == base:
+        return None, "not a file"
+    if not os.path.normcase(target).startswith(base.rstrip("\\/") + os.sep):
+        raise _FolderChanged(f"{rel} resolves outside {top}")
     try:
-        data = path.read_bytes()
-    except OSError:
-        return None
+        f = open_for_read(target, expect_folder=os.path.dirname(target))
+    except FolderMoved as exc:
+        raise _FolderChanged(str(exc)) from None
+    except (PathEscape, OSError):
+        _check_top()            # a top renamed away reads as a missing file: not a skip
+        return None, "not readable"
+    with f:
+        if os.fstat(f.fileno()).st_size > limit and not cut:
+            return None, f"larger than {limit // 1024} KB"
+        data = f.read(limit)
     if b"\x00" in data[:8192]:
-        return None
-    return data.decode("utf-8", errors="replace")
+        return None, "binary or not readable"
+    return data.decode("utf-8", errors="replace"), ""
 
 
 @dataclass
@@ -522,13 +654,13 @@ def _parts(f: _File, budget: int) -> List[_File]:
 
 
 def _load_config(top: str) -> dict:
-    path = _inside(top, CONFIG_FILE)
-    if path is None:
+    text, _reason = _read_in_repo(top, CONFIG_FILE)
+    if text is None:
         return {}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(text)
         return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
+    except ValueError:
         return {}
 
 
@@ -559,17 +691,7 @@ def _excluded(path: str, config: dict) -> Optional[str]:
 
 
 def _worktree_text(top: str, rel: str) -> Tuple[Optional[str], str]:
-    full = _inside(top, rel)
-    if full is None:
-        return None, "points outside the repository"
-    try:
-        size = full.stat().st_size
-    except OSError:
-        return None, "not readable"
-    if size > MAX_FILE_BYTES:
-        return None, f"larger than {MAX_FILE_BYTES // 1024} KB"
-    text = _read_text(full)
-    return (text, "") if text is not None else (None, "binary or not readable")
+    return _read_in_repo(top, rel)
 
 
 def _head_text(top: str, rel: str) -> Tuple[Optional[str], str]:
@@ -666,18 +788,12 @@ def _collect(top: str, scope: str, base: str, paths: Optional[Sequence[str]],
 
 
 def _tracked_text(top: str, rel: str, config: dict) -> Optional[str]:
-    full = _inside(top, rel)
-    if full is None or not full.is_file() or _excluded(rel, config):
+    if _inside(top, rel) is None or _excluded(rel, config):
         return None
     code, out = _git(top, "ls-files", "--", rel)
     if code != 0 or not out.strip():
         return None
-    try:
-        if full.stat().st_size > MAX_FILE_BYTES:
-            return None
-    except OSError:
-        return None
-    return _read_text(full)
+    return _read_in_repo(top, rel)[0]
 
 
 # ── deterministic evidence ────────────────────────────────────────────────────
@@ -833,31 +949,27 @@ def _guidelines(top: str, files: Iterable[_File]) -> str:
     repository root, nearest first. Only the project's own: a guideline file git ignores is
     someone's private notes, not the project's rules, and a symlink out of the repository is
     not one either - both would otherwise travel to the provider with every review."""
-    found: List[Path] = []
-    top_path = Path(top)
-    ignored: Dict[str, bool] = {}
+    found: Dict[str, str] = {}          # rel -> text, nearest first
+    asked = set()
     for f in files:
-        d = (top_path / f.path).parent
+        d = posixpath.dirname(f.path)
         while True:
             for name in GUIDELINE_FILES:
-                cand = d / name
-                if not cand.is_file() or cand in found:
+                rel = f"{d}/{name}" if d else name
+                if rel in asked:
                     continue
-                rel = cand.relative_to(top_path).as_posix()
-                if rel not in ignored:
-                    ignored[rel] = (_inside(top, rel) is None
-                                    or _git(top, "check-ignore", "-q", "--", rel)[0] == 0)
-                if not ignored[rel]:
-                    found.append(cand)
-            if d == top_path or top_path not in d.parents:
+                asked.add(rel)
+                # Read through the decided folder (never `is_file` by path first): a missing,
+                # unreadable or outside file is no guideline.
+                text, _reason = _read_in_repo(top, rel, limit=GUIDELINE_CHARS * 4, cut=True)
+                if text is None or _git(top, "check-ignore", "-q", "--", rel)[0] == 0:
+                    continue
+                found[rel] = text
+            if not d:
                 break
-            d = d.parent
-    parts = []
-    for cand in found[:6]:
-        text = _read_text(cand) or ""
-        rel = cand.relative_to(top_path).as_posix()
-        parts.append(f"--- {rel} ---\n{text[:GUIDELINE_CHARS]}")
-    return "\n\n".join(parts)
+            d = posixpath.dirname(d)
+    return "\n\n".join(f"--- {rel} ---\n{text[:GUIDELINE_CHARS]}"
+                       for rel, text in list(found.items())[:6])
 
 
 def _path_instructions(config: dict, files: Iterable[_File]) -> str:
@@ -1443,34 +1555,84 @@ def _dedupe(found: List[AuditFinding]) -> List[AuditFinding]:
     return kept
 
 
-def _state_dir(top: str) -> Optional[Path]:
+def _git_dir(top: str) -> Optional[str]:
+    """The repository's git directory, which holds the audit's state (`vaf-audit/`). For a
+    repository of its own that is `<top>/.git`, a folder: the runner refuses every other
+    `.git`, so no git call is needed. A linked worktree's is the one git names."""
+    if not _LINKED_WORKTREE.get():
+        return os.path.join(top, ".git")
     code, out = _git(top, "rev-parse", "--absolute-git-dir")
-    if code != 0 or not out.strip():
-        return None
-    return Path(out.strip()) / "vaf-audit"
+    return out.strip() if code == 0 and out.strip() else None
 
 
 def _load_state(top: str, name: str) -> dict:
-    d = _state_dir(top)
+    """`vaf-audit/<name>` under the git directory, read through `open_for_read`: a
+    `vaf-audit` that is a link (into another repository's state) or a file that is one is
+    not read, so another repository's `dismissed.json` hides nothing here."""
+    from vaf.core.path_jail import PathEscape, open_for_read
+    d = _git_dir(top)
     if d is None:
         return {}
+    folder = os.path.join(d, "vaf-audit")
     try:
-        data = json.loads((d / name).read_text(encoding="utf-8"))
+        with open_for_read(os.path.join(folder, name), expect_folder=folder) as f:
+            data = json.loads(f.read().decode("utf-8"))
         return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
+    except (PathEscape, OSError):
+        _check_top()            # missing because the top moved, or not this repository's
+        return {}
+    except ValueError:
         return {}
 
 
 def _save_state(top: str, name: str, data: dict) -> None:
-    d = _state_dir(top)
+    """Write `vaf-audit/<name>` under the git directory, never through a link: the git
+    directory is opened as a handle whose kernel path must be the one decided, `vaf-audit` is
+    made and opened relative to it (a link there is refused), the file is written through
+    `open_for_write` with that folder as `expect_folder` and renamed into place on the
+    folder's handle. A folder renamed away or swapped for a link at that moment gets nothing.
+    A git directory inside VAF's own state is refused by `open_for_write`, so a repository
+    there keeps no audit memory. Best effort: a write that fails leaves the old state."""
+    from vaf.core import path_jail
+    from vaf.core.path_jail import open_folder, open_for_write
+    d = _git_dir(top)
     if d is None:
         return
+    folder = os.path.join(d, "vaf-audit")
+    text = json.dumps(data, indent=1, ensure_ascii=False)
     try:
-        d.mkdir(parents=True, exist_ok=True)
-        tmp = d / (name + ".tmp")
-        tmp.write_text(json.dumps(data, indent=1, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(d / name)
-    except OSError:
+        if path_jail._DIR_FD and os.mkdir in os.supports_dir_fd:
+            gfd, _real = open_folder(d, expect_folder=d, follow=False)
+            try:
+                vfd, _real = open_folder("vaf-audit", dir_fd=gfd, follow=False, create=True,
+                                         expect_folder=folder)
+            finally:
+                os.close(gfd)
+            try:
+                with open_for_write(os.path.join(folder, name + ".tmp"), "w", encoding="utf-8",
+                                    expect_folder=folder) as f:
+                    f.write(text)
+                os.replace(name + ".tmp", name, src_dir_fd=vfd, dst_dir_fd=vfd)
+            finally:
+                os.close(vfd)
+            return
+        # NAMED BOUNDARY, Windows (no folder handles): the folders are compared by their
+        # resolved path before the folder is made and before the write, which is pinned
+        # (`open_for_write(expect_folder=)`); a link swapped in between that comparison and
+        # `mkdir`, or before the rename by path, is followed for that one call.
+        if os.path.normcase(os.path.realpath(d)) != os.path.normcase(os.path.abspath(d)):
+            return
+        try:
+            os.mkdir(folder)
+        except FileExistsError:
+            pass
+        if os.path.normcase(os.path.realpath(folder)) != os.path.normcase(os.path.abspath(folder)):
+            return
+        with open_for_write(os.path.join(folder, name + ".tmp"), "w", encoding="utf-8",
+                            expect_folder=folder) as f:
+            f.write(text)
+        os.replace(os.path.join(folder, name + ".tmp"), os.path.join(folder, name))
+    except (OSError, ValueError):
         pass
 
 
@@ -1480,8 +1642,9 @@ def dismiss_finding(root: str, finding_id: str, reason: str, *,
     repository. False when `root` is not a git repository (or a linked worktree, unless
     `linked_worktree`)."""
     token = _LINKED_WORKTREE.set(bool(linked_worktree))
+    decided = _DECIDED.set(None)
     try:
-        top = _repo_top(root)
+        top = _decide(root)
         if not top:
             return False
         data = _load_state(top, "dismissed.json")
@@ -1489,21 +1652,29 @@ def dismiss_finding(root: str, finding_id: str, reason: str, *,
         info = (last.get("open") or {}).get(finding_id) or {}
         data[finding_id] = {"reason": reason, "title": info.get("title", ""),
                             "file": info.get("file", ""), "at": time.strftime("%Y-%m-%d %H:%M")}
+        _check_top()
         _save_state(top, "dismissed.json", data)
         return True
+    except _FolderChanged:
+        return False
     finally:
+        _DECIDED.reset(decided)
         _LINKED_WORKTREE.reset(token)
 
 
 def last_report(root: str, *, linked_worktree: bool = False) -> Optional[str]:
     """The text of the last audit of this repository, or None."""
     token = _LINKED_WORKTREE.set(bool(linked_worktree))
+    decided = _DECIDED.set(None)
     try:
-        top = _repo_top(root)
+        top = _decide(root)
         if not top:
             return None
         return _load_state(top, "last.json").get("text") or None
+    except _FolderChanged:
+        return None
     finally:
+        _DECIDED.reset(decided)
         _LINKED_WORKTREE.reset(token)
 
 
@@ -1551,7 +1722,8 @@ def code_audit(root: str, *, scope: str = "changes", base: Optional[str] = None,
                parallel: int = 1,
                should_stop: Optional[Callable[[], bool]] = None,
                verify_steps: int = VERIFY_STEPS,
-               linked_worktree: bool = False) -> AuditReport:
+               linked_worktree: bool = False,
+               expect_folder=None) -> AuditReport:
     """Audit the code change in the git repository at `root` (see the module docstring).
 
     `scope`: "changes" (base to the working tree, the default), "committed" (base to HEAD),
@@ -1569,7 +1741,14 @@ def code_audit(root: str, *, scope: str = "changes", base: Optional[str] = None,
     finding; 0 leaves it at the first check (cheaper, more false findings).
     `linked_worktree=True` follows a `.git` file to the repository it names (`git worktree
     add`); without it such a checkout is refused, because the folder could point anywhere.
-    Pass it only for a repository a person chose. Never raises."""
+    Pass it only for a repository a person chose.
+    `expect_folder` is the REAL path the caller judged for `root` (no links on the way,
+    compared as given and never resolved): `root` must then be that folder and hold its own
+    `.git`. With it or without, the run decides its folder once (the top git names) and
+    checks every git call, file read and state write against that one folder; a folder that
+    is swapped for a link, renamed away or replaced while the run reads it ends the run as
+    `failed` (FOLDER_CHANGED), with nothing reported as reviewed and no state saved. Never
+    raises."""
     started = time.monotonic()
     scope = scope if scope in SCOPES else "changes"
     profile = profile if profile in PROFILES else "chill"
@@ -1582,15 +1761,23 @@ def code_audit(root: str, *, scope: str = "changes", base: Optional[str] = None,
                 raise _Stopped()
             return inner(messages, max_tokens)
     token = _LINKED_WORKTREE.set(bool(linked_worktree))
+    decided = _DECIDED.set(None)
     try:
         _run(report, root, scope, base, paths, include_untracked, profile, ask, checks,
              max_files, remember, max(4_000, int(batch_chars)), progress or (lambda _m: None),
-             max(1, min(8, int(parallel or 1))), started, max(0, min(20, int(verify_steps))))
+             max(1, min(8, int(parallel or 1))), started, max(0, min(20, int(verify_steps))),
+             expect_folder)
     except _Stopped:
         report.status, report.status_reason = "failed", "stopped before it finished"
+    except _FolderChanged:
+        # Whatever was read may come from another folder: none of it is reported.
+        report.findings, report.unverified, report.checks, report.addressed = [], [], [], []
+        report.files_reviewed, report.file_summaries, report.summary = [], {}, ""
+        report.status, report.status_reason = "failed", FOLDER_CHANGED
     except Exception as exc:                                   # noqa: BLE001
         report.status, report.status_reason = "failed", f"the audit stopped: {exc}"
     finally:
+        _DECIDED.reset(decided)
         _LINKED_WORKTREE.reset(token)
     report.duration_s = round(time.monotonic() - started, 1)
     return report
@@ -1600,8 +1787,8 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
          paths: Optional[Sequence[str]], include_untracked: bool, profile: str,
          ask: Optional[Ask], checks: bool, max_files: int, remember: bool,
          batch_chars: int, progress: Callable[[str], None], parallel: int,
-         started: float, verify_steps: int = 0) -> None:
-    top = _repo_top(root)
+         started: float, verify_steps: int = 0, expect_folder=None) -> None:
+    top = _decide(root, expect_folder)
     if not top:
         from vaf.core.git_runner import project_repo_problem
         # The runner's own reason: a linked worktree reads differently from no repository.
@@ -1619,8 +1806,10 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
         # `base` can come from the model (the code_audit tool): only the commit id it names
         # reaches `git diff`, where `--output=<file>` would write over any file.
         rev = (report.base if report.base == EMPTY_TREE
-               else resolve_commit(report.base, top, linked_worktree=_LINKED_WORKTREE.get()))
+               else resolve_commit(report.base, top, linked_worktree=_LINKED_WORKTREE.get(),
+                                   expect_folder=top))
         if not rev:
+            _check_top()        # a refusal of the moved folder, not a base that names nothing
             report.status, report.status_reason = "failed", f"{report.base[:80]!r} names no commit"
             return
     files, skipped, error = _collect(top, scope, rev, paths, include_untracked,
@@ -1817,6 +2006,10 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
         report.hidden_by_profile = len(found) - len(shown)
         found = shown
     report.findings = sorted(found, key=_rank)
+    # The folder the run decided on is still the one at its name: a folder replaced at the
+    # same path between two checked reads (another repository moved there) ends the run here,
+    # before anything is reported or remembered.
+    _check_top()
 
     if incomplete:
         report.status, report.status_reason = "incomplete", "; ".join(incomplete)

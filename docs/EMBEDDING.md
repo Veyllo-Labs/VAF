@@ -1020,8 +1020,14 @@ patterns, and the reading stays inside the repository (no symlink out, no file g
 track, no guideline file git ignores), but the code itself is what a review is for. Its
 git calls go through `vaf.run_project_git` (below), so the repository's own hooks, filters
 and drivers do not run while it is read, and a linked worktree (`.git` is a file) is refused
-unless you pass `linked_worktree=True` for a repository the person chose. Size
-`batch_chars` to your model's window, pass `parallel` > 1 only for an API that serves
+unless you pass `linked_worktree=True` for a repository the person chose. If someone else
+can write the folder (a model's sandbox, another process of the account), judge it, resolve
+it once and pass that text both as `root` and as `expect_folder`: the folder must then be
+that real path and hold its own `.git`. With or without it, a run decides its folder once
+and checks every git call, file read and state write against it; a folder swapped for a
+link, moved away or replaced while the run works makes it `failed`, with no findings and
+nothing saved, so a swap never turns into another repository's code sent to your `ask`.
+Size `batch_chars` to your model's window, pass `parallel` > 1 only for an API that serves
 concurrent requests, and give it a `should_stop` if a person can cancel. A repository can
 tune it with `.vaf/code-audit.json` (profile, path filters, path instructions, plain-language
 checks); the pipeline, the budgets and the named boundaries are in
@@ -3151,7 +3157,7 @@ Stable public surface (safe to build on):
   second character is a colon.
 - `vaf.code_audit(root, *, scope=, base=, paths=, include_untracked=, profile=, ask=,
   checks=, max_files=, remember=, batch_chars=, progress=, parallel=, should_stop=,
-  verify_steps=, linked_worktree=)` /
+  verify_steps=, linked_worktree=, expect_folder=)` /
   `vaf.AuditReport` / `vaf.AuditFinding` - reviewing a code change with your model. The
   promise is the `ask(messages, max_tokens) -> str` shape, the completion contract
   (`status` is `complete` only when everything in scope was reviewed, and `exit_code()`

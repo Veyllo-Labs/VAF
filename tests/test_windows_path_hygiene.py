@@ -1372,29 +1372,60 @@ def test_no_program_is_looked_up_by_a_built_path():
 # 11. A node script's newline needle over a source it read from disk
 # ---------------------------------------------------------------------------
 
-# A string literal argument with a `\n` escape in it, to a call that searches text.
+# A search call whose string literal argument has a `\n` escape in it; group 1 is the
+# name the call is made on, when it is made on a name.
 _JS_NEWLINE_NEEDLE = re.compile(
-    r"\.(?:indexOf|lastIndexOf|includes|startsWith|endsWith|split|search|match)\(\s*"
-    r"(['\"`])(?:(?!\1).)*?\\n")
-# A read of a file from disk; stdin (`readFileSync(0, ...)`) carries what Python sent.
-_JS_READS_A_FILE = re.compile(r"readFileSync\(\s*(?!0\s*[,)])")
+    r"(?:([A-Za-z_$][\w$]*)\s*)?\.(?:indexOf|lastIndexOf|includes|startsWith|endsWith|split|search|match)"
+    r"\(\s*(['\"`])(?:(?!\2).)*?\\n")
+# A read of a file from disk; stdin (`readFileSync(0, ...)`, spaced or not) carries what
+# Python sent. The whitespace sits inside the exclusion: outside it, `\s*` matches nothing
+# and the lookahead then sees ` 0`.
+_JS_READS_A_FILE = re.compile(r"readFileSync\((?!\s*0\s*[,)])")
 # `JSON.parse(fs.readFileSync(` - a catalogue read, indifferent to CRLF.
 _JS_FEEDS_JSON_PARSE = re.compile(r"JSON\.parse\(\s*(?:\w+\.)?$")
-# The script normalizes the line ends itself.
+# Line ends normalized in the expression itself.
 _JS_NORMALIZES = re.compile(r"replace\(\s*/\\r\\n/g|split\(\s*/\\r\?\\n/")
+# `name = value` (with or without a declaration keyword), not `==` or `=>`.
+_JS_ASSIGNMENT = re.compile(r"^\s*(?:(?:const|let|var)\s+)?([A-Za-z_$][\w$]*)\s*=(?![=>])(.*)$", re.S)
+_JS_NAME = re.compile(r"[A-Za-z_$][\w$]*")
+
+
+def _js_disk_read(text: str) -> bool:
+    return any(not _JS_FEEDS_JSON_PARSE.search(text[max(0, m.start() - 40):m.start()])
+               for m in _JS_READS_A_FILE.finditer(text))
 
 
 def _node_newline_needles(source: str):
-    """Lines of string constants (node scripts) that search for a `\\n` while some script
-    of the same module reads a file from disk and none normalizes its line ends. A read
-    that only feeds `JSON.parse` is indifferent to CRLF and does not count."""
-    scripts = [(node.lineno, node.value) for node in ast.walk(ast.parse(source))
-               if isinstance(node, ast.Constant) and isinstance(node.value, str)]
-    reads = any(not _JS_FEEDS_JSON_PARSE.search(text[max(0, m.start() - 40):m.start()])
-                for _, text in scripts for m in _JS_READS_A_FILE.finditer(text))
-    if not reads or any(_JS_NORMALIZES.search(text) for _, text in scripts):
-        return []
-    return sorted(lineno for lineno, text in scripts if _JS_NEWLINE_NEEDLE.search(text))
+    """Lines of string constants (node scripts) holding a `\\n` needle over text read from
+    disk whose line ends were not normalized BEFORE the search.
+
+    The module's string constants are read in source order and statement by statement,
+    because a test builds one script from several of them (a prelude that reads, a scenario
+    that searches). A name holds unnormalized disk text from a read that does not normalize
+    in the same expression, or from an expression over such a name; an assignment that
+    normalizes, or that holds nothing read from disk, clears it. A read that only feeds
+    `JSON.parse` is indifferent to CRLF and does not count. A normalization elsewhere in the
+    module, or after the search, exempts nothing."""
+    constants = sorted((node.lineno, node.col_offset, node.value) for node in ast.walk(ast.parse(source))
+                       if isinstance(node, ast.Constant) and isinstance(node.value, str))
+    tainted, hits = set(), set()
+    for lineno, _, text in constants:
+        for statement in re.split(r"[;\n]", text):
+            for needle in _JS_NEWLINE_NEEDLE.finditer(statement):
+                before = statement[:needle.start()]
+                chained = _js_disk_read(before) and not _JS_NORMALIZES.search(before)
+                if needle.group(1) in tainted or chained:
+                    hits.add(lineno)
+            assignment = _JS_ASSIGNMENT.match(statement)
+            if not assignment:
+                continue
+            name, value = assignment.groups()
+            from_disk = _js_disk_read(value) or bool(set(_JS_NAME.findall(value)) & tainted)
+            if from_disk and not _JS_NORMALIZES.search(value):
+                tainted.add(name)
+            else:
+                tainted.discard(name)
+    return sorted(hits)
 
 
 def test_the_node_newline_class_is_real():
@@ -1405,8 +1436,24 @@ def test_the_node_newline_class_is_real():
     assert _node_newline_needles(f"A = {from_disk!r}\nB = {cut!r}\n") == [2]
     normalized = from_disk.replace("'utf8');", "'utf8').replace(/\\r\\n/g, '\\n');")
     assert _node_newline_needles(f"A = {normalized!r}\nB = {cut!r}\n") == []
-    stdin = "const input = JSON.parse(fs.readFileSync(0, 'utf8'));"
-    assert _node_newline_needles(f"A = {stdin!r}\nB = {cut!r}\n") == []
+    for spelling in ("fs.readFileSync(0, 'utf8')", "fs.readFileSync( 0, 'utf8')", "fs.readFileSync(0)"):
+        stdin = f"const src = {spelling};"
+        assert _node_newline_needles(f"A = {stdin!r}\nB = {cut!r}\n") == [], spelling
+    # Normalization counts only for the text searched, and only before the search: an
+    # unrelated script that normalizes its own read exempts nothing, and neither does a
+    # normalization after the needle.
+    other = "const doc = fs.readFileSync(path.join(W, 'docs', 'Y.md'), 'utf8').replace(/\\r\\n/g, '\\n');"
+    assert _node_newline_needles(f"A = {other!r}\nB = {from_disk!r}\nC = {cut!r}\n") == [3]
+    late = "src = src.replace(/\\r\\n/g, '\\n');"
+    assert _node_newline_needles(f"A = {from_disk!r}\nB = {cut!r}\nC = {late!r}\n") == [2]
+    assert _node_newline_needles(f"A = {from_disk!r}\nB = {late!r}\nC = {cut!r}\n") == []
+    # A later read re-taints a name an earlier script had normalized.
+    assert _node_newline_needles(f"A = {normalized!r}\nB = {from_disk!r}\nC = {cut!r}\n") == [3]
+    # A search chained straight onto the read, and one over a slice of the read.
+    chained = "const n = fs.readFileSync(path.join(W, 'X.tsx'), 'utf8').split('\\n').length;"
+    assert _node_newline_needles(f"A = {chained!r}\n") == [1]
+    sliced = "const body = src.slice(10); const k = body.indexOf('\\n}');"
+    assert _node_newline_needles(f"A = {from_disk!r}\nB = {sliced!r}\n") == [2]
     catalogue = "const m = JSON.parse(fs.readFileSync(path.join(W, 'messages', 'en.json'), 'utf8'));"
     assert _node_newline_needles(f"A = {catalogue!r}\nB = {cut!r}\n") == []
     # What a Windows checkout does to the cut, measured the way node reads it.

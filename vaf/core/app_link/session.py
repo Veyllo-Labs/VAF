@@ -29,11 +29,11 @@ import ssl
 import tempfile
 import threading
 import time
-from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Callable, Deque, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from vaf.core.app_link import protocol as pr
+from vaf.core.rate_window import RateWindow
 
 logger = logging.getLogger(__name__)
 
@@ -67,34 +67,24 @@ class SessionLimiter:
     def __init__(self, clock: Callable[[], float] = time.monotonic):
         self._clock = clock
         self._lock = threading.Lock()
-        self._per_conn: Dict[str, Deque[float]] = {}
-        self._per_peer: Dict[str, Deque[float]] = {}
+        # Each drops the keys that went quiet by itself, so both stay bounded.
+        self._per_conn = RateWindow(60, clock=clock)
+        self._per_peer = RateWindow(60, clock=clock)
         self.live = 0
-
-    @staticmethod
-    def _hit(window: Dict[str, Deque[float]], key: str, now: float, limit: int) -> bool:
-        times = window.setdefault(key, deque())
-        while times and now - times[0] > 60:
-            times.popleft()
-        if len(times) >= limit:
-            return False
-        times.append(now)
-        return True
 
     def admit(self, connection: str, peer: str) -> bool:
         now = self._clock()
         with self._lock:
             if self.live >= MAX_SESSIONS:
                 return False
-            if not self._hit(self._per_peer, peer, now, SESSIONS_PER_MINUTE_PER_PEER):
+            # The peer is charged before the connection is asked: a peer refused by its
+            # connection's bound has still used one of its own.
+            if not self._per_peer.take(peer, limit=SESSIONS_PER_MINUTE_PER_PEER, now=now):
                 return False
-            if not self._hit(self._per_conn, connection, now, SESSIONS_PER_MINUTE_PER_CONNECTION):
+            if not self._per_conn.take(connection, limit=SESSIONS_PER_MINUTE_PER_CONNECTION,
+                                       now=now):
                 return False
             self.live += 1
-            # Windows of peers that went quiet are dropped, so the maps stay bounded.
-            for window in (self._per_conn, self._per_peer):
-                for key in [k for k, v in window.items() if not v or now - v[-1] > 120]:
-                    del window[key]
             return True
 
     def release(self) -> None:

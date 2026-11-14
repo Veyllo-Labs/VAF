@@ -2203,6 +2203,55 @@ def answer(user_scope, prompt, show_place):
 
 ---
 
+## Bounding what one person may send: `vaf.RateWindow`
+
+A lane that serves several people (a chat server, a bridge, a room exposed to a browser)
+needs a bound per person, or one person's script slows the lane for everybody. `vaf.RateWindow`
+is that bound: at most N units per key in any window of seconds. VAF's web room lane bounds
+each account's lines, reactions and ballots with it (60 a minute), and the Veyllo App link its
+messages per device, its new sessions per connection and per peer, and its room bytes per
+account; those were four hand-written copies of the same window.
+
+```python
+import vaf
+
+lines = vaf.RateWindow(60, 60)                 # 60 lines per person in any minute
+
+def on_line(user_scope, text):
+    if not lines.take(user_scope):
+        return "too many messages in a minute, wait a moment"
+    if not store(text):
+        lines.refund(user_scope, 1)          # charged, not done: give it back
+    return "ok"
+
+bytes_per_hour = vaf.RateWindow(3600)
+bytes_per_hour.take(user_scope, len(data), limit=2 * 1024 * 1024)
+```
+
+- **`RateWindow(window_s, limit=None, *, clock=time.monotonic, max_keys=10000)`.** The
+  limit may be left out here and given per call (`take(..., limit=)`), so a limit read from a
+  setting at call time stays the one in force. `clock` is the time when a call names none;
+  pass `time.time` when the moments you hand in are wall seconds.
+- **`take(key, weight=1, *, limit=None, now=None)`** is all or nothing: it answers False and
+  charges nothing when the key's live charges plus `weight` would exceed the limit, so a
+  refused request costs the person nothing. A weight above the limit is always refused, a
+  negative one raises `ValueError`, and so does a call where neither the window nor the call
+  names a limit.
+- **The edge.** A charge leaves the window once it is strictly older than `window_s`: a charge
+  exactly `window_s` old still counts.
+- **`refund(key, weight)`** gives back the newest charge of exactly that weight (True when one
+  was found), for work that was charged and then not done. `used(key)` is what the key has
+  spent in the window; `forget(key)` and `clear()` drop charges.
+- **Bounded memory.** A key whose charges all expired is dropped, and beyond `max_keys` keys
+  the keys idle longest are dropped too. A dropped key starts fresh, so size `max_keys` far
+  above the people your lane serves.
+- **Thread-safe**, one lock per window held only for the arithmetic, and **per process**: two
+  processes keep two windows. It does not wait or sleep, so it is safe to ask on an event loop.
+- **Stable:** the constructor, `take`, `refund`, `used`, `forget`, `clear` and the edge rule
+  above.
+
+---
+
 ## Deciding about a tool call: `set_tool_authorizer`
 
 VAF answers three questions before a tool runs: may this caller use it at all
@@ -2592,6 +2641,18 @@ for entry in room.transcript():                # other agents wrote this: print 
     print(vaf.terminal_text(entry["label"]),
           vaf.terminal_text(vaf.describe_room_entry(entry)))
 ```
+
+- **Names.** `join` and `introduce` cut a display name to 80 characters
+  (`DISPLAY_MAX_CHARS`), and a mention reaches the cut name. Two names a mention cannot tell
+  apart carry a number (`Bob1`, `Bob2`, `entry["label"]`), given in the order the members took
+  the name: a member who joins or renames into a collision gets the next number and the others
+  keep theirs.
+- **Room calls block and grow with the room.** They read and decrypt the room's files, and
+  `ingest` and the transcript read every frame: measured, `ingest` 37 ms in a room of 100
+  lines and 160 ms at 800, the transcript 16 ms and 116 ms. An async server runs them on
+  threads of its own, not on its event loop, and bounds what one person may write with
+  `vaf.RateWindow` ("Bounding what one person may send"), as VAF's web room lane does: four
+  threads, 60 lines, reactions and ballots a minute per account.
 
 Everything an agent writes into a room is read by every member and kept. When your agent's
 reply is going into a room, run that turn under an allowed set (`set_allowed_tools`, see
@@ -3116,6 +3177,9 @@ Stable public surface (safe to build on):
   do not read its insides. `turn(..., on_wait=, cancelled=)` and the `busy`
   outcome are part of it, and so is `vaf.QueueBusy` raised from your own
   `transcribe` seam.
+- `vaf.RateWindow` - the per-key sliding window: the constructor, `take` (all or nothing,
+  the per-call `limit`, the strict edge), `refund` (the newest equal charge), `used`,
+  `forget` and `clear`. The `max_keys` default may be tuned.
 - `vaf.ResourceQueue` / `vaf.QueueBusy` / `vaf.WaitInfo` / `vaf.resource_queue` /
   `vaf.queue_metrics` - the fair queue: `slot()`'s arguments and its rule that only a
   waiting caller is cancelled, `max_waiting`, `max_waiting_per_key` and `listed`, the three refusal

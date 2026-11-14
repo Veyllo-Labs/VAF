@@ -37,6 +37,8 @@ the chain of command grow without every ancestor drowning in its descendants' ch
 from __future__ import annotations
 
 import hashlib
+import math
+import re
 import secrets
 import time
 from pathlib import Path
@@ -130,7 +132,7 @@ def fold_name(name: Any) -> str:
 #: never sentence punctuation either, so "@C++." still reaches a member called "C++".
 _NAME_PUNCTUATION = frozenset("#%&*/_")
 _POSSESSIVES = ("'s", "’s")
-#: The longest display name a member has: `join` and `update_card` cut to it, and a longer one
+#: The longest display name a member has: `join` and `introduce` cut to it, and a longer one
 #: stored before is read as cut to it wherever names are compared (`display_name`).
 DISPLAY_MAX_CHARS = 80
 #: The longest name a mention can give. A display name is at most `DISPLAY_MAX_CHARS` and a
@@ -185,6 +187,24 @@ def display_name(display: Any, peer_id: str = "") -> str:
     return str(display or peer_id)[:DISPLAY_MAX_CHARS]
 
 
+def _named_at(record: Optional[Dict[str, Any]], display: str) -> float:
+    """When a member took the name ``display``: the moment its stored ``record`` holds when that
+    is the name it already had (0.0 for a record written before members carried it), now
+    otherwise. Orders the members of one collision in `Room.labels`."""
+    if record and str(record.get("display") or "")[:DISPLAY_MAX_CHARS] == display:
+        return _seconds(record.get("named_at"))
+    return time.time()
+
+
+def _seconds(value: Any) -> float:
+    """A stored moment as seconds; 0.0 for none or for anything that is not a finite number."""
+    try:
+        number = float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return number if math.isfinite(number) else 0.0
+
+
 def lookup_key(name: Any) -> str:
     """A name as the member lookup reads it: leading "@" taken off, folded (`fold_name`)."""
     return fold_name(str(name or "").strip().lstrip("@"))
@@ -197,6 +217,28 @@ def name_key(name: Any) -> str:
     (`Room.labels`)."""
     folded = lookup_key(name)
     return folded[:_trimmed_end(folded)]
+
+
+#: U+200B ZERO WIDTH SPACE ends a mention like a space does: a keyboard that completed a name
+#: may put one after it. Joiners (U+2060 WORD JOINER, U+FEFF, ZWJ, ZWNJ) are not spaces and
+#: continue the word, as they shape scripts and emoji.
+_ZWSP = "\u200b"
+_MENTION_GAP = re.compile(r"[\s\u200b]*")
+_MENTION_WORD = re.compile(r"\S*")
+
+
+def _mention_forms(word: str, end: int) -> List[str]:
+    """``word[:end]`` and its shorter forms, one sentence ending after another taken off,
+    longest first; a form longer than `MENTION_MAX_CHARS` is walked past, never copied."""
+    out: List[str] = []
+    while end > 0:
+        if end <= MENTION_MAX_CHARS:
+            out.append(word[:end])
+        shorter = _shorter_end(word, end)
+        if shorter == end:
+            break
+        end = shorter
+    return out
 
 
 def mention_candidates(text: Any) -> List[str]:
@@ -212,21 +254,25 @@ def mention_candidates(text: Any) -> List[str]:
     of a script written without spaces continues the word: "@Mia你好" is no mention of Mia (the
     person puts a space after the name). A form longer than `MENTION_MAX_CHARS` names nobody
     and is not offered; the endings are walked by index, so a word of 65,535 full stops costs
-    one pass and no copies."""
-    stripped = str(text or "").lstrip()
-    if not stripped.startswith("@"):
+    one pass and no copies.
+
+    A zero-width space (U+200B) is read as a space too: skipped before the "@" and between the
+    "@" and the word, and the word cut at the first one inside it gives its forms as well. So
+    "@Mia<U+200B> hi" and "@Mia<U+200B>hi" name Mia; beside a member literally called
+    "Mia<U+200B>X", "@Mia<U+200B>X" gives both names and `resolve_mention` sends it to the
+    room. Every line without one gives exactly what it always gave."""
+    raw = str(text or "")
+    at = _MENTION_GAP.match(raw).end()
+    if not raw.startswith("@", at):
         return []
-    parts = stripped[1:].split(None, 1)
-    word = parts[0] if parts else ""
-    out: List[str] = []
-    end = len(word)
-    while end > 0:
-        if end <= MENTION_MAX_CHARS:
-            out.append(word[:end])
-        shorter = _shorter_end(word, end)
-        if shorter == end:
-            break
-        end = shorter
+    begin = _MENTION_GAP.match(raw, at + 1).end()
+    word = raw[begin:_MENTION_WORD.match(raw, begin).end()]
+    out = _mention_forms(word, len(word))
+    cut = word.find(_ZWSP)
+    if cut > 0:
+        # Every form of the whole word ends past the U+200B (it is no sentence ending), so the
+        # cut word's forms are all shorter: appended, the list stays longest first and unique.
+        out.extend(_mention_forms(word, cut))
     return out
 
 
@@ -928,12 +974,19 @@ class Room:
         # would hand a stranger the switch. set_mode is the only way it changes, and it
         # is reachable from the local lanes alone.
         existing = self.store.member(identity.peer_id) or {}
-        self.store.put_member(identity.peer_id, {
+        member_record: Dict[str, Any] = {
             "display": identity.display,
             "mode": str(existing.get("mode") or mode),
             "lease": time.time(),
             "card": dict(card),
-        })
+        }
+        # When this member took its name: a re-join under the same name keeps it, so its
+        # number inside a collision stays (`labels`). A member written before the field
+        # existed and keeping its name stays without it, numbered as it always was.
+        named_at = _named_at(existing, identity.display)
+        if named_at:
+            member_record["named_at"] = named_at
+        self.store.put_member(identity.peer_id, member_record)
         body: Dict[str, Any] = {"display": identity.display, "card": dict(card)}
         if published:
             # PUBLISH ONLY A KEY THIS JOIN CAN ATTEST. A reader believes a published
@@ -1240,7 +1293,12 @@ class Room:
         if not self.role_of(identity.peer_id):
             raise NotAMember(f"{identity.peer_id!r} has not joined room {self.room_id!r}")
         if display:
+            record["named_at"] = _named_at(record, display_name(display))
             record["display"] = display_name(display)
+            if not record["named_at"]:
+                # A member written before the field existed, keeping its name: it stays as it
+                # was, numbered with the other members that carry none.
+                del record["named_at"]
         if card:
             record["card"] = dict(card)
         record.setdefault("lease", time.time())
@@ -2833,16 +2891,21 @@ class Room:
         "bob", "Straße" and "STRASSE", "Bob" and "Bob.", "Bob" and "@Bob" are each one
         collision.
 
-        The members of a collision are numbered in the order their handles sort in, and a
-        number is skipped when the label it gives could already mean somebody: its lookup
-        key or its name key equals any member's name, name key, or a label given before it.
-        NAMED BOUNDARY: the labels are stable across restarts (they come from the handles),
-        not across a join, a leave or a rename inside one collision: a third "Bob" can
-        renumber the others, and a member can rename itself to a label another member had,
-        so a mention typed from an earlier view can reach a different member. A mention only
-        decides which member is woken, every member reads every line, and it was so before
-        labels were numbered this way. So with "Bob", "bob" and "Bob1" in one room
-        the first two become "Bob2" and "bob3", and every label names exactly one member.
+        The members of a collision are numbered in the order they took the name (`named_at`
+        in the member record, written by `join` and `introduce`; a re-join under the same
+        name keeps it), then by handle, and a number is skipped when the label it gives could
+        already mean somebody: its lookup key or its name key equals any member's name, name
+        key, or a label given before it. So a member who joins or renames into a collision
+        gets the next number and the others keep theirs, and a room written before members
+        carried the field (every key 0) is numbered by handle exactly as it always was. A
+        leave renumbers nothing: the member's record stays in the store.
+        NAMED BOUNDARY: a rename OUT of a collision renumbers the members numbered after it
+        in that collision, and a member that renames itself to another member's current
+        label moves that member to the next number, so a mention typed from an earlier view
+        can reach the renamer. A mention only decides which member is woken, every member
+        reads every line, and it was so before labels were numbered this way. With "Bob",
+        "bob" and "Bob1" in one room the first two become "Bob2" and "bob3", and every
+        label names exactly one member.
         Small numbers rather than a digest, because a human reads them back to somebody
         else. UNIQUE WITHIN THE ROOM is the property that matters, and the reason this
         lives on the room rather than in a helper: a room whose labels are unique has no
@@ -2851,7 +2914,7 @@ class Room:
         members = self.store.members()
         names = {peer: display_name(rec.get("display"), peer) for peer, rec in members.items()}
         groups: Dict[str, List[str]] = {}
-        for peer in sorted(names):
+        for peer in sorted(names, key=lambda p: (_seconds(members[p].get("named_at")), p)):
             groups.setdefault(name_key(names[peer]), []).append(peer)
         taken = set()
         for name in names.values():

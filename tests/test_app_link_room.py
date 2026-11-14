@@ -1418,7 +1418,10 @@ def test_the_texts_the_agent_reads_teach_a_label_the_room_gives(tmp_path):
     address one member. The example must be a label the room really gives: with two members
     called "Codex" the second is "Codex2", and "@Codex2" reaches it. An example of the old
     digest tag ("Codex51") taught mentions that go to the whole room. MUTATION: put the old
-    example back into one of them - red; MUTATION: drop the first-word clause from one - red."""
+    example back into one of them - red; MUTATION: drop the first-word clause from one - red.
+    The first-word clause is checked as whole sentences, so a one-word change ("first term",
+    "in the CLI") is red too; MUTATION: drop "Only the member you name is woken" from the
+    briefing - red."""
     import re
 
     root = Path(__file__).resolve().parents[1]
@@ -1440,9 +1443,30 @@ def test_the_texts_the_agent_reads_teach_a_label_the_room_gives(tmp_path):
     spaced = _members(tmp_path, ["Mia Lisa", "Alice Smith", "Alice"], room_id="room-spaced")
     assert spaced.address_from_mention("@Mia Lisa hi") is None
     assert spaced.address_from_mention("@Alice Smith hi") == {"peer": "p-2"}
-    for name, text in texts.items():
-        flat = " ".join(text.split())
-        assert "first word" in flat and ("--to <peer>" in flat or "id here" in flat), name
+    from vaf.core.a2a.invite import working_instructions
+    from vaf.tools.room_tools import RoomSendTool
+    flat = {
+        "briefing": " ".join(working_instructions(room_id="room-x", role="peer",
+                                                 room_kind="round").split()),
+        "tool": " ".join(RoomSendTool.parameters["properties"]["to_peer"]["description"]
+                         .split()),
+        "skill": " ".join(texts["skill"].split()),
+    }
+    sentences = {
+        "briefing": [
+            'Only the member you name is woken by it; everyone else sees it marked as not '
+            'being for them.',
+            'Only the first word after "@" is read, so a name with a space ("Mia Lisa") '
+            'cannot be mentioned that way, and the first word alone names only a member called '
+            'exactly that word: address such a member with `--to <peer>`.'],
+        "tool": ['Only the first word after "@" is read: for a member whose name has a space, '
+                 'give its id here instead.'],
+        "skill": ['Only the first word after "@" is read',
+                  '(`to_peer` in the room tool, `--to <peer>` in `vaf a2a say`)'],
+    }
+    for name, wanted in sentences.items():
+        for sentence in wanted:
+            assert sentence in flat[name], (name, sentence)
 
 
 def test_a_space_after_the_at_still_names(room_home, monkeypatch):
@@ -1520,7 +1544,7 @@ def test_room_say_bytes_per_hour_are_bounded(room_home, monkeypatch):
     """MUTATION: skip `_say_budget_ok` in `on_room_say` - red."""
     import uuid as _uuid
     monkeypatch.setattr(room, "ROOM_SAY_BYTES_PER_HOUR", 200)
-    monkeypatch.setattr(room, "_say_bytes", {})
+    room._SAY_BYTES.clear()
     client, _pipe, _row = _capable()
     first, second = str(_uuid.uuid4()), str(_uuid.uuid4())
     client.send(_say("x" * 150, sid=first))
@@ -1883,11 +1907,11 @@ def test_the_agents_name_is_part_of_the_cache(room_home, monkeypatch):
 
 def test_a_failed_append_gives_the_bytes_back(room_home, monkeypatch):
     """MUTATION: drop the refund after an append that stored nothing - red."""
-    monkeypatch.setattr(room, "_say_bytes", {})
+    room._SAY_BYTES.clear()
     client, _pipe, _row = _capable()
     monkeypatch.setattr(room, "_append", lambda *a, **k: False)
     client.send(_say("x" * 100))
-    assert sum(n for _t, n in room._say_bytes.get(SCOPE_A, [])) == 0
+    assert room._SAY_BYTES.used(SCOPE_A) == 0
 
 
 def test_a_refused_turn_stores_when_it_was_asked(runner_world):

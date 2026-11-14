@@ -27,6 +27,7 @@ EXPORTED = [
     "NON_CONVERSATION_KINDS",
     "PathEscape",
     "QueueBusy",
+    "RateWindow",
     "RemoteRefused",
     "RemoteRoom",
     "ResourceQueue",

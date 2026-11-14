@@ -32,6 +32,7 @@ One file per contract module:
 | `test_contract_code_audit.py` | `code_audit`: the `ask` parameter, verified findings with fix prompts, the completion contract (`status`, `exit_code()`) |
 | `test_contract_environments.py` | `EnvironmentManager` / `get_environment_manager`: the kinds, the network profiles, `EnvironmentRefused`, the documented signatures |
 | `test_contract_revocation.py` | `revoke_account` / `restore_account` / `stop_account_work` / `stop_session` / revocation listeners, and the standing-grant read and undo |
+| `test_contract_rate_window.py` | `RateWindow`: the facade name, the documented signatures, lazy import, `take` all or nothing with a per-call `limit`, `refund` and `used` |
 
 The suite is offline by design: no network, no API keys, no Docker, no model
 downloads, and no writes outside pytest temp directories. Internals under

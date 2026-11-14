@@ -50,13 +50,13 @@ import os
 import threading
 import time
 import uuid
-from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from vaf.core.app_link import CHANNEL, devices
 from vaf.core.app_link import protocol as pr
+from vaf.core.rate_window import RateWindow
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,8 @@ _all: set = set()                        # every session alive, handshakes inclu
 _replies: Dict[Tuple[str, str], "Reply"] = {}
 _asks: Dict[str, Dict[str, "OpenAsk"]] = {}  # device_id -> ask id -> the open request
 _seen_ids: Dict[str, Dict[str, float]] = {}
-_msg_times: Dict[str, Deque[float]] = {}
+# Messages per device in any minute (session.MSG_PER_MINUTE, read at call time).
+_MSG_RATE = RateWindow(60)
 _touched: Dict[str, float] = {}
 _offline_hooks: List[Callable[[Dict[str, Any]], None]] = []
 _online_hooks: List[Callable[[str], None]] = []
@@ -459,15 +460,7 @@ def _touch_now_and_then(device_id: str, session) -> None:
 
 def _rate_ok(device_id: str) -> bool:
     from vaf.core.app_link.session import MSG_PER_MINUTE
-    now = time.monotonic()
-    with _lock:
-        times = _msg_times.setdefault(device_id, deque())
-        while times and now - times[0] > 60:
-            times.popleft()
-        if len(times) >= MSG_PER_MINUTE:
-            return False
-        times.append(now)
-        return True
+    return _MSG_RATE.take(device_id, limit=MSG_PER_MINUTE)
 
 
 def _seen_before(device_id: str, message_id: str) -> bool:
@@ -1058,9 +1051,9 @@ def reset() -> None:
         _replies.clear()
         _asks.clear()
         _seen_ids.clear()
-        _msg_times.clear()
         _touched.clear()
         _state["expired_at"] = 0.0
+    _MSG_RATE.clear()
     from vaf.core.app_link import confirmations
     confirmations.reset()
 

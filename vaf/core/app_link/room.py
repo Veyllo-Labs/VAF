@@ -60,13 +60,13 @@ import logging
 import threading
 import time
 import uuid
-from collections import deque
 from datetime import datetime
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from vaf.core import agent_origin as origin
 from vaf.core.app_link import CHANNEL, devices
 from vaf.core.app_link import protocol as pr
+from vaf.core.rate_window import RateWindow
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +92,13 @@ TASK_RESULT_CODES = ("answered", "declined", "unavailable", "timeout", "failed",
                      "disconnected", "file_refused")
 
 _lock = threading.Lock()
-_say_bytes: Dict[str, Deque[Tuple[float, int]]] = {}
+# room_say bytes per account in any hour (ROOM_SAY_BYTES_PER_HOUR, read at call time). A
+# wall clock, as the callers name their moment in wall seconds.
+_SAY_BYTES = RateWindow(3600, clock=time.time)
+# Page line ids a post of the account is storing right now: claimed before the id is checked
+# (`_line_id_in_use`) and released once the line is stored, so two posts of one id at the same
+# moment cannot both keep it. Per process: `post` has one caller, the web server's route.
+_claimed: Dict[str, Set[str]] = {}
 # (scope, username) -> (key, the last TRANSCRIPT_LIMIT lines, {"count", "unread", "last"})
 _cache: Dict[Tuple[str, str], Tuple[Any, List[Dict[str, Any]], Dict[str, Any]]] = {}
 
@@ -674,6 +680,26 @@ def _client_line_id(client_id: Any) -> str:
         return ""
 
 
+def _claim(scope: str, line_id: str) -> bool:
+    """Hold ``line_id`` for one post of the account, or False when another post holds it."""
+    with _lock:
+        held = _claimed.setdefault(scope, set())
+        if line_id in held:
+            return False
+        held.add(line_id)
+        return True
+
+
+def _unclaim(scope: str, line_id: str) -> None:
+    with _lock:
+        held = _claimed.get(scope)
+        if held is None:
+            return
+        held.discard(line_id)
+        if not held:
+            del _claimed[scope]
+
+
 def _line_id_in_use(scope: str, owner: str, line_id: str) -> bool:
     """Whether this account already knows ``line_id`` anywhere a line's id is read back: a room
     line or a stored question's message id in the app chat, a question still waiting in the
@@ -752,50 +778,57 @@ def post(user_scope_id: Any, username: str, text: Any,
     if not bridge._rate_ok((target or standing[0])["device_id"]):
         raise RoomRefused("rate_limited", 429)
     # The page's own id for the line when it sent one this account does not know yet
-    # (`_line_id_in_use`); a fresh one otherwise.
+    # (`_line_id_in_use`); a fresh one otherwise. The id is claimed for the length of the check
+    # and the store, so a second post of the same id at the same moment finds it claimed or
+    # stored; the claim ends on every way out, a refusal included.
     line_id = _client_line_id(client_id)
-    if not line_id or _line_id_in_use(scope, owner, line_id):
-        line_id = str(uuid.uuid4())
-    now = time.time()
-    if to == APP_AGENT:
-        meta = {"id": line_id, "to": APP_AGENT, "device": str(target.get("model") or ""),
-                "device_id": target["device_id"]}
-        guard = None
-        if resend_of and _line_text(scope, str(resend_of),
-                                    kinds=(origin.APP_ROOM_OUT_KIND,)) is not None:
-            meta["resend_of"] = str(resend_of)
-            guard = _not_sent_again_yet(str(resend_of))
-        if not _append(scope, body, role="user", kind=origin.APP_ROOM_OUT_KIND, meta=meta,
-                       only_if=guard):
-            # Not stored (the chat cannot be written, or the line was sent again meanwhile from
-            # another screen): nothing is delivered, so the app never holds a line the room
-            # does not show.
-            # "Sent again" only on a chat that was read and holds the resend: a chat that
-            # cannot be read confirms nothing, and that is the "failed" refusal.
+    claimed = line_id if line_id and _claim(scope, line_id) else ""
+    try:
+        if not claimed or _line_id_in_use(scope, owner, line_id):
+            line_id = str(uuid.uuid4())
+        now = time.time()
+        if to == APP_AGENT:
+            meta = {"id": line_id, "to": APP_AGENT, "device": str(target.get("model") or ""),
+                    "device_id": target["device_id"]}
+            guard = None
+            if resend_of and _line_text(scope, str(resend_of),
+                                        kinds=(origin.APP_ROOM_OUT_KIND,)) is not None:
+                meta["resend_of"] = str(resend_of)
+                guard = _not_sent_again_yet(str(resend_of))
+            if not _append(scope, body, role="user", kind=origin.APP_ROOM_OUT_KIND, meta=meta,
+                           only_if=guard):
+                # Not stored (the chat cannot be written, or the line was sent again meanwhile from
+                # another screen): nothing is delivered, so the app never holds a line the room
+                # does not show.
+                # "Sent again" only on a chat that was read and holds the resend: a chat that
+                # cannot be read confirms nothing, and that is the "failed" refusal.
+                try:
+                    stored = _load(devices.chat_session_id(scope)) if guard is not None else None
+                    sent_again = stored is not None and not guard(stored)
+                except Exception:
+                    sent_again = False
+                if sent_again:
+                    raise RoomRefused("already_sent_again", 409)
+                raise RoomRefused("failed", 500)
+        else:
+            # A turn of the person, queued exactly as a message from the app queues one, and
+            # kept in the channel store as that message is (the app's copy replays from there).
             try:
-                stored = _load(devices.chat_session_id(scope)) if guard is not None else None
-                sent_again = stored is not None and not guard(stored)
+                from vaf.core.channel_message_store import append_message
+                append_message(username=owner, chat_id=devices.chat_key(scope), body=body,
+                               direction="in", message_id=line_id, content_type="text",
+                               channel=CHANNEL, user_scope_id=scope)
             except Exception:
-                sent_again = False
-            if sent_again:
-                raise RoomRefused("already_sent_again", 409)
-            raise RoomRefused("failed", 500)
-    else:
-        # A turn of the person, queued exactly as a message from the app queues one, and
-        # kept in the channel store as that message is (the app's copy replays from there).
-        try:
-            from vaf.core.channel_message_store import append_message
-            append_message(username=owner, chat_id=devices.chat_key(scope), body=body,
-                           direction="in", message_id=line_id, content_type="text",
-                           channel=CHANNEL, user_scope_id=scope)
-        except Exception:
-            logger.debug("app room: storing the line failed", exc_info=True)
-        from vaf.core.task_queue import TaskQueue
-        TaskQueue().add(session_id=devices.chat_session_id(scope), input_text=body,
-                        source=CHANNEL,
-                        metadata={"user_scope_id": scope, "username": owner,
-                                  "origin_channel": CHANNEL, "task_class": "interactive",
-                                  "channel_message_id": line_id})
+                logger.debug("app room: storing the line failed", exc_info=True)
+            from vaf.core.task_queue import TaskQueue
+            TaskQueue().add(session_id=devices.chat_session_id(scope), input_text=body,
+                            source=CHANNEL,
+                            metadata={"user_scope_id": scope, "username": owner,
+                                      "origin_channel": CHANNEL, "task_class": "interactive",
+                                      "channel_message_id": line_id})
+    finally:
+        if claimed:
+            _unclaim(scope, claimed)
     state_now = "queued"
     if target is not None:
         state_now = _deliver(scope, target, line_id, body, now, to)
@@ -815,27 +848,12 @@ def _stored_incoming(scope: str, line_id: str) -> bool:
 def _say_budget_ok(scope: str, size: int, now: Optional[float] = None) -> bool:
     """Take ``size`` bytes of the account's ``ROOM_SAY_BYTES_PER_HOUR``, or False when they do
     not fit the last hour (nothing is taken then)."""
-    now = time.time() if now is None else now
-    with _lock:
-        spent = _say_bytes.setdefault(scope, deque())
-        while spent and now - spent[0][0] > 3600:
-            spent.popleft()
-        if sum(n for _t, n in spent) + size > ROOM_SAY_BYTES_PER_HOUR:
-            return False
-        spent.append((now, size))
-        return True
+    return _SAY_BYTES.take(scope, size, limit=ROOM_SAY_BYTES_PER_HOUR, now=now)
 
 
 def _say_refund(scope: str, size: int) -> None:
     """Give back the newest charge of ``size`` bytes (a line that was not stored)."""
-    with _lock:
-        spent = _say_bytes.get(scope)
-        if not spent:
-            return
-        for index in range(len(spent) - 1, -1, -1):
-            if spent[index][1] == size:
-                del spent[index]
-                return
+    _SAY_BYTES.refund(scope, size)
 
 
 def on_room_say(session, row: Dict[str, Any], message: Dict[str, Any]) -> None:

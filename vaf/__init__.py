@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from .core.environments import EnvironmentManager, get_environment_manager
     from .core.fair_queue import QueueBusy, ResourceQueue, WaitInfo, queue_metrics, resource_queue
     from .core.git_runner import run_project_git
+    from .core.rate_window import RateWindow
     from .core.pdf_extract import extract_pdf_markdown
     from .core.session import (TurnRound, TurnStatus, model_text, returned_turn_copy,
                                stored_turn_copy)
@@ -43,7 +44,7 @@ __all__ = ["__version__", "Agent", "AuditFinding", "AuditReport", "BOOKKEEPING_K
            "CoreAgent",
            "EgressPolicy", "EgressRefused", "EnvironmentManager",
            "NON_CONVERSATION_KINDS",
-           "PathEscape", "QueueBusy", "RemoteRefused",
+           "PathEscape", "QueueBusy", "RateWindow", "RemoteRefused",
            "RemoteRoom", "ResourceQueue", "Room", "RoomError", "RoomTriggerWatch",
            "SOUL_CONTINUITY_ADDENDUM",
            "StoreError", "ToolCallHooks", "ToolCallOutcome", "ToolCaller", "ToolRequest",
@@ -186,6 +187,15 @@ def __getattr__(name):
         # docs/EMBEDDING.md, "Sharing a scarce resource fairly".
         from .core import fair_queue
         return getattr(fair_queue, name)
+    if name == "RateWindow":
+        # At most N units per key in any window of seconds: the bound a lane serving
+        # several people puts on each of them, so one person's flood cannot slow the
+        # lane for the others. VAF's web room lane bounds each account's writes with it,
+        # and the Veyllo App link its messages, sessions and room bytes; those were four
+        # hand-written copies of the same window. Stdlib only. See docs/EMBEDDING.md,
+        # "Bounding what one person may send".
+        from .core.rate_window import RateWindow
+        return RateWindow
     if name == "is_error_reply":
         # Tell a turn that failed from a turn that answered. run() and chat_step do not
         # raise for a failing provider: the failure comes back as the turn's text, with

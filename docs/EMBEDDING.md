@@ -1121,27 +1121,31 @@ diff, add, checkout, reset, revert), and `git init` writes by path, so the handl
 a moment: under a process looping rename-and-link, `status` leaked in 3 of 570 calls and
 `diff` in 10 of 868, and `reset --hard` wrote your repository's files into the swapped-in
 folder in 2 of 247 answered calls. Where bubblewrap can start a namespace (one probe per
-process), every git process of the call starts in a mount namespace whose root is its own
-tmpfs, with the system folders, the hooks folder and the person's global git config
-read-only and your top folder bound at its real path; a check inside, before git starts,
-compares that folder's `dev:ino` with the handle's, and git then works there with
-`--work-tree=<top>`. A swap on the host after that does not reach the namespace: 0 leaks of
-958 answered status calls and 0 writes in 300 `reset --hard` calls under the same racer. A
-start the check refused is repeated at most twice, never once git ran, and then refused with
-"a link on the way" (`returncode` -1). The price is one namespace start per git process,
-about 20 ms more per call. In that view git can write only inside your folder (the rest is
+process, a failed start probed again after five minutes), the git command of the call starts
+in a mount namespace whose root is its own tmpfs, with the system folders, the hooks folder,
+the person's global git config and the global ignore and attributes files it names read-only,
+and your top folder bound at its real path; a check inside, before git starts, compares that
+folder's `dev:ino` with the handle's, and git then works there with `--work-tree=<top>`. The
+read-only config and index reads before it run through the handles, which pin them fully. A
+swap on the host after that does not reach the namespace: 0 leaks of 944 answered status
+calls and 0 writes in 300 `reset --hard` calls under the same racer. A start the check
+refused is repeated at most twice, never once git ran, and then refused (`returncode` -1)
+with the last start's cause ("could not start in a private view of ..."). The price is one
+namespace start per call, about 5 ms (10 against 5.5 ms for a status). A folder inside a
+folder the namespace binds read-only (/opt, a git install prefix) keeps the handles alone. In that view git can write only inside your folder (the rest is
 read-only, with no scratch `/tmp`): a command that writes elsewhere, such as `worktree add
 <path outside>`, `archive -o` or `bundle create` with a path outside, fails with "Read-only
-file system" rather than writing somewhere it would be lost. Run those with plain git, on a
-repository you trust.
+file system" rather than writing somewhere it would be lost (the runner adds a line saying
+why). Run those with plain git, on a repository you trust.
 
 **Named boundary: where that view does not exist.** macOS, Windows, Linux without a working
 bubblewrap (inside a default Docker container user namespaces are refused, measured), and
 `linked_worktree=True`: there the handles are all there is, with the numbers above. On macOS
 (no `/proc`) the folder is checked by `samestat` before each git process and git runs by
 path; on Windows (no folder handles) the folder must still resolve to `expect_folder` before
-each process. Inside the namespace git reads only the global config files it is given, so an
-include of them that points elsewhere is not read there. An entry written inside `.git` right
+each process. Inside the namespace git reads only the global config files it is given and the
+ignore and attributes files they name, so any other file an include of them points to is not
+read there. An entry written inside `.git` right
 after the runner scanned it (`objects/info/alternates`, a `commondir`) is read by that call.
 If something can write the folder while you call git, stop or pause it first, as for the
 driver race below.
@@ -1188,12 +1192,12 @@ envs.delete("scope-of-alice", env.id)          # container, volume, network and 
 
 - **Kinds.**
   - `temporary`: removed whole when it expires (`sandbox_env_temp_ttl_hours`, default 24, counted from the last use).
-  - `project`: kept until deleted, stopped when idle; `project_path=` mounts a host directory at `/workspace`. The resolved path is stored, and every start of the environment (the first one, a restore's `readopt`, a restart after an idle stop) opens it again as a handle with itself as the expected real path, so a folder replaced by a link meanwhile is refused instead of mounted; on a docker daemon that shares this kernel, `/workspace` must then show that handle's `dev:ino` before anything runs, or the container is stopped and the start refused. On a daemon in a VM (Docker Desktop) the mount is by name, unchecked after the start.
+  - `project`: kept until deleted, stopped when idle; `project_path=` mounts a host directory at `/workspace`. The resolved path is stored, and every start of the environment (the first one, a restore's `readopt`, a restart after an idle stop) opens it again as a handle with itself as the expected real path, so a folder replaced by a link meanwhile is refused instead of mounted; on a docker daemon that shares this kernel, the host's kernel is then asked what is mounted at `/workspace` (through the container's process, never a tool inside it) and it must be that handle's `dev:ino`, or the container is stopped and the start refused. Until that check passed, a command from another request or process that finds the container running checks the mount itself first. On a daemon in a VM (Docker Desktop) the mount is by name, unchecked after the start; a daemon that runs containers under another user (rootless, userns-remap) cannot be checked, and such a start is refused. The container's own command runs before the check, so a program a root command left in the environment in place of `sleep` runs then.
   - `scratch_for(scope)`: the one scratch environment per person that `python_sandbox` uses.
 - **Networks** (`network=`): `none` (no route out, the host unreachable), `registries` (only package registries, through a filtering proxy) or `open`. The admin key `sandbox_env_network_max` caps what may be asked for. `open` reaches the LAN and whatever listens on the host's `0.0.0.0`; `registries` does not stop data leaving through the registries themselves. Both are said in the tools' descriptions too.
 - **Ownership.** Every call takes the owner's scope first. Another person's environment answers like a missing one; `admin=True` on `get`, `stop` and `delete` reaches it, and nothing runs code in someone else's environment. A scope of `None` means the machine owner, as everywhere in VAF; with no owner configured, the call is refused.
 - **Running as root.** `exec_in(env, argv, as_root=True)` runs one command as root inside a `temporary` or `project` environment (created with the six capabilities a package manager needs as root, `ROOT_LANE_CAPS`, which the environment's own user cannot use); what it leaves in `/workspace` is handed back to the environment's user. VAF gives this lane only to its coder; the scratch environment has none.
-- **Refusals** raise `EnvironmentRefused` (from `vaf.core.environments`) with a reason a person can act on: the limit per person, the memory floor, the network cap, a project path outside the caller's own folder, a project folder that is not the one the environment was made for (a link on the way, gone, or a different folder at `/workspace` after the start), an image still being built. When docker does not list the environments (down, or not answering), `get` and every call that finds an environment through it raise the subclass `EnvironmentsUnlisted` instead of "no environment": unmeasured is not missing. VAF's web routes answer it with 503 and a plain refusal with 404.
+- **Refusals** raise `EnvironmentRefused` (from `vaf.core.environments`) with a reason a person can act on: the limit per person, the memory floor, the network cap, a project path outside the caller's own folder, a project folder that is not the one the environment was made for (moved, replaced by a link, gone, or a different folder at `/workspace` after the start), a mount that could not be checked, an image still being built. When docker does not list the environments (down, or not answering), `get` and every call that finds an environment through it raise the subclass `EnvironmentsUnlisted` instead of "no environment": unmeasured is not missing. VAF's web routes answer it with 503 and a plain refusal with 404.
 - **What it needs.** Docker, and the environment image, which VAF builds from the Dockerfile inside the package (minutes the first time). `create` refuses while it builds; `wait_for_image=True` waits for it. Docker 28 or newer gives `none` and `registries` an isolated gateway; on an older engine the host stays reachable on the network's gateway, and the environment's `degraded` field says so.
 - **Background processes.** `start_process(scope, env_id, command, session_id=..., username=..., user_role=..., cwd=..., cleanup_dir=..., label=...)` starts a command that keeps running and returns its handle (`e-<environment>-<process>`) at once; `processes(scope, session_id=...)`, `process_log(scope, handle)` and `stop_process(scope, handle)` list, read and stop it. At most eight run in one environment (a ninth raises `EnvironmentRefused` naming the running ones; the count and a placeholder are written under one lock, so simultaneous starts cannot all pass). `label` is what lists and the report show instead of the command; `cleanup_dir`, a run folder of your own under `/tmp` named `/tmp/vaf_<lane>_<hex>` (anything else raises `ValueError`), is removed when the process is reported or stopped. With a `session_id`, the process that started it watches it every 5 seconds and, when it ends, queues a wake turn of kind `process` for that chat on VAF's `TaskQueue`, carrying the person's identity and the end of its output. VAF's own runners consume that queue; a loop of your own around `CoreAgent` drains it itself (`vaf.core.task_queue.TaskQueue().get(...)`, `wake_kind(task.metadata)` says what woke you) or polls `processes()`. VAF's tools (`sandbox_exec`, `python_sandbox` and `host_bash` with `background=true`) refuse a background start where no lane of the process runs wake turns (`vaf.core.processes.background_refusal`), so a loop of yours that runs them says so once with `vaf.core.task_queue.declare_wake_runner("<name>")` (`withdraw_wake_runner` when it stops), or with `thread=` the thread that runs the loop, which then counts from the declaration until that thread has run and ended (declaring before its `start()` is fine). The tools also refuse without a chat, in a messaging-channel chat and in a VAF sub-agent child; `start_process` itself does not ask, it is yours to call. The `sandbox_env_process_max_hours` limit is applied by every looker, also to a process another process watches. The watcher is skipped where nobody would be told: without a `session_id`, inside a VAF sub-agent child, and with `VAF_SANDBOX_ENV_HOUSEKEEPING_OFF`; `start_reaper()` reports those. Each ended process is claimed under the state lock before anyone is woken, so it is reported once by intent; without the `filelock` package that lock holds only between the threads of one process. VAF's `python_sandbox(background=true)` is built on exactly this call.
 - **Housekeeping.** Call `start_reaper()` once in a long-lived process: it removes expired environments and stops idle ones, deciding "busy" by asking docker, and reports background processes that ended with nobody else watching them (a watcher that is gone, a process started without one). Call `stop_all_at_quit()` when your process ends; it also ends the watcher. `docker run` containers are invisible to `compose stop`.

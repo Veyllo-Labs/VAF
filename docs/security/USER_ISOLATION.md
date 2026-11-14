@@ -551,11 +551,14 @@ commit in 21 of 300 calls, and a new notes manager whose `.vaf` was missing left
 - git's own text walk, where the private mount lane runs (Linux with a bubblewrap that can
   start a namespace; `vaf/core/folder_mount.py`): git keeps the git directory as the handle
   but turns the work tree into a path and changes into it for every command that reads or
-  writes the files, and `git init` writes by path. Every git process now starts in a
-  namespace whose root is its own tmpfs, with the top folder bound at its real path and
-  checked inside, before git starts, to be the folder the handle holds (`dev:ino`). Under the
-  same racer, 1000 status calls: 0 leaks of 958 answered (2 of 957 with the handles alone),
-  and `reset --hard` wrote into the other folder in 0 of 300 calls (2 of 247 before).
+  writes the files, and `git init` writes by path. The git command of every call now starts
+  in a namespace whose root is its own tmpfs, with the top folder bound at its real path and
+  checked inside, before git starts, to be the folder the handle holds (`dev:ino`); the
+  read-only config and index reads before it stay on the handles, which pin them fully. Under
+  the same racer, 1000 status calls: 0 leaks of 944 answered (2 of 957 with the handles
+  alone), and `reset --hard` wrote into the other folder in 0 of 300 calls (2 of 247 before).
+  The person's global ignore and attributes files are bound too, so the agent's commits skip
+  what they hide, as before.
 - the jailed shell's `--bind <path>`: the coder's `bash` jail binds the same held folder and
   runs the same check before the command (0 of 289 starts showed the other folder under the
   racer; 3 of 1000 with the plain bind), and its docker fallback runs the check in the
@@ -563,8 +566,13 @@ commit in 21 of 300 calls, and a new notes manager whose `.vaf` was missing left
 - a sandbox environment's mount: every start (create, a restore's `readopt`, a restart after
   an idle stop, which resolved the stored path anew and mounted whatever it named) opens the
   stored path as a handle with itself as the expected real path, and on a daemon that shares
-  this kernel `/workspace` must show the handle's `dev:ino` before anything runs, else the
-  container is stopped and the start refused.
+  this kernel the host's kernel is asked what is mounted at `/workspace` (through
+  `/proc/<the container's process>/root`; a `stat` planted in the container by a root command
+  passed the earlier in-container check with another folder mounted, measured). It must be
+  the handle's `dev:ino`, else the container is stopped (killed if a stop does not take) and
+  the start refused. Until the check passed, the start is marked unverified, and any other
+  request or process that finds the container running checks the mount itself before its
+  command; a container whose stop failed stays refused.
 
 NAMED BOUNDARY, what remains, with the numbers above:
 - no lane: macOS, Windows, and Linux where bubblewrap is missing or cannot make a user
@@ -573,15 +581,26 @@ NAMED BOUNDARY, what remains, with the numbers above:
   as the handles leave it: status 3 of 570 and diff 10 of 868 leaked, `reset --hard` wrote
   into the other folder in 2 of 247 answered calls, `git init` writes by path. The same holds
   for a linked worktree (`linked_worktree=True`), which git reaches through its `.git` file.
-- inside the namespace git reads only the person's global config files it is given: an
-  include in them that points elsewhere, or a `core.excludesFile` outside them, is not read
-  there (status may list a file that would be hidden).
+- inside the namespace git reads only the person's global config files it is given and the
+  ignore and attributes files they name: any other file an include of them points to is not
+  read there.
+- a folder inside a folder the namespace binds read-only (/opt, a git install prefix) gets no
+  namespace (below that bind a swap showed inside, measured): git keeps the handles alone
+  there, and the shell takes its container.
 - a docker daemon in a VM (Docker Desktop, Rancher Desktop): containers see other folder
-  numbers, so the shell's fallback and an environment mount by name, unchecked.
+  numbers, so the shell's fallback and an environment mount by name, unchecked. A daemon that
+  runs containers under another user (rootless, userns-remap) cannot be checked from the
+  host: an environment start with a project folder is refused there.
 - the `:z` relabel at docker's start: docker relabels the source it resolved before the check
-  inside can refuse, so a folder swapped in during the moment between VAF's open and docker's
-  start is relabelled (`container_file_t`), though nothing runs in it. A relabel through the
-  held handle would close it and needs its own SELinux measurement.
+  can refuse, so a folder swapped in during the moment between VAF's open and docker's start
+  is relabelled (`container_file_t`). A relabel through the held handle would close it and
+  needs its own SELinux measurement.
+- what runs at an environment's start, before the check: the container's own command. An
+  environment keeps its filesystem, so a program a root command left there in place of
+  `sleep` runs then; together with a folder swapped in during that moment, it could reach the
+  swapped-in folder for the few milliseconds until the check stops the container. It needs
+  the root lane and a process winning that moment. A `docker start` made outside VAF is not
+  checked.
 - `-v` creates a missing source as an empty root-owned folder: a folder renamed away in the
   moment between VAF's open and docker's start can leave one behind (the start is refused).
 - an entry written inside `.git` after the runner scanned it: an `objects/info/alternates`

@@ -43,10 +43,28 @@ class FakeDocker:
         self.fail_isolated = False
         self.fail_run = False
         self.image_ids = {}    # tag -> image id, for `image inspect` and a container's .Image
-        # What `stat -L -c %d:%i /workspace` answers inside: None is the mount source's own
-        # identity, resolved at the time of the call (as docker resolves `-v` at every start).
+        # What the host sees mounted at /workspace (`_mounted_identity`): None is the mount
+        # source's own identity, resolved at the time of the call (as docker resolves `-v` at
+        # every start); an exception is raised as it is.
         self.mount_identity = None
         self.shares_kernel = True
+        self.fail_stop = False     # `stop` and `kill` leave the container running
+        self.identity_calls = []
+
+    def mounted_identity(self, container, inside=envmod.WORKSPACE):
+        self.identity_calls.append(container)
+        c = self.containers.get(container)
+        if not c or c["state"] != "running":
+            raise OSError("the container has no running process")
+        if isinstance(self.mount_identity, Exception):
+            raise self.mount_identity
+        if self.mount_identity is not None:
+            return self.mount_identity
+        c_args = c["args"]
+        src = next(c_args[i + 1] for i, a in enumerate(c_args)
+                   if a == "-v" and c_args[i + 1].endswith(f":{envmod.WORKSPACE}:z"))
+        st = os.stat(src.rsplit(":", 2)[0])
+        return f"{st.st_dev}:{st.st_ino}"
 
     @staticmethod
     def _labels(args):
@@ -142,8 +160,10 @@ class FakeDocker:
                 return _done(1, "", "no such container")
             c["state"] = "running"
             return _done(0)
-        if head == "stop":
+        if head in ("stop", "kill"):
             c = self.containers.get(args[-1])
+            if self.fail_stop:
+                return _done(1, "", "cannot stop container: permission denied")
             if c:
                 c["state"] = "exited"
             return _done(0)
@@ -168,14 +188,6 @@ class FakeDocker:
             return _done(0, "\n")
         if head == "exec":
             name = next(a for a in args[1:] if a in self.containers)
-            if args[-5:] == ["stat", "-L", "-c", "%d:%i", envmod.WORKSPACE]:
-                if self.mount_identity is not None:
-                    return _done(0, self.mount_identity + "\n")
-                c_args = self.containers[name]["args"]
-                src = next(c_args[i + 1] for i, a in enumerate(c_args)
-                           if a == "-v" and c_args[i + 1].endswith(f":{envmod.WORKSPACE}:z"))
-                st = os.stat(src.rsplit(":", 2)[0])
-                return _done(0, f"{st.st_dev}:{st.st_ino}\n")
             if containers.MARKED_PROCESSES_CMD in args:
                 seen = self.busy_root if args[1:3] == ["-u", "0:0"] else self.busy
                 return _done(0, "42\n" if name in seen else "")
@@ -188,6 +200,8 @@ def docker(monkeypatch, tmp_path):
     fake = FakeDocker()
     monkeypatch.setattr(containers, "docker", fake)
     monkeypatch.setattr(containers, "docker_shares_kernel", lambda: fake.shares_kernel)
+    monkeypatch.setattr(EnvironmentManager, "_mounted_identity",
+                        staticmethod(fake.mounted_identity))
     monkeypatch.setattr(containers, "mem_available_mb", lambda: 16000)
     monkeypatch.setattr(environment_image, "image_present", lambda tag=None: True)
     monkeypatch.setattr(environment_image, "usable_image", lambda: "vaf-sandbox-env:test")
@@ -357,10 +371,6 @@ def _project(tmp_path, monkeypatch, name="proj"):
     return folder
 
 
-def _stat_execs(fake):
-    return [c for c in fake.calls if c[0] == "exec" and "%d:%i" in c]
-
-
 def test_a_restart_refuses_a_folder_swapped_while_the_environment_was_stopped(
         docker, mgr, tmp_path, monkeypatch):
     """`docker start` resolves the stored path again (measured: it mounted, and relabelled, a
@@ -374,7 +384,7 @@ def test_a_restart_refuses_a_folder_swapped_while_the_environment_was_stopped(
     os.rename(proj, tmp_path / "proj-aside")
     _symlink_or_skip(proj, other)
     docker.calls.clear()
-    with pytest.raises(EnvironmentRefused, match="a link on the way"):
+    with pytest.raises(EnvironmentRefused, match="replaced by a link"):
         mgr.exec(ALICE, env.id, "ls")
     assert not [c for c in docker.calls if c[0] == "start"]
     assert docker.containers[env.container]["state"] == "exited"
@@ -385,32 +395,117 @@ def test_a_restart_on_the_checked_folder_passes_the_check(docker, mgr, tmp_path,
     env = mgr.create(ALICE, kind="project", project_path=str(proj))
     mgr.stop(ALICE, env.id)
     docker.calls.clear()
+    docker.identity_calls.clear()
     mgr._ensure_running(mgr.get(ALICE, env.id))
-    assert [c[0] for c in docker.calls if c[0] in ("start", "exec")] == ["start", "exec"]
+    assert [c[0] for c in docker.calls if c[0] in ("start", "exec")] == ["start"]
+    assert docker.identity_calls == [env.container]
     assert docker.containers[env.container]["state"] == "running"
+    assert not mgr._unverified_file(env.id).exists()
 
 
 def test_a_start_that_mounted_another_folder_is_stopped_and_refused(docker, mgr, tmp_path,
                                                                     monkeypatch):
-    """After `docker run`, /workspace must show the held folder's dev:ino before anything
-    runs. MUTATION: skip the comparison in _check_mount - red."""
+    """After `docker run`, /workspace must show the held folder's dev:ino, asked of the host,
+    before anything runs: no exec at all, so nothing in the container answers.
+    MUTATION: skip the comparison in _check_mount - red."""
     proj = _project(tmp_path, monkeypatch)
     docker.mount_identity = "1:2"
-    with pytest.raises(EnvironmentRefused, match="it changed while the environment started"):
+    with pytest.raises(EnvironmentRefused, match="it was moved or replaced by a link while"):
         mgr.create(ALICE, kind="project", project_path=str(proj))
     assert ["stop", "-t", "0"] in [c[:3] for c in docker.calls]
     assert not [n for n in docker.containers if n.startswith("vaf-env-")]   # create removed it
-    execs = [c for c in docker.calls if c[0] == "exec"]
-    assert execs == _stat_execs(docker) and len(execs) == 1
+    assert not [c for c in docker.calls if c[0] == "exec"]
     assert not list(mgr._state_dir().glob("*.json"))
+    assert not list(mgr._state_dir().glob("*.mount-unverified"))
     # The same check after a restart: stopped again, the state stays not running.
     docker.mount_identity = None
     env = mgr.create(ALICE, kind="project", project_path=str(proj))
     mgr.stop(ALICE, env.id)
     docker.mount_identity = "1:2"
-    with pytest.raises(EnvironmentRefused, match="nothing ran in it"):
+    with pytest.raises(EnvironmentRefused, match="nothing was run in it"):
         mgr.exec(ALICE, env.id, "ls")
     assert docker.containers[env.container]["state"] == "exited"
+
+
+def test_a_mount_that_cannot_be_checked_is_refused_with_its_reason(docker, mgr, tmp_path,
+                                                                  monkeypatch):
+    """A daemon whose container's root the host cannot read (rootless, userns-remap) fails
+    closed, and says that it could not check rather than that the folder changed."""
+    proj = _project(tmp_path, monkeypatch)
+    docker.mount_identity = PermissionError(13, "Permission denied")
+    with pytest.raises(EnvironmentRefused, match="could not check which folder is mounted") as e:
+        mgr.create(ALICE, kind="project", project_path=str(proj))
+    assert "Permission denied" in str(e.value) and "rootless" in str(e.value)
+
+
+def test_a_refused_mount_that_could_not_be_stopped_stays_refused(docker, mgr, tmp_path,
+                                                                monkeypatch):
+    """A stop that fails leaves the container running; the next command must not take that
+    as a checked start. MUTATION: clear the unverified mark when the check refuses - red."""
+    proj = _project(tmp_path, monkeypatch)
+    ran = []
+    monkeypatch.setattr(containers, "exec_bounded",
+                        lambda *a, **k: ran.append(a) or (0, "", "", False, False))
+    env = mgr.create(ALICE, kind="project", project_path=str(proj))
+    mgr.stop(ALICE, env.id)
+    docker.mount_identity = "1:2"
+    docker.fail_stop = True
+    with pytest.raises(EnvironmentRefused, match="could not be stopped"):
+        mgr.exec(ALICE, env.id, "ls")
+    assert docker.containers[env.container]["state"] == "running"
+    with pytest.raises(EnvironmentRefused, match="is not"):
+        mgr.exec(ALICE, env.id, "ls")              # running, and still refused
+    assert ran == []
+    docker.mount_identity = None                    # the right folder after all
+    mgr.exec(ALICE, env.id, "ls")
+    assert len(ran) == 1 and not mgr._unverified_file(env.id).exists()
+
+
+def test_a_second_command_waits_for_the_check_of_a_start_in_progress(docker, mgr, tmp_path,
+                                                                    monkeypatch):
+    """One request is between `docker start` and its check; a second one finds the container
+    running. It must check the mount itself, not run in it. MUTATION: skip _verify_running
+    in _ensure_running - red (the second command runs in the swapped-in folder)."""
+    import threading
+    proj = _project(tmp_path, monkeypatch)
+    ran = []
+    monkeypatch.setattr(containers, "exec_bounded",
+                        lambda *a, **k: ran.append(a) or (0, "", "", False, False))
+    env = mgr.create(ALICE, kind="project", project_path=str(proj))
+    mgr.stop(ALICE, env.id)
+    paused, release = threading.Event(), threading.Event()
+    real = docker.mounted_identity
+    calls = []
+
+    def _slow_first(container, inside=envmod.WORKSPACE):
+        calls.append(container)
+        if len(calls) == 1:
+            paused.set()
+            release.wait(10)
+        return real(container, inside)
+
+    monkeypatch.setattr(EnvironmentManager, "_mounted_identity", staticmethod(_slow_first))
+    first_error = []
+
+    def _first():
+        try:
+            mgr.exec(ALICE, env.id, "ls")
+        except EnvironmentRefused as e:
+            first_error.append(e)
+
+    t = threading.Thread(target=_first)
+    t.start()
+    try:
+        assert paused.wait(10)
+        assert docker.containers[env.container]["state"] == "running"
+        docker.mount_identity = "1:2"               # the started mount is another folder
+        with pytest.raises(EnvironmentRefused):
+            mgr.exec(ALICE, env.id, "ls")
+        assert ran == []
+    finally:
+        release.set()
+        t.join(10)
+    assert first_error and ran == []
 
 
 def test_a_daemon_on_another_kernel_is_not_asked(docker, mgr, tmp_path, monkeypatch):
@@ -420,11 +515,11 @@ def test_a_daemon_on_another_kernel_is_not_asked(docker, mgr, tmp_path, monkeypa
     docker.shares_kernel = False
     docker.mount_identity = "1:2"
     env = mgr.create(ALICE, kind="project", project_path=str(proj))
-    assert env.state == "running" and _stat_execs(docker) == []
+    assert env.state == "running" and docker.identity_calls == []
     # Nothing to check without a project folder either.
     docker.shares_kernel = True
     mgr.create(ALICE, kind="temporary")
-    assert _stat_execs(docker) == []
+    assert docker.identity_calls == []
 
 
 def test_a_restored_record_whose_folder_is_a_link_now_is_not_started(docker, mgr, tmp_path,
@@ -1239,3 +1334,36 @@ def test_a_record_names_only_its_own_volume_and_network_for_removal(docker, mgr,
     assert report["dropped"] == ["cafef00d"] and "vaf-env-vol-cafef00d" not in docker.volumes
     assert mgr._read_state("deadbeef") is None, "the orphan record itself is cleared"
     assert "precious" in docker.volumes and "user-net" in docker.networks
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc/self/root"), reason="needs /proc/<pid>/root (Linux)")
+def test_the_mount_is_read_from_the_host_never_from_the_container(monkeypatch, tmp_path):
+    """The identity comes from /proc/<pid>/root on the host; no command runs in the container
+    (a planted `stat` there passed the old check). The last part is not followed and must be a
+    folder. MUTATION: follow a link at the mount point - red."""
+    asked = []
+
+    def _docker(args, timeout=60, **kw):
+        asked.append(args)
+        return _done(0, f"{os.getpid()}\n")
+
+    monkeypatch.setattr(containers, "docker", _docker)
+    folder = tmp_path / "work"
+    folder.mkdir()
+    st = os.stat(folder)
+    read = EnvironmentManager._mounted_identity
+    assert read("c1", inside=str(folder)) == f"{st.st_dev}:{st.st_ino}"
+    assert asked == [["inspect", "-f", "{{.State.Pid}}", "c1"]]
+    link = tmp_path / "link"
+    try:
+        os.symlink(folder, link, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available here")
+    with pytest.raises(OSError):
+        read("c1", inside=str(link))
+    (tmp_path / "file").write_text("x", encoding="utf-8")
+    with pytest.raises(OSError):
+        read("c1", inside=str(tmp_path / "file"))
+    monkeypatch.setattr(containers, "docker", lambda *a, **k: _done(0, "0\n"))
+    with pytest.raises(OSError, match="no running process"):
+        read("c1", inside=str(folder))

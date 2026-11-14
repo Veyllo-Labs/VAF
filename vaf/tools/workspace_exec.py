@@ -23,7 +23,13 @@ shell is not real security, so we confine with the KERNEL instead:
 - Otherwise (no working bwrap / macOS / Windows): fall back to a container with ONLY the
   workspace mounted and no network. Same confinement. On a docker daemon that shares this
   kernel the same check runs in the container before the command; NAMED BOUNDARY: a daemon in
-  a VM (Docker Desktop) shows other folder numbers, so there the mount stays by name.
+  a VM (Docker Desktop) shows other folder numbers, so there the mount stays by name. A
+  workspace inside a folder the jail binds read-only (/opt) takes this lane too: below such
+  a bind its view would not be private.
+- NAMED BOUNDARY, macOS: the workspace is held with its resolved path as the expected real
+  path, and the kernel path of the handle keeps the case on disk, so a folder spelled in
+  another case on a case-insensitive volume is refused, never wrongly accepted (the same limit
+  the project git runner has there; unmeasured on a Mac).
 - No sandbox available at all: refuse. We never run a raw, unconfined host shell,
   which had no path guard and could overwrite VAF's core.
 
@@ -168,14 +174,16 @@ def run_in_workspace(base_dir: str, command: str, timeout: int = 180, *, user_sc
     # The folder that was judged, held until the command ends: the jail and the container
     # check inside, before the command, that the name still shows this very folder.
     from vaf.core.path_jail import PathEscape
-    moved = (f"Refused: cannot run in {ws}: the folder changed after it was checked "
-             "(a link on the way).")
     try:
         held = folder_mount.HeldFolder(ws, expect_folder=ws)
     except (PathEscape, OSError):
-        return -2, "", moved, "refused"
+        return -2, "", (f"Refused: cannot run in {ws}: the folder was moved or replaced by a "
+                        "link after it was checked. Check the folder and run the command "
+                        "again."), "refused"
     with held:
-        if _bwrap_available():
+        # A workspace inside a folder the jail binds read-only (/opt, /usr) would share that
+        # bind's view of the host, so its view would not be private: the container instead.
+        if _bwrap_available() and not folder_mount.overlaps_ro(ws):
             def _start(argv, **kwargs):
                 rc, out, err = _run(argv, timeout + 20, **kwargs)
                 return subprocess.CompletedProcess(argv, rc, out, err)
@@ -184,7 +192,9 @@ def run_in_workspace(base_dir: str, command: str, timeout: int = 180, *, user_sc
                                             ["/bin/sh", "-c", _wrap_timeout(command, timeout)],
                                             runner=_start)
             if folder_mount.guard_refused(proc):
-                return -2, "", moved, "refused"
+                # The cause of the last start and what to do, not only "the folder changed":
+                # a jail that cannot start (a process limit) reads differently from a swap.
+                return -2, "", f"Refused: {proc.stderr}.", "refused"
             return proc.returncode, proc.stdout, proc.stderr, "host-jail (bwrap)"
 
         if _docker_available():
@@ -192,9 +202,19 @@ def run_in_workspace(base_dir: str, command: str, timeout: int = 180, *, user_sc
             identity = held.identity if docker_shares_kernel() else None
             rc, out, err = _run_in_container(ws, command, timeout, identity=identity)
             if identity is not None and rc == 125 and folder_mount.GUARD_MARKER in err:
-                return -2, "", moved, "refused"
+                return -2, "", (f"Refused: cannot run in {ws}: the container did not get the "
+                                "folder that was checked (it was moved or replaced by a link "
+                                "while the container started). Check the folder and run the "
+                                "command again."), "refused"
             return rc, out, err, "container"
 
+    if folder_mount.bwrap_installed():
+        why = folder_mount.namespace_unavailable_reason() or (
+            f"{ws} lies inside a folder the jail binds read-only")
+        return -2, "", (
+            f"Refused: no sandbox available: {why}. A raw host shell is not run, to protect "
+            "VAF's core files. Start Docker, or allow unprivileged user namespaces for "
+            "bubblewrap on this host."), "refused"
     return -2, "", (
         "Refused: no sandbox available (bubblewrap or Docker required). A raw host shell "
         "is not run, to protect VAF's core files. Install bubblewrap or start Docker."

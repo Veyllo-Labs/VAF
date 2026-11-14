@@ -49,17 +49,27 @@ container too, where there is no handle to bind.
 container: only a daemon on this kernel shows the host's `dev:ino` numbers inside (measured
 equal on a native daemon, `44:25122028` both).
 
+A sandbox environment's container keeps running, so its check is made from the host instead
+of by the guard: `vaf.core.environments` reads the `dev:ino` of /workspace through
+`/proc/<the container's process>/root` (a tool inside the container could be replaced and lie).
+
 NAMED BOUNDARIES:
 - No lane (macOS, Windows, Linux without bubblewrap or where it cannot make a user namespace:
   measured refused inside a default Docker container; Ubuntu's AppArmor restriction on
   unprivileged user namespaces is unmeasured). `namespace_available` decides by a real probe
-  start, and the callers keep their by-name path there.
+  start, and the callers keep their by-name path there; a start that failed is probed again
+  after `PROBE_RETRY_S`.
+- A folder inside a folder the namespace binds read-only (a system folder such as /opt, a git
+  install prefix): below that bind the folder shares its view of the host, and a swap there
+  showed inside (measured), so `namespace_argv` refuses it (`overlaps_ro`) and the callers
+  keep their other lane.
 - A docker daemon in a VM (Docker Desktop, Rancher Desktop): the container sees other numbers,
   so the mount stays by name, unchecked.
 - `docker run -v` with `:z` relabels the source docker resolved at its start, before the
-  check inside can refuse. A folder swapped in during the moment between VAF's open and
-  docker's start is relabelled (`container_file_t`), though nothing runs in it. A relabel
-  through the held handle is the way to close it, and it needs its own SELinux measurement.
+  check can refuse. A folder swapped in during the moment between VAF's open and docker's
+  start is relabelled (`container_file_t`). A relabel through the held handle is the way to
+  close it, and it needs its own SELinux measurement. What may run in such a container before
+  the check is named in `vaf.core.environments`.
 - `-v` creates a missing source as an empty root-owned folder; a folder renamed away in that
   same moment can leave one behind (the start is then refused by the check).
 
@@ -82,8 +92,8 @@ from vaf.core import path_jail
 logger = logging.getLogger("vaf.core.folder_mount")
 
 __all__ = ["GUARD", "GUARD_MARKER", "HandoverRefused", "HeldFolder", "SYSTEM_DIRS",
-           "guard_argv", "guard_refused", "namespace_argv", "namespace_available",
-           "namespace_unavailable_reason", "run_guarded"]
+           "bwrap_installed", "guard_argv", "guard_refused", "namespace_argv",
+           "namespace_available", "namespace_unavailable_reason", "overlaps_ro", "run_guarded"]
 
 GUARD_MARKER = "vaf-folder-guard:"
 
@@ -91,7 +101,11 @@ GUARD_MARKER = "vaf-folder-guard:"
 # the payload. It changes into the path first and asks `.` afterwards, so the folder that was
 # compared is the folder the payload starts in. The started byte is written only after the
 # comparison, and a failed write refuses: the caller repeats a start only when the pipe stayed
-# empty, so a payload that ran must always have left its byte.
+# empty, so a payload that ran must always have left its byte. The byte goes through
+# /proc/self/fd/<n>, never `>&<n>`: dash (/bin/sh on Debian and Ubuntu) reads only one digit
+# there, and a pipe's number is 10 or more in any process with a few files open (measured:
+# exit 2 and no payload at fd 12 under dash). The write end stays open in the payload, which
+# is harmless: the caller reads one byte, without blocking, after the process ended.
 GUARD = (
     'case $3 in -|[0-9]|[0-9][0-9]|[0-9][0-9][0-9]|[0-9][0-9][0-9][0-9]) ;; '
     '*) echo "' + GUARD_MARKER + ' bad started fd" >&2; exit 125 ;; esac; '
@@ -99,8 +113,7 @@ GUARD = (
     'if ! cd -- "$d" 2>/dev/null || [ "$(stat -L -c %d:%i -- . 2>/dev/null)" != "$want" ]; then '
     'echo "' + GUARD_MARKER + ' $d is not the folder that was checked" >&2; exit 125; fi; '
     'if [ "$s" != - ]; then '
-    '{ printf x >&"$s"; } 2>/dev/null || { echo "' + GUARD_MARKER + ' $d: cannot report the start" >&2; exit 125; }; '
-    'eval "exec $s>&-"; fi; '
+    '{ printf x > "/proc/self/fd/$s"; } 2>/dev/null || { echo "' + GUARD_MARKER + ' $d: cannot report the start" >&2; exit 125; }; fi; '
     'exec "$@"'
 )
 
@@ -178,6 +191,26 @@ def guard_argv(inside_path: str, identity: str, argv: Sequence[str],
             "-" if started_fd is None else str(int(started_fd)), *argv]
 
 
+def _within(path: str, root: str) -> bool:
+    root = root.rstrip("/") or "/"
+    return path == root or path.startswith(root + "/") or root == "/"
+
+
+def overlaps_ro(real: str, extra_ro: Iterable[str] = ()) -> str:
+    """The read-only bound folder (`SYSTEM_DIRS`, ``extra_ro``) that ``real`` lies in, or "".
+    A folder bound below another bind shares that bind's view of the host: a rename or a link
+    made on the host after the mount then shows inside (measured: a held folder below a
+    read-only bound prefix listed the swapped-in folder's files). The lane is not used there."""
+    real = os.path.realpath(real)
+    for root in (*SYSTEM_DIRS, *extra_ro):
+        if not root or not os.path.isabs(root):
+            continue
+        for spelled in dict.fromkeys((root, os.path.realpath(root))):
+            if _within(real, spelled):
+                return root
+    return ""
+
+
 def namespace_argv(held: HeldFolder, dest: str, *, extra_ro: Iterable[str] = (),
                    unshare_net: bool = False, clearenv: bool = False,
                    setenv: Iterable[Tuple[str, str]] = (), chdir: Optional[str] = None,
@@ -189,12 +222,18 @@ def namespace_argv(held: HeldFolder, dest: str, *, extra_ro: Iterable[str] = (),
     swap on the host after the mount out of the child's view. The folder is bound after
     ``--tmpfs /tmp``, so a folder under /tmp is not covered by it, and after the system
     folders, so one below /opt is not either. ``--clearenv`` comes before every ``--setenv``
-    (bwrap applies them in order).
+    (bwrap applies them in order). A held folder inside a read-only bound folder raises
+    ValueError (`overlaps_ro`): its view would not be private there.
 
     ``scratch_tmp=False`` gives no writable /tmp, and ``readonly_root=True`` makes the root
     read-only once everything is mounted: then the held folder is the only place the child
     can write, and a write anywhere else fails (EROFS) instead of landing in the jail's own
     memory and vanishing with it."""
+    extra_ro = list(extra_ro)
+    inside = overlaps_ro(held.real, extra_ro)
+    if inside:
+        raise ValueError(f"{held.real} lies inside {inside}, which the namespace binds "
+                         "read-only: its view would not be private")
     argv = ["bwrap"]
     if clearenv:
         argv.append("--clearenv")
@@ -259,60 +298,79 @@ def run_guarded(argv_prefix: Sequence[str], held: HeldFolder, inside_path: str,
         lines = [ln for ln in err.strip().splitlines() if ln.strip()]
         last = lines[-1][:200] if lines else f"exit {proc.returncode}"
     return HandoverRefused(argv, -1, "",
-                           f"{inside_path}: the folder changed while it was being handed over "
-                           f"(a link on the way); the last start said: {last}")
+                           f"could not start in a private view of {inside_path} ({last}). If "
+                           f"the folder was just moved or replaced by a link, check it and "
+                           f"try again")
 
 
 _LOCK = threading.Lock()
-_PROBE: Optional[Tuple[bool, str]] = None
+# (available, reason, final, when). A success and a missing bwrap or platform are final for the
+# process; a failed start is asked again after PROBE_RETRY_S, because one start can fail for a
+# passing reason (a timeout under load, a process limit) and the lane would otherwise stay off,
+# with git on the handle pin alone, until VAF restarts.
+_PROBE: Optional[Tuple[bool, str, bool, float]] = None
+PROBE_RETRY_S = 300.0
 
 
-def _probe() -> Tuple[bool, str]:
+def _probe() -> Tuple[bool, str, bool]:
     if not sys.platform.startswith("linux"):
-        return False, "only on Linux"
+        return False, "only on Linux", True
     if shutil.which("bwrap") is None:
-        return False, "bubblewrap (bwrap) is not installed"
-    folder = tempfile.mkdtemp(prefix="vaf-mount-probe-")
+        return False, "bubblewrap (bwrap) is not installed", True
+    folder = None
     try:
+        folder = tempfile.mkdtemp(prefix="vaf-mount-probe-")
         with HeldFolder(folder) as held:
             proc = run_guarded(namespace_argv(held, held.real), held, held.real, ["true"],
                                capture_output=True, text=True, timeout=20,
                                stdin=subprocess.DEVNULL)
         if proc.returncode == 0:
-            return True, ""
+            return True, "", True
         detail = (proc.stderr or "").strip().splitlines()
-        return False, ("bubblewrap could not start a namespace: "
-                       + (detail[-1][:200] if detail else f"exit {proc.returncode}"))
+        return False, ("bubblewrap is installed but cannot start a namespace here: "
+                       + (detail[-1][:200] if detail else f"exit {proc.returncode}")), False
     except Exception as e:
-        return False, f"bubblewrap could not start a namespace: {e}"
+        return False, f"bubblewrap is installed but cannot start a namespace here: {e}", False
     finally:
-        try:
-            os.rmdir(folder)
-        except OSError:
-            pass
+        if folder is not None:
+            try:
+                os.rmdir(folder)
+            except OSError:
+                pass
 
 
 def _probed() -> Tuple[bool, str]:
     global _PROBE
+    import time
     with _LOCK:
-        if _PROBE is None:
-            _PROBE = _probe()
-            if not _PROBE[0] and sys.platform.startswith("linux") and shutil.which("bwrap"):
+        now = time.monotonic()
+        if _PROBE is None or (not _PROBE[2] and now - _PROBE[3] >= PROBE_RETRY_S):
+            was = _PROBE
+            ok, reason, final = _probe()
+            _PROBE = (ok, reason, final, now)
+            if not ok and not final and (was is None or was[0] or was[1] != reason):
                 logger.warning("The private folder mount is not available, git and the coder's "
-                               "shell hand folders over by name: %s", _PROBE[1])
-        return _PROBE
+                               "shell hand folders over by name: %s", reason)
+        return _PROBE[0], _PROBE[1]
 
 
 def namespace_available() -> bool:
     """True where a bwrap namespace with a held folder really starts: Linux, bwrap on PATH and
-    one probe start that exited 0. Probed once per process (thread-safe), so installing bwrap
-    later needs a restart."""
+    one probe start that exited 0. Probed once per process (thread-safe); a start that failed
+    is probed again after `PROBE_RETRY_S`, a missing bwrap is not (installing it later needs a
+    restart)."""
     return _probed()[0]
 
 
 def namespace_unavailable_reason() -> str:
     """Why `namespace_available` is False, or "" when it is True."""
     return _probed()[1]
+
+
+def bwrap_installed() -> bool:
+    """bwrap is on PATH (Linux): whether a refusal should say "install it" or "it cannot start
+    here"."""
+    return sys.platform.startswith("linux") and shutil.which("bwrap") is not None
 
 
 def _reset_probe() -> None:

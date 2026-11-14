@@ -48,21 +48,28 @@ can start a namespace, `vaf.core.folder_mount.namespace_available`; not for
 `linked_worktree`). git keeps `--git-dir=/proc/self/fd/<n>` as given, but it turns the work
 tree into a path and every command that sets up a work tree (status, diff, add, checkout,
 revert, reset) changes into that path, and `git init` writes the new repository by path. So
-every process of the call starts in a bwrap namespace whose root is its own tmpfs, holding the
-system folders read-only, the hooks folder and the person's global git config read-only, and
-the top folder bound read-write at its real path, the only place git can write there (the
+the command of the call starts in a bwrap namespace whose root is its own tmpfs, holding the
+system folders read-only; the hooks folder, the person's global git config and the global
+ignore and attributes files it names (`core.excludesFile`, `core.attributesFile`) read-only;
+and the top folder bound read-write at its real path, the only place git can write there (the
 root is read-only, with no scratch /tmp, so a command that writes outside the folder, such as
 `worktree add <elsewhere>`, fails instead of writing into the namespace's memory and losing
-it); `vaf.core.folder_mount`'s guard checks
-inside, before git starts, that this path is the very folder the top handle holds (`dev:ino`),
-and git runs there with `--work-tree=<top>` and the git handle as before. A start the guard
-refused is repeated (at most three starts, never once git ran) and then refused, "a link on
-the way". Inside the namespace the path names only the bound folder: a rename or a link on the
-host after the mount does not reach it. Measured, the same racer, 1000 status calls: 0 leaks
-of 958 answered with the lane (2 of 957 with the handles alone), and `reset --hard` wrote into
-the other folder in 0 of 300 calls. The price is one namespace start per git process: about 20
-ms more per call (24 against 5 ms for a status, four processes, measured under the lowest CPU
-priority on four cores).
+it, and the runner adds a line saying why); `vaf.core.folder_mount`'s guard checks inside,
+before git starts, that this path is the very folder the top handle holds (`dev:ino`), and git
+runs there with `--work-tree=<top>` and the git handle as before. A start the guard refused is
+repeated (at most three starts, never once git ran) and then refused with the last start's
+cause. Inside the namespace the path names only the bound folder: a rename or a link on the
+host after the mount does not reach it. The read-only reads before the command (the driver
+names, the gitlinks) run through the handles as in the fallback: they set up no work tree, so
+the text walk does not happen there (measured fully pinned), and they see the same files the
+namespace binds, and more (an include elsewhere), which can only switch more drivers off.
+Measured, the same racer, 1000 status calls: 0 leaks of 944 answered with the lane (2 of 957
+with the handles alone), and `reset --hard` wrote into the other folder in 0 of 300 calls. The
+price is one namespace start per call: about 10 against 5.5 ms for a status, and a coding
+run's state update for the SubAgent window (about a dozen calls) 135 against 65 ms, measured
+under the lowest CPU priority on four cores. A top inside a folder the namespace binds
+read-only (a git install prefix, /opt) keeps the handles alone: its view there would not be
+private (`folder_mount.overlaps_ro`).
 
 NAMED BOUNDARY, what the handles do not reach where the lane does not run (macOS, Windows,
 Linux without a working bubblewrap, `linked_worktree`), with the numbers above:
@@ -73,10 +80,11 @@ Linux without a working bubblewrap, `linked_worktree`), with the numbers above:
   folder. Measured, 300 calls each with `expect_folder`: `reset --hard` wrote into the other
   folder in 2 of 247 answered calls, `checkout -- .` in 0 of 255. A log, rev-parse, cat-file
   or config call stays fully pinned. `git init` writes the new repository by path.
-- where the lane runs, git reads only the global config files it is given: an include in
-  them that points elsewhere, or a `core.excludesFile` outside them, is not there inside the
-  namespace (status may then list a file that file would hide; a driver such an include
-  names does not run, in the reads and the command alike).
+- where the lane runs, git reads only the global config files it is given and the ignore and
+  attributes files they name: any other file an include in them points to is not there
+  inside the namespace (a driver such an include names does not run in the command; an
+  ignore or attributes file outside the project that the project's own config names is not
+  bound either, so status may list a file it would hide).
 - entries written inside `.git` after `_foreign_link` scanned it: an `objects/info/alternates`
   written in that moment let `cat-file` read the other repository's object; a `commondir`
   file makes `rev-parse HEAD` print the other repository's commit id (its objects stay out
@@ -244,6 +252,14 @@ _DRIVER_OVERRIDES: Dict[str, Tuple[Tuple[str, str], ...]] = {
 # specific scope reads none otherwise, measured).
 _DRIVER_KEYS = r"^(filter|diff|merge)\."
 _TRUSTED_READS: Tuple[str, ...] = ("--global", "--system")
+# The trusted reads also ask for the person's global ignore and attributes files: inside the
+# git namespace only what is bound exists, and `core.excludesFile` usually names a file in the
+# home folder (`~/.gitignore_global`). Unbound, status listed, and `add -A` staged, a file that
+# person's global ignore hides (measured: a `.secret` file staged). Read from the global and
+# system files only, which the project folder cannot write; `~` expanded as git does. A value
+# the project's own config sets is not bound (inside the namespace git then has no such file).
+_TRUSTED_FILE_KEYS = ("core.excludesfile", "core.attributesfile")
+_TRUSTED_KEYS = r"^(filter|diff|merge)\.|^core\.(excludesfile|attributesfile)$"
 
 # Flags added right after the subcommand, so no caller has to remember them.
 _SUBCOMMAND_FLAGS: Dict[str, Tuple[str, ...]] = {
@@ -262,6 +278,14 @@ _LAYOUT_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
                "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES")
 
 _HOOKS_DIR: Optional[str] = None
+
+
+# git's own words for a write outside the folder in the namespace (the C locale's strerror;
+# under another LANG the hint is not added, the refusal itself stands).
+_EROFS = "Read-only file system"
+_EROFS_HINT = ("\nvaf: git runs in a private view of the project folder, where only that folder "
+               "is writable; a command that writes elsewhere (a worktree, an archive or a "
+               "bundle outside the project) needs plain git on a repository you trust.\n")
 
 
 class ProjectGitRefused(ValueError):
@@ -426,8 +450,10 @@ class _Pin:
         # not search above the judged folder when it is gone (GIT_CEILING_DIRECTORIES).
         self.ceiling: Optional[str] = None
         # The top held for the private mount namespace (`vaf.core.folder_mount`), set where
-        # that lane runs; git then works on the top bound at its own path.
+        # that lane runs; git then works on the top bound at its own path. `namespace_ro` is
+        # what the namespace binds read-only besides the system folders.
         self.namespace = None
+        self.namespace_ro: List[str] = []
         self._fds: List[int] = []
 
     def own(self, fd: int) -> int:
@@ -443,8 +469,8 @@ class _Pin:
         while self._fds:
             os.close(self._fds.pop())
 
-    def work_tree(self) -> str:
-        if self.namespace is not None:
+    def work_tree(self, read: bool = False) -> str:
+        if self.namespace is not None and not read:
             # Inside the namespace the real path names only the bound folder; git realpaths
             # it to the same text, so `--show-toplevel` and a subfolder's pathspec stay real.
             return self.top
@@ -455,12 +481,14 @@ class _Pin:
             return f"/proc/self/fd/{self.git_fd}"
         return (Path(self.top) / ".git").as_posix()
 
-    def layout(self, sub: str, linked_worktree: bool) -> List[str]:
+    def layout(self, sub: str, linked_worktree: bool, read: bool = False) -> List[str]:
+        """``read=True``: the layout of a read-only config or index read, which runs through
+        the handles even where the command runs in the namespace (see `run`)."""
         if sub == "init":
             return []
         if linked_worktree:
-            return [f"--work-tree={self.work_tree()}"]
-        return [f"--git-dir={self.git_dir()}", f"--work-tree={self.work_tree()}"]
+            return [f"--work-tree={self.work_tree(read)}"]
+        return [f"--git-dir={self.git_dir()}", f"--work-tree={self.work_tree(read)}"]
 
     def check(self) -> None:
         """Before each process of the call: the folder is still the one that was judged."""
@@ -483,7 +511,14 @@ class _Pin:
                 raise ProjectGitRefused(f"its folder is {real}, not {self.expected} "
                                         "(a link on the way)")
 
-    def run(self, argv: Sequence[str], env: Dict[str, str], timeout: float):
+    def run(self, argv: Sequence[str], env: Dict[str, str], timeout: float, *,
+            read: bool = False):
+        """Start one git process of the call. ``read=True`` is a config or index read (the
+        driver names, the gitlinks, the trusted files): it runs through the handles, never in
+        the namespace. Neither sets up a work tree, so git's text walk does not happen there
+        (measured fully pinned under the racer), and it sees at least what the command will
+        see: the namespace binds a subset of the same files. That keeps one namespace start
+        per call instead of four or five."""
         self.check()
         if self.by_handle and self.git_fd >= 0:
             # After project_git_env removed every layout variable: the common directory
@@ -491,23 +526,19 @@ class _Pin:
             env = {**env, "GIT_COMMON_DIR": self.git_dir()}
         if self.ceiling is not None:
             env = {**env, "GIT_CEILING_DIRECTORIES": self.ceiling}
-        if self.namespace is not None:
+        if self.namespace is not None and not read:
             from vaf.core import folder_mount
-            if shutil.which(argv[0], path=env.get("PATH")) is None:
-                # Started inside the jail a missing git is the guard's exit 127; outside it
-                # was FileNotFoundError, which the caller reports as "Git is not installed."
-                raise FileNotFoundError(argv[0])
             kwargs = _popen_kwargs("/", env, timeout)
             if self.git_fd >= 0:
                 kwargs["pass_fds"] = (self.git_fd,)
             proc = folder_mount.run_guarded(
-                folder_mount.namespace_argv(self.namespace, self.top, extra_ro=_namespace_ro(),
+                folder_mount.namespace_argv(self.namespace, self.top, extra_ro=self.namespace_ro,
                                             scratch_tmp=False, readonly_root=True),
                 self.namespace, self.top, list(argv), **kwargs)
             if folder_mount.guard_refused(proc):
                 raise ProjectGitRefused(proc.stderr)
             return proc
-        kwargs = _popen_kwargs(self.work_tree(), env, timeout)
+        kwargs = _popen_kwargs(self.work_tree(read=True), env, timeout)
         if self.by_handle:
             kwargs["pass_fds"] = tuple(fd for fd in (self.top_fd, self.git_fd) if fd >= 0)
         return subprocess.run(list(argv), **kwargs)
@@ -605,8 +636,13 @@ def _pin_by_handle(pin: _Pin, sub: str, linked_worktree: bool, expect_folder) ->
     if pin.by_handle and not linked_worktree:
         from vaf.core import folder_mount
         if folder_mount.namespace_available():
-            # The handle the pin judged, so the identity the guard checks is that folder's.
-            pin.namespace = folder_mount.HeldFolder.adopt(pin.top_fd, pin.top)
+            ro = _namespace_ro()
+            # A top inside a read-only bound folder (/opt, a git install prefix) would share
+            # that bind's view of the host: no private view there, the handle pin stays.
+            if not folder_mount.overlaps_ro(pin.top, ro):
+                # The handle the pin judged, so the identity the guard checks is that folder's.
+                pin.namespace = folder_mount.HeldFolder.adopt(pin.top_fd, pin.top)
+                pin.namespace_ro = ro
 
 
 def _namespace_ro() -> List[str]:
@@ -695,11 +731,18 @@ def _untrusted_drivers(pin: _Pin, env: Dict[str, str], timeout: float,
     trusted = set()
     for scope in _TRUSTED_READS:
         try:
-            trusted |= _driver_pairs([scope], pin, env, timeout, layout)
+            trusted |= _driver_pairs([scope], pin, env, timeout, layout, _TRUSTED_KEYS)
         except RuntimeError:
             # An unreadable trusted file (no HOME, a broken ~/.gitconfig) trusts nothing:
             # that only switches more drivers off. Only the effective read fails closed.
             pass
+    # The same two reads name the person's global ignore and attributes files, which the
+    # namespace binds read-only (see _TRUSTED_KEYS).
+    for key, value in sorted(trusted, key=str):
+        if key.lower() in _TRUSTED_FILE_KEYS and value:
+            path = os.path.expanduser(value)
+            if os.path.isabs(path) and path not in pin.namespace_ro:
+                pin.namespace_ro.append(path)
     found: Dict[str, List[str]] = {}
     for key, value in sorted(_driver_pairs([], pin, env, timeout, layout), key=str):
         if (key, value) in trusted:
@@ -715,12 +758,12 @@ def _untrusted_drivers(pin: _Pin, env: Dict[str, str], timeout: float,
 
 
 def _driver_pairs(scope: Sequence[str], pin: _Pin, env: Dict[str, str], timeout: float,
-                  layout: Sequence[str]) -> set:
+                  layout: Sequence[str], keys: Optional[str] = None) -> set:
     """The (key, value) pairs one `git config --get-regexp` read returns; value None for a key
     written without one. Exit 1 is "no such key" (or no such file); anything else raises."""
     argv = [resolve_git(), *layout, "config", *scope, "--includes", "-z", "--get-regexp",
-            _DRIVER_KEYS]
-    proc = pin.run(argv, env, timeout)
+            keys or _DRIVER_KEYS]
+    proc = pin.run(argv, env, timeout, read=True)
     if proc.returncode not in (0, 1):
         raise RuntimeError(f"cannot read the repository's drivers: "
                            f"{(proc.stderr or '').strip()[:200]}")
@@ -746,10 +789,11 @@ def _command(args: Sequence[str], pin: _Pin, env: Dict[str, str], timeout: float
     """The argv for `args` on `pin`'s repository; every read on the way runs on `pin` too."""
     caller_config, sub, rest = _split_args(args)
     layout = pin.layout(sub[0] if sub else "", linked_worktree)
+    reads = pin.layout(sub[0] if sub else "", linked_worktree, read=True)
     pinned: List[str] = ["-c", f"core.hooksPath={empty_hooks_dir()}"]
     for key, value in PROJECT_GIT_CONFIG:
         pinned += ["-c", f"{key}={value}"]
-    for section, names in _untrusted_drivers(pin, env, timeout, layout).items():
+    for section, names in _untrusted_drivers(pin, env, timeout, reads).items():
         for name in names:
             if _UNSAFE_DRIVER_NAME.search(name):
                 raise ValueError(f"the repository defines a {section} driver whose name cannot "
@@ -758,7 +802,7 @@ def _command(args: Sequence[str], pin: _Pin, env: Dict[str, str], timeout: float
                 pinned += ["-c", f"{section}.{name}.{var}={value}"]
     added = list(_SUBCOMMAND_FLAGS.get(sub[0], ())) if sub else []
     if sub and sub[0] in ("add", "stash"):
-        links = _gitlinks(pin, layout, pinned, env, timeout)
+        links = _gitlinks(pin, reads, pinned, env, timeout)
         if links and sub[0] == "stash":
             raise ProjectGitRefused(f"the project holds another repository at {links[0]}; "
                                     f"git stash would run git inside it")
@@ -795,7 +839,7 @@ def _gitlinks(pin: _Pin, layout: Sequence[str], pinned: Sequence[str], env: Dict
     that reads that repository's own config, filters included, whatever diff.ignoreSubmodules
     says (measured). Reading the index starts nothing."""
     argv = [resolve_git(), *layout, *pinned, "ls-files", "-s", "-z", "--full-name", "--", ":/"]
-    proc = pin.run(argv, env, timeout)
+    proc = pin.run(argv, env, timeout, read=True)
     if proc.returncode != 0:
         raise RuntimeError(f"cannot read the index: {(proc.stderr or '').strip()[:200]}")
     links = []
@@ -863,7 +907,10 @@ def run_project_git(args: Sequence[str], cwd: str, *, timeout: float = 60,
             pin.check()
             _pin_by_path(pin, sub[0] if sub else "", linked_worktree)
         argv = _command(args, pin, env, timeout, linked_worktree)
-        return pin.run(argv, env, timeout)
+        proc = pin.run(argv, env, timeout)
+        if pin.namespace is not None and proc.returncode != 0 and _EROFS in (proc.stderr or ""):
+            proc.stderr = (proc.stderr or "") + _EROFS_HINT
+        return proc
     except _NoFolder:
         # subprocess reports a missing cwd as FileNotFoundError, which reads as "no git".
         return subprocess.CompletedProcess(argv, -1, "", f"Not a directory: {cwd}")

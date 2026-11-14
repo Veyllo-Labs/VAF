@@ -165,8 +165,9 @@ def docker_shares_kernel() -> bool:
     `vaf.core.folder_mount`'s guard check inside a container that it got the folder that was
     checked. A daemon in a VM (Docker Desktop, Rancher Desktop) shows other numbers and the
     guard would refuse every mount: there the mount stays by name (a named boundary of
-    `folder_mount`). An answer of the daemon is kept for the process; no answer is False and
-    is asked again next time."""
+    `folder_mount`). An answer of the daemon is kept for the process. No answer on Linux is
+    True, not kept: the check then runs and refuses if the numbers differ, where False would
+    let a native daemon's mount through unchecked for as long as docker did not answer."""
     global _SHARES_KERNEL
     if not sys.platform.startswith("linux"):
         return False
@@ -176,9 +177,9 @@ def docker_shares_kernel() -> bool:
         try:
             r = docker(["info", "--format", "{{.KernelVersion}}"], timeout=20)
         except Exception:
-            return False
+            return True
         if r.returncode != 0 or not (r.stdout or "").strip():
-            return False
+            return True
         import platform
         _SHARES_KERNEL = (r.stdout or "").strip() == platform.release()
         return _SHARES_KERNEL

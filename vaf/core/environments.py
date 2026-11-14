@@ -51,9 +51,26 @@ ISOLATION, measured on Docker 29.7 before this was written
 - The project folder is mounted by name (`-v`, which `:z` needs) and checked at EVERY start
   (create, `readopt`, a restart after an idle stop, which resolves the stored path anew):
   before it, the stored path is held as a handle with itself as the expected real path
-  (`_held_mount`); after it, on a daemon that shares this kernel, /workspace must show that
-  handle's `dev:ino` before anything runs (`_check_mount`), else the container is stopped
-  and the start refused. Named boundaries in `vaf.core.folder_mount`.
+  (`_held_mount`); after it, on a daemon that shares this kernel, the host's kernel is asked
+  for the `dev:ino` of /workspace through the container's process (`_mounted_identity`,
+  never a tool inside the container, which a root command could replace), and it must be
+  the handle's (`_check_mount`), else the container is stopped (killed if a stop does not
+  take) and the start refused. Until that check passed the start is marked unverified in a
+  file beside the record, and every command path (`_ensure_running`) that finds the
+  container running and still marked checks the mount itself first: a second request, or
+  another process, cannot slip a command in between `docker start` and the check, and a
+  container whose stop failed stays refused.
+  NAMED BOUNDARIES (and those of `vaf.core.folder_mount`):
+  - the container's own command runs at the start, before the check: a project environment
+    keeps its writable layer, so a program the root lane put in place of `sleep` (or a
+    library it loads) runs then. With a folder swapped in during the moment between VAF's
+    open and docker's start, it could reach that folder until the check stops the container,
+    a few milliseconds later. It needs the root lane AND a process winning that moment.
+  - a daemon in a VM (Docker Desktop) is not checked after the start (other numbers); a
+    daemon on this kernel that runs containers under another user (rootless, userns-remap)
+    cannot be checked and is refused (measured readable on a native rootful daemon);
+  - `:z` relabels what docker resolved before the check can refuse;
+  - a `docker start` made outside VAF (a person at the terminal) is not checked.
 - Network profiles, each on the environment's own network:
   - `none`: an `--internal` network created with
     `com.docker.network.bridge.gateway_mode_ipv4=isolated`. A plain internal network
@@ -402,7 +419,7 @@ class EnvironmentManager:
             pass
 
     def _delete_state(self, env_id: str) -> None:
-        for suffix in (".json", ".procs.json"):
+        for suffix in (".json", ".procs.json", ".mount-unverified"):
             try:
                 (self._state_dir() / f"{env_id}{suffix}").unlink()
             except FileNotFoundError:
@@ -687,34 +704,108 @@ class EnvironmentManager:
         try:
             return HeldFolder(env.project_path, expect_folder=env.project_path)
         except (PathEscape, OSError):
-            raise EnvironmentRefused(f"{env.project_path} is not the folder this environment "
-                                     f"was made for (a link on the way, or it is gone); "
-                                     f"nothing was started") from None
+            raise EnvironmentRefused(
+                f"{env.project_path} is not the folder this environment was made for: it was "
+                f"moved, replaced by a link, or removed, and nothing was started. Put the "
+                f"folder back, or delete the environment and create a new one for the "
+                f"project") from None
 
     @staticmethod
-    def _check_mount(env: Environment, held) -> None:
-        """Right after a start, before anything else runs in the container: /workspace must
-        be the held folder (same `dev:ino`). Asked only of a daemon on this kernel
+    def _mounted_identity(container: str, inside: str = WORKSPACE) -> str:
+        """`dev:ino` of the folder mounted at ``inside`` in the running container, asked of
+        the host's kernel: `/proc/<the container's process>/root` reaches the container's own
+        root, so nothing of the container runs for the answer. A tool inside the container
+        (its `stat`) could be replaced by a root command of the account and lie (measured: a
+        planted `stat` passed the check with another folder mounted). The last part is not
+        followed (a link at /workspace would resolve against the host's root) and must be a
+        folder. Raises OSError when it cannot be read: no process, or a daemon whose
+        container runs under another user (rootless, userns-remap)."""
+        import stat as _stat
+        r = containers.docker(["inspect", "-f", "{{.State.Pid}}", container], timeout=20)
+        try:
+            pid = int((r.stdout or "").strip()) if r.returncode == 0 else 0
+        except ValueError:
+            pid = 0
+        if pid <= 0:
+            raise OSError("the container has no running process")
+        st = os.stat(f"/proc/{pid}/root{inside}", follow_symlinks=False)
+        if not _stat.S_ISDIR(st.st_mode):
+            raise OSError(f"{inside} is not a folder in the container")
+        return f"{st.st_dev}:{st.st_ino}"
+
+    @staticmethod
+    def _quarantine(container: str) -> bool:
+        """Stop a container whose mount was refused, killing it when a stop does not take.
+        True when docker no longer lists it running."""
+        for args in (["stop", "-t", "0", container], ["kill", container]):
+            try:
+                containers.docker(args, timeout=60)
+            except Exception:
+                pass
+            try:
+                if containers.container_state(container) != "running":
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def _check_mount(self, env: Environment, held) -> None:
+        """Right after a start: /workspace must be the held folder (same `dev:ino`, read from
+        the host, `_mounted_identity`). Asked only of a daemon on this kernel
         (`containers.docker_shares_kernel`); a daemon in a VM shows other numbers, and its
-        mount stays by name. On any other answer the container is stopped at once and the
-        start refused. The container's own process is `sleep infinity` under `--init`, so
-        nothing of the account has run before this check."""
+        mount stays by name. Anything else stops the container and refuses; the start's
+        unverified mark (`_mark_unverified`) stays, so no command runs in it until a check
+        passes, whatever docker says about its state."""
         if held is None or not containers.docker_shares_kernel():
             return
         try:
-            r = containers.docker(["exec", env.container, "stat", "-L", "-c", "%d:%i", WORKSPACE],
-                                  timeout=30)
-            seen = (r.stdout or "").strip() if r.returncode == 0 else ""
-        except Exception:
-            seen = ""
-        if seen != held.identity:
+            seen, why = self._mounted_identity(env.container), ""
+        except OSError as e:
+            seen, why = "", (e.strerror or str(e))
+        if seen == held.identity:
+            return
+        stopped = self._quarantine(env.container)
+        state = ("the environment was stopped" if stopped else
+                 "the environment could not be stopped, and every command in it is refused "
+                 "until the check passes")
+        if why:
+            raise EnvironmentRefused(
+                f"could not check which folder is mounted at {WORKSPACE} ({why}); {state} and "
+                f"nothing was run in it. Run the command again; if this keeps happening, the "
+                f"docker daemon may run containers under another user (rootless or "
+                f"userns-remap), where VAF cannot check the mount")
+        raise EnvironmentRefused(
+            f"the folder mounted at {WORKSPACE} is not {env.project_path}: it was moved or "
+            f"replaced by a link while the environment started; {state} and nothing was run "
+            f"in it. Check the folder, then run the command again")
+
+    # The start of an environment with a project folder is marked unverified, in a file of its
+    # own beside the record, until `_check_mount` passed: a command of another request or
+    # another process that finds the container already running checks the mount itself
+    # first (`_ensure_running`), instead of running in a mount nobody checked yet. A file
+    # of its own, because `_touch` and other writers rewrite the record from memory.
+    def _unverified_file(self, env_id: str) -> Path:
+        return self._state_dir() / f"{env_id}.mount-unverified"
+
+    def _mark_unverified(self, env: Environment) -> None:
+        if env.project_path:
+            with self._locked():
+                self._unverified_file(env.id).write_text("", encoding="utf-8")
+
+    def _clear_unverified(self, env: Environment) -> None:
+        with self._locked():
             try:
-                containers.docker(["stop", "-t", "0", env.container], timeout=60)
-            except Exception:
+                self._unverified_file(env.id).unlink()
+            except FileNotFoundError:
                 pass
-            raise EnvironmentRefused(f"the folder mounted at {WORKSPACE} is not "
-                                     f"{env.project_path} (it changed while the environment "
-                                     f"started); nothing ran in it")
+
+    def _verify_running(self, env: Environment) -> None:
+        """A running environment whose start is not checked yet (another request is between
+        `docker start` and its check, or a check refused and the stop did not take): check
+        the mount now, before the caller's command."""
+        with (self._held_mount(env) or contextlib.nullcontext()) as held:
+            self._check_mount(env, held)
+        self._clear_unverified(env)
 
     def _start_new(self, env: Environment, *, memory_mb: int, cpus: float,
                    host_gateway: bool = False) -> None:
@@ -728,6 +819,7 @@ class EnvironmentManager:
 
     def _start_new_held(self, env: Environment, held, *, memory_mb: int, cpus: float,
                         host_gateway: bool) -> None:
+        self._mark_unverified(env)
         labels = self._labels(env)
         if env.network in ("none", "registries"):
             ok = containers.ensure_network(env.net, internal=True, labels=labels,
@@ -768,7 +860,7 @@ class EnvironmentManager:
             # relabelled. The source stays a name (`:z` needs `-v`); `_check_mount` asks
             # afterwards what docker mounted. NAMED BOUNDARY: docker relabels before that
             # check, so a folder swapped in during the moment between `_held_mount` and
-            # docker's start is relabelled, though nothing runs in it.
+            # docker's start is relabelled (see the module docstring for what can run then).
             args += ["-v", f"{env.project_path}:{WORKSPACE}:z"]
         elif env.volume:
             args += ["-v", f"{env.volume}:{WORKSPACE}"]
@@ -786,6 +878,7 @@ class EnvironmentManager:
             raise EnvironmentRefused(f"the environment could not be started: "
                                      f"{(r.stderr or '').strip()[:300]}")
         self._check_mount(env, held)
+        self._clear_unverified(env)
         env.state = "running"
         if env.network == "registries":
             self._attach_proxy(env)
@@ -942,6 +1035,8 @@ class EnvironmentManager:
 
     # -- running -------------------------------------------------------------------
     def _ensure_running(self, env: Environment) -> None:
+        if env.state == "running" and env.project_path and self._unverified_file(env.id).exists():
+            self._verify_running(env)
         if env.state == "running":
             if env.network == "registries":
                 # The proxy can be gone while the environment runs (the reaper stopped it
@@ -960,11 +1055,13 @@ class EnvironmentManager:
                                          f"floor is {setting('min_free_mb')} MB)")
         # A restart after an idle stop resolves the stored path again, like a new start.
         with (self._held_mount(env) or contextlib.nullcontext()) as held:
+            self._mark_unverified(env)
             r = containers.docker(["start", env.container], timeout=60)
             if r.returncode != 0:
                 raise EnvironmentRefused(f"the environment could not be started: "
                                          f"{(r.stderr or '').strip()[:200]}")
             self._check_mount(env, held)
+        self._clear_unverified(env)
         env.state = "running"
         if env.network == "registries":
             self._attach_proxy(env)

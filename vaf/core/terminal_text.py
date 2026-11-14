@@ -125,9 +125,10 @@ in its preview title has one). A link from a `Text` or `Style` object, from `Mar
 from the `style` argument of `print` is not markup and keeps the link handling of
 `terminal_segments` and `TerminalConsole.print`. A `style` argument of `print` that hides
 text (a background, `reverse`, `conceal`) lies over every label printed with it, so no
-markup link survives it; VAF passes none. A background from a container's own style (a
-`Panel` or table style, `Console.log(style=...)`) is applied where S2 does not see it, and
-VAF sets none either.
+markup link survives it; VAF passes none. A background from any other style laid over the
+output (a style set on the console itself, `TerminalConsole(style=...)`, a `Panel` or
+table style, a table's `row_styles`, `Console.log(style=...)`) is applied where S2 does not
+see it, and VAF sets none of them.
 """
 import json
 import logging
@@ -265,7 +266,7 @@ def _own_file_link(target: str, label: str) -> bool:
     its decoded path's length. A label longer than its target (nested links, where every
     label runs to the end of the text) is refused without being read, so a run of links
     costs the size of their own text instead of the square of it."""
-    if not label or "\t" in label or "\n" in label:
+    if not label:
         return False
     try:
         parts = urlsplit(target)
@@ -284,7 +285,8 @@ def _own_file_link(target: str, label: str) -> bool:
             path = path[1:]                   # `/C:/x` is the URI form of `C:/x`
     if not (_absolute_local(path) and path == shown):
         return False
-    return terminal_text(label) == label and not any(_unseen(ch) for ch in label)
+    return ("\t" not in label and "\n" not in label and terminal_text(label) == label
+            and not any(_unseen(ch) for ch in label))
 
 
 def file_link(path: Any) -> str:
@@ -582,12 +584,11 @@ class TerminalConsole(Console):
         may equal its background, and the highlighter colours every path label anyway.
 
         Cost: one sort and one binary search per link, O(n log n) in the spans, plus the
-        own-link check of each link, which reads a label only once it has the length of its
-        own target (`_own_file_link`), so in all no more than the size of the link tags,
-        apart from one copy of each label (a memory copy, which Rich's own parse of the same
-        nested tags outweighs: 8000 nested links cost 1.04x a plain Rich console).
-        The hiding spans are merged into disjoint intervals once, and each link looks up the
-        last interval starting before its end, instead of testing every hiding span per link
+        own-link check of each link, which neither copies nor reads a label longer than its
+        target and reads a shorter one only once it has its decoded path's length
+        (`_own_file_link`), so in all no more than the size of the link tags. The hiding
+        spans are merged into disjoint intervals once, and each link looks up the last
+        interval starting before its end, instead of testing every hiding span per link
         (quadratic: 12000 link and conceal pairs took about ten seconds, and 4000 nested
         links, each label read in full, as long)."""
         spans = rich_text.spans
@@ -615,7 +616,11 @@ class TerminalConsole(Console):
             # hiding). The intervals are disjoint and sorted, so no earlier one can.
             last = bisect_left(starts, span.end) - 1
             hidden = last >= 0 and ends[last] > span.start
-            if hidden or not _own_file_link(style.link, rich_text.plain[span.start:span.end]):
+            # A label longer than its target is never the target's decoded path (decoding
+            # only shortens), so it is refused before it is copied out of the text: in
+            # nested links every label runs to the end of the text.
+            if (hidden or span.end - span.start > len(style.link)
+                    or not _own_file_link(style.link, rich_text.plain[span.start:span.end])):
                 spans[index] = Span(span.start, span.end, style.update_link(None))
         return rich_text
 

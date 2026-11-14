@@ -480,6 +480,41 @@ def test_nested_links_cost_linear_time():
     assert best < 1.5, best
 
 
+def test_a_label_longer_than_its_target_is_neither_copied_nor_read(monkeypatch):
+    """The order the timing test above relies on, pinned without a clock: a label longer
+    than its own target cannot be the target's decoded path, so the check refuses it
+    before it scans the label (a tab, a line break, control characters), and the console
+    refuses it before it copies the label out of the text. Nested links over a long text
+    would otherwise copy and scan every label. MUTATIONS: test the tab and line break
+    before the length - red; drop the length test before the copy in `_own_links_only` -
+    red."""
+    import vaf.core.terminal_text as tt
+    from rich.text import Span, Text
+
+    class Unread(str):
+        def __contains__(self, item):
+            raise AssertionError("label scanned")
+
+        def __iter__(self):
+            raise AssertionError("label read")
+
+    assert tt._own_file_link("file:///a", Unread("/" + "x" * 50)) is False
+
+    real = tt._own_file_link
+    checked = []
+    def recording(target, label):
+        checked.append((target, label))
+        return real(target, label)
+
+    monkeypatch.setattr(tt, "_own_file_link", recording)
+    links = 50
+    text = Text("x" * links)
+    text.spans[:] = [Span(i, links, "link file:///a") for i in range(links)]
+    _console()._own_links_only(text)
+    assert checked, "the short labels still reach the check"
+    assert all(len(label) <= len(target) for target, label in checked), checked
+
+
 def test_escape_markup_keeps_only_vafs_own_link():
     """The entry escape is Rich's own, except for VAF's file link. MUTATION: keep every
     `[link=...]` match - red (the foreign link stays live)."""

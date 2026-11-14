@@ -1578,9 +1578,10 @@ alone that matches the terminal's own background is not seen as hidden, since VA
 know the terminal's colours; the link it keeps still opens only the local path its full
 label names. The same holds for VAF's own shape anywhere: foreign text that writes
 `[link=file:///tmp/x]/tmp/x[/link]` gets a live link, local only, and it opens what it
-says. A background from a container's own style (a `Panel` or table style,
+says. A background from any other style laid over the output (a style set on the console
+itself, `TerminalConsole(style=...)`, a `Panel` or table style, a table's `row_styles`,
 `Console.log(style=...)`) is applied after the console's rules and is not seen; VAF sets
-none. A value escaped into a markup line that ends in a backslash shows it twice where
+none of them. A value escaped into a markup line that ends in a backslash shows it twice where
 plain text follows it (Rich's escape doubles it for the tag that usually follows); table
 cells take `Text` for that reason. VAF's own link to a network share (a UNC project path on
 Windows) carries a host and shows as a plain label.

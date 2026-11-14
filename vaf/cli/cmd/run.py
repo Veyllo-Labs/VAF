@@ -2606,30 +2606,15 @@ def _reply_web_copy(text: str) -> str:
     link, which the model may repeat from the coder's tool result, shows as the path it opens
     (`own_links_as_labels`).
 
-    Named boundary: a local VQ-1 reply of English reasoning followed by a German answer
-    without `<think>` tags still gets the reasoning wrapped in `<think>` below; changing that
-    changes how that model's replies read and needs a measurement with it."""
-    if not text: return ""
-    text = own_links_as_labels(text)
-
-    # Auto-detect thinking when model doesn't use <think> tags
-    # Look for English reasoning followed by German answer (VQ-1 pattern)
-    if '<think>' not in text and len(text) > 100:
-        # Common German sentence starters that indicate the actual answer
-        german_starters = r'(Ich bin|Ich kann|Ich werde|Ich habe|Hallo|Guten|Gerne|Natürlich|Ja,|Nein,|Das ist|Die |Der |Ein |Eine |Hier ist|Hier sind|Klar|Sicher|Selbstverständlich)'
-
-        # Find where German answer starts (after English reasoning)
-        match = re.search(german_starters, text)
-        if match and match.start() > 50:
-            # Check if text before looks like English reasoning
-            before = text[:match.start()]
-            # English reasoning indicators
-            if re.search(r'\b(I should|I need|I will|I\'ll|Let me|The user|should be|because|since|First|Also)\b', before, re.IGNORECASE):
-                reasoning = before.strip()
-                answer = text[match.start():].strip()
-                text = f"<think>{reasoning}</think>\n\n{answer}"
-
-    return text
+    Reasoning is folded only where the model marked it: the engine streams a model's
+    reasoning channel as `<think>`, and a model's own `<think>` tags pass through; both reach
+    the browser's panel and the replay unchanged from here. Plain text is the reply, in any
+    language. A word list cannot tell a model's English reasoning from an English answer that
+    quotes German, or from a German sentence holding "also", and every wrong guess hid answer
+    text in the browser and dropped it from what the model read after a reload."""
+    if not text:
+        return ""
+    return own_links_as_labels(text)
 
 
 def _process_agent_message(agent, user_input: str, tui, session):

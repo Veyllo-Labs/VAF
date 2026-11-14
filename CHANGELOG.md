@@ -68,6 +68,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **A terminal reply is no longer folded into "thinking" by a guess at its language.** In
+  `vaf run` (the prompt interface and the full-screen app), the copy shown in the browser and
+  saved in the chat wrapped the start of a longer reply as reasoning when it found a German
+  word after an English one. It also hit German replies that used "also" and English replies
+  that quoted German, hid that text in the browser, and left it out of what the model read
+  after the chat was reopened. Reasoning is now folded only where the model marked it as
+  reasoning, as in a web chat. Chats saved before keep their folded text.
 - **`/session <id>` in `vaf run` switches the chat, and what you type next stays there.** The
   switch failed every time with "Failed to load session". Typed messages also ran on a
   history of their own that no chat held: `vaf run --session <id>` never gave the agent the

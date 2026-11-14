@@ -811,18 +811,146 @@ def test_an_async_ack_is_mirrored_as_written(quiet_run_module, monkeypatch):
     assert session.messages == [("assistant", "Started task [abc] for arr[i]")]
 
 
-def test_the_german_answer_heuristic_still_folds_english_reasoning():
-    """A local model's English reasoning before a German answer, without `<think>` tags, is
-    still folded away as reasoning in the browser's copy. MUTATION: delete the heuristic -
-    red."""
+#: Replies a German-word-after-an-English-cue guess folded into `<think>`: four of a model's
+#: untagged English reasoning before a German answer, then German answers that say "also" or
+#: hold a code comment, and English answers that quote German or name a German brand. Every
+#: one is plain text the model did not mark as reasoning, so it is the reply.
+FOLDED_BY_A_GUESS = [
+    ("vq1-hallo",
+     "The user greets me in German, so I should greet back and offer help in German. "
+     "Hallo! Wie kann ich dir heute helfen?"),
+    ("vq1-hallo-paragraph",
+     "The user greets me in German. I should answer in German and keep it short and friendly."
+     "\n\nHallo! Mir geht es gut, danke. Wie kann ich dir helfen?"),
+    ("vq1-gerne",
+     "The user asks for a short recipe. I should give the steps briefly and in German. "
+     "Gerne! Koche die Nudeln acht Minuten und gib dann die Sauce dazu."),
+    ("vq1-das-ist",
+     "The user asks what a router does. I need to explain it simply, in German. "
+     "Das ist ein Gerät, das dein Heimnetz mit dem Internet verbindet."),
+    ("de-also-die",
+     "Gute Frage! Es gibt mehrere Faktoren, also kurz gesagt: Die Antwort ist ja, aber nur "
+     "wenn der Speicher reicht."),
+    ("de-also-natuerlich",
+     "Für dein Problem gibt es zwei Wege, also eins nach dem anderen. Natürlich kannst du "
+     "auch beide kombinieren, wenn du willst."),
+    ("de-code-comment",
+     "So sieht das Skript aus:\n\n```python\n# First, read the file\nwith open(p) as f:\n"
+     "    rows = f.read()\n```\n\nDie Funktion liest die Datei einmal ganz ein."),
+    ("de-sicherheitsupdates",
+     "Kurzer Hinweis vorab zu deinem Server, also bitte lesen: Sicherheitsupdates sollten "
+     "immer zuerst eingespielt werden."),
+    ("en-translation",
+     "Sure, here is the translation you asked for, since you want it word for word:\n\n"
+     "Ich habe heute keine Zeit, aber morgen gerne."),
+    ("en-die-hard",
+     "My pick for a Christmas film is an action classic, because it is set at a party: "
+     "Die Hard (1988) with Bruce Willis."),
+    ("en-der-spiegel",
+     "The story was first reported in Germany, since a weekly broke it there: Der Spiegel "
+     "ran it on its cover in March."),
+    ("en-klarna",
+     "There are a few ways to pay in instalments, so first pick a provider. Klarna lets you "
+     "split a purchase into three parts."),
+    ("en-greetings-list",
+     "Here are three greetings you can use at work, because each fits a different time:\n\n"
+     "- Guten Morgen\n- Guten Tag\n- Guten Abend"),
+]
+
+
+@pytest.mark.parametrize("reply", [row for _, row in FOLDED_BY_A_GUESS],
+                         ids=[rid for rid, _ in FOLDED_BY_A_GUESS])
+def test_a_reply_is_never_folded_by_a_language_guess(reply):
+    """Text the model did not mark as reasoning is the reply, in any language: the copy the
+    browser shows and the chat stores keeps it as written. MUTATION: restore the German-answer
+    heuristic in `_reply_web_copy` - red on every row."""
     import vaf.cli.cmd.run as run_mod
 
-    reply = ("Let me think about this. The user wants a greeting, so I should answer in "
-             "German. Hallo! Wie kann ich dir heute helfen?")
-    copy = run_mod._reply_web_copy(reply)
-    assert copy.startswith("<think>Let me think about this.")
-    assert copy.endswith("</think>\n\nHallo! Wie kann ich dir heute helfen?")
+    assert run_mod._reply_web_copy(reply) == reply
+
+
+def test_the_reply_copy_is_the_own_link_rule_alone():
+    """No word list can come back unnoticed: the body (docstring excluded) calls no `re`
+    function and holds no string but `""`. MUTATION: restore the heuristic - red."""
+    import inspect
+
+    import vaf.cli.cmd.run as run_mod
+
     assert run_mod._reply_web_copy("") == "" and run_mod._reply_web_copy(None) == ""
+    func = ast.parse(inspect.getsource(run_mod._reply_web_copy)).body[0]
+    body = func.body[1:] if isinstance(getattr(func.body[0], "value", None), ast.Constant) \
+        else func.body
+    nodes = [n for stmt in body for n in ast.walk(stmt)]
+    assert not [n for n in nodes if isinstance(n, ast.Attribute)
+                and isinstance(n.value, ast.Name) and n.value.id == "re"]
+    assert [n.value for n in nodes
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)] == [""]
+
+
+@pytest.mark.parametrize("reply", [dict(FOLDED_BY_A_GUESS)["de-also-die"],
+                                   dict(FOLDED_BY_A_GUESS)["vq1-hallo"]],
+                         ids=["de-also-die", "vq1-hallo"])
+def test_a_streamed_reply_keeps_its_head_in_the_browser_and_the_chat(
+        quiet_run_module, monkeypatch, reply):
+    """The REAL `_process_agent_message`, 7-character chunks: the chat stores the reply as
+    written, and every mirrored copy is a head of it, so no bubble turns its start into a
+    folded panel while it streams. MUTATION: restore the heuristic - red (the stored copy
+    starts with `<think>`, the mirror flips a little past 100 characters)."""
+    import vaf.cli.cmd.run as run_mod
+
+    sent = _mirror(quiet_run_module, monkeypatch)
+    session = _Session()
+    run_mod._process_agent_message(FakeAgent(reply), "hi", _StreamTui(), session)
+    assert session.messages == [("assistant", reply)]
+    assert sent and sent[-1] == reply
+    assert all(reply.startswith(content) for content in sent), sent
+
+
+def test_reasoning_the_engine_marked_stays_marked(quiet_run_module, monkeypatch):
+    """The engine streams a model's reasoning channel as whole `<think>` tokens: the chat
+    stores them as streamed and the browser's copy keeps them, so the panel still folds it and
+    the replay still strips it. MUTATION: make `_reply_web_copy` remove `<think>...</think>`
+    blocks - red."""
+    import vaf.cli.cmd.run as run_mod
+
+    script = ["<think>", "The user greets me in German, so I answer in German.",
+              "</think>\n\n", "Hallo! Wie kann ich dir heute helfen?"]
+    sent = _mirror(quiet_run_module, monkeypatch)
+    session = _Session()
+    run_mod._process_agent_message(FakeAgent(script), "hi", _StreamTui(), session)
+    assert session.messages == [("assistant", "".join(script))]
+    assert sent and sent[-1].startswith(
+        "<think>The user greets me in German, so I answer in German.</think>")
+    assert sent[-1].endswith("Hallo! Wie kann ich dir heute helfen?")
+
+
+#: Tokens that set off the old guess and its neighbours: German answer starters, English
+#: reasoning cues (with the German "also"), tags, brackets, VAF's own link, line breaks.
+_FUZZ_TOKENS = ["Ich habe ", "Hallo! ", "Die ", "Natürlich ", "Ja, ", "Das ist ", "Gerne ",
+                "I should ", "The user ", "also ", "because ", "First, ", "Let me ",
+                "<think>", "</think>", "[x] ", "arr[i] ", OWN, "\n\n", "\n", " ", "  ",
+                "äöüß ", "word ", "reply ", "Klarna ", "Sicherheit "]
+
+
+def _fuzz_reply(rng) -> str:
+    return "".join(rng.choice(_FUZZ_TOKENS) for _ in range(rng.randint(0, 60)))
+
+
+@pytest.mark.parametrize("seed", [1, 2, 3])
+def test_the_reply_copy_is_only_the_link_rule(seed):
+    """Seeded fuzz: for any reply, the copy is `own_links_as_labels` of it and holds a
+    `<think>` only where the reply did. MUTATION: restore the heuristic - red on every seed
+    (it changes 3, 2 and 1 of the 500 draws)."""
+    import random
+
+    import vaf.cli.cmd.run as run_mod
+
+    rng = random.Random(seed)
+    for _ in range(500):
+        text = _fuzz_reply(rng)
+        copy = run_mod._reply_web_copy(text)
+        assert copy == own_links_as_labels(text), text
+        assert "<think>" not in copy or "<think>" in text, text
 
 
 # ── the sub-agent drain ──────────────────────────────────────────────────────────────

@@ -189,8 +189,9 @@ in the browser shows that copy unchanged too: the web server's transcript projec
 (`_stored_reply_text` in `vaf/core/web_server.py`) keeps every bracket of a stored reply. Before,
 this copy deleted every `[...]` group and turned a bracket holding "dim" into hidden
 reasoning; chats saved before the change keep what they lost, because the file does not
-hold the deleted text. A local model's English reasoning before a German answer without
-`<think>` tags is still folded away as reasoning in that copy. Named boundary: the
+hold the deleted text. Reasoning is folded only where the model marked it: the engine
+streams a model's reasoning channel as `<think>`, and a model's own `<think>` tags pass
+through; plain text stays the reply, in any language, as it does in a web chat. Named boundary: the
 full-screen app's transcript replay (`_transcript_entries` in
 `vaf/cli/tui_app/agent_bridge.py`) and `/export` show a stored reply exactly as stored and
 never cleaned it; replies are stored without VAF's `[ASYNC_ACK]` status tag

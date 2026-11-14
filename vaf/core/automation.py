@@ -1612,8 +1612,11 @@ vaf automation delete <id>   # Delete task
         answer it gave before it.
 
         Reasoning is never returned with only its tags removed: that text IS the reasoning.
-        Nothing found gives "", which the delivery shows as "Completed".
+        The engine's own placeholders for a round without text ("Thinking...", "[Empty]") are
+        passed over like an empty message: status, not an answer. Nothing found gives "", which
+        the delivery shows as "Completed".
         """
+        from vaf.core.completion import HISTORY_PLACEHOLDERS
         for msg in reversed(history or []):
             if not isinstance(msg, dict) or msg.get("role") != "assistant":
                 continue
@@ -1621,7 +1624,7 @@ vaf automation delete <id>   # Delete task
             if not isinstance(content, str) or not content:
                 continue
             text = (clean(content) or "").strip()
-            if text:
+            if text and text not in HISTORY_PLACEHOLDERS:
                 return text
         return ""
     
@@ -2125,7 +2128,10 @@ vaf automation delete <id>   # Delete task
                     except Exception:
                         result = ""
                     if not result:
-                        result = self._extract_clean_answer(agent.history, agent._clean_reasoning)
+                        try:
+                            result = self._extract_clean_answer(agent.history, agent._clean_reasoning)
+                        except Exception:
+                            result = ""
 
                 agent.shutdown()
 

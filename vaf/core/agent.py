@@ -34,7 +34,8 @@ from vaf.core.log_helper import append_domain_log, get_dated_log_path, log_timel
 from vaf.core.system_prompt import SystemPromptManager
 from vaf.core.last_interaction import get_last_interaction
 from vaf.core.text_match import compile_de, contains_any, fold, fold_all
-from vaf.core.completion import is_failure_chunk, strip_think_blocks
+from vaf.core.completion import (EMPTY_PLACEHOLDER, THINKING_PLACEHOLDER, is_failure_chunk,
+                                 strip_think_blocks)
 from vaf.core.subagent_spawn import delegated_task as _delegated_task, spawn_ledger as _spawn_ledger
 from vaf.core.tool_dispatch import (
     ToolCallHooks as _ToolCallHooks,
@@ -12858,12 +12859,12 @@ class Agent:
             # ───────────────────────────────────────────────────────────────────────
 
             if tool_calls_detected:
-                content_for_history = full_content if full_content else "Thinking..."
+                content_for_history = full_content if full_content else THINKING_PLACEHOLDER
                 # A tool call recovered from the assistant TEXT (a DeepSeek ｜｜DSML｜｜ / Claude
                 # <invoke> leak) leaves its raw markup in the content. Strip it so the tags are
                 # neither shown in the UI nor replayed to the model next turn. No-op otherwise.
                 from vaf.core.tool_call_recovery import strip_tool_call_markup
-                content_for_history = strip_tool_call_markup(content_for_history) or "Thinking..."
+                content_for_history = strip_tool_call_markup(content_for_history) or THINKING_PLACEHOLDER
                 if self.use_server and not full_content:
                     content_for_history = None
                 
@@ -13771,9 +13772,18 @@ class Agent:
 
                 # First empty only: keep one assistant block (with thinking) and nudge; no temp sweep.
                 if empty_retry_count == 0:
-                    content = full_response if full_response else ((full_reasoning or "") + "\n\n" + (full_content or "")).strip()
+                    # The reasoning stays in front of the model on the retry, MARKED: a local
+                    # engine's reasoning channel reaches full_reasoning (and full_response)
+                    # without tags, and stored that way it reads as an answer to every later
+                    # reader of the history (an automation delivered it as its result). The API
+                    # lanes already stream it as <think> blocks inside full_content, so for them
+                    # full_reasoning is empty and full_content is what full_response was.
+                    if full_reasoning:
+                        content = f"<think>{full_reasoning}</think>\n\n{full_content or ''}".strip()
+                    else:
+                        content = full_content
                     if not content:
-                        content = "[Empty]"
+                        content = EMPTY_PLACEHOLDER
                     self.history = self.history[:history_snapshot_len + 1] + [
                         {"role": "assistant", "content": content}
                     ]

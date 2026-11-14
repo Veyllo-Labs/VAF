@@ -42,6 +42,15 @@ _ERROR_SENTINEL = "[API Error from"
 # produced nothing.
 _ENGINE_ERROR = "[Error] "
 
+# What the engine writes as an assistant message's content in its OWN history when the
+# round had no text: a tool round without narration (outside the local server lane, which
+# stores None) and the first empty retry that had neither reasoning nor answer. Engine status,
+# never words for the person: a reader that takes the newest assistant text of a run as its
+# answer passes over these.
+THINKING_PLACEHOLDER = "Thinking..."
+EMPTY_PLACEHOLDER = "[Empty]"
+HISTORY_PLACEHOLDERS = (THINKING_PLACEHOLDER, EMPTY_PLACEHOLDER)
+
 
 def is_error_reply(text) -> bool:
     """True when a turn's text is a backend failure handed back as text, not an answer.

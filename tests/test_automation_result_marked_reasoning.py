@@ -25,7 +25,14 @@ MUTATIONS, each turns the named test red:
 - walk oldest first, drop the empty-skip, or drop the str check -> test_fallback_walk_order;
 - fall back to the tag-stripped stream, or hand the fallback a tag-only cleaner
   -> test_run_task_delivers_the_marked_only_fallback[a-*] and [c-*];
-- re-add `response_parts` or a phrase literal -> test_no_phrase_guess_left_in_the_lane.
+- re-add `response_parts` or a phrase literal -> test_no_phrase_guess_left_in_the_lane;
+- drop the placeholder skip (or keep only one of the two placeholders)
+  -> test_fallback_never_delivers_marked_reasoning[placeholder*];
+- call the fallback outside the try that guards the primary step
+  -> test_a_failing_cleaner_in_the_fallback_still_shuts_the_agent_down;
+- let the first empty retry store `full_response` again (a local engine's reasoning channel,
+  unmarked), or store `full_content` alone (the model loses its own thinking on the retry)
+  -> test_a_local_reasoning_only_round_then_a_failed_retry_is_not_the_result.
 """
 import ast
 import random
@@ -99,6 +106,14 @@ FALLBACK_ROWS = [
     pytest.param([S(), U(), A("", _CALL), T(), A(None, _CALL), T()], "", id="F7-tool-only"),
     pytest.param([S(), U(), A(_think("Plan: read calendar."))], "", id="F8-short"),
     pytest.param([S(), U(), A(_think(R_EN)), A(ACK)], ACK, id="ack-unstreamed"),
+    # The engine's placeholders for a round without text are status, not an answer.
+    pytest.param([S(), U(), A("Thinking...", _CALL), T()], "", id="placeholder-thinking"),
+    pytest.param([S(), U(), A("[Empty]"),
+                  {"role": "system", "content": "Provide a clear, direct answer now."}], "",
+                 id="placeholder-empty"),
+    pytest.param([S(), U(), A("Erledigt, der Bericht liegt im Ordner."), A("Thinking...", _CALL),
+                  T(), A("[Empty]")], "Erledigt, der Bericht liegt im Ordner.",
+                 id="placeholders-over-an-answer"),
 ]
 
 
@@ -158,9 +173,10 @@ def test_fallback_walk_order():
 
 # ── AC4: the real run_task prompt lane ───────────────────────────────────────
 
-def _drive(monkeypatch, tmp_path, chunks, turn_history):
+def _drive(monkeypatch, tmp_path, chunks, turn_history, *, cleaner=None, shutdowns=None):
     """The real `AutomationManager.run_task` prompt lane with a stub agent whose reply cleaner
-    is the real `Agent._clean_reasoning`; returns (run_task's value, the pushed deliveries)."""
+    is the real `Agent._clean_reasoning` (or `cleaner`); returns (run_task's value, the pushed
+    deliveries). `shutdowns` collects one entry per `agent.shutdown()`."""
     import vaf.core.agent as agent_mod
     from vaf.core import automation
     from vaf.core.lock_manager import LockManager
@@ -169,7 +185,7 @@ def _drive(monkeypatch, tmp_path, chunks, turn_history):
         tools = {}
         _current_username = "alice"
         _tool_authorizer = None
-        _clean_reasoning = Agent._clean_reasoning
+        _clean_reasoning = cleaner or Agent._clean_reasoning
         _sanitize_response = Agent._sanitize_response
 
         def __init__(self, *a, **k):
@@ -189,7 +205,8 @@ def _drive(monkeypatch, tmp_path, chunks, turn_history):
                     stream_callback(chunk)
 
         def shutdown(self):
-            pass
+            if shutdowns is not None:
+                shutdowns.append(1)
 
     pushed = []
     monkeypatch.setattr(agent_mod, "Agent", _Agent)
@@ -231,6 +248,99 @@ def test_run_task_delivers_the_marked_only_fallback(monkeypatch, tmp_path, chunk
     assert pushed == [delivered]
     for leaked in (R_EN, R_DE, "Kalender lesen", "Noch einmal"):
         assert leaked not in out and leaked not in pushed[0][1]
+
+
+def test_a_failing_cleaner_in_the_fallback_still_shuts_the_agent_down(monkeypatch, tmp_path):
+    """The fallback calls the same cleaner as the primary step, and like the primary step a
+    failure there gives no result rather than ending the run in the outer handler, which
+    skipped `agent.shutdown()` and turned a finished run into an error."""
+    def boom(self, text):
+        raise RuntimeError("cleaner failed")
+
+    shutdowns = []
+    out, pushed = _drive(monkeypatch, tmp_path, [PLAIN], [A(PLAIN)], cleaner=boom,
+                         shutdowns=shutdowns)
+    assert shutdowns, "the agent was never shut down"
+    assert out == ""
+    assert pushed == [("success", "Completed")]
+
+
+SECRET = "SECRETREASONING the token in the config is ab12cd34, never repeat it"
+
+
+def test_a_local_reasoning_only_round_then_a_failed_retry_is_not_the_result(monkeypatch,
+                                                                            tmp_path):
+    """The real `chat_step` on a local engine, driven by the real `run_task`: the first round
+    streams only the reasoning channel, the empty retry's request fails (HTTP 500), so nothing
+    unmarked reached the stream and the fallback reads the history. The empty retry stored that
+    reasoning as `full_response`, which holds a local engine's reasoning channel WITHOUT its
+    marks, so the fallback delivered it as a successful result. Stored marked, it is still sent
+    back to the model on the retry and never delivered."""
+    import requests
+    from test_local_engine_wiring import _Resp, _Stream
+    import vaf.core.agent as agent_mod
+    from vaf.core import automation
+    from vaf.core.lock_manager import LockManager
+    from vaf.core.platform import Platform
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: tmp_path / "data"))
+    Real = agent_mod.Agent
+    seen = {}
+
+    class _Local(Real):
+        def __init__(self, *a, **k):
+            super().__init__(register_signals=False, run_kind="automation",
+                             config_overrides={"provider": "local"})
+            self.api_backend = None
+            self.use_server = True
+            monkeypatch.setattr(self, "_try_workflow", lambda *args, **kw: None)
+            monkeypatch.setattr(self, "_route_tools", lambda text: ["web_search"])
+            monkeypatch.setattr(self, "get_token_usage", lambda **kw: (1000, 32768))
+            monkeypatch.setattr(self, "manage_context", lambda *args, **kw: None)
+            monkeypatch.setattr(self, "analyze_intent", lambda *args, **kw: 0.7)
+            seen["agent"] = self
+
+        def load_model(self):
+            pass
+
+        def shutdown(self):
+            pass
+
+    payloads = []
+
+    def post(url, json=None, **kw):
+        if isinstance(json, dict) and json.get("stream") and "messages" in json:
+            payloads.append(json)
+            if len(payloads) == 1:
+                return _Stream([{"reasoning_content": SECRET}])
+        return _Resp(500, {})
+
+    pushed = []
+    monkeypatch.setattr(requests, "post", post)
+    monkeypatch.setattr(agent_mod, "Agent", _Local)
+    monkeypatch.setattr(automation, "bind_identity", lambda *a, **k: None)
+    monkeypatch.setattr(automation, "resolve_scope_identity", lambda *a, **k: None)
+    monkeypatch.setattr(automation, "_push_result_to_web_ui",
+                        lambda *a, **k: pushed.append((a[1], a[2])))
+    monkeypatch.setattr("vaf.memory.rag.turn_memory_context", lambda *a, **k: "")
+    monkeypatch.setattr(LockManager, "acquire", lambda lock_id: True)
+    monkeypatch.setattr(LockManager, "release", lambda lock_id: None)
+    manager = automation.AutomationManager(storage_dir=str(tmp_path / "tasks"))
+    monkeypatch.setattr(manager, "_sync_workspace_automation_state", lambda *a, **k: None)
+    task = automation.AutomationTask(name="summary", prompt="Summarise tomorrow.",
+                                     user_scope_id=SCOPE)
+    out = manager.run_task(task, new_terminal=False)
+
+    assert SECRET not in out and SECRET not in str(pushed), (out, pushed)
+    assert out == ""
+    assert pushed == [("success", "Completed")]
+    history = [m.get("content") for m in seen["agent"].history if m.get("role") == "assistant"]
+    assert SECRET not in history, "the reasoning channel is in the history without its marks"
+    # The retry still shows the model its own thinking, marked as such.
+    assert len(payloads) >= 2, "the empty retry never asked the model again"
+    retry_sent = [m.get("content") for m in payloads[1]["messages"] if m.get("role") == "assistant"]
+    assert f"<think>{SECRET}</think>" in retry_sent, retry_sent
 
 
 # ── AC5: no guess left in the source ─────────────────────────────────────────

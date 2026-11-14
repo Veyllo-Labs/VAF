@@ -75,7 +75,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   and it cut answer text at phrases such as "Okay ... let me", "First ... I need" or "it
   should ... use", and at every bracket, such as a task id `[Task: ...]` or a link label. The
   fallback now removes only the reasoning the model marked, the same rule as the chat, and
-  delivers nothing rather than the reasoning.
+  delivers nothing rather than the reasoning. A local model's reasoning, which arrives without
+  marks, is now kept marked when the agent asks the model again after an empty reply, so it can
+  no longer come back as the result when that second request fails; and the placeholders
+  "Thinking..." and "[Empty]" are no longer delivered as a result.
 - **A terminal reply is no longer folded into "thinking" by a guess at its language.** In
   `vaf run` (the prompt interface and the full-screen app), the copy shown in the browser and
   saved in the chat wrapped the start of a longer reply as reasoning when it found a German

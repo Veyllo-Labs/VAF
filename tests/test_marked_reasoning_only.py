@@ -25,11 +25,16 @@ MUTATIONS, each turns the named test red:
 - keep the text after an unclosed opener in `strip_think_blocks`
   -> the unclosed rows, test_strip_think_blocks_keeps_its_rule, test_cleaners_keep_unmarked_text;
 - drop re.IGNORECASE from `_THINK_TAG` -> the upper and mixed-case rows, the fuzz;
-- drop the `<thinking>` alias in `_clean_reasoning` -> the thinking rows, the fuzz;
-- drop the second pass for a joined tag -> test_strip_think_blocks_rows[joined-tag] (the
-  greedy row joins its tag in the slice, which the first pass already sees);
+- drop the `<thinking>` alias from `_THINK_TAG` -> the thinking rows, the fuzz,
+  test_strip_think_blocks_rows[joined-alias];
+- keep the text after a tag that dropping a block joined -> test_strip_think_blocks_rows[joined-*];
+- one more pass per joined tag instead of the cut -> test_strip_think_blocks_is_linear;
 - restore the lazy-regex `strip_think_blocks` -> test_strip_think_blocks_is_linear and
   test_strip_think_blocks_rows[length-changing-lower];
+- strip the redacted blocks AFTER strip_think_blocks in `_clean_reasoning`
+  -> test_marked_reasoning_is_still_removed[think-quoted-in-redacted*];
+- give `_final_answer_probe` its own <think> regexes again -> test_probe_reads_the_cleaner_rule,
+  test_a_turn_with_only_marked_reasoning_is_asked_again;
 - build the kept answer from `full_response` again
   -> test_local_turn_returns_content_not_the_reasoning_channel (all four rows: the reasoning
      comes back glued in front of the answer);
@@ -130,9 +135,15 @@ def test_plain_text_is_the_answer(row):
     ("<thinking>Plan.</thinking>Answer.", "Answer."),
     ("<THINKING>Plan.</Thinking>\n\nAnswer.", "Answer."),
     ("Answer.\n<thinking>never closed", "Answer."),
+    ("<redacted_reasoning>R <think> R</redacted_reasoning>Answer", "Answer"),
+    ("<redacted_reasoning>The private note says the door code is 4711. I could explain the "
+     "<think> tag, but keep it short.</redacted_reasoning>Hello Bob, models mark their "
+     "reasoning with a special tag.",
+     "Hello Bob, models mark their reasoning with a special tag."),
 ], ids=["block", "doubled-tags", "greedy-to-last-close", "stray-tag", "redacted", "marked-okay-user",
         "leaked-tool-json", "unclosed-after-answer", "upper", "mixed-case", "upper-unclosed",
-        "thinking", "thinking-upper", "thinking-unclosed"])
+        "thinking", "thinking-upper", "thinking-unclosed", "think-quoted-in-redacted",
+        "think-quoted-in-redacted-long"])
 def test_marked_reasoning_is_still_removed(text, expected):
     assert _clean(text) == expected
 
@@ -143,9 +154,11 @@ def test_marked_reasoning_is_still_removed(text, expected):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _reference_strip(text: str) -> str:
-    """The regex form strip_think_blocks had before it became linear: its semantics."""
+    """The regex form strip_think_blocks had before it became linear: its semantics, with
+    <thinking> read as <think>."""
     if not text:
         return text
+    text = re.sub(r"<(/?)thinking>", r"<\1think>", text, flags=re.IGNORECASE)
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
     m = re.search(r"<think>", text, flags=re.IGNORECASE)
     if m:
@@ -154,11 +167,12 @@ def _reference_strip(text: str) -> str:
 
 
 def _reference_greedy(text: str) -> str:
+    text = re.sub(r"<(/?)thinking>", r"<\1think>", text, flags=re.IGNORECASE)
     return _reference_strip(re.sub(r"<think>[\s\S]*</think>", "", text, flags=re.IGNORECASE))
 
 
-_TAG_TOKENS = ["<think>", "</think>", "<THINK>", "</Think>", "a", "b ", " ", "\n", "x y",
-               "think", "ok.", "\u00c4"]
+_TAG_TOKENS = ["<think>", "</think>", "<THINK>", "</Think>", "<thinking>", "</THINKING>", "a",
+               "b ", " ", "\n", "x y", "think", "ok.", "\u00c4"]
 
 
 @pytest.mark.parametrize("seed", [1, 2, 3])
@@ -181,20 +195,50 @@ def test_strip_think_blocks_keeps_its_rule(seed):
     ("x <thi<think>a</think>nk>secret", True, "x"),
     ("\u0130 <think>a", False, "\u0130"),
     ("keep <THINK>drop", True, "keep"),
+    ("<thi<think>x</think>nking>secret", False, ""),
+    ("<thi<think>x</think>nking>secret", True, ""),
+    ("a " + "</" * 3 + "<think></think>" + "think>" * 3 + " secret", False, "a </</"),
+    ("a <</think>/think> secret", False, "a"),
 ], ids=["closes-at-first", "greedy-to-last", "joined-tag", "joined-tag-greedy",
-        "length-changing-lower", "upper-unclosed-greedy"])
+        "length-changing-lower", "upper-unclosed-greedy", "joined-alias", "joined-alias-greedy",
+        "joined-nested-closers", "joined-closer"])
 def test_strip_think_blocks_rows(text, greedy, expected):
     assert strip_think_blocks(text, greedy=greedy) == expected
 
 
-def test_strip_think_blocks_is_linear():
-    """128 KB of unclosed openers: the lazy regex took 9.7 s here, the walk 0.02 s (measured)."""
+def _nested_closers(k: int) -> str:
+    s = "</think>"
+    for _ in range(k):
+        s = "<" + s + "/think>"
+    return s
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("Answer. " + "<think>a " * 14500, "Answer."),
+    ("Answer. " + "</" * 16000 + "<think></think>" + "think>" * 16000, "Answer. " + "</" * 15999),
+    ("Answer. " + _nested_closers(16000), "Answer. " + "<" * 15999),
+], ids=["unclosed-openers", "nested-joined-closers", "nested-closers-recursive"])
+def test_strip_think_blocks_is_linear(text, expected):
+    """About 128 KB each. Measured: the lazy regex took 9.7 s on the openers, a pass per
+    joined tag 9.8 s on the nested closers; the walk takes a few milliseconds on all three."""
     import time
-    text = "Answer. " + "<think>a " * 14500
     started = time.perf_counter()
-    assert strip_think_blocks(text) == "Answer."
-    assert _clean(text) == "Answer."
+    assert strip_think_blocks(text) == expected
+    assert strip_think_blocks(text, greedy=True).startswith("Answer.")
+    _clean(text)
     assert time.perf_counter() - started < 2.0
+
+
+@pytest.mark.parametrize("text", [
+    "<thinking>Private plan.</thinking>",
+    "<THINK>Private plan.</THINK>",
+    "<Thinking>Private plan, never closed",
+], ids=["thinking", "upper", "thinking-unclosed"])
+def test_probe_reads_the_cleaner_rule(text):
+    """The empty-response check sees no answer exactly where the cleaner returns none."""
+    from vaf.core.agent import _final_answer_probe
+    assert _clean(text) == ""
+    assert _final_answer_probe(text) == ""
 
 
 @pytest.mark.parametrize("name", list(ANSWERS))
@@ -275,12 +319,16 @@ def api_agent(monkeypatch, tmp_path):
             requests.append(copy.deepcopy(messages))
             if len(requests) > 6:
                 raise AssertionError("runaway turn: more than six requests")
-            yield from chunks
+            if chunks and isinstance(chunks[0], list):
+                yield from chunks[min(len(requests), len(chunks)) - 1]
+            else:
+                yield from chunks
         a.api_backend.chat_completion = provider
         streamed = []
         returned = a.chat_step(user_input="Kannst du das erledigen?",
                                raw_user_input="Kannst du das erledigen?",
                                stream_callback=streamed.append)
+        a.main_requests = len(requests)
         return "".join(c for c in streamed if isinstance(c, str)), returned
 
     a.run = run
@@ -297,6 +345,14 @@ def test_api_turn_returns_its_answer_whole(api_agent, chunks, expected):
     streamed, returned = api_agent.run(chunks)
     assert expected in streamed
     assert returned == expected
+
+
+def test_a_turn_with_only_marked_reasoning_is_asked_again(api_agent):
+    """A generation that is all <thinking> leaves no answer, so the empty-response retry asks
+    again; before, the probe read the alias as text and the turn returned "" as a success."""
+    _streamed, returned = api_agent.run([["<thinking>Private plan.</thinking>"], ["Die Antwort."]])
+    assert api_agent.main_requests == 2
+    assert returned == "Die Antwort."
 
 
 def _local_agent(monkeypatch, tmp_path, engine):

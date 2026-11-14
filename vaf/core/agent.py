@@ -380,8 +380,10 @@ def _final_answer_probe(full_content: str) -> str:
     """
     if _reply_is_reasoning_echo(full_content):
         return ""
-    clean = re.sub(r'<think>.*?</think>', '', (full_content or ""), flags=re.DOTALL)
-    clean = re.sub(r'<think>.*$', '', clean, flags=re.DOTALL)
+    # The reply cleaner's own rule (strip_think_blocks): <think>/<thinking> in any case, an
+    # unclosed opener cuts to the end. Not greedy: this also decides whether a guard may
+    # retract a shown bubble, and the chat closes a leading block at its first </think>.
+    clean = strip_think_blocks(full_content or "")
     clean = re.sub(r'<[^>]*>', '', clean)                  # remaining XML (e.g. <tool_call>)
     clean = re.sub(r'```[\s\S]*?```', '', clean)           # code blocks
     clean = clean.replace(".", "").replace("\n", "").replace(":", "").strip()
@@ -6792,21 +6794,27 @@ class Agent:
         `<redacted_reasoning>` blocks. Plain text is the answer, in any language: a phrase
         list cannot tell a model's reasoning from an answer that starts "I will" or quotes
         what "the user wants", and deleting by such a guess emptied whole replies.
+
+        Named boundary: blocks of the two kinds that CROSS each other, a <think> tag inside a
+        redacted block pairing with one outside it
+        (`<redacted_reasoning><think></redacted_reasoning>Q</think>`), have no right reading;
+        the redacted block goes first and Q is kept as text (about 2 in 1,000 adversarial
+        fuzz draws, all of this class).
         """
         import re
         
         # First, apply the JSON sanitizer to catch leaked tool calls
         t = self._sanitize_response(text)
         
-        # 1. Remove the marked reasoning, in any case. <thinking> is the same marker to the chat
-        # (parseThinkBlocks in web/app/page.tsx). Greedy, first <think> .. LAST </think>: weak
-        # models sometimes quote a </think> mid-reasoning (an earlier reply), so a block closed
-        # at the first one would leak the rest. Doubled tags fall inside that block. An
-        # UNCLOSED <think> cuts to the end, as in _final_answer_probe: a model that never
-        # closed its reasoning gave no answer after that point. Stray tags are dropped.
-        t = re.sub(r'<(/?)thinking>', r'<\1think>', t, flags=re.IGNORECASE)
-        t = strip_think_blocks(t, greedy=True)
+        # 1. Redacted blocks first: a <think> the model quotes inside one would otherwise
+        # cut the text before the block's closer, leak the block and lose the answer.
         t = re.sub(r'<redacted_reasoning>.*?</redacted_reasoning>', '', t, flags=re.DOTALL)
+        # 2. <think>/<thinking> in any case. Greedy, first opener .. LAST closer: weak models
+        # sometimes quote a </think> mid-reasoning (an earlier reply), so a block closed at
+        # the first one would leak the rest. Doubled tags fall inside that block. An
+        # UNCLOSED opener cuts to the end, as in _final_answer_probe: a model that never
+        # closed its reasoning gave no answer after that point. Stray tags are dropped.
+        t = strip_think_blocks(t, greedy=True)
 
         return t.strip()
 

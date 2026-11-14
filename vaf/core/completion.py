@@ -120,23 +120,26 @@ def is_metadata_frame(chunk: str) -> bool:
     )
 
 
-_THINK_TAG = re.compile(r"<(/?)think>", re.IGNORECASE)
+# <thinking> is the same marker: the chat's parseThinkBlocks (web/app/page.tsx) reads it so.
+_THINK_TAG = re.compile(r"<(/?)think(?:ing)?>", re.IGNORECASE)
 
 
 def strip_think_blocks(text: str, *, greedy: bool = False) -> str:
     """Remove model reasoning from a one-shot result, strictly.
 
-    Closed ``<think>...</think>`` blocks are removed; an UNCLOSED ``<think>`` truncates
-    from the marker to the end (a result that is all reasoning must become empty, not
-    leak); stray close markers are dropped. Case-insensitive, like the models are.
+    Closed ``<think>...</think>`` (or ``<thinking>``) blocks are removed; an UNCLOSED
+    opener truncates from the marker to the end (a result that is all reasoning must
+    become empty, not leak); stray close markers are dropped. Case-insensitive, like the
+    models are. A tag that only forms once a block is dropped ("<" + block + "think>")
+    is a marker too and cuts the text there: removed text can never re-form a block.
 
-    ``greedy``: one block from the FIRST ``<think>`` to the LAST ``</think>``, for a turn's
-    reply, where a weak model sometimes quotes a ``</think>`` mid-reasoning (an earlier
-    reply) and a block closed at the first one would leak the rest of its reasoning.
+    ``greedy``: one block from the FIRST opener to the LAST closer, for a turn's reply,
+    where a weak model sometimes quotes a ``</think>`` mid-reasoning (an earlier reply)
+    and a block closed at the first one would leak the rest of its reasoning.
 
-    Linear in the text: one pass over the tags (one more only when dropping a block joins
-    two fragments into a new tag). A lazy ``<think>.*?</think>`` rescans to the end from
-    every unclosed opener, 9.7 s on 128 KB of them where this takes milliseconds.
+    Linear in the text: at most three passes over it. A lazy ``<think>.*?</think>``
+    rescans to the end from every unclosed opener (9.7 s on 128 KB of them), and a
+    pass per joined tag rescans once per tag (9.8 s on 128 KB of nested joined closers).
     """
     if not text:
         return text
@@ -148,28 +151,21 @@ def strip_think_blocks(text: str, *, greedy: bool = False) -> str:
             # Before the block only stray closers; after it no closer at all, so an
             # opener there is unclosed: both are handled by the walk below.
             text = text[:first_open[0]] + text[last_close[1]:]
-    return _drop_think_tags(text).strip()
-
-
-def _drop_think_tags(text: str) -> str:
-    """Closed blocks out, an unclosed opener truncates, stray tags dropped; not stripped."""
-    while True:
-        kept, pos, inside = [], 0, False
-        for m in _THINK_TAG.finditer(text):
-            if not inside:
-                kept.append(text[pos:m.start()])  # the tag is dropped: a stray closer or an opener
-                inside = not m.group(1)
-            elif m.group(1):
-                inside = False
-            pos = m.end()
+    kept, pos, inside = [], 0, False
+    for m in _THINK_TAG.finditer(text):
         if not inside:
-            kept.append(text[pos:])
-        out = "".join(kept)
-        # Dropping a block can join two fragments into a new tag ("<" + block + "think>");
-        # such a tag is a marker too. One more pass per joined tag, none for ordinary output.
-        if out == text or not _THINK_TAG.search(out):
-            return out
-        text = out
+            kept.append(text[pos:m.start()])  # the tag is dropped: a stray closer or an opener
+            inside = not m.group(1)
+        elif m.group(1):
+            inside = False
+        pos = m.end()
+    if not inside:
+        kept.append(text[pos:])
+    out = "".join(kept)
+    joined = _THINK_TAG.search(out)
+    if joined:
+        out = out[:joined.start()]
+    return out.strip()
 
 
 def _collect(chunks) -> tuple:

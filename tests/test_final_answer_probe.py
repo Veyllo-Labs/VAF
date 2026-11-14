@@ -29,7 +29,8 @@ def test_closed_thinking_alone_is_empty():
 
 
 def test_an_unclosed_think_block_is_thinking_too():
-    """MUTATION: drop the `<think>.*$` strip in `_final_answer_probe`.
+    """MUTATION: keep the text after an unclosed opener in `strip_think_blocks`, the rule
+    `_final_answer_probe` shares with the reply cleaner.
 
     The incident shape, verbatim in structure: one closed block, one the model
     never returned from, then leaked closing tags of a tool-call markup dialect.

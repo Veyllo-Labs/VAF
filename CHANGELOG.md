@@ -64,8 +64,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   App.** When the agent passed on what the coding agent reported, the web chat showed
   `[link=file:///...]/path[/link]` around the path, and Telegram, WhatsApp, Discord and the
   Veyllo App received the same text. The path now shows on its own, while the reply streams
-  and in the saved chat; any other link keeps its address visible. In the browser the path is
-  text, not a link: the files the coding agent writes arrive as download chips.
+  and in the saved chat, and the same holds for an automation's result and a question the
+  agent asks you; any other link keeps its address visible. In the browser the path is text,
+  not a link: the files the coding agent writes arrive as download chips.
 - **A workflow no longer reports success when a step was refused or failed.** A step whose
   file was refused (VAF's own data, a protected folder, outside your account's folders), a
   sandbox step that could not start, and a helper that crashed or timed out used to count as

@@ -770,14 +770,19 @@ def turn_started(meta: Dict[str, Any]) -> Optional[str]:
 
 def stream_round(reply_id: Optional[str], text: str, number: int, *, scope: Any = "") -> None:
     """One round's full text so far: the increment of the cleaned accumulated text goes out
-    as a ``delta``. A text that no longer extends what was sent (a clear, a retraction)
-    stops the deltas of this reply; ``done`` still carries the final text."""
+    as a ``delta``, up to a link that has not closed yet (``before_open_link``): VAF's own
+    file link becomes its path in ``_clean`` only once it has closed, and sent before that
+    the device would show its markup and the deltas would stop at the conversion. A text
+    that no longer extends what was sent (a clear, a retraction) stops the deltas of this
+    reply; ``done`` still carries the final text."""
+    from vaf.core.terminal_text import before_open_link
     with _lock:
         reply = _replies.get(_rkey(scope, reply_id))
     if reply is None or not reply.streaming:
         return
     reply.rounds[int(number)] = str(text or "")
-    full = _clean("\n\n".join(reply.rounds[k] for k in sorted(reply.rounds) if reply.rounds[k].strip()))
+    full = before_open_link(_clean("\n\n".join(reply.rounds[k] for k in sorted(reply.rounds)
+                                       if reply.rounds[k].strip())))
     if not full.startswith(reply.sent):
         reply.streaming = False
         return

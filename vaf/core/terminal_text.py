@@ -67,7 +67,7 @@ embedder lane has shown a Rich console or a JSON writer of its own, and an embed
 prints through Rich has Rich's own `rich.markup.escape` and `markup=False` (docs/EMBEDDING.md
 names them). `own_links_as_labels` is on the facade: VAF's own answers carry its file link
 (a workflow's `run()` answer, an inline coder result the embedder's model repeats), and
-VAF's own lanes call it at nine sites in five modules (RICH MARKUP below lists them). Log
+VAF's own lanes call it at eleven sites in six modules (RICH MARKUP below lists them). Log
 records written before
 `vaf.main.main` runs (the dependency bootstrap, module imports) and in a process that does
 not start through it are formatted by whatever handler Python has then. The cleaning covers
@@ -106,8 +106,11 @@ written, brackets included, and shows only VAF's own file link as its label
 `emit_agent_message_append` for an assistant message, `emit_message_complete`), the web
 chat's and the sub-agent drain's stored copies and the drain's fallback message
 (`vaf.core.headless_runner`), the messenger and Veyllo App chain
-(`_prepare_channel_outbound`), and the main-messenger lane (`send_to_main_messenger`). The
-label is plain text there, never a web link: the link's shape does not prove VAF wrote it,
+(`_prepare_channel_outbound`; the Veyllo App's live deltas hold back a link until it closes,
+`before_open_link`), the main-messenger lane (`send_to_main_messenger`), an
+automation's result (`vaf.core.automation._push_result_to_web_ui`) and a question the agent
+asks in the web chat (`vaf.core.thinking_mode.emit_message_to_web_ui`). The label is plain
+text there, never a web link: the link's shape does not prove VAF wrote it,
 the main one names a folder, and the files the coder writes reach the browser as download
 chips of their own.
 
@@ -118,7 +121,8 @@ raw result. The contact send tools (`send_telegram`, `send_whatsapp`, `send_disc
 and no VAF code puts `file_link` there. An automation's notification summary is a short
 preview. A chat reloaded in the browser goes through the web server's transcript projection
 (`_clean_history_text` in `vaf/core/web_server.py`), which removes every `[...]` group of a
-stored reply, the link's markup included.
+stored reply, the link's markup included. The Veyllo App room's lines are stored as they
+were exchanged with the app's agent.
 
 VAF's own file link is `file_link(path)`: the `file:` URI of an absolute local path,
 labelled with that path, raw (`_own_file_link` is the check; the coder's
@@ -397,6 +401,30 @@ def own_links_as_labels(value: Any) -> str:
         pos = match.end()
     pieces.append(text[pos:])
     return "".join(pieces)
+
+
+_LINK_OPEN, _LINK_CLOSE = "[link=", "[/link]"
+
+
+def before_open_link(text: str) -> str:
+    """The part of a growing text that is settled for `own_links_as_labels`: all of it but a
+    link still open on the last line (from its opener on) or a trailing start of an opener
+    (`[`, `[li`). VAF's own link becomes its path only once its closing tag has arrived, so a
+    stream that sends increments of the converted text holds this rest back until then;
+    otherwise the reader sees the raw markup first and the converted text no longer extends
+    what was sent. A link cannot span a line break, so an opener on an earlier line is text.
+    Named boundary: internal, its one caller is the Veyllo App's live deltas
+    (`vaf.core.app_link.bridge.stream_round`); the web chat re-sends its whole text per
+    update and needs no increment."""
+    line = text.rfind("\n") + 1
+    close = text.rfind(_LINK_CLOSE)
+    opener = text.find(_LINK_OPEN, max(line, close + len(_LINK_CLOSE) if close >= 0 else 0))
+    if opener >= 0:
+        return text[:opener]
+    for size in range(len(_LINK_OPEN) - 1, 0, -1):
+        if text.endswith(_LINK_OPEN[:size]):
+            return text[:-size]
+    return text
 
 
 def _json_escape(match: "re.Match[str]") -> str:

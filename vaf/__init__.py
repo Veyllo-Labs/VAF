@@ -207,7 +207,7 @@ def __getattr__(name):
         # engine's) shown as the path it opens, every other character kept: for text shown
         # anywhere but a Rich console. Exported because the facade's own outputs carry that
         # markup (a workflow's run() answer, an inline coder result the model repeats) and
-        # VAF's own lanes need it at nine sites: the browser bridge, the stored chat copies,
+        # VAF's own lanes need it at eleven sites: the browser bridge, the stored chat copies,
         # the messenger and Veyllo App chain and the main-messenger lane. The same object as
         # vaf.core.terminal_text.own_links_as_labels, no wrapper. See docs/EMBEDDING.md,
         # "Showing text on a terminal".

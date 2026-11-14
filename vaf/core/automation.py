@@ -421,7 +421,13 @@ def _push_result_to_web_ui(
     it (live 2026-08-21: a weather automation's Telegram text arrived without the produced
     report file).
     Returns True if at least the Web UI push succeeded.
+
+    VAF's own file link in ``summary`` (a workflow names its folder and report with one) is
+    shown as the path it opens before anything is cut, stored, shown or sent
+    (``own_links_as_labels``), so the stored chat copy holds what the browser showed.
     """
+    from vaf.core.terminal_text import own_links_as_labels
+    summary = own_links_as_labels(summary)
     status_icon = "\u2705" if status == "success" else "\u274c"
     msg = f"{status_icon} **Automation: {task.name}**\n\n{(summary or '').strip()[:1200]}"
     # Web UI gets a note about the saved file (the messenger receives the file itself as an

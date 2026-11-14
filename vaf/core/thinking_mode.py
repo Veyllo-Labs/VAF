@@ -1452,8 +1452,11 @@ def emit_message_to_web_ui(
     """Push a clean, final agent message to a Web UI chat session (used by the `ask_user` tool). When
     `session_id` (the anchor) is given and that session still exists, deliver THERE so a question and its
     later nudge/follow-up stay in the same chat; otherwise fall back to the latest web session. Returns the
-    session id ACTUALLY used (so the caller can re-pin), or None. NEVER inspects raw chain-of-thought."""
-    content = (content or "").strip()
+    session id ACTUALLY used (so the caller can re-pin), or None. NEVER inspects raw chain-of-thought.
+    VAF's own file link in the question is stored and shown as the path it opens
+    (`own_links_as_labels`), so the saved chat holds what the browser showed."""
+    from vaf.core.terminal_text import own_links_as_labels
+    content = own_links_as_labels(content).strip()
     if not content:
         return None
     try:

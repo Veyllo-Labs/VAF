@@ -104,7 +104,10 @@ are 16 random bytes as base64url without padding (22 characters).
 
 Your message becomes a turn of your agent in your account's one Veyllo App chat; the account
 comes from the device, never from the message. The reply streams to the Veyllo App and ends
-with its final text. A message VAF sends by itself (`send_to_user` with the Veyllo App as your
+with its final text. It is the text a messenger gets (`_prepare_channel_outbound`), so a file
+link VAF wrote arrives as the path it opens; while it streams, a link still waiting for its
+closing `[/link]` is held back and follows as that path once it closes (`before_open_link` in
+`vaf/core/terminal_text.py`), so the app never shows its markup. A message VAF sends by itself (`send_to_user` with the Veyllo App as your
 main messenger, the `send_veyllo_app` tool) and every finished reply are stored once in VAF's
 chat history and held per device until that device confirms it: a device that was away gets
 them, in order, when it connects again, a reply that finished meanwhile as one message. Up to

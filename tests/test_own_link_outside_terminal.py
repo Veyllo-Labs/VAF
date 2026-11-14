@@ -197,3 +197,102 @@ def test_both_drain_fallback_sites_share_the_one_message():
     assert source.count("_drain_fallback_message(combined_results, user_lang)") == 2
     assert not re.search(r"combined_results[^\n]*\[:2000\]", source)
     assert "_drain_fallback_head(user_lang)" in source    # the head alone stays the last resort
+
+
+def _app_deltas(monkeypatch, replies):
+    """The deltas the Veyllo App receives for one reply whose round grows through `replies`
+    (each the round's full text so far), and the reply's state afterwards."""
+    from vaf.core.app_link import bridge
+
+    sent = []
+    monkeypatch.setattr(bridge, "_to_reply", lambda reply, obj: sent.append(obj) or [])
+    reply = bridge.Reply(id="r1", scope="scope-a", username="alice", chat_key="k")
+    monkeypatch.setitem(bridge._replies, bridge._rkey("scope-a", "r1"), reply)
+    for text in replies:
+        bridge.stream_round("r1", text, 1, scope="scope-a")
+    return [d["text"] for d in sent if d["t"] == "delta"], reply
+
+
+@pytest.mark.parametrize("step", [1, 3, 7])
+@pytest.mark.parametrize("name,text,shown", CASES, ids=CASE_IDS)
+def test_the_app_streams_on_past_vafs_own_link(monkeypatch, name, text, shown, step):
+    """The Veyllo App's deltas, fed every growing prefix of a reply, never carry an own
+    link's raw markup and keep streaming past it: their joined text is the reply as the
+    chain shows it. MEASURED BEFORE: the raw `[link=file:...` went out as deltas and the
+    stream stopped at the first `[/link]`, so only `done` carried the rest. MUTATION: send
+    the cleaned text without holding back an open link - red. MUTATION: drop the hold-back
+    of a trailing `[li` - red for steps 1 and 3."""
+    text = text + " More text."
+    shown = shown + " More text."
+    prefixes = [text[:i] for i in range(step, len(text), step)] + [text]
+    deltas, reply = _app_deltas(monkeypatch, prefixes)
+    assert reply.streaming
+    assert "".join(deltas) == shown
+    if name in OWN_CASES:
+        assert not any("[link=" in d or "[/link" in d for d in deltas)
+
+
+def test_an_unclosed_link_on_an_earlier_line_is_not_held(monkeypatch):
+    """A link cannot span a line break, so an opener left open on an earlier line is text
+    and streams on; only the last line's open link is held."""
+    text = "See [link=file:///x without an end\nThen [link=file:///home/user/p]/home"
+    deltas, reply = _app_deltas(monkeypatch, [text])
+    assert "".join(deltas) == "See [link=file:///x without an end\nThen "
+
+
+def test_a_stored_automation_result_holds_the_path(monkeypatch):
+    """An automation result (a workflow names its folder and report with VAF's own link) is
+    stored, shown, sent and kept as a notification with the path, converted before any cut.
+    MUTATION: drop the conversion in `_push_result_to_web_ui` - red."""
+    import types
+
+    import vaf.core.automation as auto
+    import vaf.core.session as session_mod
+    import vaf.core.web_interface as wifc
+
+    text, shown = OWN_CASES["route"]
+    stored, shown_live, messenger, notes = [], [], [], []
+
+    class _SM:
+        def append_background_message(self, sid, content, **kw):
+            stored.append(content)
+
+    wi = types.SimpleNamespace(
+        connection_sessions={"ws": "chat-1"}, connection_users={"ws": "scope-a"},
+        emit_agent_message_append=lambda content, **kw: shown_live.append(content),
+        emit_session_unread=lambda sid: None)
+    monkeypatch.setattr(session_mod, "SessionManager", _SM)
+    monkeypatch.setattr(wifc, "get_web_interface", lambda: wi)
+    monkeypatch.setattr("vaf.core.messaging_connections.send_to_main_messenger",
+                        lambda scope, username, body, file_path=None: messenger.append(body))
+    monkeypatch.setattr("vaf.core.user_notifications.append_notification",
+                        lambda *a, **k: notes.append(k["summary"]))
+    task = types.SimpleNamespace(name="Report", user_scope_id="scope-a")
+    assert auto._push_result_to_web_ui(task, "success", text) is True
+    assert stored and stored[0].endswith(shown) and "[link=" not in stored[0]
+    assert shown_live == stored and messenger[0].endswith(shown) and notes == [shown]
+
+
+def test_a_stored_background_question_holds_the_path(monkeypatch):
+    """A question the agent asks in the web chat (`ask_user`) is stored with the path, as the
+    browser shows it. MUTATION: drop the conversion in `emit_message_to_web_ui` - red."""
+    import types
+
+    import vaf.core.session as session_mod
+    import vaf.core.thinking_mode as tm
+    import vaf.core.web_interface as wifc
+
+    text, shown = OWN_CASES["posix"]
+    stored = []
+
+    class _SM:
+        def append_background_message(self, sid, content, **kw):
+            stored.append(content)
+            return object()
+
+    wi = types.SimpleNamespace(emit_agent_message_append=lambda **kw: None,
+                               emit_session_unread=lambda sid: None)
+    monkeypatch.setattr(session_mod, "SessionManager", _SM)
+    monkeypatch.setattr(wifc, "get_web_interface", lambda: wi)
+    assert tm.emit_message_to_web_ui("scope-a", text, session_id="chat-1") == "chat-1"
+    assert stored == [shown]

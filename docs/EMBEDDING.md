@@ -714,8 +714,8 @@ What an embedded agent can and cannot do on the host - the short version of
   run where nobody is asked (a workflow step, VAF's coding agent); there, and on
   a direct `run()`, `python_exec` and `host_bash` refuse code or a command that
   names a network share or a Windows device path (`\\server\share`,
-  `\\?\UNC\...`, `file://server/...`), because on Windows naming one sends the
-  account's login to that host. File tools write to the host as the gate
+  `\\?\UNC\...`, `file://server/...`), because on Windows opening a share on
+  another computer sends the account's login to it. File tools write to the host as the gate
   allows.
 - **Network posture.** `import vaf` and `Agent(config=...)` open no ports and
   start no services. An API provider means outbound HTTPS only. Local mode

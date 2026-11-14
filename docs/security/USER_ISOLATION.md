@@ -740,7 +740,10 @@ switch. One thing it does not restore: a step's own value for an identity key a 
 declares (`identity_kwargs`: scope, name, role, chat) is cleared before the name list
 assigns what it knows, so a step cannot name the chat a background run reports into or the
 role its report turn binds; a tool that needs a chat has none there and refuses its
-background run.
+background run. Nor does a step's own `_call_confirmed`, `_call_question` or `_call_subject`
+reach the tool (`CALL_CONFIRMATION_KEYS`, which the funnel assigns elsewhere): nobody
+confirmed a step, so `python_exec`'s grant check and the host tools' share-path refusal hold
+there too.
 
 ### Taking access away reaches work already running
 

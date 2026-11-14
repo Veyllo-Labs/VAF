@@ -127,14 +127,19 @@ class PythonExecTool(BaseTool):
             )
         # A standing or chat grant lets this run where nobody is asked (the coding agent, a
         # workflow step). There a string naming a network share or a Windows device path is
-        # refused: on Windows opening one sends this account's login to that host, and no
-        # person saw the code. A yes to THIS call keeps it (the same rule host_bash applies).
+        # refused: on Windows opening a share on another computer sends this account's login
+        # to it, and no person saw the code. A yes to THIS call keeps it (the same rule
+        # host_bash applies).
         if "share_path" in code_categories and kwargs.get("_call_confirmed") is not True:
-            return ("[BLOCKED] python_exec: this code names a network share or a Windows device "
-                    "path, which on Windows makes this computer contact that host with this "
-                    "account's login, and nobody confirmed this call. Ask for it in the chat, "
-                    "where the person sees and confirms it, or copy the files to a local "
-                    "folder first.")
+            from vaf.core.command_policy import share_paths
+            pieces = share_paths(code)
+            named = f" ({pieces[0][:120]})" if pieces else ""
+            return (f"[BLOCKED] python_exec: this code names a network share or a Windows "
+                    f"device path{named}, and on Windows opening a share on another computer "
+                    f"sends this account's login to that computer. Nobody confirmed this call, "
+                    f"so tell the person which path you need: they can run the code in the "
+                    f"chat, where they see and confirm it, or copy the files to a local folder, "
+                    f"and you then work on the copy.")
 
         logger.warning(f"⚠️ Executing Python code on HOST (unsandboxed): {code[:50]}...")
 

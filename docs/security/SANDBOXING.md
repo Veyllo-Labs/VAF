@@ -960,28 +960,49 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   (`sudo -u $(whoami) ls`, `X=$(date) make`, `arr=($(ls))`).
 - **Share and device paths (`share_path`).** A command that names a network share or a
   Windows device path: the backslash UNC shape with a host and a share (`dir \\server\share`,
-  `\\%COMPUTERNAME%\share`, `\\h@80\s`), a device prefix (`\\?\UNC\...`, `\\.\`, `\??\`), a
-  `file:` URL naming another host (`file://h/s`, `file:////h/s`), and on a Windows host the
-  forward-slash form `//host/share`. On Windows naming one makes the machine open an SMB
-  connection that carries the account's NTLM login attempt. Refused in `host_unattended`, a
-  note in `host` (the dialog shows "share path" and a yes runs it), never in `jailed` or
-  `remote`; on every host, so the result does not hang on the platform. It is read from the
-  RAW text, once for the whole command (every nested `bash -c`, substitution and runner
-  included), never from the tokens: a POSIX shell lexer turns `\\h\s` into `\hs`. The text
-  is cut at whitespace, quotes, the shell's separators and redirections, `=`, parentheses
-  and commas, so `X=\\h\s make` and `--path=\\h\s` count. A shape filter in front of
-  `is_remote_path` keeps `//`, `//tmp`, `// TODO`, `\\n`, `\\d+\\.`, `C:\x`, `https://...`,
-  `file:///x` and `file://localhost/x` out; a host holds no regular-expression operator.
-  `python -c` code is read through `python_code_categories` as well, so a share written with
-  Python's own escapes (`"\\\\h\\s"`) counts too. Named boundary: text only. A share built at
-  run time (a variable, a string joined in PowerShell, `[char]92`), one inside a script file,
-  a share name parted from its host by two separators, Windows name resolution of a bare
-  share name, and an HTTP client told to log in as the Windows account (`curl --ntlm`,
-  `-UseDefaultCredentials`) are not seen; the Windows-side control for that class is the
+  `\\%COMPUTERNAME%\share`, `\\h@80\s`, `\\h\(share)`), a device prefix (`\\?\UNC\...`,
+  `\\.\`, `\??\`) and a `file:` URL naming another host or a UNC path (`file://h/s`,
+  `file:////h/s`, `file://localhost//h/s`, also percent-encoded; `file://C:/x` is a local
+  drive), on every host; on a Windows host also the forward-slash form `//host/share`, a host
+  alone (`net view \\nas`, `sc \\nas query`, `explorer \\nas`: the login happens at the host,
+  before a share is named) and a share after two separators (`\\nas\\share`). On Windows
+  opening a share on another computer sends the account's NTLM login attempt to it. Refused
+  in `host_unattended`, a note in `host` (the dialog shows "share path" and a yes runs it),
+  never in `jailed` or `remote`. The refusal names the piece it read as a share and tells the
+  agent to hand the path to the person, who can run the command in the chat or copy the files
+  to a local folder for the agent to work on. It is read from the RAW text, once for the whole
+  command (every nested `bash -c`, substitution and runner included), never from the tokens:
+  a POSIX shell lexer turns `\\h\s` into `\hs`. The text is cut at whitespace, quotes, the
+  shell's separators and redirections, `=` and commas, so `X=\\h\s make` and `--path=\\h\s`
+  count; each piece is read whole and then cut at parentheses, which a share name may hold
+  (`open(\\h\s)`, `\\h\(share)`); and the text is read in four spellings: as written;
+  without the quoting cmd.exe and PowerShell take out of a word before the program sees it
+  (`dir "\\h"\s`, `dir \\h""\s`, cmd's caret `dir \\h^\s`, PowerShell's backtick); with each
+  doubled backslash read as one, for a one-liner's C-style string
+  (`python -c "open('\\\\h\\s')"`, `node -e`, `perl -e`); and both. A piece's text after a
+  `:` counts too (`-Path:\\h\s`, `/out:\\h\s\x.exe`). A
+  shape filter in front of `is_remote_path` keeps `//`, `//tmp`, `// TODO`, `\\n`, `\\d+\\.`,
+  `\\w\.`, `C:\x`, `https://...`, `file:///x` and `file://localhost/x` out; a host holds no
+  regular-expression operator, and the Windows-only host-alone and two-separator readings
+  skip a host that looks like an escape (`\\n`, `\\t`, `\\x41`, `\\012`) or a shell expansion
+  (`\\$(cmd)`). `python -c` code is
+  also read through `python_code_categories`, so a share only Python's escapes spell
+  (`"\x5c\x5ch\x5cs"`) counts in a POSIX command; that reading follows POSIX quoting, and on
+  Windows the doubled-backslash spelling above is what covers the double-quoted one-liner.
+  Named boundary: text only. On POSIX the host-alone and two-separator spellings are not read
+  (a POSIX shell has no SMB client of its own, and they would refuse `printf '\\nDone'` for
+  nothing). Not seen anywhere: a share built at run time (a variable or an environment
+  variable's value, a string joined in PowerShell, `[char]92`), one inside a script file,
+  text decoded before it runs (`echo ... | base64 -d | sh`, `powershell -EncodedCommand`,
+  which also hide every other category and are a change of their own), Windows name
+  resolution of a bare name, and an HTTP client told to log in as the Windows account
+  (`curl --ntlm`, `-UseDefaultCredentials`); the Windows-side control for that class is the
   operating system's outgoing-NTLM restriction, which needs admin rights and which VAF does
-  not set. Accepted cost: the scan does not tell data from a command, so a heredoc body or an
-  `echo` that names a share is refused unattended too, and so is a WSL path typed as one
-  (`\\wsl$\...`, local on Windows).
+  not set. Accepted cost: the scan does not tell data from a command, so a heredoc body, an
+  `echo`, or the text `ssh host '...'` runs on another machine (`ssh box 'net use
+  \\nas\x'`) is refused unattended when it names a share, and so is a WSL path typed as one
+  (`\\wsl$\...`, local on Windows), as is, on Windows, a one-liner's text that starts with a
+  doubled backslash and a word (`print('\\nDone')`).
 - **Arithmetic is read both ways.** Whether bash evaluates `$((...))` or runs it as a
   command substitution holding a subshell depends on more than its parentheses (a `#`
   comment or a backtick holding a `)` moves where it closes), so every `$((`, and an

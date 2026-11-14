@@ -1542,8 +1542,13 @@ class WorkflowEngine:
                         else:
                             # The pre-C2 lane, VERBATIM: the shipped rollback
                             # (workflow_identity_injection = legacy/off), minus a step's
-                            # own identity values.
+                            # own identity values and its own confirmation: nobody confirmed
+                            # a step, and only the funnel may say otherwise (a model-written
+                            # `_call_confirmed: true` passed python_exec's grant check here).
                             _drop_step_identity(step.tool, args)
+                            from vaf.core.tool_dispatch import CALL_CONFIRMATION_KEYS
+                            for _key in CALL_CONFIRMATION_KEYS:
+                                args.pop(_key, None)
                             _inject_user_scope(step.tool, args)
                             result = run_tool_bounded(
                                 tool, args, tool_name=step.tool,

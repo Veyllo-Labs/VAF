@@ -323,9 +323,9 @@ messaging channel, for an account that may use them - the account allowlist is t
 decision, exactly as for a workflow step. Because no call here is confirmed (`_call_confirmed`
 is False), `host_bash` reads its command with the `host_unattended` profile and `python_exec`
 checks its code the same way: both refuse a network share or Windows device path
-(`share_path`, [SANDBOXING.md](../security/SANDBOXING.md)), which on Windows sends the
-account's login to that host. `python_exec` keeps its own check (a standing or a
-chat grant for the person); the chat's grants cross into the child as tool names
+(`share_path`, [SANDBOXING.md](../security/SANDBOXING.md)): on Windows opening a share on
+another computer sends the account's login to it. `python_exec` keeps its own check (a
+standing or a chat grant for the person); the chat's grants cross into the child as tool names
 (`VAF_CHAT_TOOL_GRANTS`), bound to the identity the spawn already carries. Every inner call
 gets the caller's identity through the funnel's one assignment rule
 (`assign_declared_identity`), which also delivers a declared `username` the coder's old copy

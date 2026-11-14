@@ -135,6 +135,10 @@ def policy_admin_flag(role: str | None, scope_id: str | None) -> bool:
 
 
 IDENTITY_KEYS = ("user_scope_id", "username", "user_role", "session_id", "request_origin")
+# What the funnel ASSIGNS to a tool that declared accepts_call_confirmation (ToolCaller's
+# dispatch): whether a person or the application confirmed THIS call, and what was asked. A
+# lane that calls a tool without the funnel removes a step's or a model's own values for them.
+CALL_CONFIRMATION_KEYS = ("_call_confirmed", "_call_question", "_call_subject")
 
 
 def assign_declared_identity(tool: Any, args: dict, *, user_scope_id: str | None,

@@ -155,6 +155,8 @@ import posixpath
 import re
 import shlex
 import traceback
+import urllib.parse
+import warnings
 from dataclasses import dataclass, field
 from typing import Iterable, List, Optional
 
@@ -352,8 +354,8 @@ CATEGORY_REASONS = {
                     "or Python's ftplib), with the password in the command or the code; use the "
                     "ftp tool, which asks before a new server, checks its certificate and keeps "
                     "the password out of every command",
-    "share_path": "names a network share or a Windows device path, which on Windows makes this "
-                  "computer contact that host with this account's login",
+    "share_path": "names a network share or a Windows device path, and on Windows opening a "
+                  "share on another computer sends this account's login to that computer",
 }
 
 # The other ways a command hides what runs, each with its way out (all `opaque_command`).
@@ -401,8 +403,9 @@ _OPAQUE_REASONS = {
 _WAY_OUT = {
     "pipe_to_shell": "; download it to a file, read the file, then run it "
                      "(`curl -fsSL -o install.sh URL`, then `bash install.sh`)",
-    "share_path": "; nobody confirmed this command, so ask for it in the chat, where the "
-                  "person sees and confirms it, or copy the files to a local folder first",
+    "share_path": "; nobody confirmed this command, so tell the person which path you need: "
+                  "they can run the command in the chat, where they see and confirm it, or "
+                  "copy the files to a local folder, and you then work on the copy",
 }
 
 # What each profile refuses outright. Everything else in CATEGORY_REASONS is a note.
@@ -1142,36 +1145,99 @@ def _windows_host() -> bool:
 
 
 # Where a piece of command text ends for the share reading: whitespace, quotes, the shell's
-# separators and redirections, `=` (`X=\\h\s`, `--path=\\h\s`), parentheses and commas (code).
-_SHARE_PIECE_SPLIT_RE = re.compile(r"[\s\"'`(),;|&<>=]+")
+# separators and redirections, `=` (`X=\\h\s`, `--path=\\h\s`) and commas (code), none of which
+# a share name may hold. Parentheses may (`\\h\(share)`), so a piece is cut at them only as a
+# second reading (`open(\\h\s)`, `(\\h\s)`), the whole piece read first.
+_SHARE_PIECE_SPLIT_RE = re.compile(r"[\s\"'`,;|&<>=]+")
+_SHARE_PAREN_SPLIT_RE = re.compile(r"[()]+")
+# What cmd.exe and PowerShell take out of a word before the path reaches the program: quotes
+# (`dir "\\h"\s` is `\\h\s`), cmd's caret and PowerShell's backtick escapes.
+_SHARE_QUOTING_RE = re.compile(r"[\"'^`]")
 # Two separators, a host and ONE separator before a share name that is not only dots. The host
 # holds no regular-expression operator, so `\\d+\\.`, `\\w+\\s` and `\\n\\t` (a regex or an
 # escape written with doubled backslashes) are no share; `%VAR%`, `h@80` and `wsl$` are hosts.
 _UNC_SHAPE_RE = re.compile(r"^[\\/]{2}[^\\/+*?()\[\]{}|^]+[\\/](?!\.+(?:[\\/]|$))[^\\/]")
+# On a Windows host also a host alone (`net view \\nas`, `sc \\nas query`: the login happens at
+# the host, before any share is named) and a share after two separators (`\\nas\\share`), the
+# host read the same way, unless it is what an escape looks like (`\\n`, `\\t`, `\\x41`, `\\012`)
+# or a shell expansion behind an escaped backslash (`\\$(cmd)`, `\\$VAR`).
+_LOOSE_SHARE_RE = re.compile(r"^\\[\\/](?P<host>[^\\/+*?()\[\]{}|^]+)")
+_ESCAPE_HOST_RE = re.compile(
+    r"^(?:[abefnrtvsdwSDWBN]|[0-7]{1,3}|[xXuU][0-9a-fA-F]{0,8}|\$.*)$", re.DOTALL)
 # The Win32 device and long-path namespaces (`\\?\`, `\\.\`) and the NT object namespace
 # (`\??\`), which Win32 passes through unchanged.
 _DEVICE_SHAPE_RE = re.compile(r"^(?:[\\/]{2}[?.]|[\\/]\?\?)[\\/]")
 _FILE_URL_RE = re.compile(r"^file:(?P<seps>[\\/]*)(?P<rest>.*)$", re.IGNORECASE | re.DOTALL)
+# `file://C:/x` and the old `file://C|/x` name a drive of this machine, not a host.
+_DRIVE_HOST_RE = re.compile(r"^[A-Za-z][:|]$")
+
+
+def _file_url_names_share(url: str) -> bool:
+    r"""A `file:` URL whose authority or path names a share: `file://h/s` names host h;
+    `file:///x`, `file://localhost/x` and `file://C:/x` are this machine, unless their path is
+    a UNC path itself (`file://localhost//h/s`, which Windows' url2pathname opens as
+    `\\h\s`); four or more separators (`file:////h/s`, `file:\\\\h\s`) carry one whole."""
+    match = _FILE_URL_RE.match(url)
+    seps, rest = len(match.group("seps")), match.group("rest")
+    host = re.split(r"[\\/]", rest, maxsplit=1)[0]
+    if seps >= 4:
+        return bool(host)
+    if seps != 2:
+        return False
+    if host.lower() not in ("", "localhost") and not _DRIVE_HOST_RE.match(host):
+        return True
+    path = rest[len(host):]
+    after = path.lstrip("\\/")
+    return len(path) - len(after) >= 2 and bool(re.split(r"[\\/]", after, maxsplit=1)[0])
 
 
 def _is_share_piece(piece: str, windows: bool) -> bool:
     """One piece of text (no blank, no quote) that names a share or a device path."""
-    url = _FILE_URL_RE.match(piece)
-    if url:
-        # `file://h/s` names host h; `file:///x` and `file://localhost/x` are this machine;
-        # four or more separators (`file:////h/s`, `file:\\\\h\s`) carry a UNC path whole.
-        seps, rest = len(url.group("seps")), url.group("rest")
-        host = re.split(r"[\\/]", rest, maxsplit=1)[0]
-        if seps == 2:
-            return host.lower() not in ("", "localhost")
-        return seps >= 4 and bool(host)
+    if _FILE_URL_RE.match(piece):
+        # Read as written and percent-decoded, as url2pathname reads it
+        # (`file://localhost/%5C%5Ch%5Cs`).
+        decoded = urllib.parse.unquote(piece)
+        return _file_url_names_share(piece) or (
+            decoded != piece and bool(_FILE_URL_RE.match(decoded))
+            and _file_url_names_share(decoded))
     if not is_remote_path(piece):
         return False
     if _DEVICE_SHAPE_RE.match(piece) or _UNC_SHAPE_RE.match(piece):
         # All forward slashes is a share only where the OS reads it as one: on POSIX
         # `//host/share` is a spelling of `/host/share`.
         return windows or "\\" in piece[:2]
+    if windows:
+        loose = _LOOSE_SHARE_RE.match(piece)
+        return bool(loose) and not _ESCAPE_HOST_RE.match(loose.group("host"))
     return False
+
+
+def _share_candidates(text: str) -> Iterable[str]:
+    r"""Every piece the share reading judges, each spelling of the text in turn: as written;
+    without quotes, carets and backticks; with each doubled backslash read as one (a share in
+    a one-liner's C-style string, `"open('\\\\h\\s')"`); both. A piece's text after a `:` that
+    starts with a backslash is a piece too (`-Path:\\h\s`, `/out:\\h\s\x.exe`)."""
+    stripped = _SHARE_QUOTING_RE.sub("", text)
+    spellings = []
+    for spelling in (text, stripped, text.replace("\\\\", "\\"),
+                     stripped.replace("\\\\", "\\")):
+        if spelling not in spellings:
+            spellings.append(spelling)
+    for spelling in spellings:
+        for whole in _SHARE_PIECE_SPLIT_RE.split(spelling):
+            parts = [whole]
+            if "(" in whole or ")" in whole:
+                parts += _SHARE_PAREN_SPLIT_RE.split(whole)
+            for piece in parts:
+                if not piece:
+                    continue
+                yield piece
+                if ":" in piece and not _FILE_URL_RE.match(piece):
+                    at = piece.find(":")
+                    while at >= 0:
+                        if piece[at + 1:at + 2] == "\\":
+                            yield piece[at + 1:]
+                        at = piece.find(":", at + 1)
 
 
 def share_paths(text: str, *, windows: Optional[bool] = None) -> List[str]:
@@ -1179,33 +1245,54 @@ def share_paths(text: str, *, windows: Optional[bool] = None) -> List[str]:
 
     Read from the RAW text, never through shlex: a POSIX shell lexer turns `\\h\s` into
     `\hs`, so the tokens the classifier judges never show the share. The text is cut at
-    whitespace, quotes, the shell's separators and redirections, `=`, parentheses and commas,
-    and a piece counts when it has
+    whitespace, quotes, the shell's separators and redirections, `=` and commas (a share name
+    holds none of them); each piece is read whole and then cut at parentheses, which a share
+    name may hold (`\\h\(share)`). The text is read in four spellings (`_share_candidates`):
+    as written, without the quoting cmd.exe and PowerShell take out (`dir "\\h"\s`,
+    `dir \\h^\s`, PowerShell's backtick), with each doubled backslash read as one
+    (`python -c "open('\\\\h\\s')"`, `node -e`, `perl -e`), and both; a piece's text after a
+    `:` counts too (`-Path:\\h\s`, `/out:\\h\s\x.exe`). A piece counts when it has
     - the backslash UNC shape, a host and a share (`\\host\share`, `\\%VAR%\s`, `\\h@80\s`),
       or a device prefix (`\\?\`, `\\.\`, `\??\`), on every host;
-    - the forward-slash shape with a host and a share (`//host/share`), only when `windows`
-      (default: this machine is Windows; on POSIX it is a spelling of `/host/share`);
-    - a `file:` URL naming a host other than empty or `localhost` (`file://h/s`,
-      `file:////h/s`), on every host.
-    `path_jail.is_remote_path` judges every piece of the first two shapes; the shape filter in
-    front keeps `//`, `//tmp`, `// TODO`, `\\n`, `\\d+\\.`, `C:\x` and `https://...` out,
-    several of which it answers True alone. Never raises.
+    - on a Windows host (`windows`, default: this machine), also the forward-slash shape
+      (`//host/share`; on POSIX a spelling of `/host/share`), a host alone after a backslash
+      pair (`net view \\nas`, `sc \\nas query`: the login happens at the host) and a share
+      after two separators (`\\nas\\share`), unless the host is what an escape looks like
+      (`\\n`, `\\t`, `\\x41`, `\\012`) or a shell expansion (`\\$(cmd)`, `\\$VAR`);
+    - a `file:` URL naming a host other than empty, `localhost` or a drive letter
+      (`file://h/s`, `file:////h/s`; `file://C:/x` is local), or a local one whose path is a
+      UNC path (`file://localhost//h/s`), as written and percent-decoded, on every host.
+    `path_jail.is_remote_path` judges every piece of the path shapes; the shape filter in
+    front keeps `//`, `//tmp`, `// TODO`, `\\n`, `\\d+\\.`, `\\w\.`, `C:\x` and `https://...`
+    out, several of which it answers True alone. Never raises.
 
-    NAMED BOUNDARY: text only. A share built at run time (a variable, a string joined in
-    PowerShell, `[char]92`), one inside a script file, a share name parted from its host by
-    two separators (`\\h\\s`), Windows name resolution of a bare share name, and an HTTP
-    client told to log in as the Windows account (`curl --ntlm`, `-UseDefaultCredentials`)
-    are not seen."""
+    NAMED BOUNDARY: text only, and on POSIX the host-alone and two-separator spellings are not
+    read (a POSIX shell has no SMB client of its own; refusing them there would refuse
+    `printf '\\nDone'` for nothing). Not seen anywhere: a share built at run time (a variable,
+    a string joined in PowerShell, `[char]92`, an environment variable's value), one inside a
+    script file, text decoded before it runs (`base64 -d | sh`, `powershell
+    -EncodedCommand`), Windows name resolution of a bare name, and an HTTP client told to log
+    in as the Windows account (`curl --ntlm`, `-UseDefaultCredentials`). The text is read as
+    a whole, so a share named in data (an `echo`, a heredoc body, the text `ssh host '...'`
+    runs on another machine) counts as well."""
     try:
         if windows is None:
             windows = _windows_host()
         found = []
-        for piece in _SHARE_PIECE_SPLIT_RE.split(str(text or "")):
-            if piece and _is_share_piece(piece, windows) and piece not in found:
+        for piece in _share_candidates(str(text or "")):
+            if piece not in found and _is_share_piece(piece, windows):
                 found.append(piece)
         return found
     except Exception:                   # noqa: BLE001 - a reading aid, never a crash
         return []
+
+
+# The name the code check parses under. The model's code is data here: a string with an
+# invalid escape (`open('\\h\s')`) made the parser print a SyntaxWarning to the process's
+# stderr for every check; warnings under this name alone are silenced (a filter, not
+# catch_warnings, which is not thread-safe).
+_CODE_FILENAME = "<python-code-check>"
+warnings.filterwarnings("ignore", category=SyntaxWarning, module=re.escape(_CODE_FILENAME))
 
 
 def python_code_categories(code: str, *, _depth: int = 0) -> List[str]:
@@ -1238,7 +1325,7 @@ def python_code_categories(code: str, *, _depth: int = 0) -> List[str]:
     if _depth > _MAX_CODE_DEPTH:
         return _as_text()
     try:
-        tree = ast.parse(text)
+        tree = ast.parse(text, filename=_CODE_FILENAME)
     except (SyntaxError, ValueError, RecursionError, MemoryError):
         return _as_text()
     for node in ast.walk(tree):
@@ -1751,6 +1838,11 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[List[int
     return verdict
 
 
+def _clip_piece(piece: str, limit: int = 120) -> str:
+    """A piece of the command as a refusal quotes it: at most `limit` characters."""
+    return piece if len(piece) <= limit else piece[:limit] + "..."
+
+
 def _refusal(category: str, opaque_shape: str, text: str) -> str:
     """The refusal sentence for `category`, with the way out where one exists."""
     sentence = CATEGORY_REASONS[category]
@@ -1760,6 +1852,13 @@ def _refusal(category: str, opaque_shape: str, text: str) -> str:
     quote_cure = (heredoc and category == "opaque_command"
                   and opaque_shape in ("program", "shell_text")
                   and ("$(" in text or "`" in text) and _heredoc_writes_text(text))
+    if category == "share_path":
+        # Which piece it read as a share, so the model can tell the person, and a false
+        # refusal is visible as one.
+        pieces = share_paths(text)
+        if pieces:
+            sentence = sentence.replace(
+                "device path", f"device path ({_clip_piece(pieces[0])})", 1)
     if category == "opaque_command":
         sentence = _OPAQUE_REASONS.get(opaque_shape, sentence)
         if quote_cure and opaque_shape == "program":

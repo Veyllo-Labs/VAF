@@ -49,6 +49,10 @@ MUTATIONS, each turns the named test red:
 - skip the cut at a redacted opener that cleanup joined
   -> test_marked_reasoning_is_still_removed[redacted-joined-by-cleanup];
 - strip redacted blocks with the lazy regex again -> test_redacted_strip_is_linear;
+- run `_sanitize_response` BEFORE the marked strip in `_clean_reasoning`
+  -> test_marked_reasoning_is_still_removed[json-tail-in-reasoning-*];
+- skip the marked pass after `_sanitize_response`
+  -> test_marked_reasoning_is_still_removed[think-joined-by-tool-token-removal];
 - build the kept answer from `full_response` again
   -> test_local_turn_returns_content_not_the_reasoning_channel (all four rows: the reasoning
      comes back glued in front of the answer);
@@ -161,11 +165,25 @@ def test_plain_text_is_the_answer(row):
     ("<thi<redacted_<think>x</think>reasoning>hidden</redacted_reasoning>nk>SECRET", ""),
     ("<redacted_reasoning<redact<think>x</think>ed_reasoning></redacted_reasoning>>SECRET door code 4711",
      ""),
+    # A tool-call-shaped tail INSIDE the reasoning: the JSON patterns cut to the end of the
+    # text, closer included, so cut first they left the block closed at a stray closer the
+    # model quoted earlier, and the text after it was the answer.
+    ('<think>Plan ends with </thinking> so SECRET the token is ab12cd34; I will call '
+     '{"name": "calendar_read", "arguments": {"day": "tomorrow"}}</think>', ""),
+    ('<think>Okay </Think> SECRET the token is ab12cd34 [{"tool_calls": [</think>', ""),
+    ('<think>Plan </THINKING> SECRET", "name": "x", "type": "function"</think>', ""),
+    ('<think>Plan </thinking> SECRET {"name": "x", "arguments": {}}</think>\n\nAnswer.',
+     "Answer."),
+    # A think tag the tool-call token removal joins is read as one, as before.
+    ("Answer <thi<|tool_call>call:x{}<tool_call|>nk>SECRET", "Answer"),
 ], ids=["block", "doubled-tags", "greedy-to-last-close", "stray-tag", "redacted", "marked-okay-user",
         "leaked-tool-json", "unclosed-after-answer", "upper", "mixed-case", "upper-unclosed",
         "thinking", "thinking-upper", "thinking-unclosed", "think-quoted-in-redacted",
         "think-quoted-in-redacted-long", "redacted-opener-joined", "redacted-closer-joined",
-        "redacted-unclosed", "think-joined-by-redacted-pass", "redacted-joined-by-cleanup"])
+        "redacted-unclosed", "think-joined-by-redacted-pass", "redacted-joined-by-cleanup",
+        "json-tail-in-reasoning-thinking-closer", "json-tail-in-reasoning-tool-calls",
+        "json-tail-in-reasoning-function-tail", "json-tail-in-reasoning-then-answer",
+        "think-joined-by-tool-token-removal"])
 def test_marked_reasoning_is_still_removed(text, expected):
     assert _clean(text) == expected
 

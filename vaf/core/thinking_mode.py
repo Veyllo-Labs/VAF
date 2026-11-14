@@ -22,6 +22,7 @@ from vaf.core.identity_binding import (
 )
 from vaf.core.platform import Platform
 from vaf.core.channels import ALL_SEND_TOOLS, CHAT_CHANNELS, channel_label
+from vaf.core.completion import HISTORY_PLACEHOLDERS
 
 logger = logging.getLogger(__name__)
 
@@ -3377,7 +3378,7 @@ def _thinking_pass(
                                                         name = (tc.get("function") or {}).get("name") or tc.get("name") or "?"
                                                         if name not in ("thinking_done", "thinking_note_add"):
                                                             tools_called.append(name)
-                                                if m.get("content") and m["content"].strip() != "Thinking...":
+                                                if m.get("content") and m["content"].strip() not in HISTORY_PLACEHOLDERS:
                                                     last_msg = m["content"].strip()[:100]
                                         
                                         summary = f"Run {run_id} unterbrochen (Turn {turn+1})."

@@ -32,7 +32,15 @@ MUTATIONS, each turns the named test red:
   -> test_a_failing_cleaner_in_the_fallback_still_shuts_the_agent_down;
 - let the first empty retry store `full_response` again (a local engine's reasoning channel,
   unmarked), or store `full_content` alone (the model loses its own thinking on the retry)
-  -> test_a_local_reasoning_only_round_then_a_failed_retry_is_not_the_result.
+  -> test_a_local_reasoning_only_round_then_a_failed_retry_is_not_the_result;
+- store `full_response` (or the bare `full_reasoning`) for a round with no content when the
+  empty retry is off -> test_a_thinking_run_stores_a_reasoning_only_round_marked;
+- write a drifted "[Empty]" at the empty retry, or change `EMPTY_PLACEHOLDER`
+  -> test_an_empty_first_round_is_retried_with_the_empty_placeholder;
+- write or compare a placeholder as a bare literal in agent.py, automation.py or
+  thinking_mode.py -> test_history_placeholders_are_written_and_read_by_name;
+- run `_sanitize_response` before the marked strip in `_clean_reasoning`
+  -> test_reasoning_with_a_tool_call_tail_never_leaks (every seed).
 """
 import ast
 import random
@@ -268,29 +276,18 @@ def test_a_failing_cleaner_in_the_fallback_still_shuts_the_agent_down(monkeypatc
 SECRET = "SECRETREASONING the token in the config is ab12cd34, never repeat it"
 
 
-def test_a_local_reasoning_only_round_then_a_failed_retry_is_not_the_result(monkeypatch,
-                                                                            tmp_path):
-    """The real `chat_step` on a local engine, driven by the real `run_task`: the first round
-    streams only the reasoning channel, the empty retry's request fails (HTTP 500), so nothing
-    unmarked reached the stream and the fallback reads the history. The empty retry stored that
-    reasoning as `full_response`, which holds a local engine's reasoning channel WITHOUT its
-    marks, so the fallback delivered it as a successful result. Stored marked, it is still sent
-    back to the model on the retry and never delivered."""
-    import requests
-    from test_local_engine_wiring import _Resp, _Stream
+def _local_agent_class(monkeypatch, tmp_path, run_kind, seen):
+    """A real `Agent` on the local server lane (no model: the HTTP calls are `_serve`'s),
+    built the way `run_task` builds one; `seen["agent"]` is the instance."""
     import vaf.core.agent as agent_mod
-    from vaf.core import automation
-    from vaf.core.lock_manager import LockManager
     from vaf.core.platform import Platform
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: tmp_path / "data"))
-    Real = agent_mod.Agent
-    seen = {}
 
-    class _Local(Real):
+    class _Local(agent_mod.Agent):
         def __init__(self, *a, **k):
-            super().__init__(register_signals=False, run_kind="automation",
+            super().__init__(register_signals=False, run_kind=run_kind,
                              config_overrides={"provider": "local"})
             self.api_backend = None
             self.use_server = True
@@ -307,17 +304,79 @@ def test_a_local_reasoning_only_round_then_a_failed_retry_is_not_the_result(monk
         def shutdown(self):
             pass
 
+    return _Local
+
+
+def _serve(monkeypatch, rounds):
+    """The local server: the n-th streamed request gets `rounds[n]` as its deltas, every
+    request after them HTTP 500. Returns the list the request payloads are recorded in."""
+    import requests
+    from test_local_engine_wiring import _Resp, _Stream
     payloads = []
 
     def post(url, json=None, **kw):
         if isinstance(json, dict) and json.get("stream") and "messages" in json:
             payloads.append(json)
-            if len(payloads) == 1:
-                return _Stream([{"reasoning_content": SECRET}])
+            if len(payloads) <= len(rounds):
+                return _Stream(rounds[len(payloads) - 1])
         return _Resp(500, {})
 
-    pushed = []
     monkeypatch.setattr(requests, "post", post)
+    return payloads
+
+
+def test_a_thinking_run_stores_a_reasoning_only_round_marked(monkeypatch, tmp_path):
+    """A background thinking run has the empty retry off, so a round that streamed only a local
+    engine's reasoning channel reaches the final history append with no content. That append
+    stored `full_response`, the reasoning without its marks, where every later reader of the
+    history takes it for an answer."""
+    seen = {}
+    agent = _local_agent_class(monkeypatch, tmp_path, "thinking", seen)()
+    agent.init_chat()
+    payloads = _serve(monkeypatch, [[{"reasoning_content": SECRET}]])
+    agent.chat_step(user_input="Was steht an?", raw_user_input="Was steht an?",
+                    stream_callback=lambda c: None)
+    assert payloads, "the turn never reached the local server"
+    stored = [m.get("content") for m in agent.history if m.get("role") == "assistant"]
+    assert SECRET not in stored, stored
+    assert f"<think>{SECRET}</think>" in stored, stored
+    assert _fallback(agent.history) == ""
+
+
+def test_an_empty_first_round_is_retried_with_the_empty_placeholder(monkeypatch, tmp_path):
+    """The writer side of the placeholder the fallback skips: a first round with neither
+    reasoning nor content is kept for the retry as `EMPTY_PLACEHOLDER`, the exact text the
+    fallback passes over."""
+    from vaf.core.completion import EMPTY_PLACEHOLDER
+    seen = {}
+    agent = _local_agent_class(monkeypatch, tmp_path, "automation", seen)()
+    agent.init_chat()
+    payloads = _serve(monkeypatch, [[{"content": ""}]])
+    agent.chat_step(user_input="Was steht an?", raw_user_input="Was steht an?",
+                    stream_callback=lambda c: None)
+    assert len(payloads) >= 2, "the empty retry never asked the model again"
+    retry_sent = [m.get("content") for m in payloads[1]["messages"] if m.get("role") == "assistant"]
+    assert retry_sent == [EMPTY_PLACEHOLDER] == ["[Empty]"], retry_sent
+    assert _fallback(agent.history) == ""
+
+
+def test_a_local_reasoning_only_round_then_a_failed_retry_is_not_the_result(monkeypatch,
+                                                                            tmp_path):
+    """The real `chat_step` on a local engine, driven by the real `run_task`: the first round
+    streams only the reasoning channel, the empty retry's request fails (HTTP 500), so nothing
+    unmarked reached the stream and the fallback reads the history. The empty retry stored that
+    reasoning as `full_response`, which holds a local engine's reasoning channel WITHOUT its
+    marks, so the fallback delivered it as a successful result. Stored marked, it is still sent
+    back to the model on the retry and never delivered."""
+    import vaf.core.agent as agent_mod
+    from vaf.core import automation
+    from vaf.core.lock_manager import LockManager
+
+    seen = {}
+    _Local = _local_agent_class(monkeypatch, tmp_path, "automation", seen)
+    payloads = _serve(monkeypatch, [[{"reasoning_content": SECRET}]])
+
+    pushed = []
     monkeypatch.setattr(agent_mod, "Agent", _Local)
     monkeypatch.setattr(automation, "bind_identity", lambda *a, **k: None)
     monkeypatch.setattr(automation, "resolve_scope_identity", lambda *a, **k: None)
@@ -381,6 +440,36 @@ def test_no_phrase_guess_left_in_the_lane():
         assert gone not in source, gone
 
 
+def _status_call_args(tree):
+    """ids of the string constants passed to a `UI.event(...)` status line: the same words on
+    screen, never written into the history."""
+    ids = set()
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "event"):
+            for arg in node.args:
+                if isinstance(arg, ast.Constant):
+                    ids.add(id(arg))
+    return ids
+
+
+def test_history_placeholders_are_written_and_read_by_name():
+    """The engine writes its placeholders and the readers skip them through the constants in
+    `vaf/core/completion.py`; a hand-written copy in a writer or a reader drifts silently (a
+    renamed placeholder would then be delivered as an automation's result)."""
+    from vaf.core.completion import HISTORY_PLACEHOLDERS
+    core = AUTOMATION_PY.parent
+    found = []
+    for name in ("agent.py", "automation.py", "thinking_mode.py"):
+        tree = ast.parse((core / name).read_text(encoding="utf-8"))
+        skip = _docstring_nodes(tree) | _status_call_args(tree)
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                    and id(node) not in skip and node.value.strip() in HISTORY_PLACEHOLDERS):
+                found.append((name, node.lineno, node.value))
+    assert found == [], found
+
+
 # ── AC6: the fuzz ────────────────────────────────────────────────────────────
 
 _TOKENS = ["Okay ", "okay, ", "let ", "me ", "Let me check ", "First ", "first, ", "I ", "need ",
@@ -415,4 +504,32 @@ def fallback_mismatches(seed, draws):
 @pytest.mark.parametrize("seed", [1, 2, 3])
 def test_fallback_keeps_its_rule(seed):
     bad = fallback_mismatches(seed, 500)
+    assert bad == [], f"{len(bad)} mismatches, first: {bad[:2]}"
+
+
+# Reasoning that quotes stray closers and ends tool-call-shaped: the leaked-JSON patterns cut
+# to the end of the text, so run before the marked strip they cut the block's own closer.
+_RSN_TOKENS = ["RSN ", "the token is ab12cd34 ", "I will call ", "</thinking> ", "</Think> ",
+               "</THINKING> ", "</think> ", '{"name": "calendar_read", "arguments": {"d": 1}} ',
+               '[{"tool_calls": [', '", "name": "x", "type": "function"', '"}, "type": "function"',
+               ', "name": "x"', "}]}", "\n", " "]
+_ANS_TOKENS = ["Morgen ", "um ", "9 ", "Uhr. ", "Alice ", "done. ", "\n", " ", "Gerne, "]
+
+
+def json_tail_mismatches(seed, draws):
+    """`<think>` + reasoning + `</think>` + answer, cleaned, is the answer; returns the misses."""
+    rng = random.Random(seed)
+    bad = []
+    for _ in range(draws):
+        r = "".join(rng.choice(_RSN_TOKENS) for _ in range(rng.randint(1, 25)))
+        b = "".join(rng.choice(_ANS_TOKENS) for _ in range(rng.randint(0, 15)))
+        text = "<think>" + r + "</think>" + b
+        if _CLEAN(text) != b.strip() or _fallback([S(), U(), A(text)]) != b.strip():
+            bad.append(text)
+    return bad
+
+
+@pytest.mark.parametrize("seed", [1, 2, 3])
+def test_reasoning_with_a_tool_call_tail_never_leaks(seed):
+    bad = json_tail_mismatches(seed, 500)
     assert bad == [], f"{len(bad)} mismatches, first: {bad[:2]}"

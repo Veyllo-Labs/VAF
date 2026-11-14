@@ -370,6 +370,20 @@ def _strip_marked_reasoning(text: str, *, greedy: bool) -> str:
         t = t.split(_REDACTED_OPEN, 1)[0]  # an opener that this cleanup itself joined
     return t.strip()
 
+def _marked_round_text(reasoning: str, content: str) -> str:
+    """A round's text for the engine's own history, its reasoning MARKED.
+
+    A local engine streams its reasoning channel without tags (`full_reasoning`, also inside
+    `full_response`); stored that way it reads as an answer to every later reader of the
+    history (an automation once delivered it as its result). Wrapped in a <think> block in
+    front of the content, the model still reads its own thinking and every reader that
+    strips marked reasoning strips it. The API lanes already stream it as <think> blocks
+    inside the content, so for them `reasoning` is empty and the content is stored as is."""
+    if reasoning:
+        return f"<think>{reasoning}</think>\n\n{content or ''}".strip()
+    return content or ""
+
+
 # How often one turn may re-generate because loop protection refused every call of a
 # generation. Bounded: the re-generation exists so the model can read the refusal it was
 # just sent, not so it can keep proposing the same refused call.
@@ -6865,15 +6879,19 @@ class Agent:
         model never closed cannot be told from that shape, which the empty-answer probe must
         count as an answer so a guard keeps the bubble.
         """
-        # First, apply the JSON sanitizer to catch leaked tool calls
-        t = self._sanitize_response(text)
-
         # 1. The marked reasoning (_strip_marked_reasoning: redacted blocks, then <think> and
         # <thinking> in any case). Greedy, first opener .. LAST closer: weak models sometimes
         # quote a </think> mid-reasoning (an earlier reply), so a block closed at the first
         # one would leak the rest. Doubled tags fall inside that block. An UNCLOSED opener
         # cuts to the end, as in _final_answer_probe: a model that never closed its
         # reasoning gave no answer after that point. Stray tags are dropped.
+        # 2. The leaked tool-call JSON AFTER that: its patterns cut to the end of the text, so
+        # run first they also cut the closer of a block whose reasoning ends tool-call-shaped,
+        # and a stray closer quoted earlier in it then ended the block and leaked the rest.
+        # 3. The marked rule once more on what the sanitizer left: removing a tool-call token
+        # from the middle can join a tag ("<thi" + token + "nk>"). Linear, and the identity on
+        # text without tags.
+        t = self._sanitize_response(_strip_marked_reasoning(text, greedy=True))
         return _strip_marked_reasoning(t, greedy=True)
 
     def _detect_user_language(self, text: str) -> str:
@@ -13772,16 +13790,8 @@ class Agent:
 
                 # First empty only: keep one assistant block (with thinking) and nudge; no temp sweep.
                 if empty_retry_count == 0:
-                    # The reasoning stays in front of the model on the retry, MARKED: a local
-                    # engine's reasoning channel reaches full_reasoning (and full_response)
-                    # without tags, and stored that way it reads as an answer to every later
-                    # reader of the history (an automation delivered it as its result). The API
-                    # lanes already stream it as <think> blocks inside full_content, so for them
-                    # full_reasoning is empty and full_content is what full_response was.
-                    if full_reasoning:
-                        content = f"<think>{full_reasoning}</think>\n\n{full_content or ''}".strip()
-                    else:
-                        content = full_content
+                    # The reasoning stays in front of the model on the retry, marked.
+                    content = _marked_round_text(full_reasoning, full_content)
                     if not content:
                         content = EMPTY_PLACEHOLDER
                     self.history = self.history[:history_snapshot_len + 1] + [
@@ -13958,8 +13968,10 @@ class Agent:
                 continue
 
             
-            # Clean History: Store ONLY the final content (Answer), discarding the reasoning trace.
-            history_content = full_content if full_content else full_response
+            # Clean History: store ONLY the final content (the answer), without the reasoning
+            # channel. A round with no content gets here only when the empty retry did not run
+            # (a thinking run, a compaction); its reasoning is then all there is, stored marked.
+            history_content = full_content if full_content else _marked_round_text(full_reasoning, "")
             
             # 🛡️ FINAL ANSWER VALIDATION (Intent Lock)
             # Before accepting the answer, check if it's just meta-talk/status drift

@@ -327,7 +327,10 @@ the next run.
   ends the run as well, worded with the runner's own sentence ("git refused the folder under
   review (...)"); only a timeout and a missing git keep their old meaning (a search that
   timed out finds nothing). Read as an empty answer, a refused `check-ignore` let a
-  git-ignored guideline file through. Measured with a racer (aside for 1 ms, link, back):
+  git-ignored guideline file through. The runner says which failure it was (`kind` of its
+  `ProjectGitFailed`), and that decides, never the words: a refusal quotes the names the
+  repository chose, and a link in `.git` named like the timeout message passed as a
+  timeout. Measured with a racer (aside for 1 ms, link, back):
   with `expect_folder` (the tool, the coder) nothing of the other repository reached the
   model or got its state in 1000 audits; the numbers before and after are in
   [USER_ISOLATION.md](../security/USER_ISOLATION.md). The racer keeps the folder away half

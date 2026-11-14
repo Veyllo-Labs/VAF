@@ -351,7 +351,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   instead of going on when that folder is replaced with a link, moved away or replaced by
   another folder while it runs, or when git refuses to work there (the reason says why). Before, a program of the account that swapped its project
   folder for a link could have another account's code sent to the model, or leave review
-  notes in another project. Needs a restart of VAF.
+  notes in another project. For developers building on VAF: `vaf.code_audit` takes
+  `expect_folder=`, a failed `vaf.run_project_git` says which failure it was in its `kind`
+  ("refused", "timeout", "no_git", "no_folder", "error"), and `vaf.open_for_write` takes
+  `dir_fd=` to write relative to a folder handle you hold. Needs a restart of VAF.
 - **The agent's file tools stay out of VAF's own data and your shell start files.** Reading
   VAF's data and settings folders (messages, mail, contacts, key files, the MCP server list,
   tool permissions, and in Docker mode the configuration folder) is now refused for every

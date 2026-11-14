@@ -593,8 +593,11 @@ commit in 21 of 300 calls, and a new notes manager whose `.vaf` was missing left
   `expect_folder` 0, 0 and 0. `vaf audit` without it works on the folder the typed path
   leads to when the run starts (1 of 1000 runs started through the racer's link), reviews
   that repository and saves its notes there. The state is written only into the folder the
-  run decided on (its identity is compared when the state folder is opened), and any other
-  refusal of the git runner ends the run instead of reading as an empty answer.
+  run decided on (its identity is compared when the state folder is opened, and the file is
+  opened relative to that folder's handle), and any other refusal of the git runner ends the
+  run instead of reading as an empty answer; the runner marks which failure it was
+  (`ProjectGitFailed.kind`), because a refusal quotes names the repository chose and a link
+  named like the timeout message passed as a timeout.
 
 NAMED BOUNDARY, what remains, with the numbers above:
 - no lane: macOS, Windows, and Linux where bubblewrap is missing or cannot make a user

@@ -348,6 +348,31 @@ def test_open_for_write_writes_an_ordinary_file_and_refuses_a_link(tmp_path, mon
     assert target.read_text() == "kept"
 
 
+def test_open_for_write_with_dir_fd_writes_in_the_held_folder(tmp_path, monkeypatch):
+    """`dir_fd`: the file is opened relative to the caller's folder handle, not through the
+    folder's path; another folder moved to the name is not touched. Without folder handles
+    the keyword is refused."""
+    for var in ("XDG_DATA_HOME", "LOCALAPPDATA"):
+        monkeypatch.setenv(var, str(tmp_path / "data"))
+    from vaf.core import path_jail
+    held = tmp_path / "held"
+    held.mkdir()
+    if not path_jail._DIR_FD:
+        with pytest.raises(ValueError):
+            vaf.open_for_write(held / "a.txt", dir_fd=0)
+        return
+    fd = os.open(str(held), os.O_RDONLY)
+    try:
+        os.rename(held, tmp_path / "aside")
+        held.mkdir()
+        with vaf.open_for_write(held / "a.txt", "w", encoding="utf-8", dir_fd=fd) as fh:
+            fh.write("mine")
+    finally:
+        os.close(fd)
+    assert (tmp_path / "aside" / "a.txt").read_text(encoding="utf-8") == "mine"
+    assert not (held / "a.txt").exists()
+
+
 def test_open_for_write_appends_and_refuses_a_link_the_same_way(tmp_path, monkeypatch):
     """"a" and "ab" append to an existing file (never truncate it) with the same checks:
     a link at the name is refused and its target left untouched.

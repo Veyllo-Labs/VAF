@@ -1064,7 +1064,11 @@ if proc.returncode != 0:
 `args` is what follows `git`, optionally led by `-c key=value` pairs of your own (an
 identity); the result is a `subprocess.CompletedProcess` with text output, and it never
 raises: a missing git, a missing folder, a timeout (`timeout=`, 60 seconds by default) or a
-refusal come back as `returncode` -1 with the reason in `stderr`. It pins with `-c`, which
+refusal come back as `returncode` -1 with the reason in `stderr`, and the result's `kind`
+says which ("no_git", "no_folder", "timeout", "refused" or "error"; a subclass of
+`CompletedProcess`, `vaf.core.git_runner.ProjectGitFailed`). Tell them apart by `kind`,
+never by the words: a refusal quotes names the repository chose, and a link in `.git` named
+like the timeout message would read as a timeout. It pins with `-c`, which
 outranks every config file and comes after your own pairs: an empty hooks directory VAF
 owns, every hook event switched off (`hook.<event>.enabled=false`) and every hook the config
 defines switched off by name (git 2.54 runs those on `status` and `add` too, and neither the
@@ -3076,7 +3080,8 @@ Stable public surface (safe to build on):
   workspace resolver, its queue runner and its jailed shell do, because a record written
   earlier can name another account's folder. The role must come from the caller's
   authenticated identity. Fail-closed: an error is a refusal.
-- `vaf.open_for_write(path, mode="wb", *, exclusive=False, encoding=None, newline=None, expect_folder=None)` /
+- `vaf.open_for_write(path, mode="wb", *, exclusive=False, encoding=None, newline=None,
+  expect_folder=None, dir_fd=None)` /
   `vaf.WriteRefused` - the open that goes with that answer, for a file under a name a
   model, a request or a peer chose (and the `.part` beside one). It opens the folder first
   and the file relative to it, refuses a link as the last component instead of following
@@ -3084,7 +3089,10 @@ Stable public surface (safe to build on):
   answer for the open handle), writes only a regular file (a pipe or a device is refused without blocking) and
   truncates an existing file only after all of that, so a refusal changes nothing. `mode` is
   `"w"` or `"wb"`, or `"a"` or `"ab"` to append (the same checks, `O_APPEND`, never
-  truncated); `exclusive=True` refuses an existing file. `WriteRefused` is a
+  truncated); `exclusive=True` refuses an existing file. `dir_fd` is a handle of the
+  file's folder that you already hold (where folder handles exist; elsewhere `ValueError`):
+  the file is opened relative to it, never through the folder's path, so another folder
+  moved to the same name since you took the handle is not touched. `WriteRefused` is a
   `PermissionError`, so code that already reports an `OSError` of its open reports this one
   the same way. An existing link at the name is refused, not replaced: delete it first.
   Code in a sandbox environment creates links in its mounted folder, and the host sees them
@@ -3172,10 +3180,11 @@ Stable public surface (safe to build on):
 - `vaf.run_project_git(args, cwd, *, timeout=60, linked_worktree=False, expect_folder=None) ->
   subprocess.CompletedProcess` - git in a folder a model writes, starting no program that
   folder's config or hooks name, and working only on the repository at or above `cwd`, run
-  in its top folder. The promise is the call shape, that it never raises, that a leading `-c`
-  of yours is kept, that the repository's config does not choose the hooks, a filter or the
-  work tree, that a `.git` leading into another repository is refused unless
-  `linked_worktree=True`, and that a `cwd` whose real path is not `expect_folder` is refused;
+  in its top folder. The promise is the call shape, that it never raises (a failure is
+  returncode -1 with its `kind`), that a leading `-c` of yours is kept, that the
+  repository's config does not choose the hooks, a filter or the work tree, that a `.git`
+  leading into another repository is refused unless `linked_worktree=True`, and that a
+  `cwd` whose real path is not `expect_folder` is refused;
   the exact list of pinned settings is not. See "git in a folder a model writes" above.
 - `vaf.ToolCaller` - running a tool with the agent's own policy, gate, identity
   and bounds, without an agent. Its **documented arguments** (the table under

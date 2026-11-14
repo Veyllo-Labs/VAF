@@ -67,7 +67,8 @@ NAMED BOUNDARIES:
   relative to checked folder handles) is checked against that folder. A folder swapped for a
   link, renamed away or replaced while the run works ends it as `failed`, nothing reported,
   no state saved; so does any other refusal of the git runner (only a timeout and a missing
-  git keep their old meaning), worded with the runner's own sentence. Why: the project may
+  git keep their old meaning, told by the runner's `kind`, never by its words), worded with
+  the runner's own sentence. Why: the project may
   be a coding agent's, whose sandbox code can rename its own folder and put a link into
   another account's repository in its place. Measured with a racer doing exactly that during
   1000 audits each: with each git call pinned on its own and the reads and the state by
@@ -406,20 +407,21 @@ _DECIDED: "contextvars.ContextVar[Optional[Tuple[str, Tuple[int, int]]]]" = (
 FOLDER_CHANGED = ("the folder changed while it was being reviewed (a link on the way); "
                   "nothing from it is reported as reviewed")
 GIT_REFUSED = "git refused the folder under review ({}); nothing from it is reported as reviewed"
-# `run_project_git` never raises: a refusal comes back as returncode -1 with its reason in
-# stderr, and so do a timeout and a missing git, which keep their old handling (a search that
-# timed out finds nothing). Every other -1 is a refusal and ends the run: read as an empty
-# answer, a refused `check-ignore` let an ignored guideline file through (measured, with a
-# link planted in `.git` during the run).
-_NOT_REFUSALS = ("timed out after", "Git is not installed.")
-# Refusals that mean the folder or its `.git` is not the one decided on any more; any other
-# (a link planted inside `.git`, a private view that could not start on this host) is reported
-# with the runner's own sentence, because "the folder changed" would not be true.
-_MOVED_MARKERS = ("a link on the way", "Not a directory: ", "holds no .git of its own",
-                  ".git is not a folder")
-# Before the folder is decided, these say "no repository here" and keep that answer.
-_NO_REPO_MARKERS = ("Not a directory: ", "holds no .git of its own", "Not a git repository",
-                    ".git is not a folder")
+# `run_project_git` never raises: a failure comes back as a `ProjectGitFailed` whose `kind`
+# the runner sets itself. A timeout and a missing git keep their old handling (a search that
+# timed out finds nothing); every other failure ends the run: read as an empty answer, a
+# refused `check-ignore` let an ignored guideline file through (measured, with a link planted
+# in `.git` during the run). Told apart by `kind`, never by the words: a refusal quotes the
+# names the repository chose, and a link named like the timeout message made a refusal read
+# as a timeout (measured). A -1 without a `kind` (git killed by a signal) counts as refused.
+_NOT_REFUSALS = ("timeout", "no_git")
+# Only the WORDING of the run's reason is chosen by these words: refusals that say the folder
+# or its `.git` is not the one decided on any more read "the folder changed"; any other (a
+# link planted inside `.git`, a private view that could not start on this host) is reported
+# with the runner's own sentence. Before the folder is decided, a folder that is no
+# repository keeps that answer.
+_MOVED_MARKERS = ("a link on the way", "holds no .git of its own", ".git is not a folder")
+_NO_REPO_MARKERS = ("holds no .git of its own", "Not a git repository", ".git is not a folder")
 
 
 class _FolderChanged(Exception):
@@ -432,16 +434,18 @@ class _FolderChanged(Exception):
         self.reason = reason
 
 
-def _is_refusal(proc_code: int, err: str) -> bool:
-    return proc_code == -1 and not any(m in err for m in _NOT_REFUSALS)
+def _is_refusal(proc) -> bool:
+    return proc.returncode == -1 and getattr(proc, "kind", "refused") not in _NOT_REFUSALS
 
 
-def _refused(err: str) -> _FolderChanged:
+def _refused(proc) -> _FolderChanged:
     """The exception that ends the run for a runner refusal: FOLDER_CHANGED when the decided
-    folder is not the same any more or the refusal says so, else the runner's own sentence."""
+    folder is not the same any more, is gone, or the refusal says so, else the runner's own
+    sentence."""
     _check_top()
+    err = proc.stderr or ""
     line = next((ln.strip() for ln in err.splitlines() if ln.strip()), "no reason given")[:240]
-    if any(m in err for m in _MOVED_MARKERS):
+    if getattr(proc, "kind", "") == "no_folder" or any(m in err for m in _MOVED_MARKERS):
         return _FolderChanged(line)
     return _FolderChanged(line, reason=GIT_REFUSED.format(line))
 
@@ -488,8 +492,8 @@ def _git(top: str, *args: str, timeout: float = 60) -> Tuple[int, str]:
     proc = run_project_git(["-c", "core.quotepath=false", *args], cwd=top, timeout=timeout,
                            linked_worktree=_LINKED_WORKTREE.get(), expect_folder=top)
     code, out, err = proc.returncode, proc.stdout or "", proc.stderr or ""
-    if _is_refusal(code, err):
-        raise _refused(err)
+    if _is_refusal(proc):
+        raise _refused(proc)
     return code, out if code == 0 else (err or out)
 
 
@@ -503,9 +507,9 @@ def _repo_top(root: str, expect_folder=None) -> Optional[str]:
     out, err = (proc.stdout or "").strip(), proc.stderr or ""
     # A folder that is no repository keeps that answer (the caller words it); any other
     # refusal (a link on the way, a private view that could not start) is said as it is.
-    if (_is_refusal(proc.returncode, err) and ("a link on the way" in err
-                                               or not any(m in err for m in _NO_REPO_MARKERS))):
-        raise _refused(err)
+    if (_is_refusal(proc) and getattr(proc, "kind", "") != "no_folder"
+            and ("a link on the way" in err or not any(m in err for m in _NO_REPO_MARKERS))):
+        raise _refused(proc)
     if proc.returncode != 0 or not out:
         return None
     if expect_folder is None:
@@ -1646,14 +1650,15 @@ def _save_state(top: str, name: str, data: dict) -> None:
     """Write `vaf-audit/<name>` under the git directory, never through a link: the git
     directory is opened as a handle whose kernel path must be the one decided, `vaf-audit` is
     made and opened relative to it (a link there is refused), the file is written through
-    `open_for_write` with that folder as `expect_folder` and renamed into place on the
-    folder's handle (`_state_handle`: the top must still be the decided folder by identity).
+    `open_for_write` relative to that folder's handle (`dir_fd`, so no file of another folder
+    is ever opened or truncated) and renamed into place on it (`_state_handle`: the top must
+    still be the decided folder by identity).
     A folder renamed away or swapped for a link at that moment gets nothing, and another
     repository moved to the name ends the run (_FolderChanged).
     A git directory inside VAF's own state is refused by `open_for_write`, so a repository
     there keeps no audit memory. Best effort: a write that fails leaves the old state."""
     from vaf.core import path_jail
-    from vaf.core.path_jail import discard_written, open_for_write
+    from vaf.core.path_jail import open_for_write
     d = _git_dir(top)
     if d is None:
         return
@@ -1663,19 +1668,11 @@ def _save_state(top: str, name: str, data: dict) -> None:
         if path_jail._DIR_FD and os.mkdir in os.supports_dir_fd:
             vfd = _state_handle(top, d, folder)
             try:
-                tmp = os.path.join(folder, name + ".tmp")
-                with open_for_write(tmp, "w", encoding="utf-8", expect_folder=folder) as f:
-                    # The file just opened by its path must be the one in the held folder: a
-                    # repository moved to this name after the handle was taken has a folder
-                    # with the same real path, and its state is not ours to write.
-                    try:
-                        here = os.stat(name + ".tmp", dir_fd=vfd, follow_symlinks=False)
-                        ours = os.path.samestat(here, os.fstat(f.fileno()))
-                    except OSError:
-                        ours = False
-                    if not ours:
-                        discard_written(tmp, f)
-                        return
+                # Opened relative to the held folder, never by its path: a repository moved to
+                # this name after the handle was taken has a folder with the same real path,
+                # and its own files (an in-flight temporary file) are not ours to truncate.
+                with open_for_write(os.path.join(folder, name + ".tmp"), "w", encoding="utf-8",
+                                    expect_folder=folder, dir_fd=vfd) as f:
                     f.write(text)
                 os.replace(name + ".tmp", name, src_dir_fd=vfd, dst_dir_fd=vfd)
             finally:
@@ -1876,13 +1873,13 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
         from vaf.core.git_runner import resolve_commit
         # `base` can come from the model (the code_audit tool): only the commit id it names
         # reaches `git diff`, where `--output=<file>` would write over any file.
-        refusals: List[str] = []
+        refusals: list = []
         rev = (report.base if report.base == EMPTY_TREE
                else resolve_commit(report.base, top, linked_worktree=_LINKED_WORKTREE.get(),
                                    expect_folder=top, errors=refusals))
         if not rev:
             # A refusal of the folder is not a base that names nothing.
-            if refusals and _is_refusal(-1, refusals[0]):
+            if refusals and _is_refusal(refusals[0]):
                 raise _refused(refusals[0])
             _check_top()
             report.status, report.status_reason = "failed", f"{report.base[:80]!r} names no commit"

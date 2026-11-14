@@ -92,3 +92,26 @@ def test_expect_folder_refuses_a_folder_that_is_not_the_one_judged(tmp_path):
                                   expect_folder=str((tmp_path / "elsewhere").resolve()))
     assert isinstance(refused, subprocess.CompletedProcess)
     assert refused.returncode != 0 and "a link on the way" in refused.stderr
+
+
+def test_a_failure_says_its_kind(tmp_path):
+    """A caller tells a timeout or a missing folder from a refusal by `kind`, never by the
+    words: a refusal quotes names the repository chose (a link in `.git` named like the
+    timeout message)."""
+    import os
+    proc = vaf.run_project_git(["status"], cwd=str(tmp_path / "missing"))
+    assert isinstance(proc, subprocess.CompletedProcess)
+    assert proc.returncode == -1 and proc.kind == "no_folder"
+    r = _repo(tmp_path)
+    try:
+        os.symlink(str(tmp_path), str(r / ".git" / "timed out after"))
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available here")
+    proc = vaf.run_project_git(["status"], cwd=str(r))
+    assert proc.returncode == -1 and proc.kind == "refused"
+    assert "timed out after" in proc.stderr
+
+
+def test_a_timeout_says_so(tmp_path):
+    proc = vaf.run_project_git(["status"], cwd=str(_repo(tmp_path)), timeout=1e-6)
+    assert proc.returncode == -1 and proc.kind == "timeout"

@@ -315,7 +315,7 @@ def _protected(path) -> str:
 
 def open_for_write(path, mode: str = "wb", *, exclusive: bool = False,
                    encoding: Optional[str] = None, newline: Optional[str] = None,
-                   expect_folder=None):
+                   expect_folder=None, dir_fd: Optional[int] = None):
     """Open ``path`` to write it, as a file object, or raise `WriteRefused`.
 
     For a path a model, a request or a peer chose, and for a temporary ``.part`` beside one.
@@ -348,6 +348,14 @@ def open_for_write(path, mode: str = "wb", *, exclusive: bool = False,
     file is then opened relative to that handle, so later renames cannot redirect it. Without
     a kernel answer (no /proc, no F_GETPATH) the resolved path is accepted only when it is
     the same directory as the handle.
+
+    ``dir_fd`` is a handle of the file's folder that the caller already holds: the file is
+    opened relative to it, and the folder is not opened again by ``path`` (which still names
+    the file for the checks and the messages; its folder's kernel path is the handle's). For
+    a caller that decided on a folder by its identity: another folder moved to the same name
+    has the same real path, and opening by path would truncate that folder's file before any
+    later comparison. Only where folder handles exist (`_DIR_FD`); elsewhere it is refused
+    (ValueError).
 
     NAMED BOUNDARY, Windows (no ``O_NOFOLLOW``, no directory handles): a link at the path is
     refused (``islink``), the resolved path is checked before and after the open, and a file
@@ -385,8 +393,11 @@ def open_for_write(path, mode: str = "wb", *, exclusive: bool = False,
         flags |= os.O_APPEND
     expected = (os.path.normcase(os.path.abspath(os.fspath(expect_folder)))
                 if expect_folder is not None else None)
+    if dir_fd is not None and not _DIR_FD:
+        raise ValueError("open_for_write(dir_fd=) needs folder handles")
     if _DIR_FD:
-        fd = _open_in_folder(parent, name, flags | os.O_NOFOLLOW | os.O_NONBLOCK, raw, expected)
+        fd = _open_in_folder(parent, name, flags | os.O_NOFOLLOW | os.O_NONBLOCK, raw, expected,
+                             dir_fd=dir_fd)
     else:
         fd = _open_without_dir_fd(raw, flags, expected)
     try:
@@ -561,10 +572,13 @@ def open_for_read(path, *, expect_folder=None):
 
 
 def _open_in_folder(parent: str, name: str, flags: int, raw: str,
-                    expected: Optional[str] = None) -> int:
+                    expected: Optional[str] = None, dir_fd: Optional[int] = None) -> int:
     import errno
     try:
-        dfd, real_dir = open_folder(parent, expect_folder=expected)
+        # With the caller's handle the folder is reopened through it ("."), never by its path:
+        # the same folder, whatever is at its name now, compared like any other.
+        dfd, real_dir = (open_folder(parent, expect_folder=expected) if dir_fd is None
+                         else open_folder(".", dir_fd=dir_fd, expect_folder=expected))
     except NotADirectoryError:
         raise WriteRefused(f"refusing to write {raw}: {parent} is not a folder") from None
     except PathEscape as e:

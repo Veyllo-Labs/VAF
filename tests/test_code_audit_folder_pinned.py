@@ -18,7 +18,6 @@ import ast
 import json
 import os
 import shutil
-import subprocess
 import threading
 from pathlib import Path
 
@@ -217,6 +216,32 @@ def test_open_folder_create_makes_the_folder_relative_to_the_handle(world, monke
         os.close(pfd)
     with pytest.raises(ValueError):
         path_jail.open_folder(str(parent), create=True)
+
+
+@_HANDLES
+def test_open_for_write_with_a_held_folder_writes_only_there(world):
+    """The folder is replaced at its name after its handle was taken: the file is written in
+    the held folder, the folder now at the name is not touched, and the handle stays open.
+    MUTATION: _open_in_folder ignores dir_fd (opens the folder by path) - red."""
+    held = world.tmp / "held"
+    held.mkdir()
+    real = str(held)
+    hfd = os.open(real, os.O_RDONLY)
+    try:
+        aside = world.tmp / "held-aside"
+        os.rename(held, aside)
+        held.mkdir()
+        (held / "x.tmp").write_text("INFLIGHT", encoding="utf-8")
+        with pytest.raises(path_jail.WriteRefused):        # the held folder moved away
+            path_jail.open_for_write(str(held / "x.tmp"), "w", expect_folder=real, dir_fd=hfd)
+        with path_jail.open_for_write(str(held / "x.tmp"), "w", expect_folder=str(aside),
+                                      dir_fd=hfd) as f:
+            f.write("mine")
+        os.fstat(hfd)                                      # still open: the caller's handle
+    finally:
+        os.close(hfd)
+    assert (aside / "x.tmp").read_text(encoding="utf-8") == "mine"
+    assert (held / "x.tmp").read_text(encoding="utf-8") == "INFLIGHT"
 
 
 # ── 3. and 4. a read whose folder was swapped ───────────────────────────────
@@ -442,9 +467,9 @@ def test_a_folder_replaced_after_the_end_check_gets_no_state(pair, monkeypatch):
 @_HANDLES
 def test_the_state_file_is_written_only_in_the_held_folder(pair, monkeypatch):
     """Another repository is moved to A's name after the state folder's handle was taken and
-    before the file is opened by its path (the same real path): nothing is written there,
-    not even the temporary file. MUTATION: drop the samestat comparison in _save_state - red
-    (the other repository keeps a last.json.tmp)."""
+    before the file is opened (the same real path): nothing of it is opened, so its own
+    in-flight temporary file keeps its text. MUTATION: open the temporary file by its path
+    (no dir_fd) - red (the other repository's last.json.tmp is truncated)."""
     kept = {"text": "OTHER's own last audit"}
     real = ca._state_handle
     moved = {}
@@ -453,14 +478,17 @@ def test_the_state_file_is_written_only_in_the_held_folder(pair, monkeypatch):
         fd = real(top, d, folder)
         if not moved:
             moved["aside"] = _replace_with_repo(pair.a, kept)
+            (pair.a / ".git" / "vaf-audit" / "last.json.tmp").write_text("INFLIGHT",
+                                                                         encoding="utf-8")
         return fd
 
     monkeypatch.setattr(ca, "_state_handle", _then_replaced)
     report = _audit(pair.a, _Stub(), expect_folder=str(pair.a))
     assert report.status == "failed"
     state = pair.a / ".git" / "vaf-audit"
-    assert sorted(os.listdir(state)) == ["last.json"]
+    assert sorted(os.listdir(state)) == ["last.json", "last.json.tmp"]
     assert json.loads((state / "last.json").read_text(encoding="utf-8")) == kept
+    assert (state / "last.json.tmp").read_text(encoding="utf-8") == "INFLIGHT"
     _put_back(pair.a, moved["aside"])
 
 
@@ -499,17 +527,21 @@ def test_an_empty_listing_from_a_replaced_folder_is_not_a_clean_result(pair, mon
     _put_back(pair.a, moved["aside"])
 
 
-def test_a_refused_git_call_is_never_read_as_an_empty_answer(pair, monkeypatch):
+@pytest.mark.parametrize("link", ["evil", "timed out after", "Git is not installed."])
+def test_a_refused_git_call_is_never_read_as_an_empty_answer(pair, monkeypatch, link):
     """A link planted inside `.git` during the run makes the runner refuse every later call;
-    `check-ignore` read as "not ignored" sent a git-ignored guideline file to the model.
-    MUTATION: only the moved-folder words count as a refusal in `_git` - red."""
+    `check-ignore` read as "not ignored" sent a git-ignored guideline file to the model. The
+    refusal quotes the link's name, so a name like the timeout message must not turn it into a
+    timeout. MUTATIONS: only the moved-folder words count as a refusal in `_git` - red
+    ("evil"); a timeout or a missing git told by the words in stderr again - red (the two
+    other names)."""
     (pair.a / ".gitignore").write_text("sub/AGENTS.md\n", encoding="utf-8")
     (pair.a / "sub" / "AGENTS.md").write_text("PRIVATE_NOTES of the person\n", encoding="utf-8")
     (pair.a / "sub" / "x.txt").write_text("x2\n", encoding="utf-8")
     real = ca._guidelines
 
     def _planting(top, files):
-        _symlink_or_skip(pair.a / ".git" / "evil", pair.b / ".git")
+        _symlink_or_skip(pair.a / ".git" / link, pair.b / ".git")
         return real(top, files)
 
     monkeypatch.setattr(ca, "_guidelines", _planting)
@@ -518,18 +550,18 @@ def test_a_refused_git_call_is_never_read_as_an_empty_answer(pair, monkeypatch):
     assert "PRIVATE_NOTES" not in stub.text
     assert report.status == "failed" and report.status_reason.startswith("git refused")
     assert "is a link" in report.status_reason
-    os.unlink(pair.a / ".git" / "evil")
+    os.unlink(pair.a / ".git" / link)
 
 
-def _runner_answering(monkeypatch, when, stderr):
-    """`run_project_git` answers returncode -1 with ``stderr`` for the call one of whose
-    arguments ends with ``when``; every other call runs."""
+def _runner_answering(monkeypatch, when, kind, stderr):
+    """`run_project_git` fails (its own `ProjectGitFailed`, ``kind``, ``stderr``) for the call
+    one of whose arguments ends with ``when``; every other call runs."""
     import vaf.core.git_runner as gr
     real = gr.run_project_git
 
     def _run(args, *a, **kw):
         if any(str(a).endswith(when) for a in args):
-            return subprocess.CompletedProcess(["git", *args], -1, "", stderr)
+            return gr._failed(["git", *args], kind, stderr)
         return real(args, *a, **kw)
 
     monkeypatch.setattr(gr, "run_project_git", _run)
@@ -538,7 +570,7 @@ def _runner_answering(monkeypatch, when, stderr):
 def test_a_private_view_that_cannot_start_is_reported_as_it_is(pair, monkeypatch):
     """bubblewrap failing on this host is no moved folder. MUTATION: count "could not start
     in a private view" as a moved folder again - red (the reason says the folder changed)."""
-    _runner_answering(monkeypatch, "merge-base", "could not start in a private view of "
+    _runner_answering(monkeypatch, "merge-base", "refused", "could not start in a private view of "
                       f"{pair.a} (exit 1). Try again")
     report = _audit(pair.a, _Stub(), expect_folder=str(pair.a))
     assert report.status == "failed"
@@ -549,7 +581,8 @@ def test_a_private_view_that_cannot_start_is_reported_as_it_is(pair, monkeypatch
 def test_a_refusal_while_the_base_is_resolved_is_not_a_missing_commit(pair, monkeypatch):
     """The runner refuses the base's rev-parse (the folder was away for that call and back
     by the next check). MUTATION: ignore resolve_commit's errors - red ("names no commit")."""
-    _runner_answering(monkeypatch, "^{commit}", f"{pair.a}: its folder is /elsewhere, not "
+    _runner_answering(monkeypatch, "^{commit}", "refused",
+                      f"{pair.a}: its folder is /elsewhere, not "
                       f"{pair.a} (a link on the way)")
     report = _audit(pair.a, _Stub(), expect_folder=str(pair.a))
     assert report.status == "failed" and report.status_reason == ca.FOLDER_CHANGED
@@ -557,11 +590,11 @@ def test_a_refusal_while_the_base_is_resolved_is_not_a_missing_commit(pair, monk
 
 def test_a_search_that_timed_out_still_finds_nothing(pair, monkeypatch):
     """A timeout is no refusal: the reference search (git grep) finds nothing and the run goes
-    on. MUTATION: drop the timeout from _NOT_REFUSALS - red."""
+    on. MUTATION: drop "timeout" from _NOT_REFUSALS - red."""
     (pair.a / "app.py").write_text("def total_of(xs):\n    return 'A_OWN_CODE'\n",
                                    encoding="utf-8")
-    _runner_answering(monkeypatch, "grep", "Command '['git', 'grep']' timed out after 20 "
-                      "seconds")
+    _runner_answering(monkeypatch, "grep", "timeout", "Command '['git', 'grep']' timed out "
+                      "after 20 seconds")
     report = _audit(pair.a, _Stub(), expect_folder=str(pair.a))
     assert report.status == "complete", report.status_reason
 

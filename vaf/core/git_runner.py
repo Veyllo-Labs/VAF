@@ -191,16 +191,16 @@ def resolve_commit(rev: str, cwd: str = ".", *, linked_worktree: bool = False,
     line. git reads an argument that starts with a dash as an option wherever it stands, and
     `git diff --output=<file>` writes over any file the process may write; the id that comes
     back is hex only, so it is safe in every position. ``expect_folder`` as for
-    `run_project_git`. ``errors``: a list that gets the runner's own sentence when it refused
-    or could not run git (returncode -1), so a caller can tell that from a revision that names
-    no commit."""
+    `run_project_git`. ``errors``: a list that gets the runner's `ProjectGitFailed` when it
+    refused or could not run git, so a caller can tell that (by its ``kind``) from a revision
+    that names no commit."""
     rev = (rev or "").strip()
     if not rev or rev.startswith("-"):
         return None
     proc = run_project_git(["rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}"], cwd=cwd,
                            linked_worktree=linked_worktree, expect_folder=expect_folder)
-    if errors is not None and proc.returncode == -1:
-        errors.append(proc.stderr or "")
+    if errors is not None and isinstance(proc, ProjectGitFailed):
+        errors.append(proc)
     out = (proc.stdout or "").strip()
     return out if proc.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", out) else None
 
@@ -323,6 +323,28 @@ _EROFS_HINT = ("\nvaf: git runs in a private view of the project folder, where o
 
 class ProjectGitRefused(ValueError):
     """The folder's git layout leads somewhere the runner will not follow."""
+
+
+class ProjectGitFailed(subprocess.CompletedProcess):
+    """`run_project_git`'s answer when git did not run to its end: returncode -1, the reason
+    for a person in ``stderr``, and ``kind`` saying which failure it was, set by the runner
+    itself. A caller tells a timeout from a refusal by ``kind``, never by the words: a refusal
+    quotes names the repository chose (``.git/<name> is a link``), so a link named like the
+    timeout message made a refusal read as a timeout (measured).
+
+    ``kind``: "refused" (the folder, its `.git` or the private view; see `run_project_git`),
+    "no_folder" (``cwd`` is missing or not a folder), "timeout", "no_git" (git is not
+    installed) or "error" (anything else the runner caught). A subclass of
+    ``subprocess.CompletedProcess``, so every caller that reads ``returncode`` and
+    ``stderr`` keeps working."""
+
+    kind = "error"
+
+
+def _failed(argv, kind: str, reason: str) -> ProjectGitFailed:
+    proc = ProjectGitFailed(argv, -1, "", reason)
+    proc.kind = kind
+    return proc
 
 
 def _is_empty_dir(path: str) -> bool:
@@ -934,8 +956,10 @@ def run_project_git(args: Sequence[str], cwd: str, *, timeout: float = 60,
     call is never worked on. With `expect_folder` the folder must hold `.git` itself: git is
     never run on a repository above the judged folder, which nobody judged.
 
-    Never raises: a missing git, a timeout or a refusal comes back as returncode -1 with the
-    reason in stderr.
+    Never raises: a missing git, a timeout or a refusal comes back as a `ProjectGitFailed`,
+    returncode -1 with the reason in stderr and its ``kind`` ("refused", "no_folder",
+    "timeout", "no_git", "error"); tell them apart by ``kind``, never by the words, which can
+    quote names the repository chose.
     """
     from vaf.core import path_jail
     argv: List[str] = ["git", *args]
@@ -959,10 +983,14 @@ def run_project_git(args: Sequence[str], cwd: str, *, timeout: float = 60,
         return proc
     except _NoFolder:
         # subprocess reports a missing cwd as FileNotFoundError, which reads as "no git".
-        return subprocess.CompletedProcess(argv, -1, "", f"Not a directory: {cwd}")
+        return _failed(argv, "no_folder", f"Not a directory: {cwd}")
     except FileNotFoundError:
-        return subprocess.CompletedProcess(argv, -1, "", "Git is not installed.")
+        return _failed(argv, "no_git", "Git is not installed.")
+    except ProjectGitRefused as e:
+        return _failed(argv, "refused", str(e))
+    except subprocess.TimeoutExpired as e:
+        return _failed(argv, "timeout", str(e))
     except Exception as e:
-        return subprocess.CompletedProcess(argv, -1, "", str(e))
+        return _failed(argv, "error", str(e))
     finally:
         pin.close()

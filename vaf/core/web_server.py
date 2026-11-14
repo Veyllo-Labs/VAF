@@ -5759,16 +5759,15 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 # whether this account may be in this room at all.
                                 display = str(cmd.get("display") or "").strip()
                                 if not display:
-                                    # THIS account's name, not the machine owner's. The
-                                    # old fallback printed the local admin for whoever
-                                    # was speaking, so on an installation with several
-                                    # people the room learned one name for all of them -
-                                    # and the moment a surface says who belongs to whom,
-                                    # that becomes the room asserting, with its own
-                                    # authority, that the admin is somebody else's user.
-                                    # `resolve_caller_username` is the one definition of
-                                    # this question; the lookup is one database round
-                                    # trip, paid once when a person first speaks here.
+                                    # THIS account's name, not the machine owner's. The old fallback
+                                    # printed the local admin for whoever was speaking, so on an
+                                    # installation with several people the room learned one name for
+                                    # all of them - and the moment a surface says who belongs to
+                                    # whom, that becomes the room asserting, with its own authority,
+                                    # that the admin is somebody else's user.
+                                    # `resolve_caller_username` is the one definition of this
+                                    # question; the lookup is one database round trip, paid once
+                                    # when a person first speaks here.
                                     from vaf.core.config import resolve_caller_username
                                     display = str(resolve_caller_username(
                                         None, user_scope_id, allow_lookup=True) or "user")

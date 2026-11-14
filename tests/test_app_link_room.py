@@ -1552,8 +1552,12 @@ def test_room_say_bytes_per_hour_are_bounded(room_home, monkeypatch):
     assert {"t": "ack", "id": first} in client.frames
     assert {"t": "error", "code": "rate_limited", "ref": second} in client.frames
     assert _kinds() == [agent_origin.APP_ROOM_IN_KIND]
-    # An hour later the budget is back.
-    assert room._say_budget_ok(SCOPE_A, 150, now=time.time() + 3601)
+    # An hour later the budget is back (the window's own clock is monotonic). A moment
+    # handed in ahead moves the window's time along, so it is cleared after.
+    try:
+        assert room._say_budget_ok(SCOPE_A, 150, now=time.monotonic() + 3601)
+    finally:
+        room._SAY_BYTES.clear()
 
 
 def test_room_say_reusing_one_of_the_persons_ids_is_stored(room_home):

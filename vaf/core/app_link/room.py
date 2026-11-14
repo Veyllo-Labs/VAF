@@ -92,9 +92,10 @@ TASK_RESULT_CODES = ("answered", "declined", "unavailable", "timeout", "failed",
                      "disconnected", "file_refused")
 
 _lock = threading.Lock()
-# room_say bytes per account in any hour (ROOM_SAY_BYTES_PER_HOUR, read at call time). A
-# wall clock, as the callers name their moment in wall seconds.
-_SAY_BYTES = RateWindow(3600, clock=time.time)
+# room_say bytes per account in any hour (ROOM_SAY_BYTES_PER_HOUR, read at call time). On the
+# window's monotonic clock: a wall clock that steps back (an NTP step at boot) would hold every
+# account's charges at the moment it was ahead until it caught up.
+_SAY_BYTES = RateWindow(3600)
 # Page line ids a post of the account is storing right now: claimed before the id is checked
 # (`_line_id_in_use`) and released once the line is stored, so two posts of one id at the same
 # moment cannot both keep it. Per process: `post` has one caller, the web server's route.

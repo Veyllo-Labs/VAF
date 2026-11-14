@@ -2243,7 +2243,11 @@ bytes_per_hour.take(user_scope, len(data), limit=2 * 1024 * 1024)
 - **Time runs forward.** Moments are taken as monotonic across the whole window. Its own clock
   is read under its lock; a `now` earlier than the newest charge it recorded (a wall clock
   that stepped back) is taken as that newest moment, so the charges stay in order and the
-  bound holds. A `now` far in the future moves that moment along until `clear()`.
+  bound holds. A `now` far in the future moves that moment along until `clear()`. The
+  moment is one for the whole window, so pass a clock you trust: one `now` far ahead lets every
+  key's earlier charges expire, and a clock that stepped back holds every key's charges until
+  it catches up (the default monotonic clock does neither). `used(key, now=...)` only reads:
+  a `now` ahead counts what is live then and forgets nothing.
 - **`refund(key, weight)`** gives back the newest charge of exactly that weight (True when one
   was found), for work that was charged and then not done. `used(key)` is what the key has
   spent in the window; `forget(key)` and `clear()` drop charges.

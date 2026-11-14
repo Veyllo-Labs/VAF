@@ -209,12 +209,12 @@ def _fuzz(draws: int, seed: int = 308) -> int:
             assert got == want, (step, "take", key, size, now)
         elif op < 0.7:
             size = rng.randint(1, 300)
-            got = budget_new.refund(key, size)
-            want = budget_old.refund(key, size)
-            # The old copy kept expired charges until its next take of that key, so it may give
-            # back one of those where the window has none left (no decision changes); a live
-            # charge the window gives back, the old copy gives back too.
-            assert want or not got, (step, "refund", key, size)
+            budget_new.refund(key, size)
+            budget_old.refund(key, size)
+            # Expired charges linger in both until a take of that key prunes them, and not by
+            # the same takes (the old copy pruned on a zero-weight take, the window records
+            # nothing for one), so either may give back an expired charge the other no longer
+            # holds. What counts is the live state, compared here, and every later decision.
             assert budget_new.used(key, now=now) == sum(
                 n for t, n in budget_old.spent.get(key, ()) if now - t <= 3600), (step, "refund")
         else:
@@ -256,6 +256,59 @@ def test_a_zero_weight_records_nothing():
     assert len(window) == 0, "every zero-weight take kept a record"
     assert window.take("b", 1, limit=1) and window.take("b", 0, limit=1)
     assert not window.take("b", 1, limit=1)
+
+
+def test_an_expired_charge_given_back_changes_nothing():
+    """Found by the differential fuzz (1,000,000 draws, seed 308, step 12,256): a zero-weight
+    take prunes nothing, so a refund can still find a charge that has expired and gives it
+    back. That changes no live total and no decision."""
+    window = RateWindow(3600, 1000)
+    assert window.take("k2", 228, now=0)
+    assert window.take("k2", 0, now=4000)
+    assert window.used("k2", now=4000) == 0
+    window.refund("k2", 228)
+    assert window.used("k2", now=4000) == 0
+    assert window.take("k2", 1000, now=4000) and not window.take("k2", 1, now=4000)
+
+
+def test_a_zero_weight_fits_under_a_lowered_limit():
+    window = RateWindow(60, clock=_Clock())
+    assert window.take("a", 5, limit=10)
+    assert window.take("a", 0, limit=4), "zero always fits, also over a lowered limit"
+    with pytest.raises(ValueError):
+        window.take("a", 0, limit=4, now=float("nan"))
+
+
+def test_a_refund_that_finds_nothing_walks_without_indexing(monkeypatch):
+    """A deque's index is O(n): a refund walked by index costs O(n^2) when it finds nothing
+    (100 ms per call at 100,000 charges). The walk reads no item by index."""
+    import vaf.core.rate_window as rate_window
+    reads = []
+
+    class _Counted(deque):
+        def __getitem__(self, index):
+            reads.append(index)
+            return super().__getitem__(index)
+
+    monkeypatch.setattr(rate_window, "deque", _Counted)
+    window = RateWindow(60, 10 ** 6, clock=_Clock())
+    for _ in range(500):
+        assert window.take("a")
+    reads.clear()
+    assert not window.refund("a", 2)
+    assert window.refund("a", 1)
+    assert len([r for r in reads if r != -1]) == 0, "the refund read items by index"
+
+
+def test_used_with_a_moment_ahead_forgets_nothing():
+    """`used` only reads: asked about a moment far ahead it counts what is live then, and the
+    charges are still there for the next take at the window's own time."""
+    window = RateWindow(60, 3)
+    for moment in (1, 2, 3):
+        assert window.take("k", now=moment)
+    assert window.used("k", now=1e6) == 0
+    assert not window.take("k", now=4), "a read with a future moment deleted live charges"
+    assert window.used("k", now=4) == 3
 
 
 def test_an_earlier_moment_is_taken_as_the_newest_recorded():
@@ -318,12 +371,12 @@ class _Model:
             self.keys.pop(key, None)
 
     def take(self, key, weight, limit, now):
+        if weight == 0:
+            return True
         moment = max(now, self.latest)
         self._expire(key, moment)
         if sum(w for _t, w in self.keys.get(key, [])) + weight > limit:
             return False
-        if weight == 0:
-            return True
         self.keys.setdefault(key, []).append((moment, weight))
         self.latest = moment
         for other in [k for k, v in self.keys.items() if moment - v[-1][0] > self.window_s]:
@@ -343,8 +396,8 @@ class _Model:
         return False
 
     def used(self, key, now):
-        self._expire(key, max(now, self.latest))
-        return sum(w for _t, w in self.keys.get(key, []))
+        moment = max(now, self.latest)
+        return sum(w for t, w in self.keys.get(key, []) if moment - t <= self.window_s)
 
 
 def _model_fuzz(draws: int, seed: int, *, ordered: bool) -> None:
@@ -388,6 +441,8 @@ def test_the_conversions_use_the_window():
     from vaf.core.app_link import bridge, room, session
     assert not hasattr(bridge, "_msg_times") and isinstance(bridge._MSG_RATE, RateWindow)
     assert not hasattr(room, "_say_bytes") and isinstance(room._SAY_BYTES, RateWindow)
+    # Monotonic: a wall clock stepping back would hold every account's charges.
+    assert room._SAY_BYTES._clock is time.monotonic
     assert not hasattr(session.SessionLimiter, "_hit")
     limiter = session.SessionLimiter(clock=lambda: 0.0)
     assert isinstance(limiter._per_peer, RateWindow) and isinstance(limiter._per_conn, RateWindow)

@@ -196,17 +196,19 @@ full-screen app's transcript replay (`_transcript_entries` in
 never cleaned it; replies are stored without VAF's `[ASYNC_ACK]` status tag
 (`returned_turn_copy` in `vaf/core/session.py`), and only a chat saved before that still shows
 the tag there. A model reads such a chat without it: the full-screen app's chat switch and the
-prompt interface's `session <id>` switch put a stored chat back into the agent's history
+prompt interface's `/session <id>` switch put a stored chat back into the agent's history
 through the engine's replay (`load_session_context`), which reads each message through
 `model_text`.
 
 The prompt interface keeps one chat for what you type (`_terminal_chat` in
 `vaf/cli/cmd/run.py`): the chat the run opened (`vaf run --session <id>`, or the new chat it
-starts with) until `session <id>` switches to another. Every typed or spoken turn binds the
+starts with) until `/session <id>` switches to another (with the slash: in the prompt
+interface a bare `session <id>` is a message). Every typed or spoken turn binds the
 agent and the saved chat to that one chat, also after the same loop answered a queued message
 from the browser on the browser's chat. A chat whose file is gone is created again under its
-id. A chat that cannot be read is not replaced: the terminal says so, runs no message, and
-still runs every command, so `session <id>` switches away and `quit` ends the session.
+id. A chat that cannot be read is not replaced: the terminal says so, runs no message, saves
+nothing into it (`quit` and Ctrl+C leave the file as it is, `/export` has nothing to export),
+and still runs every command, so `/session <id>` switches away and `quit` ends the session.
 
 ## Keys and commands
 

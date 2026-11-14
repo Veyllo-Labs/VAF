@@ -1086,8 +1086,8 @@ def _bind_terminal_chat(agent, session_mgr, chat_id, tui):
         return _terminal_chat(agent, session_mgr, chat_id)
     except Exception as exc:
         tui.error(f"This chat cannot be opened ({chat_id}): {type(exc).__name__}: {exc}. "
-                  "Messages are not sent until it can be; switch with `session <id>` "
-                  "or quit.")
+                  "Messages are not sent and nothing is saved into it; switch with "
+                  "`/session <id>` or quit.")
         return None
 
 
@@ -1503,7 +1503,8 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                 
                 # Broadcast to Web UI
                 try:
-                    get_web_interface().emit_stats(stats, session_id=current_session.id)
+                    if current_session is not None:   # None: the chat cannot be opened
+                        get_web_interface().emit_stats(stats, session_id=current_session.id)
                 except Exception:
                     pass
                 
@@ -1933,8 +1934,8 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                     # Spoken at this terminal: a turn of the terminal's chat, like a typed one.
                     terminal_session = _bind_terminal_chat(agent, session_mgr,
                                                            terminal_chat_id, tui)
+                    current_session = terminal_session
                     if terminal_session is not None:
-                        current_session = terminal_session
                         tui.event("User (Voice)", captured, style="normal")
                         _process_agent_message(agent, captured, tui, current_session)
                 
@@ -2018,8 +2019,9 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                 # chat that cannot be read stops the message below, never the commands.
                 terminal_session = _bind_terminal_chat(agent, session_mgr, terminal_chat_id,
                                                        tui)
-                if terminal_session is not None:
-                    current_session = terminal_session
+                # None when it cannot be read: the copy held so far is that chat's stale one
+                # (or a browser chat's), and a save of it on quit would overwrite the file.
+                current_session = terminal_session
             
             # ═══════════════════════════════════════════════════════════════
             # KEYBOARD SHORTCUTS (single letters)
@@ -2221,7 +2223,10 @@ Tab             - Autocomplete
                     # still goes to the model here - only `{"theme"}` is in
                     # the bare-with-args set, and main.py only ever handled
                     # the slash form.)
-                    if args:
+                    if current_session is None:
+                        tui.warning("This chat cannot be opened, so there is nothing to "
+                                    "export. Switch with `/session <id>`.")
+                    elif args:
                         filepath = args[0]
                         content = session_mgr.export(current_session, format="markdown")
                         with open(filepath, 'w', encoding='utf-8') as f:
@@ -2554,7 +2559,12 @@ Created: {current_session.created_at}
 
 
 def _handle_exit(tui, session_mgr, session):
-    """Handle exit with session save prompt."""
+    """Handle exit with session save prompt. `session` is None when the terminal's chat
+    could not be opened (`_bind_terminal_chat`): nothing is saved, so the unreadable file is
+    left as it is."""
+    if session is None:
+        tui.info("This chat could not be opened; nothing was saved.")
+        return
     if not session.messages:
         tui.info("No messages to save.")
         return

@@ -1006,3 +1006,45 @@ def test_a_spoken_turn_after_a_browser_chat_runs_in_the_terminal_chat(modern_lan
     assert [m.role for m in mgr.load(terminal).messages] == ["assistant"]
     held = [(m.role, m.content) for m in mgr.load("web-chat-0061").messages]
     assert held == [("user", "Hallo"), ("assistant", "")], held
+
+
+def _damage_the_terminal_chat(lane, then):
+    """A script step: the chat this run opened at start (the only one in the store) is
+    damaged on disk, so it cannot be read any more; the step then types `then`."""
+    from vaf.core.session import SessionManager
+    damaged = {}
+
+    def step():
+        [path] = list(Path(SessionManager().storage_dir).glob("*.json"))
+        path.write_bytes(b"\x00 damaged, not a chat \x00")
+        damaged["path"] = path
+        return then
+    return step, damaged
+
+
+def test_quit_never_saves_over_a_terminal_chat_that_cannot_be_read(modern_lane):
+    """Quit with the default answer, save: the stale copy held in memory must not overwrite
+    the file that could not be read. MEASURED BEFORE THE FIX: the loop kept that copy as
+    its session after the failed open, and quit's save wrote it over the file. MUTATION:
+    keep the previous session when the open fails - red; drop the guard in `_handle_exit` -
+    red."""
+    modern_lane.monkeypatch.setattr(_FakeTUI, "confirm", lambda self, *a, **k: True)
+    step, damaged = _damage_the_terminal_chat(modern_lane, "quit")
+    # A first turn, so the copy in memory holds messages and quit would offer to save it.
+    modern_lane.rec["script"] = ["Erste Frage", step, "never read"]
+    rec = modern_lane.run(console_breaks=True)
+    assert damaged["path"].read_bytes() == b"\x00 damaged, not a chat \x00"
+    assert rec["prompts"] == 2 and rec["chat_steps"] == ["Erste Frage"]
+    assert len(rec["errors"]) == 1 and rec["errors"][0].startswith("This chat cannot be opened")
+
+
+def test_export_of_a_terminal_chat_that_cannot_be_read_writes_nothing(modern_lane):
+    """MUTATION: drop the guard in `/export` - red (it exported a stale or a foreign chat,
+    or failed with a loop error)."""
+    target = modern_lane.tmp / "export.md"
+    step, damaged = _damage_the_terminal_chat(modern_lane, f"/export {target.as_posix()}")
+    modern_lane.rec["script"] = ["Erste Frage", step, None]
+    rec = modern_lane.run(console_breaks=True)
+    assert not target.exists()
+    assert [w for w in rec["warnings"] if "nothing to export" in w], rec["warnings"]
+    assert len(rec["errors"]) == 1 and rec["errors"][0].startswith("This chat cannot be opened")

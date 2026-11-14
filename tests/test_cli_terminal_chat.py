@@ -88,7 +88,7 @@ def test_a_chat_that_cannot_be_read_is_not_replaced(store, monkeypatch):
 
 
 def test_an_unreadable_chat_is_reported_and_binds_nothing(store, monkeypatch):
-    """MUTATION: let the failure through - red."""
+    """MUTATION: let the failure through - red; name the bare `session <id>` - red."""
     chat = _chat(store, "Broken")
 
     def fail(*a, **k):
@@ -99,7 +99,8 @@ def test_an_unreadable_chat_is_reported_and_binds_nothing(store, monkeypatch):
     tui = type("T", (), {"error": lambda self, msg: shown.append(msg)})()
     assert run_mod._bind_terminal_chat(agent, store, chat, tui) is None
     assert agent.bound == [] and len(shown) == 1 and chat in shown[0]
-    assert "session <id>" in shown[0]
+    # Only the slash form is a command in the prompt interface; a bare one is a message.
+    assert "`/session <id>`" in shown[0]
 
 
 def test_the_loop_runs_typed_turns_in_the_terminal_chat():

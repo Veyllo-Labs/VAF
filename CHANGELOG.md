@@ -115,7 +115,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   through `run_vaf.sh` or `run_vaf.bat` came back with the GitHub tools not working (the
   log said PyGithub was not installed), because VAF's own `github` folder hid the GitHub
   library. VAF started from another package's `python -m` entry point came back as
-  `python -m vaf`, which cannot start.
+  `python -m vaf`, which cannot start. On Windows, `restart` after starting VAF with the
+  `vaf` command (an activated virtual environment or `pip install`) tried to start a file
+  that does not exist, and a folder or argument containing a space was split apart; it now
+  starts exactly the command VAF was started with, including Python options such as
+  `-X utf8`.
 
 - **Unrelated commands are no longer taken for a running VAF.** A command counted as VAF's
   tray when its arguments contained the word `tray` anywhere, and either a folder named VAF

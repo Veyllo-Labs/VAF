@@ -66,8 +66,8 @@ import textwrap
 
 import pytest
 
-from tests.test_chat_step_return import TASK, _Install
-from tests.test_outbound_sanitizer import LEAKED
+from test_chat_step_return import TASK, _Install
+from test_outbound_sanitizer import LEAKED
 from vaf.core.agent import Agent
 from vaf.core.completion import strip_think_blocks
 from vaf.core.speech import SpeechManager

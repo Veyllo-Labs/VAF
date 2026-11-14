@@ -423,7 +423,8 @@ def _folder_moved(raw: str, real: str, expected: str) -> "WriteRefused":
 
 
 def open_folder(path, *, dir_fd: Optional[int] = None, expect_folder=None,
-                follow: bool = True, create: bool = False) -> Tuple[int, str]:
+                follow: bool = True, create: bool = False,
+                path_hint=None) -> Tuple[int, str]:
     """``path`` opened as a folder handle: ``(fd, real)``, ``real`` being the kernel's path
     for the handle. The caller closes ``fd``.
 
@@ -442,6 +443,11 @@ def open_folder(path, *, dir_fd: Optional[int] = None, expect_folder=None,
       first, relative to ``dir_fd`` (``mkdir`` with ``dir_fd``), never by path, so a folder
       above it swapped for a link at that moment gets nothing; an entry already there is
       opened as above (a link refused).
+
+    - ``path_hint``: where the opened folder is believed to be, for a host without a kernel
+      answer for a handle (no /proc, no F_GETPATH): ``real`` is then that path resolved,
+      accepted only when it is the same folder as the handle (``samestat``). Needed with
+      ``dir_fd`` and no ``expect_folder``, where ``path`` alone ("." or "..") says nothing.
 
     Any other ``OSError`` (missing, not a folder, no permission) is raised as it is. Only
     where `_DIR_FD` holds (no folder handles on Windows): callers branch on it.
@@ -476,7 +482,9 @@ def open_folder(path, *, dir_fd: Optional[int] = None, expect_folder=None,
             raise PathEscape(f"{spelled} is a link or not a folder") from None
         raise
     try:
-        fallback = spelled if dir_fd is None or expect_folder is None else os.fspath(expect_folder)
+        fallback = (os.fspath(path_hint) if path_hint is not None
+                    else spelled if dir_fd is None or expect_folder is None
+                    else os.fspath(expect_folder))
         try:
             real = _fd_path(fd, fallback)
         except WriteRefused as e:
@@ -578,7 +586,8 @@ def _open_in_folder(parent: str, name: str, flags: int, raw: str,
         # With the caller's handle the folder is reopened through it ("."), never by its path:
         # the same folder, whatever is at its name now, compared like any other.
         dfd, real_dir = (open_folder(parent, expect_folder=expected) if dir_fd is None
-                         else open_folder(".", dir_fd=dir_fd, expect_folder=expected))
+                         else open_folder(".", dir_fd=dir_fd, expect_folder=expected,
+                                          path_hint=parent))
     except NotADirectoryError:
         raise WriteRefused(f"refusing to write {raw}: {parent} is not a folder") from None
     except PathEscape as e:

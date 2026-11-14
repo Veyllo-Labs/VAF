@@ -330,7 +330,8 @@ the next run.
   git-ignored guideline file through. The runner says which failure it was (`kind` of its
   `ProjectGitFailed`), and that decides, never the words: a refusal quotes the names the
   repository chose, and a link in `.git` named like the timeout message passed as a
-  timeout. Measured with a racer (aside for 1 ms, link, back):
+  timeout. A git killed by a signal (a negative returncode, no `kind`) counts as refused.
+  Measured with a racer (aside for 1 ms, link, back):
   with `expect_folder` (the tool, the coder) nothing of the other repository reached the
   model or got its state in 1000 audits; the numbers before and after are in
   [USER_ISOLATION.md](../security/USER_ISOLATION.md). The racer keeps the folder away half

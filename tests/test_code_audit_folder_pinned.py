@@ -244,6 +244,38 @@ def test_open_for_write_with_a_held_folder_writes_only_there(world):
     assert (held / "x.tmp").read_text(encoding="utf-8") == "INFLIGHT"
 
 
+@_HANDLES
+def test_a_held_folder_is_found_without_a_kernel_path(world, monkeypatch):
+    """A host without /proc and F_GETPATH: the held folder is found through the path the
+    caller names (resolved, and only when it is the same folder as the handle), not through
+    the working folder. MUTATION: open_for_write reopens "." without the path hint - red."""
+    import fcntl
+    real_readlink = os.readlink
+
+    def _no_proc(p, *a, **kw):
+        if str(p).startswith("/proc/self/fd/"):
+            raise OSError("no /proc here")
+        return real_readlink(p, *a, **kw)
+
+    monkeypatch.setattr(path_jail.os, "readlink", _no_proc)
+    monkeypatch.delattr(fcntl, "F_GETPATH", raising=False)
+    held = world.tmp / "held"
+    held.mkdir()
+    monkeypatch.chdir(world.a)                         # anywhere but the held folder
+    hfd = os.open(str(held), os.O_RDONLY)
+    try:
+        with path_jail.open_for_write(str(held / "x.txt"), "w", dir_fd=hfd) as f:
+            f.write("mine")
+        os.rename(held, world.tmp / "held-aside")      # the name now leads elsewhere
+        held.mkdir()
+        with pytest.raises(path_jail.WriteRefused):
+            path_jail.open_for_write(str(held / "y.txt"), "w", dir_fd=hfd)
+    finally:
+        os.close(hfd)
+    assert (world.tmp / "held-aside" / "x.txt").read_text(encoding="utf-8") == "mine"
+    assert not (held / "y.txt").exists()
+
+
 # ── 3. and 4. a read whose folder was swapped ───────────────────────────────
 
 @pytest.mark.parametrize("rel, mark", [
@@ -565,6 +597,46 @@ def _runner_answering(monkeypatch, when, kind, stderr):
         return real(args, *a, **kw)
 
     monkeypatch.setattr(gr, "run_project_git", _run)
+
+
+@pytest.mark.parametrize("code", [-15, -1], ids=["killed-by-signal", "minus-one-untyped"])
+def test_an_untyped_negative_answer_is_a_refusal(pair, monkeypatch, code):
+    """A git killed by a signal comes back as a plain CompletedProcess with a negative
+    returncode and no `kind`; a killed `check-ignore` must not read as "not ignored" and let a
+    git-ignored guideline file through. MUTATIONS: count only -1 as refused - red (-15);
+    default a missing kind to "timeout" - red (-1)."""
+    import subprocess as sp
+    import vaf.core.git_runner as gr
+    (pair.a / ".gitignore").write_text("sub/AGENTS.md\n", encoding="utf-8")
+    (pair.a / "sub" / "AGENTS.md").write_text("PRIVATE_NOTES of the person\n", encoding="utf-8")
+    (pair.a / "sub" / "x.txt").write_text("x2\n", encoding="utf-8")
+    real = gr.run_project_git
+
+    def _run(args, *a, **kw):
+        if "check-ignore" in args:
+            return sp.CompletedProcess(["git", *args], code, "", "")
+        return real(args, *a, **kw)
+
+    monkeypatch.setattr(gr, "run_project_git", _run)
+    stub = _Stub()
+    report = _audit(pair.a, stub, expect_folder=str(pair.a))
+    assert "PRIVATE_NOTES" not in stub.text
+    assert report.status == "failed" and report.status_reason.startswith("git refused")
+
+
+def test_a_dismissal_checks_the_folder_after_its_save(pair, monkeypatch):
+    """The folder is replaced right after the dismissal was saved: the call says False, not
+    that the dismissal is in place. MUTATION: check before the save only - red."""
+    real = ca._save_state
+    moved = {}
+
+    def _then_replaced(top, name, data):
+        real(top, name, data)
+        moved["aside"] = _replace_with_repo(pair.a, {"text": "x"})
+
+    monkeypatch.setattr(ca, "_save_state", _then_replaced)
+    assert ca.dismiss_finding(str(pair.a), "abc", "no") is False
+    _put_back(pair.a, moved["aside"])
 
 
 def test_a_private_view_that_cannot_start_is_reported_as_it_is(pair, monkeypatch):

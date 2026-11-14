@@ -413,7 +413,8 @@ GIT_REFUSED = "git refused the folder under review ({}); nothing from it is repo
 # refused `check-ignore` let an ignored guideline file through (measured, with a link planted
 # in `.git` during the run). Told apart by `kind`, never by the words: a refusal quotes the
 # names the repository chose, and a link named like the timeout message made a refusal read
-# as a timeout (measured). A -1 without a `kind` (git killed by a signal) counts as refused.
+# as a timeout (measured). Any negative returncode without a `kind` (git killed by a signal:
+# -15 for SIGTERM) counts as refused too: a killed `check-ignore` is no "not ignored".
 _NOT_REFUSALS = ("timeout", "no_git")
 # Only the WORDING of the run's reason is chosen by these words: refusals that say the folder
 # or its `.git` is not the one decided on any more read "the folder changed"; any other (a
@@ -435,7 +436,7 @@ class _FolderChanged(Exception):
 
 
 def _is_refusal(proc) -> bool:
-    return proc.returncode == -1 and getattr(proc, "kind", "refused") not in _NOT_REFUSALS
+    return proc.returncode < 0 and getattr(proc, "kind", "refused") not in _NOT_REFUSALS
 
 
 def _refused(proc) -> _FolderChanged:

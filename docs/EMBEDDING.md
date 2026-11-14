@@ -1066,7 +1066,9 @@ identity); the result is a `subprocess.CompletedProcess` with text output, and i
 raises: a missing git, a missing folder, a timeout (`timeout=`, 60 seconds by default) or a
 refusal come back as `returncode` -1 with the reason in `stderr`, and the result's `kind`
 says which ("no_git", "no_folder", "timeout", "refused" or "error"; a subclass of
-`CompletedProcess`, `vaf.core.git_runner.ProjectGitFailed`). Tell them apart by `kind`,
+`CompletedProcess`, `vaf.core.git_runner.ProjectGitFailed`). `kind` is there only when the
+runner itself failed, not on git's own answers, so read it as `getattr(proc, "kind", None)`;
+a negative returncode without one is git killed by a signal. Tell them apart by `kind`,
 never by the words: a refusal quotes names the repository chose, and a link in `.git` named
 like the timeout message would read as a timeout. It pins with `-c`, which
 outranks every config file and comes after your own pairs: an empty hooks directory VAF
@@ -3181,7 +3183,8 @@ Stable public surface (safe to build on):
   subprocess.CompletedProcess` - git in a folder a model writes, starting no program that
   folder's config or hooks name, and working only on the repository at or above `cwd`, run
   in its top folder. The promise is the call shape, that it never raises (a failure is
-  returncode -1 with its `kind`), that a leading `-c` of yours is kept, that the
+  returncode -1 with its `kind`, which only the runner's own failures carry:
+  `getattr(proc, "kind", None)`), that a leading `-c` of yours is kept, that the
   repository's config does not choose the hooks, a filter or the work tree, that a `.git`
   leading into another repository is refused unless `linked_worktree=True`, and that a
   `cwd` whose real path is not `expect_folder` is refused;

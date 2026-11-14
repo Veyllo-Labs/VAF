@@ -1554,8 +1554,12 @@ URI whose label is the absolute path it opens. A link that names a host
 UNC path on Windows), carries a query, has a relative label, or has a label with a
 character the console removes or the reader cannot see (a bidi or other format character,
 a zero-width space, a variation selector or another default-ignorable code point, a line
-separator), or has part of its label concealed (`[conceal]` inside the label of a link
-printed raw) keeps its label and loses the link. A backslash separates path parts only in a
+separator), or has part of its label hidden (`[conceal]`, a background colour or `reverse`
+on any part of the label of a link printed raw; a background or reverse span that only
+borders the label does not count) keeps its label and loses the link. Any background
+counts, not only one equal to the text's colour: `#000000 on #010101` looks equal and is
+not, and a colour and a background can come from two spans. VAF puts none of the three on
+markup of its own. A backslash separates path parts only in a
 drive-letter label; in a POSIX path it is part of the name. The label stays raw in
 `file_link`'s text, since the model and the workflow engine read it as a path (a Next.js
 `app/[id]/page.tsx`); `escape_markup` escapes it where it is printed. The full-screen app's
@@ -1565,9 +1569,12 @@ Named boundaries of the markup class: Rich's `Panel` titles and `Text.from_marku
 without the console, so neither console rule reaches them and a foreign value there needs
 the entry escape (the coder's file name has one). About 900 other interpolations into
 markup strings print mostly VAF's own values (paths, counts, configuration) and rely on the
-console rules alone: a foreign value there can restyle itself, hide itself (`[conceal]`) or
-lose a `[word]`, but it cannot raise, and the only link it can produce is a local file link
-whose label is exactly the absolute path it opens. The same holds for VAF's own shape
+console rules alone: a foreign value there can restyle itself, hide itself (`[conceal]`, a
+colour) or lose a `[word]`, but it cannot raise, and the only link it can produce is a local
+file link whose label is exactly the absolute path it opens. A foreground colour alone that
+matches the terminal's own background is not seen as hidden, since VAF does not know the
+terminal's colours; the link it keeps still opens only the local path its full label
+names. The same holds for VAF's own shape
 anywhere: foreign text that writes `[link=file:///tmp/x]/tmp/x[/link]` gets a live link,
 local only, and it opens what it says. A value escaped into a markup line
 that ends in a backslash shows it twice where plain text follows it (Rich's escape doubles

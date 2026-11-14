@@ -301,6 +301,111 @@ def test_a_concealed_part_of_a_label_drops_the_link():
     assert set(_targets(_render("[link=file:///tmp/ab]/tmp/ab[/link]"))) == {"file:///tmp/ab"}
 
 
+@pytest.mark.parametrize("markup", [
+    "[link=file:///tmp/ab]/tmp/a[#000000 on #000000]b[/][/link]",
+    # Contrast 1.006: equal to the eye, unequal as values, so an equality check misses it.
+    "[link=file:///tmp/ab]/tmp/a[#000000 on #010101]b[/][/link]",
+    "[link=file:///tmp/ab]/tmp/a[reverse #ffffff on #ffffff]b[/][/link]",
+    # Reverse with no background: black text becomes black cells on a light terminal.
+    "[link=file:///tmp/ab]/tmp/a[reverse black]b[/][/link]",
+    # The foreground and the background come from two different spans.
+    "[link=file:///tmp/ab][on black]/tmp/a[black]b[/black][/on black][/link]",
+    "[link=file:///tmp/ab][#000000 on #000000]/tmp/ab[/][/link]",
+    # A background over the whole line, with a shorter hiding span inside it that ends
+    # before the link starts: the merged interval must keep the longer end.
+    "[on black]x[reverse]y[/reverse]z[link=file:///tmp/ab]/tmp/ab[/link][/on black]",
+])
+def test_a_label_hidden_by_colour_drops_the_link(markup):
+    """Text printed raw into markup can write VAF's own shape and hide part of the label
+    with colours instead of `[conceal]`: the link opens `/tmp/ab` while the reader sees
+    `/tmp/a` or a blank. Any background or `reverse` on the label drops the link; the label
+    stays as text. MUTATIONS: drop the `bgcolor` clause of `_hides_text` - red on the
+    background cases; drop its `reverse` clause - red on `[reverse black]`; keep the end of
+    the last merged interval instead of the larger one - red on the last case."""
+    out = _render(markup)
+    assert _targets(out) == [], (markup, out)
+    assert "/tmp/ab" in _plain(out), (markup, out)
+
+
+@pytest.mark.parametrize("markup", [
+    "[link=file:///tmp/ab]/tmp/ab[/link]",
+    "[cyan]see [link=file:///tmp/ab]/tmp/ab[/link] [bold]x[/][/cyan]",
+    "[dim]see [link=file:///tmp/ab]/tmp/ab[/link][/dim]",
+    "[bold][link=file:///tmp/ab]/tmp/ab[/link][/bold]",
+])
+def test_a_visible_style_keeps_the_own_link(markup):
+    """A foreground colour, `dim` or `bold` hides nothing, and the console's highlighter
+    (on by default) colours parts of a path label: the own link stays. MUTATION: count any
+    style with a foreground colour as hiding - red on the `[cyan]` case (and on the
+    highlighter's colours)."""
+    out = _render(markup)
+    assert set(_targets(out)) == {"file:///tmp/ab"}, (markup, out)
+
+
+@pytest.mark.parametrize("markup", [
+    "[conceal]x[/conceal][link=file:///tmp/ab]/tmp/ab[/link]",
+    "[link=file:///tmp/ab]/tmp/ab[/link][conceal]x[/conceal]",
+    "[on red]x[/][link=file:///tmp/ab]/tmp/ab[/link][on red]y[/]",
+])
+def test_a_hiding_span_that_only_touches_the_label_keeps_the_link(markup):
+    """A hiding span that ends where the label starts, or starts where it ends, hides no
+    character of it. MUTATIONS: the end test `ends[last] > span.start` made `>=` - red on
+    the span directly before; `bisect_left` made `bisect_right` - red on the span directly
+    after."""
+    out = _render(markup)
+    assert set(_targets(out)) == {"file:///tmp/ab"}, (markup, out)
+
+
+def test_hiding_spans_out_of_order_still_hide():
+    """Rich lists the highlighter's spans before the markup's, and a `Text` built by hand can
+    hold any order, so the hiding intervals are sorted before they are merged. Here a
+    background over the whole text is listed after a later `conceal` span. MUTATION: merge
+    the intervals in the order given (no sort) - red."""
+    from rich.text import Span, Text
+
+    console = _console()
+    text = Text("xx/tmp/abyyz")
+    text.spans[:] = [Span(10, 11, "conceal"), Span(0, 12, "on black"),
+                     Span(2, 9, "link file:///tmp/ab")]
+    console._own_links_only(text)
+    assert not console.get_style(text.spans[2].style).link
+    # The same spans without the background keep the link: the check is not just dropping
+    # every link of a hand-built text.
+    text = Text("xx/tmp/abyyz")
+    text.spans[:] = [Span(10, 11, "conceal"), Span(2, 9, "link file:///tmp/ab")]
+    console._own_links_only(text)
+    assert console.get_style(text.spans[1].style).link == "file:///tmp/ab"
+
+
+def test_the_own_link_check_costs_linear_time():
+    """S2 runs on every string printed with markup on, so somebody's text decides how many
+    link and hiding spans it gets. Testing every hiding span per link was quadratic
+    (measured: 8000 pairs 4.2 s, 20000 pairs 28 s, about 9.5 s at the 12000 here); the sweep
+    takes about 0.08 s. The limit of 1.5 s is far above the sweep and far below the quadratic
+    pass, and the best of three runs counts, so a briefly loaded runner does not make it
+    flaky. MUTATION: put back the per-link `any(...)` over all hiding spans - red."""
+    import time
+
+    from rich.text import Span, Text
+
+    console = _console()
+    pairs = 12000
+    best = None
+    for _ in range(3):
+        text = Text("xy" * pairs)
+        text.spans[:] = [span for i in range(pairs)
+                         for span in (Span(2 * i, 2 * i + 1, "conceal"),
+                                      Span(2 * i + 1, 2 * i + 2, "link https://e.org"))]
+        start = time.perf_counter()
+        console._own_links_only(text)
+        elapsed = time.perf_counter() - start
+        best = elapsed if best is None else min(best, elapsed)
+        assert not any(console.get_style(span.style).link for span in text.spans)
+        if best < 1.5:
+            break
+    assert best < 1.5, best
+
+
 def test_escape_markup_keeps_only_vafs_own_link():
     """The entry escape is Rich's own, except for VAF's file link. MUTATION: keep every
     `[link=...]` match - red (the foreign link stays live)."""

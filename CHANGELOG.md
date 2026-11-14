@@ -400,7 +400,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
   VAF's own links to files it created stay clickable: a link is kept only when it points to
   a file on this computer and its label is the path it opens, so a link to another machine
-  or a network share is never kept.
+  or a network share is never kept. Neither is a link whose label is partly hidden, by
+  `[conceal]` or by a background colour, so it cannot open a different file than the one
+  you read.
 
 ## [0.1.0a36] - 2026-11-09
 

@@ -95,7 +95,8 @@ raised `MarkupError` out of `print`. Three parts, from the narrowest to the wide
    export`), markup is OFF: text is the definition there.
 3. `TerminalConsole.render_str`, for every remaining string with markup on: a string that
    does not parse is shown as text, cleaned like a markup-off string (S1), and a markup
-   link survives only as VAF's own file link (S2), its label kept. And the console prints
+   link survives only as VAF's own file link (S2), its label kept and shown as it is: no
+   part of it concealed, reversed or on a background colour. And the console prints
    emoji codes as text unless asked otherwise: VAF writes none of its own.
 
 The copy of a terminal turn that the chat stores and the browser shows is not markup at all:
@@ -112,11 +113,14 @@ label holds a character the reader cannot see is not VAF's, whoever wrote it.
 Named boundaries: about 900 interpolations into markup strings outside the full-screen app
 print mostly VAF's own values (paths, counts, configuration); those without an entry escape
 rely on S1 and S2 alone, so a foreign value there can restyle itself, hide itself
-(`[conceal]`) or lose a `[word]`, but it cannot raise, and the only link it can produce is
-a local file link whose label is exactly the absolute path it opens (as any foreign text
-can that writes VAF's own shape). Rich's `Panel` titles and `Text.from_markup` parse
-without the console, so neither S1 nor S2 reaches them: a foreign value there needs the
-entry escape (the coder's file name in its preview title has one). A link from a `Text` or
+(`[conceal]`, a colour) or lose a `[word]`, but it cannot raise, and the only link it can
+produce is a local file link whose label is exactly the absolute path it opens (as any
+foreign text can that writes VAF's own shape) and is shown as it is: a link part of whose
+label is concealed, reversed or on a background colour is not kept. A foreground colour
+alone that matches the terminal's own background is not seen as hiding, since VAF does not
+know the terminal's colours; the link it keeps still opens only the path its full label
+names. Rich's `Panel` titles and `Text.from_markup` parse without the console, so neither
+S1 nor S2 reaches them: a foreign value there needs the entry escape (the coder's file name in its preview title has one). A link from a `Text` or
 `Style` object, from `Markdown` or from the `style` argument of `print` is not markup and
 keeps the link handling of `terminal_segments` and `TerminalConsole.print`.
 """
@@ -125,6 +129,7 @@ import logging
 import re
 import sys
 import unicodedata
+from bisect import bisect_left
 from typing import Any, Iterable, Iterator, Optional
 from urllib.parse import unquote, urlsplit
 
@@ -529,9 +534,22 @@ class TerminalConsole(Console):
     def _own_links_only(self, rich_text: Text) -> Text:
         """S2: a link that markup put on a span stays only as VAF's own file link (its label
         is the path it opens); any other loses the link and keeps its label. So does an own
-        link part of whose label is concealed: `/tmp/a[conceal]b[/conceal]` links `/tmp/ab`
-        while the reader sees `/tmp/a`. A style that does not resolve is left as it is: Rich
-        renders it as no style, so no link."""
+        link any character of whose label is shown with `conceal`, `reverse` or a background
+        colour: `/tmp/a[conceal]b[/conceal]` or `/tmp/a[black on black]b[/]` links `/tmp/ab`
+        while the reader sees `/tmp/a`. Not equal colours but any background counts, because
+        `#000000 on #010101` is equal to the eye and unequal as values, and a foreground and
+        a background can come from two spans; VAF puts none of the three on markup of its
+        own, and no style of Rich's highlighter has one. A hiding span that only borders the
+        label does not count. Named boundary: a foreground colour alone that matches the
+        terminal's own background (`[black]` on a black terminal) is not seen, since VAF does
+        not know the terminal's colours; the link still opens only the path the full label
+        names. A style that does not resolve is left as it is: Rich renders it as no style,
+        so no link.
+
+        Cost: one sort and one binary search per link, O(n log n) in the spans. The hiding
+        spans are merged into disjoint intervals once, and each link looks up the last
+        interval starting before its end, instead of testing every hiding span per link
+        (quadratic: 12000 link and conceal pairs took about ten seconds)."""
         spans = rich_text.spans
         resolved = []
         for span in spans:
@@ -539,20 +557,46 @@ class TerminalConsole(Console):
                 resolved.append(self.get_style(span.style) if span.style else None)
             except Exception:
                 resolved.append(None)
-        hidden = [(span.start, span.end) for span, style in zip(spans, resolved)
-                  if style is not None and style.conceal]
+        starts, ends = _hiding_intervals(
+            (span.start, span.end) for span, style in zip(spans, resolved)
+            if style is not None and _hides_text(style))
         for index, (span, style) in enumerate(zip(spans, resolved)):
             if style is None or not style.link:
                 continue
-            concealed = any(start < span.end and span.start < end for start, end in hidden)
-            if concealed or not _own_file_link(style.link,
-                                               rich_text.plain[span.start:span.end]):
+            # The last hiding interval that starts before the label ends; it overlaps the
+            # label only when it ends after the label starts (both strict: touching is not
+            # hiding). The intervals are disjoint and sorted, so no earlier one can.
+            last = bisect_left(starts, span.end) - 1
+            hidden = last >= 0 and ends[last] > span.start
+            if hidden or not _own_file_link(style.link, rich_text.plain[span.start:span.end]):
                 spans[index] = Span(span.start, span.end, style.update_link(None))
         return rich_text
 
     def render(self, renderable: RenderableType,
                options: Optional[ConsoleOptions] = None) -> Iterable[Segment]:
         return terminal_segments(super().render(renderable, options))
+
+
+def _hides_text(style: Any) -> bool:
+    """A style that can keep text from the reader as it is: `conceal`, `reverse`, or any
+    background colour (equal or near-equal to the foreground, or set by another span)."""
+    return bool(style.conceal or style.reverse or style.bgcolor is not None)
+
+
+def _hiding_intervals(intervals: Iterable[tuple]) -> tuple:
+    """`(start, end)` intervals merged into disjoint ones, as two lists sorted by start.
+    Overlapping and touching intervals merge. Sorted here, not trusted to be: Rich's markup
+    spans come in start order, but the highlighter's are listed before them and a `Text`
+    built by hand can hold any order."""
+    starts: list = []
+    ends: list = []
+    for start, end in sorted(intervals):
+        if ends and start <= ends[-1]:
+            ends[-1] = max(ends[-1], end)
+        else:
+            starts.append(start)
+            ends.append(end)
+    return starts, ends
 
 
 class TerminalLogFormatter(logging.Formatter):

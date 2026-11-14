@@ -1356,6 +1356,16 @@ The Web UI runs alongside the CLI interface:
   supported way to bring one message into view; it addresses the bubble by the
   `data-msg-idx` attribute, which carries the index in the FULL `messages` array, and
   returns `false` when that bubble is not rendered.
+- **A follow yields to the person.** The follow of a growing answer is decided in one render
+  and runs one frame later (`requestAnimationFrame`). A person who scrolls in between, a
+  wheel-up right after Enter, keeps the view where they put it: the frame does nothing when
+  `lastHumanRef` (the moment of the last wheel, touch, key or press on the scroller, written by
+  the position guard) is later than the moment the follow was armed. The same holds for the
+  Veyllo App room's follow of a line it just took (`pendingScrollRestore` parks `{ followFrom }`).
+  The person's own input is the signal and not `isAtBottomRef`, which a scroll the engine
+  makes by itself moves too. A session switch and a history replay (`'bottom'` or a saved
+  position) still restore unconditionally: the view is new, and nothing of the reader's is
+  there to keep.
 - **Scroll anchoring is off** for `.vaf-chat-col` and its children (`globals.css`), so
   the browser does not also adjust the position when content around it resizes.
 

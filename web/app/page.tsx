@@ -4825,7 +4825,9 @@ function VAFDashboardContent() {
     const containerRef = useRef<HTMLDivElement>(null);
     const sessionScrollPositions = useRef<Record<string, { scrollTop: number; wasAtBottom: boolean }>>({});
     const isAtBottomRef = useRef(true);
-    const pendingScrollRestore = useRef<{ scrollTop: number; wasAtBottom: boolean } | 'bottom' | null>(null);
+    // `'bottom'` and a saved position restore a view that was just switched to, whatever the
+    // person does; `followFrom` follows only while nobody touched the chat since that moment.
+    const pendingScrollRestore = useRef<{ scrollTop: number; wasAtBottom: boolean } | 'bottom' | { followFrom: number } | null>(null);
     // The prompt navigator's jump, parked until the widened window is on screen.
     const pendingJumpRef = useRef<number | null>(null);
 
@@ -4847,6 +4849,10 @@ function VAFDashboardContent() {
     // three were reverted silently. tests/test_chat_autoscroll_guard.py pins that
     // no site assigns scrollTop on this container by hand again.
     const scrollIntentRef = useRef<number | null>(null);
+    // When a person last touched the chat (wheel, touch, key, a press on the scroller), on
+    // the `performance.now()` clock; written by the position guard below. A follow frame
+    // armed before that moment does not run: the person moved after the follow was decided.
+    const lastHumanRef = useRef(0);
     const setChatScroll = useCallback((target: number) => {
         const c = containerRef.current;
         if (!c) return;
@@ -5135,7 +5141,8 @@ function VAFDashboardContent() {
         appRoomSendRef.current = next;
         // Sending is "take me to my line", as in a chat: the view follows the sending row from
         // here, wherever the person was reading. Scrolling up DURING the send still holds the
-        // view (the scroll listener, and `goToTakenLine` at the answer).
+        // view (the scroll listener, and `goToTakenLine` at the answer), and so does scrolling
+        // in the moment between the answer and the frame that would follow it (`followFrom`).
         isAtBottomRef.current = true;
         setAppRoomSending(next);
         setAppRoomError('');
@@ -5156,7 +5163,7 @@ function VAFDashboardContent() {
             // The new line is where the view goes once the room answers, while the room is
             // still what is on screen and the view still follows (appRoom.ts `goToTakenLine`).
             if (goToTakenLine(roomViewRef.current?.room.roomId ?? null, isAtBottomRef.current)) {
-                pendingScrollRestore.current = 'bottom';
+                pendingScrollRestore.current = { followFrom: performance.now() };
             }
             refresh();
         };
@@ -8143,6 +8150,13 @@ function VAFDashboardContent() {
             requestAnimationFrame(() => {
                 const container = containerRef.current;
                 if (!container) return;
+                if (restore !== 'bottom' && 'followFrom' in restore) {
+                    // A follow, not a switch: a person who scrolled since it was parked keeps
+                    // the view where they put it.
+                    if (lastHumanRef.current > restore.followFrom) return;
+                    setChatScroll(container.scrollHeight);
+                    return;
+                }
                 setChatScroll(restore === 'bottom' || restore.wasAtBottom
                     ? container.scrollHeight
                     : restore.scrollTop);
@@ -8162,7 +8176,14 @@ function VAFDashboardContent() {
             // one the browser has finished with rather than one mid-update.
             // setChatScroll writes the real maximum and declares it as the
             // intent; see its comment for why both halves are needed.
-            requestAnimationFrame(() => setChatScroll(containerRef.current?.scrollHeight ?? 0));
+            // A person who scrolls between here and the frame keeps the view where they put
+            // it: the follow was decided before they moved. Their own input is the signal,
+            // not `isAtBottomRef`, which a scroll the engine makes by itself also moves.
+            const armedAt = performance.now();
+            requestAnimationFrame(() => {
+                if (lastHumanRef.current > armedAt) return;
+                setChatScroll(containerRef.current?.scrollHeight ?? 0);
+            });
         }
     }, [messages, loading, roomView?.messages.length, appRoomDrafts.length, dockHeight, appRoomSending.busy]);
 
@@ -8269,6 +8290,7 @@ function VAFDashboardContent() {
         let lastHuman = 0;
         const human = () => {
             lastHuman = performance.now();
+            lastHumanRef.current = lastHuman;
             scrollIntentRef.current = el.scrollTop;
             // The person decides: no pin, and no bottom waiting for a replay still on its way.
             bottomPinUntilRef.current = 0;

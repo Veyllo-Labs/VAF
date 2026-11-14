@@ -65,6 +65,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **`vaf.own_links_as_labels(text)`** for applications that show VAF's text outside a
   terminal: a coding agent's result or a workflow's answer names its files with a terminal
   link, and this turns only that link into its path.
+- **`vaf.RateWindow`**: a per-key sliding window (at most N units per key in any window of
+  seconds), for a lane that serves several people. VAF's own Veyllo App limits and the web
+  room lane use it.
 
 ### Fixed
 
@@ -79,6 +82,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   marks, is now kept marked when the agent asks the model again after an empty reply, so it can
   no longer come back as the result when that second request fails; and the placeholders
   "Thinking..." and "[Empty]" are no longer delivered as a result.
+- **Agent rooms in the web UI no longer hold up the whole server** while a long room is written
+  to or refreshed: the room's work runs on threads of its own, and one account writes at most
+  60 room messages a minute.
+- **A message to your VAF agent from the Veyllo App on an installation with no model set up**
+  now gets the reason as the reply on the device, not only in the room.
+- **In rooms, a name followed by a zero-width space is a mention** (`@Name` as some keyboards
+  complete it), and members of a name collision keep their numbers when another member joins
+  or takes the same name.
+- **Scrolling up right after sending keeps the view where you put it**, in a chat and in the
+  Veyllo App room.
 - **A terminal reply is no longer folded into "thinking" by a guess at its language.** In
   `vaf run` (the prompt interface and the full-screen app), the copy shown in the browser and
   saved in the chat wrapped the start of a longer reply as reasoning when it found a German

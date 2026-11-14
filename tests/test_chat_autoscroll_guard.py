@@ -256,3 +256,42 @@ def test_the_navigator_jump_waits_for_the_render_instead_of_a_timer():
     )
     assert "setTimeout" not in effect[1].split("}, [", 1)[0], \
         "the jump is back on a timer instead of on the render it is waiting for"
+
+
+def test_a_follow_frame_yields_to_a_person_who_scrolled_after_it_was_armed():
+    """A follow is decided, then runs one frame later. A person who scrolls in between (a
+    wheel-up right after Enter) used to be overridden once: the frame wrote the bottom over
+    both the at-bottom flag and the intent the position guard had just taken from them. The
+    chat's follow and the Veyllo App room's parked follow are one code path, so one check
+    covers both. The person's own input is the signal (`human()`), not `isAtBottomRef`,
+    which a scroll the engine makes by itself moves too.
+
+    MUTATION: drop the check from the follow frame - red; drop the assignment in `human()` -
+    red; park `'bottom'` again for a taken room line - red (here and in
+    test_app_link_room_web_static.py); check `followFrom` for nothing in the restore - red."""
+    src = _source()
+    assert "const lastHumanRef = useRef(0);" in src
+    human = src.split("const human = () => {", 1)[1].split("};", 1)[0]
+    assert "lastHumanRef.current = lastHuman;" in human, "the guard no longer records the person"
+
+    effect = src.split("const grew = _chatGrew();", 1)[1].split("}, [messages, loading,", 1)[0]
+    follow = effect.split("} else if (isAtBottomRef.current && grew) {", 1)[1]
+    armed = follow.index("const armedAt = performance.now();")
+    frame = follow.index("requestAnimationFrame(() => {")
+    assert armed < frame, "the follow is armed after its frame is scheduled"
+    callback = follow[frame:]
+    assert callback.index("if (lastHumanRef.current > armedAt) return;") \
+        < callback.index("setChatScroll("), "the follow frame runs over a person's scroll"
+
+    restore = effect.split("} else if (isAtBottomRef.current && grew) {", 1)[0]
+    parked = restore.split("if (restore !== 'bottom' && 'followFrom' in restore) {", 1)
+    assert len(parked) == 2, "the parked follow is restored like a switch"
+    branch = parked[1].split("setChatScroll(restore === 'bottom'", 1)[0]
+    assert branch.index("if (lastHumanRef.current > restore.followFrom) return;") \
+        < branch.index("setChatScroll(container.scrollHeight);")
+    # A switch and a replay keep their unconditional restore: nothing of the reader's is there.
+    assert "setChatScroll(restore === 'bottom' || restore.wasAtBottom" in restore
+    sender = src.split("const sendToAppRoom = async (text: string, resendOf?: string) => {", 1)[1]
+    sender = sender.split("\n    };\n", 1)[0]
+    assert "pendingScrollRestore.current = { followFrom: performance.now() };" in sender
+    assert "pendingScrollRestore.current = 'bottom';" not in sender

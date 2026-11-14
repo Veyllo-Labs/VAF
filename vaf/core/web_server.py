@@ -35,6 +35,7 @@ from vaf.version import __version__
 from vaf.core.log_helper import append_domain_log, get_dated_log_path, is_debug_logging_enabled
 from pathlib import Path
 from vaf.core.path_jail import PathEscape, contained_path, safe_entry_name
+from vaf.core.rate_window import RateWindow
 from vaf.network.binding import connection_client_ip
 from typing import Any, Dict, Optional, List
 import logging
@@ -425,9 +426,11 @@ async def _send_room_door(websocket, room, row: dict) -> None:
     accept and not one poll earlier. Who is in it travels by label only, because
     the card says "3 members, among them Alice" and that much the inviter chose
     to reveal by inviting.
+
+    Read on the room lane's threads (`_room_lane_pool`), like the transcript.
     """
-    labels = room.labels()
-    members = room.members()
+    labels, members = await asyncio.get_running_loop().run_in_executor(
+        _room_lane_pool(), lambda: (room.labels(), room.members()))
     await websocket.send_json({
         "type": "room_transcript",
         "room": {
@@ -490,258 +493,276 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
     one, closing one - and a browser that repainted from what it ASSUMED had happened
     would drift from the transcript the moment anything else wrote at the same time.
     The room has N writers; only the store knows what is in it.
+
+    Built on the room lane's own threads (`_room_lane_pool`): every part of it is file work
+    that grows with the room, and the loop it would otherwise run on serves every connection.
     """
     from vaf.core.a2a.room import (CAPABILITIES, derive_peer_id, describe,
                                    owner_tenant, participant_key)
     from vaf.core.session import _room_rows
 
-    row = next((r for r in _room_rows(user_scope_id) if r["room_id"] == room.room_id), {})
-    entries = room.transcript()[-ROOM_TRANSCRIPT_LIMIT:]
-    members, labels, hosts = room.members(), room.labels(), room.host_peers()
-    # Who belongs to whom, once for the whole payload rather than per member: it is a
-    # derivation over the same accounts every time, and asking it per row would walk
-    # the room's own member list once per member.
-    try:
-        pairs = room.pairs()
-    except Exception:
-        pairs = {}
-    # The handle the browser ACTS as, which is the CLI lane - not whichever lane the
-    # sidebar row happened to resolve first. Asking about the wrong one is how the
-    # remove buttons stayed hidden for the host of their own room: the row answered for
-    # the agent while the browser was acting as the person.
-    try:
-        acting = derive_peer_id(participant_key("cli", user_scope_id), room.room_id)
-    except Exception:
-        acting = ""
-    # The name the room shows for this person is corrected the moment they LOOK at the
-    # room, not only when they act in it. The heal used to live in the command branch
-    # (say/close/kick/rename), which meant a member record written as the lane literal
-    # by an older CLI stayed "terminal" for anyone who only ever read their room - and
-    # reading is what a person does most. Every room command ends here, so this is the
-    # one place that covers all of them. Admin-only by the same measure that makes it
-    # safe: today the room's own tenant is the only account that can act on it at all
-    # (Room._check_tenant), so the account name IS the local admin's; a per-user name
-    # lookup becomes necessary exactly when cross-account rooms do.
-    try:
-        if acting and user_scope_id is not None:
-            from vaf.core.config import (get_local_admin_scope_id,
-                                         get_local_admin_username)
-            record = room.store.member(acting) or {}
-            if (record and str(record.get("display") or "") in ("terminal", "guest", "")
-                    and str(user_scope_id) == str(get_local_admin_scope_id())):
-                wanted_name = str(get_local_admin_username() or "").strip()
-                healed = room.identity_for(participant_key("cli", user_scope_id))
-                if wanted_name and healed is not None:
-                    room.introduce(healed, display=wanted_name)
-                    members, labels = room.members(), room.labels()
-    except Exception:
-        pass
-    # Who is composing, and who has read how far. Composing keeps two honest
-    # signals - the host agent's turn marker (precise) and a human's keypresses
-    # in the input box (reported by the browser, expired by the clock). What used
-    # to be the third signal, "read the newest message recently and answered
-    # nothing", is promoted into READ RECEIPTS instead of being painted as
-    # typing: it made a merely-monitoring agent look busy for two minutes at a
-    # time. None of this is a wire concept - see Room.activity() for why there
-    # is no "typing" frame kind.
-    typing = []
-    read_positions = []
-    try:
-        import time as _time
-        latest = room.store.highest_lamport()
-        if latest and not room.closed:
-            # The host agent's handle, needed to resolve the turn marker to a
-            # peer. Only the marker may paint this agent as composing: its
-            # cursor advances right after every turn, including one in which it
-            # deliberately said nothing, so any cursor-based composing rule
-            # would show it busy precisely when it chose to stay quiet.
-            host_agent = ""
-            try:
-                owner = owner_tenant(room.manifest.get("owner_scope"))
-                if owner:
-                    host_agent = derive_peer_id(participant_key("agent", owner),
-                                                room.room_id)
-            except Exception:
-                host_agent = ""
-            busy_agent = ""
-            try:
-                turn = getattr(getattr(manager, "agent_instance", None),
-                               "_room_turn", None)
-                if isinstance(turn, dict) and str(turn.get("room_id")) == room.room_id:
-                    # The marker names the room, not the peer; the answering agent
-                    # on this machine is the host account's agent lane.
-                    busy_agent = host_agent
-            except Exception:
-                busy_agent = ""
-            typing, read_positions = derive_room_presence(
-                activity=room.activity(), members=members, labels=labels,
-                acting=acting,
-                keys=_ROOM_KEYS_TYPING.setdefault(room.room_id, {}),
-                busy_agent=busy_agent, now=_time.time())
-    except Exception:
+    # Written on the loop (`room_typing`): the thread reads a copy, and what the projection
+    # expired is taken out of the map here, on the loop, once the thread is done.
+    typing_seen = dict(_ROOM_KEYS_TYPING.setdefault(room.room_id, {}))
+    typing_keys = dict(typing_seen)
+
+    def _build():
+        row = next((r for r in _room_rows(user_scope_id) if r["room_id"] == room.room_id), {})
+        entries = room.transcript()[-ROOM_TRANSCRIPT_LIMIT:]
+        members, labels, hosts = room.members(), room.labels(), room.host_peers()
+        # Who belongs to whom, once for the whole payload rather than per member: it is a
+        # derivation over the same accounts every time, and asking it per row would walk
+        # the room's own member list once per member.
+        try:
+            pairs = room.pairs()
+        except Exception:
+            pairs = {}
+        # The handle the browser ACTS as, which is the CLI lane - not whichever lane the
+        # sidebar row happened to resolve first. Asking about the wrong one is how the
+        # remove buttons stayed hidden for the host of their own room: the row answered for
+        # the agent while the browser was acting as the person.
+        try:
+            acting = derive_peer_id(participant_key("cli", user_scope_id), room.room_id)
+        except Exception:
+            acting = ""
+        # The name the room shows for this person is corrected the moment they LOOK at the
+        # room, not only when they act in it. The heal used to live in the command branch
+        # (say/close/kick/rename), which meant a member record written as the lane literal
+        # by an older CLI stayed "terminal" for anyone who only ever read their room - and
+        # reading is what a person does most. Every room command ends here, so this is the
+        # one place that covers all of them. Admin-only by the same measure that makes it
+        # safe: today the room's own tenant is the only account that can act on it at all
+        # (Room._check_tenant), so the account name IS the local admin's; a per-user name
+        # lookup becomes necessary exactly when cross-account rooms do.
+        try:
+            if acting and user_scope_id is not None:
+                from vaf.core.config import (get_local_admin_scope_id,
+                                             get_local_admin_username)
+                record = room.store.member(acting) or {}
+                if (record and str(record.get("display") or "") in ("terminal", "guest", "")
+                        and str(user_scope_id) == str(get_local_admin_scope_id())):
+                    wanted_name = str(get_local_admin_username() or "").strip()
+                    healed = room.identity_for(participant_key("cli", user_scope_id))
+                    if wanted_name and healed is not None:
+                        room.introduce(healed, display=wanted_name)
+                        members, labels = room.members(), room.labels()
+        except Exception:
+            pass
+        # Who is composing, and who has read how far. Composing keeps two honest
+        # signals - the host agent's turn marker (precise) and a human's keypresses
+        # in the input box (reported by the browser, expired by the clock). What used
+        # to be the third signal, "read the newest message recently and answered
+        # nothing", is promoted into READ RECEIPTS instead of being painted as
+        # typing: it made a merely-monitoring agent look busy for two minutes at a
+        # time. None of this is a wire concept - see Room.activity() for why there
+        # is no "typing" frame kind.
         typing = []
         read_positions = []
-    await websocket.send_json({
-        "type": "room_transcript",
-        "room": {
-            "id": row.get("id") or f"room:{room.room_id}",
-            "roomId": room.room_id,
-            "title": row.get("name") or room.manifest.get("topic") or room.room_id,
-            "roomKind": room.kind,
-            "role": row.get("role"),
-            "closed": bool(room.closed),
-            "members": len(members),
-            # Who is in it, by the name the ROOM resolved. A header that listed join
-            # names would show two agents called "Codex" and no way to tell which is
-            # which, which is the same reason the tag exists at all.
-            # Whether the viewer may remove anybody here at all. Answered by the room
-            # rather than guessed from the role, because the host may act beyond its
-            # role and a browser that decided for itself would be a second rule.
-            "createdAt": room.manifest.get("created_at"),
-            "topic": room.manifest.get("topic") or "",
-            "me": acting or row.get("peer"),
-            # The viewer's own AGENT in this room, so the view can draw it as the
-            # agent it is (the living avatar) rather than as initials. Derived the
-            # same way every identity here is; empty when their agent is not a
-            # member. A foreign agent never gets this treatment: an agent that is
-            # not ours is a full agent of its own, never a second face of ours.
-            "agentPeer": next((p for p in [
-                _derive_or_empty("agent", user_scope_id, room.room_id)] if p in members), ""),
-            # How far the viewer has allowed THEIR agent to act on this room's
-            # messages (observe/assist/autonomous). Shown and set from the member
-            # panel; empty when their agent is not in the room.
-            "agentMode": next((room.mode_of(p) for p in [
-                _derive_or_empty("agent", user_scope_id, room.room_id)] if p in members), ""),
-            # The workers the viewer's agent is running RIGHT NOW - the same list
-            # the chat's TasksLine reads, scoped hard to the viewer. Refreshed by
-            # the 3s poll like everything else here.
-            "agentWorkers": (_viewer_agent_workers(user_scope_id)
-                             if _derive_or_empty("agent", user_scope_id, room.room_id)
-                             in members else []),
-            "typing": typing,
-            # Read receipts: every other member's read position as facts, so the
-            # view can stack each reader's face under the last message they took.
-            # Remote wire peers keep their position in their own seat file and
-            # never appear here - the documented protocol boundary, not a bug.
-            "readPositions": read_positions,
-            # The task board, derived exactly like typing is (Room.tasks): a
-            # directive, or anything a report chain answers via reply_to. The 3s
-            # poll keeps it fresh; nothing travels on the wire for it. Capped the
-            # way the transcript is - a board is a glance, not an archive.
-            "tasks": [
-                {"id": t["id"], "title": t["title"], "status": t["status"],
-                 "requester": t["requester_label"], "assignee": t["assignee_label"],
-                 "reports": t["reports"], "ts": t["updated_ts"],
-                 # Nothing said about it for hours. Not "finished" - nobody said that -
-                 # but not work in progress either, and a surface that counts it as
-                 # such fills up with entries nobody is doing.
-                 "quiet": bool(t.get("quiet")),
-                 "silentFor": float(t.get("silent_for_s") or 0.0),
-                 "result": str(t.get("result") or "")[:400],
-                 # Rebuilt field by field here, so every new one has to be named
-                 # or it vanishes without a word - which has shipped twice. This
-                 # one is how far the work has come, from the last report that
-                 # said anything about it.
-                 "progress": t.get("progress")}
-                for t in _room_board(room)
+        try:
+            import time as _time
+            latest = room.store.highest_lamport()
+            if latest and not room.closed:
+                # The host agent's handle, needed to resolve the turn marker to a
+                # peer. Only the marker may paint this agent as composing: its
+                # cursor advances right after every turn, including one in which it
+                # deliberately said nothing, so any cursor-based composing rule
+                # would show it busy precisely when it chose to stay quiet.
+                host_agent = ""
+                try:
+                    owner = owner_tenant(room.manifest.get("owner_scope"))
+                    if owner:
+                        host_agent = derive_peer_id(participant_key("agent", owner),
+                                                    room.room_id)
+                except Exception:
+                    host_agent = ""
+                busy_agent = ""
+                try:
+                    turn = getattr(getattr(manager, "agent_instance", None),
+                                   "_room_turn", None)
+                    if isinstance(turn, dict) and str(turn.get("room_id")) == room.room_id:
+                        # The marker names the room, not the peer; the answering agent
+                        # on this machine is the host account's agent lane.
+                        busy_agent = host_agent
+                except Exception:
+                    busy_agent = ""
+                typing, read_positions = derive_room_presence(
+                    activity=room.activity(), members=members, labels=labels,
+                    acting=acting,
+                    keys=typing_keys,
+                    busy_agent=busy_agent, now=_time.time())
+        except Exception:
+            typing = []
+            read_positions = []
+        return {
+            "type": "room_transcript",
+            "room": {
+                "id": row.get("id") or f"room:{room.room_id}",
+                "roomId": room.room_id,
+                "title": row.get("name") or room.manifest.get("topic") or room.room_id,
+                "roomKind": room.kind,
+                "role": row.get("role"),
+                "closed": bool(room.closed),
+                "members": len(members),
+                # Who is in it, by the name the ROOM resolved. A header that listed join
+                # names would show two agents called "Codex" and no way to tell which is
+                # which, which is the same reason the tag exists at all.
+                # Whether the viewer may remove anybody here at all. Answered by the room
+                # rather than guessed from the role, because the host may act beyond its
+                # role and a browser that decided for itself would be a second rule.
+                "createdAt": room.manifest.get("created_at"),
+                "topic": room.manifest.get("topic") or "",
+                "me": acting or row.get("peer"),
+                # The viewer's own AGENT in this room, so the view can draw it as the
+                # agent it is (the living avatar) rather than as initials. Derived the
+                # same way every identity here is; empty when their agent is not a
+                # member. A foreign agent never gets this treatment: an agent that is
+                # not ours is a full agent of its own, never a second face of ours.
+                "agentPeer": next((p for p in [
+                    _derive_or_empty("agent", user_scope_id, room.room_id)] if p in members), ""),
+                # How far the viewer has allowed THEIR agent to act on this room's
+                # messages (observe/assist/autonomous). Shown and set from the member
+                # panel; empty when their agent is not in the room.
+                "agentMode": next((room.mode_of(p) for p in [
+                    _derive_or_empty("agent", user_scope_id, room.room_id)] if p in members), ""),
+                # The workers the viewer's agent is running RIGHT NOW - the same list
+                # the chat's TasksLine reads, scoped hard to the viewer. Refreshed by
+                # the 3s poll like everything else here.
+                "agentWorkers": (_viewer_agent_workers(user_scope_id)
+                                 if _derive_or_empty("agent", user_scope_id, room.room_id)
+                                 in members else []),
+                "typing": typing,
+                # Read receipts: every other member's read position as facts, so the
+                # view can stack each reader's face under the last message they took.
+                # Remote wire peers keep their position in their own seat file and
+                # never appear here - the documented protocol boundary, not a bug.
+                "readPositions": read_positions,
+                # The task board, derived exactly like typing is (Room.tasks): a
+                # directive, or anything a report chain answers via reply_to. The 3s
+                # poll keeps it fresh; nothing travels on the wire for it. Capped the
+                # way the transcript is - a board is a glance, not an archive.
+                "tasks": [
+                    {"id": t["id"], "title": t["title"], "status": t["status"],
+                     "requester": t["requester_label"], "assignee": t["assignee_label"],
+                     "reports": t["reports"], "ts": t["updated_ts"],
+                     # Nothing said about it for hours. Not "finished" - nobody said that -
+                     # but not work in progress either, and a surface that counts it as
+                     # such fills up with entries nobody is doing.
+                     "quiet": bool(t.get("quiet")),
+                     "silentFor": float(t.get("silent_for_s") or 0.0),
+                     "result": str(t.get("result") or "")[:400],
+                     # Rebuilt field by field here, so every new one has to be named
+                     # or it vanishes without a word - which has shipped twice. This
+                     # one is how far the work has come, from the last report that
+                     # said anything about it.
+                     "progress": t.get("progress")}
+                    for t in _room_board(room)
+                ],
+                # Open votes, folded like the board is. Capped for the same reason:
+                # a glance, not an archive.
+                "votes": [
+                    {"id": v["id"], "question": v["question"], "options": v["options"],
+                     "askedBy": v["asked_by_label"], "tally": v["tally"],
+                     "voted": v["voted"], "waitingFor": v["waiting_for"],
+                     "closed": v["closed"],
+                     # The countdown runs in the browser off this one number, rather than
+                     # off a seconds-left the server recomputes every poll: a clock that
+                     # only moves when a poll lands stutters, and this way the card is
+                     # exact between polls and cannot drift apart from the deadline the
+                     # room will actually act on.
+                     "deadline": v["deadline"],
+                     "everyoneVoted": v["everyone_voted"],
+                     "mine": next((b["choice"] for b in v["ballots"]
+                                   if b["peer"] == acting), ""),
+                     "ballots": [{"label": b["label"], "choice": b["choice"]}
+                                 for b in v["ballots"]][:20]}
+                    # A vote leaves this list when the ROOM has said how it ended, not
+                    # when the clock ran out: the card and the result message change
+                    # places, so there is never a moment with neither on screen. The
+                    # sweep writes that result within its own tick.
+                    for v in room.votes() if not v["concluded"]
+                ][:6],
+                "mission": str(room.manifest.get("mission") or ""),
+                "canManage": bool(acting) and (
+                    acting in hosts or room.role_of(acting) == "leader"),
+                # Whether the viewer may bring another ACCOUNT in: the room's own rule
+                # (host or leader, `Room._check_may_admit`), asked once here so the panel
+                # offers the invite tab only where the room would say yes.
+                "canInvite": bool(acting) and (
+                    acting in hosts or room.role_of(acting) == "leader"),
+                "shared": bool(room.manifest.get("multi_scope")),
+                # Who was invited and what became of it - accounts and agents in one
+                # list, refreshed by the 3s poll like everything else here, so an
+                # invitation accepted on another screen turns green on this one.
+                "invitations": _room_invitations(room, user_scope_id),
+                # Built from members(), which already resolves the role, the card and the
+                # lease. Reading those out of the store again here would be a second answer
+                # to "who is in this room and are they awake".
+                "members_list": [
+                    {
+                        "peer": peer,
+                        "label": labels.get(peer) or record["display"],
+                        "role": record["role"],
+                        "card": record.get("card") or {},
+                        "stale": bool(record.get("stale")),
+                        # The raw lease, so a reader can say WHEN rather than only that it
+                        # lapsed. Nobody heartbeats a file-only room, so "not responding"
+                        # on its own reads as a fault where none exists.
+                        "lease": float((room.store.member(peer) or {}).get("lease") or 0.0),
+                        # What this role may send, from the table that enforces it. An
+                        # abilities list written anywhere else would be a second answer.
+                        "can": sorted(CAPABILITIES.get(record["role"], ())),
+                        # The room's own host handles. Sent so the view can leave the remove
+                        # button off entirely rather than offer one that is refused: an
+                        # action offered and then denied reads as a fault, and this is a
+                        # deliberate rule with a different answer (close the room).
+                        "protected": peer in hosts,
+                        # WHO this member is, and whose. Derived by the room from the
+                        # account each handle was built from, never claimed by the member -
+                        # a `speaks_for` in a member's own file would be a peer naming its
+                        # own partner, and in a room of strangers that is the one claim
+                        # nobody may make. A guest that arrived on an invitation named no
+                        # account and stays "unknown" rather than being guessed at.
+                        "kind": (pairs.get(peer) or {}).get("kind") or "unknown",
+                        "partner": (pairs.get(peer) or {}).get("partner") or "",
+                        "partnerLabel": (pairs.get(peer) or {}).get("partner_label") or "",
+                    }
+                    for peer, record in sorted(
+                        members.items(), key=lambda kv: labels.get(kv[0]) or kv[1]["display"])
+                ],
+            },
+            "messages": [
+                {"id": e["id"], "peer": e["peer"], "label": e["label"],
+                 "role": e["role"], "kind": e["kind"],
+                 "text": describe(e), "ts": e["ts"],
+                 # Forwarded EXPLICITLY, like every field this projection carries:
+                 # the handler rebuilds the row field by field, so anything not
+                 # named here is silently dropped on its way to the browser - the
+                 # shape that has cost this file two features already.
+                 "files": e.get("files") or [],
+                 # What a reader may conclude about who wrote this line. Forwarded like
+                 # every other field here, and deliberately the VERDICT rather than the
+                 # signature: the browser has no use for the key material and this exact
+                 # rebuild has silently dropped a field twice already.
+                 "verdict": e.get("verdict") or "unsigned",
+                 "reply_to": e.get("reply_to") or "",   # a reaction is drawn under its target
+                 "lamport": e["lamport"], "to": e.get("to") or {}}
+                for e in entries
+                # A check-in is the room talking to ONE agent about its own attention,
+                # not something anybody said, and drawing it as a message would put
+                # words in a member's mouth that no member wrote. It stays in the log
+                # (and in `vaf a2a log`) where an audit can find it.
+                if e["kind"] != "ping"
             ],
-            # Open votes, folded like the board is. Capped for the same reason:
-            # a glance, not an archive.
-            "votes": [
-                {"id": v["id"], "question": v["question"], "options": v["options"],
-                 "askedBy": v["asked_by_label"], "tally": v["tally"],
-                 "voted": v["voted"], "waitingFor": v["waiting_for"],
-                 "closed": v["closed"],
-                 # The countdown runs in the browser off this one number, rather than
-                 # off a seconds-left the server recomputes every poll: a clock that
-                 # only moves when a poll lands stutters, and this way the card is
-                 # exact between polls and cannot drift apart from the deadline the
-                 # room will actually act on.
-                 "deadline": v["deadline"],
-                 "everyoneVoted": v["everyone_voted"],
-                 "mine": next((b["choice"] for b in v["ballots"]
-                               if b["peer"] == acting), ""),
-                 "ballots": [{"label": b["label"], "choice": b["choice"]}
-                             for b in v["ballots"]][:20]}
-                # A vote leaves this list when the ROOM has said how it ended, not
-                # when the clock ran out: the card and the result message change
-                # places, so there is never a moment with neither on screen. The
-                # sweep writes that result within its own tick.
-                for v in room.votes() if not v["concluded"]
-            ][:6],
-            "mission": str(room.manifest.get("mission") or ""),
-            "canManage": bool(acting) and (
-                acting in hosts or room.role_of(acting) == "leader"),
-            # Whether the viewer may bring another ACCOUNT in: the room's own rule
-            # (host or leader, `Room._check_may_admit`), asked once here so the panel
-            # offers the invite tab only where the room would say yes.
-            "canInvite": bool(acting) and (
-                acting in hosts or room.role_of(acting) == "leader"),
-            "shared": bool(room.manifest.get("multi_scope")),
-            # Who was invited and what became of it - accounts and agents in one
-            # list, refreshed by the 3s poll like everything else here, so an
-            # invitation accepted on another screen turns green on this one.
-            "invitations": _room_invitations(room, user_scope_id),
-            # Built from members(), which already resolves the role, the card and the
-            # lease. Reading those out of the store again here would be a second answer
-            # to "who is in this room and are they awake".
-            "members_list": [
-                {
-                    "peer": peer,
-                    "label": labels.get(peer) or record["display"],
-                    "role": record["role"],
-                    "card": record.get("card") or {},
-                    "stale": bool(record.get("stale")),
-                    # The raw lease, so a reader can say WHEN rather than only that it
-                    # lapsed. Nobody heartbeats a file-only room, so "not responding"
-                    # on its own reads as a fault where none exists.
-                    "lease": float((room.store.member(peer) or {}).get("lease") or 0.0),
-                    # What this role may send, from the table that enforces it. An
-                    # abilities list written anywhere else would be a second answer.
-                    "can": sorted(CAPABILITIES.get(record["role"], ())),
-                    # The room's own host handles. Sent so the view can leave the remove
-                    # button off entirely rather than offer one that is refused: an
-                    # action offered and then denied reads as a fault, and this is a
-                    # deliberate rule with a different answer (close the room).
-                    "protected": peer in hosts,
-                    # WHO this member is, and whose. Derived by the room from the
-                    # account each handle was built from, never claimed by the member -
-                    # a `speaks_for` in a member's own file would be a peer naming its
-                    # own partner, and in a room of strangers that is the one claim
-                    # nobody may make. A guest that arrived on an invitation named no
-                    # account and stays "unknown" rather than being guessed at.
-                    "kind": (pairs.get(peer) or {}).get("kind") or "unknown",
-                    "partner": (pairs.get(peer) or {}).get("partner") or "",
-                    "partnerLabel": (pairs.get(peer) or {}).get("partner_label") or "",
-                }
-                for peer, record in sorted(
-                    members.items(), key=lambda kv: labels.get(kv[0]) or kv[1]["display"])
-            ],
-        },
-        "messages": [
-            {"id": e["id"], "peer": e["peer"], "label": e["label"],
-             "role": e["role"], "kind": e["kind"],
-             "text": describe(e), "ts": e["ts"],
-             # Forwarded EXPLICITLY, like every field this projection carries:
-             # the handler rebuilds the row field by field, so anything not
-             # named here is silently dropped on its way to the browser - the
-             # shape that has cost this file two features already.
-             "files": e.get("files") or [],
-             # What a reader may conclude about who wrote this line. Forwarded like
-             # every other field here, and deliberately the VERDICT rather than the
-             # signature: the browser has no use for the key material and this exact
-             # rebuild has silently dropped a field twice already.
-             "verdict": e.get("verdict") or "unsigned",
-             "reply_to": e.get("reply_to") or "",   # a reaction is drawn under its target
-             "lamport": e["lamport"], "to": e.get("to") or {}}
-            for e in entries
-            # A check-in is the room talking to ONE agent about its own attention,
-            # not something anybody said, and drawing it as a message would put
-            # words in a member's mouth that no member wrote. It stays in the log
-            # (and in `vaf a2a log`) where an audit can find it.
-            if e["kind"] != "ping"
-        ],
-    })
+        }, acting
+
+    loop = asyncio.get_running_loop()
+    payload, acting = await loop.run_in_executor(_room_lane_pool(), _build)
+    live_keys = _ROOM_KEYS_TYPING.get(room.room_id)
+    if live_keys is not None:
+        for peer in set(typing_seen) - set(typing_keys):
+            if live_keys.get(peer) == typing_seen[peer]:
+                live_keys.pop(peer, None)
+    await websocket.send_json(payload)
 
     # Looking at the room IS reading it. The person's cursor (the cli lane the
     # browser shares with the terminal) moves to the newest frame - AFTER the
@@ -750,15 +771,18 @@ async def _send_room_transcript(websocket, room, user_scope_id: Optional[str]) -
     # out with it. Needs no membership: a reading position is the reader's own
     # file. The notify fires only on actual movement, or the 3-second room poll
     # would broadcast a sidebar refresh forever.
-    try:
-        if acting and room.mark_read(acting):
-            try:
-                from vaf.core.web_interface import notify_rooms_changed
-                notify_rooms_changed(user_scope_id)
-            except Exception:
-                pass
-    except Exception:
-        pass
+    def _mark_read():
+        try:
+            if acting and room.mark_read(acting):
+                try:
+                    from vaf.core.web_interface import notify_rooms_changed
+                    notify_rooms_changed(user_scope_id)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    if acting:
+        await loop.run_in_executor(_room_lane_pool(), _mark_read)
 
 
 log("WebServer", "Getting WebInterfaceManager...")
@@ -4997,6 +5021,39 @@ def _room_invite_pool():
     return _ROOM_INVITE_POOL
 
 
+# The room lane (`open_room`, the acting room commands and the transcript every one of them
+# answers with) runs on threads of its own as well. Room calls are blocking file work that
+# grows with the room: `ingest` reads and decrypts every frame of the room several times, and
+# the transcript, the members and the labels read them again. Measured on one process with a
+# scratch home (median of 3): `ingest` with the addressee 37 ms in a room of 2 members and 100
+# lines, 157 ms with 200 members, 160 ms at 800 lines; the transcript 16 ms at 100 lines, 116
+# ms at 800. Five lines written into a room of 806 lines on the loop stalled every connection
+# for 1.4 s at once; on a thread, the loop's longest gap was 8.5 ms. Not the default executor,
+# which the uploads, the voice feed and many routes share. Four at a time. NAMED BOUNDARY, as
+# for the invitations: the four are shared by every account with no count per account, so one
+# account's long room delays another's refresh; one socket's commands still run one at a time,
+# in order. Out of this lane, one click each and never polled: `room_task_history`, the
+# invitation commands and the answer at the door.
+_ROOM_LANE_POOL = None
+
+
+def _room_lane_pool():
+    global _ROOM_LANE_POOL
+    if _ROOM_LANE_POOL is None:
+        from vaf.core.bounded_run import DaemonPool
+        _ROOM_LANE_POOL = DaemonPool(4, "vaf-room-lane")
+    return _ROOM_LANE_POOL
+
+
+# What one account may write into rooms from the browser: lines, reactions and ballots, at
+# most this many in any minute, asked on the loop before any store work. Far above what a
+# person types or clicks, and a script is stopped within its first minute. (The Veyllo App
+# link allows a device 30 messages a minute, session.MSG_PER_MINUTE.)
+ROOM_WRITES_PER_MINUTE = 60
+_ROOM_WRITES = RateWindow(60)
+ROOM_WRITES_REFUSED = "Too many room messages in a minute. Wait a moment and write again."
+
+
 def _emit_sec_ws(detail: str, ip: str = "") -> None:
     """Security-event mirror for rejected NETWORK WebSocket handshakes (lazy, never raises)."""
     try:
@@ -5498,9 +5555,14 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                         # Membership is decided by the SAME function that decided the
                         # sidebar. A second predicate here would be a second answer to
-                        # "is this user in that room", and the two would drift.
-                        mine = {row["room_id"]: row for row in _room_rows(user_scope_id)}
-                        row = mine.get(wanted)
+                        # "is this user in that room", and the two would drift. Read on the
+                        # room lane's threads (`_room_lane_pool`), the room opened there too.
+                        def _open_row():
+                            mine = {row["room_id"]: row for row in _room_rows(user_scope_id)}
+                            found = mine.get(wanted)
+                            return found, (Room.open(wanted) if found is not None else None)
+                        row, opened = await asyncio.get_running_loop().run_in_executor(
+                            _room_lane_pool(), _open_row)
                         if row is None:
                             log("API", f"Access denied: open_room for a room the user has not joined")
                             await websocket.send_json({"type": "error", "message": "Access denied"})
@@ -5510,10 +5572,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             # Invited, not in: the door opens in the same place the
                             # room would, and carries no transcript. Accepting is a
                             # command of its own below; looking is never a join.
-                            await _send_room_door(websocket, Room.open(wanted), row)
+                            await _send_room_door(websocket, opened, row)
                             continue
 
-                        await _send_room_transcript(websocket, room=Room.open(wanted),
+                        await _send_room_transcript(websocket, room=opened,
                                                    user_scope_id=user_scope_id)
                     except Exception as e:
                         log("API", f"open_room failed: {e}", "ERROR")
@@ -5587,143 +5649,147 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                                        participant_key)
                         from vaf.core.session import member_room_ids
 
-                        # Members only. An INVITED person has a row in the sidebar
-                        # too, and speaking here would join them past the door they
-                        # have not answered - the filter keeps them at it.
-                        if wanted not in member_room_ids(user_scope_id):
-                            log("API", f"Access denied: {type} for a room the user is not in")
-                            await websocket.send_json({"type": "error", "message": "Access denied"})
+                        # A line, a reaction or a ballot is charged to the account BEFORE any
+                        # store work, on the loop: a refused one costs nothing
+                        # (`ROOM_WRITES_PER_MINUTE`).
+                        if type in ("room_say", "room_react", "cast_room_vote") \
+                                and not _ROOM_WRITES.take(str(user_scope_id or ""),
+                                                          limit=ROOM_WRITES_PER_MINUTE):
+                            await websocket.send_json({"type": "error",
+                                                       "message": ROOM_WRITES_REFUSED})
                             continue
 
-                        room = Room.open(wanted)
-                        key = participant_key("cli", user_scope_id)
-                        identity = room.identity_for(key, scope_id=user_scope_id)
-                        if identity is None:
-                            # The room reached the sidebar because the user's AGENT is
-                            # in it. Speaking for themselves makes them a member too,
-                            # and Room.join carries the tenant check that decides
-                            # whether this account may be in this room at all.
-                            display = str(cmd.get("display") or "").strip()
-                            if not display:
-                                # THIS account's name, not the machine owner's. The
-                                # old fallback printed the local admin for whoever
-                                # was speaking, so on an installation with several
-                                # people the room learned one name for all of them -
-                                # and the moment a surface says who belongs to whom,
-                                # that becomes the room asserting, with its own
-                                # authority, that the admin is somebody else's user.
-                                # `resolve_caller_username` is the one definition of
-                                # this question; the lookup is one database round
-                                # trip, paid once when a person first speaks here.
-                                from vaf.core.config import resolve_caller_username
-                                display = str(resolve_caller_username(
-                                    None, user_scope_id, allow_lookup=True) or "user")
-                            identity = room.join(display=display, scope_id=user_scope_id,
-                                                 peer_id=derive_peer_id(key, wanted),
-                                                 participant_key=key)
-                        # A member record still carrying the lane literal as its name is
-                        # healed in _send_room_transcript, which every one of these
-                        # commands answers with - a second heal here would be a second
-                        # copy of the same rule waiting to drift.
+                        # The store work runs on the room lane's threads (`_room_lane_pool`), not
+                        # on the loop every connection shares. It answers None when the command
+                        # was carried out, the message of a refusal, or "" for a command that
+                        # does nothing.
+                        def _act():
+                            # Members only. An INVITED person has a row in the sidebar
+                            # too, and speaking here would join them past the door they
+                            # have not answered - the filter keeps them at it.
+                            if wanted not in member_room_ids(user_scope_id):
+                                log("API", f"Access denied: {type} for a room the user is not in")
+                                return "Access denied"
 
-                        if type == "delete_room":
-                            # What the bin means everywhere else in this product. It
-                            # closes first, so a peer reading the room over a wire is
-                            # told WHY its access ended rather than finding a
-                            # conversation that is simply not there any more.
-                            room.delete(identity, reason=Room.TERMINATED_BY_USER)
-                        elif type == "close_room":
-                            room.close(identity, reason=Room.TERMINATED_BY_USER)
-                        elif type == "kick_peer":
-                            # The room decides whether this is allowed, including the
-                            # rule that its own host handles can never be removed. A
-                            # second check here would be a second answer.
-                            room.kick(identity, str(cmd.get("peer") or ""),
-                                      reason=str(cmd.get("reason") or "").strip())
-                        elif type == "set_room_agent_mode":
-                            # The mode is THE USER'S standing decision about their own
-                            # agent (mode_of's contract), so the person setting it here
-                            # is the authority the member file exists to record - and
-                            # they may only ever set it for the agent of their OWN
-                            # account: the handle is derived from the caller's scope,
-                            # so another user's agent is unreachable by construction.
-                            # Wirkung: the next room wake reads mode_of live, so
-                            # "autonomous" is exactly "work while I sleep", granted
-                            # per room and revocable the same way.
-                            from vaf.core.a2a.room import ROOM_MODES
-                            wanted_mode = str(cmd.get("mode") or "").strip()
-                            if wanted_mode not in ROOM_MODES:
-                                await websocket.send_json({
-                                    "type": "error",
-                                    "message": f"Unknown room mode '{wanted_mode}'"})
-                                continue
-                            agent_identity = room.identity_for(
-                                participant_key("agent", user_scope_id))
-                            if agent_identity is None:
-                                await websocket.send_json({
-                                    "type": "error",
-                                    "message": "Your agent is not in this room"})
-                                continue
-                            room.set_mode(agent_identity, wanted_mode)
-                        elif type == "cast_room_vote":
-                            # The person votes as themselves - the cli lane, the same
-                            # handle their messages carry - and voting again replaces
-                            # their earlier ballot, exactly as it does on the CLI.
-                            vote_id = str(cmd.get("vote_id") or "").strip()
-                            choice = str(cmd.get("choice") or "").strip()
-                            if not vote_id or not choice:
-                                continue
-                            try:
-                                room.cast(identity, vote_id, choice)
-                            except Exception as _vote_err:
-                                await websocket.send_json({
-                                    "type": "error",
-                                    "message": f"Could not cast that vote: {_vote_err}"})
-                                continue
+                            room = Room.open(wanted)
+                            key = participant_key("cli", user_scope_id)
+                            identity = room.identity_for(key, scope_id=user_scope_id)
+                            if identity is None:
+                                # The room reached the sidebar because the user's AGENT is
+                                # in it. Speaking for themselves makes them a member too,
+                                # and Room.join carries the tenant check that decides
+                                # whether this account may be in this room at all.
+                                display = str(cmd.get("display") or "").strip()
+                                if not display:
+                                    # THIS account's name, not the machine owner's. The
+                                    # old fallback printed the local admin for whoever
+                                    # was speaking, so on an installation with several
+                                    # people the room learned one name for all of them -
+                                    # and the moment a surface says who belongs to whom,
+                                    # that becomes the room asserting, with its own
+                                    # authority, that the admin is somebody else's user.
+                                    # `resolve_caller_username` is the one definition of
+                                    # this question; the lookup is one database round
+                                    # trip, paid once when a person first speaks here.
+                                    from vaf.core.config import resolve_caller_username
+                                    display = str(resolve_caller_username(
+                                        None, user_scope_id, allow_lookup=True) or "user")
+                                identity = room.join(display=display, scope_id=user_scope_id,
+                                                     peer_id=derive_peer_id(key, wanted),
+                                                     participant_key=key)
+                            # A member record still carrying the lane literal as its name is
+                            # healed in _send_room_transcript, which every one of these
+                            # commands answers with - a second heal here would be a second
+                            # copy of the same rule waiting to drift.
 
-                        elif type == "room_react":
-                            # The person reacting as themselves, on the same lane their
-                            # words and ballots travel. Shown to everybody and a wake for
-                            # nobody; the room writes the line, so the browser sends the
-                            # emoji and the id and nothing else.
-                            target = str(cmd.get("reply_to") or "").strip()
-                            emoji = str(cmd.get("emoji") or "").strip()
-                            if not target or not emoji:
-                                await websocket.send_json({
-                                    "type": "error",
-                                    "message": "A reaction needs the message id and an emoji"})
-                                continue
-                            try:
-                                room.react(identity, target, emoji)
-                            except Exception as _react_err:
-                                await websocket.send_json({
-                                    "type": "error",
-                                    "message": f"Could not react: {_react_err}"})
-                                continue
+                            if type == "delete_room":
+                                # What the bin means everywhere else in this product. It
+                                # closes first, so a peer reading the room over a wire is
+                                # told WHY its access ended rather than finding a
+                                # conversation that is simply not there any more.
+                                room.delete(identity, reason=Room.TERMINATED_BY_USER)
+                            elif type == "close_room":
+                                room.close(identity, reason=Room.TERMINATED_BY_USER)
+                            elif type == "kick_peer":
+                                # The room decides whether this is allowed, including the
+                                # rule that its own host handles can never be removed. A
+                                # second check here would be a second answer.
+                                room.kick(identity, str(cmd.get("peer") or ""),
+                                          reason=str(cmd.get("reason") or "").strip())
+                            elif type == "set_room_agent_mode":
+                                # The mode is THE USER'S standing decision about their own
+                                # agent (mode_of's contract), so the person setting it here
+                                # is the authority the member file exists to record - and
+                                # they may only ever set it for the agent of their OWN
+                                # account: the handle is derived from the caller's scope,
+                                # so another user's agent is unreachable by construction.
+                                # Wirkung: the next room wake reads mode_of live, so
+                                # "autonomous" is exactly "work while I sleep", granted
+                                # per room and revocable the same way.
+                                from vaf.core.a2a.room import ROOM_MODES
+                                wanted_mode = str(cmd.get("mode") or "").strip()
+                                if wanted_mode not in ROOM_MODES:
+                                    return f"Unknown room mode '{wanted_mode}'"
+                                agent_identity = room.identity_for(
+                                    participant_key("agent", user_scope_id))
+                                if agent_identity is None:
+                                    return "Your agent is not in this room"
+                                room.set_mode(agent_identity, wanted_mode)
+                            elif type == "cast_room_vote":
+                                # The person votes as themselves - the cli lane, the same
+                                # handle their messages carry - and voting again replaces
+                                # their earlier ballot, exactly as it does on the CLI.
+                                vote_id = str(cmd.get("vote_id") or "").strip()
+                                choice = str(cmd.get("choice") or "").strip()
+                                if not vote_id or not choice:
+                                    return ""
+                                try:
+                                    room.cast(identity, vote_id, choice)
+                                except Exception as _vote_err:
+                                    return f"Could not cast that vote: {_vote_err}"
 
-                        elif type == "rename_room":
-                            title = str(cmd.get("title") or "").strip()
-                            if not title:
-                                continue
-                            # The topic lives in the manifest, not in a frame: it is a
-                            # property of the room rather than something somebody said,
-                            # and a renamed room must not look like a message nobody
-                            # wrote. Only the host may change it.
-                            if not room.is_host(identity):
-                                await websocket.send_json({
-                                    "type": "error",
-                                    "message": "Only the room's host can rename it"})
-                                continue
-                            room.store.update_manifest(topic=title[:200])
-                        else:
-                            text = str(cmd.get("text") or "").strip()
-                            if not text:
-                                continue
-                            # A leading "@Name" is resolved by the ROOM, the one place
-                            # that knows who is in it - the same call the terminal and
-                            # the agent's tool make.
-                            room.ingest({"kind": "say", "body": {"text": text},
-                                         "to": room.addressee(text)}, identity=identity)
+                            elif type == "room_react":
+                                # The person reacting as themselves, on the same lane their
+                                # words and ballots travel. Shown to everybody and a wake for
+                                # nobody; the room writes the line, so the browser sends the
+                                # emoji and the id and nothing else.
+                                target = str(cmd.get("reply_to") or "").strip()
+                                emoji = str(cmd.get("emoji") or "").strip()
+                                if not target or not emoji:
+                                    return "A reaction needs the message id and an emoji"
+                                try:
+                                    room.react(identity, target, emoji)
+                                except Exception as _react_err:
+                                    return f"Could not react: {_react_err}"
+
+                            elif type == "rename_room":
+                                title = str(cmd.get("title") or "").strip()
+                                if not title:
+                                    return ""
+                                # The topic lives in the manifest, not in a frame: it is a
+                                # property of the room rather than something somebody said,
+                                # and a renamed room must not look like a message nobody
+                                # wrote. Only the host may change it.
+                                if not room.is_host(identity):
+                                    return "Only the room's host can rename it"
+                                room.store.update_manifest(topic=title[:200])
+                            else:
+                                text = str(cmd.get("text") or "").strip()
+                                if not text:
+                                    return ""
+                                # A leading "@Name" is resolved by the ROOM, the one place
+                                # that knows who is in it - the same call the terminal and
+                                # the agent's tool make.
+                                room.ingest({"kind": "say", "body": {"text": text},
+                                             "to": room.addressee(text)}, identity=identity)
+                            return None
+
+                        refusal = await asyncio.get_running_loop().run_in_executor(
+                            _room_lane_pool(), _act)
+                        if refusal is not None:
+                            if refusal:
+                                await websocket.send_json({"type": "error", "message": refusal})
+                            continue
 
                         # Answer with the room as it now stands, so the view repaints
                         # from the store rather than from what the browser assumed. A
@@ -5731,8 +5797,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # is the whole answer, and the view closes itself when the row
                         # goes.
                         if type != "delete_room":
-                            await _send_room_transcript(websocket, Room.open(wanted),
-                                                        user_scope_id)
+                            reopened = await asyncio.get_running_loop().run_in_executor(
+                                _room_lane_pool(), Room.open, wanted)
+                            await _send_room_transcript(websocket, reopened, user_scope_id)
 
                         # Anything that changes what the SIDEBAR says has to push the
                         # sidebar. Closing takes the room out of the list and renaming

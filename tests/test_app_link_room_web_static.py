@@ -258,7 +258,7 @@ def test_one_line_is_on_its_way_at_a_time_and_shows_it():
                       "\n    };")
     assert "const next = beginSend(appRoomSendRef.current, text, resendOf);\n        if (!next) return;" in sender
     assert "appRoomSendRef.current = ROOM_SEND_IDLE;" in _between(sender, "} finally {", "}")
-    assert "pendingScrollRestore.current = 'bottom';" in sender
+    assert "pendingScrollRestore.current = { followFrom: performance.now() };" in sender
     view = _between(PAGE, "function RoomConversation(", "function VAFDashboardContent(")
     assert "disabled={appRoom.sending}" in view
     assert "(appRoomSending.busy ? [{ key: 1, text: appRoomSending.text }] : [])" in PAGE
@@ -303,8 +303,12 @@ def test_a_send_gives_up_after_its_timeout_and_scrolls_only_the_room():
     # parked restore is set inside that condition and nowhere else in the sender.
     taken = _code_only(_between(sender, "const taken = () => {", "\n        };"))
     decision = "if (goToTakenLine(roomViewRef.current?.room.roomId ?? null, isAtBottomRef.current)) {"
-    assert taken.index(decision) < taken.index("pendingScrollRestore.current = 'bottom';")
-    assert sender.count("pendingScrollRestore.current = 'bottom';") == 1
+    parked = "pendingScrollRestore.current = { followFrom: performance.now() };"
+    assert taken.index(decision) < taken.index(parked)
+    assert sender.count(parked) == 1
+    # A follow, never an unconditional restore: a person who scrolls before its frame keeps
+    # the view (test_chat_autoscroll_guard.py pins the frame's check).
+    assert "pendingScrollRestore.current = 'bottom';" not in sender
     handler = _code_only(_between(PAGE, "else if (data.type === 'room_transcript') {",
                                   "else if (data.type === 'room_invite_candidates')"))
     assert "appRoomListenersRef.current.forEach(cb => cb(lines));" in handler

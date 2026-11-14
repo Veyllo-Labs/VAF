@@ -390,7 +390,8 @@ Key rules:
   sidebar rows (`_room_rows`), so there is one answer to "is this user in that room";
   a room the caller has not joined is answered with `Access denied`. The reply is
   read-only - writing into a room happens through the agent's room tools or
-  `vaf a2a say`.
+  `vaf a2a say`. The membership read, the room and the reply are built on the room lane's
+  threads (`vaf-room-lane`, see `room_say`).
 - `room_typing` (`{ room_id }`): the browser reporting that a human is pressing keys in
   the open room's input box, throttled client-side to one signal per two seconds and
   only while the box carries text. Fire and forget - no reply; the signal lands in an
@@ -408,6 +409,21 @@ Key rules:
   the room's host (the account that opened it) nor a leader; a redeemed ticket sets a
   guest's scope to None, so no guest can ever be the host. Both answer with a fresh
   `room_transcript` read from the store rather than an echo of what was sent.
+  The store work of every acting room command (`room_say`, `close_room`, `delete_room`,
+  `kick_peer`, `rename_room`, `set_room_agent_mode`, `cast_room_vote`, `room_react`) and
+  the `room_transcript` it answers with run on a pool of their own (`vaf-room-lane`, four
+  threads), not on the server's event loop and not on the default executor: room calls read
+  and decrypt the room's files and grow with its length (a room of 800 lines costs about
+  0.16 s per line written and 0.12 s per view), and on the loop five lines into a long room
+  stalled every connection for 1.4 s. One socket's commands still run one at a time, in
+  order. One account writes at most 60 lines, reactions and ballots (`room_say`,
+  `room_react`, `cast_room_vote`) in any minute (`ROOM_WRITES_PER_MINUTE`, a
+  `vaf.RateWindow` keyed by the account), asked on the loop before any store work; the 61st
+  is answered `{"type": "error", "message": "Too many room messages in a minute. Wait a
+  moment and write again."}` and writes nothing. NAMED BOUNDARY: the page ignores `error`
+  frames of the room lane today, so a refused line shows as pending and drops from the view
+  after 30 seconds without a sentence; 60 a minute is out of a person's reach. The four threads are
+  shared by every account, so one account's long room delays another's 3-second refresh.
 - `kick_peer` (`{ room_id, peer }`) and `rename_room` (`{ room_id, title }`): the same lane
   and the same membership check. `kick_peer` is decided by the ROOM - a leader in its chain
   or the room's host, never against one of the room's own host handles - so the browser adds

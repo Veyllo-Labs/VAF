@@ -1312,11 +1312,14 @@ def refuse_turn_without_backend(task, why: str, session_mgr, text: "str | None" 
     logged: the reason is the admin's setup, not something to tell whoever wrote in, and
     running the turn anyway sent them "[Error] No response was produced ... try closing the
     Document Editor" (measured through _prepare_channel_outbound, which lets it pass).
-    The Veyllo App is the exception, and only in what is STORED: whoever writes there is the
-    account's own person or the agent in their own app, the same as on the web, and the app
-    chat is the record the Veyllo App room shows (vaf/core/app_link/room.py). Without the
-    stored pair the person's line vanished from the room once its turn left the queue. Nothing
-    of the refusal is sent to the device: the reason stays the admin's setup.
+    The Veyllo App is the exception: whoever writes there is the account's own person or the
+    agent in their own app, the same as on the web, where they read the same reason. The app
+    chat is the record the Veyllo App room shows (vaf/core/app_link/room.py), so the pair is
+    stored; without it the person's line vanished from the room once its turn left the queue.
+    And the reason is the turn's reply on the device (``done`` with it, stored once with an
+    outbox entry per device; a request of the app's agent gets it under its own id on the
+    device that asked, and its place is freed at once), so the device is not left waiting for
+    an answer that never comes.
 
     ``text`` is what the turn would have read (a confirmed action's report instead of the
     queued text); the question is stored under the same author kind the turn's own save
@@ -1364,6 +1367,15 @@ def refuse_turn_without_backend(task, why: str, session_mgr, text: "str | None" 
     except Exception as e:
         append_domain_log_always("headless", f"refused turn not stored for {task.session_id}: "
                                              f"{type(e).__name__}: {e}")
+    if getattr(task, "source", None) == _APP_CHANNEL:
+        # Outside the chat's lock, like every other reply to the device.
+        try:
+            from vaf.core.app_link import bridge as app_bridge
+            meta = task.metadata if isinstance(getattr(task, "metadata", None), dict) else {}
+            app_bridge.finish_reply(meta, _prepare_channel_outbound(why))
+        except Exception as e:
+            append_domain_log_always("headless", f"refused turn not sent to the device for "
+                                                 f"{task.session_id}: {type(e).__name__}: {e}")
 
 
 # ── The turn binding: what each lane's turn is bound to (vaf/core/turn_binding.py) ─────────

@@ -882,6 +882,19 @@ every 2 s (largest wait seen, median; 60 s each):
 Before the lookups were shared and the failures held, the same loads cost 12 s and 32 s
 (SERVFAIL after 1.5 s), and a resolver that failed in 0.05 s got about 230 queries/s.
 
+The rest of the web UI's room lane runs on a pool of its own as well (`vaf-room-lane`, four
+threads): opening a room, the acting commands (`room_say`, `room_react`, `cast_room_vote`,
+closing, renaming, removing a member, the agent's mode) and the room view every one of them
+answers with. Room calls are blocking file work that grows with the room: `ingest` reads and
+decrypts every frame several times, and the view reads them again. Measured on one process
+(median of 3): `ingest` with the addressee 37 ms in a room of 2 members and 100 lines, 157 ms
+with 200 members, 160 ms at 800 lines; the view 16 ms at 100 lines and 116 ms at 800. Five
+lines into a room of 806 lines stalled the server's event loop, and with it every connection,
+for 1.4 s; on the pool, the loop's longest gap was 8.5 ms. One account writes at most 60 lines,
+reactions and ballots a minute from the browser (`ROOM_WRITES_PER_MINUTE`, `vaf.RateWindow`);
+the 61st is refused before any store work. NAMED BOUNDARY, as for the invitations: the four
+threads are shared by every account, so one account's long room delays another's refresh.
+
 The joining machine's network must resolve the name to the host. When the certificate names
 none, the invitation carries no lane for other machines: its briefing says so and why,
 `vaf a2a invite` returns the reason as `remote_unavailable`, and the host's log says it too. A
@@ -1107,16 +1120,22 @@ indistinguishable in a transcript, and nobody can address one of them. A collisi
 names with one `name_key` (read as the lookup reads a name: a leading "@" taken off, folded,
 and with sentence endings taken off their end), so "Bob" and "bob", "Straße" and "STRASSE",
 "Bob" and "Bob.", and "Bob" and "@Bob" are each one. The members of a collision are numbered in
-the order their handles sort in (no counter written into the room), and a number is skipped
-when the label it would give could already mean somebody: with members "Bob", "bob" and "Bob1"
-the first two become `Bob2` and `bob3` (`Room.labels`). **Every label is unique within the
-room**, which is what makes every member reachable by a mention. Named boundary: labels are
-stable across restarts, not across a join, a leave or a rename inside one collision. A third
-"Bob" can renumber the other two, and a member can rename itself to a label another member
-had, so a mention typed from an earlier view can reach a different member. A mention only
-decides which member is woken (every member reads every line), and it was so before.
+the order they took the name, then by handle, and a number is skipped when the label it would
+give could already mean somebody: with members "Bob", "bob" and "Bob1" the first two become
+`Bob2` and `bob3` (`Room.labels`). When a member took its name is `named_at` in its own member
+record, written by `join` and by `introduce` when the name changes; a re-join under the same
+name keeps it. So a member who joins or renames into a collision gets the next number and the
+others keep theirs ("Bob1" and "Bob2" stay when a third "Bob" arrives, whatever its handle). A
+room written before members carried the field numbers by handle exactly as it always did, until
+somebody joins or renames. A leave renumbers nothing: the member's record stays in the store.
+**Every label is unique within the room**, which is what makes every member reachable by a
+mention. Named boundary: a rename OUT of a collision renumbers the members numbered after it in
+that collision, and a member can rename itself to another member's current label, which moves
+that member to the next number, so a mention typed from an earlier view can reach the renamer.
+A mention only decides which member is woken (every member reads every line), and it was so
+before.
 
-A display name is at most 80 characters (`DISPLAY_MAX_CHARS`): `join` and `update_card` cut to
+A display name is at most 80 characters (`DISPLAY_MAX_CHARS`): `join` and `introduce` cut to
 it, and a longer name stored before is read as cut wherever names are compared, so the cut
 name is the one a mention reaches.
 
@@ -1156,7 +1175,13 @@ look-alike names). Names are compared NFC-normalised and case-folded (`fold_name
 names "Straße", a decomposed "e" + U+0308 names "Zoë"); combining marks stay with their letter
 (`@राम`). A symbol or a letter of a script written without spaces continues the word, so
 `@Mia你好`, `@Mia♥` and `@Mia😊` name nobody called "Mia" and the person puts a space after the
-name. `Room.address_from_mention` asks it with the member table (`Room.peers_named`: display
+name. A zero-width space (U+200B, which some keyboards put after a name they completed) counts
+as a space: it is skipped before the "@" and between the "@" and the word, and the word cut at
+its first U+200B gives its forms too, beside the forms of the whole word. So `@Mia` followed by
+U+200B and "hi" names Mia, with or without a space after the U+200B; with members "Mia" and
+"Mia" + U+200B + "X", that longer name typed after "@" gives both names and goes to the room.
+Joiners (U+2060 WORD JOINER, U+FEFF, ZWJ, ZWNJ) continue the word, as they shape scripts and
+emoji. A line without U+200B gives exactly what it gave before. `Room.address_from_mention` asks it with the member table (`Room.peers_named`: display
 names and labels together). Members of one collision keep a label each and are reachable by
 it: with "Bob" and "bob" in a room `@bob` goes to the room and `@Bob1` and `@bob2` reach one
 member each; with "Bob" and "Bob." `@Bob` still reaches Bob, `@Bob.` goes to the room, and

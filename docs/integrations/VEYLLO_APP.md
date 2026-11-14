@@ -428,7 +428,9 @@ The first word after "@" counts, whole or with sentence
 punctuation taken off its end, in any case form: `@Mia.`, `@mia?` and `@MIA, hi` name Mia,
 `@Miami`, `@Mia♥` and `@Mia😊` do not (a symbol or an emoji continues the word), and a space
 between the "@" and the name is allowed (`@ Mia hi`). So put a space after the name, also in a
-script written without spaces (`@Mia 你好`); the empty room says so in every language. It is the same
+script written without spaces (`@Mia 你好`); the empty room says so in every language. A
+zero-width space (U+200B), which some keyboards put after a name they completed, counts as a
+space: `@Mia` followed by one names Mia, with or without a space after it. It is the same
 leading-mention rule as in an agent room
 ([A2A_PROTOCOL.md](../agents/A2A_PROTOCOL.md#display-names-carry-a-number-when-they-collide)), so `ask @VAF` in
 the middle of a line still goes to the app's agent. The empty room and the notices name that
@@ -472,7 +474,10 @@ sentence that a newer Veyllo App is needed. A device that has not connected sinc
 is told "open it once" instead, because VAF does not know yet what it supports. A line to your
 VAF agent (`@` and its name) still works and its answer reaches the older app as an ordinary
 reply. On an installation with no model set up, such a line stays in the room with the
-reason it got no answer under it. An app that answers a room
+reason it got no answer under it, and the Veyllo App gets that reason as the agent's reply
+(`done` with it, as for any answer), so it is not left waiting. The same holds for a message
+typed in the app and for a request of the app's agent (`agent_ask`), which gets the reason
+under its own id and has its place freed at once. An app that answers a room
 line with "unknown type" is treated as an older app until it announces the room again.
 
 **Where it lives.** The room has no store of its own. Its record is the two sessions that
@@ -499,9 +504,13 @@ working unchanged.
   `room_say`.
 - **VAF to the app: `room_msg`**, a line the person wrote on VAF:
   `{"t": "room_msg", "id": "<uuid>", "text": "<1..65536 characters>", "ts": <Unix seconds>,
-  "from": "person", "to": "app_agent" | "vaf_agent"}`. `"app_agent"`: give it to the app's agent
-  as its user's words; it answers with `room_say`. `"vaf_agent"`: show it, do not answer; VAF's
-  agent's answer arrives as `delta`/`done` to every device. The app acknowledges with
+  "from": "person", "to": "app_agent" | "vaf_agent"}`. `"from"` is `"person"` in this version;
+  show any other value as from an unknown party and answer nothing. `"app_agent"`: give it to
+  the app's agent as its user's words; it answers with `room_say`. `"vaf_agent"`: show it, do
+  not answer; VAF's agent's answer arrives as `delta`/`done` to every device. That answer
+  carries no reference to the line's id (neither does the answer to a message typed in the
+  app): the account's app chat answers its turns one after another in the order they arrived,
+  so place it by time. The app acknowledges with
   `{"t": "ack", "id": "<id>"}` once it is stored, acknowledges a repeat again and shows it once.
   Only one device of the account gets a given `room_msg`. A line the person sends again
   arrives as a NEW `room_msg` with a new `id` (the earlier one may already be in the app); the

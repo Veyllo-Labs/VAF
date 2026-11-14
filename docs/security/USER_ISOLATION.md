@@ -1532,36 +1532,38 @@ Named boundaries: `vaf env exec` and `vaf env logs` print a container program's 
 output byte for byte, the way `docker exec` and `docker logs` do (see
 [SANDBOXING.md](SANDBOXING.md)).
 
-Rich markup is the second class, with clean characters only: Rich reads `[...]` in a printed
-string as markup, so `[link=https://...]label[/link]` from another party became a link whose
-address the reader never saw, `[conceal]` hid text, `arr[i]` lost its `[i]`, and a lone
-closing tag such as `[/]` or `[/link]` raised a markup error out of the print (in the reply
-stream the answer was then not saved; in the sub-agent drain the same result failed at
-every pass). Other parties' text is now escaped where it enters a markup string
+Rich markup is the second class, with clean characters only: Rich reads `[...]` in a
+printed string as markup, so `[link=https://...]label[/link]` from another party became a
+link whose address the reader never saw, `[conceal]` hid text, `arr[i]` lost its `[i]`, and
+a lone closing tag such as `[/]` or `[/link]` raised a markup error out of the print (in
+the reply stream the answer was then not saved; in the sub-agent drain the same result
+failed at every pass). Other parties' text is now escaped where it enters a markup string
 (`escape_markup` in `vaf/core/terminal_text.py`): the narration lines (`UI.event` and its
 helpers, `TUI.event`, the notifications, a user's message box), sub-agent results, errors,
 agent types and workflow names in the drain panels, the `vaf session load` and `vaf
 automation` lines, `vaf git log`'s subjects and authors, `vaf workflow list`, the coder's
-file names, and the `vaf security` lists; a table cell (`vaf inbox list`, `vaf session list`
-and `search`, `vaf automation list`, the coder's files) takes it as a Rich `Text`, which is
-never markup. Whole replies are printed as text, with markup off: the classic and modern
-reply stream, `vaf debug`'s answers, `vaf git commit --auto`'s suggested message, the
-automation output and `vaf session export`. `TerminalConsole` itself shows a markup string
-that does not parse as text, prints emoji codes such as `:CD:` as text (VAF writes none of
-its own), and keeps a markup link only in VAF's own shape (`file_link`): a local `file:`
-URI whose label is the absolute path it opens. A link that names a host
+file names, and the `vaf security` lists; a table cell (`vaf inbox list`, `vaf session
+list` and `search`, `vaf automation list`, the coder's files) takes it as a Rich `Text`,
+which is never markup. Whole replies are printed as text, with markup off: the classic and
+modern reply stream, `vaf debug`'s answers, `vaf git commit --auto`'s suggested message,
+the automation output and `vaf session export`. `TerminalConsole` itself shows a markup
+string that does not parse as text, prints emoji codes such as `:CD:` as text (VAF writes
+none of its own), and keeps a markup link only in VAF's own shape (`file_link`): a local
+`file:` URI whose label is the absolute path it opens. A link that names a host
 (`file://host/...`, a file on that machine) or a network share (`file:////host/share`, a
 UNC path on Windows), carries a query, has a relative label, or has a label with a
-character the console removes or the reader cannot see (a bidi or other format character,
-a zero-width space, a variation selector or another default-ignorable code point, a line
-separator), or has part of its label hidden (`[conceal]`, a background colour or `reverse`
-on any part of the label of a link printed raw; a background or reverse span that only
-borders the label does not count) keeps its label and loses the link. Any background
-counts, not only one equal to the text's colour: `#000000 on #010101` looks equal and is
-not, and a colour and a background can come from two spans. VAF puts none of the three on
-markup of its own. A backslash separates path parts only in a
-drive-letter label; in a POSIX path it is part of the name. The label stays raw in
-`file_link`'s text, since the model and the workflow engine read it as a path (a Next.js
+character the console removes or the reader cannot see (a bidi or other format character, a
+zero-width space, a variation selector or another default-ignorable code point, a line
+separator, a tab or a line break, which show as spaces or as two lines), or has part of its
+label hidden (`[conceal]`, a background colour or `reverse` on any part of the label of a
+link printed raw; a background or reverse span that only borders the label does not count)
+keeps its label and loses the link. Any background counts, not only one equal to the text's
+colour: `#000000 on #010101` looks equal and is not, and a colour and a background can come
+from two spans. VAF puts none of the three on markup of its own. A `print` whose own
+`style` hides text (a background, `reverse`, `conceal`) lies over every label it prints, so
+no markup link printed with it is kept; VAF passes none. A backslash separates path parts
+only in a drive-letter label; in a POSIX path it is part of the name. The label stays raw
+in `file_link`'s text, since the model and the workflow engine read it as a path (a Next.js
 `app/[id]/page.tsx`); `escape_markup` escapes it where it is printed. The full-screen app's
 toasts show their message as text.
 
@@ -1570,17 +1572,18 @@ without the console, so neither console rule reaches them and a foreign value th
 the entry escape (the coder's file name has one). About 900 other interpolations into
 markup strings print mostly VAF's own values (paths, counts, configuration) and rely on the
 console rules alone: a foreign value there can restyle itself, hide itself (`[conceal]`, a
-colour) or lose a `[word]`, but it cannot raise, and the only link it can produce is a local
-file link whose label is exactly the absolute path it opens. A foreground colour alone that
-matches the terminal's own background is not seen as hidden, since VAF does not know the
-terminal's colours; the link it keeps still opens only the local path its full label
-names. The same holds for VAF's own shape
-anywhere: foreign text that writes `[link=file:///tmp/x]/tmp/x[/link]` gets a live link,
-local only, and it opens what it says. A value escaped into a markup line
-that ends in a backslash shows it twice where plain text follows it (Rich's escape doubles
-it for the tag that usually follows); table cells take `Text` for that reason. VAF's own
-link to a network share (a UNC project path on Windows) carries a host and shows as a plain
-label.
+colour) or lose a `[word]`, but it cannot raise, and the only link it can produce is a
+local file link whose label is exactly the absolute path it opens. A foreground colour
+alone that matches the terminal's own background is not seen as hidden, since VAF does not
+know the terminal's colours; the link it keeps still opens only the local path its full
+label names. The same holds for VAF's own shape anywhere: foreign text that writes
+`[link=file:///tmp/x]/tmp/x[/link]` gets a live link, local only, and it opens what it
+says. A background from a container's own style (a `Panel` or table style,
+`Console.log(style=...)`) is applied after the console's rules and is not seen; VAF sets
+none. A value escaped into a markup line that ends in a backslash shows it twice where
+plain text follows it (Rich's escape doubles it for the tag that usually follows); table
+cells take `Text` for that reason. VAF's own link to a network share (a UNC project path on
+Windows) carries a host and shows as a plain label.
 
 ## 7. Watchdog and Admin Security APIs
 

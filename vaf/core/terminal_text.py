@@ -120,14 +120,20 @@ label is concealed, reversed or on a background colour is not kept. A foreground
 alone that matches the terminal's own background is not seen as hiding, since VAF does not
 know the terminal's colours; the link it keeps still opens only the path its full label
 names. Rich's `Panel` titles and `Text.from_markup` parse without the console, so neither
-S1 nor S2 reaches them: a foreign value there needs the entry escape (the coder's file name in its preview title has one). A link from a `Text` or
-`Style` object, from `Markdown` or from the `style` argument of `print` is not markup and
-keeps the link handling of `terminal_segments` and `TerminalConsole.print`.
+S1 nor S2 reaches them: a foreign value there needs the entry escape (the coder's file name
+in its preview title has one). A link from a `Text` or `Style` object, from `Markdown` or
+from the `style` argument of `print` is not markup and keeps the link handling of
+`terminal_segments` and `TerminalConsole.print`. A `style` argument of `print` that hides
+text (a background, `reverse`, `conceal`) lies over every label printed with it, so no
+markup link survives it; VAF passes none. A background from a container's own style (a
+`Panel` or table style, `Console.log(style=...)`) is applied where S2 does not see it, and
+VAF sets none either.
 """
 import json
 import logging
 import re
 import sys
+import threading
 import unicodedata
 from bisect import bisect_left
 from typing import Any, Iterable, Iterator, Optional
@@ -247,11 +253,19 @@ def _own_file_link(target: str, label: str) -> bool:
     label says; `localhost` alone is the local machine and is compared without it), a path
     that is a share (`file:////host/share` is one on Windows), a query or fragment the label
     would not show, a label that is not an absolute local path, and a label the reader
-    cannot see as it is: one with a control character the console removes or a character
-    that shows as nothing (`_unseen`), which would show a different name than the one the
-    link opens. A backslash is a separator only in a drive-letter (Windows) label; in a POSIX
-    path it is part of the name, so `/tmp/a\\b` and `/tmp/a/b` are different files."""
-    if not label or terminal_text(label) != label or any(_unseen(ch) for ch in label):
+    cannot see as it is: one with a control character the console removes, a tab or a line
+    break (shown as spaces or as two lines, while the name holds the character), or a
+    character that shows as nothing (`_unseen`), which would show a different name than
+    the one the link opens. A backslash is a separator only in a drive-letter (Windows)
+    label; in a POSIX path it is part of the name, so `/tmp/a\\b` and `/tmp/a/b` are
+    different files.
+
+    The checks are all required, so their order changes no answer, only the cost: the
+    target is checked first and the label is read character by character only once it has
+    its decoded path's length. A label longer than its target (nested links, where every
+    label runs to the end of the text) is refused without being read, so a run of links
+    costs the size of their own text instead of the square of it."""
+    if not label or "\t" in label or "\n" in label:
         return False
     try:
         parts = urlsplit(target)
@@ -261,11 +275,16 @@ def _own_file_link(target: str, label: str) -> bool:
             or parts.query or parts.fragment):
         return False
     path, shown = unquote(parts.path), label
-    if _DRIVE_RE.match(shown.replace("\\", "/")):
+    # The decoded path equals the label at its length, or one more (`/C:/x` for `C:\\x`).
+    if not 0 <= len(path) - len(shown) <= 1:
+        return False
+    if _DRIVE_RE.match(shown[:3].replace("\\", "/")):
         path, shown = path.replace("\\", "/"), shown.replace("\\", "/")
         if path.startswith("/") and _DRIVE_RE.match(path[1:]):
             path = path[1:]                   # `/C:/x` is the URI form of `C:/x`
-    return _absolute_local(path) and path == shown
+    if not (_absolute_local(path) and path == shown):
+        return False
+    return terminal_text(label) == label and not any(_unseen(ch) for ch in label)
 
 
 def file_link(path: Any) -> str:
@@ -491,10 +510,11 @@ class TerminalConsole(Console):
     a markup link is kept only when its label is the file path it opens (VAF's own
     `[link=file://...]`); any other markup link keeps its label and loses the link. Rich's own
     control codes (`Control.clear()`, cursor moves) are control segments and pass; its colours
-    come from styles and are untouched. The one style
-    Rich applies after `render`, the `style` argument of `print` (and so of `out`), has an
-    unsafe link target dropped before Rich sees it. A CR in `end` is removed like any other,
-    which no caller relies on. Constructed exactly like
+    come from styles and are untouched. The one style Rich applies after `render`, the
+    `style` argument of `print` (and so of `out`), has an unsafe link target dropped before
+    Rich sees it, and when it hides text (a background, `reverse`, `conceal`) no markup link
+    printed under it is kept (S2). A CR in `end` is removed like any other, which no caller
+    relies on. Constructed exactly like
     `rich.console.Console` (whose arguments are all keywords), except that emoji codes are
     OFF unless `emoji=True` is passed: VAF writes no Rich emoji code in any string of its own
     (an AST scan of every string literal in `vaf/` found none), so a `:CD:` or `:smile:` in a
@@ -504,19 +524,32 @@ class TerminalConsole(Console):
         kwargs.setdefault("emoji", False)
         super().__init__(**kwargs)
         self._markup_default = bool(kwargs.get("markup", True))
+        # Whether the `print` running on this thread lays a hiding style over its output.
+        self._print_backdrop = threading.local()
 
     def print(self, *objects: Any, style: Any = None, **kwargs: Any) -> None:
         # `print` applies its `style` to the segments AFTER `render`, so a link in it would
         # skip `terminal_segments`; one holding an unsafe character is dropped here instead.
-        # A style Rich cannot resolve is passed on unchanged, so Rich reports it as before.
+        # For the same reason S2 cannot see that style's background on a label: it is noted
+        # for `_own_links_only` while this call renders (per thread, restored for a nested
+        # call). A style Rich cannot resolve is passed on unchanged, so Rich reports it as
+        # before.
+        hides = False
         if style is not None:
             try:
                 resolved = self.get_style(style)
             except Exception:
                 resolved = None
-            if resolved is not None and _hostile_link(resolved):
-                style = resolved.update_link(None)
-        super().print(*objects, style=style, **kwargs)
+            if resolved is not None:
+                if _hostile_link(resolved):
+                    style = resolved.update_link(None)
+                hides = _hides_text(resolved)
+        outer = getattr(self._print_backdrop, "hides", False)
+        self._print_backdrop.hides = outer or hides
+        try:
+            super().print(*objects, style=style, **kwargs)
+        finally:
+            self._print_backdrop.hides = outer
 
     def render_str(self, text: str, **kwargs: Any) -> Text:
         markup = kwargs.get("markup")
@@ -544,12 +577,19 @@ class TerminalConsole(Console):
         terminal's own background (`[black]` on a black terminal) is not seen, since VAF does
         not know the terminal's colours; the link still opens only the path the full label
         names. A style that does not resolve is left as it is: Rich renders it as no style,
-        so no link.
+        so no link. A hiding style over the whole text, the `style` of the `print` call or
+        the text's own base style, lies over every label, so every link drops: its own colour
+        may equal its background, and the highlighter colours every path label anyway.
 
-        Cost: one sort and one binary search per link, O(n log n) in the spans. The hiding
-        spans are merged into disjoint intervals once, and each link looks up the last
-        interval starting before its end, instead of testing every hiding span per link
-        (quadratic: 12000 link and conceal pairs took about ten seconds)."""
+        Cost: one sort and one binary search per link, O(n log n) in the spans, plus the
+        own-link check of each link, which reads a label only once it has the length of its
+        own target (`_own_file_link`), so in all no more than the size of the link tags,
+        apart from one copy of each label (a memory copy, which Rich's own parse of the same
+        nested tags outweighs: 8000 nested links cost 1.04x a plain Rich console).
+        The hiding spans are merged into disjoint intervals once, and each link looks up the
+        last interval starting before its end, instead of testing every hiding span per link
+        (quadratic: 12000 link and conceal pairs took about ten seconds, and 4000 nested
+        links, each label read in full, as long)."""
         spans = rich_text.spans
         resolved = []
         for span in spans:
@@ -560,6 +600,13 @@ class TerminalConsole(Console):
         starts, ends = _hiding_intervals(
             (span.start, span.end) for span, style in zip(spans, resolved)
             if style is not None and _hides_text(style))
+        try:
+            base = self.get_style(rich_text.style) if rich_text.style else None
+        except Exception:
+            base = None
+        if getattr(self._print_backdrop, "hides", False) or (
+                base is not None and _hides_text(base)):
+            starts, ends = [0], [len(rich_text.plain)]
         for index, (span, style) in enumerate(zip(spans, resolved)):
             if style is None or not style.link:
                 continue

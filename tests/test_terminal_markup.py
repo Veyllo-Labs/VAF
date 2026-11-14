@@ -196,6 +196,9 @@ def test_markup_that_does_not_parse_is_shown_as_text(text):
     ("file:///tmp/a%EF%B8%8Fb", "/tmp/a\ufe0fb", False),
     ("file:///tmp/a%E3%85%A4b", "/tmp/a\u3164b", False),
     ("file:///tmp/a%E2%80%A8b", "/tmp/a\u2028b", False),
+    # A tab shows as spaces and a line break as two lines, while the name holds the character.
+    ("file:///tmp/a%09b", "/tmp/a\tb", False),
+    ("file:///tmp/a%0Ab", "/tmp/a\nb", False),
     # A decomposed accent (the way macOS writes file names) is visible: kept.
     ("file:///tmp/cafe%CC%81", "/tmp/cafe\u0301", True),
     # A backslash is a separator in a drive-letter label only.
@@ -206,7 +209,8 @@ def test_markup_that_does_not_parse_is_shown_as_text(text):
 ])
 def test_the_own_link_label_is_what_the_reader_sees(target, label, own):
     """MUTATION: drop the default-ignorable table - red; refuse every combining mark as well
-    - red (the accent); turn backslashes into slashes for a POSIX label - red."""
+    - red (the accent); turn backslashes into slashes for a POSIX label - red; drop the tab
+    and line-break refusal - red on those two."""
     from vaf.core.terminal_text import _own_file_link
 
     assert _own_file_link(target, label) is own
@@ -396,6 +400,76 @@ def test_the_own_link_check_costs_linear_time():
         text.spans[:] = [span for i in range(pairs)
                          for span in (Span(2 * i, 2 * i + 1, "conceal"),
                                       Span(2 * i + 1, 2 * i + 2, "link https://e.org"))]
+        start = time.perf_counter()
+        console._own_links_only(text)
+        elapsed = time.perf_counter() - start
+        best = elapsed if best is None else min(best, elapsed)
+        assert not any(console.get_style(span.style).link for span in text.spans)
+        if best < 1.5:
+            break
+    assert best < 1.5, best
+
+
+@pytest.mark.parametrize("style", ["white on black", "on #000000", "reverse", "conceal"])
+def test_a_hiding_print_style_drops_every_markup_link(style):
+    """`print` lays its `style` over the output after `render`, so S2 never sees that
+    background on a label: under `white on black`, a `[black]` part of the label is black on
+    black. A print style that hides text drops every markup link printed under it; the
+    label stays. MUTATIONS: ignore the print style in `_own_links_only` - red; do not restore
+    it after the call - red on the plain print after it."""
+    console = _console()
+    for markup in ("[link=file:///tmp/ab]/tmp/a[black]b[/][/link]",
+                   "[link=file:///tmp/ab]/tmp/ab[/link]"):
+        start = len(_out(console))
+        console.print(markup, style=style)
+        out = _out(console)[start:]
+        assert _targets(out) == [], (style, markup, out)
+    start = len(_out(console))
+    console.print("[link=file:///tmp/ab]/tmp/ab[/link]")
+    assert set(_targets(_out(console)[start:])) == {"file:///tmp/ab"}
+
+
+def test_a_print_style_without_a_background_keeps_the_own_link():
+    """Only a hiding print style counts: a colour or `bold` keeps VAF's own link. MUTATION:
+    treat every print style as hiding - red."""
+    for style in ("bold", "cyan", "bold magenta"):
+        console = _console()
+        console.print("[link=file:///tmp/ab]/tmp/ab[/link]", style=style)
+        assert set(_targets(_out(console))) == {"file:///tmp/ab"}, style
+
+
+def test_a_hiding_base_style_drops_the_link():
+    """`render_str(text, style=...)` gives the parsed text a base style under every span,
+    which Rich renders with the text: a background there lies under the whole label. (With
+    the highlighter on, Rich returns a new text without that base style, so nothing is
+    drawn under the label and the link rightly stays.) MUTATION: ignore the base style -
+    red."""
+    console = _console()
+    markup = "[link=file:///tmp/ab]/tmp/ab[/link]"
+    text = console.render_str(markup, style="on black", highlight=False)
+    assert text.style == "on black"
+    assert not any(console.get_style(span.style).link for span in text.spans)
+    text = console.render_str(markup, style="bold", highlight=False)
+    assert any(console.get_style(span.style).link == "file:///tmp/ab" for span in text.spans)
+
+
+def test_nested_links_cost_linear_time():
+    """In nested links every label runs to the end of the text, so reading each label
+    before its target is quadratic (measured: `"[link=file:///a]x" * 4000 + "[/link]" *
+    4000` took 9.5 s against Rich's own 0.15 s). The label is read only once it has its
+    target's length. Spans built directly, so Rich's own parse is not timed; the limit and
+    the best of three runs as in the test above. MUTATION: read the label (control
+    characters, `_unseen`) before the target checks again - red."""
+    import time
+
+    from rich.text import Span, Text
+
+    console = _console()
+    links = 4000
+    best = None
+    for _ in range(3):
+        text = Text("x" * links)
+        text.spans[:] = [Span(i, links, "link file:///a") for i in range(links)]
         start = time.perf_counter()
         console._own_links_only(text)
         elapsed = time.perf_counter() - start

@@ -192,10 +192,13 @@ reasoning; chats saved before the change keep what they lost, because the file d
 hold the deleted text. A local model's English reasoning before a German answer without
 `<think>` tags is still folded away as reasoning in that copy. Named boundary: the
 full-screen app's transcript replay (`_transcript_entries` in
-`vaf/cli/tui_app/agent_bridge.py`), the prompt interface's chat switch and `/export` show a
-stored reply exactly as stored and never cleaned it; replies are stored without VAF's
-`[ASYNC_ACK]` status tag (`returned_turn_copy` in `vaf/core/session.py`), and only a chat saved
-before that still shows the tag there. A model reads such a chat without it (`model_text`).
+`vaf/cli/tui_app/agent_bridge.py`) and `/export` show a stored reply exactly as stored and
+never cleaned it; replies are stored without VAF's `[ASYNC_ACK]` status tag
+(`returned_turn_copy` in `vaf/core/session.py`), and only a chat saved before that still shows
+the tag there. A model reads such a chat without it: the full-screen app's chat switch and the
+prompt interface's `session <id>` switch put a stored chat back into the agent's history
+through the engine's replay (`load_session_context`), which reads each message through
+`model_text`.
 
 ## Keys and commands
 

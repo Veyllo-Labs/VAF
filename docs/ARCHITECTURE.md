@@ -122,9 +122,10 @@ This is the contract. Treat it as a stable API.
   `coder_only`, `identity_kwargs`, `run`)
 - `vaf.markers` - the special-return-value constants
 - `last_turn` on both `Agent` and `CoreAgent` (a frozen `vaf.TurnStatus`), with
-  `vaf.stored_turn_copy` and `vaf.model_text` - whether the last turn failed and which
-  streamed text was its failure, and the rule that keeps that failure out of what a model
-  reads from a transcript kept from the stream; `vaf.is_error_reply` asks the same of a
+  `vaf.stored_turn_copy`, `vaf.returned_turn_copy` and `vaf.model_text` - whether the last
+  turn failed and which streamed text was its failure, and the rule that keeps that failure
+  out of what a model reads from a transcript kept from the stream or from the return value
+  (whose leading `ASYNC_ACK`/`SYSTEM_LOG_ONLY` status comes off); `vaf.is_error_reply` asks the same of a
   text (contract in [EMBEDDING.md](EMBEDDING.md))
 - `vaf.user_jail` - turning a declared identity into a file boundary, and
   `vaf.jail_allows` - asking that same boundary from outside a tool run, for a
@@ -165,7 +166,7 @@ The authoritative list is `vaf.__all__` plus that page; this one is a summary.
   `extract_pdf_markdown`, `set_account_allowlist_resolver`,
   `account_allows_tool`, `contained_path`, `safe_entry_name`,
   `PathEscape`, `is_remote_path`, `is_error_reply`, `TurnStatus`, `stored_turn_copy`,
-  `model_text`, `terminal_text`, `own_links_as_labels`) are the deliberate
+  `returned_turn_copy`, `model_text`, `terminal_text`, `own_links_as_labels`) are the deliberate
   exceptions - import them from `vaf`, not from `vaf.core`.
 - private methods and attributes (leading underscore)
 

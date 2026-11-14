@@ -1186,7 +1186,31 @@ def _session_record_exists(session_id) -> bool:
 # stored from that stream kept it; no writer has stored it since. A chat message dated before
 # this day can hold it, a later one cannot, so `[dim]` in a later reply is text the model wrote.
 _LEGACY_DIM_BEFORE = _date(2026, 2, 1)
-_LEGACY_DIM_PAIR = re.compile(r"\[(?:white )?dim\](.*?)\[/(?:dim)?\]", re.DOTALL | re.IGNORECASE)
+_LEGACY_DIM_OPEN = re.compile(r"\[(?:white )?dim\]", re.IGNORECASE)
+_LEGACY_DIM_CLOSE = re.compile(r"\[/(?:dim)?\]", re.IGNORECASE)
+
+
+def _legacy_dim_pairs(text: str) -> str:
+    """Each `[dim]` or `[white dim]` opener paired with the next `[/dim]` or `[/]` after it,
+    the span turned into a `<think>` block; an opener with no closer after it, and everything
+    after it, stays as written. One pass: the stored text is read whole, and a single regex
+    with a lazy body rescans the rest of the text for every opener that has no closer, which
+    is quadratic in the number of openers. Once one opener has no closer after it, no later
+    one can have one, so the scan stops there."""
+    out = []
+    pos = 0
+    while True:
+        opener = _LEGACY_DIM_OPEN.search(text, pos)
+        if opener is None:
+            break
+        closer = _LEGACY_DIM_CLOSE.search(text, opener.end())
+        if closer is None:
+            break
+        out.append(text[pos:opener.start()])
+        out.append(f"<think>{text[opener.end():closer.start()]}</think>")
+        pos = closer.end()
+    out.append(text[pos:])
+    return "".join(out)
 
 
 def _stored_before_legacy_dim_end(timestamp) -> bool:
@@ -1220,7 +1244,7 @@ def _stored_reply_text(text, timestamp=None) -> str:
     from vaf.core.terminal_text import own_links_as_labels
     text = own_links_as_labels(split_control_head(text)[1])
     if _stored_before_legacy_dim_end(timestamp):
-        text = _LEGACY_DIM_PAIR.sub(lambda m: f"<think>{m.group(1)}</think>", text)
+        text = _legacy_dim_pairs(text)
     return text
 
 

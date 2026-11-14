@@ -521,10 +521,13 @@ person's screen shows the error. Every host that stores
 the streamed text for a transcript (the queue runner's chat lane and its sub-agent result
 drain, the interactive CLI and the TUI) stores it as one message, the way it was shown, and
 builds that copy and its mark with `stored_turn_copy(stream, agent.last_turn, clean)` (a
-stream that does not end with its failure is marked failed); `vaf run -p` stores the return
-value and marks only a failed turn. `last_turn`, `stored_turn_copy` and `model_text` are all
-on the facade (`Agent.last_turn`, `vaf.stored_turn_copy`, `vaf.model_text`), so an
-application that keeps its own transcript of the stream does the same (EMBEDDING.md). Every
+stream that does not end with its failure is marked failed); `vaf run -p` and the chat lane
+when nothing streamed store the return value through `returned_turn_copy(answer,
+agent.last_turn, clean)`, which takes off a leading `[ASYNC_ACK]` or `[SYSTEM_LOG_ONLY]` and
+marks a `[SYSTEM_LOG_ONLY]` notice failed, as it marks a failed turn. `last_turn`, `stored_turn_copy`,
+`returned_turn_copy` and `model_text` are all on the facade (`Agent.last_turn`,
+`vaf.stored_turn_copy`, `vaf.returned_turn_copy`, `vaf.model_text`), so an application that
+keeps its own transcript of the stream or of the return value does the same (EMBEDDING.md). Every
 reader that builds a model's context from a stored chat reads it through
 `session.model_text` (SESSION_MANAGEMENT.md). The runner also answers a contact's failed
 turn with a fixed sentence, and a turn that answered first with that answer

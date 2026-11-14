@@ -397,8 +397,9 @@ def model_text(msg) -> Optional[str]:
         # A copy of the return value stored before `returned_turn_copy` existed can begin
         # with the delegation's `[ASYNC_ACK]` head; the live history never held it.
         from vaf.core.completion import split_control_head
+        from vaf.markers import ASYNC_ACK
         head, rest = split_control_head(content)
-        if head:
+        if head == ASYNC_ACK:
             content = rest
     meta = get("metadata")
     failure = meta.get(TURN_FAILURE_KEY) if isinstance(meta, dict) else None

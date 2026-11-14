@@ -2360,13 +2360,10 @@ Created: {current_session.created_at}
                             # Ask if user wants to switch to this session
                             if tui.confirm("Switch to this session?", default=False):
                                 current_session = loaded_session
-                                # Restore messages to agent history
-                                agent.init_chat()
-                                for msg in loaded_session.messages:
-                                    if msg.get("role") == "user":
-                                        agent.history.append({"role": "user", "content": msg.get("content", "")})
-                                    elif msg.get("role") == "assistant":
-                                        agent.history.append({"role": "assistant", "content": msg.get("content", "")})
+                                # The engine's own replay: the history a model may read of the
+                                # stored chat (session.model_text), tool calls and results kept
+                                # together. A loaded chat holds Message objects, not dicts.
+                                agent.load_session_context(loaded_session.id, force=True)
                                 tui.success("Session restored to agent context!")
                         except FileNotFoundError:
                             tui.error(f"Session not found: {session_id}")

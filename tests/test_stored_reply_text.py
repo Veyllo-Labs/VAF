@@ -128,6 +128,29 @@ def test_legacy_dim_pairs_convert_only_in_chats_before_february_2026():
         assert _stored_reply_text(text) == text
         assert _stored_reply_text(text, "not a date") == text
     assert _shown("shape[dim] ok", OLD) == ["shape[dim] ok"]
+    # Each opener takes the next closer after it; an opener with no closer stays.
+    assert _shown("[dim]a[dim]b[/dim]c [dim]d", OLD) == ["<think>a[dim]b</think>c [dim]d"]
+
+
+def test_the_legacy_dim_cut_off_is_the_first_of_february_2026():
+    """The engine streamed that markup until 2026-01-29. MUTATION: move
+    `_LEGACY_DIM_BEFORE` to 2026-03-01 - red on the February case; to 2026-01-31 - red on the
+    January case."""
+    assert _shown("[dim]why[/dim]Answer.", "2026-01-31T23:59:59") == [
+        "<think>why</think>Answer."]
+    assert _shown("[dim]why[/dim]Answer.", "2026-02-01T00:00:00") == ["[dim]why[/dim]Answer."]
+
+
+def test_many_unclosed_dim_openers_cost_one_pass():
+    """MEASURED: one regex with a lazy body took 28.6 s on 32000 openers without a closer,
+    because every opener rescanned the rest of the text; the pairing is now one pass (0.2 ms
+    there). The bound is generous for a slow runner and far below the quadratic cost.
+    MUTATION: pair with the single lazy regex again - red."""
+    import time
+    text = "[dim]" * 16000 + "[white dim]a[b" * 16000
+    started = time.perf_counter()
+    assert _stored_reply_text(text, OLD) == text
+    assert time.perf_counter() - started < 1.0
 
 
 def test_the_chat_lane_stores_a_return_value_without_its_head():
@@ -169,14 +192,33 @@ def test_the_guard_pattern_catches_each_shape():
 
 def test_model_text_reads_a_legacy_head_like_the_live_history():
     """MUTATION: drop the head step in `model_text` - red; drop the `[SYSTEM_LOG_ONLY]`
-    clause of `is_failed_turn` - red."""
+    clause of `is_failed_turn` - red; take off any head, not only `[ASYNC_ACK]` - red."""
     assert model_text({"role": "assistant", "content": "[ASYNC_ACK]On it."}) == "On it."
     notice = {"role": "assistant", "content": "[SYSTEM_LOG_ONLY]API returned empty."}
     assert is_failed_turn(notice) and model_text(notice) is None
     quote = {"role": "assistant", "content": "Quote: [ASYNC_ACK] means it runs on."}
     assert model_text(quote) == quote["content"] and not is_failed_turn(quote)
+    # Only the delegation's head comes off: a `[SYSTEM_LOG_ONLY]` text that is not a failed
+    # turn (a tool-call message never is one, its calls anchor their results) stays whole.
+    calls = {"role": "assistant", "content": "[SYSTEM_LOG_ONLY]x",
+             "tool_calls": [{"id": "c1", "type": "function",
+                             "function": {"name": "t", "arguments": "{}"}}]}
+    assert model_text(calls) == "[SYSTEM_LOG_ONLY]x"
     # A user's own words are never cut.
     assert model_text({"role": "user", "content": "[ASYNC_ACK]x"}) == "[ASYNC_ACK]x"
     # The stored copy and the reader agree.
     copy, meta = returned_turn_copy("[ASYNC_ACK]On it.", TurnStatus())
     assert model_text({"role": "assistant", "content": copy, "metadata": meta}) == "On it."
+
+
+def test_the_prompt_interface_chat_switch_uses_the_engine_replay():
+    """`session <id>` in the prompt interface put the stored content back into the agent's
+    history by hand: raw, failed turns and old heads included, and through `msg.get` on the
+    `Message` objects a loaded chat holds, which raised, so the switch failed every time.
+    It now goes through `load_session_context`, which reads each message through
+    `model_text`. MUTATION: put the hand-written loop back - red."""
+    src = (ROOT / "vaf" / "cli" / "cmd" / "run.py").read_text(encoding="utf-8")
+    start = src.index('tui.confirm("Switch to this session?"')
+    block = src[start:src.index('tui.success("Session restored to agent context!")', start)]
+    assert "agent.load_session_context(loaded_session.id, force=True)" in block
+    assert "agent.history.append" not in block and "msg.get(" not in block

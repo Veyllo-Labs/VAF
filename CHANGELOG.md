@@ -73,9 +73,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   `arr`, a route like `app/[id]/page.tsx` lost its folder, a task list lost its boxes, a
   stopped reply ended in `**`, and a text such as `a[0] and the dimension[1]` folded the rest
   of the reply away as reasoning. The reply now looks the same after a reload as while it
-  streamed. VAF's own status tags (the note that a sub-agent took over, the notice after
-  repeated empty answers) are no longer stored with the reply, and chats saved before this
-  change are shown without them.
+  streamed. One difference stays on purpose: the notice after repeated empty answers, shown
+  live only as a status line, appears after a reload as the turn's reply, so the question is
+  not left without an answer. VAF's own status tags (the note that a sub-agent took over, that
+  notice) are no longer stored with the reply, and chats saved before this change are shown
+  without them.
 - **A file link VAF wrote shows as its path in the web chat, the messengers and the Veyllo
   App.** When the agent passed on what the coding agent reported, the web chat showed
   `[link=file:///...]/path[/link]` around the path, and Telegram, WhatsApp, Discord and the

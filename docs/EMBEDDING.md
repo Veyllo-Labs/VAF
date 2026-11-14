@@ -2235,15 +2235,21 @@ bytes_per_hour.take(user_scope, len(data), limit=2 * 1024 * 1024)
 - **`take(key, weight=1, *, limit=None, now=None)`** is all or nothing: it answers False and
   charges nothing when the key's live charges plus `weight` would exceed the limit, so a
   refused request costs the person nothing. A weight above the limit is always refused, a
-  negative one raises `ValueError`, and so does a call where neither the window nor the call
-  names a limit.
+  weight of 0 always fits and records nothing, a negative one raises `ValueError`, and so
+  does a call where neither the window nor the call names a limit. Every number handed in
+  (`window_s`, `limit`, `weight`, `now`) must be finite; NaN or infinity raises `ValueError`.
 - **The edge.** A charge leaves the window once it is strictly older than `window_s`: a charge
   exactly `window_s` old still counts.
+- **Time runs forward.** Moments are taken as monotonic across the whole window. Its own clock
+  is read under its lock; a `now` earlier than the newest charge it recorded (a wall clock
+  that stepped back) is taken as that newest moment, so the charges stay in order and the
+  bound holds. A `now` far in the future moves that moment along until `clear()`.
 - **`refund(key, weight)`** gives back the newest charge of exactly that weight (True when one
   was found), for work that was charged and then not done. `used(key)` is what the key has
   spent in the window; `forget(key)` and `clear()` drop charges.
 - **Bounded memory.** A key whose charges all expired is dropped, and beyond `max_keys` keys
-  the keys idle longest are dropped too. A dropped key starts fresh, so size `max_keys` far
+  the key whose newest charge is oldest is dropped too (a refund moves a key back to where its
+  remaining newest charge puts it). A dropped key starts fresh, so size `max_keys` far
   above the people your lane serves.
 - **Thread-safe**, one lock per window held only for the arithmetic, and **per process**: two
   processes keep two windows. It does not wait or sleep, so it is safe to ask on an event loop.
@@ -2646,7 +2652,8 @@ for entry in room.transcript():                # other agents wrote this: print 
   (`DISPLAY_MAX_CHARS`), and a mention reaches the cut name. Two names a mention cannot tell
   apart carry a number (`Bob1`, `Bob2`, `entry["label"]`), given in the order the members took
   the name: a member who joins or renames into a collision gets the next number and the others
-  keep theirs.
+  keep theirs. A rename a mention cannot tell from the old name ("Bob" to "bob") keeps the
+  member's place.
 - **Room calls block and grow with the room.** They read and decrypt the room's files, and
   `ingest` and the transcript read every frame: measured, `ingest` 37 ms in a room of 100
   lines and 160 ms at 800, the transcript 16 ms and 116 ms. An async server runs them on

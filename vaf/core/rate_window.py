@@ -12,12 +12,23 @@ or bytes (the weight of a line is its size).
 nothing is recorded. ``refund`` gives back the newest charge of exactly that weight, for
 work that was charged and then not done (a line that could not be stored). A charge is
 dropped once it is strictly older than ``window_s`` (``now - t > window_s``), so a charge
-exactly ``window_s`` old still counts.
+exactly ``window_s`` old still counts. A weight of 0 always fits and records nothing.
+
+Times are taken as monotonic, for every key and across keys. The window's own clock is
+read under its lock, so two threads cannot record their moments out of order. A ``now``
+handed in that is earlier than the newest charge the window recorded (a wall clock that
+stepped back, a caller that read the clock long before it got here) is taken as that
+newest moment: the charges stay in order, which is what the expiry, the bound and the
+order keys are dropped in rest on. A ``now`` far in the future moves that moment along
+for every later charge until ``clear``. Every number handed in must be finite;
+``ValueError`` otherwise.
 
 Bounded memory: a key whose charges all expired is dropped, and beyond ``max_keys`` keys
-the keys idle longest are dropped too. A dropped key starts fresh, so a flood spread over
-more than ``max_keys`` keys within one window can pass more than ``limit`` for some of
-them; ``max_keys`` is sized far above the people a lane serves.
+the key whose newest charge is oldest is dropped too (a refund that gives back a key's
+newest charge moves the key back to where its remaining newest charge puts it). A dropped
+key starts fresh, so a flood spread over more than ``max_keys`` keys within one window can
+pass more than ``limit`` for some of them; ``max_keys`` is sized far above the people a
+lane serves.
 
 Thread-safe: one lock per window, held only for the arithmetic. Stdlib only.
 
@@ -32,12 +43,20 @@ not a different contract.
 """
 from __future__ import annotations
 
+import math
 import threading
 import time
 from collections import OrderedDict, deque
 from typing import Callable, Deque, Hashable, Optional, Tuple
 
 __all__ = ["RateWindow"]
+
+
+def _finite(value: float, what: str) -> float:
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f"{what} must be a finite number")
+    return number
 
 
 class _Charges:
@@ -59,18 +78,25 @@ class RateWindow:
 
     def __init__(self, window_s: float, limit: Optional[float] = None, *,
                  clock: Callable[[], float] = time.monotonic, max_keys: int = 10000) -> None:
-        if float(window_s) <= 0:
+        window = _finite(window_s, "window_s")
+        if window <= 0:
             raise ValueError("window_s must be positive")
         if int(max_keys) < 1:
             raise ValueError("max_keys must be at least 1")
-        self.window_s = float(window_s)
-        self.limit = None if limit is None else float(limit)
+        self.window_s = window
+        self.limit = None if limit is None else _finite(limit, "limit")
         self._clock = clock
         self._max_keys = int(max_keys)
         self._lock = threading.Lock()
+        # The newest moment a charge was recorded at; no later charge is recorded before it.
+        self._latest = -math.inf
         # Ordered by the time of each key's newest charge, oldest first: the front is the
         # key idle longest, which is the one dropped first.
         self._keys: "OrderedDict[Hashable, _Charges]" = OrderedDict()
+
+    def _moment(self, now: Optional[float]) -> float:
+        """The moment of a call; read under the lock when the window's own clock gives it."""
+        return _finite(self._clock() if now is None else now, "now")
 
     def _expire(self, charges: _Charges, now: float) -> None:
         items = charges.items
@@ -100,24 +126,43 @@ class RateWindow:
                 return
             del self._keys[key]
 
+    def _place(self, key: Hashable, charges: _Charges) -> None:
+        """Put ``key`` back where its newest charge belongs in the idle order (after a
+        refund made that charge older). O(keys), and only a refund of a newest charge pays
+        it."""
+        newest = charges.items[-1][0]
+        others = list(self._keys.items())
+        self._keys.clear()
+        placed = False
+        for other, held in others:
+            if not placed and held.items and held.items[-1][0] > newest:
+                self._keys[key] = charges
+                placed = True
+            self._keys[other] = held
+        if not placed:
+            self._keys[key] = charges
+
     def take(self, key: Hashable, weight: float = 1, *, limit: Optional[float] = None,
              now: Optional[float] = None) -> bool:
         """Charge ``weight`` units to ``key`` and answer True, or answer False and charge
         nothing when they do not fit: the key's live charges plus ``weight`` would exceed
         the limit (``limit`` here, else the window's). Raises ``ValueError`` when neither
-        names a limit or ``weight`` is negative."""
-        bound = self.limit if limit is None else float(limit)
+        names a limit, when ``weight`` is negative, or when a number is not finite."""
+        bound = self.limit if limit is None else _finite(limit, "limit")
         if bound is None:
             raise ValueError("RateWindow.take needs a limit (here or in the constructor)")
-        weight = float(weight)
+        weight = _finite(weight, "weight")
         if weight < 0:
             raise ValueError("weight must not be negative")
-        moment = self._clock() if now is None else float(now)
         with self._lock:
+            # A moment earlier than the newest recorded charge is taken as that charge's.
+            moment = max(self._moment(now), self._latest)
             charges = self._live(key, moment)
             spent = charges.total if charges is not None else 0.0
             if spent + weight > bound:
                 return False
+            if weight == 0:
+                return True
             if charges is None:
                 charges = _Charges()
                 self._keys[key] = charges
@@ -125,13 +170,14 @@ class RateWindow:
                 self._keys.move_to_end(key)
             charges.items.append((moment, weight))
             charges.total += weight
+            self._latest = moment
             self._sweep(moment)
             return True
 
     def refund(self, key: Hashable, weight: float) -> bool:
         """Give back the newest charge of exactly ``weight`` units to ``key``. True when one
         was found."""
-        weight = float(weight)
+        weight = _finite(weight, "weight")
         with self._lock:
             charges = self._keys.get(key)
             if charges is None:
@@ -139,18 +185,21 @@ class RateWindow:
             items = charges.items
             for index in range(len(items) - 1, -1, -1):
                 if items[index][1] == weight:
+                    newest = index == len(items) - 1
                     del items[index]
                     charges.total -= weight
                     if not items:
                         del self._keys[key]
+                    elif newest:
+                        del self._keys[key]
+                        self._place(key, charges)
                     return True
             return False
 
     def used(self, key: Hashable, *, now: Optional[float] = None) -> float:
         """The units ``key`` has spent within the window up to ``now``."""
-        moment = self._clock() if now is None else float(now)
         with self._lock:
-            charges = self._live(key, moment)
+            charges = self._live(key, max(self._moment(now), self._latest))
             return charges.total if charges is not None else 0.0
 
     def forget(self, key: Hashable) -> None:
@@ -159,9 +208,10 @@ class RateWindow:
             self._keys.pop(key, None)
 
     def clear(self) -> None:
-        """Drop every charge of every key."""
+        """Drop every charge of every key, and the newest moment with them."""
         with self._lock:
             self._keys.clear()
+            self._latest = -math.inf
 
     def __len__(self) -> int:
         """How many keys hold charges (expired ones included until they are swept)."""

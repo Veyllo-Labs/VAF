@@ -189,10 +189,14 @@ def display_name(display: Any, peer_id: str = "") -> str:
 
 def _named_at(record: Optional[Dict[str, Any]], display: str) -> float:
     """When a member took the name ``display``: the moment its stored ``record`` holds when that
-    is the name it already had (0.0 for a record written before members carried it), now
-    otherwise. Orders the members of one collision in `Room.labels`."""
-    if record and str(record.get("display") or "")[:DISPLAY_MAX_CHARS] == display:
-        return _seconds(record.get("named_at"))
+    is the name it already had, or one a mention cannot tell from it (`name_key`: "Bob" to
+    "bob" or "Bob." stays in the same collision, so it keeps its place there); 0.0 for a
+    record written before members carried it; now otherwise. Orders the members of one
+    collision in `Room.labels`."""
+    if record:
+        before = str(record.get("display") or "")[:DISPLAY_MAX_CHARS]
+        if before == display or (before and name_key(before) == name_key(display)):
+            return _seconds(record.get("named_at"))
     return time.time()
 
 
@@ -2893,7 +2897,8 @@ class Room:
 
         The members of a collision are numbered in the order they took the name (`named_at`
         in the member record, written by `join` and `introduce`; a re-join under the same
-        name keeps it), then by handle, and a number is skipped when the label it gives could
+        name keeps it, and so does a rename a mention cannot tell from the old name, such
+        as "Bob" to "bob"), then by handle, and a number is skipped when the label it gives could
         already mean somebody: its lookup key or its name key equals any member's name, name
         key, or a label given before it. So a member who joins or renames into a collision
         gets the next number and the others keep theirs, and a room written before members

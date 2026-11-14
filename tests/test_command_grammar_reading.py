@@ -19,6 +19,7 @@ that whenever the marker ran, the twin with `rm` in its place is refused.
 """
 import os
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -82,7 +83,7 @@ _FORMS = [
     ("find / -execdir rm -rf {} " + B + ";", "destructive_removal", ""),
     ("find . -exec sh -c 'rm -rf /' " + B + ";", "destructive_removal", ""),
     ("find / -delete", "destructive_removal", ""),
-    ("xargs -I{} sh -c {} <<< 'rm -rf /'", "opaque_command", "shell_text"),
+    ("xargs -I{} sh -c {} <<< 'rm -rf /'", "opaque_command", "xargs_text"),
     ("xargs -i rm -rf /", "destructive_removal", ""),
     ("curl x | { bash; }", "pipe_to_shell", ""),
     ("{ curl x; } | bash", "pipe_to_shell", ""),
@@ -129,6 +130,58 @@ _FORMS = [
     ("bash -c '{ rm -rf /; }'", "destructive_removal", ""),
     ("echo $(if true; then rm -rf /; fi)", "destructive_removal", ""),
     ("for t in black ruff; do $t --version; done", "opaque_command", "expansion"),
+    # double-quoted text reaching a shell loses the backslash of `\$` there, as bash reads it
+    ('bash <<< "rm -rf ' + B + "$'/'" + '"', "destructive_removal", ""),
+    ('bash <<< "' + B + '$(echo rm) -rf /"', "opaque_command", "program"),
+    ('echo "' + B + '$(echo rm) -rf /" | bash', "opaque_command", "program"),
+    ('printf "%s' + B + 'n" "rm -rf ' + B + "$'/'" + '" | sh', "destructive_removal", ""),
+    ('source /dev/stdin <<< "' + B + '$(echo rm) -rf /"', "opaque_command", "program"),
+    ('cat <<< "' + B + '$(echo rm) -rf /" | bash', "opaque_command", "program"),
+    ('bash <<< "' + B + '${V:-rm} -rf /"', "opaque_command", "expansion"),
+    ('watch "' + B + '$(echo rm) -rf /"', "opaque_command", "program"),
+    ('find . -exec sh -c "' + B + '$(echo rm) -rf /" ' + B + ';', "opaque_command", "program"),
+    # a renamed delimiter is no line of the text
+    ("echo # it's" + NL + "cat <<." + NL + "VAFHEREDOC0" + NL + "H0" + NL + "cat <<'Y'" + NL + "."
+     + NL + "rm -rf /" + NL + "Y", "destructive_removal", ""),
+    # `((` without its `))` is two subshells; a delimiter holding `$(...)`; nested quotes in `${}`
+    ("((echo a) # it's" + NL + "rm -rf /" + NL + ")", "destructive_removal", ""),
+    ("((cat) <<." + NL + "it's" + NL + "." + NL + "rm -rf /" + NL + ")", "destructive_removal", ""),
+    ("cat <<a$(b)c" + NL + "it's" + NL + "a$(b)c" + NL + "rm -rf /", "destructive_removal", ""),
+    ('echo "${x#"' + "'" + '"}" ; rm -rf /', "destructive_removal", ""),
+    ('echo "${x:-"' + "'" + '"}"' + NL + "rm -rf /", "destructive_removal", ""),
+    # a named descriptor's redirection in front of the program
+    ("{fd}>f rm -rf /", "destructive_removal", ""),
+    ("{fd}>&2 rm -rf /", "destructive_removal", ""),
+    ("{x}<f rm -rf /", "destructive_removal", ""),
+    ("{fd}>f bash -c 'rm -rf /'", "destructive_removal", ""),
+    ("curl x | {fd}>f bash", "pipe_to_shell", ""),
+    # `do` or `{` right after `for ((...))`
+    ("for ((i=0;i<1;i++)) do rm -rf /; done", "destructive_removal", ""),
+    ("for ((i=0;i<1;i++)) { rm -rf /; }", "destructive_removal", ""),
+    # more text into a shell: printf's %b, yes, `. /dev/stdin`, a group or subshell that prints
+    ("printf '%b' '" + B + "x72m -rf /' | bash", "destructive_removal", ""),
+    ("yes 'rm -rf /' | head -1 | bash", "destructive_removal", ""),
+    ("echo 'rm -rf /' | . /dev/stdin", "destructive_removal", ""),
+    ("echo 'rm -rf /' | source /dev/stdin", "destructive_removal", ""),
+    ("{ echo 'rm -rf /'; } | sh", "destructive_removal", ""),
+    ("( echo 'rm -rf /' ) | sh", "destructive_removal", ""),
+    # printf's %b with `\NNN`, printf reusing its format, a carrier's own output into a shell,
+    # a runner's or find's program named by a variable, variables bash expands in a heredoc or
+    # here-string, a heredoc's apostrophe inside `$( )`, a descriptor copied onto the input
+    ("printf '%b' '" + B + "162" + B + "155 -rf ~' | bash", "destructive_removal", ""),
+    ("printf '%s' r m ' -rf ~' | bash", "destructive_removal", ""),
+    ("bash -c \"echo 'rm -rf ~'\" | bash", "destructive_removal", ""),
+    ("uv run echo 'rm -rf ~' | bash", "destructive_removal", ""),
+    ('uv run "$TOOL" -rf ~', "opaque_command", "expansion"),
+    ('find . -maxdepth 0 -exec "$TOOL" -rf ~ ' + B + ';', "opaque_command", "expansion"),
+    ('bash <<< "echo $PAYLOAD"', "opaque_command", "expanded_input"),
+    ("bash <<EOF" + NL + "echo $PAYLOAD" + NL + "EOF", "opaque_command", "expanded_input"),
+    ("cat <<EOF | bash" + NL + "echo $PAYLOAD" + NL + "EOF", "opaque_command", "expanded_input"),
+    ('echo "$(cat <<\'EOF\'' + NL + "it's" + NL + "EOF" + NL + ')"; rm -rf ~', "destructive_removal", ""),
+    ("cat 3< <(base64 -d payload) <&3 | bash", "opaque_command", "shell_text"),
+    # trap runs its first argument
+    ("trap 'rm -rf /' EXIT", "destructive_removal", ""),
+    ("trap -- 'rm -rf /' INT TERM", "destructive_removal", ""),
 ]
 
 
@@ -172,6 +225,7 @@ _WRAPS = [
     "@", "{ @; }", "{" + NL + "@" + NL + "}", "if true; then @; fi", "if false; then :; else @; fi",
     "if false; then :; elif true; then @; fi", "for i in 1; do @; done",
     "for i in 1" + NL + "do" + NL + "@" + NL + "done", "for ((i=0;i<1;i++)); do @; done",
+    "for ((i=0;i<1;i++)) do @; done", "for ((i=0;i<1;i++)) { @; }",
     "i=0; while [ $i -lt 1 ]; do @; i=1; done", "i=0; until [ $i -ge 1 ]; do @; i=1; done",
     "case x in x) @;; esac", "case x in (x) @;; esac",
     "case x in" + NL + "y|x)" + NL + "@" + NL + ";;" + NL + "esac", "f() { @; }; f",
@@ -239,6 +293,119 @@ def _marker_bin(folder):
     return folder
 
 
+# A second generator: a recursive grammar rendered twice from one tree, once with the marker
+# and once with its twin, so a nested script can be quoted whole (single, double, `$'...'`),
+# which a text template cannot do. Its forms nest substitutions, `${ ;}`, process
+# substitutions, functions, arrays, case fall-through, piped and redirected compounds, the
+# shells, eval, here-strings, echo and printf into a shell, find -exec and env -S.
+_DANGER = "r" + "m"
+_SPELLINGS = [
+    ("vafmark", _DANGER), ("vaf''mark", "r''m"), ('"vafmark"', '"rm"'), (B + "vafmark", B + "rm"),
+    ("vafma" + B + "rk", "r" + B + "m"), ("$'vafma" + B + "x72k'", "$'r" + B + "x6d'"),
+    ("$'" + B + "166afmark'", "$'" + B + "162m'"), ("vaf" + B + NL + "mark", "r" + B + NL + "m"),
+    ("v'af'\"ma\"rk", "r''\"\"m"), ('$"vafmark"', '$"rm"'), ("${V:-vafmark}", "${V:-rm}"),
+    ("$(echo vafmark)", "$(echo rm)"), ("`echo vafmark`", "`echo rm`"),
+]
+_SPELLING_WEIGHTS = [10, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1]
+_TREE_ARGS = ["-rf /", "-rf '/'", '-"rf" /', "-r''f /", "-rf $'/'", "-rf / 2>/dev/null",
+              "-rf / </dev/null", "-rf / >|o.txt"]
+_TREE_PREFIX = ["", "", "", "command ", "env ", "nice ", "timeout 2 ", "A=1 ", "2>/dev/null ",
+                ">o.txt ", "<<<x ", "exec ", "builtin command ", "env -- ", "{fd}>o.txt "]
+
+
+def _q_single(s):
+    return "'" + s.replace("'", "'" + B + "''") + "'"
+
+
+def _q_double(s):
+    return '"' + "".join(B + ch if ch in '"$`' + B else ch for ch in s) + '"'
+
+
+def _q_ansi(s):
+    return "$'" + "".join(ch if ch.isascii() and ch.isalnum() else
+                          (B + "x%02x" % ord(ch) if ord(ch) < 256 else ch) for ch in s) + "'"
+
+
+def _tree(rng, depth):
+    """A function of the kind ("m" marker, "t" twin) that renders one statement."""
+    if depth <= 0 or rng.random() < 0.25:
+        marker, twin = rng.choices(_SPELLINGS, weights=_SPELLING_WEIGHTS)[0]
+        pre, args = rng.choice(_TREE_PREFIX), rng.choice(_TREE_ARGS)
+        return lambda k: pre + (marker if k == "m" else twin) + " " + args
+    inner = _tree(rng, depth - 1)
+    q = rng.choice((_q_single, _q_single, _q_double, _q_ansi))
+    sep = rng.choice((";", NL, " ;" + NL))
+    forms = [
+        lambda k: "{ " + inner(k) + sep + "}",
+        lambda k: "( " + inner(k) + " )",
+        lambda k: "if true" + sep + "then " + inner(k) + sep + "fi",
+        lambda k: "until false; do " + inner(k) + sep + "break; done",
+        lambda k: "while :" + sep + "do" + NL + inner(k) + NL + "break" + NL + "done",
+        lambda k: "for x in a b; do " + inner(k) + "; break; done",
+        lambda k: "for ((;;)) do " + inner(k) + "; break; done",
+        lambda k: "case $PWD in *) " + inner(k) + " ;; esac",
+        lambda k: "case a in (b|a) " + inner(k) + " ;& c) : ;; esac",
+        lambda k: "function f { " + inner(k) + "; }" + sep + "f",
+        lambda k: "g ( ) {" + NL + inner(k) + NL + "}" + NL + "g",
+        lambda k: "time -p " + inner(k),
+        lambda k: "! " + inner(k),
+        lambda k: "coproc C { " + inner(k) + "; }; wait",
+        lambda k: ": $(" + inner(k) + ")",
+        lambda k: "cat <(" + inner(k) + ")",
+        lambda k: "x=$( " + inner(k) + NL + ")",
+        lambda k: ": ${ " + inner(k) + "; }",
+        lambda k: 'echo "${u:-$(' + inner(k) + ')}"',
+        lambda k: "cat <<E" + NL + "$(" + inner(k) + ")" + NL + "E",
+        lambda k: "bash -c " + q(inner(k)),
+        lambda k: "eval " + q(inner(k)),
+        lambda k: "bash <<< " + q(inner(k)),
+        lambda k: "echo " + q(inner(k)) + " | bash",
+        lambda k: "printf '%s" + B + "n' " + q(inner(k)) + " | sh",
+        lambda k: "source /dev/stdin <<< " + q(inner(k)),
+        lambda k: "cat <<'EOS' | bash" + NL + inner(k) + NL + "EOS",
+        lambda k: ": | { " + inner(k) + "; }",
+        lambda k: "false || " + inner(k),
+        lambda k: "find . -maxdepth 0 -exec bash -c " + q(inner(k)) + " " + B + ";",
+        lambda k: "x='a[$(" + inner(k) + ")]'; : $((x))",
+    ]
+    return rng.choice(forms)
+
+
+def _tree_draw(rng):
+    """(marker text, twin text) from the recursive generator, with noise around it."""
+    render = _tree(rng, rng.choice((1, 2, 2, 3, 3, 4)))
+    pre = [rng.choice(_NOISE) for _ in range(rng.choice((0, 0, 1, 2)))]
+    post = [rng.choice(_NOISE) for _ in range(rng.choice((0, 1)))]
+    seps = [rng.choice(_SEPARATORS[:5]) for _ in range(len(pre) + len(post))]
+
+    def full(kind):
+        items = pre + [render(kind)] + post
+        text = items[0]
+        for sep, item in zip(seps, items[1:]):
+            text += sep + item
+        return text
+    return full("m"), full("t")
+
+
+def _pair_draw(rng):
+    """(marker text, twin text) from either generator."""
+    if rng.random() < 0.5:
+        return _tree_draw(rng)
+    draw = _draw(rng)
+    marker, twin = rng.choice(_MARKERS)
+    return draw.replace("\x00", marker), draw.replace("\x00", twin)
+
+
+def _bash_major(bash):
+    """The major version of `bash`, 0 when it cannot be asked."""
+    try:
+        out = subprocess.run([bash, "-c", "echo ${BASH_VERSINFO[0]}"], capture_output=True,
+                             text=True, timeout=10).stdout.strip()
+        return int(out)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0
+
+
 def _run_marker_draws(seed, count, workdir, bash):
     """(draws run, draws that ran the marker, misses): a miss is a draw that ran the marker
     with the dangerous arguments (`-rf /`, or `-rf` and the home folder) whose twin with `rm`
@@ -251,14 +418,15 @@ def _run_marker_draws(seed, count, workdir, bash):
     ran = 0
     misses = []
     for number in range(count):
-        draw = _draw(rng)
-        marker, twin = rng.choice(_MARKERS)
-        text = draw.replace("\x00", marker)
+        text, doubled = _pair_draw(rng)
         assert "rm" not in text.replace("vafmark", "").split()     # never a real removal
         # A log of its own per draw: a process a draw left behind (a coprocess, a job) that
         # runs the marker later writes into its own draw's log, never the next one's.
         log = os.path.join(workdir, "marker-%d.log" % number)
-        env = {"PATH": bindir + os.pathsep + "/usr/bin:/bin", "HOME": cwd, "LC_ALL": "C",
+        # A bare environment on purpose (the draws must not see the caller's); the Windows
+        # keys are named for completeness, since the draws run only where bash 5 runs.
+        env = {"PATH": bindir + os.pathsep + "/usr/bin:/bin", "HOME": cwd, "USERPROFILE": cwd,
+               "SystemRoot": os.environ.get("SystemRoot", ""), "LC_ALL": "C",
                "VAFMARK_LOG": log}
         proc = subprocess.Popen([bash, "--norc", "--noprofile", "-c", text], cwd=cwd, env=env,
                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
@@ -279,7 +447,6 @@ def _run_marker_draws(seed, count, workdir, bash):
             continue
         os.unlink(log)
         ran += 1
-        doubled = draw.replace("\x00", twin)
         for profile in ("host", "jailed", "remote"):
             if not classify_command(doubled, profile=profile).blocked:
                 misses.append((profile, doubled))
@@ -287,21 +454,26 @@ def _run_marker_draws(seed, count, workdir, bash):
     return count, ran, misses
 
 
-@pytest.mark.skipif(sys.platform.startswith("win") or not shutil.which("bash"),
-                    reason="needs bash")
+_BASH = shutil.which("bash") if not sys.platform.startswith("win") else None
+
+
+@pytest.mark.skipif(not _BASH or _bash_major(_BASH) < 5,
+                    reason="needs bash 5 (the reading follows bash 5; macOS ships bash 3.2)")
 @pytest.mark.parametrize("seed", [303, 3030])
 def test_bash_differential_marker(seed, tmp_path):
-    """Generated commands (comments with apostrophes, heredocs with every kind of delimiter,
-    `$'...'` with `\\'`, line continuations in words, every reserved word and brace form,
-    `!`, `time`, `coproc`, functions, leading redirections, pipes into groups, `env -S`,
-    `find -exec`) are run through bash with a marker program; whenever it ran, the twin with
-    `rm -rf` in its place is refused on host, jailed and remote. Outside the suite the same
-    generator ran 300 000 draws: 114 064 ran the marker, no twin passed.
+    """Generated commands are run through bash with a marker program; whenever it ran, the twin
+    with `rm -rf` in its place is refused on host, jailed and remote. Two generators: text
+    templates (comments with apostrophes, heredocs with every kind of delimiter, `$'...'` with
+    `\\'`, line continuations in words, every reserved word and brace form, `!`, `time`,
+    `coproc`, functions, leading redirections, pipes into groups, `env -S`, `find -exec`) and
+    a recursive grammar that quotes a nested script whole, double quotes included. Skipped
+    below bash 5, whose grammar this reading follows (measured with 5.3). Outside the suite
+    the same generators ran the draws the SANDBOXING bounds name.
     MUTATION: drop the comment rule - red; drop the any-word heredoc delimiters - red;
     MUTATION: drop the `$'...'` decoding - red."""
     (tmp_path / "bin").mkdir()
     (tmp_path / "cwd").mkdir()
-    count, ran, misses = _run_marker_draws(seed, 800, str(tmp_path), shutil.which("bash"))
+    count, ran, misses = _run_marker_draws(seed, 800, str(tmp_path), _BASH)
     assert misses == [], misses[:5]
     assert ran >= 150, ran
 
@@ -379,6 +551,34 @@ _NEIGHBOURS = [
     "openssl enc -aes-256-cbc -in a -out b",
     "xxd f | head",
     "echo 'b64' | base64 -d > out.bin",
+    "trap 'rm -f /tmp/x.lock' EXIT",
+    "trap - EXIT",
+    "printf '%b' 'a\\tb' | cat",
+    'uv run --with "$PKG" pytest',
+    "xargs -I{} sh -c 'wc -l \"$1\"' _ {}",
+    "xargs -I{} wc -l {}",
+    "eval 'echo hi' 2>&1",
+    'echo "${x#"a"}"',
+    "(( i < 3 )) && echo small",
+    "echo $(( 1 << 2 ))",
+    "echo 'echo hi' | bash",
+    "{ echo 'ls'; } | sh",
+    "{fd}>log.txt echo hi",
+    "bash <<'EOF'" + NL + "echo $HOME" + NL + "EOF",
+    "bash <<< 'echo $HOME'",
+    "cat > conf.ini <<EOF" + NL + "home=$HOME" + NL + "EOF",
+    "printf '%s\\n' a b c | sort",
+    "cat 3<list.txt <&3 | sort",
+    "bash -c 'echo hi' | cat",
+    "uv run python -V | cat",
+    'git commit -m "$(cat <<\'EOF\'' + NL + "Fix the parser" + NL + NL + "- it's fine" + NL + "EOF" + NL + ')"',
+    # arrays, arithmetic and substrings written as everyday scripts write them
+    "files=(a.txt 'b;c.txt' <(ls) $(date; pwd)) && echo ${#files[@]}",
+    "args=(" + NL + "  --verbose  # loud" + NL + "  --dry-run" + NL + ")",
+    "(( n=(1|2) )) && echo $(( (n<<1) ))",
+    'name=report.txt; echo "${name: -3}" ${name:0:6} ${x:-\'$(date)\'}',
+    "(cat <<'EOF') | sort" + NL + "it's fine" + NL + "EOF" + NL + "echo ok",
+    "echo $((echo a; echo b) | sort)",
 ]
 
 
@@ -454,6 +654,61 @@ def test_harmless_neighbours_still_pass(cmd):
     ("cat <{<EOF $(<<echo a)\nit's\nEOF ;\necho $'a\\x27b' ;\necho hi | ( { :; } | $'\\x72m' -rf / )", "destructive_removal"),
     ("echo ${x:{-a} || # don't\nexec 3>&1; r\\\nm -rf / && echo hi # it's ;\necho esac", "destructive_removal"),
     ('{ :; }\nfor i in 1\ndo\n{\n: | if true; the\\\n\\\nn rm -rf /; fi\n}\ndone', "destructive_removal"),
+    # scripts nested in quotes a level deeper: bash's own quote removal of the word, and a
+    # single-quoted `\$` that stays for the shell it reaches
+    ('set +f ; bash -s <<< "bash -c \\"case \\\\\\$(case \\\\\\$(builtin command r\\\\\\\\\nm -rf \'/\') in *) ;; esac) in *) ;; esac\\""\necho it\'s;echo {a,b}', "destructive_removal"),
+    ('cat <<Q\ndon\'t $HOME\nQ;\necho "$(echo \'q)\')"\n\necho `echo \\`echo a\\``&&\nfalse || coproc C { for x in $(bash -c \'sh -c "[[ \\$(nice \\\\rm -rf \\$\'\\\'\'/\'\\\'\') ]]"\'); do :; done; }; wait;\necho it\'s && : ${x:=\'}', "destructive_removal"),
+    ('coproc C { case a in (b|a) g ( ) {\nsh -c \'find . -maxdepth 0 -exec bash -c ": \\$(<<<x r\\\\\nm -rf /)" \\;\'\n}\ng ;& c) : ;; esac; }; wait', "destructive_removal"),
+    ('bash -c "eval \\": | { echo \\\\\\"\\\\\\${u:-\\\\\\$(env -- \\\\\\\\rm -r\'\'f /)}\\\\\\"; }\\""\n(( 1 < 2 ))', "destructive_removal"),
+    # printf's words as bash's quote removal leaves them; env's own heredoc reaches what env -S
+    # starts; a case pattern's `)` in a heredoc body inside `$( )`
+    ('printf \'%s\\n\' "eval \\"! cat <<E\n\\\\\\$({fd}>o.txt \\\\\\"rm\\\\\\" -rf \'/\')\nE\\"" | sh\ncat <<$X\nit\'s\n$X', "destructive_removal"),
+    ("{ :; }\nx=$'\\'' && env -S 'sh -c 'bash <<EOF\n'rm' -rf /\nEOF''; cat <<EOF $(echo a)\nit's\nEOF ;\n{ :; }", "opaque_command"),
+    ('case $(time : "$(bash <<\'EOS\'\ncase $(env r\\\nm -rf / >|o.txt) in *) ;; esac\nEOS)") in *) ;; esac;cat <<-\tQ\n\tit\'s\n\tQ', "destructive_removal"),
+    ("echo case in&&\ncat <<Q\ndon't $HOME\nQ;echo a#b;x=$( cat <<'EOS' | bash\ncase $PWD in *) if true;then cat <($'\\162m' -rf /);fi ;; esac\nEOS\n)\n: 'a;b'", "opaque_command"),
+    # an array subscript's substitution ends where bash ends it, quotes inside skipped
+    ('x=1 && time -p x=\'a[$(source /dev/stdin <<< ": | { case a in (b|a) A=1 \\\\rm -r\'\'f / ;& c) : ;; esac; }")]\'; : $((x))', "destructive_removal"),
+    # ... and where bash's parser ends it: a case pattern's `)` in a funsub closes nothing
+    ("x='a[$(: ${ case $PWD in *) <<<x rm -r''f / ;; esac; })]'; : $((x))\n\ncat <<1\nit's\n1", "destructive_removal"),
+    ("x='a[$(case $PWD in *) rm -rf / ;; esac)]'; : $((x))", "destructive_removal"),
+    ("x='a[$(# a ) in a comment\nrm -rf /)]'; let x", "destructive_removal"),
+    # env splits its string itself: any word with a `=` before the program is an assignment
+    ("env -S 'x=|1 'rm' -rf /' ;\nca(t <<-EOF\n\tit's\n\tEOF", "destructive_removal"),
+    ("env -S 'x<<=1 rm -rf /'\ncat <<$X\nit';s\n$X || echo a # x \\", "destructive_removal"),
+    ("env -S 'x;=1 rm -rf /'", "destructive_removal"),
+    ("env -S '-i x=1\\_rm -rf /'", "destructive_removal"),
+    # `for (\` NL `(`: bash joins the continuation before it sees `((`
+    ("echo ${x:<<-a}\n\necho $'it\\'s' && for (\\\n(i=0;i<1;i++)) do rm -rf /; done", "destructive_removal"),
+    # arithmetic reads its text as if in double quotes: a `'` quotes nothing there, in `$(( ))`,
+    # `(( ))`, `for (( ))`, `$[ ]` and a substring's offset and length
+    ("cat <<E\\OF\nit's\nEOF\n\necho $'it\\'s' ;\n: $(( x='a[$({fd}>o.txt $'\\162m' -\"rf\" /)]'; : $((x)) ))\ncat <<$\"EOF\"\nit's\nEOF", "destructive_removal"),
+    (": $(( '$(rm -rf /)' ))", "destructive_removal"),
+    ("(( '$(rm -rf /)' ))", "destructive_removal"),
+    ("for (( '$(rm -rf /)'; 0; )); do :; done", "destructive_removal"),
+    (": $[ '$(rm -rf /)' ]", "destructive_removal"),
+    ("x=abc; : ${x:'$(rm -rf /)'}", "destructive_removal"),
+    ("x=abc; : ${x:1:'$(rm -rf /)'}", "destructive_removal"),
+    # an operator, a redirection or a `(` inside an array's parentheses: bash drops that line
+    # and reads on at the next one, outside whatever compound held it
+    ("x=(\"a\nb\"; find . -maxdepth 0 -execdir bas\"h <<E\n\"rm\" -rf /\nE \\;", "opaque_command"),
+    ("x=(a; b\nrm -rf /", "opaque_command"),
+    ("x=(a > f\nrm -rf /", "opaque_command"),
+    ("declare -a x=(a; b\nrm -rf /", "opaque_command"),
+    ("{ x=(a (b)\nrm -rf /\n}", "opaque_command"),
+    ("let x=(1|2)\nrm -rf /", "opaque_command"),
+    # `${ cmd; }` closes at a `}` where a command starts, whatever follows it
+    ("cat <<Q\r\ndon't $HOME\r\nQ&&\r\necho a\u00a0b ; : ${| false || <<<x $'\\162m' -rf '/'; }\r\n\r\ncat <<-\tQ\r\n\tit's\r\n\tQ;set -f", "destructive_removal"),
+    (": ${| rm -rf /; }\r", "destructive_removal"),
+    # an expansion's word outside double quotes runs a process substitution
+    ("set +f;\n: ${x:='} # it's\n && { cat <(for ((;;)); do timeout 2 r''m -rf '/'; break; done);}\n\necho \\'&&\ncat << 9\n'\n9", "destructive_removal"),
+    (": ${x:=<(for ((;;)); do rm -rf /; break; done)}", "destructive_removal"),
+    # `$((` with no `))`: bash ends it by its parentheses, then reads the text between as a
+    # command substitution, where a heredoc ends with that text
+    ("echo $(( 1 << 2 )\n); {\\\n r$'m' -rf /; } | echo then", "destructive_removal"),
+    ("echo $(( 1 << 2 )\n); rm -rf /", "destructive_removal"),
+    # a heredoc in a subshell keeps its renamed delimiter, its body after the subshell
+    ("( cat <<. )\nit's\n.\nrm -rf /", "destructive_removal"),
+    ("( cat <<2 )\nit's\n2\nrm -rf /", "destructive_removal"),
 ])
 def test_what_the_differential_found_is_read(cmd, category):
     """Each row is a class the bash differential found while the grammar reading was built:
@@ -467,12 +722,40 @@ def test_what_the_differential_found_is_read(cmd, category):
         assert v.blocked and category in v.categories, (profile, cmd, v.categories)
 
 
+def test_eval_keeps_the_earlier_reading_of_its_words():
+    """eval's redirections are its own and no words of its text, and its words as the check read
+    them before are read as well, so no earlier refusal is lost (union).
+    MUTATION: read eval's words without its redirections only - red."""
+    for profile in ("host", "jailed", "remote"):
+        v = classify_command("eval <<( << mkfs x", profile=profile)
+        assert v.blocked, (profile, v.categories)
+
+
+@pytest.mark.parametrize("text", [
+    "( cat <<. )" + NL + "it's" + NL + "." + NL + "echo a",
+    "( cat <<2 ) | sort" + NL + "x" + NL + "2",
+    "echo $(( 1 << 2 )" + NL + "); echo a",
+])
+def test_a_renamed_delimiter_matches_its_line(text):
+    """A heredoc written inside a list that is joined into text before its body comes (a
+    subshell, a `$((` read as a command substitution) keeps the name its delimiter line gets.
+    MUTATION: rename such a delimiter only when its body is read - red."""
+    written = cp._grammar_text(text)
+    names = re.findall(r"<<-?\s*'?(H[0-9a-z]+)", written)
+    assert names, written
+    for name in names:
+        assert name in written.split(NL), (name, written)
+
+
 def test_the_new_shapes_name_their_way_out():
     """Each new opaque shape names its way out, and the way out passes."""
     for cmd, words, way_out in [
         ("$PYTHON -m pytest", "write the program name out", "python3 -m pytest"),
         ("base64 -d f | sh", "decode it into a file, read the file", "base64 -d f > f.sh"),
         ("pwsh -enc ZQ==", "write the command out with `-Command`", "pwsh -Command Get-Date"),
+        ('eval "$cmd"', "the command itself", "eval 'echo hi'"),
+        ("xargs -I{} sh -c 'wc -l {}'", "hand each item over as an argument",
+         "xargs -I{} sh -c 'wc -l \"$1\"' _ {}"),
     ]:
         v = classify_command(cmd, profile="host")
         assert v.blocked and words in v.reason, (cmd, v.reason)
@@ -544,7 +827,7 @@ def test_a_grammar_only_refusal_carries_its_own_reason():
 
 @pytest.mark.parametrize("unit", [
     "echo a # it's" + NL, "{ ", "if true; then ", "cat <<." + NL + "x's" + NL + "." + NL,
-    "echo $'a" + B + "'b' ", "r" + B + NL,
+    "echo $'a" + B + "'b' ", "r" + B + NL, "cat <<." + NL + "." + NL, "((a) ); ",
 ])
 def test_grammar_reading_is_linear(unit):
     """8x the text takes at most 20x the time plus 0.05 s (the grammar text, which every

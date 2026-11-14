@@ -673,8 +673,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   an apostrophe, after a heredoc with any delimiter (`<<.`, `<<1`, `<<$'EOF'`, also one
   without its closing line), inside `$'...'` strings, across line continuations, behind a
   redirection in front of the program (`>f mkfs x`), in text piped into a shell by `echo`,
-  `printf` or a heredoc (`cat <<'EOF' | bash`), and in the commands `env -S`, `watch`,
-  `find -exec` and `find -delete` run. A program named by a variable, a glob or a brace
+  `printf`, `yes`, a subshell, `bash -c` or a heredoc (`cat <<'EOF' | bash`), also from double quotes
+  nested in other quotes, and in the commands `env -S`, `watch`, `trap`, `find -exec` and
+  `find -delete` run. A program named by a variable, a glob or a brace
   expansion, decoded text piped into a shell (`base64 -d | sh`) and PowerShell's
   `-EncodedCommand` are refused, and each refusal names the plain way to write the command.
   These refusals hold in every lane, also after a yes in the chat. Everyday commands that are
@@ -683,9 +684,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
     `$SHELL -c '...'`: write the program out (`python3 -m pytest`).
   - `$HOME/.local/bin/uv sync`: `"$HOME/.local/bin/uv" sync` or `~/.local/bin/uv sync`.
   - `for t in black ruff; do $t --version; done`: write each command.
-  - `eval "$cmd"`, `bash -c "$cmd"`, `echo "$SCRIPT" | bash`: save the text to a file, read
-    it, then run the file.
-  - `uv run --with "$PKG" pytest`: `uv run --with="$PKG" pytest`.
+  - `exec "$@"`, `nohup "$CMD" &`: write the program out.
+  - `eval "$cmd"`, `bash -c "$cmd"`, `echo "$SCRIPT" | bash`: write the command itself out,
+    or save the text to a file, read it, then run the file.
+  - `rm -rf ~/.cache/$X`, `rm -rf "$HOME/$X"`, `/var/tmp/$USER` and the like (a variable after
+    a protected folder; an empty variable deletes that folder): write the path out.
   - `./build/*/tool`: write the path out.
   - `... | base64 -d | sh`, `xxd -r -p | sh`, `... | rev | sh`: decode into a file, read it,
     then run it.
@@ -697,6 +700,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
     literal (`` fetch(`/api/${id}`) ``): quote the delimiter (`<<'EOF'`).
   - An inline script fed to a shell through a heredoc that names its programs by variables
     (`$INSTALL_CMD`): write it to a file and run the file.
+  - A script fed to a shell through an unquoted heredoc or a double-quoted here-string with a
+    variable in it (`bash <<EOF` ... `echo $NAME`, `bash <<< "echo $NAME"`): bash fills the
+    variable in before the shell reads the script, so quote it (`<<'EOF'`, `<<< '...'`) and
+    the shell reads the variable itself.
+  - `uv run "$TOOL" ...`, `find ... -exec "$TOOL" ...` (a program named by a variable that a
+    runner or find starts): write the program out.
+  - On Windows, cmd.exe's `for %i in (*.txt) do ...`: use PowerShell
+    (`powershell -Command "Get-ChildItem *.txt | ForEach-Object { ... }"`).
+  - An array with `;`, `|`, `&`, `<`, `>` or `(` unquoted between its parentheses
+    (`arr=(a;b)`, a syntax error after which bash runs the next line): quote the element
+    (`arr=('a;b')`).
 
   `find / -delete` and `find / -exec rm -rf {} +` are refused too; a `find` with a test
   before its `-exec` (`find ~ -name '*.tmp' -exec rm -rf {} +`) passes as before. Takes

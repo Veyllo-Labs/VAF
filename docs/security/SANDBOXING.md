@@ -916,17 +916,20 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   installer piped into a shell is named rather than refused, because that is how a server
   is commonly set up). A wrapper's option values are stepped over (`sudo -u root rm -rf /`
   is judged as `rm -rf /`). Before this, ten of ten measured wrapped forms passed. Also the
-  commands a carrier runs: `env -S`/`--split-string` (and the program after env's
-  assignments, also one whose name is no identifier: `env }x=1 cmd`), `watch` (its words, as
-  `sh -c` gets them), `find -exec`/`-execdir`/`-ok`/`-okdir` up to `;` or `+`, where `{}` stands
-  for the start paths when no test comes before it (`find / -exec rm -rf {} +` is `rm -rf /`)
+  commands a carrier runs: `env -S`/`--split-string` (its string read as shell text and as
+  env splits it itself, quotes grouping and `\_` a blank, and the program after env's
+  assignments, also one whose name is no identifier: `env }x=1 cmd`, `env -S 'x=|1 cmd'`),
+  `watch` (its words, as `sh -c` gets them), `find -exec`/`-execdir`/`-ok`/`-okdir` up to
+  `;` or `+`, where `{}` stands for the start paths when no test comes before it
+  (`find / -exec rm -rf {} +` is `rm -rf /`)
   and stays `{}` after one (`find ~ -name '*.tmp' -exec rm -rf {} +` passes), and
   `find START -delete` with no test before it as `rm -rf START`. A here-string or heredoc
   reaches the command a carrier starts (`find . -exec bash \; <<< '...'`, `eval bash <<EOF`,
   whose redirections are its own and no words of the text it runs), and so does what a
   subshell's or an `exec`'s redirections give its input. A descriptor counts as opened only by
   a redirection BEFORE the one that copies it (`bash <&3- 3<f` copies what an earlier command
-  opened, then opens 3). A recursive delete whose target puts a variable after a protected
+  opened, then opens 3), and a copy keeps what that descriptor holds (`cat 3< <(base64 -d f)
+  <&3 | bash` hands bash decoded text). A recursive delete whose target puts a variable after a protected
   root is judged by that root (`rm -rf /$X`, `"$HOME/$X"`); one that starts with the variable
   is not (`rm -rf "$BUILD_DIR"` passes).
 - **A program it cannot see is refused (`opaque_command`), with the way out in the
@@ -984,24 +987,29 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   `-EncodedCommand` and its short forms `-enc`, `-e`, `-ec`, also after `/`): write the
   command out with `-Command`. A shell's `-c` under xargs whose script holds xargs' replace
   string, or that has no script, so xargs supplies it (`xargs -I{} sh -c {}`): hand the item
-  over as an argument (`xargs -I{} sh -c 'black "$1"' _ {}`) or run the program directly.
+  over as an argument (`xargs -I{} sh -c 'black "$1"' _ {}`) or run the program directly
+  (shape `xargs_text`, whose refusal says so).
   These refusals hold on all four lanes and after a yes in the chat, like the substitution
   as the program. The everyday commands they refuse, each with its way out:
   `$EDITOR notes.md`, `$PAGER log.txt`, `$PYTHON -m pytest`, `"$PYTHON" -m pytest`,
   `${CC:-gcc} -o app app.c`, `$SHELL -c '...'` (write the program out);
   `$HOME/.local/bin/uv sync` (`"$HOME/.local/bin/uv" sync` or `~/.local/bin/uv sync`);
-  `for t in black ruff; do $t --version; done` (write each command); `eval "$cmd"`,
-  `bash -c "$cmd"`, `curl ... | while read l; do bash -c "$l"; done`, `echo "$SCRIPT" | bash`,
-  `printf '%s' "$X" | sh` (save the text to a file, read it, run it);
-  `uv run --with "$PKG" pytest`, `npx --package "$P" tool` (`--with="$PKG"`, the rule a
-  `$(...)` value already has); `./build/*/tool`, `/opt/*/bin/x` (write the path);
+  `for t in black ruff; do $t --version; done` (write each command); `exec "$@"`,
+  `nohup "$CMD" &` (write the program out); `eval "$cmd"`, `bash -c "$cmd"`, `curl ... |
+  while read l; do bash -c "$l"; done`, `echo "$SCRIPT" | bash`, `printf '%s' "$X" | sh`
+  (write the command itself out, or save the text to a file, read it, run it);
+  `./build/*/tool`, `/opt/*/bin/x` (write the path); a recursive delete whose target puts a
+  variable after a protected root (`rm -rf ~/.cache/$X`, `/var/tmp/$USER`, `"$HOME/$X"`;
+  write the path out, since an empty variable deletes the root);
   `... | base64 -d | sh`, `xxd -r -p | sh`, `openssl base64 -d | bash`, `... | rev | sh`
   (decode into a file, read, run); `powershell -EncodedCommand ...` (`-Command`); an unquoted
   heredoc whose body holds a backtick span with a variable, such as a JavaScript template
   literal (quote the delimiter, `<<'EOF'`, which the refusal offers first when the heredoc
   goes into a file); and an inline script fed to a shell through a heredoc that names its
   programs by variables (`$INSTALL_CMD`; write it to a file and run the file, which is not
-  read).
+  read). On Windows, where host commands run in cmd.exe, `for %i in (*.txt) do ...` is read
+  as bash too and refused (bash takes `(*.txt)` for a subshell running a glob): use
+  PowerShell (`powershell -Command "Get-ChildItem *.txt | ForEach-Object { ... }"`).
 - **Share and device paths (`share_path`).** A command that names a network share or a
   Windows device path: the backslash UNC shape with a host and a share (`dir \\server\share`,
   `\\%COMPUTERNAME%\share`, `\\h@80\s`, `\\h\(share)`), a device prefix (`\\?\UNC\...`,
@@ -1084,7 +1092,9 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   substitutions are read. Arithmetic also runs a substitution held in an array subscript
   once a string becomes an array reference (`x='a[$(...)]'; echo $((x))`, `printf -v
   'a[$(...)]' v`, `let`): a substitution left as text in a quoted `NAME[...]` is read as a
-  command, not refused (`x='a[$(date)]'; echo $((x))` passes).
+  command, not refused (`x='a[$(date)]'; echo $((x))` passes). Such a `$(` ends where its
+  parentheses balance and where bash's parser ends it (a case pattern's `)` or one in a
+  comment closes nothing); both texts are read.
 - **`case`.** A `case` statement inside a substitution (the reserved word where a command
   starts, at the start, after `;`, `&&`, `||`, `|`, a newline, or after `if`, `while`,
   `until`, `then`, `do`, `else`, `{`, `!`, `time`, followed by exactly one shell word and
@@ -1115,13 +1125,26 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   `curl ... |& bash`, `bash <<< "$(curl ...)"` and `bash <(curl ...)`. The `&` of a
   redirection (`2>&1`, `&>f`) is no separator. The refusal names the way out: download to
   a file, read it, then run the file. Text that reaches a shell's input is read as its
-  script: what `echo` and `printf` print into the pipe (`echo 'rm -rf /' | bash`; dash's echo
-  decodes escapes, so both spellings are read), a heredoc or a here-string, also passed on
-  through a filter (`cat <<'EOF' | sort | bash`) or a command that runs another one
-  (`eval`, `sh -c`, `env -S`, a runner), and into a carried command or a subshell. A variable
-  or a substitution in such text makes it shell text another command prints (`echo "$X" |
-  bash`): save it to a file, read it, then run it. A newline right after a `|` continues the
-  pipeline, as bash reads it.
+  script (`bash`, `sh -s`, `. /dev/stdin`): what `echo`, `printf` and `yes` print into the
+  pipe (`echo 'rm -rf /' | bash`; dash's echo decodes escapes, so both spellings are read;
+  printf's format is used again while arguments are left, as printf does, `%b` decodes its
+  argument's escapes, and output past a bound is refused as unreadable text), what a
+  subshell, a group or a command run from text prints (`( echo '...' ) | sh`,
+  `bash -c "echo '...'" | bash`), a heredoc
+  or a here-string, also passed on through a filter (`cat <<'EOF' | sort | bash`) or a
+  command that runs another one (`eval`, `sh -c`, `env -S`, a runner), and into a carried
+  command or a subshell. Text from double quotes is read the way bash hands it over:
+  shlex keeps the backslash of `\$` there, bash takes it off (`bash <<< "\$(echo rm) -rf /"`
+  runs `rm`), so such a text is read both ways, and the text a command runs (`bash -c`,
+  `eval`, `su`, `ssh`, `watch`, `find`, `trap`) also with its words as bash's own quote
+  removal leaves them, which reaches scripts nested in quotes several levels deep. A variable
+  or a substitution in what echo or printf prints makes it shell text another command prints
+  (`echo "$X" | bash`): save it to a file, read it, then run it. A variable bash expands in
+  a double-quoted here-string or an unquoted heredoc before the shell reads it is refused as
+  `expanded_input` (`bash <<< "echo $P"`, `bash <<EOF` with `echo $P` in the body, also
+  passed on through `cat <<EOF | bash`): quote it (`<<'EOF'`, `<<< '...'`), so the shell
+  reads the variables itself; a quoted heredoc passes. A newline right after a `|`
+  continues the pipeline, as bash reads it.
 - **Bounds.** Every reading, the command itself included, spends one of
   `MAX_NESTED_COMMANDS` (64), so one command carries at most 63 nested readings, each
   reading counting as one (`$(( $(x) ))` is two), and a command nested more than
@@ -1146,9 +1169,10 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   1.03 s idle and 1.44 s with the machine under load, `uv run -a` 0.76 s, `x=` 0.52 s, a
   heredoc file 0.10 s; `npx --x y ...` took 10 s at 100 KB before). The grammar reading
   writes its text in one pass and reads it only when it differs from the command, with a
-  budget of its own at the top level; all three readings together, 23 shapes at
-  131 000 characters: 1.27 s at most (functions `f() { echo a; }; ` repeated; 0.71 s
-  before), every shape linear (8 times the length, about 8 times the time).
+  budget of its own at the top level; all three readings together, 33 shapes at
+  131 000 characters, measured on a machine under load (load average 9): 2.0 s at most (a
+  heredoc `cat <<.` with an empty body repeated; 0.74 s before, measured alongside), every
+  shape linear (8 times the length, about 8 times the time).
 - **Compound commands, comments and heredocs (the grammar reading).** The reading above cuts a
   command at its separators and judges simple commands, so the shell's grammar around them
   hid the command word: `{ rm -rf /; }`, `if true; then rm -rf /; fi`, `for`, `while`,
@@ -1158,26 +1182,47 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   refusals). In that text a comment is gone (a `#` where a word starts, to the end of its
   line; a backslash at its end joins nothing, measured with bash); every heredoc ends where
   bash ends it, whatever its delimiter (`<<.`, `<<1`, `<<$X`, `<<$'EOF'`, `<<"E"OF`, an
-  unquoted body's lines joined at a line continuation first, inside `$( )` also at a line
-  like `EOF)`, and without its delimiter line at the end of the text), with its body as data
-  and an unquoted body's substitutions as commands; a line continuation is joined, also
+  `<<a$(b)c`; an unquoted body's lines joined at a line continuation first; one written
+  inside `$( )` also at the first line that starts with its delimiter, as bash 5.3 does,
+  the rest of that line read as commands (`EOF)`); without its delimiter line at the end of
+  the text), with its body as data and an unquoted body's substitutions as commands, and a
+  renamed delimiter that is no line of the text; inside `$( )` or a subshell a quote a body
+  leaves open is closed at its end and its parentheses are balanced by comment lines (a
+  case pattern's `)`), since the reading above counts quotes and parentheses across it
+  (`echo "$(cat <<'EOF'` NL `it's` NL `EOF` NL `)"; rm -rf ~`); a line continuation is joined, also
   inside a word or an operator; `$'...'` is decoded into one quoted word and `r\m` is `rm`;
   reserved words count only where a command starts: `!`, `time`, `coproc`, `function NAME` and
   `NAME ()` are dropped, a compound command becomes a list of its commands (`for NAME in
   WORDS`, `case WORD in` and each case pattern become `: WORDS`, since bash expands them), and
   a compound in a pipeline or with a redirection after it becomes a subshell, so it reads the
   pipe like one (`curl x | { bash; }`, `{ bash; } <&3`); `[[ ... ]]` stays as written, bash
-  5.3's `${ cmd; }` is a command substitution, and inside `((...))` a `<<` is a shift and `#`
-  no comment; redirections move behind the last word of their simple command (`>f mkfs x`,
-  `sudo >f rm -rf /`, `rm -rf ~>/dev/null`). The text `bash -c`, `eval`, `ssh` or a runner
-  runs is written out the same way. Measured: a differential that runs generated commands
+  5.3's `${ cmd; }` is a command substitution that closes at a `}` where a command starts,
+  whatever follows it (`}x`), `${...}` ends at its first `}`, its nested quotes inside double
+  quotes are left out (`"${x#"'"}"`) and outside them a `<(...)` in its word runs
+  (`${x:=<(cmd)}`), and inside `((...))` a `<<` is a shift and `#` no comment once its `))`
+  is found (without one bash reads two subshells, and a `$((` without one ends where its
+  parentheses balance, the text between read as a command substitution of its own, where a
+  heredoc ends with that text); a heredoc in a subshell keeps a renamed delimiter whose body
+  comes after the subshell (`( cat <<. )` NL ...); arithmetic reads its text as if in double
+  quotes, so a `'` quotes nothing in `$((...))`, `((...))`, `for ((...))`, `$[...]` and a
+  substring's offset and length (`${x:'$(cmd)'}` runs cmd); an operator, a redirection or a
+  `(` inside an array assignment's parentheses (`x=(a;` NL `cmd`) is a syntax error after
+  which bash drops that line and runs the next one, so such a command is refused (quote the
+  element: `arr=('a;b' c)`);
+  redirections move behind the last word of their simple command (`>f mkfs x`,
+  `sudo >f rm -rf /`, `rm -rf ~>/dev/null`, `{fd}>f rm -rf /`). The text `bash -c`, `eval`,
+  `ssh`, `trap` or a runner runs is written out the same way, and the program a runner or
+  `find -exec` starts is judged in its spelling as written (`uv run "$TOOL" -rf ~`). Measured: a differential that runs generated commands
   (comments with apostrophes, heredocs with every kind of delimiter, `$'...'` with `\'`, line
   continuations, every reserved word and brace form, `!`, `time`, `coproc`, functions,
   leading redirections, pipes into groups, `env -S`, `find -exec`) through bash with a marker
   program in the dangerous one's place, and checks the twin with `rm -rf` in its place:
-  300 000 draws, 114 064 of which ran the marker, and every one of their twins refused on
-  host, jailed and remote (bash 5.3; the suite runs 1 600 draws). The classes the
-  differential found on the way are each pinned in `tests/test_command_grammar_reading.py`.
+  300 000 draws, 178 814 of which ran the marker, and every one of their twins refused on
+  host, jailed and remote; two further generators (nested quote levels, carriers, arrays,
+  arithmetic and heredocs inside substitutions) ran 60 000 and 15 000 draws, 39 609 and
+  3 497 of which ran the marker, again with no twin let through (bash 5.3; the suite runs
+  1 600 draws). The classes the differential found on the way are each pinned in
+  `tests/test_command_grammar_reading.py`.
 - **Named boundary: what it does not read.** cmd.exe's and PowerShell's own grammar (`%VAR%`
   as the program, the text `pwsh -Command` runs); dash's differences from bash, read as bash,
   the larger grammar; decompressors and other programs that write new text piped into a
@@ -1188,7 +1233,11 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   behind a substitution (`flock f $(true) cmd`), as their plain forms did before; a
   descriptor named through a variable (`exec {fd}< ...; bash /dev/fd/$fd`); a coprocess's or a
   named pipe's text; the file names `find` or `xargs` hand a command (`find . -exec sh -c 'cat
-  {}' \;`). A `case` statement inside a substitution stays refused as unreadable (see
+  {}' \;`); the stdin shell of `sudo -s`, `su` or `at`; shell features that store command
+  text and run it later or elsewhere: `alias` with `expand_aliases`, `${x@P}`, `PS4` with
+  `set -x`, `PROMPT_COMMAND`, `BASH_ENV`, `mapfile`/`readarray -C`, `complete -C`, `bind -x`
+  (`trap`'s command is read); the output of other programs piped into a shell beyond those
+  named above. A `case` statement inside a substitution stays refused as unreadable (see
   `case` above).
 - **Comments and heredocs in the other two readings.** Neither takes a `#` as a comment, so
   for them an apostrophe in a comment or a heredoc body opens a quote that swallows the later

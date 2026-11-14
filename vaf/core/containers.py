@@ -74,6 +74,21 @@ def container_state(name: str) -> Optional[str]:
     return r.stdout.strip() or None
 
 
+def container_gone(name: str) -> bool:
+    """True only when docker says there is no such container. `container_state` answers None
+    for that and for a daemon that did not answer alike; a caller that deletes what belongs
+    to a container once it is gone (its record, a mark that keeps a refused mount refused)
+    must not take an outage for a removal."""
+    try:
+        r = docker(["inspect", name, "--format", "{{.State.Status}}"], timeout=20)
+    except Exception:
+        return False
+    if r.returncode == 0:
+        return False
+    err = (r.stderr or "").lower()
+    return "no such object" in err or "no such container" in err
+
+
 def count_running(name_prefix: str) -> Optional[int]:
     """How many running containers carry this name prefix. Counted at docker, not in
     memory, so containers another VAF process started count too. None when docker does

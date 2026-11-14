@@ -1054,7 +1054,9 @@ identity); the result is a `subprocess.CompletedProcess` with text output, and i
 raises: a missing git, a missing folder, a timeout (`timeout=`, 60 seconds by default) or a
 refusal come back as `returncode` -1 with the reason in `stderr`. It pins with `-c`, which
 outranks every config file and comes after your own pairs: an empty hooks directory VAF
-owns, and no fsmonitor, pager, editor, askpass, credential helper, signing, external diff,
+owns, every hook event switched off (`hook.<event>.enabled=false`) and every hook the config
+defines switched off by name (git 2.54 runs those on `status` and `add` too, and neither the
+hooks directory nor `--no-verify` stops them), and no fsmonitor, pager, editor, askpass, credential helper, signing, external diff,
 textconv or signature check. Every filter, diff and merge driver the repository's own config
 names is switched off by name, so a merge that needed one fails instead (a conflict, or an
 error that stops the revert on an older git). `diff`, `log`
@@ -1134,7 +1136,9 @@ swap on the host after that does not reach the namespace: 0 leaks of 963 answere
 calls and 0 writes in 300 `reset --hard` calls under the same racer. A start the check
 refused is repeated at most twice, never once git ran, and then refused (`returncode` -1)
 with the last start's cause ("could not start in a private view of ..."). The price is one
-namespace starts per call, about 10 ms (15 against 5 ms for a status). A folder inside a
+namespace starts per call, about 12 ms (17 against 5 ms for a status). The namespace has no
+network: a git-lfs object missing locally cannot be downloaded there, so fetch it with plain
+git first. A folder inside a
 folder the namespace binds read-only (/opt, a git install prefix) keeps the handles alone. In that view git can write only inside your folder (the rest is
 read-only, with no scratch `/tmp`): a command that writes elsewhere, such as `worktree add
 <path outside>`, `archive -o` or `bundle create` with a path outside, fails with "Read-only

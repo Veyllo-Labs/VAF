@@ -432,6 +432,87 @@ def test_a_driver_only_the_namespace_can_see_is_switched_off(world, include):
     assert not ran.exists(), "the repository's own filter ran"
 
 
+def _config_hooks_run() -> bool:
+    """Whether this git runs hooks its config defines (git 2.54 and later)."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        subprocess.run(["git", "init", "-q", d], check=True, capture_output=True)
+        mark = os.path.join(d, "RAN")
+        subprocess.run(["git", "-C", d, "config", "hook.probe.command", f"touch {mark}"],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "-C", d, "config", "hook.probe.event", "post-index-change"],
+                       check=True, capture_output=True)
+        open(os.path.join(d, "f"), "w").write("x")
+        subprocess.run(["git", "-C", d, "add", "f"], capture_output=True)
+        return os.path.exists(mark)
+
+
+@pytest.mark.skipif(not path_jail._DIR_FD, reason="no folder handles here")
+@pytest.mark.parametrize("lane", [True, False])
+def test_no_hook_the_config_defines_runs(world, monkeypatch, lane):
+    """A hook git 2.54 lets the config define is no file in the hooks folder: the empty
+    `core.hooksPath` and `--no-verify` did not stop it, and it ran on status, add and commit
+    (measured, reaching the host's loopback). MUTATION: drop the hook pins - red."""
+    if not _config_hooks_run():
+        pytest.skip("this git runs no hooks from its config")
+    if not lane:
+        monkeypatch.setattr(folder_mount, "namespace_available", lambda: False)
+    elif not folder_mount.namespace_available():
+        pytest.skip("no private mount namespace here")
+    for name, event in (("watch", "post-index-change"), ("refs", "reference-transaction"),
+                        ("done", "post-commit")):
+        _git("config", f"hook.{name}.command", f"touch HOOK-{event}", cwd=world.a)
+        _git("config", f"hook.{name}.event", event, cwd=world.a)
+        _git("config", f"hook.{name}.enabled", "true", cwd=world.a)
+    (world.a / "f.txt").write_text("changed\n", encoding="utf-8")
+    a = str(world.a)
+    for args in (["status", "--short"], ["add", "-A"], ["commit", "-qm", "hooked"]):
+        proc = gr.run_project_git(args, cwd=a, expect_folder=a)
+        assert proc.returncode == 0, (args, proc.stderr)
+    assert not list(world.a.glob("HOOK-*")), "a hook of the repository's config ran"
+    argv = gr.project_git_command(["status"], a)
+    for event in ("post-index-change", "reference-transaction", "pre-commit"):
+        assert f"hook.{event}.enabled=false" in argv
+    for name in ("watch", "refs", "done"):
+        assert f"hook.{name}.enabled=false" in argv
+
+
+@_LANE
+def test_git_in_the_namespace_has_no_network(world):
+    """No git command VAF runs reaches the network, so the namespace has none: a filter of the
+    person's own global config (the one kind that still runs there) cannot reach a listener
+    on the host's loopback. MUTATION: git's namespace without --unshare-net - red."""
+    import shutil
+    import socket
+    python = shutil.which("python3", path="/usr/bin:/bin")
+    if not python:
+        pytest.skip("no system python3 to run the filter inside the namespace")
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(64)       # the filter runs once per file; a full queue would drop, not refuse
+    port = srv.getsockname()[1]
+    script = world.a / ".git" / "net.py"     # bound: the namespace holds only the project
+    script.write_text(
+        "import socket, sys\n"
+        "try:\n"
+        f"    socket.create_connection(('127.0.0.1', {port}), timeout=3)\n"
+        "    r = 'REACHED'\n"
+        "except OSError as e:\n"
+        "    r = 'blocked ' + repr(e)\n"
+        f"open({str(world.a / 'NET')!r}, 'w').write(r)\n"
+        "sys.stdout.write(sys.stdin.read())\n", encoding="utf-8")
+    _git("config", "--global", "filter.own.clean", f"{python} {script}", cwd=world.a)
+    (world.a / ".gitattributes").write_text("*.txt filter=own\n", encoding="utf-8")
+    (world.a / "n.txt").write_text("hi\n", encoding="utf-8")
+    a = str(world.a)
+    try:
+        proc = gr.run_project_git(["add", "-A"], cwd=a, expect_folder=a)
+    finally:
+        srv.close()
+    assert proc.returncode == 0, proc.stderr
+    assert (world.a / "NET").read_text().startswith("blocked"), (world.a / "NET").read_text()
+
+
 @_LANE
 def test_the_global_ignore_file_hides_files_inside_the_namespace_too(world):
     """`core.excludesFile` usually names a file in the home folder, which the namespace did
@@ -751,7 +832,7 @@ def test_a_shell_jail_that_cannot_start_says_why(tmp_path, monkeypatch):
     rc, out, err, mode = wx.run_in_workspace(str(tmp_path), "true", **_NO_ACCOUNT)
     assert (rc, mode) == (-2, "refused")
     assert "No permissions to create new namespace" in err and "try again" in err.lower()
-    assert "vaf health" in err
+    assert "bubblewrap can start on this host" in err
 
 
 @pytest.mark.parametrize("installed", [True, False])

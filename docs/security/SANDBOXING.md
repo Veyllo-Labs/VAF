@@ -708,7 +708,9 @@ workspace mount includes `.git`, so the jailed command can write its config and 
 VAF then runs git there on the host (the final commit, history and rollback, the code audit,
 the SubAgent window's diffs, `/undo`). Those calls go through
 `vaf.core.git_runner.run_project_git`, which pins with `-c` everything through which that
-config names a program: an empty VAF-owned `core.hooksPath`, no fsmonitor, pager, editor,
+config names a program: an empty VAF-owned `core.hooksPath`, every hook event off and every
+hook the config defines (git 2.54) off by name (those ran on every call before, status
+included, and reached the host's loopback, measured), no fsmonitor, pager, editor,
 askpass, credential helper or signing, no external diff or textconv, and every filter and merge
 driver the repository's config defines switched off by name. It also pins the repository
 and the work tree to the project itself (`--git-dir=<top>/.git --work-tree=<top>`), because
@@ -754,10 +756,12 @@ writes in 300 `reset --hard` calls under the same racer. Two namespace starts pe
 command and the read of the repository's own drivers, which must see what the command sees (an
 include through `/proc/self/task/2/`, git's own task inside, let a filter run when that read
 was made outside, measured); the global and system config and the index are read through the
-handles, which pin them fully. About 15 against 5 ms for a status, and 190 against 65 ms for a
-coding run's state update of the SubAgent window. The namespace shares the network, so a
-git-lfs download of the person's own config works; the repository's own drivers are switched
-off. git there can write only inside the project folder: a
+handles, which pin them fully. About 17 against 5 ms for a status, and 215 against 65 ms for a
+coding run's state update of the SubAgent window. The namespace has no network
+(`--unshare-net`): no git command VAF runs fetches, pushes or clones, and a driver of the
+person's own global config, the one kind that still runs there, cannot reach the host's
+loopback services. Named boundary: a git-lfs object missing locally cannot be downloaded
+there; fetch it with plain git first. git there can write only inside the project folder: a
 command that writes elsewhere fails with "Read-only file system". The person's global ignore
 and attributes files are bound, so the agent's commits skip what they hide, as before.
 With `expect_folder` the checked folder must hold its own `.git`, decided once: git never

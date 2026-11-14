@@ -272,8 +272,9 @@ def run_guarded(argv_prefix: Sequence[str], held: HeldFolder, inside_path: str,
 
     A start whose pipe stayed empty ran nothing of the payload and is repeated, up to
     ``attempts`` starts; then a `HandoverRefused` (returncode -1, the last start's cause in
-    ``cause`` and a sentence with it in stderr) comes back. A start that reached the payload is returned as it is, never repeated. Exceptions of
-    the runner (a timeout) pass through; every pipe end is closed on every path."""
+    ``cause`` and a sentence with it in stderr) comes back. A start that reached the payload
+    is returned as it is, never repeated. Exceptions of the runner (a timeout) pass through;
+    every pipe end is closed on every path."""
     run = runner or subprocess.run
     extra_fds = tuple(run_kwargs.pop("pass_fds", ()) or ())
     last = ""
@@ -304,8 +305,8 @@ def run_guarded(argv_prefix: Sequence[str], held: HeldFolder, inside_path: str,
     refused = HandoverRefused(argv, -1, "",
                               f"could not start in a private view of {inside_path} ({last}). "
                               f"Try again; if it keeps failing, check that the folder was not "
-                              f"moved or replaced by a link, and check the sandbox "
-                              f"(`vaf health`)")
+                              f"moved or replaced by a link, and that bubblewrap can start on "
+                              f"this host")
     refused.cause = last
     return refused
 

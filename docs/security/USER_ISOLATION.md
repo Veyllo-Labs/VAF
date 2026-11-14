@@ -561,6 +561,12 @@ commit in 21 of 300 calls, and a new notes manager whose `.vaf` was missing left
   alone), and `reset --hard` wrote into the other folder in 0 of 300 calls (2 of 247 before).
   The person's global ignore and attributes files are bound too, so the agent's commits skip
   what they hide, as before.
+- hooks the project's config defines (git 2.54: `hook.<name>.command` and `.event`): not
+  files in the hooks folder, so the empty `core.hooksPath` and `--no-verify` did not stop
+  them, and they ran on every git call VAF made there, status included (measured, reaching
+  the host's loopback; the same before this change, then on the host). Every hook event is
+  now pinned off, and every hook name the config defines too, on every platform; the git
+  namespace also has no network.
 - the jailed shell's `--bind <path>`: the coder's `bash` jail binds the same held folder and
   runs the same check before the command (0 of 289 starts showed the other folder under the
   racer; 3 of 1000 with the plain bind), and its docker fallback runs the check in the

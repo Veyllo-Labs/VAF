@@ -625,6 +625,99 @@ def test_a_late_check_never_clears_a_newer_starts_mark(docker, mgr, tmp_path, mo
     assert ran == []
 
 
+def test_a_daemon_that_does_not_answer_is_not_a_removal(docker, mgr, tmp_path, monkeypatch):
+    """`inspect` answers non-zero for a missing container and for a daemon that does not
+    answer alike; only docker's own "no such" counts as gone. MUTATION: take any non-zero
+    inspect for gone - red (record and mark deleted, the next command runs in the refused
+    mount)."""
+    proj = _project(tmp_path, monkeypatch)
+    ran = []
+    monkeypatch.setattr(containers, "exec_bounded",
+                        lambda *a, **k: ran.append(a) or (0, "", "", False, False))
+    docker.mount_identity = "1:2"
+    docker.fail_stop = docker.fail_rm = True
+    real = FakeDocker.__call__
+    outage = {"on": False}
+
+    def _call(self, args, *a, **k):
+        if args and args[0] == "rm":
+            outage["on"] = True                     # the daemon stops answering at the rm
+        if outage["on"] and args and args[0] == "inspect":
+            outage["on"] = False                    # one failed inspect, then it answers
+            return _done(1, "", "Cannot connect to the Docker daemon at unix:///var/run/docker.sock")
+        return real(self, args, *a, **k)
+
+    monkeypatch.setattr(FakeDocker, "__call__", _call)
+    with pytest.raises(EnvironmentRefused):
+        mgr.create(ALICE, kind="project", project_path=str(proj))
+    (name,) = [n for n in docker.containers if n.startswith("vaf-env-")]
+    env_id = name.rsplit("-", 1)[1]
+    assert mgr._read_state(env_id) is not None and mgr._unverified_file(env_id).exists()
+    with pytest.raises(EnvironmentRefused):
+        mgr.exec(ALICE, env_id, "ls")
+    assert ran == []
+
+
+def test_a_stop_answered_by_a_daemon_error_is_not_a_stop(docker, mgr, tmp_path, monkeypatch):
+    """The quarantine asks whether the container still runs; a daemon that does not answer is
+    not "stopped". MUTATION: count any answer other than "running" as stopped - red."""
+    proj = _project(tmp_path, monkeypatch)
+    docker.mount_identity = "1:2"
+    docker.fail_stop = True
+    real = FakeDocker.__call__
+
+    def _call(self, args, *a, **k):
+        if args and args[0] == "inspect" and "{{.State.Status}}" in args:
+            return _done(1, "", "Cannot connect to the Docker daemon at unix:///var/run/docker.sock")
+        return real(self, args, *a, **k)
+
+    monkeypatch.setattr(FakeDocker, "__call__", _call)
+    with pytest.raises(EnvironmentRefused, match="could not be stopped"):
+        mgr.create(ALICE, kind="project", project_path=str(proj))
+
+
+def test_a_check_overtaken_by_a_newer_start_does_not_let_its_command_run(docker, mgr, tmp_path,
+                                                                         monkeypatch):
+    """Start A passes its check and pauses before it clears its mark; the container is stopped
+    and started again (start B, another folder mounted, B's own check still to come). A must
+    not take B's start as checked. MUTATION: go on when the mark is a newer start's - red."""
+    import threading
+    from vaf.core.folder_mount import HeldFolder
+    proj = _project(tmp_path, monkeypatch)
+    ran = []
+    monkeypatch.setattr(containers, "exec_bounded",
+                        lambda *a, **k: ran.append(a) or (0, "", "", False, False))
+    env = mgr.create(ALICE, kind="project", project_path=str(proj))
+    mgr.stop(ALICE, env.id)
+    paused, release = threading.Event(), threading.Event()
+    real_clear = EnvironmentManager._clear_unverified
+    first = []
+
+    def _slow_clear(self, e, token):
+        if not first:
+            first.append(token)
+            paused.set()
+            release.wait(10)
+        return real_clear(self, e, token)
+
+    monkeypatch.setattr(EnvironmentManager, "_clear_unverified", _slow_clear)
+    errors = []
+    t = threading.Thread(target=lambda: _catch(errors, mgr.exec, ALICE, env.id, "ls"))
+    t.start()
+    try:
+        assert paused.wait(10)                      # A checked, before its clear
+        docker.containers[env.container]["state"] = "exited"
+        with HeldFolder(proj) as held:              # start B marks itself, docker starts it
+            mgr._mark_unverified(env, held)
+        docker.containers[env.container]["state"] = "running"
+        docker.mount_identity = "1:2"               # B got another folder
+    finally:
+        release.set()
+        t.join(10)
+    assert errors, "A ran its command in B's unchecked start"
+    assert ran == []
+
+
 def test_a_daemon_on_another_kernel_is_not_asked(docker, mgr, tmp_path, monkeypatch):
     """A daemon in a VM shows other numbers: the mount stays by name there.
     MUTATION: always run the check - red."""

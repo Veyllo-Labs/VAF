@@ -748,7 +748,11 @@ class EnvironmentManager:
             except Exception:
                 pass
             try:
-                if containers.container_state(container) != "running":
+                state = containers.container_state(container)
+                # None is also "docker did not answer": only a listed state that is not
+                # running, or docker's own "no such container", counts as stopped.
+                if (state is not None and state != "running") or (
+                        state is None and containers.container_gone(container)):
                     return True
             except Exception:
                 pass
@@ -828,17 +832,38 @@ class EnvironmentManager:
             os.replace(tmp, path)
         return token
 
-    def _clear_unverified(self, env: Environment, token: Optional[str]) -> None:
-        """Remove the mark of the start ``token`` names, and only that start's."""
+    def _clear_unverified(self, env: Environment, token: Optional[str]) -> bool:
+        """Remove the mark of the start ``token`` names, and only that start's. False when a
+        newer start's mark is there instead: the container was started again after this
+        check, so what was checked is not what runs now, and the caller must not go on."""
         if not token:
-            return
+            return True
         with self._locked():
             mark = self._read_mark(env.id)
-            if mark is not None and mark["token"] == token:
-                try:
-                    self._unverified_file(env.id).unlink()
-                except FileNotFoundError:
-                    pass
+            if mark is None:
+                return True
+            if mark["token"] != token:
+                return False
+            try:
+                self._unverified_file(env.id).unlink()
+            except FileNotFoundError:
+                pass
+            return True
+
+    def _settle(self, env: Environment, token: Optional[str]) -> None:
+        """After a passing check: clear its start's mark, or, when a newer start replaced it,
+        check that newer start against its own held identity before the caller's command
+        runs (a few times, then refuse)."""
+        for _ in range(3):
+            if self._clear_unverified(env, token):
+                return
+            mark = self._read_mark(env.id)
+            if mark is None:
+                return
+            self._check_marked(env, mark)
+            token = mark["token"]
+        raise EnvironmentRefused(f"environment {env.id} was started again while it was being "
+                                 f"checked; run the command again")
 
     def _verify_running(self, env: Environment) -> None:
         """A running environment whose start is not checked yet (another request is between
@@ -848,12 +873,15 @@ class EnvironmentManager:
         mark = self._read_mark(env.id)
         if mark is None:
             return
+        self._check_marked(env, mark)
+        self._settle(env, mark["token"])
+
+    def _check_marked(self, env: Environment, mark: Dict[str, Any]) -> None:
         if not mark["identity"]:
             raise EnvironmentRefused(
-                f"environment {env.id} was started without a check that can be repeated; "
-                f"stop it and run the command again")
+                f"environment {env.id} was started without a check that can be repeated; stop "
+                f"it with `vaf env stop {env.id}`, then run the command again")
         self._check_mount(env, mark["identity"], mark["path"])
-        self._clear_unverified(env, mark["token"])
 
     def _start_new(self, env: Environment, *, memory_mb: int, cpus: float,
                    host_gateway: bool = False) -> None:
@@ -926,7 +954,7 @@ class EnvironmentManager:
             raise EnvironmentRefused(f"the environment could not be started: "
                                      f"{(r.stderr or '').strip()[:300]}")
         self._check_mount(env, held.identity if held is not None else None)
-        self._clear_unverified(env, token)
+        self._settle(env, token)
         env.state = "running"
         if env.network == "registries":
             self._attach_proxy(env)
@@ -1111,7 +1139,7 @@ class EnvironmentManager:
                 raise EnvironmentRefused(f"the environment could not be started: "
                                          f"{(r.stderr or '').strip()[:200]}")
             self._check_mount(env, held.identity if held is not None else None)
-        self._clear_unverified(env, token)
+        self._settle(env, token)
         env.state = "running"
         if env.network == "registries":
             self._attach_proxy(env)
@@ -1148,10 +1176,7 @@ class EnvironmentManager:
             containers.docker(["rm", "-f", env.container], timeout=60)
         except Exception:
             pass
-        try:
-            gone = containers.container_state(env.container) is None
-        except Exception:
-            gone = False
+        gone = containers.container_gone(env.container)
         if not gone:
             return False
         if env.network == "registries" and env.net:

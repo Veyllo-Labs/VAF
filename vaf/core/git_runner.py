@@ -10,7 +10,9 @@ own. The CLI imports it from here now.
 `run_git` runs git as the person would in a repository they own. `run_project_git` runs it in
 a folder a model writes: the coding agent's project, whose `.git` directory its jailed shell
 can write like any other file. git reads that directory's config and hooks on every call and
-starts the programs they name (hooks on commit, add and checkout, an fsmonitor hook on status,
+starts the programs they name (hooks on commit, add and checkout, both the hook files and the
+hooks git 2.54 lets the config itself define, which run on status and add too, an fsmonitor
+hook on status,
 clean and smudge filters on add and checkout, textconv and external diff drivers on diff, merge
 drivers on revert, gpg on `log` once `log.showSignature` is set), outside the jail and with the
 account's rights. `run_project_git` pins all of them off with `-c`, which outranks every
@@ -66,13 +68,15 @@ missed the filter it defines while the command inside ran it, a filter that coul
 host's loopback (measured). The reads whose answer does not depend on the view, the person's
 global and system config (the project cannot write them) and the index (the gitlinks), run
 through the handles as in the fallback: they set up no work tree, so the text walk does not
-happen there (measured fully pinned). The namespace shares the network, so a git-lfs smudge
-of the person's own config can download; only drivers of the global and system config run
-in it, the repository's are switched off by the read above. Measured, the same racer, 1000
+happen there (measured fully pinned). The namespace has no network (`--unshare-net`): no git
+command VAF runs fetches, pushes or clones, and a program that still runs there (a driver of
+the person's own global config) cannot reach the host's loopback services. NAMED BOUNDARY: a
+git-lfs object missing locally cannot be downloaded there (a checkout or reset that needs
+one fails); fetch it with plain git first. Measured, the same racer, 1000
 status calls: 0 leaks of 963 answered with the lane (2 of 957 with the handles alone), and
 `reset --hard` wrote into the other folder in 0 of 300 calls. The price is two namespace
-starts per call: about 15 against 5 ms for a status, and a coding run's state update for the
-SubAgent window (about a dozen calls) 190 against 65 ms, measured under the lowest CPU
+starts per call: about 17 against 5 ms for a status, and a coding run's state update for the
+SubAgent window (about a dozen calls) 215 against 65 ms, measured under the lowest CPU
 priority on four cores. A top inside a folder the namespace binds
 read-only (a git install prefix, /opt) keeps the handles alone: its view there would not be
 private (`folder_mount.overlaps_ro`).
@@ -242,7 +246,26 @@ _DRIVER_OVERRIDES: Dict[str, Tuple[Tuple[str, str], ...]] = {
     "filter": (("clean", ""), ("smudge", ""), ("process", ""), ("required", "false")),
     "diff": (("textconv", ""),),
     "merge": (("driver", ""),),
+    # A hook the config defines (git 2.54: `hook.<name>.command` and `.event`) is not a file in
+    # the hooks folder, so neither the empty `core.hooksPath` nor `--no-verify` stops it: the
+    # repository's own hook ran on every call, status included (measured, and it reached the
+    # host's loopback). Every hook name the effective read finds is switched off by name, the
+    # person's global ones too, as the empty hooks folder switches off theirs; the events are
+    # pinned off as a whole as well (PROJECT_GIT_HOOK_EVENTS), which needs no read.
+    "hook": (("enabled", "false"),),
 }
+
+# Every hook event of githooks(5) (git 2.56), switched off as a whole: `hook.<event>.enabled=
+# false` turns off every hook of that event, whatever a per-hook `enabled` says (measured
+# against a repository that sets both to true). A git without config hooks ignores the keys.
+PROJECT_GIT_HOOK_EVENTS: Tuple[str, ...] = (
+    "applypatch-msg", "pre-applypatch", "post-applypatch", "pre-commit", "pre-merge-commit",
+    "prepare-commit-msg", "commit-msg", "post-commit", "pre-rebase", "post-checkout",
+    "post-merge", "pre-push", "pre-receive", "update", "proc-receive", "post-receive",
+    "post-update", "reference-transaction", "push-to-checkout", "pre-auto-gc", "post-rewrite",
+    "sendemail-validate", "fsmonitor-watchman", "p4-changelist", "p4-prepare-changelist",
+    "p4-post-changelist", "p4-pre-submit", "post-index-change",
+)
 
 # Which drivers to switch off is decided by comparing two reads, not by asking which file a
 # value came from. The EFFECTIVE config (no scope given) is what the command itself will see,
@@ -256,7 +279,7 @@ _DRIVER_OVERRIDES: Dict[str, Tuple[Tuple[str, str], ...]] = {
 # GIT_CONFIG_PARAMETERS is switched off too, being neither file. No scope labels (git 2.26) are
 # asked for, so git 2.25 (Ubuntu 20.04) works. Every read follows includes (--includes; a
 # specific scope reads none otherwise, measured).
-_DRIVER_KEYS = r"^(filter|diff|merge)\."
+_DRIVER_KEYS = r"^(filter|diff|merge|hook)\."
 _TRUSTED_READS: Tuple[str, ...] = ("--global", "--system")
 # The trusted reads also ask for the person's global ignore and attributes files: inside the
 # git namespace only what is bound exists, and `core.excludesFile` usually names a file in the
@@ -542,7 +565,8 @@ class _Pin:
                 kwargs["pass_fds"] = (self.git_fd,)
             proc = folder_mount.run_guarded(
                 folder_mount.namespace_argv(self.namespace, self.top, extra_ro=self.namespace_ro,
-                                            scratch_tmp=False, readonly_root=True),
+                                            scratch_tmp=False, readonly_root=True,
+                                            unshare_net=True),
                 self.namespace, self.top, list(argv), **kwargs)
             if folder_mount.guard_refused(proc):
                 raise ProjectGitRefused(proc.stderr)
@@ -808,6 +832,8 @@ def _command(args: Sequence[str], pin: _Pin, env: Dict[str, str], timeout: float
     pinned: List[str] = ["-c", f"core.hooksPath={empty_hooks_dir()}"]
     for key, value in PROJECT_GIT_CONFIG:
         pinned += ["-c", f"{key}={value}"]
+    for event in PROJECT_GIT_HOOK_EVENTS:
+        pinned += ["-c", f"hook.{event}.enabled=false"]
     for section, names in _untrusted_drivers(pin, env, timeout, reads, layout).items():
         for name in names:
             if _UNSAFE_DRIVER_NAME.search(name):
@@ -887,8 +913,9 @@ def run_project_git(args: Sequence[str], cwd: str, *, timeout: float = 60,
     """Run git in a folder whose `.git` someone else may have written, starting nothing but git.
 
     `args` is what follows `git`, optionally led by `-c key=value` pairs of the caller's own.
-    Hooks, the fsmonitor, pagers, editors, askpass, credential helpers, signing, external diff
-    and textconv, and the filter and merge drivers the repository's config names are all off;
+    Hooks (the files and the ones the config defines), the fsmonitor, pagers, editors, askpass,
+    credential helpers, signing, external diff and textconv, and the filter and merge drivers
+    the repository's config names are all off;
     diffs and logs get --no-ext-diff --no-textconv and commits --no-verify. git works on the
     repository whose `.git` is at or nearest above `cwd`, and on its folder as the work tree,
     whatever that config says; a `.git` that is a file or a link, or that leads into another

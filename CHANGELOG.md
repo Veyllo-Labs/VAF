@@ -312,10 +312,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
     checked, so such a program can no longer redirect them for that moment either. A sandbox
     environment with a project folder checks the folder before and after each start, a
     restart included, and runs nothing in it otherwise.
+  - Hooks that a project's git configuration defines (possible since git 2.54) no longer run
+    when VAF calls git there; before, they ran on every call, even a status check.
   - What changes in a coding run: git can no longer write outside the project folder (for
-    example `git worktree add` into another folder fails with "Read-only file system"), your
-    own global ignore file still keeps the files it lists out of the agent's commits, and
-    each git call takes about 10 ms longer.
+    example `git worktree add` into another folder fails with "Read-only file system") or
+    reach the network (a large file stored with git-lfs that is not on this computer yet
+    cannot be downloaded there; fetch it with git first), your own global ignore file still
+    keeps the files it lists out of the agent's commits, and each git call takes about 12 ms
+    longer.
   - What stays open: on macOS and Windows, on Linux without a working bubblewrap, and for a
     git worktree you created with `git worktree add`, git still runs on the folder's name.
     With Docker Desktop or another Docker in a virtual machine, the shell's Docker fallback
@@ -329,6 +333,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   - Where bubblewrap is installed but cannot start (inside a container, for example), the
     coding agent's shell now uses its Docker fallback, or says why no sandbox is available,
     instead of failing every command.
+
   Needs a restart of VAF.
 - **The agent's file tools stay out of VAF's own data and your shell start files.** Reading
   VAF's data and settings folders (messages, mail, contacts, key files, the MCP server list,

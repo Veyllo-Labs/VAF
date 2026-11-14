@@ -25,6 +25,7 @@ from fastapi import WebSocket
 from vaf.core.platform import Platform
 from vaf.core.log_helper import append_domain_log
 from vaf.core.outage import OutageMemory
+from vaf.core.terminal_text import own_links_as_labels
 from pathlib import Path
 
 import queue
@@ -35,6 +36,16 @@ from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
 # Fire-and-forget pool for bridging sub-agent events (browser frames/steps) from a sub-agent
 # subprocess to the main VAF process over HTTP, without blocking the caller's event loop.
 _BRIDGE_POOL = _ThreadPoolExecutor(max_workers=2, thread_name_prefix="subagent-bridge")
+
+
+def _shown(content: Any) -> Any:
+    """An assistant's text as the browser shows it: VAF's own file link (`file_link`, which
+    the coder and the workflow engine write and a model repeats) as the path it opens, every
+    other character as written (`own_links_as_labels`). A plain path, not a web link: the
+    link's shape does not prove VAF wrote it, the main one names a folder, and the files the
+    coder writes arrive as download chips. Anything but a string (None, a list) passes
+    unchanged, never coerced to text."""
+    return own_links_as_labels(content) if isinstance(content, str) else content
 
 
 def _current_turn_id() -> Optional[str]:
@@ -602,7 +613,8 @@ class WebInterfaceManager:
         
     def emit_agent_message(self, role: str, content: str, session_id: str = None,
                            round: Optional[int] = None, answer: Optional[bool] = None):
-        """Emit a message update. Content is the FULL message so far.
+        """Emit a message update. Content is the FULL message so far; an assistant's
+        content is shown with VAF's own file link as the path it opens (`_shown`).
 
         `round`: the generation round of the turn this text belongs to (`round_start`); the
         content is then that round's text alone, and the browser keeps one bubble per round
@@ -612,7 +624,7 @@ class WebInterfaceManager:
         payload = {
             "type": "agent_message_update",
             "role": role,
-            "content": content,
+            "content": _shown(content) if role == "assistant" else content,
             "turnId": _current_turn_id(),
         }
         if round is not None:
@@ -636,11 +648,14 @@ class WebInterfaceManager:
         lands inside the preceding turn and takes over its answer bubble. So every
         proactive lane passes one, and persists it on the stored message; that pairing is
         pinned in tests/test_proactive_bubbles_stand_alone.py.
+
+        An assistant message is shown with VAF's own file link as its path (`_shown`); a
+        wake (`role="user"`) keeps its text.
         """
         payload = {
             "type": "agent_message_append",
             "role": role,
-            "content": content,
+            "content": _shown(content) if role == "assistant" else content,
             "turnId": _current_turn_id(),
         }
         if kind:
@@ -658,10 +673,11 @@ class WebInterfaceManager:
         self._push_session_update(session_id, payload)
 
     def emit_message_complete(self, content: str, session_id: str = None):
-        """Emit when a message is fully complete (for Auto-TTS trigger)."""
+        """Emit when a message is fully complete (for Auto-TTS trigger). The content is
+        shown with VAF's own file link as its path (`_shown`)."""
         self._push_session_update(session_id, {
             "type": "message_complete",
-            "content": content,
+            "content": _shown(content),
             "turnId": _current_turn_id(),
         })
 

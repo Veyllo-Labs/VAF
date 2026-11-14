@@ -24,7 +24,7 @@ if TYPE_CHECKING:
                                   restore_account, revoke_account, stop_account_work,
                                   stop_session)
     from .core.system_prompt import SOUL_CONTINUITY_ADDENDUM, build_capability_addendum
-    from .core.terminal_text import terminal_text
+    from .core.terminal_text import own_links_as_labels, terminal_text
     from .core.threat_db import UploadVerdict, inspect_upload, record_threat
     from .core.trust import (list_standing_grants, mark_trusted_dir, revoke_standing_grants,
                              set_tool_policy)
@@ -61,7 +61,7 @@ __all__ = ["__version__", "Agent", "AuditFinding", "AuditReport", "BOOKKEEPING_K
            "is_remote_path", "is_vaf_state",
            "jail_allows", "joined_rooms",
            "list_standing_grants", "mark_trusted_dir", "markers", "model_text",
-           "open_for_write",
+           "open_for_write", "own_links_as_labels",
            "participant_key", "project_dir_refusal", "queue_metrics", "record_threat",
            "remove_revocation_listener",
            "resource_queue", "restore_account", "revoke_account", "revoke_standing_grants",
@@ -202,6 +202,17 @@ def __getattr__(name):
         # the slim base is unaffected. See docs/EMBEDDING.md, "Showing text on a terminal".
         from .core.terminal_text import terminal_text
         return terminal_text
+    if name == "own_links_as_labels":
+        # VAF's own file link (`[link=file:///path]/path[/link]`, the coder's and the workflow
+        # engine's) shown as the path it opens, every other character kept: for text shown
+        # anywhere but a Rich console. Exported because the facade's own outputs carry that
+        # markup (a workflow's run() answer, an inline coder result the model repeats) and
+        # VAF's own lanes need it at nine sites: the browser bridge, the stored chat copies,
+        # the messenger and Veyllo App chain and the main-messenger lane. The same object as
+        # vaf.core.terminal_text.own_links_as_labels, no wrapper. See docs/EMBEDDING.md,
+        # "Showing text on a terminal".
+        from .core.terminal_text import own_links_as_labels
+        return own_links_as_labels
     if name in ("TurnRound", "TurnStatus", "model_text", "stored_turn_copy"):
         # How a turn ended, beside its text, and the rule for keeping its failure out of
         # what a model reads later. `Agent.last_turn` / `CoreAgent.last_turn` hand out the

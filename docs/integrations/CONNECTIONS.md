@@ -633,7 +633,10 @@ delivery RULE is channel-agnostic and exists exactly once:
   every existing automation automatically.
 - **The adapter**: `send_to_main_messenger` in `vaf/core/messaging_connections.py` is
   the single dispatch point mapping `main_messenger` to a concrete channel send
-  (Telegram/WhatsApp/Discord/Veyllo App today). The text send decides success; a file is
+  (Telegram/WhatsApp/Discord/Veyllo App today). VAF's own file link in the text (a
+  workflow answer naming its folder) is sent as the path it opens (`own_links_as_labels`),
+  since a messenger cannot open a host path; any other link stays as written. The text send
+  decides success; a file is
   attached best-effort as a separate message (avoids per-channel caption limits).
   An EMPTY text with an existing file delivers attachment-only - the document goes
   out as the only message (filename caption) and its send decides success; the

@@ -852,8 +852,13 @@ def send_to_main_messenger(
     question was nowhere (live 2026-09-02: the user answered a background question on
     Telegram and the agent had no record of ever asking). The transcript is the record;
     the latch adds the proposal and the findings on top of it.
+
+    VAF's own file link in ``text`` (an automation result or a workflow answer naming its
+    folder) is sent as the path it opens (``own_links_as_labels``): a messenger cannot open a
+    host path, and the recorded copy holds the same text that was sent.
     """
-    text = (text or "").strip()
+    from vaf.core.terminal_text import own_links_as_labels
+    text = own_links_as_labels(text).strip()
     import os as _os
     attach = file_path if (file_path and _os.path.isfile(file_path)) else None
     caption = ("\U0001F4CE " + _os.path.basename(attach)) if attach else ""

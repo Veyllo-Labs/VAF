@@ -879,7 +879,8 @@ sequence split between two chunks is not seen whole, so its printable rest shows
 
 Use it on whatever reaches a terminal and was not written by you: streamed tokens and
 `run()`'s answer, room entries and labels, a tool's output, an event's arguments. It is for
-terminals only: store, send and return the original text, and put text into HTML as text.
+terminals only: store, send and return the original text, and put text into HTML as text
+(VAF's own file link aside, see below).
 VAF's own terminals apply this same definition at their sinks (the full-screen app's line
 filter, every Rich console it builds, its JSON lines and its log handler); see
 "Text from others on a terminal" in
@@ -904,6 +905,26 @@ console.print(vaf.terminal_text(answer), markup=False)
 console.print(f"[bold]{escape(vaf.terminal_text(name))}:[/bold] "
               f"{escape(vaf.terminal_text(text))}")
 ```
+
+Text VAF writes can carry one piece of Rich markup of its own: the coding agent and the
+workflow engine name their folder and files with a terminal link,
+`[link=file:///home/user/p]/home/user/p[/link]`. It reaches you in a workflow's `run()`
+answer and in an inline `coding_agent` result, which your model reads and often repeats.
+Anywhere but a Rich console (a web page, a messenger, a stored transcript), pass the text
+through `vaf.own_links_as_labels`, which turns only that link into the path it opens and
+keeps every other character: `arr[i]`, a Markdown link, a foreign `[link=https://...]` with
+its address, and a link whose label is not the path it opens (any text can write the
+shape) all stay as written. VAF's own web chat, its messengers and the Veyllo App show the
+path this way, as plain text and not as a web link. On a Rich console, `markup=False` shows
+the markup itself as text, so convert there too:
+
+```python
+answer = agent.run("Build a tiny page and tell me where it is.")
+shown = vaf.own_links_as_labels(answer)    # "... in /home/user/p ...", for your page or chat
+```
+
+`vaf.own_links_as_labels(value) -> str` gives `""` for `None` and `str()`s anything else.
+Control characters are not its job: `vaf.terminal_text` is the call for a terminal.
 
 ---
 
@@ -1246,7 +1267,9 @@ What to expect:
   spawn and no web server to stream to, so a sub-agent call runs INLINE, in the
   same process, and returns its result to your `run()` turn. This is the
   supported library path and needs nothing extra - as long as nothing else is
-  drawing on the terminal.
+  drawing on the terminal. The coder's result names the project folder and its files
+  with VAF's terminal link; before you show the answer anywhere but a terminal, see
+  `vaf.own_links_as_labels` in "Showing text on a terminal".
 - **If YOUR application owns the terminal, an inline sub-agent will draw over
   it.** The heavy sub-agents animate a progress panel on stdout while they
   work: the coder builds its own console with `force_terminal=True`, so the
@@ -3265,6 +3288,11 @@ Stable public surface (safe to build on):
   and newline, DEL, every C1 character, the twelve bidirectional controls and lone
   surrogates), that every other character is kept, that an unterminated sequence loses only
   its control characters, and that `None` gives `""`. See "Showing text on a terminal".
+- `vaf.own_links_as_labels(value) -> str` - VAF's own file link shown as the path it opens.
+  The promise: a complete `[link=file:...]label[/link]` whose label is the absolute local
+  path its target opens becomes that label; a link to another host or a share, a label
+  that is not the path, and every other character are kept as written; `None` gives `""`.
+  See "Showing text on a terminal".
 - `last_turn` on both `Agent` and `CoreAgent`, a frozen `vaf.TurnStatus(failed, failure,
   rounds)` with `rounds` a tuple of frozen `vaf.TurnRound(round, tool_call_ids, answer)`
   (outside equality, see "Streaming"),
@@ -3288,8 +3316,8 @@ façade, and no embedder has asked for one. If you need it, say so - the export 
 one lazy branch away, and it is not being added on speculation.
 `vaf.ToolCaller`, `vaf.ToolCallOutcome`, `vaf.advise_tools`, `vaf.ToolRequest`, `vaf.set_account_allowlist_resolver`,
 `vaf.extract_pdf_markdown`, `vaf.install_thread_excepthook`, `vaf.is_error_reply`,
-`vaf.terminal_text`, `vaf.TurnStatus`, `vaf.TurnRound`, `vaf.stored_turn_copy` and `vaf.model_text`
-are the deliberate exceptions: they live in `vaf.core` but are re-exported on the façade, and the
+`vaf.terminal_text`, `vaf.own_links_as_labels`, `vaf.TurnStatus`, `vaf.TurnRound`,
+`vaf.stored_turn_copy` and `vaf.model_text` are the deliberate exceptions: they live in `vaf.core` but are re-exported on the façade, and the
 façade names are the ones to import.
 
 ### Breaking-change tests you can run in your own CI

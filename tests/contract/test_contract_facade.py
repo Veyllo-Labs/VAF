@@ -76,6 +76,7 @@ EXPORTED = [
     "markers",
     "model_text",
     "open_for_write",
+    "own_links_as_labels",
     "participant_key",
     "project_dir_refusal",
     "queue_metrics",

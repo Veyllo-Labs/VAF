@@ -57,3 +57,40 @@ def test_it_is_the_engine_function_itself():
     import vaf.core.terminal_text as tt  # re-export source named in EMBEDDING.md
 
     assert vaf.terminal_text is tt.terminal_text
+
+
+# `vaf.own_links_as_labels` (docs/EMBEDDING.md, "Showing text on a terminal"): VAF's own file
+# link, the markup a workflow's answer or a coder result carries, shown as the path it opens
+# for a web page, a messenger or a transcript. The link is written out here, as VAF writes it
+# for a POSIX path: the facade has no writer of it to call.
+OWN_LINK = "[link=file:///home/user/My%20Project]/home/user/My Project[/link]"
+
+
+def test_vafs_own_file_link_becomes_its_path():
+    assert vaf.own_links_as_labels(f"Created {OWN_LINK} for you.") == \
+        "Created /home/user/My Project for you."
+    assert vaf.own_links_as_labels(
+        "[link=file:///home/user/p/app/%5Bid%5D/page.tsx]/home/user/p/app/[id]/page.tsx[/link]"
+    ) == "/home/user/p/app/[id]/page.tsx"
+
+
+@pytest.mark.parametrize("text", [
+    "See [link=https://evil.example]click[/link] now.",          # a foreign link
+    "[link=file:///etc/passwd]https://bank.example[/link]",      # label is not its path
+    "[link=file://evil.example/share/x]/share/x[/link]",         # a file on another host
+    "arr[i], [the docs](https://e.org)\n- [x] done",
+    "\x1b]0;title\x07",                                           # not a terminal filter
+])
+def test_every_other_character_is_kept(text):
+    assert vaf.own_links_as_labels(text) == text
+
+
+def test_own_links_none_is_empty_and_anything_else_is_its_str():
+    assert vaf.own_links_as_labels(None) == ""
+    assert vaf.own_links_as_labels(3) == "3"
+
+
+def test_own_links_is_the_engine_function_itself():
+    import vaf.core.terminal_text as tt  # re-export source named in EMBEDDING.md
+
+    assert vaf.own_links_as_labels is tt.own_links_as_labels

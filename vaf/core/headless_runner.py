@@ -33,6 +33,7 @@ from vaf.core.session import (ASKED_AT_KEY, TURN_ID_KEY, TURN_ROUNDS_KEY, Sessio
                               turn_context_messages_since_last_user)
 from vaf.core.tray_context import TrayContext
 from vaf.core.web_interface import get_web_interface
+from vaf.core.terminal_text import own_links_as_labels
 from vaf.core.platform import Platform
 from vaf.core.log_helper import append_domain_log, append_domain_log_always, get_app_log_dir, get_dated_log_path, is_debug_logging_enabled
 from vaf.core.config import Config, subagent_provider_override
@@ -597,12 +598,14 @@ def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=N
 
 
 def _clean_for_session(text: str) -> str:
-    """The chat turn's stored copy: full content for display; only redacted blocks removed.
-    <think> blocks stay so the UI can show thinking after reload (the replay in agent.py
-    strips them from the model's context)."""
+    """The chat turn's stored copy: full content for display; only redacted blocks removed,
+    and VAF's own file link shown as the path it opens, as the browser showed it
+    (`own_links_as_labels`). <think> blocks stay so the UI can show thinking after reload
+    (the replay in agent.py strips them from the model's context)."""
     if not text:
         return ""
-    cleaned = re.sub(r'<redacted_reasoning>.*?</redacted_reasoning>', '', text, flags=re.DOTALL)
+    cleaned = own_links_as_labels(text)
+    cleaned = re.sub(r'<redacted_reasoning>.*?</redacted_reasoning>', '', cleaned, flags=re.DOTALL)
     cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
     return cleaned.strip()
 
@@ -632,9 +635,11 @@ def _drain_turn_copy(response_parts, *, turn):
 
 
 def _clean_drain_text(text: str) -> str:
-    """The sub-agent drain's stored copy of its summary turn: reasoning removed, leaked
-    tool-call JSON stripped, blank-line runs collapsed."""
-    text = re.sub(r"<think>.*?</think>", "", str(text or ""), flags=re.DOTALL)
+    """The sub-agent drain's stored copy of its summary turn: VAF's own file link shown as
+    the path it opens (`own_links_as_labels`), reasoning removed, leaked tool-call JSON
+    stripped, blank-line runs collapsed."""
+    text = own_links_as_labels(text)
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
     text = _strip_tool_calls_json(text)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
@@ -1015,8 +1020,10 @@ def _prepare_channel_outbound(text: str) -> str:
     helper makes a fifth divergent copy structurally impossible. Pure text->text:
     it never decides WHETHER a message is sent, only what the text looks like.
     Never used for the WebUI/session lane (the browser already streamed the
-    original text - invariant 4.2)."""
-    out = str(text or "")
+    original text - invariant 4.2). Its first step shows VAF's own file link as the path
+    it opens (`own_links_as_labels`): a messenger or the Veyllo App cannot open a host
+    path, and the markup around it is noise there; any other link stays as written."""
+    out = own_links_as_labels(text)
     out = re.sub(r"<think>.*?</think>", "", out, flags=re.DOTALL)
     out = _strip_tool_calls_json(out)
     out = re.sub(r"\n{3,}", "\n\n", out).strip()
@@ -1024,6 +1031,22 @@ def _prepare_channel_outbound(text: str) -> str:
     out = sanitize_outgoing_message(out)
     out = _strip_untagged_cot_prefix(out)
     return (out or "").strip()
+
+
+def _drain_fallback_head(user_lang) -> str:
+    """The head of the drain's deterministic fallback message, in the user's language."""
+    return "Der Sub-Agent ist fertig. Ergebnis:" if user_lang == "de" else "The sub-agent finished. Result:"
+
+
+def _drain_fallback_message(combined_results, user_lang) -> str:
+    """The drain's deterministic message when the model produced no usable summary: the head,
+    a blank line, and the raw result's first 2000 characters (or a placeholder), never empty
+    (the drain owns delivery). One text for the chat and the messenger alike. VAF's own file
+    link is shown as its path BEFORE the cut, so a link that straddles the cut leaves no half
+    of its markup behind."""
+    body = own_links_as_labels(combined_results).strip()[:2000] or (
+        "(kein Text-Ergebnis)" if user_lang == "de" else "(no textual result payload)")
+    return f"{_drain_fallback_head(user_lang)}\n\n{body}"
 
 
 def _user_asked_for_text(user_input: str) -> bool:
@@ -4408,11 +4431,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                     # that then vanished on reload and the thread never
                                     # acknowledged the sub-agent's work. Deliver a deterministic
                                     # message built from the raw result instead.
-                                    _fb_head = ("Der Sub-Agent ist fertig. Ergebnis:"
-                                                if user_lang == "de" else "The sub-agent finished. Result:")
-                                    _fb_body = (combined_results or "").strip()[:2000] or (
-                                        "(no textual result payload)" if user_lang != "de" else "(kein Text-Ergebnis)")
-                                    _fb_msg = f"{_fb_head}\n\n{_fb_body}"
+                                    _fb_msg = _drain_fallback_message(combined_results, user_lang)
                                     try:
                                         get_web_interface().emit_agent_message("assistant", _fb_msg, session_id=_result_sid)
                                         get_web_interface().emit_message_complete(content=_fb_msg, session_id=_result_sid)
@@ -4440,11 +4459,9 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                         session = session_mgr.load(sid)
                                         out = _prepare_channel_outbound(_clean_result or "")
                                         if not out:
-                                            _mb_head = ("Der Sub-Agent ist fertig. Ergebnis:"
-                                                        if user_lang == "de" else "The sub-agent finished. Result:")
-                                            _mb_body = (combined_results or "").strip()[:2000] or (
-                                                "(kein Text-Ergebnis)" if user_lang == "de" else "(no textual result payload)")
-                                            out = _prepare_channel_outbound(f"{_mb_head}\n\n{_mb_body}") or _mb_head
+                                            out = (_prepare_channel_outbound(
+                                                _drain_fallback_message(combined_results, user_lang))
+                                                or _drain_fallback_head(user_lang))
                                         from vaf.core.channel_reply import reply_to_chat
                                         _smeta = session.metadata or {}
                                         reply_to_chat(_smeta.get("source"), _smeta, out, infer=True)

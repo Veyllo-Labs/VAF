@@ -65,10 +65,10 @@ Named boundaries: the Rich console class, `escape_markup` and `terminal_json` st
 the facade's own examples print with `print`, which is what `vaf.terminal_text` serves, no
 embedder lane has shown a Rich console or a JSON writer of its own, and an embedder who
 prints through Rich has Rich's own `rich.markup.escape` and `markup=False` (docs/EMBEDDING.md
-names them). `own_links_as_labels` stays internal too: its one caller is the terminal's
-stored and mirrored reply copy, and an embedder's stream holds VAF's file link only when its
-model repeats a coder tool result; `vaf.stored_turn_copy(stream, turn, clean=None)` already
-stores a stream as written. Log records written before
+names them). `own_links_as_labels` is on the facade: VAF's own answers carry its file link
+(a workflow's `run()` answer, an inline coder result the embedder's model repeats), and
+VAF's own lanes call it at nine sites in five modules (RICH MARKUP below lists them). Log
+records written before
 `vaf.main.main` runs (the dependency bootstrap, module imports) and in a process that does
 not start through it are formatted by whatever handler Python has then. The cleaning covers
 the records that reach the root logger while VAF's handler is its only handler: a handler a
@@ -99,9 +99,26 @@ raised `MarkupError` out of `print`. Three parts, from the narrowest to the wide
    part of it concealed, reversed or on a background colour. And the console prints
    emoji codes as text unless asked otherwise: VAF writes none of its own.
 
-The copy of a terminal turn that the chat stores and the browser shows is not markup at all:
-it keeps the reply as written, brackets included, and shows only VAF's own file link as its
-label (`own_links_as_labels`).
+Every copy of a reply that leaves the terminal is not markup at all: it keeps the reply as
+written, brackets included, and shows only VAF's own file link as its label
+(`own_links_as_labels`). Those copies are the terminal turn's stored and mirrored copy
+(`vaf.cli.cmd.run._reply_web_copy`), the browser bridge (`WebInterface.emit_agent_message`,
+`emit_agent_message_append` for an assistant message, `emit_message_complete`), the web
+chat's and the sub-agent drain's stored copies and the drain's fallback message
+(`vaf.core.headless_runner`), the messenger and Veyllo App chain
+(`_prepare_channel_outbound`), and the main-messenger lane (`send_to_main_messenger`). The
+label is plain text there, never a web link: the link's shape does not prove VAF wrote it,
+the main one names a folder, and the files the coder writes reach the browser as download
+chips of their own.
+
+Named boundaries of that rule: the terminal keeps the link live (above), and the model reads
+the markup in the tool result it was given, so a tool card's Output in the browser shows that
+raw result. The contact send tools (`send_telegram`, `send_whatsapp`, `send_discord`,
+`send_veyllo_app`) send the argument the model wrote, byte for byte as a held send is approved,
+and no VAF code puts `file_link` there. An automation's notification summary is a short
+preview. A chat reloaded in the browser goes through the web server's transcript projection
+(`_clean_history_text` in `vaf/core/web_server.py`), which removes every `[...]` group of a
+stored reply, the link's markup included.
 
 VAF's own file link is `file_link(path)`: the `file:` URI of an absolute local path,
 labelled with that path, raw (`_own_file_link` is the check; the coder's
@@ -359,7 +376,8 @@ def own_links_as_labels(value: Any) -> str:
     the coder's tool result) becomes its label, the path it opens. A foreign link stays as
     written, its address visible. Control characters are not this function's job either: a
     browser does not obey them and a terminal prints through `TerminalConsole`. `None` gives
-    `""`; anything else is `str()`-ed.
+    `""`; anything else is `str()`-ed. Exported as `vaf.own_links_as_labels` for every place
+    that shows VAF's text outside a Rich console: a web page, a messenger, a transcript.
 
     `vaf.workflows.engine._strip_rich_links` is wider on purpose: it keeps the label of
     EVERY link, because the next workflow step reads its paths with a regex and never shows

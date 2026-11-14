@@ -66,7 +66,8 @@ def test_facade_exports_exactly_the_documented_surface():
         "install_thread_excepthook", "invited_rooms", "is_error_reply", "is_host_config",
         "is_remote_path", "is_vaf_state", "jail_allows", "joined_rooms",
         "list_standing_grants", "mark_trusted_dir",
-        "markers", "model_text", "open_for_write", "participant_key", "project_dir_refusal",
+        "markers", "model_text", "open_for_write", "own_links_as_labels", "participant_key",
+        "project_dir_refusal",
         "queue_metrics", "record_threat",
         "remove_revocation_listener", "resource_queue",
         "restore_account", "revoke_account", "revoke_standing_grants", "room_invitation",
@@ -103,6 +104,10 @@ def test_the_newly_public_names_actually_resolve():
     assert issubclass(vaf.PathEscape, ValueError)
     assert callable(vaf.set_account_allowlist_resolver)
     assert callable(vaf.set_confirmation_bypass_resolver)
+    # VAF's own file link as its path, for text shown outside a Rich console: the engine's
+    # function itself, not a wrapper that could drift from the one VAF's lanes call.
+    import vaf.core.terminal_text as tt
+    assert vaf.own_links_as_labels is tt.own_links_as_labels
 
 
 def test_the_resolver_setter_is_the_same_object_on_facade_and_engine():

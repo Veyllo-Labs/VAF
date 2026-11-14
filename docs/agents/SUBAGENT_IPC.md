@@ -357,14 +357,15 @@ generation - killing the sub-agent requires pressing Stop again when nothing is 
 runner's drain (full side effects: SubAgent window, `subagent_output`, messenger summaries) -
 a user chat turn no longer consumes them mid-reply. The drain's summary turn runs as the chat's
 owner with that chat's source; a result that names no chat stays pending (Result push above). Drain messenger summaries pass the SAME
-outbound sanitizer chain as normal headless replies (`_prepare_channel_outbound`: think-strip,
-tool-JSON strip, workflow-async strip, internal-phrase net, untagged-CoT prefix guard) and carry
+outbound sanitizer chain as normal headless replies (`_prepare_channel_outbound`: VAF's own file link shown as its path (`own_links_as_labels`),
+think-strip, tool-JSON strip, workflow-async strip, internal-phrase net, untagged-CoT prefix guard) and carry
 the summary the chat shows: the drain's stored copy of the streamed turn (`stored_turn_copy`),
-the stream as the chat showed it, with reasoning and leaked tool-call JSON removed
-(`_clean_drain_text`); a reply a guard retracted is cleared from that copy as in the chat
+the stream as the chat showed it, with reasoning and leaked tool-call JSON removed and VAF's
+own file link shown as its path (`_clean_drain_text`); a reply a guard retracted is cleared from that copy as in the chat
 lane, and the stream, the stored copy and the messenger all address the chat the turn was bound to. When
-sanitization empties the summary, a deterministic localized fallback (head + result excerpt)
-is sent instead - never a noise placeholder, never a skipped send (the drain owns delivery).
+sanitization empties the summary, a deterministic localized fallback (head + result excerpt,
+one helper for the chat and the messenger, `_drain_fallback_message`, with VAF's own file
+link shown as its path before the excerpt is cut at 2000 characters) is sent instead - never a noise placeholder, never a skipped send (the drain owns delivery).
 The WebUI/session lane is exempt from the new guard: the browser already streamed the
 original text and must not see it retro-edited. On `provider=local` the block and hint
 are simply absent (no new gating of messages): the single llama server would otherwise serve

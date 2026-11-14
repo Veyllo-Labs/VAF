@@ -320,26 +320,52 @@ def _note_claims_unearned_outcome(texts) -> "str | None":
 
 _REASONING_ECHO_MIN = 400
 
-_REDACTED_BLOCK = re.compile(r'<redacted_reasoning>.*?</redacted_reasoning>', re.DOTALL)
 _REDACTED_OPEN = '<redacted_reasoning>'
+_REDACTED_CLOSE = '</redacted_reasoning>'
+
+
+def _drop_redacted_blocks(text: str, *, cut_unclosed: bool) -> str:
+    """Every `<redacted_reasoning>` block out, each closed at its first closer, in one walk.
+
+    An opener without a closer is kept as text, or with `cut_unclosed` cuts the text there.
+    No closer follows it either way, so the walk stops: linear, where a lazy
+    `<redacted_reasoning>.*?</redacted_reasoning>` rescans to the end from every unclosed
+    opener (about 4 s on 128 KB of them).
+    """
+    kept, pos = [], 0
+    while True:
+        start = text.find(_REDACTED_OPEN, pos)
+        if start < 0:
+            break
+        end = text.find(_REDACTED_CLOSE, start + len(_REDACTED_OPEN))
+        if end < 0:
+            if cut_unclosed:
+                kept.append(text[pos:start])
+                return "".join(kept)
+            break
+        kept.append(text[pos:start])
+        pos = end + len(_REDACTED_CLOSE)
+    kept.append(text[pos:])
+    return "".join(kept)
 
 
 def _strip_marked_reasoning(text: str, *, greedy: bool) -> str:
     """The reasoning a model MARKED, out of a reply: one rule for the reply cleaner
     (`Agent._clean_reasoning`, greedy) and the empty-answer probe (`_final_answer_probe`,
-    not greedy, see there).
+    not greedy first, see there).
 
     Redacted blocks go first: a <think> the model quotes inside one would otherwise cut the
     text before the block's closer, leak the block and lose the answer. Then <think> and
     <thinking> blocks through `strip_think_blocks`. A redacted tag that only formed once a
-    think block was dropped ("<redacted_" + block + "reasoning>") gets a second pass, and an
-    opener still left without its closer cuts the text there, like an unclosed <think>.
+    think block was dropped ("<redacted_" + block + "reasoning>") gets a second pass, in
+    which an opener still left without its closer cuts the text, like an unclosed <think>;
+    and a think tag that pass joins ("<thi" + block + "nk>") is read by `strip_think_blocks`
+    once more, so it cuts too. Linear: every pass is one walk.
     """
-    t = _REDACTED_BLOCK.sub('', text or "")
+    t = _drop_redacted_blocks(text or "", cut_unclosed=False)
     t = strip_think_blocks(t, greedy=greedy)
     if _REDACTED_OPEN in t:
-        t = _REDACTED_BLOCK.sub('', t)
-        t = t.split(_REDACTED_OPEN, 1)[0]
+        t = strip_think_blocks(_drop_redacted_blocks(t, cut_unclosed=True), greedy=greedy)
     return t.strip()
 
 # How often one turn may re-generate because loop protection refused every call of a
@@ -403,18 +429,26 @@ def _final_answer_probe(full_content: str) -> str:
     if _reply_is_reasoning_echo(full_content):
         return ""
     # The reply cleaner's own rule (_strip_marked_reasoning): redacted blocks, then
-    # <think>/<thinking> in any case, an unclosed opener cutting to the end. Not greedy: this
-    # also decides whether a guard may retract a shown bubble (Rule 4.2), and the chat closes
-    # a leading block at its first </think>, so "<think>a</think>Hello<think>b</think>" is
-    # an answer here although the greedy cleaner returns it empty.
-    clean = _strip_marked_reasoning(full_content, greedy=False)
-    clean = re.sub(r'<[^>]*>', '', clean)                  # remaining XML (e.g. <tool_call>)
-    clean = re.sub(r'```[\s\S]*?```', '', clean)           # code blocks
-    clean = clean.replace(".", "").replace("\n", "").replace(":", "").strip()
-    probe = clean.lower()
-    for pattern in ("answer", "antwort", "response", "here", "hier", "ok", "okay"):
-        probe = probe.replace(pattern, "")
-    return probe.strip()
+    # <think>/<thinking> in any case, an unclosed opener cutting to the end. Both readings,
+    # and an answer in either counts: this also decides whether a guard may retract a shown
+    # bubble (Rule 4.2), so it fails toward keeping it. The chat closes a leading block at
+    # its first </think> ("<think>a</think>Hello<think>b</think>" shows Hello, which only the
+    # non-greedy reading finds) unless a stray closer follows, then at the last one
+    # ("<think>a</think><redacted_reasoning>b</think>Answer" shows Answer, which only the
+    # greedy reading finds).
+    probe = ""
+    for greedy in (False, True):
+        clean = _strip_marked_reasoning(full_content, greedy=greedy)
+        clean = re.sub(r'<[^>]*>', '', clean)                  # remaining XML (e.g. <tool_call>)
+        clean = re.sub(r'```[\s\S]*?```', '', clean)           # code blocks
+        clean = clean.replace(".", "").replace("\n", "").replace(":", "").strip()
+        probe = clean.lower()
+        for pattern in ("answer", "antwort", "response", "here", "hier", "ok", "okay"):
+            probe = probe.replace(pattern, "")
+        probe = probe.strip()
+        if len(probe) >= 2:
+            break
+    return probe
 
 
 def _join_turn_answers(kept: list, tail: str) -> str:

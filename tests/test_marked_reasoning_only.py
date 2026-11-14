@@ -42,6 +42,11 @@ MUTATIONS, each turns the named test red:
   -> test_probe_counts_the_answer_the_chat_shows[thinking-quoted-in-redacted],
      test_probe_reads_the_cleaner_rule[redacted-only];
 - make the probe greedy -> test_probe_counts_the_answer_the_chat_shows[answer-between-blocks];
+- drop the probe's greedy second reading
+  -> test_probe_counts_the_answer_the_chat_shows[stray-closer-after-redacted];
+- skip strip_think_blocks after the second redacted pass
+  -> test_marked_reasoning_is_still_removed[think-joined-by-redacted-pass];
+- strip redacted blocks with the lazy regex again -> test_redacted_strip_is_linear;
 - build the kept answer from `full_response` again
   -> test_local_turn_returns_content_not_the_reasoning_channel (all four rows: the reasoning
      comes back glued in front of the answer);
@@ -151,11 +156,12 @@ def test_plain_text_is_the_answer(row):
      "Answer"),
     ("<redacted_reasoning>SECRET</redacted_<think>x</think>reasoning>Answer", "Answer"),
     ("Answer <redacted_reasoning>SECRET, never closed", "Answer"),
+    ("<thi<redacted_<think>x</think>reasoning>hidden</redacted_reasoning>nk>SECRET", ""),
 ], ids=["block", "doubled-tags", "greedy-to-last-close", "stray-tag", "redacted", "marked-okay-user",
         "leaked-tool-json", "unclosed-after-answer", "upper", "mixed-case", "upper-unclosed",
         "thinking", "thinking-upper", "thinking-unclosed", "think-quoted-in-redacted",
         "think-quoted-in-redacted-long", "redacted-opener-joined", "redacted-closer-joined",
-        "redacted-unclosed"])
+        "redacted-unclosed", "think-joined-by-redacted-pass"])
 def test_marked_reasoning_is_still_removed(text, expected):
     assert _clean(text) == expected
 
@@ -257,13 +263,41 @@ def test_probe_reads_the_cleaner_rule(text):
 @pytest.mark.parametrize("text", [
     "<redacted_reasoning><thinking>R</redacted_reasoning>Die Zahl ist 42.",
     "<think>a</think>Hello<think>b</think>",
-], ids=["thinking-quoted-in-redacted", "answer-between-blocks"])
+    "<think>plan</think><redacted_reasoning>more</think>Here is the result: 42 apples.",
+], ids=["thinking-quoted-in-redacted", "answer-between-blocks", "stray-closer-after-redacted"])
 def test_probe_counts_the_answer_the_chat_shows(text):
-    """No retry for a reply with an answer on screen. The second row is why the probe is not
-    greedy: the chat shows "Hello" (it closes a leading block at its first </think>), and a
-    probe that called it empty would let a guard retract a bubble the person sees."""
+    """No retry for a reply with an answer on screen: a probe that called it empty would let a
+    guard retract a bubble the person sees. The chat closes a leading block at its first
+    </think> (row two shows "Hello", only the non-greedy reading finds it) unless a stray
+    closer follows, then at the last one (row three shows the result, only the greedy reading
+    finds it), so the probe counts an answer in either."""
     from vaf.core.agent import _final_answer_probe
     assert _final_answer_probe(text) != ""
+
+
+def _redacted_shapes():
+    n = 128 * 1024
+    unit = "<redacted_reasoning>"
+    return {
+        "unclosed-openers": "Answer. " + unit * (n // len(unit)),
+        "opener-and-text": "Answer. " + (unit + "x") * (n // (len(unit) + 1)),
+        "think-block-then-openers": "<think>a</think>Answer. " + unit * (n // len(unit)),
+        "opener-and-stray-closer": "Answer. " + (unit + "</think>") * (n // (len(unit) + 8)),
+        "spliced-openers": "Answer. " + "<redacted_<think>x</think>reasoning>" * (n // 36),
+    }
+
+
+@pytest.mark.parametrize("name", list(_redacted_shapes()))
+def test_redacted_strip_is_linear(name):
+    """About 128 KB each. Measured: the lazy redacted regex, run twice, took 4.6 to 8.2 s per
+    call on these, in the cleaner and the probe alike; the walk takes milliseconds."""
+    import time
+    from vaf.core.agent import _final_answer_probe
+    text = _redacted_shapes()[name]
+    started = time.perf_counter()
+    assert _clean(text) == "Answer."
+    _final_answer_probe(text)
+    assert time.perf_counter() - started < 2.0
 
 
 @pytest.mark.parametrize("name", list(ANSWERS))

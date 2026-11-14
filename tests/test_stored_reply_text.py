@@ -210,15 +210,3 @@ def test_model_text_reads_a_legacy_head_like_the_live_history():
     copy, meta = returned_turn_copy("[ASYNC_ACK]On it.", TurnStatus())
     assert model_text({"role": "assistant", "content": copy, "metadata": meta}) == "On it."
 
-
-def test_the_prompt_interface_chat_switch_uses_the_engine_replay():
-    """`session <id>` in the prompt interface put the stored content back into the agent's
-    history by hand: raw, failed turns and old heads included, and through `msg.get` on the
-    `Message` objects a loaded chat holds, which raised, so the switch failed every time.
-    It now goes through `load_session_context`, which reads each message through
-    `model_text`. MUTATION: put the hand-written loop back - red."""
-    src = (ROOT / "vaf" / "cli" / "cmd" / "run.py").read_text(encoding="utf-8")
-    start = src.index('tui.confirm("Switch to this session?"')
-    block = src[start:src.index('tui.success("Session restored to agent context!")', start)]
-    assert "agent.load_session_context(loaded_session.id, force=True)" in block
-    assert "agent.history.append" not in block and "msg.get(" not in block

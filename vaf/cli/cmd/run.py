@@ -1059,6 +1059,25 @@ def _terminal_echo(text) -> str:
     return escape(terminal_text(text or ""))
 
 
+def _terminal_chat(agent, session_mgr, chat_id):
+    """The terminal's own chat for a typed turn: its session, the one the turn is saved into,
+    with the agent bound to that same chat.
+
+    Queued web tasks run in this loop on their own chats and leave the agent and the session
+    there, so every typed turn binds both back to the terminal's chat: the one `vaf run`
+    opened, or the one `session <id>` switched to. A chat whose file is gone is created again
+    under its id. Any other load failure raises: the turn is then not run, rather than saved
+    into another chat or run on a history that is not this chat's."""
+    try:
+        session = session_mgr.load(chat_id)
+    except FileNotFoundError:
+        session = session_mgr.new()
+        session.id = chat_id
+        session_mgr.save(session)
+    agent.load_session_context(session.id)
+    return session
+
+
 def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None, web_enabled: bool = False):
     """Run with modern TUI interface."""
     global global_agent
@@ -1438,6 +1457,10 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
 
     # Flag used to break from input_box when Web UI sends a message (no wake word)
     wake_word_detected_flag = threading.Event()
+
+    # The chat typed turns run in and are saved into: the one this run opened (`--session`
+    # or the new chat saved above) until `session <id>` switches it (_terminal_chat).
+    terminal_chat_id = current_session.id
 
     # Interactive loop
     console_broken = False
@@ -1971,14 +1994,9 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
             # If input was not fetched from TaskQueue (is_web_input=False), it came from TUI manually.
             # Ensure we are in the correct session context.
             if not is_web_input:
-                # Force TUI to use its own dedicated session ID
-                target_session_id = "cli-main" 
-                agent.load_session_context(target_session_id)
-                # Note: 'current_session' variable might be stale from Web Task, but Agent context is now correct.
-                # Ideally we should reload current_session object too, but Agent history is the critical part.
-                try:
-                    current_session = session_mgr.load(target_session_id)
-                except: pass
+                # A queued web task ran on its own chat and left the agent and
+                # current_session there: a typed turn returns to the terminal's chat.
+                current_session = _terminal_chat(agent, session_mgr, terminal_chat_id)
             
             # ═══════════════════════════════════════════════════════════════
             # KEYBOARD SHORTCUTS (single letters)
@@ -2364,6 +2382,9 @@ Created: {current_session.created_at}
                                 # stored chat (session.model_text), tool calls and results kept
                                 # together. A loaded chat holds Message objects, not dicts.
                                 agent.load_session_context(loaded_session.id, force=True)
+                                # The terminal's chat from now on: the next typed turn runs
+                                # and is saved here (_terminal_chat).
+                                terminal_chat_id = loaded_session.id
                                 tui.success("Session restored to agent context!")
                         except FileNotFoundError:
                             tui.error(f"Session not found: {session_id}")

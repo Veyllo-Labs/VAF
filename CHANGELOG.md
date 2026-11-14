@@ -68,6 +68,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **`session <id>` in `vaf run` switches the chat, and what you type next stays there.** The
+  switch failed every time with "Failed to load session". Typed messages also ran on a
+  history of their own that no chat held: `vaf run --session <id>` never gave the agent the
+  chat's earlier messages, and after the window answered a message from the browser, the next
+  typed message started from nothing and was saved into the browser's chat. Typed messages
+  now run on, and are saved in, one chat: the one `vaf run` opened, or the one you switched
+  to.
 - **A chat reloaded in the browser shows its replies as they were written.** Opening a chat
   again deleted everything in square brackets from the agent's replies: `arr[i]` became
   `arr`, a route like `app/[id]/page.tsx` lost its folder, a task list lost its boxes, a

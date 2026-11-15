@@ -31,7 +31,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from vaf.tools.coder import CodingAgentTool, TaskManager, _continuation_call, _nothing_to_resume
+from vaf.core.persistence import PersistenceManager, ProjectState, Task
+from vaf.tools.coder import (CodingAgentTool, TaskManager, _continuation_call,
+                             _failed_tasks_note, _nothing_to_resume, _resume_requested)
 
 REPO = Path(__file__).resolve().parent.parent
 ORIGINAL = 'Build a "Todo" app with login.\nUse SQLite, one file per page.'
@@ -146,24 +148,49 @@ def test_resume_keeps_a_plan_that_stopped_before_its_todo_list(tmp_path):
 
 # ── AC3: nothing to resume ──────────────────────────────────────────────────────────────
 
-def test_resume_without_a_stored_plan_is_a_new_request(tmp_path):
-    d = str(tmp_path)
+def _listing(root: Path) -> dict:
+    """Every entry under ``root`` with the bytes of each file, so any write shows."""
+    return {p.relative_to(root).as_posix(): (p.read_bytes() if p.is_file() else None)
+            for p in sorted(root.rglob("*"))}
+
+
+def test_resume_without_a_stored_plan_writes_nothing(tmp_path):
+    """A refused resume leaves no plan behind: an empty plan stamped with the continuation
+    text would be continued by the same call a second time.
+    MUTATION: drop the read-only check at the top of initialize - red (.vaf is made)."""
+    (tmp_path / "notes.txt").write_text("mine")
+    before = _listing(tmp_path)
     tm = TaskManager()
-    tm.initialize(d, current_task="complete all remaining tasks", resume=True)
+    tm.initialize(str(tmp_path), current_task="complete all remaining tasks", resume=True)
     assert tm.resumed is False
-    assert tm.todos == []
-    assert tm.state.task == "complete all remaining tasks"
+    assert tm.state is None and tm.todos == []
+    assert _listing(tmp_path) == before
 
 
-def test_resume_of_a_finished_plan_is_a_new_request(tmp_path):
-    """MUTATION: keep the plan for every resume, finished or not - red."""
+def test_resume_of_a_finished_plan_changes_nothing(tmp_path):
+    """MUTATION: keep the plan for every resume, finished or not - red.
+    MUTATION: let a resume of a finished plan replace it as a new request does - red."""
     d = str(tmp_path)
     _plan(d, statuses=("completed", "completed"))
+    before = _listing(tmp_path)
     tm = TaskManager()
     tm.initialize(d, current_task="complete all remaining tasks", resume=True)
     assert tm.resumed is False
-    assert tm.todos == []
-    assert tm.state.task == "complete all remaining tasks"
+    assert tm.state is None
+    assert _listing(tmp_path) == before
+
+
+def test_a_reused_manager_does_not_keep_the_last_resume(tmp_path):
+    """MUTATION: drop the `self.resumed = False` reset in initialize - red."""
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    _plan(str(a))
+    tm = TaskManager()
+    tm.initialize(str(a), current_task="", resume=True)
+    assert tm.resumed is True
+    tm.initialize(str(b), current_task="build a page")
+    assert tm.resumed is False
 
 
 # ── AC4: where a kept plan continues ────────────────────────────────────────────────────
@@ -236,6 +263,27 @@ def test_resume_is_read_strictly(spawn_recorder):
     assert "--resume" not in spawn_recorder[0][2]["args"]
 
 
+@pytest.mark.parametrize("value", ["true", "TRUE", " yes ", "on", "1"])
+def test_resume_written_as_text_is_a_resume(spawn_recorder, tmp_path, value):
+    """A model that writes the flag as text means it: read as no, the call would plan fresh
+    and replace the plan it asked to keep.
+    MUTATION: read only a real True (`is True`) - red."""
+    out = CodingAgentTool().run(task="complete all remaining tasks", resume=value,
+                                project_path=str(tmp_path))
+    assert out.startswith("[SUBAGENT_ASYNC:"), out
+    assert "--resume" in spawn_recorder[0][2]["args"]
+
+
+@pytest.mark.parametrize("value,expected", [
+    (True, True), ("true", True), ("Yes", True), ("ON", True), ("1", True),
+    (False, False), ("false", False), ("0", False), ("no", False), ("off", False), ("", False),
+    (None, False), (1, False), ("truthy", False), (["true"], False),
+])
+def test_the_resume_read(value, expected):
+    """MUTATION: drop "on" from the accepted words - red."""
+    assert _resume_requested(value) is expected
+
+
 def test_a_content_only_run_has_nothing_to_resume(spawn_recorder, tmp_path):
     out = CodingAgentTool().run(task="CONTENT_ONLY automation: write a poem", resume=True,
                                 project_path=str(tmp_path))
@@ -245,14 +293,20 @@ def test_a_content_only_run_has_nothing_to_resume(spawn_recorder, tmp_path):
 
 def test_the_resume_refusals_come_before_the_shortcut_and_the_spawn():
     """MUTATION: move the checks below the spawn block - red."""
-    src = inspect.getsource(CodingAgentTool.run)
-    gate = src.index("_project_path_refusal(kwargs.get(\"project_path\")")
-    read = src.index('resume = kwargs.get("resume") is True')
-    needs = src.index('if resume and not kwargs.get("project_path"):')
-    content = src.index("if resume and _content_only_task(task):")
-    assert gate < read < needs < content
-    assert content < src.index("_detect_history_rollback_intent(task)")
-    assert content < src.index("spawned = spawn_subagent(")
+    tree = _run_tree()
+    gate = _first_call(tree, "_project_path_refusal")
+    read = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)
+            and ast.unparse(n.targets[0]) == "resume" and _calls(n, "_resume_requested")]
+    needs = [n for n in _ifs_naming(tree, "resume", "kwargs.get", "project_path")
+             if isinstance(n.body[-1], ast.Return)]
+    content = [n for n in _ifs_naming(tree, "resume", "_content_only_task")
+               if isinstance(n.body[-1], ast.Return)]
+    assert len(read) == 1 and len(needs) == 1 and len(content) == 1
+    assert gate < read[0].lineno < needs[0].lineno
+    assert read[0].lineno < content[0].lineno
+    last = max(needs[0].lineno, content[0].lineno)
+    assert last < _first_call(tree, "_detect_history_rollback_intent")
+    assert last < _first_call(tree, "spawn_subagent")
 
 
 # ── AC6: the flag crosses into the child ────────────────────────────────────────────────
@@ -281,20 +335,53 @@ def _function(path: Path, name: str, cls: str = None):
     return next(n for n in scope if isinstance(n, ast.FunctionDef) and n.name == name)
 
 
+def _mentions(node) -> set:
+    """The names, dotted attributes and string constants a node uses: what a structural test
+    matches on, so that a reorder of a condition that behaves the same stays green."""
+    out = set()
+    for n in ast.walk(node):
+        if isinstance(n, ast.Name):
+            out.add(n.id)
+        elif isinstance(n, ast.Attribute):
+            out.add(ast.unparse(n))
+        elif isinstance(n, ast.Constant) and isinstance(n.value, str):
+            out.add(n.value)
+    return out
+
+
+def _ifs_naming(tree, *names):
+    return [n for n in ast.walk(tree) if isinstance(n, ast.If) and set(names) <= _mentions(n.test)]
+
+
+def _calls(node, name: str) -> list:
+    return [n for n in ast.walk(node) if isinstance(n, ast.Call) and ast.unparse(n.func) == name]
+
+
+def _first_call(tree, name: str) -> int:
+    found = _calls(tree, name)
+    assert found, f"no call of {name}"
+    return min(n.lineno for n in found)
+
+
+def _strings(node) -> list:
+    return [n.value for n in ast.walk(node) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+
+
 def test_vaf_subagent_run_maps_the_flag_for_the_coder():
     """MUTATION: remove the kwargs assignment - red."""
     fn = _function(REPO / "vaf" / "cli" / "cmd" / "subagent.py", "run_subagent")
     names = [a.arg for a in fn.args.args]
     default = fn.args.defaults[names.index("resume") - (len(names) - len(fn.args.defaults))]
-    assert ast.unparse(default).startswith("typer.Option(False, '--resume'"), ast.unparse(default)
+    assert ast.unparse(default.func) == "typer.Option"
+    assert [ast.literal_eval(a) for a in default.args[:2]] == [False, "--resume"]
     branch = next(n for n in ast.walk(fn) if isinstance(n, ast.If)
-                  and ast.unparse(n.test) == "agent_type == 'coding_agent'")
-    sets = [n for n in ast.walk(branch) if isinstance(n, ast.If) and ast.unparse(n.test) == "resume"]
-    assert len(sets) == 1
-    assert [ast.unparse(s) for s in sets[0].body] == ["kwargs['resume'] = True"]
-    call = next(n for n in ast.walk(branch) if isinstance(n, ast.Call)
-                and ast.unparse(n.func) == "tool.run")
-    assert call.lineno > sets[0].lineno
+                  and {"agent_type", "coding_agent"} <= _mentions(n.test))
+    sets = [n for n in ast.walk(branch) if isinstance(n, ast.Assign)
+            and ast.unparse(n.targets[0]) == "kwargs['resume']"]
+    assert len(sets) == 1 and ast.literal_eval(sets[0].value) is True
+    guard = [n for n in ast.walk(branch) if isinstance(n, ast.If) and sets[0] in n.body]
+    assert len(guard) == 1 and _mentions(guard[0].test) == {"resume"}
+    assert _first_call(branch, "tool.run") > sets[0].lineno
 
 
 # ── AC7: the run continues the kept plan ────────────────────────────────────────────────
@@ -303,48 +390,97 @@ def _run_tree():
     return _function(REPO / "vaf" / "tools" / "coder.py", "run", cls="CodingAgentTool")
 
 
-def _ifs(tree, test: str):
-    return [n for n in ast.walk(tree) if isinstance(n, ast.If) and ast.unparse(n.test) == test]
+def _nested(tree, name: str):
+    return next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == name)
 
 
 def test_the_run_initializes_with_resume_and_answers_nothing_to_resume():
     """MUTATION: drop `resume=resume` - red. MUTATION: drop the answer - red."""
     tree = _run_tree()
-    init = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
-            and ast.unparse(n.func) == "task_mgr.initialize"]
+    init = _calls(tree, "task_mgr.initialize")
     assert len(init) == 1
-    assert ast.unparse(init[0]) == "task_mgr.initialize(base_dir, current_task=task, resume=resume)"
-    nothing = _ifs(tree, "resume and (not task_mgr.resumed)")
+    assert {k.arg: ast.unparse(k.value) for k in init[0].keywords}.get("resume") == "resume"
+    nothing = _ifs_naming(tree, "resume", "task_mgr.resumed")
     assert len(nothing) == 1 and nothing[0].lineno > init[0].lineno
-    body = [ast.unparse(s) for s in nothing[0].body]
-    assert body[-2:] == ["stop_live()", "return _nothing_to_resume(base_dir)"], body
-    assert "animation_running.clear()" in body
+    assert _calls(nothing[0], "stop_live") and _calls(nothing[0], "animation_running.clear")
+    assert isinstance(nothing[0].body[-1], ast.Return)
+    assert _calls(nothing[0].body[-1], "_nothing_to_resume")
     assert _nothing_to_resume("/p").startswith("Error: nothing to resume in '/p'")
 
 
-def test_a_resume_names_its_own_folder_or_nothing():
-    """A project_path the choice did not use, or one that does not exist, is refused before
-    a folder is created or a repository started there.
-    MUTATION: drop the check - red."""
+def test_a_resume_is_decided_by_reading_before_anything_is_written():
+    """A resume names its own folder, an existing one, with an unfinished plan stored in it,
+    and that is decided before a folder is made, a repository started or the plan store
+    opened.
+    MUTATION: drop the stored-plan read from the early check - red (and the run test below)."""
     tree = _run_tree()
-    early = _ifs(tree, "resume and (_choice.source != 'project_path' or not "
-                       "os.path.isdir(_choice.base_dir))")
+    early = _ifs_naming(tree, "resume", "_choice.source", "os.path.isdir",
+                        "TaskManager.stored_unfinished_plan")
     assert len(early) == 1
-    assert ast.unparse(early[0].body[-1]) == "return _nothing_to_resume(kwargs.get('project_path'))"
-    makedirs = min(n.lineno for n in ast.walk(tree) if isinstance(n, ast.Call)
-                   and ast.unparse(n.func) == "os.makedirs")
-    assert early[0].lineno < makedirs
+    assert _calls(early[0].body[-1], "_nothing_to_resume")
+    assert _calls(early[0], "stop_live")
+    for later in ("os.makedirs", "self._ensure_git_repo", "task_mgr.initialize"):
+        assert early[0].lineno < _first_call(tree, later), later
+
+
+def _drive_run_to_the_folder(monkeypatch):
+    """A child-mode run() that gets past the display and the health check without a server:
+    the health answer is stubbed, every other request is refused, and no model is asked
+    before the folder decision this drives to."""
+    import vaf.tools.coder as coder
+    for var in ("VAF_USER_SCOPE_ID", "VAF_USER_ROLE", "VAF_SESSION_ID", "VAF_PARENT_CWD"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("VAF_IN_SUBAGENT_TERMINAL", "1")
+    monkeypatch.setenv("VAF_PROVIDER", "local")
+    import vaf.core.subagent_ipc as ipc
+    monkeypatch.setattr(ipc, "get_current_session_id", lambda: None)
+
+    def _get(url, *a, **k):
+        if url.endswith("/health"):
+            return SimpleNamespace(status_code=200)
+        raise AssertionError(f"unexpected request to {url}")
+
+    monkeypatch.setattr(coder.requests, "get", _get)
+    monkeypatch.setattr(coder.requests, "post", _get)
+    monkeypatch.setattr(CodingAgentTool, "_active_instance", None)
+
+
+def test_a_refused_resume_leaves_the_folder_as_it_was(tmp_path, monkeypatch):
+    """Twice in a row, on a folder with no plan and on a finished plan: the answer is "nothing
+    to resume" both times and no file, folder, repository or plan store appears or changes.
+    Before, the repository and an empty plan with the continuation text as its request were
+    written, and the second identical call continued that empty plan.
+    MUTATION: drop the stored-plan read from the early check - red."""
+    _drive_run_to_the_folder(monkeypatch)
+    no_plan = tmp_path / "no_plan"
+    no_plan.mkdir()
+    (no_plan / "notes.txt").write_text("mine")
+    finished = tmp_path / "finished"
+    finished.mkdir()
+    _plan(str(finished), statuses=("completed", "completed"))
+    for folder in (no_plan, finished):
+        before = _listing(folder)
+        for _ in range(2):
+            monkeypatch.setattr(CodingAgentTool, "_active_instance", None)
+            out = CodingAgentTool().run(task="Continue the open tasks of the stored plan.",
+                                        project_path=str(folder), resume=True)
+            assert out.startswith("Error: nothing to resume in "), out
+            assert _listing(folder) == before, folder.name
+    assert not (no_plan / ".git").exists() and not (no_plan / ".vaf").exists()
 
 
 def test_the_run_works_for_the_stored_request():
     """MUTATION: drop the replacement of `task` - red."""
     tree = _run_tree()
-    keep = _ifs(tree, "task_mgr.resumed and _stored_request and (task.strip() != _stored_request)")
+    keep = _ifs_naming(tree, "task_mgr.resumed", "_stored_request")
     assert len(keep) == 1
-    assign = keep[0].body[0]
-    assert ast.unparse(assign) == (
-        "task = f'{_stored_request}\\n\\n[Continuation note from the caller]\\n{task}'")
-    assert "tui.task = task" in [ast.unparse(s) for s in keep[0].body]
+    assign = [s for s in keep[0].body if isinstance(s, ast.Assign)
+              and ast.unparse(s.targets[0]) == "task"]
+    assert len(assign) == 1
+    assert {"_stored_request", "task"} <= _mentions(assign[0].value)
+    assert any("[Continuation note from the caller]" in s for s in _strings(assign[0].value))
+    assert any(isinstance(s, ast.Assign) and ast.unparse(s.targets[0]) == "tui.task"
+               for s in keep[0].body)
 
 
 def test_a_kept_plan_skips_the_template_and_starts_in_its_open_task():
@@ -353,28 +489,26 @@ def test_a_kept_plan_skips_the_template_and_starts_in_its_open_task():
     MUTATION: switch to the literal task 0 again - red."""
     tree = _run_tree()
     kept = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)
-            and ast.unparse(n) == "_kept_plan_start = task_mgr.resume_point() if task_mgr.todos else None"]
-    assert len(kept) == 1
-    init = next(n for n in ast.walk(tree) if isinstance(n, ast.Call)
-                and ast.unparse(n.func) == "task_mgr.initialize")
-    assert kept[0].lineno > init.lineno
+            and ast.unparse(n.targets[0]) == "_kept_plan_start"]
+    assert len(kept) == 1 and _calls(kept[0], "task_mgr.resume_point")
+    assert kept[0].lineno > _first_call(tree, "task_mgr.initialize")
 
-    template = [n for n in ast.walk(tree) if isinstance(n, ast.If)
-                and "not _existing_code_files" in ast.unparse(n.test)
-                and "not skip_template" in ast.unparse(n.test)
-                and "_is_api_mode" in ast.unparse(n.test)]
+    template = [n for n in _ifs_naming(tree, "skip_template", "_is_api_mode",
+                                       "_existing_code_files", "_kept_plan_start")
+                if _calls(n, "TemplateManager.detect_template_type_with_llm")]
     assert len(template) == 1
-    assert "_kept_plan_start is None" in ast.unparse(template[0].test)
     assert kept[0].lineno < template[0].lineno
 
-    start = _ifs(tree, "_kept_plan_start is not None and (not guided_mode)")
+    start = [n for n in _ifs_naming(tree, "_kept_plan_start", "guided_mode")
+             if any(isinstance(s, ast.Assign) and ast.unparse(s.targets[0])
+                    == "guided_mode_skipped_planning" and ast.literal_eval(s.value) is True
+                    for s in n.body)]
     assert len(start) == 1
-    assert "guided_mode_skipped_planning = True" in [ast.unparse(s) for s in start[0].body]
 
-    executor = _ifs(tree, "guided_mode_skipped_planning")
+    executor = [n for n in ast.walk(tree) if isinstance(n, ast.If)
+                and _mentions(n.test) == {"guided_mode_skipped_planning"}]
     assert len(executor) == 1
-    switches = [ast.unparse(n.args[0]) for n in ast.walk(executor[0]) if isinstance(n, ast.Call)
-                and ast.unparse(n.func) == "switch_to_task_context"]
+    switches = [ast.unparse(c.args[0]) for c in _calls(executor[0], "switch_to_task_context")]
     assert switches == ["task_mgr.current_task_idx"], switches
 
 
@@ -382,34 +516,43 @@ def test_a_resumed_start_names_the_tasks_that_failed_before():
     """The archived reasons reach the model once, in the fresh context of the first open task.
     MUTATION: drop the note - red."""
     tree = _run_tree()
-    executor = _ifs(tree, "guided_mode_skipped_planning")[0]
+    executor = next(n for n in ast.walk(tree) if isinstance(n, ast.If)
+                    and _mentions(n.test) == {"guided_mode_skipped_planning"})
     notes = [n for n in ast.walk(executor) if isinstance(n, ast.If)
-             and ast.unparse(n.test) == "_resume_failed"]
+             and _mentions(n.test) == {"_resume_failed"}]
     assert len(notes) == 1
-    first = notes[0].body[0]
-    assert ast.unparse(first.value.func) == "history.append"
-    message = first.value.args[0]
-    fields = {ast.literal_eval(k): v for k, v in zip(message.keys, message.values)}
-    assert ast.literal_eval(fields["role"]) == "system"
-    assert "failed in an earlier run" in ast.unparse(fields["content"])
-    assert ast.unparse(notes[0].body[-1]) == "_resume_failed = []"
+    appended = _calls(notes[0], "history.append")
+    assert len(appended) == 1 and _calls(appended[0], "_failed_tasks_note")
     taken = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)
-             and ast.unparse(n) == "_resume_failed = task_mgr.failed_tasks() if task_mgr.todos else []"]
+             and ast.unparse(n.targets[0]) == "_resume_failed" and _calls(n, "task_mgr.failed_tasks")]
     kept = next(n for n in ast.walk(tree) if isinstance(n, ast.Assign)
                 and ast.unparse(n.targets[0]) == "_kept_plan_start")
     assert len(taken) == 1 and taken[0].lineno < kept.lineno   # read before the reset
+
+
+def test_the_failed_task_note_is_bounded():
+    """The note is sent with every request of the task, and the plan is project content.
+    MUTATION: list every failed task - red. MUTATION: drop the title cut - red."""
+    failed = [{"id": i + 1, "task": "t" * 1000, "result": "r" * 1000} for i in range(25)]
+    note = _failed_tasks_note(failed)
+    lines = note.splitlines()
+    listed = [ln for ln in lines if ln.startswith("- Task ")]
+    assert len(listed) == 10
+    assert "- ... and 15 more" in lines
+    assert all(len(ln) < 2 * 200 + 40 for ln in listed)
+    assert _failed_tasks_note(failed[:2]).count("- Task ") == 2
+    assert "more" not in _failed_tasks_note(failed[:10])
 
 
 def test_a_kept_plan_is_not_told_to_call_set_todos():
     """MUTATION: drop the kept-plan user message - red."""
     tree = _run_tree()
     msg = [n for n in ast.walk(tree) if isinstance(n, ast.If)
-           and ast.unparse(n.test) == "guided_mode"
-           and any(isinstance(o, ast.If) and ast.unparse(o.test) == "_kept_plan_start is not None"
+           and _mentions(n.test) == {"guided_mode"}
+           and any(isinstance(o, ast.If) and "_kept_plan_start" in _mentions(o.test)
                    for o in n.orelse)]
     assert len(msg) == 1
-    branch = msg[0].orelse[0]
-    text = "\n".join(ast.unparse(s) for s in branch.body)
+    text = " ".join(_strings(ast.Module(body=msg[0].orelse[0].body, type_ignores=[])))
     assert "do not call `set_todos`" in text
     assert "FIRST action MUST be to call `set_todos`" not in text
 
@@ -417,19 +560,39 @@ def test_a_kept_plan_is_not_told_to_call_set_todos():
 # ── AC8, AC9, AC11: the recommended call ────────────────────────────────────────────────
 
 def test_the_answer_recommends_the_resume_call():
-    """MUTATION: write the literal text again - red."""
+    """MUTATION: write the literal text again - red. MUTATION: drop the deploy target - red.
+    MUTATION: drop the content-only gate - red."""
     tree = _run_tree()
-    built = [ast.unparse(n.value) for n in ast.walk(tree) if isinstance(n, ast.AugAssign)
+    built = [n for n in ast.walk(tree) if isinstance(n, ast.AugAssign)
              and ast.unparse(n.target) == "task_status"
-             and ("coding_agent" in ast.unparse(n.value)
-                  or "_continuation_call" in ast.unparse(n.value))]
-    assert built == ["f'`{_continuation_call(base_dir)}`'"], built
+             and (_calls(n, "_continuation_call")
+                  or any("coding_agent(" in s for s in _strings(n)))]
+    assert len(built) == 1 and not any("coding_agent(" in s for s in _strings(built[0]))
+    call = _calls(built[0], "_continuation_call")[0]
+    assert [ast.unparse(a) for a in call.args] == ["base_dir", "_deploy"]
     assert "resume=true" in _continuation_call("/p")
     # A content-only run's temporary folder holds no plan to come back to.
-    gate = [n for n in ast.walk(tree) if isinstance(n, ast.If)
-            and any(isinstance(s, ast.AugAssign) and "_continuation_call" in ast.unparse(s)
-                    for s in n.body)]
-    assert [ast.unparse(g.test) for g in gate] == ["(failed_list or remaining) and (not skip_template)"]
+    gate = [n for n in _ifs_naming(tree, "skip_template", "failed_list", "remaining")
+            if built[0] in n.body]
+    assert len(gate) == 1
+
+
+def test_the_continue_note_appears_only_with_the_call():
+    """"Continue with the call above" is said only where the call is shown: never for a
+    content-only run, whose answer names no call.
+    MUTATION: drop the content-only branch of the note - red."""
+    tree = _run_tree()
+    sentence = "Continue with the call above"
+    holders = [n for n in ast.walk(tree) if isinstance(n, ast.If)
+               and "skip_template" in _mentions(n.test)
+               and any(isinstance(s, ast.Assign) and ast.unparse(s.targets[0]) == "completion_note"
+                       for s in n.body)]
+    assert len(holders) == 1
+    assert not any(sentence in s for s in _strings(ast.Module(body=holders[0].body,
+                                                              type_ignores=[])))
+    assert any(sentence in s for s in _strings(ast.Module(body=holders[0].orelse,
+                                                          type_ignores=[])))
+    assert sum(sentence in s for s in _strings(tree)) == 1
 
 
 @pytest.mark.parametrize("path", [
@@ -443,6 +606,23 @@ def test_the_continuation_call_reads_back_the_exact_folder(path):
     assert found and json.loads(found.group(1)) == path
     assert text.startswith('coding_agent(task="complete all remaining tasks", project_path=')
     assert text.endswith(", resume=true)")
+    assert "deploy_to" not in text
+
+
+@pytest.mark.parametrize("target", [
+    "user@example.com:/srv/site", "ftps://user@example.com:2121/htdocs", 'a"b\\c:/x y',
+])
+def test_the_continuation_call_keeps_the_deploy_target(target):
+    """A resumed run without the target reaches no server and refuses its deploy task.
+    MUTATION: leave deploy_to out of the call - red. MUTATION: write it in plain quotes - red
+    for the quoted row."""
+    from vaf.tools.coder import DeployTarget
+    text = _continuation_call("/p", target)
+    found = re.search(r'deploy_to=("(?:[^"\\]|\\.)*")', text)
+    assert found and json.loads(found.group(1)) == target
+    assert text.endswith(", resume=true)")
+    ssh = DeployTarget("user@example.com", "/srv/site")
+    assert f'deploy_to="{ssh}"' in _continuation_call("/p", ssh)
 
 
 def test_the_continuation_text_has_one_home():
@@ -463,9 +643,8 @@ def test_the_workflow_continuation_resumes_and_reads_the_status_signal():
     """MUTATION: drop `"resume": True` - red. MUTATION: restore "ALL TASKS COMPLETED" - red."""
     path = REPO / "vaf" / "core" / "agent.py"
     fn = _function(path, "_try_workflow", cls="Agent")
-    calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
-             and ast.unparse(n.func) == "_assign_declared_identity"
-             and ast.unparse(n.args[0]) == "coding_tool"]
+    calls = [c for c in _calls(fn, "_assign_declared_identity")
+             if ast.unparse(c.args[0]) == "coding_tool"]
     assert len(calls) == 1
     args = {ast.literal_eval(k): v for k, v in zip(calls[0].args[1].keys, calls[0].args[1].values)}
     assert ast.literal_eval(args["resume"]) is True
@@ -475,9 +654,9 @@ def test_the_workflow_continuation_resumes_and_reads_the_status_signal():
     assert r"Tasks:\s*" not in src
     assert "'○' in line" not in src
     assert "ALL TASKS COMPLETED" not in src
-    done = _ifs(fn, "'[VAF_CODING_AGENT_STATUS: COMPLETE]' in continuation_result")
+    done = _ifs_naming(fn, "[VAF_CODING_AGENT_STATUS: COMPLETE]", "continuation_result")
     assert len(done) == 1
-    assert "_continuation_call(project_path_hint)" in src
+    assert _calls(fn, "_continuation_call")
 
 
 # ── AC12: the schema ────────────────────────────────────────────────────────────────────
@@ -490,30 +669,137 @@ def test_the_schema_declares_resume_as_an_optional_boolean():
     assert params["required"] == ["task"]
 
 
+# ── A plan of many failed tasks, and planted values at the data-model boundary ──────────
+
+def test_resume_point_saves_the_plan_once(tmp_path, monkeypatch):
+    """A save per failed task rewrote the whole file once per task (13.8 s for 1000).
+    MUTATION: reset each task through reset_task_for_retry again - red (51 saves)."""
+    tm = _plan(str(tmp_path), statuses=["failed"] * 50 + ["pending"])
+    saves = []
+    real = tm.pm.save_state
+    monkeypatch.setattr(tm.pm, "save_state", lambda state: (saves.append(1), real(state)))
+    assert tm.resume_point() == (0, "write file0.html")
+    assert len(saves) == 1
+    assert all(t["status"] == "pending" for t in TaskManager(str(tmp_path)).todos)
+
+
+def test_a_planted_request_or_result_is_text_at_the_boundary(tmp_path):
+    """A list as the stored request raised AttributeError out of the run; a dict as a task's
+    result raised KeyError on the note's slice.
+    MUTATION: drop ProjectState.__post_init__ - red. MUTATION: drop the Task text fields
+    coercion - red."""
+    assert ProjectState(project_name="p", task=["build", "it"]).task == "['build', 'it']"
+    state = ProjectState.from_dict({"project_name": "p", "task": {"text": "build a page"},
+                                    "tasks": [{"id": 1, "title": "a", "status": "failed",
+                                               "result": {"why": "x"}, "description": 7}]})
+    assert state.task == "build a page"
+    assert isinstance(state.tasks[0].result, str) and state.tasks[0].description == "7"
+    assert isinstance(Task(id=1, title="a", instructions=["x"]).instructions, str)
+    _tasks_file(tmp_path).parent.mkdir(parents=True)
+    _tasks_file(tmp_path).write_text(json.dumps({
+        "project_name": "p", "task": ["planted"],
+        "tasks": [{"id": 1, "title": "a", "status": "failed", "result": {"k": 1}}]}))
+    tm = TaskManager()
+    tm.initialize(str(tmp_path), current_task="complete all remaining tasks", resume=True)
+    assert tm.resumed is True and tm.state.task == "['planted']"
+    assert "Task 1" in _failed_tasks_note(tm.failed_tasks())
+
+
+def test_peek_state_reads_without_writing(tmp_path):
+    """MUTATION: read through a PersistenceManager instead - red (.vaf is made)."""
+    assert PersistenceManager.peek_state(str(tmp_path)) is None
+    assert list(tmp_path.iterdir()) == []
+    _plan(str(tmp_path), statuses=("pending",))
+    assert PersistenceManager.peek_state(str(tmp_path)).task == ORIGINAL
+
+
+def test_peek_state_does_not_follow_a_linked_plan_store(tmp_path):
+    other = tmp_path / "other"
+    other.mkdir()
+    _plan(str(other), statuses=("pending",))
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    try:
+        (proj / ".vaf").symlink_to(other / ".vaf", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available here")
+    assert PersistenceManager.peek_state(str(proj)) is None
+    assert TaskManager.stored_unfinished_plan(str(proj)) is False
+
+
+# ── A code audit fix task keeps its findings across a resume ────────────────────────────
+
+def test_a_fix_task_stores_its_instructions(tmp_path):
+    """A resumed audit fix task got back only its generic title; the findings lived in the
+    stopped run's history.
+    MUTATION: drop `instructions` from ProjectState.from_dict - red.
+    MUTATION: clear the instructions in the retry reset - red."""
+    d = str(tmp_path)
+    tm = _plan(d, statuses=("completed",))
+    idx = tm.append_task("Fix the code audit findings (round 1)", description="2 finding(s)",
+                         instructions="CODE AUDIT ROUND 1 - fix a.py line 3")
+    tm.state.tasks[idx].status = "failed"
+    tm.pm.save_state(tm.state)
+    again = TaskManager()
+    again.initialize(d, current_task="complete all remaining tasks", resume=True)
+    assert again.resume_point() == (idx, "Fix the code audit findings (round 1)")
+    assert again.task_instructions(idx) == "CODE AUDIT ROUND 1 - fix a.py line 3"
+    assert again.task_instructions(0) == "" and again.task_instructions(99) == ""
+
+
+def test_every_fresh_task_context_carries_the_stored_instructions():
+    """The fix task's first context, a retry's and a resumed run's all come from one place.
+    MUTATION: drop the injection in switch_to_task_context - red.
+    MUTATION: let the audit round append its findings to the history again instead of
+    storing them - red."""
+    tree = _run_tree()
+    switch = _nested(tree, "switch_to_task_context")
+    asked = _calls(switch, "task_mgr.task_instructions")
+    assert len(asked) == 1 and ast.unparse(asked[0].args[0]) == "task_idx"
+    fresh = _first_call(switch, "create_fresh_context_for_task")
+    appended = _calls(switch, "task_hist.append")
+    assert len(appended) == 1 and appended[0].lineno > fresh
+    audit = _nested(tree, "_maybe_start_audit_round")
+    added = _calls(audit, "task_mgr.append_task")
+    assert len(added) == 1
+    assert "instructions" in {k.arg for k in added[0].keywords}
+    assert not _calls(audit, "history.append")
+
+
 # ── Fuzz: the continuation call and the keep-or-replace decision ───────────────────────
 
 _PATH_ALPHABET = (list("abcXYZ /:\\\"`\n\t") + [chr(c) for c in range(0x20)]
                   + ["ü", "€", "\u2028", "\U0001f600"])
 
 
+def _read_back(name: str, text: str):
+    found = re.search(name + r'=("(?:[^"\\]|\\.)*")', text)
+    try:
+        return json.loads(found.group(1)) if found else None
+    except ValueError:
+        return None
+
+
 def continuation_call_mismatches(seed: int, draws: int, make=None) -> list:
-    """Paths that do not read back exactly from the recommended call."""
+    """Folders and deploy targets that do not read back exactly from the recommended call."""
     make = make or _continuation_call
     rng = random.Random(seed)
     bad = []
     for _ in range(draws):
         path = "".join(rng.choice(_PATH_ALPHABET) for _ in range(rng.randint(0, 200)))
-        text = make(path)
-        found = re.search(r'project_path=("(?:[^"\\]|\\.)*")', text)
-        try:
-            back = json.loads(found.group(1)) if found else None
-        except ValueError:
-            back = None
-        if (back != path
-                or not text.startswith('coding_agent(task="complete all remaining tasks", '
-                                       'project_path=')
-                or not text.endswith(", resume=true)")):
-            bad.append(path)
+        target = (None if rng.random() < 0.5 else
+                  "".join(rng.choice(_PATH_ALPHABET) for _ in range(rng.randint(0, 120))))
+        text = make(path) if target is None else make(path, target)
+        ok = (_read_back("project_path", text) == path
+              and text.startswith('coding_agent(task="complete all remaining tasks", '
+                                  'project_path=')
+              and text.endswith(", resume=true)"))
+        if target is None:
+            ok = ok and "deploy_to=" not in text
+        else:
+            ok = ok and _read_back("deploy_to", text) == target
+        if not ok:
+            bad.append((path, target))
     return bad
 
 
@@ -550,7 +836,9 @@ def _expected(stored, statuses, call, resume):
 
 
 def decision_mismatches(root: Path, seed: int, draws: int) -> list:
-    """Draws where initialize() kept or replaced the plan against the decision table."""
+    """Draws where initialize() kept, replaced or left the plan against the decision table:
+    kept as stored, replaced by a fresh state stamped with the call, or, for a resume with
+    nothing to continue, left exactly as it was (no plan store made where there was none)."""
     rng = random.Random(seed)
     bad = []
     for n in range(draws):
@@ -565,16 +853,21 @@ def decision_mismatches(root: Path, seed: int, draws: int) -> list:
                 data["task"] = stored
             _tasks_file(d).parent.mkdir(parents=True)
             _tasks_file(d).write_text(json.dumps(data), encoding="utf-8")
+        before = _listing(d)
         tm = TaskManager()
         tm.initialize(str(d), current_task=call, resume=resume)
-        back = json.loads(_tasks_file(d).read_text(encoding="utf-8"))
         kept, resumed = _expected(stored, statuses, call, resume)
-        got_statuses = [t["status"] for t in back["tasks"]]
-        if kept:
-            ok = (got_statuses == statuses
-                  and back.get("task", "") == ("" if stored == "legacy" else stored))
+        if resume and not kept:
+            ok = _listing(d) == before and tm.state is None
+            back = None
         else:
-            ok = got_statuses == [] and back.get("task", "") == call.strip()
+            back = json.loads(_tasks_file(d).read_text(encoding="utf-8"))
+            got_statuses = [t["status"] for t in back["tasks"]]
+            if kept:
+                ok = (got_statuses == statuses
+                      and back.get("task", "") == ("" if stored == "legacy" else stored))
+            else:
+                ok = got_statuses == [] and back.get("task", "") == call.strip()
         if not ok or tm.resumed is not resumed:
             bad.append((stored, statuses, call, resume, back))
     return bad
@@ -593,9 +886,10 @@ def test_the_fuzz_oracles_see_a_broken_rule(tmp_path, monkeypatch):
 
     monkeypatch.setattr(TaskManager, "initialize", without_resume)
     assert decision_mismatches(tmp_path, seed=377, draws=60) != []
-    # ...and the call fuzz a folder written between plain quotes.
-    naive = lambda p: (f'coding_agent(task="complete all remaining tasks", '  # noqa: E731
-                       f'project_path="{p}", resume=true)')
+    # ...and the call fuzz a value written between plain quotes.
+    naive = lambda p, t=None: (  # noqa: E731
+        f'coding_agent(task="complete all remaining tasks", project_path="{p}"'
+        + (f', deploy_to="{t}"' if t is not None else "") + ", resume=true)")
     assert continuation_call_mismatches(seed=377, draws=60, make=naive) != []
 
 

@@ -1325,7 +1325,9 @@ What to expect:
   tasks are kept, failed ones are tried again, and the run starts at the next open task.
   Calling it again with a different task text and without `resume` is a new request and
   plans fresh. If your application offers a "continue" action of its own, pass
-  `resume=True` with the folder from the answer's `Full Path` line.
+  `resume=True` with the folder from the answer's `Full Path` line, and the same `deploy_to`
+  you started the run with, if any. A folder with no unfinished plan is answered
+  `Error: nothing to resume ...` and left exactly as it was.
 - **The coder needs a sandbox.** The coding agent's shell needs bubblewrap or
   Docker; its test runner and `python_sandbox` need Docker specifically (see
   [Security posture](#security-posture)). Without them, those steps return an

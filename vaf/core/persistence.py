@@ -55,12 +55,23 @@ class Task:
     files_created: List[str] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
     completed_at: Optional[float] = None
+    # What the task's context must carry beyond its title, for a task made by the run itself
+    # (a code audit fix task's findings). Read into every fresh context of the task, so a
+    # resumed or retried run still knows what to fix. `description` cannot hold it: a retry
+    # overwrites it with the previous attempt's reason.
+    instructions: Optional[str] = None
 
     def __post_init__(self):
         # Guarantee a string title no matter how the Task was built (set_todos,
         # from_dict/resume, or any future caller). See coerce_task_title.
         if not isinstance(self.title, str):
             self.title = coerce_task_title(self.title)
+        # The texts the coder slices into its prompts and answers: a planted dict there
+        # raised KeyError on `[:200]`.
+        for name in ("description", "result", "instructions"):
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, str):
+                setattr(self, name, coerce_task_title(value))
 
 @dataclass
 class ProjectState:
@@ -71,7 +82,13 @@ class ProjectState:
     # The user request this plan was made for. Lets a new invocation tell a DIFFERENT request
     # (plan fresh) from a genuine crash-resume of the SAME request (resume the incomplete plan).
     task: str = ""
-    
+
+    def __post_init__(self):
+        # The stored request is read into every prompt of a resumed run and stripped on every
+        # load: a planted list there raised AttributeError out of the run.
+        if not isinstance(self.task, str):
+            self.task = coerce_task_title(self.task)
+
     def to_dict(self) -> Dict:
         return asdict(self)
     
@@ -89,7 +106,8 @@ class ProjectState:
                 result=t_data.get("result"),
                 files_created=t_data.get("files_created", []),
                 created_at=t_data.get("created_at", time.time()),
-                completed_at=t_data.get("completed_at")
+                completed_at=t_data.get("completed_at"),
+                instructions=t_data.get("instructions"),
             )
             tasks.append(t)
             
@@ -307,6 +325,22 @@ class PersistenceManager:
             return ProjectState.from_dict(data)
         except Exception as e:
             print(f"Error loading state: {e}")
+            return None
+
+    @classmethod
+    def peek_state(cls, base_dir: str) -> Optional[ProjectState]:
+        """The state stored in ``base_dir`` (a judged REAL path), read without making or
+        writing anything, or None. Constructing a manager makes ``.vaf`` at once; a caller
+        that only asks whether a plan is stored (a resume that may be refused) must leave the
+        folder as it found it. A ``.vaf`` that is a link, or a ``tasks.json`` that is one, is
+        not read (`open_for_read` with ``expect_folder``, as `_read_file` reads)."""
+        from vaf.core.path_jail import open_for_read
+        folder = os.path.join(base_dir, cls.VAF_DIR)
+        try:
+            with open_for_read(os.path.join(folder, cls.TASKS_FILE), expect_folder=folder) as f:
+                data = json.loads(f.read().decode("utf-8") or "null")
+            return ProjectState.from_dict(data) if isinstance(data, dict) else None
+        except Exception:
             return None
 
     def save_state(self, state: ProjectState):

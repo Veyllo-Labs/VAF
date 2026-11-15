@@ -228,8 +228,9 @@ survives the new run:
 
 | Stored state | Call | Result |
 |---|---|---|
-| none | any | a fresh state with the call's text as its request |
-| every task completed | any | replaced by a fresh state (a finished plan is never continued) |
+| none | without `resume` | a fresh state with the call's text as its request |
+| every task completed | without `resume` | replaced by a fresh state (a finished plan is never continued) |
+| none, or every task completed | `resume=True` | nothing is written (no `.vaf`, no fresh state, no stamp); `state` is None and `resumed` False, so the caller refuses the resume |
 | unfinished | `resume=True` | kept exactly as stored: tasks, statuses, cursor and the original request; nothing is stamped, also when it has no tasks yet (a run that stopped before `set_todos`); `resumed` is True |
 | unfinished | the same text, after strip | kept (a crash-resume) |
 | unfinished | an empty text | kept |
@@ -237,12 +238,21 @@ survives the new run:
 | unfinished, no stored request (written before requests were stored) | any non-empty text | replaced: only `resume=True` or an empty text keep it, because a kept plan's run starts straight in its open task |
 
 `coding_agent(task=..., project_path=..., resume=true)` is the explicit continuation. `run()`
-reads the flag strictly (`kwargs.get("resume") is True`) and refuses, before the history
-shortcut and before the spawn, a resume without `project_path` and a resume of a content-only
-task. The spawned child gets `--resume`. A `project_path` that does not exist, or that the
-folder choice did not use (an unsafe folder falls through to another source), is answered
-`Error: nothing to resume in '<path>'` before a folder or a repository is created; so is a
-folder with no unfinished plan, after `initialize`. The display is ended on both answers.
+reads the flag with `_resume_requested`: a real True, or the text `true`, `1`, `yes` or `on` in
+any case (a model may write the flag as text, and reading that as no would plan fresh and
+replace the plan it asked to keep); `false` and anything else is no resume. Before the history
+shortcut and before the spawn it refuses a resume without `project_path` and a resume of a
+content-only task. The spawned child gets `--resume`. Whether there is anything to resume is
+decided by reading alone, right after the folder choice and before the folder is made, the
+repository started or the plan store opened: a `project_path` that does not exist, one the
+folder choice did not use (an unsafe folder falls through to another source), and a folder
+with no unfinished plan (`TaskManager.stored_unfinished_plan`, which reads through
+`PersistenceManager.peek_state`: no `.vaf` is made, a linked `.vaf` or `tasks.json` is not
+read) are answered `Error: nothing to resume in '<path>'`, and the folder is left exactly as
+it was, also on a second identical call. Before, the repository and an empty plan whose
+request was the continuation text were written first, so the same call a second time found
+that empty plan and planned freely. The answer after `initialize` stays as the backstop for a
+plan that changed in between. The display is ended on every answer.
 
 A kept plan (a resume, or a crash-resume of the same text):
 
@@ -252,24 +262,40 @@ A kept plan (a resume, or a crash-resume of the same text):
     template choice, the system prompt, each task's `Original Project Task` line, the
     single-file rule and the final commit message read it.
 *   **Continues at its first open task.** `TaskManager.resume_point()` puts every failed task
-    back to pending through `reset_task_for_retry` (the reason archived as `Previous attempt:`
-    in `description`), moves the cursor to the first task that is not terminal, counted from
-    the start of the plan, and returns `(index, title)`. The run then starts in that task's
+    back to pending the way `reset_task_for_retry` does (the reason archived as
+    `Previous attempt:` in `description`), in memory and with one save for the whole plan (a
+    save per task rewrote the file once per failed task: 13.8 s for a planted plan of 1000,
+    0.015 s now), moves the cursor to the first task that is not terminal, counted from the
+    start of the plan, and returns `(index, title)`. The run then starts in that task's
     context through the same flag guided mode uses (`guided_mode_skipped_planning`, switching
     to `task_mgr.current_task_idx`, labelled `[RESUME]`), with one system note in that fresh
-    context naming the tasks that failed before and why. Before, a kept plan started in the
-    planning context, where `set_todos` is refused while tasks are open, and reached a task
-    only through stuck detection.
+    context naming the tasks that failed before and why (`_failed_tasks_note`: the first 10,
+    each title and reason cut to 200 characters, then "and k more", because the note is sent
+    with every request of the task and the plan is project content). Before, a kept plan
+    started in the planning context, where `set_todos` is refused while tasks are open, and
+    reached a task only through stuck detection.
+*   **Keeps what a task was made with.** A task the run made itself, a code audit fix task,
+    stores its findings as `Task.instructions` (section 5b), and every fresh context of a task
+    reads them (`switch_to_task_context` through `task_mgr.task_instructions`): its first
+    context, a retry's, and a resumed run's. Before, the findings lived only in the stopped
+    run's history and a resumed fix task got back only its generic title. `description` does
+    not hold them, because a retry overwrites it with the previous attempt's reason.
 *   **Skips the template** (the kept-plan guard above).
 
 The coder's answer with open tasks names the continuation, built once by
-`_continuation_call(base_dir)`:
-`coding_agent(task="complete all remaining tasks", project_path="<folder>", resume=true)`, the
-folder written as a JSON string so any path reads back exactly. A content-only run's answer
-names none, because its temporary folder holds no plan to come back to. The main agent's
-automatic continuation after a workflow passes `resume` in code (see
-[WORKFLOW_SELECTION.md](WORKFLOW_SELECTION.md)). A model that sends a different text without
-`resume` still gets a fresh plan: that is the rule for a new request, unchanged.
+`_continuation_call(base_dir, deploy_to)`:
+`coding_agent(task="complete all remaining tasks", project_path="<folder>", resume=true)`, and
+for a run started with `deploy_to` the validated target too
+(`..., deploy_to="user@host:/folder", resume=true`): a resumed run without it reaches no server
+and refuses its deploy task, and the next run checks the target again as any run does. Every
+value is written as a JSON string so it reads back exactly. The target travels in the call,
+decided by the caller as before, and is not stored with the plan: `tasks.json` is project
+content the run's own shell can write, and a stored target would let that file choose the
+server. A content-only run's answer names no call, because its temporary folder holds no plan
+to come back to, and its note does not point at one. The main agent's automatic continuation
+after a workflow passes `resume` in code (see [WORKFLOW_SELECTION.md](WORKFLOW_SELECTION.md)).
+A model that sends a different text without `resume` still gets a fresh plan: that is the rule
+for a new request, unchanged.
 
 NAMED BOUNDARIES:
 *   **The stored request is project content.** `tasks.json` lives in the project folder, which
@@ -288,9 +314,20 @@ NAMED BOUNDARIES:
     plans fresh: a corrected request by design.
 *   **The IPC task title** of a resumed child shows the call's text (the note), not the stored
     request.
+*   **The automatic continuation after a workflow passes no `deploy_to`.** It has the folder
+    from the report's `Full Path` line and nothing else: no built-in workflow template names
+    `deploy_to` (grep of `vaf/`: only the coder and `vaf subagent run` read it), a step's
+    `args_template` holds unresolved placeholders, and taking the target out of the coder's
+    answer text would read text a task title can carry. A deploy task left open there stays
+    open, and the answer shows the call with the target for the model to make.
+*   **Every stored text is a string at the boundary.** `ProjectState.task` and a task's
+    `title`, `description`, `result` and `instructions` are coerced to text when the state is
+    built (`coerce_task_title`), so a planted list or dict in `tasks.json` reads as text
+    instead of ending the run.
 
 Pinned by `tests/test_coder_task_resume.py`, including two seeded fuzz tests (the call reads
-back every path; the keep-or-replace decision against the table above).
+back every folder and deploy target; the keep-or-replace decision against the table above,
+where a refused resume must leave the folder unchanged).
 
 ### C. Hierarchical Context Setup (Lines ~2200-2400)
 *   **`ContextState` Class:** Defined locally to hold `ContextManager`, `history`, `phase`, and `files_created` for a specific scope.
@@ -577,6 +614,7 @@ outcome, and only a run that truly changed nothing keeps the failure message.
 *   **Who decides:** the main agent, from what the person asked. `coding_agent(deploy_to="user@host[:port]:/folder")` names the ONE SSH server and folder a run may put its result on, `deploy_to="ftps://user@host[:port]/folder"` (or `ftp://` without encryption) the ONE web space with FTP; without it the run reaches no server at all.
 *   **Checked before anything is built** (`_deploy_target`, parent and child alike): the format, a folder that is not `/` (over FTP the login folder `/` is allowed: an FTP login is usually locked into the account's own space, and on many web spaces that folder is the site), and that the server is one this account already confirmed. The coder runs unattended and nobody could be asked about a new fingerprint or certificate, so a new server is refused at once with the call that confirms it in the chat (`ssh(server=..., command="true")` or `ftp(server=..., action="list")`).
 *   **Crossing the process boundary:** the argument `--deploy-to`, like `--environment`, never an environment variable.
+*   **Continuing:** an answer with open tasks names the target in its continuation call (`_continuation_call(base_dir, deploy_to)`), so a resumed run can still deploy; the target is checked again there, and it is never stored with the plan (see "The plan store" in section B).
 *   **In the run:** `ssh` is registered for that run only (never auto-discovered; `"ssh"` is in `MANUALLY_ADDED_TOOLS`), advertised in every context with its server in the description, and every call passes `_deploy_refusal`: pinned to that server, `run`/`upload`/`download` only (no `install_key`), uploads and downloads under the folder, and a relative `local_path` is the project's (`dist`), not the chat workspace the ssh tool reads a relative path against. `upload` takes the built folder whole (see the ssh tool). The account allowlist still decides whether the account may use `ssh` at all.
 *   **Over FTP** the same holds for the `ftp` tool (`"ftp"` in `MANUALLY_ADDED_TOOLS`, registered and advertised only for an `ftps://` or `ftp://` target): `list`/`upload`/`download`/`delete` under the folder, pinned to that web space. A run gets the one tool its target names, never both: an ssh call in an FTP run is refused with a pointer to `ftp`, and the other way round. `host_bash` refuses the FTP clients (`ftp`, `lftp`, the `ncftp` tools) and `curl`/`wget` with an `ftp://` or `ftps://` address (`ftp_transfer`), and `bash` in a sandbox environment refuses those and any `ssh`/`scp`/`sftp` login (an environment can have network), so the pin cannot be stepped around.
 
@@ -624,7 +662,7 @@ The prompt has always stated these rules ("run_tests must be green before `task_
 *   **Search-before-build** (`_sibling_file_note`): creating a NEW file whose stem matches an existing one (case/`-`/`_`-insensitive) gets the sibling named in a post-tool note - once per basename, never blocking; `test_utils.py` next to `utils.py` is legitimate.
 *   **Immediate lint feedback, both write lanes** (`_lint_feedback_message`): every successful `write_file` AND `edit_file` lints the file at once and posts the `LINTER CHECK PASSED`/`FAILED` verdict as a post-tool message - a hidden syntax error surfaces ONE reply after the write, not a whole task later (the loop-escape small local models need; `edit_file` previously stayed unlinted until `task_done`). The `task_done` linter gate decides on the LATEST verdict per file (`_active_lint_failure_files`): a fixed file (FAILED, then PASSED) stops blocking immediately instead of waiting for the stale message to scroll out of the window.
 *   **Guards feed**: every gate block, loop intervention (stuck detection, context resets, inactivity auto-complete, premature-completion blocks) and note reports one row into the `coder_state` payload's `guards` list, rendered in the SubAgent window's bottom-panel **Guards tab** (see `WEBUI_WEBSOCKET_FLOW.md`). The run's self-corrections are a first-class UI signal, not terminal-only output.
-*   **Code audit rounds** (`_audit_round_refusal`, `_audit_round_outcome`; engine `vaf.core.code_audit`, see [CODE_AUDIT.md](CODE_AUDIT.md)): once every task is done the run commits, reviews its change from `_run_start_sha` to HEAD with its own model and endpoint (`_coder_audit_ask`, the `_llm_verify_call` lane) on the run's resolved folder (`expect_folder=base_dir`: a folder swapped for a link during the review fails that round instead of reviewing another folder), and turns every verified problem into one more task via `TaskManager.append_task`, with the fix prompt as that task's context. The task runs through every gate above; then the run commits and reviews again. Each finding gets one attempt: a fix task carries only what no earlier fix task of the run was pointed at (`_audit_attempted`: the same id, or the same lines in the same file, because the model words, quotes and labels one problem differently from round to round), and it keeps the original task's explicit requirements in force. It ends on a clean round, an incomplete review with nothing found (never read as clean), a round whose findings were all attempted before, or `coder_audit_max_rounds` (50) rounds; the model's own `code_audit` calls count toward the same limit. The outcome is one line in the final summary and one Guards row per round. Off with `coder_audit_enabled`; never in a content-only run. Every round's findings pass the engine's two-stage verification: the first check (four findings per call), then the deep check of what it confirmed, which searches the project's code and Markdown (its README and `docs/` included, so a documented decision is not "fixed") and reads files before it decides, up to `VERIFY_STEPS` (6) per confirmed finding, with a confidence floor and a major claim downgraded unless it names the path that reaches it. That is several model calls per confirmed finding on the coder's own model: `_coder_audit_ask` passes the whole message list, and a model that answers with DSML tool-call markup instead of the JSON protocol is read through `tool_call_recovery`.
+*   **Code audit rounds** (`_audit_round_refusal`, `_audit_round_outcome`; engine `vaf.core.code_audit`, see [CODE_AUDIT.md](CODE_AUDIT.md)): once every task is done the run commits, reviews its change from `_run_start_sha` to HEAD with its own model and endpoint (`_coder_audit_ask`, the `_llm_verify_call` lane) on the run's resolved folder (`expect_folder=base_dir`: a folder swapped for a link during the review fails that round instead of reviewing another folder), and turns every verified problem into one more task via `TaskManager.append_task`, with the fix prompt as that task's context: stored with the task (`instructions`) and read into every fresh context of it, so a run stopped during a fix task and resumed still has the findings (see "The plan store" in section B). The task runs through every gate above; then the run commits and reviews again. Each finding gets one attempt: a fix task carries only what no earlier fix task of the run was pointed at (`_audit_attempted`: the same id, or the same lines in the same file, because the model words, quotes and labels one problem differently from round to round), and it keeps the original task's explicit requirements in force. It ends on a clean round, an incomplete review with nothing found (never read as clean), a round whose findings were all attempted before, or `coder_audit_max_rounds` (50) rounds; the model's own `code_audit` calls count toward the same limit. The outcome is one line in the final summary and one Guards row per round. Off with `coder_audit_enabled`; never in a content-only run. Every round's findings pass the engine's two-stage verification: the first check (four findings per call), then the deep check of what it confirmed, which searches the project's code and Markdown (its README and `docs/` included, so a documented decision is not "fixed") and reads files before it decides, up to `VERIFY_STEPS` (6) per confirmed finding, with a confidence floor and a major claim downgraded unless it names the path that reaches it. That is several model calls per confirmed finding on the coder's own model: `_coder_audit_ask` passes the whole message list, and a model that answers with DSML tool-call markup instead of the JSON protocol is read through `tool_call_recovery`.
 *   **Lifecycle stepper**: the payload's `phases` list (plan → build → audit → document → commit, with live status; without the audit when it is off or the run is content-only) renders as a stepper above the Tasks section - the Tasks list shows WHAT is being built, the stepper shows WHERE the run is. Anchors: build on the first loop inside a task context (covers model plan, auto plan and retries through one line), audit when a round starts and build again when its fix task starts (a later phase that was running goes back to pending), document before `_run_document_phase`, commit around `_final_commit`. `run_tests` and `render_check` also set the live action line ("Running tests...", "Render check..."), so file-less verify stretches no longer read as frozen.
 
 ---
@@ -636,7 +674,7 @@ The prompt has always stated these rules ("run_tests must be green before `task_
     3.  Then the code audit rounds (section 5b): commit, review `_run_start_sha..HEAD`, first check, deep check, one fix task per round with what is new; repeat until clean, nothing new, incomplete or the limit.
     4.  End-of-run cleanup of stale `PARTIAL_*` files.
     5.  DOCUMENT phase (section 5a): one model call writes or updates the README from what git says changed. It runs after the audit, so the README it writes is not reviewed.
-    6.  Final commit, then the summary: files, task status, the commit line and the audit outcome line. With open or failed tasks, the task status ends with the call that continues the plan, `_continuation_call(base_dir)` (`resume=true`, see "The plan store" in section B); the answer of a run that created no files carries the same section.
+    6.  Final commit, then the summary: files, task status, the commit line and the audit outcome line. With open or failed tasks, the task status ends with the call that continues the plan, `_continuation_call(base_dir, deploy_to)` (`resume=true`, and the run's deploy target when it has one; see "The plan store" in section B); the answer of a run that created no files carries the same section.
 *   **Final Commit (every exit path):** before the final summary is built, `_final_commit(base_dir, message)` runs `git add -A` and commits when changes exist. Each code audit round commits through the same helper first (`... Code audit round k: the state under review`), so the final commit may find nothing new besides the README. The commit message is `VAF Coder: <task excerpt>` plus a status line (`Status: COMPLETE|PARTIAL (n/m tasks)`); runs with failed or remaining tasks commit too, so no work is ever left untracked. If no git identity is configured, the commit retries once with a one-off VAF identity (`-c user.name=... -c user.email=...`, the user's git config is never modified); `commit_project_state` in `vaf/tools/project_git.py` holds that retry for both this commit and the rollback's own. Unsafe directories and CONTENT_ONLY temp dirs are excluded. The result line appears in the final summary. These commits are what powers the history/rollback delegation (section 3.A0).
 *   **Logic:**
     *   Stops TUI thread (`live.stop()`).

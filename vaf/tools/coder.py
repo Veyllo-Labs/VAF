@@ -1837,24 +1837,32 @@ class TaskManager:
         Which stored plan survives:
         - a finished plan (every task completed) never does, the request plans fresh;
         - ``resume=True`` keeps an unfinished plan exactly as stored (its tasks, statuses,
-          cursor and original request; nothing is stamped), also one with no tasks yet;
+          cursor and original request; nothing is stamped), also one with no tasks yet. With
+          no unfinished plan stored it changes nothing on disk (no ``.vaf``, no fresh state)
+          and leaves ``state`` None: the caller refuses the resume, and a refused resume must
+          not leave a plan behind that a second identical call would continue;
         - otherwise a request whose text differs from the stored one (after strip) plans
           fresh, and the same text keeps the plan (a crash-resume). A state without a stored
           request, written before requests were stored, is kept only for an empty text.
         """
         self.resumed = False
+        if resume and not self.stored_unfinished_plan(base_dir):
+            self.pm = None
+            self.state = None
+            return
         self.pm = PersistenceManager(base_dir, expect_folder=base_dir)
         project_name = os.path.basename(base_dir)
         cur = (current_task or "").strip()
         # Load existing state or create new
         loaded_state = self.pm.load_state()
+        if resume and (not loaded_state or self._finished(loaded_state)):
+            # Changed since the read above: still nothing to continue, and nothing written.
+            self.state = None
+            return
         if loaded_state:
             # If ALL tasks were already completed, this is a NEW invocation (not a
             # crash-resume).  Discard the stale state so the agent plans fresh.
-            all_done = (
-                bool(loaded_state.tasks)
-                and all(t.status == "completed" for t in loaded_state.tasks)
-            )
+            all_done = self._finished(loaded_state)
             if resume and not all_done:
                 # The caller continues this plan by name: its request stays the one the plan
                 # was made for, so a later resume still sees the original requirements.
@@ -1889,7 +1897,19 @@ class TaskManager:
             self.state.task = cur
             if self.pm:
                 self.pm.save_state(self.state)
-    
+
+    @staticmethod
+    def _finished(state: ProjectState) -> bool:
+        """A plan whose every task completed: never continued, the next request plans fresh."""
+        return bool(state.tasks) and all(t.status == "completed" for t in state.tasks)
+
+    @classmethod
+    def stored_unfinished_plan(cls, base_dir: str) -> bool:
+        """Whether ``base_dir`` (a judged real path) holds a plan a resume can continue, read
+        without making or writing anything (`PersistenceManager.peek_state`)."""
+        state = PersistenceManager.peek_state(base_dir)
+        return state is not None and not cls._finished(state)
+
     @property
     def todos(self) -> List[Dict]:
         """Backward compatibility for todos list."""
@@ -1995,27 +2015,33 @@ class TaskManager:
         if not self.state or not self.pm:
             return
         if 0 <= idx < len(self.state.tasks):
-            task = self.state.tasks[idx]
-            prev = note or task.result or ""
-            if prev:
-                task.description = f"Previous attempt: {prev}"[:500]
-            task.status = "pending"
-            task.result = None
-            task.completed_at = None
-            if idx < self.state.current_task_idx:
-                self.state.current_task_idx = idx
+            self._reset_in_memory(idx, note)
             self.pm.save_state(self.state)
+
+    def _reset_in_memory(self, idx: int, note: str = ""):
+        """reset_task_for_retry without the save, for a caller that resets many at once."""
+        task = self.state.tasks[idx]
+        prev = note or task.result or ""
+        if prev:
+            task.description = f"Previous attempt: {prev}"[:500]
+        task.status = "pending"
+        task.result = None
+        task.completed_at = None
+        if idx < self.state.current_task_idx:
+            self.state.current_task_idx = idx
 
     def resume_point(self) -> Optional[tuple]:
         """Where a kept plan continues: every failed task goes back to pending (its reason
-        archived in ``description`` by reset_task_for_retry), and the cursor moves to the
-        first task that is not terminal, counted from the start of the plan. Returns
-        ``(index, title)`` of that task, or None when the plan has no open task."""
+        archived in ``description``, as reset_task_for_retry does), and the cursor moves to
+        the first task that is not terminal, counted from the start of the plan. One save for
+        the whole plan: a save per task rewrote the file once per failed task (13.8 s for a
+        planted plan of 1000). Returns ``(index, title)`` of that task, or None when the plan
+        has no open task."""
         if not self.state or not self.pm or not self.state.tasks:
             return None
         for idx, task in enumerate(self.state.tasks):
             if task.status == "failed":
-                self.reset_task_for_retry(idx, task.result or "failed")
+                self._reset_in_memory(idx, task.result or "failed")
         self.state.current_task_idx = 0
         self._advance_to_next_actionable()
         self.pm.save_state(self.state)
@@ -2025,19 +2051,27 @@ class TaskManager:
             return None
         return idx, self.state.tasks[idx].title
 
-    def append_task(self, title: str, description: str = "") -> int:
+    def append_task(self, title: str, description: str = "", instructions: str = "") -> int:
         """Add one task at the end of the plan. The code audit round uses it: what the audit
         found becomes one more task of the same run, worked with the same gates as every
         other. A finished plan's cursor stands at its end, which is exactly the new task, so
-        it is current at once. Returns its index, -1 without a plan."""
+        it is current at once. ``instructions`` is stored with the task and read into every
+        fresh context of it (`task_instructions`). Returns its index, -1 without a plan."""
         if not self.state or not self.pm:
             return -1
         idx = len(self.state.tasks)
         self.state.tasks.append(Task(id=idx + 1, title=str(title), status="pending",
-                                     description=(description or None)))
+                                     description=(description or None),
+                                     instructions=(instructions or None)))
         self.pm.save_state(self.state)
         set_run_progress(*self.progress_counts())
         return idx
+
+    def task_instructions(self, idx: int) -> str:
+        """The instructions stored with task ``idx`` (see Task.instructions), or ""."""
+        if not self.state or not 0 <= idx < len(self.state.tasks):
+            return ""
+        return self.state.tasks[idx].instructions or ""
 
     def failed_tasks(self) -> List[Dict]:
         """All tasks in status 'failed' (legacy dict format, like .todos)."""
@@ -3263,13 +3297,58 @@ class DeployTarget:
         return f"{self.target}{self.root}" if self.kind == "ftp" else f"{self.target}:{self.root}"
 
 
-def _continuation_call(base_dir: str) -> str:
+def _continuation_call(base_dir: str, deploy_to=None) -> str:
     """The call that continues the plan stored in ``base_dir``, as an answer with open tasks
     recommends it. ``resume=true`` keeps the stored request and its open tasks; the same
-    call without it is a new request and plans fresh. The folder is written as a JSON string,
-    so a quote, a backslash or a newline in it reads back as the same path."""
+    call without it is a new request and plans fresh. ``deploy_to`` is the run's validated
+    target (`DeployTarget`, written in the form `--deploy-to` parses): a resumed run without
+    it reaches no server and refuses its deploy task, and the next run checks it again.
+    Every value is written as a JSON string, so a quote, a backslash or a newline in it reads
+    back as the same text."""
+    deploy = (f", deploy_to={json.dumps(str(deploy_to), ensure_ascii=False)}"
+              if deploy_to is not None else "")
     return (f'coding_agent(task="complete all remaining tasks", '
-            f'project_path={json.dumps(str(base_dir), ensure_ascii=False)}, resume=true)')
+            f'project_path={json.dumps(str(base_dir), ensure_ascii=False)}{deploy}, '
+            f'resume=true)')
+
+
+# How a resume flag counts as set: a real True, or what a model writes for it as text.
+_RESUME_WORDS = ("true", "1", "yes", "on")
+
+
+def _resume_requested(value) -> bool:
+    """Whether ``coding_agent``'s ``resume`` argument asks to continue the stored plan. A
+    model that writes the flag as the string "true" means it, and reading that as no would
+    plan fresh and replace the plan it asked to keep; "false" and anything else is no.
+
+    NAMED BOUNDARY: through the dispatch funnel a text value never gets here, because the
+    schema check refuses it with "field 'resume' expects boolean, got str" (measured), so the
+    model is told and calls again. This read serves the callers that reach run() directly (a
+    workflow step, an embedder, `Agent._try_workflow`). A boolean rule in
+    `vaf/core/tool_input_repair.py` would serve every tool at once; four tools read a boolean
+    argument written as text by hand today (python_sandbox, context_tools, git_coauthor and
+    this one)."""
+    if isinstance(value, bool):
+        return value
+    return isinstance(value, str) and value.strip().lower() in _RESUME_WORDS
+
+
+# The failed-task note at a resumed start is sent with every request of the task, and the
+# plan it lists is project content: bounded like the answer's own lists.
+_FAILED_NOTE_TASKS = 10
+_FAILED_NOTE_CHARS = 200
+
+
+def _failed_tasks_note(failed: list) -> str:
+    """The system note that names the tasks a kept plan reopened, with why they failed."""
+    shown = failed[:_FAILED_NOTE_TASKS]
+    lines = [f"- Task {t['id']}: {str(t['task'])[:_FAILED_NOTE_CHARS]} -> "
+             f"{str(t.get('result') or 'failed')[:_FAILED_NOTE_CHARS]}" for t in shown]
+    if len(failed) > len(shown):
+        lines.append(f"- ... and {len(failed) - len(shown)} more")
+    return ("These tasks failed in an earlier run and are open again:\n" + "\n".join(lines)
+            + "\n\nUse the existing project files and make the required changes, then call "
+              "task_done.")
 
 
 def _nothing_to_resume(folder) -> str:
@@ -4138,9 +4217,9 @@ Thumbs.db
         # here, before a child process, the display or its temporary folder exist.
         if kwargs.get("environment") and _content_only_task(task):
             return "Error: a content-only run has no project folder to work in an environment"
-        # Continue the plan stored in project_path instead of planning the task text. Read
-        # strictly: a direct run() caller's string "false" is not a request to resume.
-        resume = kwargs.get("resume") is True
+        # Continue the plan stored in project_path instead of planning the task text. A real
+        # True or the text "true" (what a model may write) asks for it; "false" does not.
+        resume = _resume_requested(kwargs.get("resume"))
         if resume and not kwargs.get("project_path"):
             return ("Error: resume needs project_path, the folder whose stored plan to "
                     "continue.")
@@ -4550,9 +4629,13 @@ Thumbs.db
             animation_running.clear()
             stop_live()
             return _choice.refusal
-        if resume and (_choice.source != "project_path" or not os.path.isdir(_choice.base_dir)):
-            # A resume works only in the folder it names: an unusable project_path falls
-            # through to another folder above, and a missing one would be created here.
+        if resume and (_choice.source != "project_path" or not os.path.isdir(_choice.base_dir)
+                       or not TaskManager.stored_unfinished_plan(_choice.base_dir)):
+            # A resume works only in the folder it names and only on a plan stored there,
+            # decided by reading alone: an unusable project_path falls through to another
+            # folder above, a missing one would be created below, and the repository and the
+            # plan store would be written into a folder with nothing to continue, after which
+            # the same call would find an empty plan and plan freely.
             animation_running.clear()
             stop_live()
             return _nothing_to_resume(kwargs.get("project_path"))
@@ -5329,6 +5412,11 @@ Complete this task: "{task}"
                     task_cm, task_hist = create_fresh_context_for_task(
                         task_idx, task_description, completed_info
                     )
+                    # The task's stored instructions (a code audit fix task's findings) belong
+                    # to every fresh context of it: the first, a retry's, and a resumed run's.
+                    _instructions = task_mgr.task_instructions(task_idx)
+                    if _instructions:
+                        task_hist.append({"role": "system", "content": _instructions})
 
                     # Create new state
                     new_state = ContextState(
@@ -6549,7 +6637,9 @@ Task {task_idx + 1}: {current_task}
                          "asks for something the task ruled out, leave it and say why in "
                          "task_done. The run commits and reviews again afterwards.")
             title = f"Fix the code audit findings (round {k})"
-            idx = task_mgr.append_task(title, description=f"{fresh_count} finding(s)")
+            # The findings are stored with the task, so a resumed run still has them.
+            idx = task_mgr.append_task(title, description=f"{fresh_count} finding(s)",
+                                       instructions="\n".join(lines))
             if idx < 0:
                 # The findings stand but have nowhere to go: said, and the loop ends.
                 _audit_state["finished"] = True
@@ -6560,8 +6650,8 @@ Task {task_idx + 1}: {current_task}
                          "; ".join(f.title for f in to_fix[:3]))
             tui.append_stream(f"[AUDIT] Round {k}: {fresh_count} finding(s) - fixing them")
             _set_phase("build")
-            if switch_to_task_context(idx, title):
-                history.append({"role": "system", "content": "\n".join(lines)})
+            # The fresh context of the new task carries its stored instructions.
+            switch_to_task_context(idx, title)
             return True
 
         def _next_round() -> str:
@@ -6789,17 +6879,8 @@ Task {task_idx + 1}: {current_task}
                         if _resume_failed:
                             # A fresh context holds only its system and user message here,
                             # so no tool call is waiting for an answer.
-                            history.append({
-                                "role": "system",
-                                "content": (
-                                    "These tasks failed in an earlier run and are open again:\n"
-                                    + "\n".join(f"- Task {t['id']}: {t['task']} -> "
-                                                f"{(t.get('result') or 'failed')[:200]}"
-                                                for t in _resume_failed)
-                                    + "\n\nUse the existing project files and make the "
-                                      "required changes, then call task_done."
-                                ),
-                            })
+                            history.append({"role": "system",
+                                            "content": _failed_tasks_note(_resume_failed)})
                             _resume_failed = []
                     else:
                         tui.append_stream(f"[WARN] Failed to switch to Task {_start_idx + 1} - continuing in planning mode")
@@ -11835,7 +11916,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
             # A content-only run's folder is temporary and holds no plan to come back to.
             if (failed_list or remaining) and not skip_template:
                 task_status += f"\n\n**💡 To complete all tasks, continue with:**\n"
-                task_status += f"`{_continuation_call(base_dir)}`"
+                task_status += f"`{_continuation_call(base_dir, _deploy)}`"
 
         if files_created:
             # ═══════════════════════════════════════════════════════════════
@@ -11913,6 +11994,9 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         "**Note**: Some tasks FAILED goal verification despite retries — they were NOT silently "
                         "marked as done. Review the failed tasks above before continuing."
                     )
+                elif skip_template:
+                    # A content-only run names no continuation call (its folder is temporary).
+                    completion_note = "**Note**: Loop ended before all tasks were completed."
                 else:
                     completion_note = "**Note**: Loop ended before all tasks were completed. Continue with the call above, which keeps the plan."
                 status_signal = "[VAF_CODING_AGENT_STATUS: PARTIAL]"

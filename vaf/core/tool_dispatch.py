@@ -263,6 +263,13 @@ def decode_arguments(name: str, raw: Any) -> tuple[dict, str | None]:
 
     Missing or empty arguments are an empty object, not an error: that is how a tool without
     parameters is called. A dict passes through, for a lane that decoded already.
+
+    Text nested deeper than the interpreter can decode (the limit depends on the version: about
+    1000 levels before 3.12, about 10,000 on 3.13, less inside a deep call stack) gets the same
+    refusal. `json.loads` raises `RecursionError` there, which is not a `ValueError`, and it
+    used to escape and end the chat turn, the coder's tool loop or a `ToolCaller.execute` call.
+    Named boundary: a value that DOES decode but is nested deeper than the Python recursion
+    limit still raises later, in `make_json_serializable` when `ToolCallContext` is built.
     """
     if raw is None:
         return {}, None
@@ -274,7 +281,7 @@ def decode_arguments(name: str, raw: Any) -> tuple[dict, str | None]:
             return {}, None
         try:
             value = json.loads(text)
-        except ValueError as exc:
+        except (ValueError, RecursionError) as exc:
             return {}, (f"Tool Error: the arguments of this '{name}' call are not valid JSON "
                         f"({exc}), so nothing was run. Call it again with a JSON object whose "
                         "string values are all in double quotes.")

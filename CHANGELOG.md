@@ -74,6 +74,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- A tool call whose arguments are nested thousands of levels deep no longer ends the turn with
+  an error; it is answered like any other unreadable arguments, and the tool does not run.
 - A reply in which the model wrote a tool-call list with a malformed entry (for example
   `{"tool_calls": [1]}`) no longer ends the turn with an error; the text is shown as written,
   and arguments that are not an object are refused with their type named instead of running

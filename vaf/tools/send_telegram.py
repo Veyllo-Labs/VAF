@@ -10,6 +10,7 @@ Supports optional file attachments (e.g. documents, PDFs) when the user asks for
 import re
 from pathlib import Path
 
+from vaf.core.completion import strip_think_blocks
 from vaf.tools.base import BaseTool
 from vaf.tools.filesystem import is_safe_path
 
@@ -109,9 +110,8 @@ class SendTelegramTool(BaseTool):
         if file_path and not file_path.is_file():
             return f"File not found or not a file: {file_path}"
 
-        # Strip <think>...</think> and internal system phrases for clean delivery
-        out = re.sub(r"<think>.*?</think>", "", message, flags=re.DOTALL)
-        out = re.sub(r"\n{3,}", "\n\n", out).strip()
+        # Strip the marked reasoning and internal system phrases for clean delivery
+        out = re.sub(r"\n{3,}", "\n\n", strip_think_blocks(message or "")).strip()
         try:
             from vaf.core.outbound_sanitizer import sanitize_outgoing_message
             out = sanitize_outgoing_message(out)

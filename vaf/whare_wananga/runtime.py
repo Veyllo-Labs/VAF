@@ -18,11 +18,11 @@ or rewrites), and leaves the record untouched on any error.
 from __future__ import annotations
 
 import json
-import re
 import threading
 import time
 from typing import Any, List, Optional
 
+from vaf.core.completion import strip_think_blocks
 from vaf.whare_wananga import store
 
 # Environmental / transient errors are NOT a usage lesson -> never learn a pitfall from them (they
@@ -98,7 +98,7 @@ def _evict_over_cap(tool: str, pits: List[Any], cap: int = None) -> List[Any]:
 
 def _extract_json(text: str):
     try:
-        t = re.sub(r"<think>[\s\S]*?</think>", "", text or "", flags=re.IGNORECASE)
+        t = strip_think_blocks(text or "")
         try:
             return json.loads(t.strip())
         except Exception:

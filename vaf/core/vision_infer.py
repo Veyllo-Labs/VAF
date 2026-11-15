@@ -197,7 +197,8 @@ def vision_infer(
         if saw_error:
             _domain_log(f"[VISION_INFER] {provider}/{model or 'default'} backend error — no description")
             return None
-        text = _strip_reasoning(text)
+        from vaf.core.completion import strip_think_blocks
+        text = strip_think_blocks(text) or ""  # never a model's reasoning in a stored description
         _domain_log(f"[VISION_INFER] {provider}/{model or 'default'} imgs={len(images)} -> {len(text)} chars")
         return text or None
     except Exception as e:  # never break the caller's turn
@@ -304,17 +305,6 @@ def build_visual_context_text(images: List[Dict], user_text: str = "") -> str:
     )
     block = "\n\n".join(parts + [hint])
     return (block + "\n\n" + user_text).strip() if user_text else block
-
-
-def _strip_reasoning(text: str) -> str:
-    """Remove reasoning-model ``<think>…</think>`` blocks (and stray markers) from a
-    vision response so chain-of-thought never lands in a stored image description."""
-    if not text:
-        return ""
-    import re
-    text = re.sub(r"<think>[\s\S]*?</think>", "", text)
-    text = re.sub(r"</?think>", "", text)
-    return text.strip()
 
 
 def _domain_log(msg: str) -> None:

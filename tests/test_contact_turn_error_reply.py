@@ -289,11 +289,23 @@ def test_reasoning_that_quotes_an_error_does_not_swallow_the_answer(delivered):
 
 def test_a_failure_inside_unclosed_reasoning_is_still_caught(delivered):
     """The provider failed mid-reasoning: the "</think>" never came, and the sentinel
-    follows the open block. The outbound text keeps it, so the contact gets the sentence."""
+    follows the open block. The outbound text cuts both away, so the failure is judged on the
+    text with only its closed blocks removed, and the contact gets the sentence.
+    MUTATION: drop `failed_mid_reasoning` - red (nothing is sent)."""
     hr._deliver_channel_reply(_delivery_task("telegram", from_contact=True),
                               "<think>Ich prüfe den Kalender " + _KEY_ERROR,
                               contact={"preferred_language": "de"})
     assert delivered == [("telegram", _FIXED_DE)]
+
+
+def test_reasoning_alone_that_quotes_an_error_sends_nothing(delivered):
+    """A reply of closed reasoning only, quoting an "[Error] ..." tool result: nothing is
+    visible and nothing failed, so nothing goes out, as for any reply that is reasoning only.
+    MUTATION: judge the failure on `final_text` instead of its closed blocks removed - red."""
+    hr._deliver_channel_reply(_delivery_task("telegram", from_contact=True),
+                              "<think>contact_history gave [Error] API backend failure: x</think>",
+                              contact={"preferred_language": "de"})
+    assert delivered == []
 
 
 def test_a_failed_turn_after_a_telegram_voice_note_is_not_read_out(delivered):

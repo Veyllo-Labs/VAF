@@ -938,8 +938,8 @@ def _fuzz_reply(rng) -> str:
 
 @pytest.mark.parametrize("seed", [1, 2, 3])
 def test_the_reply_copy_is_only_the_link_rule(seed):
-    """Seeded fuzz: for any reply, the copy is `own_links_as_labels` of it and holds a
-    `<think>` only where the reply did. MUTATION: restore the heuristic - red on every seed
+    """Seeded fuzz: for any reply, the copy is exactly `own_links_as_labels` of it, nothing
+    added and nothing else removed. MUTATION: restore the heuristic - red on every seed
     (it changes 3, 2 and 1 of the 500 draws)."""
     import random
 
@@ -950,7 +950,6 @@ def test_the_reply_copy_is_only_the_link_rule(seed):
         text = _fuzz_reply(rng)
         copy = run_mod._reply_web_copy(text)
         assert copy == own_links_as_labels(text), text
-        assert "<think>" not in copy or "<think>" in text, text
 
 
 # ── the sub-agent drain ──────────────────────────────────────────────────────────────

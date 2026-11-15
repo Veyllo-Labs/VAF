@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import time
 from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional
 
@@ -295,9 +294,6 @@ async def sse_events(messages: List[Dict[str, str]], *, meta: Dict[str, Any],
     yield "event: end\ndata: {}\n\n"
 
 
-_THINK_BLOCK = re.compile(r"<think>(.*?)</think>", re.DOTALL | re.IGNORECASE)
-
-
 def reasoning_leaked(raw: str, cleaned: str) -> bool:
     """True when the text left after cleaning is the model's own scratchpad.
 
@@ -310,7 +306,8 @@ def reasoning_leaked(raw: str, cleaned: str) -> bool:
     `reasoning_effort=none` were all probed and ignored), so the leak is caught by
     shape: the answer equals, or is a prefix of, what stood inside the think block.
     """
-    thoughts = " ".join(m.strip() for m in _THINK_BLOCK.findall(raw or "") if m.strip())
+    from vaf.core.completion import split_think_blocks
+    thoughts = " ".join(m.strip() for m in split_think_blocks(raw or "")[1] if m.strip())
     if not thoughts or not cleaned:
         return False
     head = cleaned.strip()[:200]

@@ -14,6 +14,7 @@ from typing import List, Tuple
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
+from vaf.core.completion import strip_think_blocks
 from vaf.tools.base import BaseTool
 
 
@@ -58,15 +59,6 @@ def _strip_json_fences(raw: str) -> str:
     return raw.strip()
 
 
-def _strip_think(text: str) -> str:
-    """Remove reasoning-model <think>...</think> blocks. If an unclosed <think> remains (output was
-    truncated mid-reasoning), drop everything from it on -- so reasoning never leaks into stored text."""
-    t = re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL | re.IGNORECASE)
-    if "<think>" in t.lower():
-        t = re.split(r"(?i)<think>", t)[0]
-    return t.strip()
-
-
 def _strip_librarian_wrapper(md: str) -> str:
     """Remove the Librarian's '### PDF: <name>\\n**Pages:** N' header (and the temp filename it carries)
     from the very start, so the tool wrapper is not learned as document content."""
@@ -102,7 +94,7 @@ def _contextualize_section_llm(section_text, section_title, doc_title, generate_
         doc_title=doc_title, section_title=section_title, section_text=(section_text or "")[:max_chars]
     )
     try:
-        out = _strip_json_fences(_strip_think(generate_fn(prompt) or ""))
+        out = _strip_json_fences(strip_think_blocks(generate_fn(prompt) or ""))
         out = re.sub(r"^\s*(context|summary)\s*[:\-]\s*", "", out, flags=re.I)
         out = " ".join(out.split())  # collapse newlines/whitespace
         return out[:600] if len(out) >= 15 else fallback
@@ -123,7 +115,7 @@ def _summarize_doc_from_contexts(contexts, doc_title, generate_fn) -> tuple:
     )
     try:
         import json
-        d = json.loads(_strip_json_fences(_strip_think(generate_fn(prompt) or "")))
+        d = json.loads(_strip_json_fences(strip_think_blocks(generate_fn(prompt) or "")))
         summary = str(d.get("doc_summary") or "").strip() or fallback[0]
         tags = [str(t).strip().lower() for t in (d.get("doc_tags") or []) if str(t).strip()]
         return (summary, tags)

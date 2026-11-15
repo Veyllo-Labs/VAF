@@ -35,7 +35,8 @@ MUTATIONS, each turns the named test red:
   -> test_marked_reasoning_is_still_removed[think-quoted-in-redacted*];
 - give `_final_answer_probe` its own <think> regexes again -> test_probe_reads_the_cleaner_rule,
   test_a_turn_with_only_marked_reasoning_is_asked_again;
-- skip the second redacted pass in `_strip_marked_reasoning`
+- skip the second redacted pass in `strip_think_blocks` (vaf/core/completion.py, the home of
+  every pass since the reply cleaner's own helper moved there)
   -> test_marked_reasoning_is_still_removed[redacted-*-joined];
 - skip the cut at a redacted opener left unclosed -> [redacted-unclosed];
 - let the probe call strip_think_blocks without the redacted pass

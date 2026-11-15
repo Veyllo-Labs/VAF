@@ -2785,9 +2785,9 @@ def _detect_language_simple(text: str) -> str:
     # Prefer langid for reliable detection (e.g. German text -> de)
     try:
         from vaf.vendor import langid
-        import re
-        # Strip thinking/code so we classify on actual spoken content
-        clean = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        from vaf.core.completion import strip_think_blocks
+        # Strip the marked reasoning so we classify on actual spoken content
+        clean = strip_think_blocks(text) or ""
         if not clean:
             clean = text.strip()
         # Use first ~2k chars to avoid slow classify on huge text

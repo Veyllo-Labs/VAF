@@ -28,7 +28,8 @@ from vaf.core.task_queue import WAKE_KINDS, TaskQueue, is_system_command
 from vaf.core.turn_binding import (TurnBinding, TurnRefused, bind_turn, end_turn,
                                    room_turn_marker)
 from vaf.core.subagent_ipc import take_result_notification
-from vaf.core.completion import split_control_head
+from vaf.core.completion import (drop_redacted_blocks, split_control_head, split_think_blocks,
+                                 strip_think_blocks)
 from vaf.core.session import (ASKED_AT_KEY, TURN_ID_KEY, TURN_ROUNDS_KEY, SessionManager, Session, TurnStatus,
                               returned_turn_copy, stored_turn_copy,
                               turn_context_messages_since_last_user)
@@ -486,7 +487,15 @@ def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=N
                     return
                 final_text = answer
             visible = _prepare_channel_outbound(final_text)
-            if turn.failed or is_error_reply(visible) or is_stop_note(visible):
+            # A provider that failed mid-reasoning leaves its failure after a block the model
+            # never closed, and the cut removes both: nothing would go out. With nothing
+            # visible, the failure is judged on the text with only its CLOSED blocks removed,
+            # so such a turn still gets the fixed sentence, while reasoning that merely quotes
+            # an "[Error] ..." inside a closed block still decides nothing.
+            failed_mid_reasoning = (not visible and is_error_reply(
+                split_think_blocks(own_links_as_labels(final_text))[0]))
+            if (turn.failed or failed_mid_reasoning or is_error_reply(visible)
+                    or is_stop_note(visible)):
                 _send_turn_error_reply(task, final_text, contact=contact)
                 return
         if task_source == "telegram" and chat_id:
@@ -606,7 +615,7 @@ def _clean_for_session(text: str) -> str:
     if not text:
         return ""
     cleaned = own_links_as_labels(text)
-    cleaned = re.sub(r'<redacted_reasoning>.*?</redacted_reasoning>', '', cleaned, flags=re.DOTALL)
+    cleaned = drop_redacted_blocks(cleaned, cut_unclosed=False)
     cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
     return cleaned.strip()
 
@@ -641,8 +650,7 @@ def _clean_drain_text(text: str) -> str:
     """The sub-agent drain's stored copy of its summary turn: VAF's own file link shown as
     the path it opens (`own_links_as_labels`), reasoning removed, leaked tool-call JSON
     stripped, blank-line runs collapsed."""
-    text = own_links_as_labels(text)
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    text = strip_think_blocks(own_links_as_labels(text))
     text = _strip_tool_calls_json(text)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
@@ -1026,8 +1034,7 @@ def _prepare_channel_outbound(text: str) -> str:
     original text - invariant 4.2). Its first step shows VAF's own file link as the path
     it opens (`own_links_as_labels`): a messenger or the Veyllo App cannot open a host
     path, and the markup around it is noise there; any other link stays as written."""
-    out = own_links_as_labels(text)
-    out = re.sub(r"<think>.*?</think>", "", out, flags=re.DOTALL)
+    out = strip_think_blocks(own_links_as_labels(text))
     out = _strip_tool_calls_json(out)
     out = re.sub(r"\n{3,}", "\n\n", out).strip()
     out = _strip_workflow_async_from_message(out)
@@ -1107,9 +1114,7 @@ def _maybe_open_draft_in_editor(
         return
     if not _user_asked_for_text(user_input or ""):
         return
-    # Strip <think>...</think> for draft content
-    clean = re.sub(r"<think>.*?</think>", "", response_text, flags=re.DOTALL)
-    clean = re.sub(r"\n{3,}", "\n\n", clean).strip()
+    clean = re.sub(r"\n{3,}", "\n\n", strip_think_blocks(response_text or "")).strip()
     if len(clean) < 200:
         return
     try:

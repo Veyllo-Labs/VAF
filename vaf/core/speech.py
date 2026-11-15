@@ -1140,11 +1140,11 @@ $player.Close()
     def _clean_markdown(self, text: str) -> str:
         """Removes markdown symbols, emojis, and thinking blocks for natural speech."""
         import re
-        t = text
-        
-        # 1. Remove XML-style thinking blocks
-        t = re.sub(r'<think>.*?</think>', '', t, flags=re.DOTALL)
-        t = re.sub(r'<redacted_reasoning>.*?</redacted_reasoning>', '', t, flags=re.DOTALL)
+
+        from vaf.core.completion import strip_think_blocks
+
+        # 1. Remove the marked reasoning: never read aloud
+        t = strip_think_blocks(text or "")
         
         # 2a. Strip filler phrases (Web UI TTS: don't read "Einen Moment", "Just a moment" etc.)
         try:

@@ -358,7 +358,7 @@ runner's drain (full side effects: SubAgent window, `subagent_output`, messenger
 a user chat turn no longer consumes them mid-reply. The drain's summary turn runs as the chat's
 owner with that chat's source; a result that names no chat stays pending (Result push above). Drain messenger summaries pass the SAME
 outbound sanitizer chain as normal headless replies (`_prepare_channel_outbound`: VAF's own file link shown as its path (`own_links_as_labels`),
-think-strip, tool-JSON strip, workflow-async strip, internal-phrase net, untagged-CoT prefix guard) and carry
+the marked-reasoning strip `strip_think_blocks`, tool-JSON strip, workflow-async strip, internal-phrase net, untagged-CoT prefix guard) and carry
 the summary the chat shows: the drain's stored copy of the streamed turn (`stored_turn_copy`),
 the stream as the chat showed it, with reasoning and leaked tool-call JSON removed and VAF's
 own file link shown as its path (`_clean_drain_text`); a reply a guard retracted is cleared from that copy as in the chat

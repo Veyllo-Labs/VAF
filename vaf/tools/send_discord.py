@@ -8,6 +8,7 @@ Only available when the user has Discord connected; use main_messenger or user r
 import re
 from pathlib import Path
 
+from vaf.core.completion import strip_think_blocks
 from vaf.tools.base import BaseTool
 from vaf.core.channel_secrets import channel_secret
 from vaf.tools.send_telegram import _resolve_path
@@ -84,9 +85,8 @@ class SendDiscordTool(BaseTool):
         if not bot_token:
             return "Discord bot token missing. Please complete Discord setup in Settings → Connections."
 
-        # Strip <think>...</think> and internal system phrases for clean delivery
-        out = re.sub(r"<think>.*?</think>", "", message, flags=re.DOTALL)
-        out = re.sub(r"\n{3,}", "\n\n", out).strip()
+        # Strip the marked reasoning and internal system phrases for clean delivery
+        out = re.sub(r"\n{3,}", "\n\n", strip_think_blocks(message or "")).strip()
         try:
             from vaf.core.outbound_sanitizer import sanitize_outgoing_message
             out = sanitize_outgoing_message(out)

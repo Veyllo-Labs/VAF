@@ -700,7 +700,8 @@ class BaseTool(ABC):
         if not raw:
             return ""
         import re as _re
-        text = _re.sub(r'<think>[\s\S]*?</think>', '', raw).strip()
+        from vaf.core.completion import strip_think_blocks
+        text = strip_think_blocks(raw)
         text = _re.sub(r'^```[a-zA-Z]*\s*', '', text)
         text = _re.sub(r'\s*```\s*$', '', text).strip()
         if not text:

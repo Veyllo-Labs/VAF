@@ -35,7 +35,7 @@ from vaf.core.system_prompt import SystemPromptManager
 from vaf.core.last_interaction import get_last_interaction
 from vaf.core.text_match import compile_de, contains_any, fold, fold_all
 from vaf.core.completion import (EMPTY_PLACEHOLDER, THINKING_PLACEHOLDER, is_failure_chunk,
-                                 strip_think_blocks)
+                                 split_think_blocks, strip_think_blocks)
 from vaf.core.subagent_spawn import delegated_task as _delegated_task, spawn_ledger as _spawn_ledger
 from vaf.core.tool_dispatch import (
     ToolCallHooks as _ToolCallHooks,
@@ -321,54 +321,6 @@ def _note_claims_unearned_outcome(texts) -> "str | None":
 
 _REASONING_ECHO_MIN = 400
 
-_REDACTED_OPEN = '<redacted_reasoning>'
-_REDACTED_CLOSE = '</redacted_reasoning>'
-
-
-def _drop_redacted_blocks(text: str, *, cut_unclosed: bool) -> str:
-    """Every `<redacted_reasoning>` block out, each closed at its first closer, in one walk.
-
-    An opener without a closer is kept as text, or with `cut_unclosed` cuts the text there.
-    No closer follows it either way, so the walk stops: linear, where a lazy
-    `<redacted_reasoning>.*?</redacted_reasoning>` rescans to the end from every unclosed
-    opener (about 4 s on 128 KB of them).
-    """
-    kept, pos = [], 0
-    while True:
-        start = text.find(_REDACTED_OPEN, pos)
-        if start < 0:
-            break
-        end = text.find(_REDACTED_CLOSE, start + len(_REDACTED_OPEN))
-        if end < 0:
-            if cut_unclosed:
-                kept.append(text[pos:start])
-                return "".join(kept)
-            break
-        kept.append(text[pos:start])
-        pos = end + len(_REDACTED_CLOSE)
-    kept.append(text[pos:])
-    return "".join(kept)
-
-
-def _strip_marked_reasoning(text: str, *, greedy: bool) -> str:
-    """The reasoning a model MARKED, out of a reply: one rule for the reply cleaner
-    (`Agent._clean_reasoning`, greedy) and the empty-answer probe (`_final_answer_probe`,
-    not greedy first, see there).
-
-    Redacted blocks go first: a <think> the model quotes inside one would otherwise cut the
-    text before the block's closer, leak the block and lose the answer. Then <think> and
-    <thinking> blocks through `strip_think_blocks`. A redacted tag that only formed once a
-    think block was dropped ("<redacted_" + block + "reasoning>") gets a second pass, in
-    which an opener still left without its closer cuts the text, like an unclosed <think>;
-    and a think tag that pass joins ("<thi" + block + "nk>") is read by `strip_think_blocks`
-    once more, so it cuts too. Linear: every pass is one walk.
-    """
-    t = _drop_redacted_blocks(text or "", cut_unclosed=False)
-    t = strip_think_blocks(t, greedy=greedy)
-    if _REDACTED_OPEN in t:
-        t = strip_think_blocks(_drop_redacted_blocks(t, cut_unclosed=True), greedy=greedy)
-        t = t.split(_REDACTED_OPEN, 1)[0]  # an opener that this cleanup itself joined
-    return t.strip()
 
 def _marked_round_text(reasoning: str, content: str) -> str:
     """A round's text for the engine's own history, its reasoning MARKED.
@@ -412,11 +364,10 @@ def _reply_is_reasoning_echo(full_content: str) -> bool:
     an ordinary shape for a model that streams inline think tags) still contains its answer,
     and declaring that "no answer" would erase it.
     """
-    raw = full_content or ""
-    blocks = re.findall(r'<think>([\s\S]*?)</think>', raw, flags=re.IGNORECASE)
+    visible, blocks = split_think_blocks(full_content or "")
     if not blocks:
         return False
-    visible = " ".join(re.sub(r'<think>[\s\S]*?</think>', ' ', raw, flags=re.IGNORECASE).split())
+    visible = " ".join(visible.split())
     if len(visible) < _REASONING_ECHO_MIN:
         return False
     return visible in (" ".join(blocks[-1].split()), " ".join(" ".join(blocks).split()))
@@ -444,18 +395,20 @@ def _final_answer_probe(full_content: str) -> str:
     """
     if _reply_is_reasoning_echo(full_content):
         return ""
-    # The reply cleaner's own rule (_strip_marked_reasoning): redacted blocks, then
+    # The reply cleaner's own rule (strip_think_blocks): redacted blocks, then
     # <think>/<thinking> in any case, an unclosed opener cutting to the end. Both readings,
     # and an answer in either counts: this also decides whether a guard may retract a shown
     # bubble (Rule 4.2), so it fails toward keeping it. The chat closes a leading block at
     # its first </think> ("<think>a</think>Hello<think>b</think>" shows Hello, which only the
     # non-greedy reading finds) unless a stray closer follows, then at the last one
     # ("<think>a</think><redacted_reasoning>b</think>Answer" shows Answer, which only the
-    # greedy reading finds).
-    probe = ""
+    # greedy reading finds). Neither reading reaching two characters, the longer one is the
+    # probe ("<think>a</think>4<think>b</think>" is the answer "4" non-greedy and nothing
+    # greedy); on a tie the non-greedy one.
+    readings = []
     for greedy in (False, True):
-        clean = _strip_marked_reasoning(full_content, greedy=greedy)
-        clean = re.sub(r'<[^>]*>', '', clean)                  # remaining XML (e.g. <tool_call>)
+        clean = strip_think_blocks(full_content or "", greedy=greedy)
+        clean = _drop_angle_tags(clean)                        # remaining XML (e.g. <tool_call>)
         clean = re.sub(r'```[\s\S]*?```', '', clean)           # code blocks
         clean = clean.replace(".", "").replace("\n", "").replace(":", "").strip()
         probe = clean.lower()
@@ -463,8 +416,28 @@ def _final_answer_probe(full_content: str) -> str:
             probe = probe.replace(pattern, "")
         probe = probe.strip()
         if len(probe) >= 2:
+            return probe
+        readings.append(probe)
+    return max(readings, key=len)
+
+
+def _drop_angle_tags(text: str) -> str:
+    """Every `<...>` out, each ending at the first `>` after its `<`: the output of
+    `re.sub(r'<[^>]*>', '', text)` in one walk. A `<` with no `>` after it ends the walk,
+    since no later `<` can be closed either; the regex retries from every such `<` and
+    scans to the end each time (2.1 s on 64 KB of them)."""
+    kept, pos = [], 0
+    while True:
+        start = text.find("<", pos)
+        if start < 0:
             break
-    return probe
+        end = text.find(">", start + 1)
+        if end < 0:
+            break
+        kept.append(text[pos:start])
+        pos = end + 1
+    kept.append(text[pos:])
+    return "".join(kept)
 
 
 def _join_turn_answers(kept: list, tail: str) -> str:
@@ -5762,8 +5735,8 @@ class Agent:
             
             # Check for empty result to prevent hallucination
             result_content = (task.result or "").strip()
-            # Remove <think> blocks for emptiness check
-            clean_result = re.sub(r'<think>.*?</think>', '', result_content, flags=re.DOTALL).strip()
+            # Remove marked reasoning for emptiness check
+            clean_result = strip_think_blocks(result_content)
             
             is_empty = not clean_result or len(clean_result) < 5
             
@@ -6753,10 +6726,7 @@ class Agent:
                         _readable = model_text(msg)
                         if _readable is None:
                             continue
-                        content = _readable
-                        import re as _re
-                        content = _re.sub(r'<think>.*?</think>', '', content, flags=_re.DOTALL)
-                        content = content.strip()
+                        content = strip_think_blocks(_readable or "")
                         # Keep tool-call messages even if their text is empty — their
                         # tool_calls are what anchor the following role:"tool" result.
                         if not content and not _tool_calls:
@@ -6831,7 +6801,10 @@ class Agent:
         # Matches things like: [{"tool_calls": ...}] or {"name": "update_working_memory"...}
         # and even fragmented ones: ", "name": ... or "}, "type": "function", "index": 0}]}
         patterns = [
-            r'\[?\s*\{\s*"tool_calls":.*$',
+            # Starts at the bracket or the brace, never at the whitespace before it: a
+            # leading `\s*` retried from every blank of a long run (11 s on 64 KB of
+            # spaces). The blank it leaves behind goes with the final strip.
+            r'(?:\[\s*)?\{\s*"tool_calls":.*$',
             r'\{\s*"name":\s*"[^"]*",\s*"arguments":.*$',
             r'\{\s*"index":\s*\d+,\s*"id":.*$',
             r'",\s*"name":\s*"[^"]*",\s*"type":\s*"function".*$',
@@ -6855,7 +6828,20 @@ class Agent:
 
         # Gemma-4 native tool-call tokens that leaked into the visible text (rare: the server usually
         # converts them via --jinja). Strip them so they are never shown. No-op for other models.
-        cleaned = re.sub(r'<\|tool_call>[\s\S]*?<tool_call\|>', '', cleaned)
+        # One walk, each call closed at its first closer: a lazy regex rescanned to the end
+        # from every unclosed opener (3.1 s on 64 KB of them).
+        kept, pos = [], 0
+        while True:
+            start = cleaned.find('<|tool_call>', pos)
+            if start < 0:
+                break
+            end = cleaned.find('<tool_call|>', start + len('<|tool_call>'))
+            if end < 0:
+                break
+            kept.append(cleaned[pos:start])
+            pos = end + len('<tool_call|>')
+        kept.append(cleaned[pos:])
+        cleaned = "".join(kept)
         cleaned = cleaned.replace('<|tool_call>', '').replace('<tool_call|>', '')
 
         return cleaned.strip()
@@ -6863,23 +6849,17 @@ class Agent:
     def _clean_reasoning(self, text: str) -> str:
         """Remove leaked tool-call JSON and the reasoning the model MARKED as reasoning.
 
-        Marked means `<think>` and `<thinking>` blocks in any case (first opener to last
-        closer; an unclosed opener cuts to the end; stray tags dropped) and
-        `<redacted_reasoning>` blocks (first, again once think blocks are gone, and an
-        unclosed one cuts to the end). Plain text is the answer, in any language: a phrase
-        list cannot tell a model's reasoning from an answer that starts "I will" or quotes
-        what "the user wants", and deleting by such a guess emptied whole replies.
-
-        Named boundary: blocks of the two kinds that CROSS each other, a <think> tag inside a
-        redacted block pairing with one outside it
-        (`<redacted_reasoning><think></redacted_reasoning>Q</think>`), have no right reading;
-        the redacted block goes first and Q is kept as text (about 2 in 1,000 adversarial
-        fuzz draws, all of this class). Likewise text after `<redacted_reasoning>...</think>`
-        is the answer, as the chat shows it: a think closer quoted inside a redacted block the
-        model never closed cannot be told from that shape, which the empty-answer probe must
-        count as an answer so a guard keeps the bubble.
+        Marked means what `strip_think_blocks` removes, greedy: `<think>` and `<thinking>`
+        blocks in any case (first opener to last closer; an unclosed opener cuts to the end;
+        stray tags dropped) and `<redacted_reasoning>` blocks. Its docstring holds the order
+        of the passes and the two named boundaries; the second one (text after
+        `<redacted_reasoning>...</think>` is kept) is also what the empty-answer probe must
+        count as an answer so a guard keeps the bubble. Plain text is the answer, in any
+        language: a phrase list cannot tell a model's reasoning from an answer that starts
+        "I will" or quotes what "the user wants", and deleting by such a guess emptied whole
+        replies.
         """
-        # 1. The marked reasoning (_strip_marked_reasoning: redacted blocks, then <think> and
+        # 1. The marked reasoning (strip_think_blocks: redacted blocks, then <think> and
         # <thinking> in any case). Greedy, first opener .. LAST closer: weak models sometimes
         # quote a </think> mid-reasoning (an earlier reply), so a block closed at the first
         # one would leak the rest. Doubled tags fall inside that block. An UNCLOSED opener
@@ -6891,8 +6871,8 @@ class Agent:
         # 3. The marked rule once more on what the sanitizer left: removing a tool-call token
         # from the middle can join a tag ("<thi" + token + "nk>"). Linear, and the identity on
         # text without tags.
-        t = self._sanitize_response(_strip_marked_reasoning(text, greedy=True))
-        return _strip_marked_reasoning(t, greedy=True)
+        t = self._sanitize_response(strip_think_blocks(text or "", greedy=True))
+        return strip_think_blocks(t, greedy=True)
 
     def _detect_user_language(self, text: str) -> str:
         """
@@ -8279,8 +8259,8 @@ class Agent:
                 except Exception:
                     pass
 
-            # Strip <think> blocks and parse
-            clean_content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+            # Strip the marked reasoning and parse
+            clean_content = strip_think_blocks(content)
             match = re.search(r"0?\.\d+|\d\.\d+", clean_content)
             if match:
                 temp = float(match.group())

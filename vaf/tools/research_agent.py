@@ -31,6 +31,7 @@ import sys
 
 from vaf.cli.ui import UI, AnimatedHeader
 from vaf.cli.themes import ThemeManager
+from vaf.core.completion import strip_think_blocks
 from vaf.core.config import Config, subagent_provider_override
 from vaf.core.platform import Platform
 from vaf.core.progress import StatePublisher
@@ -602,7 +603,7 @@ class ResearchAgentTool(BaseTool):
                 # Reasoning models may return their chain of thought instead of
                 # the title (query_llm falls back to reasoning_content): strip
                 # think blocks and take the text after the LAST "Title:" marker.
-                cleaned = re.sub(r'<think>[\s\S]*?</think>', '', content).strip()
+                cleaned = strip_think_blocks(content)
                 if 'title:' in cleaned.lower():
                     cleaned = re.split(r'(?i)\btitle\s*:', cleaned)[-1].strip()
                 title = cleaned.strip('"').strip("'").split("\n")[0].strip()
@@ -1759,7 +1760,7 @@ class ResearchAgentTool(BaseTool):
                 return fallback
             # Reasoning models bury the answer at the end — strip think blocks
             # and take the LAST parseable JSON array in the text.
-            cleaned = re.sub(r'<think>[\s\S]*?</think>', '', response)
+            cleaned = strip_think_blocks(response)
             variants = None
             for m in reversed(re.findall(r'\[[^\[\]]*\]', cleaned)):
                 try:
@@ -2049,7 +2050,7 @@ class ResearchAgentTool(BaseTool):
         """
         if not raw:
             return ""
-        text = re.sub(r'<think>[\s\S]*?</think>', '', raw).strip()
+        text = strip_think_blocks(raw)
         # Models often wrap the fragment in markdown fences (```html ... ```)
         text = re.sub(r'^```[a-zA-Z]*\s*', '', text)
         text = re.sub(r'\s*```\s*$', '', text).strip()

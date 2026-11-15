@@ -19,6 +19,7 @@ notification preview and reports the fallback honestly in its result string.
 
 import re
 
+from vaf.core.completion import strip_think_blocks
 from vaf.tools.base import BaseTool
 from vaf.core.channels import channel_label
 from vaf.tools.send_telegram import _resolve_path
@@ -75,8 +76,7 @@ class SendToUserTool(BaseTool):
 
         # Same outgoing hygiene as the per-platform send tools: this wrapper must
         # not become the one unfiltered outbound lane.
-        out = re.sub(r"<think>.*?</think>", "", message, flags=re.DOTALL)
-        out = re.sub(r"\n{3,}", "\n\n", out).strip()
+        out = re.sub(r"\n{3,}", "\n\n", strip_think_blocks(message or "")).strip()
         try:
             from vaf.core.outbound_sanitizer import sanitize_outgoing_message
             out = sanitize_outgoing_message(out)

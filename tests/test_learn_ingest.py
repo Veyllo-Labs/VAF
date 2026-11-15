@@ -39,11 +39,20 @@ def test_clean_title_strips_extensions():
 
 
 def test_strip_think_removes_reasoning():
+    """The same rows, through the real path (`strip_think_blocks` on the model's reply)."""
+    def contextualize(reply):
+        return ld._contextualize_section_llm("section text", "Intro", "Doc", lambda p: reply)
+
     # reasoning model: keep only the answer after </think>
-    assert ld._strip_think("<think>we should summarize</think>\n\nThe summary.") == "The summary."
+    assert contextualize("<think>we should summarize</think>\n\nThe summary of the section.") \
+        == "The summary of the section."
     # truncated mid-reasoning (no close) -> empty, so the caller falls back to a clean label
-    assert ld._strip_think("<think>reasoning that never closed") == ""
-    assert ld._strip_think("No think here.") == "No think here."
+    label = ld._contextualize_section_llm("section text", "Intro", "Doc", None)
+    assert contextualize("<think>reasoning that never closed, about the section") == label
+    assert contextualize("No think here, only the summary.") == "No think here, only the summary."
+    # the doc-level JSON call reads the same rule
+    reply = '<THINK>draft {"doc_summary": "wrong"}</THINK>{"doc_summary": "Right.", "doc_tags": ["a"]}'
+    assert ld._summarize_doc_from_contexts(["ctx"], "Doc", lambda p: reply) == ("Right.", ["a"])
 
 
 def test_contextualize_strips_think_from_summary():

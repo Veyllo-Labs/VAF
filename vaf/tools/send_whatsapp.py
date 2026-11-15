@@ -9,6 +9,7 @@ import re
 import tempfile
 from pathlib import Path
 
+from vaf.core.completion import strip_think_blocks
 from vaf.tools.base import BaseTool
 from vaf.tools.send_telegram import _resolve_path
 
@@ -142,9 +143,8 @@ class SendWhatsAppTool(BaseTool):
                     "or ask the user to register the number they chat from in Settings → Connections → WhatsApp."
                 )
 
-        # Strip <think>...</think> and internal system phrases for clean delivery
-        out = re.sub(r"<think>.*?</think>", "", message, flags=re.DOTALL)
-        out = re.sub(r"\n{3,}", "\n\n", out).strip()
+        # Strip the marked reasoning and internal system phrases for clean delivery
+        out = re.sub(r"\n{3,}", "\n\n", strip_think_blocks(message or "")).strip()
         # Safety: block messages that contain internal/system-level content
         try:
             from vaf.core.outbound_sanitizer import sanitize_outgoing_message

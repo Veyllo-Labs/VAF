@@ -28,6 +28,7 @@ from vaf.memory.crypto import (get_crypto, MemoryCrypto, encrypt_field,
 from vaf.memory.embeddings import get_embedding_service, get_chunker, EmbeddingService, TextChunker
 from vaf.memory.graph import GraphManager
 from vaf.memory.database import get_db
+from vaf.core.completion import strip_think_blocks
 from vaf.core.config import Config
 from vaf.core.log_helper import append_domain_log
 from vaf.memory.tag_links import expand_tags_with_links
@@ -466,14 +467,10 @@ class RagPipeline:
         Returns:
             List of RagSource objects
         """
-        # Remove <think> blocks from query to avoid recursive RAG loops
-        import re
-        # 1. Remove complete <think>...</think> blocks
-        query = re.sub(r'<think>.*?</think>', '', query, flags=re.DOTALL).strip()
-        # 2. Remove unclosed <think>... (streaming/partial thought) - CRITICAL for preventing recursive RAG
-        if '<think>' in query:
-            query = query.split('<think>')[0].strip()
-        
+        # Remove the marked reasoning from the query to avoid recursive RAG loops; an
+        # unclosed opener (streaming/partial thought) cuts to the end.
+        query = strip_think_blocks(query or "")
+
         if not query:
             return []
 
@@ -1241,18 +1238,6 @@ async def auto_capture_memory(
     return 1
 
 
-def _strip_think_reply(text: str) -> str:
-    """Remove reasoning-model <think>...</think> blocks before parsing MEMORY: lines. Without this, a
-    reasoning model can draft MEMORY: lines inside its <think> trace, so the raw reasoning would be
-    persisted as a memory instead of the intended fact.
-    Mirrors vaf/tools/learn_document._strip_think (the document path already does this); inlined here to
-    avoid a tools->memory import cycle. If an unclosed <think> remains (truncated output), drop from it on."""
-    t = re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL | re.IGNORECASE)
-    if "<think>" in t.lower():
-        t = re.split(r"(?i)<think>", t)[0]
-    return t.strip()
-
-
 _MAX_FACTS_PER_COMPACTION = 12   # a derailed model spewing 50 lines gets cut
 _FACT_MIN_CHARS = 15
 _FACT_MAX_CHARS = 500
@@ -1347,7 +1332,8 @@ def _parse_memory_reply(reply: str) -> List[Tuple[str, List[str]]]:
     """
     if not reply or not reply.strip():
         return []
-    reply = _strip_think_reply(reply)
+    # A reasoning model drafts MEMORY: lines inside its reasoning too: never persisted.
+    reply = strip_think_blocks(reply)
     if not reply.strip():
         return []
     reply_upper = reply.strip().upper()
@@ -2181,16 +2167,10 @@ def run_memory_search_sync(
         return ""
 
     # Truncate at entry so we never pass long strings to encoder (avoids a large RAM spike)
-    # Also strip <think> blocks to prevent recursive loops
+    # Also strip the marked reasoning (an unclosed opener cuts) to prevent recursive loops
     from vaf.memory.embeddings import MAX_EMBED_INPUT_CHARS
-    import re
 
-    _q = (query or "").strip()
-    # 1. Remove complete <think>...</think> blocks
-    _q = re.sub(r'<think>.*?</think>', '', _q, flags=re.DOTALL).strip()
-    # 2. Remove unclosed <think>... (streaming/partial thought)
-    if '<think>' in _q:
-        _q = _q.split('<think>')[0].strip()
+    _q = strip_think_blocks((query or "").strip())
 
     if not _q:
         _rag_timing_log(f"RAG_EXIT_EMPTY caller={caller or 'unknown'} duration_sec={_time.time() - _t0:.1f} reason=query_empty_after_strip")

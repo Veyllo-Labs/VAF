@@ -118,7 +118,7 @@ The conversion uses ffmpeg built into the container - no local ffmpeg installati
 
 Before TTS playback, content is cleaned via `_clean_markdown()`:
 
-- **Removed:** Code blocks, thinking tags (`<think>`, `<redacted_reasoning>`), emojis, markdown formatting, long URLs
+- **Removed:** Code blocks, reasoning blocks (`<think>` and `<thinking>` in any case, `<redacted_reasoning>`, also one the model never closed, by the reply cleaner's rule `strip_think_blocks`), emojis, markdown formatting, long URLs
 - **Kept:** Pure answer text (the "blue text" in TUI)
 
 Reasoning is removed only where it is marked; answer text is spoken as written, also when it

@@ -30,6 +30,7 @@ import json
 import re
 from typing import Any, Callable, Dict, List, Optional
 
+from vaf.core.completion import strip_think_blocks
 from vaf.whare_wananga import store
 
 _ERROR_MARKERS = (
@@ -65,8 +66,7 @@ def _extract_json(text: str) -> Optional[dict]:
     # Local reasoning models emit a <think> block before the answer; its prose contains stray
     # braces that wreck naive find/rfind. Strip it, but keep the raw text as a fallback in case
     # the model put the JSON *inside* the think block.
-    stripped = re.sub(r"<think>.*?</think>", " ", text, flags=re.DOTALL | re.IGNORECASE)
-    stripped = re.sub(r"</?think>", " ", stripped, flags=re.IGNORECASE)
+    stripped = strip_think_blocks(text)
     for candidate in (stripped, text):
         m = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", candidate, re.IGNORECASE)
         if m:

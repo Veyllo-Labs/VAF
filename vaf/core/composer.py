@@ -476,17 +476,16 @@ def build_prompt(ctx: ThreadContext, *, mode: str, instruction: str = "",
     return msgs
 
 
-_THINK = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
-_THINK_OPEN = re.compile(r"<think>", re.IGNORECASE)
 _LEADING_SUBJECT = re.compile(r"^\s*subject:.*?\n+", re.IGNORECASE)
 
 
 def clean_output(text: str) -> str:
     """Strip what models add around a message body.
 
-    Reasoning models emit a <think> block first; several wrap the answer in a code
-    fence; many prepend a Subject line despite being told not to. None of that
-    belongs in a compose box the user is about to send from.
+    Reasoning models emit a <think> block first (`strip_think_blocks` removes it, in
+    any of the marks it knows); several wrap the answer in a code fence; many prepend
+    a Subject line despite being told not to. None of that belongs in a compose box
+    the user is about to send from.
 
     Called on the WHOLE buffer after every streamed chunk, so it must handle a
     half-arrived block: an unterminated <think> suppresses everything from its
@@ -494,11 +493,8 @@ def clean_output(text: str) -> str:
     scratchpad is streamed into the user's compose box and only retracted a second
     later, which is both alarming and, on a slow model, briefly readable.
     """
-    out = _THINK.sub("", text or "")
-    m = _THINK_OPEN.search(out)
-    if m:
-        out = out[:m.start()]
-    out = out.strip()
+    from vaf.core.completion import strip_think_blocks
+    out = strip_think_blocks(text or "")
     if out.startswith("```"):
         lines = out.split("\n")
         lines = lines[1:]

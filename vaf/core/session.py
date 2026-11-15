@@ -324,11 +324,10 @@ def is_failed_turn(msg) -> bool:
     meta = get("metadata")
     if isinstance(meta, dict) and meta.get(FAILED_TURN_KEY):
         return True
-    import re
-
-    from vaf.core.completion import _ENGINE_ERROR, _ERROR_SENTINEL, is_stop_note
+    from vaf.core.completion import (_ENGINE_ERROR, _ERROR_SENTINEL, is_stop_note,
+                                     strip_think_blocks)
     from vaf.markers import SYSTEM_LOG_ONLY
-    text = re.sub(r"<think>.*?</think>", "", str(get("content") or ""), flags=re.DOTALL).lstrip()
+    text = strip_think_blocks(str(get("content") or ""))
     return (text.startswith((_ENGINE_ERROR, _ERROR_SENTINEL, SYSTEM_LOG_ONLY))
             or is_stop_note(text))
 

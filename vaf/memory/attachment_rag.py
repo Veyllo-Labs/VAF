@@ -135,9 +135,8 @@ def _normalize_query(raw_query: str) -> str:
     if not q:
         return ""
 
-    q = re.sub(r"<think>.*?</think>", "", q, flags=re.DOTALL).strip()
-    if "<think>" in q:
-        q = q.split("<think>")[0].strip()
+    from vaf.core.completion import strip_think_blocks
+    q = strip_think_blocks(q)
     if len(q) > MAX_EMBED_INPUT_CHARS:
         q = q[:MAX_EMBED_INPUT_CHARS].rstrip()
     return q

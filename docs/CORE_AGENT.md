@@ -156,8 +156,10 @@ the answer and returns it:
   server error, or an inference exception.
 - Meaningful strings are returned for: workflow results, errors
   (`[Error] API backend failure: ...`, `[Error] Server rejected ...`), user
-  stop (`[Generation stopped by user]` - though a mid-stream stop returns the
-  partial answer instead when text was already produced), loop protection
+  stop (`[Generation stopped by user]` exactly when the stopped round wrote no
+  answer text, nothing or only reasoning; a mid-stream stop after answer text
+  returns that partial answer instead, cleaned like any answer; either way
+  after the answers the turn had already given), loop protection
   (contains `[LOOP_PROTECTION]`, prefixed by a warning emoji - match by
   substring, not prefix: the safe side, which also catches a reply that
   quotes the marker; the engine's own `completion.is_stop_note` checks for

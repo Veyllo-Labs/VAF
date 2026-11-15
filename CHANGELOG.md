@@ -76,6 +76,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 - A tool call whose arguments are nested thousands of levels deep no longer ends the turn with
   an error; it is answered like any other unreadable arguments, and the tool does not run.
+- **A reply that is only a code block is no longer taken off the screen and asked again**, and
+  when the model answers empty after using a tool, the retry keeps the tool results instead of
+  running the tool a second time. Stopping a reply now returns the text without the model's
+  reasoning, together with the answers the turn had already given.
 - A reply in which the model wrote a tool-call list with a malformed entry (for example
   `{"tool_calls": [1]}`) no longer ends the turn with an error; the text is shown as written,
   and arguments that are not an object are refused with their type named instead of running

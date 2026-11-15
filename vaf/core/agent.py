@@ -337,6 +337,76 @@ def _marked_round_text(reasoning: str, content: str) -> str:
     return content or ""
 
 
+def _turn_start_index(history: list, base, fallback: int) -> int:
+    """Index of the turn's first own message: the one after `base`, the message the turn
+    started on (its request, the onboarding note after it, or the previous last message on a
+    call without input).
+
+    `base` is found again by identity, searched from the end, because an index taken at the
+    start of the turn goes stale: the compression after a tool result and the emergency purge
+    rebuild the list, and a slice by the old index then cut a tool exchange in half. When the
+    base itself is gone (a compression dropped or copied it), the turn's request is found by
+    `turn_anchor_index`, the rule the compression and the turn-end squash keep it by; only a
+    history with no request left falls back to `fallback + 1`. Identity comes first because
+    the base can sit after the request (the onboarding note) or be no request at all, and the
+    anchor alone would then pull earlier messages into the turn."""
+    if base is not None:
+        for i in range(len(history) - 1, -1, -1):
+            if history[i] is base:
+                return i + 1
+    from vaf.core.context import turn_anchor_index
+    anchor = turn_anchor_index(history)
+    if anchor is not None:
+        return anchor + 1
+    return max(0, min(fallback + 1, len(history)))
+
+
+def _history_for_first_retry(history: list, start: int, drop_ids: set,
+                             round_msg: dict, nudge_msg: dict) -> list:
+    """The history the first empty-answer retry sends: the turn as committed, then the empty
+    round and the nudge.
+
+    Everything the turn committed after its base stays, verbatim and in order: its tool
+    exchanges (resetting them made the model run finished calls again), the answers the user
+    was already shown and the notes that answer them. That is the request that just failed
+    plus two messages, so the retry extends it as a prefix. Dropped are only the messages an
+    EARLIER empty retry of this turn appended (`drop_ids`, by identity, never by text: a model
+    reply that quotes a nudge is the model's). Those were appended at the end of a round
+    without tool calls, so removing them never separates a call from its results."""
+    turn = [m for m in history[start:] if id(m) not in drop_ids]
+    return history[:start] + turn + [round_msg, nudge_msg]
+
+
+_SNAPSHOT_RESULT_MAX = 2500
+
+
+def _turn_tool_exchanges(turn: list, max_result_chars: int = _SNAPSHOT_RESULT_MAX) -> list:
+    """The tool exchanges of a turn, for the later empty-answer retries: assistant messages
+    with `tool_calls` and the `role: tool` results, in order; every other message goes (the
+    text rounds and notes that led to the repeated empty answer).
+
+    Kept, because a reset that drops them loops: call the tool, answer empty, reset, call the
+    tool again. A result longer than `max_result_chars` is cut to exactly that length,
+    the truncation note included, so a second pass over the output leaves it as it is."""
+    kept = []
+    for msg in turn:
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role", "")
+        if role == "assistant" and msg.get("tool_calls"):
+            kept.append(msg)
+        elif role == "tool":
+            content = str(msg.get("content", ""))
+            if len(content) > max_result_chars:
+                suffix = f"\n... [truncated for snapshot, original len: {len(content)}]"
+                clone = msg.copy()
+                clone["content"] = content[:max(0, max_result_chars - len(suffix))] + suffix
+                kept.append(clone)
+            else:
+                kept.append(msg)
+    return kept
+
+
 # How often one turn may re-generate because loop protection refused every call of a
 # generation. Bounded: the re-generation exists so the model can read the refusal it was
 # just sent, not so it can keep proposing the same refused call.
@@ -374,13 +444,18 @@ def _reply_is_reasoning_echo(full_content: str) -> bool:
     return visible in (" ".join(blocks[-1].split()), " ".join(" ".join(blocks).split()))
 
 
+_FENCE_LINE_RE = re.compile(r'(?m)^[ \t]*`{3,}[\w+#.-]*[ \t\r]*$')
+
+
 def _final_answer_probe(full_content: str) -> str:
     """What is left of a model response once everything that is not an ANSWER goes.
 
     The empty-response check runs on this: closed <think> blocks, leftover tags,
-    code fences, punctuation and filler words are all stripped, and whatever
-    survives is what the user would actually be given. Length >= 2 counts as an
-    answer so that "Hi" and "Ok" pass.
+    the markers of code fences, punctuation and filler words are all stripped, and
+    whatever survives is what the user would actually be given. Length >= 2 counts
+    as an answer so that "Hi" and "Ok" pass. The code inside a fence counts: a
+    reply that is only a code block ("just the code, please") is an answer, and
+    taking it for none retracted the bubble the user was reading and asked again.
 
     An UNCLOSED <think> is thinking too, stripped to the end of the text: a model
     that opens a think block and never returns from it produced no answer after
@@ -410,7 +485,12 @@ def _final_answer_probe(full_content: str) -> str:
     for greedy in (False, True):
         clean = strip_think_blocks(full_content or "", greedy=greedy)
         clean = _drop_angle_tags(clean)                        # remaining XML (e.g. <tool_call>)
-        clean = re.sub(r'```[\s\S]*?```', '', clean)           # code blocks
+        # Code fences: the fence LINES go (a run of backticks plus an optional language tag,
+        # alone on its line), then any marker left inside a line; the code stays. A fence with
+        # nothing in it is still nothing. Both steps are linear: the line pattern is anchored
+        # and its classes are disjoint.
+        clean = _FENCE_LINE_RE.sub('', clean)
+        clean = clean.replace("```", "")
         clean = clean.replace(".", "").replace("\n", "").replace(":", "").strip()
         probe = clean.lower()
         for pattern in ("answer", "antwort", "response", "here", "hier", "ok", "okay"):
@@ -11160,6 +11240,9 @@ class Agent:
         # This index points to the user message we just added.
         # Everything BEFORE and INCLUDING this index is our "safe" context.
         history_snapshot_len = len(self.history) - 1
+        # The message that index points at, kept by identity: a compression inside the turn
+        # rebuilds the list and the index then points elsewhere (_turn_start_index).
+        _turn_base = self.history[history_snapshot_len] if self.history else None
 
         # Dynamic Tool Selection (Tool Router)
         # Only route tools on a new, non-empty input
@@ -11214,6 +11297,10 @@ class Agent:
         
         # Retry counter for empty responses
         empty_retry_count = 0
+        # The messages the empty-answer retries of this turn appended (the first retry's round
+        # and nudge, a later retry's nudge). The next first retry drops exactly these, matched
+        # by identity; the list also keeps them alive, so their ids cannot be reused meanwhile.
+        _empty_retry_added: list = []
         # One automatic retry per turn after the provider refused the request as too large:
         # the history is compressed and the same round is asked again, so the person does not
         # have to send the message again. One, never more: a second refusal ends the turn.
@@ -11303,6 +11390,20 @@ class Agent:
                 return _join_turn_answers(kept_turn_answers[:-1], kept_turn_answers[-1])
             self._turn_failed = True
             return text
+
+        def _end_turn_on_stop(partial):
+            """What every user-stop exit returns; each commits its own text to the history
+            first, as before. The stopped round's text cleaned like any answer
+            (`_clean_reasoning`: its marked reasoning, an unclosed block included, and leaked
+            tool-call JSON go), or the stop marker when it wrote no answer text, so a host
+            that looks for the marker finds it exactly then. The turn's earlier final answers
+            come first: the user already read them, and a stop is not a failure that takes
+            them back. A kept reply still under correction is not returned, the same rule as
+            `_end_turn_without_answer`."""
+            tail = self._clean_reasoning(partial or "") or "[Generation stopped by user]"
+            if kept_turn_answers and _last_kept_is_final:
+                return _join_turn_answers(kept_turn_answers, tail)
+            return tail
 
         def _reflex_withheld_step():
             """The tool step a request-level reflex withholds: (indices of its tool results
@@ -11420,7 +11521,7 @@ class Agent:
                         _ltq.clear_stop(_loop_session)
                         _stop_msg = "[Generation stopped by user]"
                         self.history.append({"role": "assistant", "content": _stop_msg})
-                        return _stop_msg
+                        return _end_turn_on_stop("")
                 except Exception:
                     pass
 
@@ -12916,7 +13017,7 @@ class Agent:
                                 _stq.clear_stop(_stop_sid)
                                 _sm = "[Generation stopped by user]"
                                 self.history.append({"role": "assistant", "content": _sm})
-                                return _sm
+                                return _end_turn_on_stop("")
                         except Exception:
                             pass
 
@@ -13667,7 +13768,7 @@ class Agent:
                             UI.event("System", "Generation stopped after tool execution", style="info")
                             _stop_msg = "[Generation stopped by user]"
                             self.history.append({"role": "assistant", "content": _stop_msg})
-                            return _stop_msg
+                            return _end_turn_on_stop("")
                     except Exception:
                         pass
 
@@ -13705,7 +13806,9 @@ class Agent:
                         "role": "assistant",
                         "content": (full_content.strip() or "[Generation stopped by user]")
                     })
-                return full_content.strip() or "[Generation stopped by user]"
+                # The return is the cleaned text after the turn's earlier answers; the commit
+                # above stays what the round wrote, the record of what the user stopped.
+                return _end_turn_on_stop(full_content)
 
             # Skip empty-response filter during compaction (every ~15 msgs); compaction reply is short (NO_REPLY / MEMORY:)
             try:
@@ -13744,79 +13847,45 @@ class Agent:
                         pass
                 self._retract_streamed_reply(stream_callback, kept_turn_answers)
 
-                # First empty only: keep one assistant block (with thinking) and nudge; no temp sweep.
+                # First empty only: keep the turn, add the empty round (with its thinking) and a
+                # nudge; no temp sweep. The turn's committed messages stay (_history_for_first_retry):
+                # resetting to the request deleted finished tool exchanges, and the model ran them
+                # again.
                 if empty_retry_count == 0:
                     # The reasoning stays in front of the model on the retry, marked.
                     content = _marked_round_text(full_reasoning, full_content)
                     if not content:
                         content = EMPTY_PLACEHOLDER
-                    self.history = self.history[:history_snapshot_len + 1] + [
-                        {"role": "assistant", "content": content}
-                    ]
-                    self.history.append({
+                    _round_msg = {"role": "assistant", "content": content}
+                    _nudge_msg = {
                         "role": "system",
                         "content": (
                             "You only provided thinking but no final answer for the user. "
                             "Provide a clear, direct answer now (or call the necessary tools)."
                         )
-                    })
+                    }
+                    self.history = _history_for_first_retry(
+                        self.history,
+                        _turn_start_index(self.history, _turn_base, history_snapshot_len),
+                        {id(m) for m in _empty_retry_added},
+                        _round_msg, _nudge_msg)
+                    _empty_retry_added.extend((_round_msg, _nudge_msg))
                     empty_retry_count += 1
                     time.sleep(1)
                     continue
 
-                # Second and later empties: existing logic (drop thinking, temp sweep, emergency clear)
-                # Check for tool results that occurred during this turn (after original snapshot)
-                # If we executed tools but got no final answer, we must PRESERVE the tools!
-                # Otherwise we loop forever: Call Tool -> Empty Ans -> Reset -> Call Tool -> ...
-                
-                # Identify messages added since original snapshot
-                current_len = len(self.history)
-                
-                # We need to construct a new history list that preserves critical context
-                # Start with the snapshot (System + User Prompt)
-                new_history = self.history[:history_snapshot_len + 1]
-                
-                # Scan the messages added since snapshot
-                tools_preserved = 0
-                
-                for i in range(history_snapshot_len + 1, current_len):
-                    msg = self.history[i]
-                    role = msg.get('role', '')
-                    content = str(msg.get('content', ''))
-                    
-                    # 1. Keep Tool Calls (Assistant Action)
-                    # Necessary so the following 'tool' message makes sense
-                    if role == 'assistant' and msg.get('tool_calls'):
-                        new_history.append(msg)
-                        continue
-                        
-                    # 2. Keep Tool Results (Persistent Memory)
-                    if role == 'tool':
-                        # Truncate extremely huge outputs to save tokens, but keep generous amount
-                        # (2500 chars is enough for file lists, search snippets, etc.)
-                        if len(content) > 2500:
-                            truncated = content[:2500] + f"\n... [truncated for snapshot, original len: {len(content)}]"
-                            msg_clone = msg.copy()
-                            msg_clone["content"] = truncated
-                            new_history.append(msg_clone)
-                        else:
-                            new_history.append(msg)
-                        tools_preserved += 1
-                        continue
-                        
-                    # 3. Drop "Thinking" (Text-only Assistant Messages)
-                    # These led to the empty response loop. We remove them to force a re-think.
-                    pass
-                
+                # Second and later empties: a fresh start that keeps only the turn's tool
+                # exchanges (drop the text rounds, temp sweep, emergency clear). The exchanges
+                # stay, or the turn loops: call the tool, answer empty, reset, call the tool.
+                _start = _turn_start_index(self.history, _turn_base, history_snapshot_len)
+                _exchanges = _turn_tool_exchanges(self.history[_start:])
+                tools_preserved = sum(1 for m in _exchanges if m.get("role") == "tool")
                 if tools_preserved > 0:
                     UI.event("Snapshot", f"Advanced snapshot: Preserved {tools_preserved} tool messages", style="success")
-                    # Update history with the filtered list
-                    self.history = new_history
-                    # Advance snapshot pointer so we don't re-process these valid tools
-                    history_snapshot_len = len(self.history) - 1
+                    self.history = self.history[:_start] + _exchanges
                 else:
                     # No tools to preserve, standard reset
-                    self.history = self.history[:history_snapshot_len + 1]
+                    self.history = self.history[:_start]
                     UI.event("Debug", f"Reset to user prompt snapshot (preserving query)", style="dim")
 
                 # ═══════════════════════════════════════════════════════════════
@@ -13831,12 +13900,13 @@ class Agent:
                     
                     UI.event("System", f"Early Warning ({empty_retry_count}) - Aggressive Context Clearing...", style="dim")
                     
-                    # Preservation Strategy:
-                    # Keep System Prompt + Snapshot (User Prompt)
-                    if len(self.history) > history_snapshot_len + 2:
-                        kept_history = self.history[:history_snapshot_len + 1]
-                        self.history = kept_history
-                        
+                    # Preservation Strategy: everything up to the turn's base, then the turn's
+                    # tool exchanges (the same selection as the reset above, idempotent).
+                    _start = _turn_start_index(self.history, _turn_base, history_snapshot_len)
+                    _cleared = self.history[:_start] + _turn_tool_exchanges(self.history[_start:])
+                    if len(_cleared) < len(self.history):
+                        self.history = _cleared
+
                         # Calculate tokens after (estimate)
                         tokens_after, _ = self.get_token_usage(include_tools=not disable_tools)
                         UI.event("Context", f"Cleared: {tokens_before} -> {tokens_after} Tokens | Snapshot preserved", style="dim")
@@ -13863,15 +13933,19 @@ class Agent:
                         stream_callback(emergency_summary)
                     return emergency_summary
 
-                # Reset to user prompt snapshot
-                self.history = self.history[:history_snapshot_len + 1]
+                # Reset to the turn's base and its tool exchanges once more: the emergency
+                # manage_context above may have rebuilt the list, so the start is found again.
+                _start = _turn_start_index(self.history, _turn_base, history_snapshot_len)
+                self.history = self.history[:_start] + _turn_tool_exchanges(self.history[_start:])
                 UI.event("Debug", f"Reset to user prompt snapshot (preserving query)", style="dim")
-                
+
                 # Add a brief system prompt to nudge the model
-                self.history.append({
+                _later_nudge = {
                     "role": "system",
                     "content": "You didn't provide a final answer. Please provide a clear response or call the necessary tools."
-                })
+                }
+                self.history.append(_later_nudge)
+                _empty_retry_added.append(_later_nudge)
                 
                 # Dynamic Temperature Sweep to break loops
                 empty_retry_count += 1

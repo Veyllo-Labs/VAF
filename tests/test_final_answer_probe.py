@@ -10,9 +10,30 @@ second think block, drifted from it straight into leaked tool-call markup, and n
 wrote </think>. The block's prose survived the strip, counted as the answer, and the
 retry that would have saved the turn never fired - the user saw raw markup and a
 three-character reply, frozen where an answer should have been.
+
+The other way round, a reply that is only a code block IS an answer. The probe deleted every
+fenced block whole, so "only the code, please" counted as no answer: the empty retry took the
+bubble the user was reading off the screen and asked again, and every guard that asks the
+probe whether it may retract lost that protection for code. The probe now drops the fence
+markers and counts the code; a fence with nothing in it stays nothing.
+
+MUTATIONS for that part, each turns the named test red:
+- restore `re.sub(r'```[\\s\\S]*?```', '', clean)` -> test_a_code_only_reply_is_an_answer and
+  the fence fuzz (oracle b);
+- drop the fence-line step and keep only `replace("```", "")`
+  -> test_an_empty_fence_is_still_empty[python] and [indented-crlf], the fence fuzz;
+- drop `\\r` from the fence line's trailing class
+  -> test_an_empty_fence_is_still_empty[indented-crlf];
+- change any other step of the probe (e.g. drop "hier" from the filler list)
+  -> test_the_probe_is_unchanged_outside_fences.
 """
+import os
+import random
 import re
+import time
 from pathlib import Path
+
+import pytest
 
 from vaf.core.agent import _final_answer_probe
 
@@ -157,3 +178,127 @@ def test_a_generation_whose_every_call_was_blocked_is_regenerated():
     # The bound is a real bound: zero would disable the whole fix while the wiring still reads
     # correctly, which is how a source check lies.
     assert MAX_BLOCKED_BATCH_ROUNDS >= 1
+
+
+# ── a reply that is only code ────────────────────────────────────────────────
+
+CODE_ONLY = "```python\nprint('hallo welt')\n```"
+
+
+def test_a_code_only_reply_is_an_answer(monkeypatch, tmp_path):
+    """The probe counts the code, and on the real `chat_step` that reply is one request, never
+    retracted, and the returned answer."""
+    from test_empty_retry_history import make_agent
+
+    assert _final_answer_probe(CODE_ONLY) != ""
+    agent = make_agent(monkeypatch, tmp_path)
+    retracted = []
+    monkeypatch.setattr(agent, "_retract_streamed_reply",
+                        lambda *a, **k: retracted.append(a))
+    streamed, returned = agent.run([CODE_ONLY])
+    assert len(agent.requests) == 1, "the code reply was asked again"
+    assert retracted == []
+    assert returned == CODE_ONLY
+    assert streamed.startswith(CODE_ONLY)
+
+
+@pytest.mark.parametrize("reply", [
+    pytest.param("```\n```", id="bare"),
+    pytest.param("```python\n```", id="python"),
+    pytest.param("<think>x</think>```\n```", id="after-thinking"),
+    pytest.param("  ```json  \r\n```\r\n", id="indented-crlf"),
+])
+def test_an_empty_fence_is_still_empty(reply):
+    assert _final_answer_probe(reply) == ""
+
+
+def _probe_before_the_fence_change(full_content):
+    """The probe as it was before fences were unwrapped, verbatim but for its fence line: on
+    text without a backtick the two must agree."""
+    from vaf.core.agent import _drop_angle_tags, _reply_is_reasoning_echo
+    from vaf.core.completion import strip_think_blocks
+    if _reply_is_reasoning_echo(full_content):
+        return ""
+    readings = []
+    for greedy in (False, True):
+        clean = strip_think_blocks(full_content or "", greedy=greedy)
+        clean = _drop_angle_tags(clean)
+        clean = re.sub(r'```[\s\S]*?```', '', clean)
+        clean = clean.replace(".", "").replace("\n", "").replace(":", "").strip()
+        probe = clean.lower()
+        for pattern in ("answer", "antwort", "response", "here", "hier", "ok", "okay"):
+            probe = probe.replace(pattern, "")
+        probe = probe.strip()
+        if len(probe) >= 2:
+            return probe
+        readings.append(probe)
+    return max(readings, key=len)
+
+
+_PIECES = ["<think>", "</think>", "<THINKING>", "</thinking>", "<redacted_reasoning>",
+           "</redacted_reasoning>", "<", ">", "<tool_call>", "answer", "Antwort", "here", "Hier",
+           "ok", "Okay", "response", ".", ":", "\n", " ", "!", "?", "Hi", "Ja", "4", "x",
+           "Das Ergebnis ist 42", "print(1)", "a"]
+_TAGS = ["", "python", "c++", "json", "objective-c"]
+
+
+def _text(rng, most=8):
+    return "".join(rng.choice(_PIECES) for _ in range(rng.randint(0, most)))
+
+
+def _fence_stripped(text):
+    from vaf.core.agent import _FENCE_LINE_RE
+    return _FENCE_LINE_RE.sub("", text).replace("```", "")
+
+
+def _only_fence_markers_lost(text):
+    """True when, at the stage where the probe meets the fences (after its tag steps, in both
+    readings), dropping the fence lines and markers leaves nothing the old probe counts. A
+    tag the probe drops can put a fence on a line of its own ("</think>```HiJa" is the opener
+    of an empty block with the info string HiJa), so the raw text is not that stage."""
+    from vaf.core.agent import _drop_angle_tags
+    from vaf.core.completion import strip_think_blocks
+    return all(
+        not _probe_before_the_fence_change(
+            _fence_stripped(_drop_angle_tags(strip_think_blocks(text, greedy=greedy))))
+        for greedy in (False, True))
+
+
+def probe_fence_mismatches(seed, draws):
+    """Oracles: (a) without a backtick the probe is the one from before; (b) a fence on its
+    own lines around X counts as X alone does; (c) where the old probe found an answer and the
+    new one finds none, there was nothing but fence markers to find (a lone opener)."""
+    rng = random.Random(seed)
+    bad = []
+    for _ in range(draws):
+        plain = _text(rng, 12)
+        if _final_answer_probe(plain) != _probe_before_the_fence_change(plain):
+            bad.append(("a", plain))
+        a, x, b = _text(rng), _text(rng), _text(rng)
+        a = a + "\n" if a and rng.random() < 0.8 else ""
+        b = "\n" + b if b and rng.random() < 0.8 else ""
+        fenced = f"{a}```{rng.choice(_TAGS)}\n{x}\n```{b}"
+        if bool(_final_answer_probe(fenced)) != bool(_final_answer_probe(a + x + b)):
+            bad.append(("b", fenced))
+        mixed = "".join(rng.choice(_PIECES + ["```", "```python\n", "\n```\n", "```json"])
+                        for _ in range(rng.randint(0, 10)))
+        if (_probe_before_the_fence_change(mixed) and not _final_answer_probe(mixed)
+                and not _only_fence_markers_lost(mixed)):
+            bad.append(("c", mixed))
+    return bad
+
+
+def test_the_probe_is_unchanged_outside_fences():
+    """3 seeds x 500 draws here; `VAF_EMPTY_RETRY_FUZZ_DRAWS` runs more outside the suite."""
+    draws = int(os.environ.get("VAF_EMPTY_RETRY_FUZZ_DRAWS", "500"))
+    for seed in (5, 11, 2026):
+        bad = probe_fence_mismatches(seed, draws)
+        assert not bad, f"seed {seed}: {len(bad)} mismatches, first: {bad[:3]}"
+
+
+def test_the_fence_steps_are_linear():
+    """128 KB of fence markers, on one line and one per line, through the probe."""
+    for text in ("```" * 43_000, "```\n" * 32_000, "`" * 130_000 + "x", " \t" * 64_000 + "y"):
+        started = time.monotonic()
+        _final_answer_probe(text)
+        assert time.monotonic() - started < 2.0, repr(text[:8])

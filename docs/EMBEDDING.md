@@ -531,7 +531,10 @@ results of that tool step are withheld for a content or size refusal. A rate lim
 login, quota or server error, or the network never are, and the note is taken out again if
 that round fails too. When the turn had already answered in an earlier round (the
 pending-task auto-continue) and a later round failed or was stopped, `run()` returns that
-answer: a provider failure then reached `on_token` only, a stop note nothing.
+answer: a provider failure then reached `on_token` only. For a stop it is followed by the
+stopped round's answer text, cleaned like any answer, or by `vaf.markers.GENERATION_STOPPED`
+when that round wrote none (nothing yet, or only reasoning); a turn stopped in its first round
+returns the same text or marker alone.
 
 `agent.last_turn`, read after `run()`, says which of these happened: a frozen
 `vaf.TurnStatus` whose `failed` is True when the turn produced no answer (a provider

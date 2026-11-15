@@ -25,9 +25,11 @@ updating it here fails CI (Rule-2 guard instead of a second silent copy).
 # returned status string, not a real answer.
 SYSTEM_LOG_ONLY = "[SYSTEM_LOG_ONLY]"
 
-# The user (or a stop request) ended the turn. NOTE: a mid-stream stop that
-# already produced text returns the partial answer instead - match this
-# marker, but do not rely on it as the only stop signal.
+# The user (or a stop request) ended the turn. The return carries it exactly
+# when the stopped round wrote no answer text (nothing, or only reasoning),
+# after any answers the turn had already given. A mid-stream stop that
+# already produced answer text returns that text, cleaned, instead - match
+# this marker by substring, but do not rely on it as the only stop signal.
 GENERATION_STOPPED = "[Generation stopped by user]"
 
 # Loop protection ended the turn (wall clock, tool-turn budget or the daily

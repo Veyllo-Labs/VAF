@@ -336,6 +336,64 @@ def test_the_owner_learns_of_a_failure_the_reasoning_cut_took(delivered, channel
     assert delivered == [(channel, _KEY_ERROR.strip())]
 
 
+def test_the_owner_gets_the_failure_without_the_reasoning_after_it(delivered):
+    """Reasoning the model never closed quotes a failure and goes on past it: the owner gets
+    the failure up to its own end, not the reasoning that follows. MUTATION: let
+    `_failure_end` run to the end of the text - red (Bob's contract goes out)."""
+    text = ("Here is the summary.\n<think>The tool said [Error] file not found: plan.txt\n"
+            "so I should not mention that Bob's contract ends in May.")
+    hr._deliver_channel_reply(_delivery_task("telegram", from_contact=False), text)
+    assert delivered == [("telegram", "Here is the summary.\n\n[Error] file not found: plan.txt")]
+
+
+def test_the_owner_gets_a_provider_failure_up_to_its_closing_bracket(delivered):
+    """MUTATION: end the sentinel at its first `]` instead of the balanced one - red."""
+    text = ("Answer. <think>so [API Error from x: {'error': [1, 2]}] and I should not say "
+            "Bob's contract ends")
+    hr._deliver_channel_reply(_delivery_task("telegram", from_contact=False), text)
+    assert delivered == [("telegram", "Answer.\n\n[API Error from x: {'error': [1, 2]}]")]
+
+
+def test_the_owner_gets_the_engines_record_of_the_failure(delivered):
+    """The engine recorded the turn's failure: that exact text goes after the outbound text,
+    whatever the reasoning around a quoted marker says. MUTATION: ignore `turn.failure` in
+    `_channel_reply_text` - red (the quoted marker's line goes out instead)."""
+    text = "<think>The tool said [Error] x, and Bob's contract ends in May " + _KEY_ERROR
+    hr._deliver_channel_reply(_delivery_task("telegram", from_contact=False), text,
+                              turn=TurnStatus(failed=True, failure=_KEY_ERROR))
+    assert delivered == [("telegram", _KEY_ERROR)]
+
+
+def test_the_veyllo_app_lane_gets_the_failure_the_cut_took(monkeypatch):
+    """The Veyllo App's `done`, and the follow-up of a turn a Yes woke, carry the same text
+    as the messenger lanes. MUTATION: send `_prepare_channel_outbound` on the app lane again
+    - red on both (nothing but an empty text)."""
+    from vaf.core.app_link import bridge as app_bridge
+    from vaf.core.app_link import confirmations
+    done, followups = [], []
+    monkeypatch.setattr(app_bridge, "finish_reply", lambda meta, text: done.append(text))
+    monkeypatch.setattr(confirmations, "open_followup",
+                        lambda meta, text: followups.append(text))
+    text = "<think>Ich prüfe den Kalender " + _KEY_ERROR
+    task = SimpleNamespace(source="veyllo_app", metadata={"app_request_id": "r1"},
+                           session_id="s1")
+    hr._deliver_channel_reply(task, text)
+    asked = SimpleNamespace(source="veyllo_app", session_id="s1",
+                            metadata={"app_agent_ask": True, "app_confirm_id": "c1"})
+    hr._deliver_channel_reply(asked, text)
+    assert done == [_KEY_ERROR] and followups == [_KEY_ERROR]
+
+
+@pytest.mark.parametrize("final_text", ["[Error] ", "Einen Moment.\n[Error] "])
+def test_a_bare_status_is_a_failure_after_the_strip(delivered, final_text):
+    """The engine's status with no detail loses its trailing blank in the outbound strip; the
+    contact still gets the sentence, never the word "[Error]". MUTATION: drop the stripped
+    shape from `is_error_reply` - red."""
+    hr._deliver_channel_reply(_delivery_task("telegram", from_contact=True), final_text,
+                              contact={"preferred_language": "de"})
+    assert delivered == [("telegram", _FIXED_DE)]
+
+
 def test_the_owner_gets_the_answer_and_the_failure_after_it(delivered):
     hr._deliver_channel_reply(_delivery_task("telegram", from_contact=False),
                               "Teilantwort. <think>noch mehr " + _KEY_ERROR)

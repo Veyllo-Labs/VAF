@@ -90,7 +90,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   repeated tags or blank space no longer stall the reply cleaner or the read-aloud cleanup
   for seconds or minutes. When a provider fails in the middle of the model's reasoning, your
   own messenger chat still gets the error and a contact still gets the polite fixed reply,
-  instead of nothing.
+  instead of nothing. `vaf.is_error_reply` also counts a text that ends in the bare
+  `[Error]` status, so a contact never receives that word on its own.
 - **An automation no longer delivers the model's reasoning as its result.** When a run's reply
   held nothing but marked reasoning, or its last words never reached the stream (such as the
   note that a background task started), the result fell back to a guess: it delivered the

@@ -72,13 +72,16 @@ def _strip_leading_fillers(text: str, fillers) -> str:
     once per phrase per round returned (2.7 s on 4 KB of fillers), by an index that only
     moves forward. `fillers` in the order they are tried (the longest first).
 
-    A phrase is compared with a slice of its own length, lowered, instead of the whole rest
-    lowered: the same answer for every phrase whose lowercase is one character for one and
-    holds no sigma and no combining dot (all of them, pinned by
-    tests/test_think_strip_sites.py). A slice holding U+0130 or a capital sigma lowers to a
-    combining dot or a sigma, which no phrase has, so it matches neither way; any other
-    character lowers one for one, whatever follows it. For the same reason only the phrases
-    whose lowercase begins with the first character lowered are tried, in the same order."""
+    A slice of the phrase's own length is lowered instead of the whole rest, and must START
+    with the lowered phrase: the same answer for every phrase whose lowercase is one
+    character for one and holds no sigma and no combining dot (all of them, pinned by
+    tests/test_think_strip_sites.py). Any character but U+0130 and a capital sigma lowers one
+    for one, whatever follows it. U+0130 lowers to "i" and a combining dot: at the slice's
+    last place the dot falls past the phrase, so a phrase ending in "i" matches, as the whole
+    lowered rest did ("Vediamo quİ"); anywhere earlier the dot stands inside the phrase,
+    which has none. A capital sigma lowers to a sigma, which no phrase has. Only the phrases
+    whose lowercase begins with the first character's lowercase are tried, in the same
+    order."""
     end = len(text.rstrip())
     pos, matched = 0, False
     by_first = {}
@@ -93,7 +96,7 @@ def _strip_leading_fillers(text: str, fillers) -> str:
         if start >= end:
             break
         for phrase, low in by_first.get(text[start].lower(), ()):
-            if text[start:min(end, start + len(phrase))].lower() == low:
+            if text[start:min(end, start + len(phrase))].lower().startswith(low):
                 pos = start + len(phrase)
                 while pos < end and text[pos] in ".,;: ":
                     pos += 1

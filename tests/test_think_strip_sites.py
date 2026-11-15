@@ -34,7 +34,14 @@ MUTATIONS, each turns the named test red:
   fuzz (oracles 9, 10); the old leading-filler loop -> [speech-leading-fillers]; try the
   phrases by the first character unlowered -> the fuzz (oracle 9);
 - only `*?` as a repetition in `_is_hand_copy` -> test_the_hand_copy_shapes; no folding of
-  concatenations -> test_concatenated_and_f_string_patterns_are_seen;
+  concatenations -> test_concatenated_and_f_string_patterns_are_seen; no group or blank
+  between "<" and the tag, no back-referenced closer, no counted repetition -> their rows;
+- the messenger chain on its own copy of the tool-call patterns again -> the fuzz
+  (oracle 11) and test_one_list_of_tool_call_tail_patterns; the old pattern 7 in the shared
+  list -> [delivery-name-fragment-in-unclosed-think]; the brace walk searching both
+  spellings from every block -> [delivery-single-quoted-tool-call-blocks-1mb];
+- compare the lowered slice with `==` in the leading-filler strip
+  -> test_a_dotted_capital_i_reads_as_the_whole_lowered_text_did;
 - re-add a lazy think regex in send_telegram.py, a `.split("<think>")` in rag.py, or remove
   the call in vision_infer -> test_no_hand_copy_of_the_rule / test_converted_functions_call_the_rule.
 """
@@ -152,7 +159,18 @@ def _shapes():
         "speech-leading-fillers-then-dotted-i": (
             _speak, "\u7b49\u4e00\u4e0b " * 12 + "\u0130" + " " * N + "x"),
         "delivery-judgement-think-openers": (_reply_failure, _fill("<think>a ", "Answer. ")),
+        "delivery-name-fragment-in-unclosed-think": (
+            _channel_reply_text, "Answer. <think>" + ', "name": "' + " " * N + 'x"y'),
+        # 1 MB: the old walk was quadratic with a small constant (0.38 s at 128 KB, about
+        # 12 s here); the walk now takes a fraction of a second.
+        "delivery-single-quoted-tool-call-blocks-1mb": (
+            _channel_reply_text, "Answer. " + "{'tool_calls': 1}" * (8 * N // 17)),
     }
+
+
+def _channel_reply_text(text):
+    from vaf.core.headless_runner import _channel_reply_text as send_text
+    return send_text(text)
 
 
 def _reply_failure(text):
@@ -287,27 +305,38 @@ def _docstring_ids(tree) -> set:
 
 
 def _repeat_after(low: str, start: int) -> int:
-    """Index of the first regex repetition at or after `start`, or -1: a `*` or `+` (lazy or
-    not) right behind something a regex repeats, `.`, a class `]`, a group `)` or an escape
-    like `\\s`. A markdown bullet's `*` in prose stands behind a blank and is not one."""
+    """Index of the first regex repetition at or after `start`, or -1: a `*`, `+` or `{n,m}`
+    (lazy or not) right behind something a regex repeats, `.`, a class `]`, a group `)` or
+    an escape like `\\s`. A markdown bullet's `*` in prose stands behind a blank and is not
+    one."""
     for i in range(start, len(low)):
-        if low[i] in "*+" and i > 0 and (low[i - 1] in ".])" or (i > 1 and low[i - 2] == "\\")):
+        if low[i] in "*+{" and i > 0 and (low[i - 1] in ".])" or (i > 1 and low[i - 2] == "\\")):
             return i
     return -1
 
 
+# What a regex may put between "<", "/" and the tag name: blanks (`\s*`), a group opening
+# (`(`, `(?:`) as in `<(?:think|thinking)>`, a word boundary.
+_FILL = r"(?:\\s[*+?]?|\(\?:|\(|\\b)*"
+_OPENER = re.compile("<" + _FILL + "think")
+# A closer names the tag, or refers back to the opener's group (`</\1>`, `</(?P=tag)>`).
+_CLOSER = re.compile("<" + _FILL + "/" + _FILL + r"(?:think|\\[1-9]|\(\?p=)")
+_REDACTED_OPENER = re.compile("<" + _FILL + "redacted_reasoning")
+
+
 def _is_hand_copy(s: str) -> bool:
-    """A regex that removes a whole reasoning block: an opener with the `<think` prefix (so
-    also `<think\\b`, `<think(?:ing)?>`, `<think[^>]*>`), any repetition after it, then a
-    `</think` closer; or a `<redacted_reasoning` opener with any repetition after it."""
+    """A regex that removes a whole reasoning block: a think opener (`<think`, also
+    `<think\\b`, `<think(?:ing)?>`, `<think[^>]*>`, `<(?:think|thinking)>`, `<\\s*think\\s*>`),
+    any repetition after it, then a think closer (`</think`, `</(?:think`, `<\\s*/\\s*think`);
+    or a redacted opener with any repetition after it."""
     low = s.lower()
-    start = low.find("<think")
-    if start >= 0:
-        rep = _repeat_after(low, start)
-        if rep >= 0 and low.find("</think", rep) >= 0:
+    opener = _OPENER.search(low)
+    if opener:
+        rep = _repeat_after(low, opener.end())
+        if rep >= 0 and _CLOSER.search(low, rep):
             return True
-    start = low.find("<redacted_reasoning")
-    return start >= 0 and _repeat_after(low, start) >= 0
+    opener = _REDACTED_OPENER.search(low)
+    return bool(opener) and _repeat_after(low, opener.end()) >= 0
 
 
 def _folded(node) -> str:
@@ -356,6 +385,10 @@ def _string_expressions(tree, docs):
     (r"<redacted_reasoning>.*?</redacted_reasoning>", True),
     (r"<redacted_reasoning>.*</redacted_reasoning>", True),
     (r"<redacted_reasoning>[\s\S]+", True),
+    (r"<(?:think|thinking)>.*?</(?:think|thinking)>", True),
+    (r"<\s*think\s*>.*?<\s*/\s*think\s*>", True),
+    (r"<think>.{0,9999}</think>", True),
+    (r"<(think)>(.*?)</\1>", True),
     (r"</?think>", False),
     (r"<think>", False),
     (r"<(/?)think(?:ing)?>", False),
@@ -506,7 +539,7 @@ TOKENS = ["<think>", "</think>", "<THINK>", "</Think>", "<thinking>", "</THINKIN
           "<thi", "nk>", "ing>", "<redacted_", "reasoning>", "</", "<", ">", "<a ",
           "<|tool_call>", "<tool_call|>", '{"tool_calls": ', "{", "[", "]", "}", '"name": "x"',
           "```", " ", "   ", "\n", "a", "Answer.", "x y", "İ", "ı", "K", "ok", ",", '"',
-          ', "name": "', '"name": ']
+          ', "name": "', '"name": ', "{'tool_calls': ", "'", "\\"]
 # Block contents for the sentinel draws: no tag and no tag fragment, so the block is a natural one.
 SAFE = [" ", "\n", "a", "Answer.", "x y", "ok", "{", "]", "İ", "K"]
 MARKS = [("<think>", "</think>"), ("<THINK>", "</Think>"), ("<thinking>", "</THINKING>"),
@@ -558,7 +591,8 @@ def fuzz_mismatches(rng: random.Random, draws: int) -> dict:
     from vaf.core.agent import Agent, _drop_angle_tags, _reply_is_reasoning_echo
     agent = Agent.__new__(Agent)
     from vaf.core.speech import _drop_standalone_filler
-    bad = {k: [] for k in range(1, 11)}
+    from vaf.core.headless_runner import _strip_tool_calls_json
+    bad = {k: [] for k in range(1, 12)}
     for _ in range(draws):
         t = _draw(rng)
         for greedy in (False, True):
@@ -596,7 +630,81 @@ def fuzz_mismatches(rng: random.Random, draws: int) -> dict:
         phrase = rng.choice(STANDALONE_PHRASES)
         if _drop_standalone_filler(s, phrase) != _old_standalone(s, phrase):
             bad[10].append((s, phrase))
+        if _strip_tool_calls_json(t) != _old_strip_tool_calls_json(t):
+            bad[11].append(t)
     return {k: v for k, v in bad.items() if v}
+
+
+def _old_strip_tool_calls_json(text):
+    """The messenger chain's tool-call strip as it was: its own copy of the patterns (the old
+    quadratic ones), then the brace walk that searched both spellings from every block."""
+    if not text:
+        return text
+    if "tool_calls" not in text and '"name":' not in text and '"function":' not in text:
+        return text
+    patterns = [
+        r'\[?\s*\{\s*"tool_calls":.*$',
+        r'\{\s*"name":\s*"[^"]*",\s*"arguments":.*$',
+        r'\{\s*"index":\s*\d+,\s*"id":.*$',
+        r'",\s*"name":\s*"[^"]*",\s*"type":\s*"function".*$',
+        r'"\}\s*,\s*"type":\s*"function".*$',
+        r'",\s*"name":\s*"[^"]*"\}\s*,\s*"type":\s*"function".*$',
+        r',\s*"name":\s*"[^"]*"?\s*$',
+        r'\}\s*,\s*\{\s*"index":\s*\d+.*$',
+        r'\}\s*,\s*\{\s*"name":\s*"[^"]*".*$',
+        r'\]\s*\}\s*$',
+        r'\}\s*\]\s*\}\s*$',
+    ]
+    out = text
+    for pat in patterns:
+        out = re.sub(pat, '', out, flags=re.DOTALL | re.MULTILINE)
+    if '{"tool_calls"' in out or "{'tool_calls'" in out:
+        temp_out = []
+        i = 0
+        while i < len(out):
+            start = out.find('{"tool_calls"', i)
+            if start == -1:
+                start = out.find("{'tool_calls'", i)
+            if start == -1:
+                temp_out.append(out[i:])
+                break
+            temp_out.append(out[i:start])
+            depth = 0
+            j = start
+            in_dq = False
+            escape = False
+            while j < len(out):
+                c = out[j]
+                if escape:
+                    escape = False
+                    j += 1
+                    continue
+                if c == "\\" and in_dq:
+                    escape = True
+                    j += 1
+                    continue
+                if c == '"' and not in_dq:
+                    in_dq = True
+                    j += 1
+                    continue
+                if c == '"' and in_dq:
+                    in_dq = False
+                    j += 1
+                    continue
+                if in_dq:
+                    j += 1
+                    continue
+                if c == "{":
+                    depth += 1
+                elif c == "}":
+                    depth -= 1
+                    if depth == 0:
+                        j += 1
+                        break
+                j += 1
+            i = j
+        out = "".join(temp_out)
+    return out.strip()
 
 
 _OLD_PATTERN7 = r',\s*"name":\s*"[^"]*"?\s*$'
@@ -604,10 +712,26 @@ _PATTERN7 = r',\s*"name":\s*"[^"]*(?:"\s*)?$'
 
 
 def test_pattern7_is_the_one_in_the_sanitizer():
-    """The oracle's pattern is the sanitizer's own (the fuzz compares this text)."""
+    """The oracle's pattern is the shared list's own (the fuzz compares this text)."""
+    assert _PATTERN7 in [rx.pattern for rx in completion._TOOL_CALL_TAILS]
+
+
+def test_one_list_of_tool_call_tail_patterns():
+    """The reply cleaner and the messenger chain share `completion.strip_tool_call_tails`;
+    a second copy of the list kept the old quadratic patterns on the delivery path."""
     import inspect
     from vaf.core.agent import Agent
-    assert "r'" + _PATTERN7 + "'" in inspect.getsource(Agent._sanitize_response)
+    from vaf.core.headless_runner import _strip_tool_calls_json
+    for func in (Agent._sanitize_response, _strip_tool_calls_json):
+        assert "strip_tool_call_tails" in func.__code__.co_names, func.__qualname__
+    copies = []
+    for path in sorted((ROOT / "vaf").rglob("*.py")):
+        rel = path.relative_to(ROOT).as_posix()
+        if rel != "vaf/core/completion.py" and '"tool_calls":.*$' in path.read_text(
+                encoding="utf-8"):
+            copies.append(rel)
+    assert copies == [], f"a copy of the tool-call tail patterns: {copies}"
+    assert "strip_tool_call_tails" in inspect.getsource(_strip_tool_calls_json)
 
 
 # Speech: filler phrases among blanks, dots and the punctuation the leading strip eats,
@@ -616,7 +740,7 @@ SPEECH_TOKENS = ["Moment", "moment", "MOMENT", "Einen Moment bitte.", "Einen Mom
                  "\u7b49\u4e00\u4e0b", "Let me check", "let me check", "Okay, Moment.",
                  "Anlad\u0131m, hemen bak\u0131yorum", " ", "  ", "\n", "\n\n", "\t", ".", ",",
                  ";", ":", "x", "Answer", "\u0130", "\u03a3", "\u03a3\u0391", "\u212a",
-                 "\u0131", "- ", "**"]
+                 "\u0131", "- ", "**", "Vediamo qu", "Deixa eu ver aqu", "i"]
 
 
 STANDALONE_PHRASES = ["Moment", "Einen Moment bitte.", "等一下", "Let me check",
@@ -655,6 +779,22 @@ def _old_speak(text):
     with mock.patch.object(speech, "_strip_leading_fillers", _old_leading), \
             mock.patch.object(speech, "_drop_standalone_filler", _old_standalone):
         return _speak(text)
+
+
+@pytest.mark.parametrize("text", ["Vediamo qu\u0130", "Vediamo qu\u0130 ok", "Deixa eu ver aqu\u0130, ol\u00e1",
+                                  "Vediamo q\u0130i ok", "\u0130ch bin da"])
+def test_a_dotted_capital_i_reads_as_the_whole_lowered_text_did(text):
+    """U+0130 lowers to "i" and a combining dot: at the end of a phrase that ends in "i" the
+    dot falls past it and the filler matched; anywhere earlier it does not. The leading strip
+    itself, and the whole cleanup (where the standalone step's case-blind regex catches a
+    "Vediamo quİ" the leading strip left). MUTATION: compare the lowered slice with `==`
+    again - red on the first three rows."""
+    from vaf.core import speech
+    from vaf.core.speech_fillers import THINKING_FILLERS
+    fillers = sorted({f for v in THINKING_FILLERS.values() for f in v if isinstance(f, str) and f},
+                     key=len, reverse=True)
+    assert speech._strip_leading_fillers(text, fillers) == _old_leading(text, fillers)
+    assert _speak(text) == _old_speak(text)
 
 
 def test_no_filler_phrase_lowers_out_of_step():

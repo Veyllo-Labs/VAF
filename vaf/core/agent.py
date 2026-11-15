@@ -35,7 +35,8 @@ from vaf.core.system_prompt import SystemPromptManager
 from vaf.core.last_interaction import get_last_interaction
 from vaf.core.text_match import compile_de, contains_any, fold, fold_all
 from vaf.core.completion import (EMPTY_PLACEHOLDER, THINKING_PLACEHOLDER, is_failure_chunk,
-                                 split_think_blocks, strip_think_blocks)
+                                 split_think_blocks, strip_think_blocks,
+                                 strip_tool_call_tails)
 from vaf.core.subagent_spawn import delegated_task as _delegated_task, spawn_ledger as _spawn_ledger
 from vaf.core.tool_dispatch import (
     ToolCallHooks as _ToolCallHooks,
@@ -6797,38 +6798,9 @@ class Agent:
         if not text:
             return ""
             
-        # Pattern 1: Full or partial JSON tool call arrays/objects at the end
-        # Matches things like: [{"tool_calls": ...}] or {"name": "update_working_memory"...}
-        # and even fragmented ones: ", "name": ... or "}, "type": "function", "index": 0}]}
-        patterns = [
-            # Starts at the bracket or the brace, never at the whitespace before it: a
-            # leading `\s*` retried from every blank of a long run (11 s on 64 KB of
-            # spaces). The blank it leaves behind goes with the final strip.
-            r'(?:\[\s*)?\{\s*"tool_calls":.*$',
-            r'\{\s*"name":\s*"[^"]*",\s*"arguments":.*$',
-            r'\{\s*"index":\s*\d+,\s*"id":.*$',
-            r'",\s*"name":\s*"[^"]*",\s*"type":\s*"function".*$',
-            r'"\}\s*,\s*"type":\s*"function".*$',  # leaked tail: "}, "type": "function", "index": 0}]}
-            r'",\s*"name":\s*"[^"]*"\}\s*,\s*"type":\s*"function".*$',  # full: , "name": "x"}, "type": "function"...
-            # trailing fragment: , "name": "update_working_memory" or without closing quote.
-            # The blanks before the end go with the closing quote only: `[^"]*` already takes
-            # them when the quote is missing, and a `\s*` behind an optional quote rescanned
-            # the rest of a blank run from every blank (39 s on 64 KB).
-            r',\s*"name":\s*"[^"]*(?:"\s*)?$',
-            r'\}\s*,\s*\{\s*"index":\s*\d+.*$',
-            r'\}\s*,\s*\{\s*"name":\s*"[^"]*".*$',
-            r'\]\s*\}\s*$', # Closing brackets at the very end
-            r'\}\s*\]\s*\}\s*$', # More closing brackets
-        ]
-        
-        cleaned = text
-        for pattern in patterns:
-            # We use re.sub with a special handling for end of string to avoid destroying internal JSON
-            # Only strip if the pattern is found near the end of the text
-            if re.search(pattern, cleaned, flags=re.DOTALL | re.MULTILINE):
-                # If the match is in the last 20% of the text or at least after 50 chars
-                # this prevents stripping legitimate looking JSON in long technical answers
-                cleaned = re.sub(pattern, '', cleaned, flags=re.DOTALL | re.MULTILINE)
+        # Leaked tool-call JSON at the end: [{"tool_calls": ...}], {"name": ...} and the
+        # fragments (", "name": ...). One pattern list for the reply and the messenger chain.
+        cleaned = strip_tool_call_tails(text)
 
         # Gemma-4 native tool-call tokens that leaked into the visible text (rare: the server usually
         # converts them via --jinja). Strip them so they are never shown. No-op for other models.

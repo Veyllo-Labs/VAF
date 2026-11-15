@@ -66,10 +66,15 @@ def is_error_reply(text) -> bool:
     Named boundary: the collectors that test ONE chunk of a stream for the provider
     sentinel (`_collect` here, `_first_chunk` in the failover chain, the vision, voice and
     memory-answer lanes) stay chunk tests. The engine marker is a whole-text signal; at
-    chunk level it would fire on content that merely starts a chunk with it."""
+    chunk level it would fire on content that merely starts a chunk with it.
+
+    The engine marker with no detail after it counts too when a cleanup stripped its
+    trailing blank (a text that ends in `[Error]`): a messenger's outbound text is
+    stripped, and the bare word would otherwise reach a contact."""
     if not isinstance(text, str) or not text:
         return False
-    return _ERROR_SENTINEL in text or _ENGINE_ERROR in text
+    return (_ERROR_SENTINEL in text or _ENGINE_ERROR in text
+            or text.rstrip().endswith(_ENGINE_ERROR.rstrip()))
 
 
 def is_stop_note(text) -> bool:
@@ -129,6 +134,41 @@ def is_metadata_frame(chunk: str) -> bool:
     )
 
 
+# Leaked tool-call JSON at the end of a reply, each pattern cutting to the end of the text:
+# a whole array or object ([{"tool_calls": ...}], {"name": ..., "arguments": ...}) and the
+# fragments a confused model leaves (", "name": ..., "}, "type": "function", "index": 0}]}).
+# Each starts at a literal, never at a run of blanks, so none rescans a run from every blank.
+_TOOL_CALL_TAILS = tuple(re.compile(p, re.DOTALL | re.MULTILINE) for p in (
+    # The bracket or the brace starts it, not the blank before: a leading `\s*` was retried
+    # from every blank of a long run (11 s on 64 KB of spaces); that blank goes with the
+    # caller's final strip.
+    r'(?:\[\s*)?\{\s*"tool_calls":.*$',
+    r'\{\s*"name":\s*"[^"]*",\s*"arguments":.*$',
+    r'\{\s*"index":\s*\d+,\s*"id":.*$',
+    r'",\s*"name":\s*"[^"]*",\s*"type":\s*"function".*$',
+    r'"\}\s*,\s*"type":\s*"function".*$',
+    r'",\s*"name":\s*"[^"]*"\}\s*,\s*"type":\s*"function".*$',
+    # A trailing fragment, with or without its closing quote. The blanks before the end go
+    # with the quote only: `[^"]*` already takes them when the quote is missing, and a `\s*`
+    # behind an optional quote rescanned the rest of a blank run from every blank (39 s on
+    # 64 KB).
+    r',\s*"name":\s*"[^"]*(?:"\s*)?$',
+    r'\}\s*,\s*\{\s*"index":\s*\d+.*$',
+    r'\}\s*,\s*\{\s*"name":\s*"[^"]*".*$',
+    r'\]\s*\}\s*$',
+    r'\}\s*\]\s*\}\s*$',
+))
+
+
+def strip_tool_call_tails(text: str) -> str:
+    """Leaked tool-call JSON off the end of a model's text, by the one pattern list the
+    reply cleaner (`Agent._sanitize_response`) and the messenger chain
+    (`headless_runner._strip_tool_calls_json`) share. Not stripped: the caller strips."""
+    for pattern in _TOOL_CALL_TAILS:
+        text = pattern.sub("", text)
+    return text
+
+
 # <thinking> is the same marker: the chat's parseThinkBlocks (web/app/page.tsx) reads it so.
 _THINK_TAG = re.compile(r"<(/?)think(?:ing)?>", re.IGNORECASE)
 
@@ -175,8 +215,9 @@ def strip_think_blocks(text: str, *, greedy: bool = False) -> str:
     such a block cannot be told from one that ends it, so the reasoning side wins. Only a
     ``<think>`` opener BEFORE the redacted one pairs with that closer, which the greedy
     reading does (``<think>a</think><redacted_reasoning>b</think>Answer`` is ``Answer``
-    greedy, as the chat shows it, and empty plain). A stray ``</redacted_reasoning>`` that the second think pass itself joins stays as
-    text: a closer opens nothing, so no reasoning follows it out.
+    greedy, as the chat shows it, and empty plain). A stray ``</redacted_reasoning>`` that
+    the second think pass itself joins stays as text: a closer opens nothing, so no
+    reasoning follows it out.
 
     Linear in the text: a fixed number of passes, none of which rescans what it already
     read. A lazy ``<think>.*?</think>`` rescans to the end from every unclosed opener

@@ -3396,8 +3396,10 @@ Stable public surface (safe to build on):
 - `vaf.is_error_reply(text)` - True when a turn's text (`run()`, `chat_step` and its
   stream) is a backend failure rather than an answer: it carries the engine's
   `[Error] ` status or a provider's `[API Error from` sentinel anywhere in it, also
-  after text an earlier round streamed. A reply that quotes either marker counts as a
-  failure, the safe side. Never raises; anything but a non-empty string is False.
+  after text an earlier round streamed, or a text that ends in `[Error]` (the status with
+  no detail, after a cleanup stripped its trailing blank). A reply that quotes either
+  marker counts as a failure, the safe side. Never raises; anything but a non-empty string
+  is False.
 - `vaf.strip_think_blocks(text, *, greedy=False) -> str` - a model's marked reasoning out of
   its text, by the rule VAF's own reply cleaner, messenger lane, speech and memory use. The
   promise: the marks are `<think>` and `<thinking>` in any case and `<redacted_reasoning>`

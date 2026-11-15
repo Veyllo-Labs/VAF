@@ -22,6 +22,14 @@ def test_a_failure_after_streamed_text_is_still_a_failure():
     assert vaf.is_error_reply("Let me look.\n[Error] Server unavailable after retries.")
 
 
+def test_the_status_with_no_detail_is_a_failure_also_when_stripped():
+    """A messenger's outbound text is stripped, so the bare status loses its trailing blank."""
+    assert vaf.is_error_reply("[Error] ")
+    assert vaf.is_error_reply("[Error]")
+    assert vaf.is_error_reply("Einen Moment.\n[Error]\n")
+    assert not vaf.is_error_reply("Errors are logged in error.log.")
+
+
 def test_an_answer_is_not_a_failure():
     assert not vaf.is_error_reply("Python is a programming language.")
     assert not vaf.is_error_reply("The error was fixed yesterday.")

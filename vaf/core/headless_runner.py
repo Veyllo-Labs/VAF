@@ -29,7 +29,7 @@ from vaf.core.turn_binding import (TurnBinding, TurnRefused, bind_turn, end_turn
                                    room_turn_marker)
 from vaf.core.subagent_ipc import take_result_notification
 from vaf.core.completion import (drop_redacted_blocks, split_control_head, split_think_blocks,
-                                 strip_think_blocks)
+                                 strip_think_blocks, strip_tool_call_tails)
 from vaf.core.session import (ASKED_AT_KEY, TURN_ID_KEY, TURN_ROUNDS_KEY, SessionManager, Session, TurnStatus,
                               returned_turn_copy, stored_turn_copy,
                               turn_context_messages_since_last_user)
@@ -493,9 +493,12 @@ def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=N
                     or is_stop_note(visible)):
                 _send_turn_error_reply(task, final_text, contact=contact)
                 return
+        # The engine's record of the turn's failure, for the owner's own chats only: a
+        # contact's text never carries it (taken off above, or the turn got the sentence).
+        owner_turn = None if meta.get("from_contact") else turn
         if task_source == "telegram" and chat_id:
             from vaf.core.telegram_reply import send_telegram_reply
-            out = _channel_reply_text(final_text)
+            out = _channel_reply_text(final_text, owner_turn)
             if not out:
                 try:
                     log_telegram_reply(
@@ -517,7 +520,7 @@ def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=N
                     )
                 except Exception:
                     pass
-                out = _channel_reply_text(final_text)
+                out = _channel_reply_text(final_text, owner_turn)
                 if out:
                     send_discord_reply(str(discord_channel_id), out)
         elif task_source == "email":
@@ -554,12 +557,12 @@ def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=N
                 # A turn a Yes woke has answered: the next message of the same round gets its
                 # card now, and this answer waits for the request's final `done`.
                 from vaf.core.app_link import confirmations
-                answer = confirmations.open_followup(meta, _channel_reply_text(final_text))
+                answer = confirmations.open_followup(meta, _channel_reply_text(final_text, owner_turn))
                 if answer is None:
                     return
                 app_bridge.finish_reply(meta, answer)
                 return
-            app_bridge.finish_reply(meta, _channel_reply_text(final_text))
+            app_bridge.finish_reply(meta, _channel_reply_text(final_text, owner_turn))
         elif task_source == "whatsapp":
             chat_jid = meta.get("whatsapp_chat_jid")
             username = meta.get("username") or "admin"
@@ -581,7 +584,7 @@ def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=N
                     )
                 except Exception:
                     pass
-                out = _channel_reply_text(final_text)
+                out = _channel_reply_text(final_text, owner_turn)
                 if out:
                     send_whatsapp_reply(username, str(chat_jid), out, user_scope_id=meta.get("user_scope_id") and str(meta["user_scope_id"]) or None)
                 else:
@@ -887,34 +890,24 @@ def _strip_tool_calls_json(text: str) -> str:
     if "tool_calls" not in text and '"name":' not in text and '"function":' not in text:
         return text
         
-    # Pattern-based removal for leaked JSON fragments (incl. tail like ", "name": "update_working_memory"}, "type": "function", "index": 0}]}")
-    import re
-    patterns = [
-        r'\[?\s*\{\s*"tool_calls":.*$',
-        r'\{\s*"name":\s*"[^"]*",\s*"arguments":.*$',
-        r'\{\s*"index":\s*\d+,\s*"id":.*$',
-        r'",\s*"name":\s*"[^"]*",\s*"type":\s*"function".*$',
-        r'"\}\s*,\s*"type":\s*"function".*$',
-        r'",\s*"name":\s*"[^"]*"\}\s*,\s*"type":\s*"function".*$',
-        r',\s*"name":\s*"[^"]*"?\s*$',
-        r'\}\s*,\s*\{\s*"index":\s*\d+.*$',
-        r'\}\s*,\s*\{\s*"name":\s*"[^"]*".*$',
-        r'\]\s*\}\s*$',
-        r'\}\s*\]\s*\}\s*$',
-    ]
-    
-    out = text
-    for p in patterns:
-        out = re.sub(p, '', out, flags=re.DOTALL | re.MULTILINE)
-        
+    # The leaked fragments at the end (incl. a tail like ", "name": "update_working_memory"},
+    # "type": "function", "index": 0}]}"), by the reply cleaner's own pattern list.
+    out = strip_tool_call_tails(text)
+
     # Legacy brace counting for full blocks (fallback)
     if '{"tool_calls"' in out or "{'tool_calls'" in out:
         temp_out = []
         i = 0
+        # The next block of each spelling, found once and searched again only after the walk
+        # has passed it: searching both from every block scanned the rest of the text once
+        # per block (0.19 s on 128 KB of single-quoted blocks, four times that per doubling).
+        next_dq, next_sq = out.find('{"tool_calls"'), out.find("{'tool_calls'")
         while i < len(out):
-            start = out.find('{"tool_calls"', i)
-            if start == -1:
-                start = out.find("{'tool_calls'", i)
+            if 0 <= next_dq < i:
+                next_dq = out.find('{"tool_calls"', i)
+            if 0 <= next_sq < i:
+                next_sq = out.find("{'tool_calls'", i)
+            start = next_dq if next_dq != -1 else next_sq
             if start == -1:
                 temp_out.append(out[i:])
                 break
@@ -1045,9 +1038,32 @@ def _prepare_channel_outbound(text: str, *, closed_reasoning_only: bool = False)
     return (out or "").strip()
 
 
+def _failure_end(text: str, start: int) -> int:
+    """Where the failure that begins at `start` ends: a provider's `[API Error from ...]` at
+    its own closing bracket (brackets inside it balanced), the engine's `[Error] ...` at the
+    end of its line; either at the end of the text when nothing closes it."""
+    from vaf.core.completion import _ERROR_SENTINEL
+    if text.startswith(_ERROR_SENTINEL, start):
+        depth = 0
+        for i in range(start, len(text)):
+            if text[i] == "[":
+                depth += 1
+            elif text[i] == "]":
+                depth -= 1
+                if depth == 0:
+                    return i + 1
+            elif text[i] == "\n" and depth == 1:
+                break  # an unclosed sentinel ends with its line, like the engine's status
+        else:
+            return len(text)
+        return i
+    newline = text.find("\n", start)
+    return len(text) if newline < 0 else newline
+
+
 def _reply_failure(text: str) -> str:
     """The failure a reply's text carries outside its CLOSED reasoning, from its marker
-    (`[Error] ` or `[API Error from`) to the end, or "".
+    (`[Error] ` or `[API Error from`) to the end of that failure (`_failure_end`), or "".
 
     One text decides, visible or not: the outbound chain with only the closed blocks of all
     three marks removed. A provider that failed mid-reasoning leaves its failure after a
@@ -1060,19 +1076,32 @@ def _reply_failure(text: str) -> str:
     judged = _prepare_channel_outbound(text, closed_reasoning_only=True)
     if not is_error_reply(judged):
         return ""
-    return judged[min(i for i in (judged.find(_ENGINE_ERROR), judged.find(_ERROR_SENTINEL))
-                      if i >= 0):].strip()
+    marks = [i for i in (judged.find(_ENGINE_ERROR), judged.find(_ERROR_SENTINEL)) if i >= 0]
+    # The bare status a strip left at the very end ("... [Error]"), is_error_reply's third shape.
+    start = min(marks) if marks else len(judged.rstrip()) - len(_ENGINE_ERROR.rstrip())
+    return judged[start:_failure_end(judged, start)].strip()
 
 
-def _channel_reply_text(text: str) -> str:
-    """What a messenger lane sends of a turn's text: the outbound text, and when the cut of
-    an unclosed block took a failure with it, that failure after it (`_reply_failure`), so the
-    owner's own chat still learns that the turn failed. A contact never gets here with one:
-    `_deliver_channel_reply` answers such a turn with the fixed sentence first."""
+def _channel_reply_text(text: str, turn: TurnStatus = None) -> str:
+    """What a messenger lane sends of a turn's text: the outbound text, and when it does not
+    show the turn's failure, that failure after it, so the owner's own chat still learns
+    that the turn failed, without the reasoning around it. The failure is the engine's own
+    record when it has one (`turn.failure`, the exact streamed failure text); otherwise the
+    one `_reply_failure` finds outside the closed reasoning, which ends at its own end
+    (`_failure_end`): a provider's failure at its closing bracket, the engine's status at the
+    end of its line, so the rest of a line that only quotes "[Error] ..." in reasoning the
+    model never closed goes with it. `turn` is passed for the owner's chats only: a contact
+    never gets here with a failure, because `_deliver_channel_reply` answers such a turn
+    with the fixed sentence first."""
     from vaf.core.completion import is_error_reply
     visible = _prepare_channel_outbound(text)
-    failure = _reply_failure(text)
-    if failure and not is_error_reply(visible):
+    if is_error_reply(visible):
+        return visible
+    if turn is not None and turn.failure:
+        failure = _prepare_channel_outbound(turn.failure)
+    else:
+        failure = _reply_failure(text)
+    if failure and failure not in visible:
         return f"{visible}\n\n{failure}".strip()
     return visible
 

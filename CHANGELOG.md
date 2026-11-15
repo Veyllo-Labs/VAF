@@ -74,6 +74,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **A long reply full of unfinished tool-call tags no longer stalls VAF.** VAF used to hang for
+  seconds or minutes while it looked for tool calls in such a reply: 128 KB took up to 27 s,
+  twice per reply, and one shape took far longer. The tool calls it finds are the same as
+  before.
 - **Stop now stops a tool the model is still writing.** Pressing Stop while the reply was
   streaming used to let a tool call that had already arrived run anyway, after which VAF asked
   the model again. The call is now dropped and the turn ends. A stop between two tools records

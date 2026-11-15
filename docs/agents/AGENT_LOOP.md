@@ -279,6 +279,20 @@ dispatches one call per loop iteration and re-prompts after each result, so a ba
 asked for again rather than lost - the main agent's turn ends after its fallback, which is why
 it takes everything.
 
+**The XML lanes read in linear time.** `extract_xml_tool_calls` and `strip_tool_call_markup`
+find each opener, `>` and closer once and look them up by position (`_Positions`, n log n).
+The lazy regexes they replaced rescanned to the end from every opener with no closer after
+it: 3.2 s for 128 KB of unclosed `<invoke name="x">`, 27 s for 128 KB of unclosed child tags,
+and about 15 minutes for 128 KB of `<tool_use name="a" ` heads, whose head backtracked over
+every `name="` before the first `>`. The lane runs twice per generation round (the
+model-health guard and the fallback), and each call held the interpreter lock throughout. The
+results are those of the regexes, match for match; `tests/test_tool_call_recovery_linear.py`
+keeps the regex implementation as its oracle. Named boundaries: dialect 3 is one pass per tool
+name, because the result follows the order of the names; the reply length is not capped; and
+the `agent.py` text lanes for `<tool_call>`, json fences, Gemma and Qwen, and the coder's own
+Formats 0, 0b and 0c, are still quadratic on their unclosed openers (the `<tool_call>` lane:
+0.48 s at 32 KB).
+
 Host-speaker TTS (the thinking fillers, `_speak_filler`) only fires for agents
 constructed with `host_audio=True`, which is exclusively the interactive CLI
 (`_make_cli_agent`). The final answer and the answer chime are not spoken on the host: the

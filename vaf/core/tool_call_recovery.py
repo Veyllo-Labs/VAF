@@ -16,6 +16,11 @@ closers, and wrapped the batch in a bare ``calls`` instead of ``tool_calls``. St
 token alone left ``< invoke ...>``, which no dialect matched: three calls never ran and the
 raw block was the reply the user saw. The token regex therefore swallows the whitespace
 after the token, and the wrapper strip knows ``calls`` and ``function_calls`` too.
+
+The XML lanes read in linear time (n log n with the lookups): every opener, ``>`` and closer is
+found once and looked up by position, never rescanned from each opener. The lazy regexes they
+replace rescanned to the end from every unclosed opener, 27 s for 128 KB of unclosed child tags
+and about 15 minutes for 128 KB of ``<tool_use name="a" `` heads, twice per generation round.
 """
 from __future__ import annotations
 
@@ -23,20 +28,177 @@ import json
 import os
 import re
 import time
-from typing import Any, Dict, Optional
+from bisect import bisect_left
+from typing import Any, Dict, List, Optional
 
 # Dialect 1 - Anthropic/Claude: <invoke name="X"> ... <parameter name="P">V</parameter> ... </invoke>
+# Only ever run up to the end of the last </invoke> (_invoke_matches): every match ends at a
+# closer, and an opener past the last one would otherwise rescan the rest of the text.
 _INVOKE_RE = re.compile(r'<invoke\s+name="([^"]+)"\s*>(.*?)</invoke>', re.DOTALL)
-_PARAM_RE = re.compile(r'<parameter\s+name="([^"]+)"([^>]*)>(.*?)</parameter>', re.DOTALL)
+# The head of <parameter name="P" ...>V</parameter>; the rest is walked (_parameters).
+_PARAM_HEAD_RE = re.compile(r'<parameter\s+name="([^"]+)"')
 # Dialect 2 - Morph <tool_use name="X" [id="..."]>: params are TAG-named children (<path>V</path>).
-_TOOL_USE_RE = re.compile(r'<tool_use\b[^>]*\bname="([^"]+)"[^>]*>(.*?)</tool_use>', re.DOTALL)
-# Direct child tags used as parameters in Dialects 2 & 3 (tag name = parameter name).
-_CHILD_TAG_RE = re.compile(r"<([A-Za-z_][\w-]*)\s*>(.*?)</\1>", re.DOTALL)
+# The start of the tag and every name attribute; the head between them is walked (_tool_use_blocks).
+_TOOL_USE_START_RE = re.compile(r"<tool_use\b")
+_NAME_ATTR_RE = re.compile(r'\bname="')
+# Direct child tags used as parameters in Dialects 2 & 3 (tag name = parameter name): the opener
+# <name> and the closer </name>, paired by name in _child_params.
+_CHILD_OPEN_RE = re.compile(r"<([A-Za-z_][\w-]*)\s*>")
+_CHILD_CLOSE_RE = re.compile(r"</([A-Za-z_][\w-]*)>")
 # DeepSeek wraps tags in its special-token delimiter (fullwidth pipe U+FF5C): <｜｜DSML｜｜invoke ...>.
 # The trailing \s* eats the space some stacks put between the token and the tag name
 # (<｜｜DSML｜｜ invoke ...>, </｜｜DSML｜｜ parameter>): without it the plain-XML regexes below see
 # "< invoke" and match nothing. Only whitespace directly after the token is consumed.
 _DSML_TOKEN_RE = re.compile(r"[｜|]{1,2}\s*DSML\s*[｜|]{1,2}\s*")
+
+
+class _Positions:
+    """The sorted start positions of one needle in a text, found once, and the first one at or
+    after a given position by bisection.
+
+    Every walk in this module pairs an opener with the first ``>`` or the first closer after it.
+    Searching forward from each opener is what made the lazy regexes quadratic: thousands of
+    unclosed openers each scanned to the same distant ``>`` or to the end. Here each needle is
+    found in one pass and every lookup is a bisection, so a walk costs n log n.
+
+    Private to this module. ``completion.drop_redacted_blocks`` and
+    ``web_server._legacy_dim_pairs`` walk an opener and a closer by hand too, but each with one
+    fixed pair and semantics of its own (a cut at an unclosed opener, a closer with
+    alternatives), already linear and tested. The helper moves to a shared module when a third
+    module needs such a walk; the text lanes of ``Agent._text_tool_calls`` are the likely next.
+    """
+
+    __slots__ = ("_at",)
+
+    def __init__(self, at: List[int]):
+        self._at = at
+
+    @classmethod
+    def of(cls, text: str, needle: str) -> "_Positions":
+        # Stepping by one keeps overlapping occurrences, as a regex attempt at every
+        # position would see them.
+        at = []
+        i = text.find(needle)
+        while i >= 0:
+            at.append(i)
+            i = text.find(needle, i + 1)
+        return cls(at)
+
+    def first_at(self, pos: int) -> int:
+        """The first position at or after ``pos``, or -1."""
+        k = bisect_left(self._at, pos)
+        return self._at[k] if k < len(self._at) else -1
+
+
+def _cut(text: str, spans) -> str:
+    """``text`` without the given (start, end) spans, which are in order and disjoint."""
+    parts = []
+    pos = 0
+    for start, end in spans:
+        parts.append(text[pos:start])
+        pos = end
+    if not parts:
+        return text
+    parts.append(text[pos:])
+    return "".join(parts)
+
+
+def _invoke_matches(text: str):
+    """The ``_INVOKE_RE`` matches of ``text``, in order.
+
+    The search stops at the end of the last ``</invoke>``. Every match ends at a closer, so the
+    matches are the same; an opener after the last closer is no longer tried against the whole
+    rest of the text.
+    """
+    last = text.rfind("</invoke>")
+    if last < 0:
+        return iter(())
+    return _INVOKE_RE.finditer(text, 0, last + len("</invoke>"))
+
+
+def _parameters(body: str):
+    """(name, attributes, value) of every ``<parameter name="P" ...>V</parameter>`` in an
+    invoke body, in order; the matches of ``<parameter\\s+name="([^"]+)"([^>]*)>(.*?)</parameter>``.
+
+    The head ends at the first ``>`` after the name and the value at the first closer after
+    that. Every ``<parameter`` position is tried, also one inside an earlier opener's name, as
+    a regex attempt at that position would be; positions inside a match are skipped.
+    """
+    gts = closers = None
+    taken = 0
+    p = body.find("<parameter")
+    while p >= 0:
+        head = _PARAM_HEAD_RE.match(body, p) if p >= taken else None
+        if head is None:
+            p = body.find("<parameter", p + 1)
+            continue
+        if gts is None:
+            gts = _Positions.of(body, ">")
+            closers = _Positions.of(body, "</parameter>")
+        g = gts.first_at(head.end())
+        if g < 0:
+            return
+        c = closers.first_at(g + 1)
+        if c < 0:
+            # A later opener's head ends later, so its ">" and its closer would too.
+            return
+        yield head.group(1), body[head.end():g], body[g + 1:c]
+        taken = c + len("</parameter>")
+        p = body.find("<parameter", taken)
+
+
+def _tool_use_blocks(text: str):
+    """(start, end, name, body) of every ``<tool_use ... name="X" ...>body</tool_use>`` block,
+    in order; the matches of ``<tool_use\\b[^>]*\\bname="([^"]+)"[^>]*>(.*?)</tool_use>``.
+
+    The head runs to the first ``>`` (g1) and the regex backtracks over it from the right, so
+    the LAST ``name="`` attribute before g1 that leads to a closer wins. Only that last one can
+    have a name running past g1 (``name="a>b"``) and so its own ``>``: every earlier one's name
+    ends at the next attribute's quote, so its ``>`` is g1. That leaves two checks per block,
+    the last attribute and the last earlier one with a non-empty name.
+    """
+    if "<tool_use" not in text:
+        return
+    gts = _Positions.of(text, ">")
+    quotes = _Positions.of(text, '"')
+    closers = _Positions.of(text, "</tool_use>")
+    attrs = [m.start() for m in _NAME_ATTR_RE.finditer(text)]
+    # named[i]: the index of the last attribute at or before i whose name is not empty, or -1.
+    named = []
+    last = -1
+    for i, s in enumerate(attrs):
+        if text[s + 6:s + 7] not in ("", '"'):
+            last = i
+        named.append(last)
+    taken = 0
+    for m in _TOOL_USE_START_RE.finditer(text):
+        if m.start() < taken:
+            continue
+        g1 = gts.first_at(m.end())
+        if g1 < 0 or closers.first_at(g1 + 1) < 0:
+            # A later block's head ends at this ">" or a later one, and needs a closer after it.
+            return
+        hi = bisect_left(attrs, g1) - 1
+        if hi < 0 or attrs[hi] < m.end():
+            continue
+        hit = None
+        s = attrs[hi]
+        q = quotes.first_at(s + 6)
+        if q > s + 6:
+            g2 = gts.first_at(q + 1)
+            c = closers.first_at(g2 + 1) if g2 >= 0 else -1
+            if c >= 0:
+                hit = (s, q, g2, c)
+        if hit is None and hi > 0:
+            j = named[hi - 1]
+            if j >= 0 and attrs[j] >= m.end():
+                s = attrs[j]
+                hit = (s, quotes.first_at(s + 6), g1, closers.first_at(g1 + 1))
+        if hit is None:
+            continue
+        s, q, g2, c = hit
+        taken = c + len("</tool_use>")
+        yield m.start(), taken, text[s + 6:q], text[g2 + 1:c]
 
 
 def _coerce(raw: str, force_string: bool = False) -> Any:
@@ -51,11 +213,59 @@ def _coerce(raw: str, force_string: bool = False) -> Any:
 
 
 def _child_params(block: str) -> Dict[str, Any]:
-    """Parse tag-named child parameters (<path>V</path>, <content>V</content>, ...)."""
+    """Parse tag-named child parameters (<path>V</path>, <content>V</content>, ...).
+
+    The matches of ``<([A-Za-z_][\\w-]*)\\s*>(.*?)</\\1>``: each opener closes at the first
+    ``</name>`` of its own name after it. An opener whose name never closes is skipped and the
+    walk goes on, because another name can still close; an opener inside a match is skipped.
+    A name that comes twice keeps its first place and its last value.
+    """
     args: Dict[str, Any] = {}
-    for m in _CHILD_TAG_RE.finditer(block):
-        args[m.group(1).strip()] = _coerce(m.group(2))
+    if "</" not in block:
+        return args
+    by_name: Dict[str, List[int]] = {}
+    for m in _CHILD_CLOSE_RE.finditer(block):
+        by_name.setdefault(m.group(1), []).append(m.start())
+    closers = {name: _Positions(at) for name, at in by_name.items()}
+    taken = 0
+    for m in _CHILD_OPEN_RE.finditer(block):
+        name = m.group(1)
+        if m.start() < taken or name not in closers:
+            continue
+        c = closers[name].first_at(m.end())
+        if c < 0:
+            continue
+        args[name.strip()] = _coerce(block[m.end():c])
+        taken = c + len(name) + 3
     return args
+
+
+def _tool_tag_blocks(text: str, tool: str, gts: _Positions):
+    """The body of every ``<TOOL ...>body</TOOL>`` block, in order; the matches of
+    ``<TOOL\\b[^>]*>(.*?)</TOOL>``. ``gts`` holds the ``>`` positions of ``text``."""
+    head = re.compile("<" + re.escape(tool) + r"\b")
+    opener = "<" + tool
+    closer = "</" + tool + ">"
+    closers = None
+    taken = 0
+    p = text.find(opener)
+    while p >= 0:
+        h = head.match(text, p) if p >= taken else None
+        if h is None:
+            p = text.find(opener, p + 1)
+            continue
+        g = gts.first_at(h.end())
+        if g < 0:
+            return
+        if closers is None:
+            closers = _Positions.of(text, closer)
+        c = closers.first_at(g + 1)
+        if c < 0:
+            # A later opener's ">" is this one or a later one, so it has no closer either.
+            return
+        yield text[g + 1:c]
+        taken = c + len(closer)
+        p = text.find(opener, taken)
 
 
 def _mk(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -96,6 +306,16 @@ def extract_xml_tool_calls(content: str, valid_names=None) -> list:
     Returns a list of OpenAI-style tool_call dicts (empty when nothing matched). Parameter
     values are coerced from text: an Anthropic ``string="true"`` attribute forces a string,
     otherwise values are JSON-parsed with a string fallback.
+
+    Cost: each opener, ``>`` and closer is found once (see ``_Positions``), so a reply full of
+    unclosed openers is read in n log n. The lazy regexes this replaced rescanned to the end
+    from every unclosed opener: 3.2 s for 128 KB of ``<invoke name="x">``, 27 s for 128 KB of
+    unclosed child tags in one ``<tool_use>``, about 15 minutes for 128 KB of
+    ``<tool_use name="a" `` heads without ``>``, and the main agent runs this twice per
+    generation round, holding the interpreter lock throughout. The results are those of the
+    regexes, match for match. Named boundaries: dialect 3 is one pass per tool name (T * n,
+    8 ms for 152 names on 128 KB of prose), because the result follows the order of the names;
+    the reply length itself is not capped.
     """
     if not content:
         return []
@@ -108,32 +328,33 @@ def extract_xml_tool_calls(content: str, valid_names=None) -> list:
     out: list = []
 
     # 1. Anthropic <invoke name>/<parameter name>
-    for inv in _INVOKE_RE.finditer(norm):
+    for inv in _invoke_matches(norm):
         name = inv.group(1).strip()
         if not _ok(name):
             continue
         args: Dict[str, Any] = {}
-        for pm in _PARAM_RE.finditer(inv.group(2)):
-            args[pm.group(1).strip()] = _coerce(pm.group(3), 'string="true"' in pm.group(2))
+        for pname, attrs, value in _parameters(inv.group(2)):
+            args[pname.strip()] = _coerce(value, 'string="true"' in attrs)
         out.append(_mk(name, args))
 
     # 2. Morph <tool_use name="X" ...> with tag-named params
-    for tu in _TOOL_USE_RE.finditer(norm):
-        name = tu.group(1).strip()
+    for _start, _end, name, body in _tool_use_blocks(norm):
+        name = name.strip()
         if _ok(name):
-            out.append(_mk(name, _child_params(tu.group(2))))
+            out.append(_mk(name, _child_params(body)))
 
     if out:
         return out
 
     # 3. Morph tool-as-tag <TOOLNAME>...</TOOLNAME> - only with a known-tools allowlist.
     # Last, and only when the named dialects found nothing: a bare tool-named tag is the
-    # shape most easily confused with ordinary markup inside file content.
+    # shape most easily confused with ordinary markup inside file content. One pass per name,
+    # in the caller's order, which is the order of the result.
     if valid_names:
+        gts = _Positions.of(norm, ">")
         for tool in valid_names:
-            for m in re.finditer(rf"<{re.escape(tool)}\b[^>]*>(.*?)</{re.escape(tool)}>",
-                                 norm, re.DOTALL):
-                out.append(_mk(tool, _child_params(m.group(1))))
+            for body in _tool_tag_blocks(norm, tool, gts):
+                out.append(_mk(tool, _child_params(body)))
     return out
 
 
@@ -262,7 +483,24 @@ def extract_wire_json_tool_calls(content: str, valid_names=None):
 # The batch wrapper: DeepSeek's `tool_calls`, Anthropic's `function_calls`, and the bare
 # `calls` one live leak used. Only reached when the content carries call markup (the guard
 # in strip_tool_call_markup), so a `<calls>` tag in ordinary prose is never touched.
-_TOOL_CALLS_WRAP_RE = re.compile(r"</?(?:tool_calls|function_calls|calls)\b[^>]*>")
+# The tag runs to the first ">" after this start (_wrapper_spans).
+_TOOL_CALLS_WRAP_START_RE = re.compile(r"</?(?:tool_calls|function_calls|calls)\b")
+
+
+def _wrapper_spans(text: str):
+    """(start, end) of every ``</?(?:tool_calls|function_calls|calls)\\b[^>]*>`` tag, in order."""
+    gts = None
+    taken = 0
+    for m in _TOOL_CALLS_WRAP_START_RE.finditer(text):
+        if m.start() < taken:
+            continue
+        if gts is None:
+            gts = _Positions.of(text, ">")
+        g = gts.first_at(m.end())
+        if g < 0:
+            return
+        taken = g + 1
+        yield m.start(), taken
 
 
 def strip_tool_call_markup(content: str) -> str:
@@ -285,9 +523,11 @@ def strip_tool_call_markup(content: str) -> str:
                        and '"tool_calls"' not in content):
         return content
     text = _DSML_TOKEN_RE.sub("", content).replace("｜", "")
-    text = _INVOKE_RE.sub("", text)
-    text = _TOOL_USE_RE.sub("", text)
-    text = _TOOL_CALLS_WRAP_RE.sub("", text)
+    # Each stage reads what the stage before left: a removed <invoke> block can join the
+    # text around it into a <tool_use> block, and that one goes too.
+    text = _cut(text, (m.span() for m in _invoke_matches(text)))
+    text = _cut(text, ((s, e) for s, e, _name, _body in _tool_use_blocks(text)))
+    text = _cut(text, _wrapper_spans(text))
     span = _wire_json_span(text)
     if span:
         text = text[:span[0]] + text[span[1]:]

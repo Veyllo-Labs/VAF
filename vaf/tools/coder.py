@@ -1614,25 +1614,39 @@ class CoderTUI:
 # Agentic Loop Controller
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _repeated_refusal(loop, fn_name: str, raw_args, refusal: str) -> bool:
-    """Count a call refused before dispatch; True when it is the same refused call the third
-    time in a row.
+# Consecutive refusals that end a coder run: the same refused call this many times in a row
+# (the bound the repeated write-error stop has), or refused calls of any kind this many times
+# in a row. The second one exists because varying the arguments slightly escapes the first:
+# measured, a model answering a different spelling of the same bare list used all 120
+# scripted requests of a run without a to-do list, where only Stop bounded it.
+_SAME_REFUSAL_LIMIT = 3
+_ANY_REFUSAL_LIMIT = 10
 
-    The same bound the repeated write-error stop applies (three identical errors in a row
-    end the run). The streak lives on the loop as ``refusal_streak`` and every call that
-    gets past the refusal resets it, so only consecutive refusals count. "The same call" is
-    the tool name, a hash of the raw argument text as the model sent it, and the refusal: a
-    hash reads the text as bytes and never walks a value, so a call nested too deep to walk
-    is keyed as safely as any other. Arguments that did not arrive as text (a provider that
-    hands over a decoded object) are keyed by the tool name and the refusal alone.
+
+def _repeated_refusal(loop, fn_name: str, raw_args, refusal: str) -> str | None:
+    """Count a call refused before dispatch; the reason to end the run, or None.
+
+    The streak lives on the loop as ``refusal_streak`` = (key of the last refused call,
+    how often that same call came in a row, how many refused calls of any kind came in a
+    row). Every call that gets past the refusal resets it to ``(None, 0, 0)``, so only
+    consecutive refusals count. "The same call" is the tool name, a hash of the raw
+    argument text as the model sent it, and the refusal: a hash reads the text as bytes and
+    never walks a value, so a call nested too deep to walk is keyed as safely as any other.
+    Arguments that did not arrive as text (a provider that hands over a decoded object) are
+    keyed by the tool name and the refusal alone.
     """
     digest = (hashlib.sha256(raw_args.encode("utf-8", "surrogatepass")).hexdigest()
               if isinstance(raw_args, str) else type(raw_args).__name__)
     key = f"{fn_name}:{digest}:{refusal[:200]}"
-    last, count = getattr(loop, "refusal_streak", (None, 0))
-    count = count + 1 if key == last else 1
-    loop.refusal_streak = (key, count)
-    return count >= 3
+    last, same, any_kind = getattr(loop, "refusal_streak", (None, 0, 0))
+    same = same + 1 if key == last else 1
+    any_kind += 1
+    loop.refusal_streak = (key, same, any_kind)
+    if same >= _SAME_REFUSAL_LIMIT:
+        return f"The model sent the same refused `{fn_name}` call {same} times in a row"
+    if any_kind >= _ANY_REFUSAL_LIMIT:
+        return f"The model's last {any_kind} tool calls were all refused before they could run"
+    return None
 
 
 _STATUS_TAG = "[VAF_CODING_AGENT_STATUS:"
@@ -5160,6 +5174,9 @@ Complete this task: "{task}"
         current_context_manager = current_state.context_manager
         history = current_state.history
         history_snapshot_len = len(history)
+        # The history a tool-call batch answers into (set once per batch, below). Bound here
+        # so the context switch can compare against it before the first batch exists.
+        _history_at_dispatch = None
 
         # Helper function to sync legacy variables
         def sync_legacy_vars():
@@ -5180,6 +5197,10 @@ Complete this task: "{task}"
             """
             nonlocal current_state, last_stable_state, context_states, _history_at_dispatch
 
+            # Whether the context being left holds the running batch's calls: only then does
+            # its rollback copy take over the batch. An earlier switch in the same batch has
+            # already moved `current_state` on, and its rollback copy owns none of the calls.
+            _owned_batch = current_state.history is _history_at_dispatch
             try:
                 # Save current state for rollback
                 last_stable_state = current_state.clone()
@@ -5232,10 +5253,12 @@ Complete this task: "{task}"
                 tui.append_stream(f"[ERROR] Context switch failed: {str(e)[:100]}")
                 current_state = last_stable_state
                 sync_legacy_vars()
-                # The rollback state is a copy (`clone()` copies the history list), so the
-                # list a running tool-call batch answers into is no longer the one sent. The
-                # copy holds the assistant message owning the batch, so answer into it.
-                _history_at_dispatch = history
+                # The rollback state is a copy (`clone()` copies the history list), so when the
+                # context left owned the running batch, the list it answers into is no longer
+                # the one sent. The copy holds the assistant message owning the batch, so
+                # answer into it.
+                if _owned_batch:
+                    _history_at_dispatch = history
 
                 try:
                     if lg:
@@ -9741,7 +9764,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                 context_states[current_state.phase] = current_state
                                 # Answered without reaching the refusal below, so this call
                                 # ends a run of refused calls like any other that gets past.
-                                loop.refusal_streak = (None, 0)
+                                loop.refusal_streak = (None, 0, 0)
                                 continue # Skip to next tool
                             else:
                                 fn_args = extracted_args
@@ -9797,18 +9820,18 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                     })
                     # A refused call never reaches the doom-loop signature below, and every
                     # reply resets the idle clock, so a model that sends it again and again
-                    # would be asked forever. The same refused call three times in a row ends
-                    # the run, the rule three identical write errors already follow; the run
-                    # still leaves through the common end below (final commit, summary).
-                    if _repeated_refusal(loop, fn_name, fn_args_str, _args_refusal):
+                    # would be asked forever. The same refused call three times in a row, or
+                    # ten refused calls of any kind in a row, end the run (`_repeated_refusal`);
+                    # the run still leaves through the common end below (final commit, summary).
+                    if (_why_stop := _repeated_refusal(loop, fn_name, fn_args_str, _args_refusal)):
                         _loop_stop_report = (
                             f"### ❌ Repeated Refused Call\n\n"
-                            f"The model sent the same refused `{fn_name}` call 3 times in a "
-                            f"row:\n\n{_args_refusal}\n\nStopped to prevent an endless loop."
+                            f"{_why_stop}. The last refusal:\n\n{_args_refusal}\n\n"
+                            f"Stopped to prevent an endless loop."
                         )
                         break
                     continue
-                loop.refusal_streak = (None, 0)
+                loop.refusal_streak = (None, 0, 0)
 
                 # Reset consecutive_task_done counter if a different tool is called
                 if fn_name != "task_done" and hasattr(loop, 'consecutive_task_done'):
@@ -11656,6 +11679,33 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
         files_created = _rescue_edited_outcome(files_created, base_dir,
                                                _diff_baseline_sha)
 
+        # Check task status for Main Agent. Built once for both outcomes below: a run that
+        # stops before its first file still has a plan, and the caller needs its open tasks
+        # to continue.
+        task_status = ""
+        has_incomplete_tasks = False
+        failed_list = []
+        if task_mgr and task_mgr.todos:
+            completed_count = len([t for t in task_mgr.todos if t["status"] == "completed"])
+            total_count = len(task_mgr.todos)
+            failed_list = task_mgr.failed_tasks()
+            remaining = [t["task"] for t in task_mgr.todos if t["status"] not in ("completed", "failed")]
+            task_status = f"\n\n**📋 Task Status**: {completed_count}/{total_count} tasks completed"
+            if failed_list:
+                has_incomplete_tasks = True
+                task_status += f"\n**❌ Failed tasks ({len(failed_list)})** (goal verification failed after retries):\n"
+                task_status += "\n".join(
+                    f"- {t['task']}: {(t.get('result') or 'failed')[:120]}" for t in failed_list[:5]
+                )
+            if remaining:
+                has_incomplete_tasks = True
+                task_status += f"\n**⚠️ Remaining tasks ({len(remaining)})**:\n" + "\n".join(f"- {t}" for t in remaining[:5])
+                if len(remaining) > 5:
+                    task_status += f"\n- ... and {len(remaining) - 5} more"
+            if failed_list or remaining:
+                task_status += f"\n\n**💡 To complete all tasks, continue with:**\n"
+                task_status += f"`coding_agent(task=\"complete all remaining tasks\", project_path=\"{base_dir}\")`"
+
         if files_created:
             # ═══════════════════════════════════════════════════════════════
             # CONTENT_ONLY MODE: Return actual file content instead of summary
@@ -11721,31 +11771,6 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         placeholder_warning += f"- {p}\n"
                 placeholder_warning += f"\n*Total: {placeholder_check['total_placeholders']} placeholders may need customization*"
             
-            # Check task status for Main Agent
-            task_status = ""
-            has_incomplete_tasks = False
-            failed_list = []
-            if task_mgr and task_mgr.todos:
-                completed_count = len([t for t in task_mgr.todos if t["status"] == "completed"])
-                total_count = len(task_mgr.todos)
-                failed_list = task_mgr.failed_tasks()
-                remaining = [t["task"] for t in task_mgr.todos if t["status"] not in ("completed", "failed")]
-                task_status = f"\n\n**📋 Task Status**: {completed_count}/{total_count} tasks completed"
-                if failed_list:
-                    has_incomplete_tasks = True
-                    task_status += f"\n**❌ Failed tasks ({len(failed_list)})** (goal verification failed after retries):\n"
-                    task_status += "\n".join(
-                        f"- {t['task']}: {(t.get('result') or 'failed')[:120]}" for t in failed_list[:5]
-                    )
-                if remaining:
-                    has_incomplete_tasks = True
-                    task_status += f"\n**⚠️ Remaining tasks ({len(remaining)})**:\n" + "\n".join(f"- {t}" for t in remaining[:5])
-                    if len(remaining) > 5:
-                        task_status += f"\n- ... and {len(remaining) - 5} more"
-                if failed_list or remaining:
-                    task_status += f"\n\n**💡 To complete all tasks, continue with:**\n"
-                    task_status += f"`coding_agent(task=\"complete all remaining tasks\", project_path=\"{base_dir}\")`"
-
             # Determine completion status
             # EXPLICIT SIGNAL for Main Agent: [VAF_CODING_AGENT_STATUS]
             if has_incomplete_tasks or _loop_stop_report:
@@ -11795,7 +11820,8 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                 f"**Full Path**: `{base_dir}`\n"
                 f"{folder_status}\n"
                 f"{git_line}\n"
-                f"No files were created in {loop.loop_count} loops.\n\n"
+                f"No files were created in {loop.loop_count} loops."
+                f"{task_status}\n\n"
                 f"**💡 Suggestion**: Try a more specific task description.\n\n"
                 f"**🔧 To retry, use:**\n"
                 f"`coding_agent(task=\"your task\", project_path=\"{base_dir}\")`"

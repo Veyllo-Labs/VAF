@@ -320,13 +320,16 @@ any lane, including a messaging channel. Now:
    `decode_arguments` about the arguments it will actually use, the `set_todos` list fix
    included: text that is not an object, or an object nested deeper than 100 levels, is
    answered with the funnel's refusal and never run, where such a value used to end the
-   whole coder run. The same refused call three times in a row (same tool, same raw
-   argument text by hash, same refusal) ends the run (`_repeated_refusal`, the rule three
-   identical write errors follow), because a refused call never reaches the doom-loop
-   detector and every reply resets the idle clock. Both stops leave the loop through the
-   common end, so the work is committed and the outcome carries the project summary and the
-   open tasks after the stop's report, which comes first and keeps the run a failure
-   (`_stopped_outcome`). Every tool answer of one batch, early refusals included, goes into
+   whole coder run. Two bounds end the run, because a refused call never reaches the
+   doom-loop detector and every reply resets the idle clock (`_repeated_refusal`): the same
+   refused call three times in a row (same tool, same raw argument text by hash, same
+   refusal; the rule three identical write errors follow), and refused calls of any kind ten
+   times in a row, since varying the arguments slightly escapes the first (measured: without
+   a to-do list, all 120 scripted requests of a run were used). Any call that gets past the
+   refusal resets both. These stops and the write-error stops leave the loop through the
+   common end, so the work is committed and the outcome carries the project folder, the
+   files the run created, if any, and the open tasks after the stop's report, which comes
+   first and keeps the run a failure (`_stopped_outcome`). Every tool answer of one batch, early refusals included, goes into
    the history that holds the assistant message owning the calls, taken once before the
    batch (and again after a failed context switch, whose rollback state is a copy):
    `set_todos` switches `history` to a fresh task context, and an answer that landed there

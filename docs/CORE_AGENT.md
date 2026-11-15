@@ -206,8 +206,9 @@ the answer and returns it:
   `[ASYNC_ACK]` before the head was taken off is read without it, and one with a leading
   `[SYSTEM_LOG_ONLY]` counts as a failed turn. VAF's own readers and hosts do exactly this.
 
-There is no public `stop()`; a running turn is stopped via
-`TaskQueue().request_stop(session_id)` (polled between chunks and tools).
+A running turn is stopped with `vaf.stop_session(session_id)` (underneath,
+`TaskQueue().request_stop`). The engine checks at the loop top, between stream chunks, before
+each tool and after a tool round; a stop in the stream runs none of that round's tool calls.
 
 ## complete
 

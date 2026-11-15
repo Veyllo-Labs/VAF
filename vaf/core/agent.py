@@ -1713,6 +1713,11 @@ API_ERROR_REFLEX_NOTES = {
 REFLEX_WITHHELD_RESULT = (
     "[Result withheld: this tool ran, but the AI provider refused the request that carried "
     "its result. Do not run it again for that reason.]")
+# A stop seen before a tool of a committed batch answers that call and every later one with
+# this, so the stored history stays a valid tool sequence. No "error" or "failed" in it: the
+# redundant-call check reads those words as a failure.
+STOPPED_CALL_RESULT = (
+    "[Not run: the user stopped the turn before this call. Do not report it as done.]")
 
 
 def _tool_error_note_parts(name: str) -> tuple:
@@ -11804,8 +11809,10 @@ class Agent:
                     # tool_calls_detected only below, and a round that streamed nothing but
                     # tool-call frames paid for a second, non-streamed request whose JSON
                     # frames reached the person as text.
+                    # Not after a stop either: the stream is empty because the user ended it,
+                    # and asking again would answer after the stop notice.
                     if (not full_response and not tool_calls_detected and not tool_call_accumulator
-                            and not _round_failure):
+                            and not _round_failure and not _generation_stopped):
                         try:
                             fallback_chunks = list(self.api_backend.chat_completion(
                                 messages=prepared_messages,
@@ -11926,35 +11933,39 @@ class Agent:
                                 append_domain_log("backend", f"round_failed: compression failed: {e}")
                         return _end_turn_without_answer(_round_failure, streamed=bool(stream_callback))
 
-                    # POST-LOOP: Convert accumulator to list
-                    for idx, tc_data in sorted(tool_call_accumulator.items()):
-                        # Ensure ID and Type
-                        if not tc_data.get("id"): 
-                            tc_data["id"] = _synth_tool_call_id()
-                        if not tc_data.get("type"): 
-                            tc_data["type"] = "function"
-                            
-                        tool_calls_detected.append(tc_data)
-                    
-                    # Validate tool calls (guard against missing tool names)
-                    if tool_calls_detected:
-                        valid_tool_calls = []
-                        for tc in tool_calls_detected:
-                            func = tc.get("function") or {}
-                            name = func.get("name") or tc.get("name")
-                            if name:
-                                func["name"] = name
-                                tc["function"] = func
-                                valid_tool_calls.append(tc)
-                        if len(valid_tool_calls) != len(tool_calls_detected):
-                            UI.event("System", "API returned tool calls with missing names. Dropping invalid entries.", style="warning")
-                        tool_calls_detected = valid_tool_calls
-                        if not tool_calls_detected:
-                            err_msg = "[Error] API returned tool calls without a function name. Please retry."
-                            UI.error(err_msg)
-                            if stream_callback:
-                                stream_callback(err_msg)
-                            return _end_turn_without_answer(err_msg, streamed=bool(stream_callback))
+                    # A stopped round's calls are a stream the user cut off: the stop exit after
+                    # the stream drops them, so they are neither converted nor checked here (a
+                    # stop before a call's name frame is a stop, not a backend failure).
+                    if not _generation_stopped:
+                        # POST-LOOP: Convert accumulator to list
+                        for idx, tc_data in sorted(tool_call_accumulator.items()):
+                            # Ensure ID and Type
+                            if not tc_data.get("id"):
+                                tc_data["id"] = _synth_tool_call_id()
+                            if not tc_data.get("type"):
+                                tc_data["type"] = "function"
+
+                            tool_calls_detected.append(tc_data)
+
+                        # Validate tool calls (guard against missing tool names)
+                        if tool_calls_detected:
+                            valid_tool_calls = []
+                            for tc in tool_calls_detected:
+                                func = tc.get("function") or {}
+                                name = func.get("name") or tc.get("name")
+                                if name:
+                                    func["name"] = name
+                                    tc["function"] = func
+                                    valid_tool_calls.append(tc)
+                            if len(valid_tool_calls) != len(tool_calls_detected):
+                                UI.event("System", "API returned tool calls with missing names. Dropping invalid entries.", style="warning")
+                            tool_calls_detected = valid_tool_calls
+                            if not tool_calls_detected:
+                                err_msg = "[Error] API returned tool calls without a function name. Please retry."
+                                UI.error(err_msg)
+                                if stream_callback:
+                                    stream_callback(err_msg)
+                                return _end_turn_without_answer(err_msg, streamed=bool(stream_callback))
 
                     if stream_callback: stream_callback("\n")
                     
@@ -12533,6 +12544,23 @@ class Agent:
             except Exception:
                 pass
 
+            # A stop seen in the stream (any of the three lanes) ends the round HERE, before
+            # any guard, parser or tool. The stream was cut, so its tool calls, streamed or
+            # written as text, are not what the model would have sent: none is committed and
+            # none runs, the rule a failed round follows. No guard judges the stopped text
+            # either: a correction or re-run would ask the model again after the stop.
+            if _generation_stopped:
+                UI.event("System", "Generation was stopped - skipping retry", style="info")
+                # Add partial content to history if any
+                if full_content.strip() or full_reasoning.strip():
+                    self.history.append({
+                        "role": "assistant",
+                        "content": (full_content.strip() or "[Generation stopped by user]")
+                    })
+                # The return is the cleaned text after the turn's earlier answers; the commit
+                # above stays what the round wrote, the record of what the user stopped.
+                return _end_turn_on_stop(full_content)
+
             # 0. MODEL HEALTH (vaf/core/model_health.py): is the model stuck in this chat?
             # Read on the user's own turn (`_model_health_begin` decides the scope) for a
             # generation that put an answer on the screen, called no tool and wrote none as
@@ -12545,7 +12573,7 @@ class Agent:
             _mh_verdict = None
             _mh_logged = False
             _mh_skip_grounding = False
-            if (getattr(self, "_model_health_turn", None) is not None and not _generation_stopped
+            if (getattr(self, "_model_health_turn", None) is not None
                     and not streaming_tools and not tool_calls_detected and full_content.strip()
                     and self._guard_keeps_answer(full_content)
                     and not self._turn_ran_progress_tool
@@ -13020,7 +13048,7 @@ class Agent:
                 self._subagent_round = _uuid.uuid4().hex[:8]
                 self._round_spawns = {}
 
-                for tc in tool_calls_detected:
+                for _tc_i, tc in enumerate(tool_calls_detected):
                     function_name = tc['function']['name']
 
                     # THINKING READ-CAP: in a background thinking run, block a read/gather tool called too
@@ -13058,6 +13086,20 @@ class Agent:
                             _stq = _STQ()
                             if _stq.should_stop(_stop_sid):
                                 _stq.clear_stop(_stop_sid)
+                                # The batch's tool_calls message is committed: this call and
+                                # every later one get their answer first, then the notes of
+                                # the calls that ran, then the marker (the shape a closing
+                                # tool leaves), so the stored history stays a valid tool
+                                # sequence.
+                                for _nr in tool_calls_detected[_tc_i:]:
+                                    self.history.append({
+                                        "role": "tool",
+                                        "tool_call_id": _nr['id'],
+                                        "name": _nr['function']['name'],
+                                        "content": STOPPED_CALL_RESULT,
+                                    })
+                                for _ptm in _post_tc_messages:
+                                    self.history.append(_ptm)
                                 _sm = "[Generation stopped by user]"
                                 self.history.append({"role": "assistant", "content": _sm})
                                 return _end_turn_on_stop("")
@@ -13839,19 +13881,8 @@ class Agent:
                         has_final_answer = True
 
             # Empty Response Handler: No answer for the user (thinking only counts as empty)
-            # NO RETRY LIMITS - will loop until we get a response
-            # SKIP if user stopped generation manually
-            if _generation_stopped:
-                UI.event("System", "Generation was stopped - skipping retry", style="info")
-                # Add partial content to history if any
-                if full_content.strip() or full_reasoning.strip():
-                    self.history.append({
-                        "role": "assistant",
-                        "content": (full_content.strip() or "[Generation stopped by user]")
-                    })
-                # The return is the cleaned text after the turn's earlier answers; the commit
-                # above stays what the round wrote, the record of what the user stopped.
-                return _end_turn_on_stop(full_content)
+            # NO RETRY LIMITS - will loop until we get a response. A stopped round never gets
+            # here: it ended right after its stream.
 
             # Skip empty-response filter during compaction (every ~15 msgs); compaction reply is short (NO_REPLY / MEMORY:)
             try:

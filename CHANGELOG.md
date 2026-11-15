@@ -74,6 +74,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **Stop now stops a tool the model is still writing.** Pressing Stop while the reply was
+  streaming used to let a tool call that had already arrived run anyway, after which VAF asked
+  the model again. The call is now dropped and the turn ends. A stop between two tools records
+  the calls that did not run, so the chat history stays complete.
 - A tool call whose arguments are nested thousands of levels deep no longer ends the turn with
   an error; it is answered like any other unreadable arguments, and the tool does not run.
 - **A reply that is only a code block is no longer taken off the screen and asked again**, and

@@ -212,7 +212,7 @@ grep the symbol names to find them.
 | 3 | Record input | the user message is appended; the intent was recorded in phase 1 |
 | 4 | Tool router (not asked while the agent has an allowed set: the set is the turn's tool set and nothing rides along, see `set_allowed_tools`). The routed set can grow during the turn: a tool a call's answer advises (`vaf.advise_tools`) joins it for the rest of the turn, and `_select_turn_tools` clears that advice when the next turn is routed | `_select_turn_tools`, `_route_tools` |
 | 5 | Adaptive temperature | `analyze_intent` |
-| 6 | LLM call (streaming) + parse tool calls | `_prepare_messages` runs on ALL THREE lanes (api_backend / local llama-server / llama-cpp-python in-process) before the call - it strips dangling `tool_calls`, drops orphaned `role:tool` messages, converts images to text and downgrades synthetic tool ids; the memory block is spliced into the first system message right after. The server lane re-prepares per retry attempt, because its 400/500 recovery rebinds the history between attempts. Then `api_backend.chat_completion`, `_parse_qwen_tool_calls`, `_parse_gemma4_tool_calls` |
+| 6 | LLM call (streaming) + parse tool calls | `_prepare_messages` runs on ALL THREE lanes (api_backend / local llama-server / llama-cpp-python in-process) before the call - it strips dangling `tool_calls`, drops orphaned `role:tool` messages, converts images to text and downgrades synthetic tool ids; the memory block is spliced into the first system message right after. The server lane re-prepares per retry attempt, because its 400/500 recovery rebinds the history between attempts. Then `api_backend.chat_completion`, `_parse_qwen_tool_calls`, `_parse_gemma4_tool_calls`. A stop seen in the stream ends the round right after the stream, on all three lanes, before any parsing, guard or tool: its calls, streamed or written as text, are never committed and never run (the stop paragraph below). The API lane sends no non-streamed fallback for a stopped round and does not check the cut-off calls' names |
 | 6b | Recover tool calls leaked as TEXT | `vaf/core/tool_call_recovery.py` - see below |
 | 7 | Guardrails | model health first (a stuck model is re-run once with a tool call forced, then gets an honest note; see [Model health](#model-health-a-stuck-model-or-a-normal-error)), then result grounding (the last unsupported verdict of a reply chain appends a fixed unconfirmed-claim note instead of another model rewrite); team-await note (a reply claiming completion while a sub-agent runs is KEPT - never erased - and a history note keeps the next turn honest); outbound messenger sends (normal headless path AND runner drain) apply the shared `_prepare_channel_outbound` chain incl. a conservative untagged-CoT prefix guard, with the drain text taken from its stored copy of the stream (the return is a status) |
 | 8 | Tool dispatch. What the answer advises (`ToolCallOutcome.advised_tools`) is added to the turn's tool set, never to the history, and put back after the two mid-turn narrowings (see [TOOL_ROUTER_ARCHITECTURE.md](TOOL_ROUTER_ARCHITECTURE.md#a-tool-result-that-advises-a-tool)) | `execute_tool`, `_take_tool_advice`, `_pin_advised_tools`, `_anti_spin_step` |
@@ -601,6 +601,21 @@ still under correction is not returned, as in the failure closure). The return c
 marker exactly when the stopped round wrote no answer text (nothing, or reasoning only), and
 that is what the queue runner's stop branch looks for. A mid-stream stop used to return the raw
 text, so a stop during the thinking returned the thinking.
+A stop seen in the stream ends the round right after the stream, on every lane, before the
+model-health check, result grounding, the tool-call parsers and the tool section. The cut
+stream's calls are not what the model would have sent (a later call missing, arguments cut
+mid-JSON, an Anthropic round without its signed blocks), so the round commits its text only,
+the rule a failed round follows; a call written as text is committed as that raw text and
+never runs. It used to reach that exit only without a tool call: a call that had already
+streamed ran, and the turn asked the model again. The stop before a tool comes after the
+batch's `tool_calls` message is committed, so it answers that call and every later call of
+the batch with `STOPPED_CALL_RESULT` (calls that ran keep their real results), then the
+deferred notes of the calls that ran, then the marker: the shape `_turn_closing` leaves, so
+the stored history stays a valid tool sequence (Rule 4.1). Named boundaries: a retry's wait
+(1-3 s) ends in `continue`, and the loop top sees a stop after it; the emergency loop breaker
+still returns with the batch's later calls unanswered, and the local server's request retries
+do not check a stop (both measured, separate fixes). Guard:
+`tests/test_stop_after_tool_call.py`, with a seeded fuzz over where the stop lands.
 The emergency loop breaker (ten tool calls in under five seconds) commits a note that names
 no internals. The empty retry's hard limit streams "Model Not Responding" and returns it
 uncommitted; an API provider that keeps answering empty never reaches it (measured: it ends

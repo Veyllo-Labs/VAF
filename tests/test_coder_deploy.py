@@ -261,3 +261,19 @@ def test_a_folder_with_whitespace_at_its_edge_is_refused(known, ftp_known, given
     ftp_known.add("ftps://example.org")
     d, err = coder._deploy_target(given, "s")
     assert d is None and "must not start or end with a space" in err, (given, err)
+
+
+@pytest.mark.parametrize("given", [
+    "deploy@example.org:/var/www/\ud800site",
+    "ftps://web@example.org/htdocs/\udfff",
+])
+def test_a_folder_that_is_not_text_is_refused(known, ftp_known, given):
+    """A lone surrogate is a str but no text: `--deploy-to` and the continuation call could
+    not carry it to the next check.
+    MUTATION: drop the encoding check - red."""
+    known.add("deploy@example.org")
+    ftp_known.add("ftps://example.org")
+    d, err = coder._deploy_target(given, "s")
+    assert d is None and "not valid text" in err, (given, err)
+    ok, err = coder._deploy_target("deploy@example.org:/var/www/Übung €", "s")
+    assert err is None and ok.root == "/var/www/Übung €"

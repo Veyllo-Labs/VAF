@@ -33,7 +33,8 @@ import pytest
 
 from vaf.core.persistence import PersistenceManager, ProjectState, Task
 from vaf.tools.coder import (CodingAgentTool, TaskManager, _continuation_call,
-                             _failed_tasks_note, _nothing_to_resume, _resume_requested)
+                             _failed_tasks_note, _nothing_to_resume, _resume_requested,
+                             _stored_instructions_message)
 
 REPO = Path(__file__).resolve().parent.parent
 ORIGINAL = 'Build a "Todo" app with login.\nUse SQLite, one file per page.'
@@ -760,24 +761,34 @@ def test_every_fresh_task_context_carries_the_stored_instructions():
     and a resumed run. Before, only the switch read them, and finishing the task before an
     audit fix task built the fix task's context without its findings (the task_done path
     calls the constructor directly).
+    The message itself is `_stored_instructions_message`, unit-tested below; this pins that
+    the constructor appends it for its own index on every build.
     MUTATION: move the injection back into switch_to_task_context - red.
-    MUTATION: drop the bound on the stored text - red.
+    MUTATION: guard the append with `if False:` - red.
+    MUTATION: ask the helper for task 0 instead of task_idx - red.
     MUTATION: let the audit round append its findings to the history again instead of
     storing them - red."""
     tree = _run_tree()
     build = _nested(tree, "create_fresh_context_for_task")
-    asked = _calls(build, "task_mgr.task_instructions")
-    assert len(asked) == 1 and ast.unparse(asked[0].args[0]) == "task_idx"
-    assert _calls(build, "_bounded_instructions")
-    appended = _calls(build, "task_history.append")
-    assert len(appended) == 1 and appended[0].lineno > asked[0].lineno
-    returned = [n for n in ast.walk(build) if isinstance(n, ast.Return)]
-    assert all(r.lineno > appended[0].lineno for r in returned)
+    asked = _calls(build, "_stored_instructions_message")
+    assert len(asked) == 1
+    assert [ast.unparse(a) for a in asked[0].args] == ["task_mgr", "task_idx"]
+    taken = [n for n in ast.walk(build) if isinstance(n, ast.Assign) and asked[0] in ast.walk(n)]
+    assert len(taken) == 1 and [ast.unparse(t) for t in taken[0].targets] == ["_instructions"]
+    guard = [n for n in ast.walk(build) if isinstance(n, ast.If)
+             and _mentions(n.test) == {"_instructions"}
+             and isinstance(n.test, ast.Compare) and isinstance(n.test.ops[0], ast.IsNot)]
+    assert len(guard) == 1
+    assert [ast.unparse(s) for s in guard[0].body] == ["task_history.append(_instructions)"]
+    # In the constructor's own body, after the history is built and before it is returned.
+    assert guard[0] in build.body
+    history = next(n for n in build.body if isinstance(n, ast.Assign)
+                   and ast.unparse(n.targets[0]) == "task_history")
+    assert history.lineno < taken[0].lineno < guard[0].lineno
+    assert all(r.lineno > guard[0].lineno for r in ast.walk(build) if isinstance(r, ast.Return))
     # No second copy anywhere else in the run.
-    assert len(_calls(tree, "task_mgr.task_instructions")) == 1
-    # The paths that build a context: the switch and the task_done/stuck/auto paths all call
-    # the constructor, so all of them get the instructions.
-    assert len(_calls(tree, "create_fresh_context_for_task")) >= 5
+    assert len(_calls(tree, "_stored_instructions_message")) == 1
+    assert not _calls(tree, "task_mgr.task_instructions")
     audit = _nested(tree, "_maybe_start_audit_round")
     added = _calls(audit, "task_mgr.append_task")
     assert len(added) == 1
@@ -800,14 +811,80 @@ def test_finishing_the_task_before_a_fix_task_hands_on_its_findings(tmp_path):
     again.complete_current_task("done")
     assert again.current_task_idx == fix
     assert again.task_instructions(again.current_task_idx) == "CODE AUDIT ROUND 1 - fix b.py line 9"
-    # The task_done path passes exactly that index to the constructor.
+    message = _stored_instructions_message(again, again.current_task_idx)
+    assert message == {"role": "system", "content": "CODE AUDIT ROUND 1 - fix b.py line 9"}
+
+
+def _parents(tree) -> dict:
+    return {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+
+
+def _index_source(call, parents) -> str:
+    """Where a constructor call's index comes from: "cursor" (`task_mgr.current_task_idx`, or
+    a name the statement just before the call's statement in its block set from it), "zero
+    under the guard" (literal 0 inside `if task_mgr.current_task_idx == 0`), "switch
+    parameter" (the switch's own `task_idx`), or what it is otherwise."""
+    arg = call.args[0]
+    text = ast.unparse(arg)
+    if text == "task_mgr.current_task_idx":
+        return "cursor"
+    node = call
+    while node in parents and not isinstance(node, ast.stmt):
+        node = parents[node]
+    stmt = node
+    holder = parents[stmt]
+    block = next(getattr(holder, f) for f in ("body", "orelse", "finalbody")
+                 if stmt in (getattr(holder, f, None) or []))
+    if isinstance(arg, ast.Name):
+        fn = holder
+        while not isinstance(fn, ast.FunctionDef):
+            fn = parents[fn]
+        if fn.name == "switch_to_task_context" and arg.id == fn.args.args[0].arg:
+            return "switch parameter"
+        before = block[:block.index(stmt)]
+        sets = [s for s in before if isinstance(s, ast.Assign)
+                and [ast.unparse(t) for t in s.targets] == [arg.id]]
+        if sets and ast.unparse(sets[-1].value) == "task_mgr.current_task_idx":
+            return "cursor"
+        return f"name {arg.id} from {ast.unparse(sets[-1].value) if sets else 'elsewhere'}"
+    if isinstance(arg, ast.Constant) and arg.value == 0:
+        node = stmt
+        while node in parents:
+            node = parents[node]
+            if isinstance(node, ast.If) and ast.unparse(node.test) == "task_mgr.current_task_idx == 0":
+                return "zero under the guard"
+    return text
+
+
+def test_every_context_is_built_for_the_task_the_plan_stands_on():
+    """Each call of the constructor names the task whose context it builds, and the stored
+    instructions read are that task's: the task_done, stuck and auto paths ask the cursor, the
+    first-task path passes 0 only where the cursor is 0, and the switch passes the index its
+    own caller chose.
+    MUTATION: the task_done path at the next-task build passes 0 instead of task_idx - red."""
     tree = _run_tree()
-    built = [c for c in _calls(tree, "create_fresh_context_for_task")
-             if ast.unparse(c.args[0]) == "task_idx"]
-    sets = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)
-            and ast.unparse(n.targets[0]) == "task_idx"
-            and ast.unparse(n.value) == "task_mgr.current_task_idx"]
-    assert built and sets
+    parents = _parents(tree)
+    calls = _calls(tree, "create_fresh_context_for_task")
+    assert len(calls) == 5
+    sources = sorted(_index_source(c, parents) for c in calls)
+    assert sources == ["cursor", "cursor", "cursor", "switch parameter",
+                       "zero under the guard"], sources
+
+
+def test_the_stored_instructions_message():
+    """MUTATION: return the message with empty content - red. MUTATION: answer a message for
+    a task without instructions - red. MUTATION: drop the bound - red."""
+    from vaf.tools.coder import _INSTRUCTIONS_MAX_CHARS
+    tm = SimpleNamespace(task_instructions=lambda idx: {
+        0: "fix a.py line 3", 1: "", 2: "   \n", 3: "z" * (_INSTRUCTIONS_MAX_CHARS + 10)}.get(idx, ""))
+    assert _stored_instructions_message(tm, 0) == {"role": "system", "content": "fix a.py line 3"}
+    assert _stored_instructions_message(tm, 1) is None
+    assert _stored_instructions_message(tm, 2) is None
+    assert _stored_instructions_message(tm, 9) is None
+    long = _stored_instructions_message(tm, 3)
+    assert long["role"] == "system"
+    assert long["content"].endswith("[... cut: 10 more characters of the stored instructions]")
+    assert len(long["content"]) < _INSTRUCTIONS_MAX_CHARS + 100
 
 
 def test_stored_instructions_are_bounded_where_they_enter_the_context():

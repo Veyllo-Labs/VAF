@@ -3352,6 +3352,16 @@ def _bounded_instructions(text: str) -> str:
               "stored instructions]")
 
 
+def _stored_instructions_message(task_mgr, task_idx: int) -> Optional[Dict[str, str]]:
+    """The system message that carries task ``task_idx``'s stored instructions (a code audit
+    fix task's findings) into a fresh context of it, bounded, or None when the task has none.
+    The one constructor of task contexts appends it, so every path that builds one gets it."""
+    text = _bounded_instructions(task_mgr.task_instructions(task_idx))
+    if not text.strip():
+        return None
+    return {"role": "system", "content": text}
+
+
 # The failed-task note at a resumed start is sent with every request of the task, and the
 # plan it lists is project content: bounded like the answer's own lists.
 _FAILED_NOTE_TASKS = 10
@@ -3433,6 +3443,12 @@ def _deploy_folder_refusal(folder: str, root: str) -> Optional[str]:
         if text[:1].isspace() or text[-1:].isspace():
             return ("deploy_to: the folder must not start or end with a space or a line break; "
                     "write the folder exactly")
+    # A lone surrogate is a str but no text: neither `--deploy-to` nor the continuation call
+    # could carry it to the next check.
+    try:
+        folder.encode("utf-8")
+    except UnicodeEncodeError:
+        return "deploy_to: the folder is not valid text; write the folder exactly"
     return None
 
 
@@ -5763,9 +5779,9 @@ Task {task_idx + 1}: {current_task}
             # The task's stored instructions (a code audit fix task's findings) belong to every
             # fresh context of it, whichever path builds it: the switch, the next task after a
             # task_done, a retry, a resumed run.
-            _instructions = _bounded_instructions(task_mgr.task_instructions(task_idx))
-            if _instructions:
-                task_history.append({"role": "system", "content": _instructions})
+            _instructions = _stored_instructions_message(task_mgr, task_idx)
+            if _instructions is not None:
+                task_history.append(_instructions)
 
             # Store in task contexts (handled by switch_to_task_context now)
             # No longer needed - context_states manages this

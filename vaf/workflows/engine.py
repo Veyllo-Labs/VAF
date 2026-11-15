@@ -127,6 +127,15 @@ def _infer_step_args(tool_name: str, value: str) -> Dict[str, Any]:
     return args
 
 
+class StepArgsRefused(Exception):
+    """A step's resolved input is a JSON object nested too deeply to be its arguments.
+
+    ``str()`` is the refusal text (`tool_dispatch.too_deep_refusal`). The engine fails that
+    step on it, and a planner refuses the step before it runs. Deliberately not a
+    ``ValueError``, so no existing ``except ValueError`` catches it on the way.
+    """
+
+
 def build_step_args(tool_name: str, input_template: str, args_template: Optional[Dict[str, Any]],
                     resolve: Callable[[str], str],
                     trace: Optional[Callable[[str, str, str], None]] = None) -> Dict[str, Any]:
@@ -146,6 +155,15 @@ def build_step_args(tool_name: str, input_template: str, args_template: Optional
       template) are unchanged; their input stays what it always was, a display label.
     - otherwise the resolved input: a JSON object is the args, any other text goes into
       the tool's primary parameter.
+
+    The resolved input is decoded with `tool_dispatch.decode_arguments`, the funnel's own
+    decoder. An object nested deeper than `MAX_ARGUMENT_DEPTH` levels, text too deep for the
+    decoder at all included, raises `StepArgsRefused` with the funnel's depth refusal; text
+    that is not valid JSON, an integer past Python's digit limit included, is the single
+    argument. The input usually arrives through a `{placeholder}` holding a fetched page or
+    an API answer, and such text used to raise `RecursionError` or `ValueError` out of
+    `WorkflowEngine.execute`, which ended the whole run with no result and no
+    `optional`/`on_failure` handling.
     """
     if args_template is not None:
         args: Dict[str, Any] = {}
@@ -167,13 +185,14 @@ def build_step_args(tool_name: str, input_template: str, args_template: Optional
     resolved_input = resolve(input_template)
     text = resolved_input.strip()
     if text.startswith("{") and text.endswith("}"):
-        import json
-        try:
-            parsed = json.loads(resolved_input)
-            if isinstance(parsed, dict):
-                return parsed
-        except json.JSONDecodeError:
-            pass  # not valid JSON: the text is the step's single argument
+        from vaf.core.tool_dispatch import decode_arguments, too_deep_refusal
+        parsed, refusal = decode_arguments(tool_name, text)
+        if refusal is None:
+            return parsed
+        if refusal == too_deep_refusal(tool_name):
+            raise StepArgsRefused(refusal)
+        # Not valid JSON (an integer past the decoder's digit limit included): the text is
+        # the step's single argument.
     return _infer_step_args(tool_name, resolved_input)
 
 
@@ -930,15 +949,19 @@ class WorkflowEngine:
         # list. `dict(<list>)` raises "dictionary update sequence element #0 has length N;
         # 2 is required" and aborts the whole workflow — coerce defensively so a malformed
         # value degrades to "missing variable" (a clear per-step error) instead of a crash.
+        # A string is decoded like a step's arguments (`decode_arguments`): one that is not a
+        # JSON object, or nests deeper than `MAX_ARGUMENT_DEPTH` levels, is `{}`: the same
+        # limit a step's arguments meet, and text too deep to decode at all is `{}` too.
+        # The coerced mapping replaces `variables`, because later readers (the anchoring
+        # before every step, the pause record, the debug event) read it, and a string there
+        # failed every step with "'str' object has no attribute 'items'".
         _vars = variables or {}
         if isinstance(_vars, str):
-            try:
-                import json as _json
-                _vars = _json.loads(_vars)
-            except Exception:
-                _vars = {}
+            from vaf.core.tool_dispatch import decode_arguments
+            _vars, _ = decode_arguments("workflow variables", _vars)
         if not isinstance(_vars, dict):
             _vars = {}
+        variables = _vars
         outputs: Dict[str, Any] = dict(_vars)
         # Merge defaults into outputs if not already present
         for key, value in self._workflow_defaults.items():
@@ -1200,9 +1223,10 @@ class WorkflowEngine:
                     lambda text: self._resolve_template(text, outputs, defaults),
                     trace=_trace,
                 )
-            except KeyError as e:
+            except (KeyError, StepArgsRefused) as e:
+                # A refused input fails this step only, so optional/on_failure still apply.
                 step.status = StepStatus.FAILED
-                step.error = f"Missing variable: {e}"
+                step.error = str(e) if isinstance(e, StepArgsRefused) else f"Missing variable: {e}"
                 error = step.error
                 UI.error(f"  → {step.error}")
                 if stop_on_error and not step.optional and not step.on_failure:

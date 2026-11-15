@@ -258,7 +258,13 @@ def repair_arguments(tool: Any, args: dict, *, tool_name: str,
 MAX_ARGUMENT_DEPTH = 100
 
 
-def _too_deep(name: str) -> str:
+def too_deep_refusal(name: str) -> str:
+    """The refusal for a call whose arguments nest deeper than `MAX_ARGUMENT_DEPTH` levels.
+
+    Public because a caller of `decode_arguments` may need to tell this refusal from the
+    others: the workflow engine fails a step on it, while text that is not valid JSON is the
+    step's single argument. Compare the refusal against this function's result.
+    """
     return (f"Tool Error: the arguments of this '{name}' call are nested deeper than "
             f"{MAX_ARGUMENT_DEPTH} levels, so nothing was run. Call it again with flatter "
             "arguments.")
@@ -296,7 +302,7 @@ def decode_arguments(name: str, raw: Any) -> tuple[dict, str | None]:
         return {}, None
     if isinstance(raw, dict):
         if nesting_depth(raw, MAX_ARGUMENT_DEPTH) > MAX_ARGUMENT_DEPTH:
-            return {}, _too_deep(name)
+            return {}, too_deep_refusal(name)
         return raw, None
     if isinstance(raw, str):
         text = raw.strip()
@@ -305,7 +311,7 @@ def decode_arguments(name: str, raw: Any) -> tuple[dict, str | None]:
         try:
             value = json.loads(text)
         except RecursionError:
-            return {}, _too_deep(name)
+            return {}, too_deep_refusal(name)
         except ValueError as exc:
             return {}, (f"Tool Error: the arguments of this '{name}' call are not valid JSON "
                         f"({exc}), so nothing was run. Call it again with a JSON object whose "
@@ -314,7 +320,7 @@ def decode_arguments(name: str, raw: Any) -> tuple[dict, str | None]:
             return {}, None
         if isinstance(value, dict):
             if nesting_depth(value, MAX_ARGUMENT_DEPTH) > MAX_ARGUMENT_DEPTH:
-                return {}, _too_deep(name)
+                return {}, too_deep_refusal(name)
             return value, None
         raw = value
     return {}, (f"Tool Error: the arguments of this '{name}' call are a JSON "
@@ -1662,7 +1668,7 @@ class ToolCaller:
             # A list of (name, value) pairs runs as the dict it makes, and it can come from
             # model-written code (the sandbox tool bridge forwards its `args` as they are).
             # The outer list and each pair stand for the one level of that dict, hence + 1.
-            args, malformed = {}, _too_deep(name)
+            args, malformed = {}, too_deep_refusal(name)
         self._audit_log(name, args)
         if malformed:
             # Like a schema error, about THIS call and nothing else; unlike one, there are no
@@ -1976,7 +1982,7 @@ class ToolCaller:
         # measured through `edit_file.edits` and `update_working_memory.tasks`. What the
         # tool gets is held to the same limit as what the model sent.
         if nesting_depth(tool_args, MAX_ARGUMENT_DEPTH) > MAX_ARGUMENT_DEPTH:
-            return _too_deep(name)
+            return too_deep_refusal(name)
         assign_declared_identity(
             tool, tool_args, user_scope_id=self.user_scope_id,
             username=self.username, user_role=self.user_role, session_id=self.session_id,

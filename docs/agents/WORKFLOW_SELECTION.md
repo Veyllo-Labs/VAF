@@ -344,6 +344,20 @@ create_agent_workflow(
   incident). The resolved `input` now fills the tool's missing PRIMARY parameter
   (`_PRIMARY_ARG_BY_TOOL`); steps whose `args` already carry it - every saved template - are
   untouched (their `input` stays a display label).
+- **A JSON object as the step's input:** a step without `args` whose resolved `input` is a
+  JSON object takes that object as the call's arguments. `engine.build_step_args` decodes it
+  with the funnel's own decoder (`tool_dispatch.decode_arguments`). Text that is not valid
+  JSON, an integer past Python's 4300-digit limit included, is the step's single argument.
+  An object nested deeper than 100 levels (`MAX_ARGUMENT_DEPTH`), text too deep to decode at
+  all included, fails that step with the funnel's depth refusal (`too_deep_refusal`): its
+  tool does not run, and `optional`/`on_failure` apply as for any failed step. Such input
+  used to raise out of the engine and end the whole run with no result, measured with a
+  fetched value chained into the next step through a `{placeholder}`. `_preflight_steps`
+  refuses a literal one before anything runs. A `variables` string is decoded the same way
+  (one that is not an object, or is too deep, is `{}`), and every later reader of
+  `variables` sees the coerced mapping; a string there used to fail every step.
+  `tests/test_workflow_step_args_decode.py` guards it, with a seeded fuzz against a
+  reference decoder.
 - **Completion carries every step's result:** both completion messages (saved workflows via
   `execute_workflow` and temporary ones) append a bounded "Step results" summary - one line per
   step with tool, status and result head (`engine.summarize_run_steps`). The completion used to

@@ -335,8 +335,10 @@ def _preflight_steps(normalised: List[dict], tools: Dict[str, Any], *,
     Refused as well, because no repair makes them runnable: a tool that does not exist; a
     `bash` step that downloads (the workflow shell has no network, and the networked shell
     asks a person); a `host_bash` step, because this lane runs its steps without asking
-    the user while host_bash in chat asks for every command; and a step whose output name the
-    engine owns (`engine.ENGINE_OUTPUT_NAMES`), which the engine refuses as well.
+    the user while host_bash in chat asks for every command; a step whose output name the
+    engine owns (`engine.ENGINE_OUTPUT_NAMES`), which the engine refuses as well; and a step
+    whose literal input is a JSON object nested deeper than `MAX_ARGUMENT_DEPTH` levels
+    (`engine.StepArgsRefused`), which would otherwise fail only once the run executes.
 
     The way out a refusal names is a tool this caller may use, and it is handed to the turn
     (`advise_tools`): the network steps share one line and one instruction
@@ -353,10 +355,10 @@ def _preflight_steps(normalised: List[dict], tools: Dict[str, Any], *,
     applies the same schema check at dispatch, so an embedder's own plan fails there with the
     same words. A second planner is the trigger for a public primitive.
     """
-    from vaf.core.tool_dispatch import unknown_tool_hint
+    from vaf.core.tool_dispatch import MAX_ARGUMENT_DEPTH, unknown_tool_hint
     from vaf.core.tool_input_repair import MISSING_REQUIRED, RETRY_SAME_CALL, repair_tool_input
     from vaf.tools.bash import command_needs_network
-    from vaf.workflows.engine import build_step_args, reserved_output_problem
+    from vaf.workflows.engine import StepArgsRefused, build_step_args, reserved_output_problem
 
     problems: List[str] = []
     network: List[str] = []         # the commands of the bash steps that need the network
@@ -383,6 +385,10 @@ def _preflight_steps(normalised: List[dict], tools: Dict[str, Any], *,
         try:
             args = build_step_args(name, str(step.get("input") or ""), step.get("args"),
                                    lambda text: text)
+        except StepArgsRefused:
+            problems.append(f"{label}: its input is a JSON object nested deeper than "
+                            f"{MAX_ARGUMENT_DEPTH} levels, so the step cannot run.")
+            continue
         except Exception:
             continue  # the engine reports a step it cannot build on its own
         try:

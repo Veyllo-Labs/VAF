@@ -718,6 +718,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
     (`a[$(cmd) ;x]=1`): put the index into a variable first (`i=$(cmd); a[$i]=1`).
   - Thousands of `[` opened without their `]` where a command starts (`a[` repeated): close
     each one, or quote it.
+  - A long script nested several levels deep (`eval '... bash -c "..."'`, tens of kilobytes
+    at each level): write the inner script to a file and run the file.
 
   `find / -delete` and `find / -exec rm -rf {} +` are refused too; a `find` with a test
   before its `-exec` (`find ~ -name '*.tmp' -exec rm -rf {} +`) passes as before. Takes

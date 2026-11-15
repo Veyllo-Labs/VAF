@@ -220,6 +220,20 @@ _FORMS = [
     # with a newline: refused as a subscript this check cannot read
     ("a[\n: \"$(echo \"'\")\"\n]=1 rm -rf /", "opaque_command", "subscript"),
     ("a[\necho $'it\\'s'\n]=1 bash -c 'rm -rf /'", "opaque_command", "subscript"),
+    ("a[ \"${x#'\"'}\" ]=1 rm -rf /", "opaque_command", "subscript"),
+    ("a[\n: \"${x#'\"'}\"\n]=1 rm -rf /", "opaque_command", "subscript"),
+    # ... after a command, wherever the next one starts (each simple command starts with
+    # assignments only again)
+    ("ls; a['x' ;y]=1 rm -rf /", "destructive_removal", ""),
+    ("true\na[\"x\";y]=1 rm -rf /", "destructive_removal", ""),
+    ("true && a[x ;y]=1 rm -rf /", "destructive_removal", ""),
+    ("{ ls; a[x ;y]=1 rm -rf /; }", "destructive_removal", ""),
+    # ... before a function head: `a[()]=1` is an assignment, not a function named `a[`
+    ("a[()]=1 rm -rf /", "destructive_removal", ""),
+    ("m[x()]=1 rm -rf /", "destructive_removal", ""),
+    ("m[ ()]=1 rm -rf /", "destructive_removal", ""),
+    ("m[()]= bash -c 'rm -rf /'", "destructive_removal", ""),
+    ("eval 'm[()]=1 rm -rf /'", "destructive_removal", ""),
     # a single-quoted span holding a `}` inside `"${...}"`: bash takes it for quoting
     (": \"${x#'}\"'}\"; rm -rf /", "destructive_removal", ""),
     # the standard output spelled another way, or copied through another descriptor
@@ -229,6 +243,12 @@ _FORMS = [
     ("( echo 'rm -rf /' ) 3>&1 >&3 | bash", "destructive_removal", ""),
     ("( echo 'rm -rf /' ) 2>/dev/stdout >&2 | bash", "destructive_removal", ""),
     ("{ echo 'rm -rf /'; } 4>&1 >&4- | bash", "destructive_removal", ""),
+    ("( echo 'rm -rf /' ) 3>&01 >&3 | bash", "destructive_removal", ""),
+    ("( echo 'rm -rf /' ) >&001 | bash", "destructive_removal", ""),
+    ("( echo 'rm -rf /' ) 2>&01 >&2 | bash", "destructive_removal", ""),
+    # ... or written into the input, which a shell reading its script there reads on
+    (": a[; echo '{ :; echo '\\''rm -rf /'\\''; } 4<&1 1>&0 9>&9- &>>/dev/./stdout |& bash'"
+     " | bash", "destructive_removal", ""),
     # an option of the shell that takes a value: the input is still its script
     ("echo 'rm -rf /' | bash -O extglob", "destructive_removal", ""),
     ("echo 'rm -rf /' | bash +O extglob", "destructive_removal", ""),
@@ -237,6 +257,11 @@ _FORMS = [
     ("echo 'rm -rf /' | bash --init-file /dev/null", "destructive_removal", ""),
     # echo's own redirections print nothing: the text it prints is its words alone
     ("echo 'echo rm -rf / | bash' </dev/null | bash", "destructive_removal", ""),
+    # what a shell prints from the script it read from its input goes on into the next pipe
+    ("echo 'echo rm -rf /' | bash | bash", "destructive_removal", ""),
+    ("bash <<< 'echo rm -rf /' | bash", "destructive_removal", ""),
+    (": 'x' ;\necho $'it\\'s'; echo 'eval 'echo ''rm' -rf /' | bash'' | bash",
+     "destructive_removal", ""),
     ("</dev/null echo '{ echo 'rm -rf /'; } 2>&1 | bash' | bash", "destructive_removal", ""),
 ]
 
@@ -250,7 +275,11 @@ def test_compound_forms_are_read(cmd, category, shape, windows):
     Windows seam changes nothing here.
     MUTATION: skip _join_the_grammar_reading - red (compound, comment, heredoc, continuation);
     MUTATION: drop the B1 check - red (the expansion rows);
-    MUTATION: drop B2/B3/B4/B5/B6/B7 one at a time - red (their rows)."""
+    MUTATION: drop B2/B3/B4/B5/B6/B7 one at a time - red (their rows);
+    MUTATION: keep "assignments only" false past a command's end - red (`ls; a[...]=1 ...`);
+    MUTATION: read the function head before a subscript - red (`a[()]=1 ...`);
+    MUTATION: end a `"` span in a subscript at its first `"` - red (`a[ "${x#'"'}" ]=1 ...`);
+    MUTATION: look a descriptor copy up by its text - red (`3>&01 >&3`)."""
     with mock.patch.object(cp, "_windows_host", return_value=windows):
         verdicts = _verdicts(cmd)
     for profile, v in verdicts.items():
@@ -668,6 +697,8 @@ _NEIGHBOURS = [
     "i=1; a[$i]=x; echo ${a[@]}", 'a["$k"]=1 echo hi', "arr[0]=x; arr[1]=y; echo ${arr[1]}",
     "echo \"${x#'a'}\"", "echo \"${HOME%'/'}\"", "( echo hi ) 2>/dev/null | cat",
     "printf '%(%F)T' -1", "printf '%.0s%s' x 'ls -la'", "printf '%05d|%-8s|' 42 ok",
+    # a subscript holding a plain expansion among blanks; appending to an array
+    "a[ $i ]=1; echo ${a[@]}", "a[${#a[@]}]=new; echo ${a[@]}", "f() { :; }; f",
 ]
 
 
@@ -1177,6 +1208,8 @@ def _distinct_echoes(length):
     lambda n: "echo '$(x)' [" + "a" * n,                   # a long word, a substitution text
     lambda n: "echo 'a[" + "$(a)" * (n // 4) + "]'",       # many substitutions in a subscript
     lambda n: "$X; " + "for /d " * (n // 7),               # cmd.exe options, value `for`
+    lambda n: "echo x" + ("$'" + B + "a'") * (n // 5),        # many `$'...'` parts in a word
+    lambda n: "eval " + ("$'" + B + "a'") * (n // 5),         # ... in a text eval runs
 ])
 def test_long_and_distinct_shapes_are_linear(build):
     """Texts whose parts all differ, or one long run, cost the same per character as short
@@ -1187,7 +1220,8 @@ def test_long_and_distinct_shapes_are_linear(build):
     MUTATION: a printf width that may start with `0` - red (the zeros);
     MUTATION: blanks with newlines after a command start in the heredoc hint - red;
     MUTATION: `_SUBSCRIPT_RE` as a whole name before the `[` - red (the long word);
-    MUTATION: a fresh writer state for each substitution in a subscript text - red."""
+    MUTATION: a fresh writer state for each substitution in a subscript text - red;
+    MUTATION: a fresh writer for each `$'...'` of a word bash's quote removal reads - red."""
     def took(length):
         text = build(length)
         best = None
@@ -1259,6 +1293,87 @@ def test_cmd_for_reads_what_the_pattern_reads():
         assert cp._cmd_for(text) == bool(_CMD_FOR_ORACLE.search(text)), repr(text)
 
 
+# A text nested four deep (`eval`, `bash -c`), each level with a trigger for a second reading:
+# a comment holding an apostrophe, or a single-quoted span holding a `}` in `"${...}"`.
+_NEST_TRIGGERS = ["# it's" + NL, ": \"${x#'}'}\"; "]
+
+
+def _nested(trigger, runner, depth, size):
+    import shlex
+    unit = "a[;"
+
+    def wrap(inner):
+        for _ in range(depth):
+            inner = trigger + runner + " " + shlex.quote(inner)
+        return inner
+    count = size // len(unit)
+    while len(wrap(unit * count)) > size:
+        count -= max(1, count // 50)
+    return wrap(unit * count)
+
+
+@pytest.mark.parametrize("trigger", _NEST_TRIGGERS)
+@pytest.mark.parametrize("runner", ["eval", "bash -c"])
+def test_nesting_costs_a_bounded_multiple_of_the_text(trigger, runner):
+    """Every reading of one call spends its text from one budget (_READ_FACTOR), so a text
+    nested four deep, each level read twice or three times, costs a few times the flat text
+    and not 3 to the 4th: at 32 000 characters at most 6x the flat text plus 0.5 s.
+    MUTATION: no budget for the characters read - red (24 s); MUTATION: a fresh character
+    budget for the top-level grammar reading - red."""
+    def took(text):
+        best = None
+        for _ in range(2):
+            start = time.perf_counter()
+            verdict = classify_command(text, profile="host_unattended")
+            spent = time.perf_counter() - start
+            best = spent if best is None else min(best, spent)
+        return best, verdict
+    flat = took(_nested(trigger, runner, 0, 32000))[0]
+    deep, verdict = took(_nested(trigger, runner, 4, 32000))
+    assert deep <= 6 * flat + 0.5, (flat, deep)
+    assert verdict.blocked and "nested_too_deep" in verdict.categories, verdict
+
+
+def test_all_readings_of_one_call_share_one_character_budget(monkeypatch):
+    """The characters every reading of one call reads, the top-level grammar reading's
+    included, stay within _READ_FACTOR times the text plus _READ_SLACK and one more reading
+    (a reading past the budget is refused before it reads anything, and is not counted).
+    MUTATION: a fresh character budget for the top-level grammar reading - red."""
+    text = _nested(_NEST_TRIGGERS[1], "eval", 4, 32000)
+    read = [0, 0]
+    real = cp._read
+
+    def counting(command, **kwargs):
+        size = len((command or "").strip())
+        verdict = real(command, **kwargs)
+        if verdict.segments or verdict.categories != ["nested_too_deep"]:
+            read[0] += size
+            read[1] = max(read[1], size)
+        return verdict
+
+    monkeypatch.setattr(cp, "_read", counting)
+    classify_command(text, profile="host")
+    assert read[0] <= cp._READ_FACTOR * len(text) + cp._READ_SLACK + read[1], read
+
+
+def test_moves_stdout_reads_descriptor_numbers_as_numbers():
+    """`01` is descriptor 1 on either side of a redirection.
+    MUTATION: keep the descriptor as written - red; look a copy up by its text - red."""
+    assert cp._moves_stdout(["01>/dev/null"])
+    assert cp._moves_stdout(["001>&2"])
+    assert not cp._moves_stdout(["3>&01", ">&3"])
+    assert not cp._moves_stdout([">&001"])
+
+
+def test_one_word_decodes_its_ansi_c_parts_with_one_writer():
+    """bash's quote removal of a word with many `$'...'` parts builds one writer, which looks
+    the word up for extglob once.
+    MUTATION: a writer for each part - red."""
+    raw = _Counting("x" + ("$'" + B + "a'") * 300)
+    assert cp._bash_word(raw) == "x" + "\a" * 300
+    assert raw.contains.get("extglob", 0) <= 1, raw.contains
+
+
 def test_unclosed_subscripts_with_no_closer_after_them_cost_no_budget():
     """An `a[` with no `]` anywhere after it ends at the end of the text at once, so thousands
     of them use none of the bracket budget and the command is read, not refused.
@@ -1269,13 +1384,20 @@ def test_unclosed_subscripts_with_no_closer_after_them_cost_no_budget():
 
 def test_heredoc_substitutions_merge_in_linear_time():
     """An unquoted heredoc's substitutions, read twice and merged with a set beside the list:
-    20 000 distinct ones take a moment.
+    8x the substitutions take at most 20x the time plus 0.05 s.
     MUTATION: test membership against the list - red."""
-    body = NL.join("$(echo %d)" % k for k in range(20000))
-    start = time.perf_counter()
-    found = cp._heredoc_substitutions(body)
-    assert time.perf_counter() - start < 1.0
-    assert len(found) >= 20000
+    def took(count):
+        body = NL.join("$(echo %d)" % k for k in range(count))
+        best = None
+        for _ in range(3):
+            start = time.perf_counter()
+            found = cp._heredoc_substitutions(body)
+            spent = time.perf_counter() - start
+            best = spent if best is None else min(best, spent)
+        assert len(found) >= count
+        return best
+    short, long = took(2500), took(20000)
+    assert long <= 20 * short + 0.05, (short, long)
 
 
 class _Counting(str):

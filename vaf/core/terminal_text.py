@@ -337,10 +337,24 @@ def file_link(path: Any) -> str:
 _MARKUP_LINK_RE = re.compile(r"\[link=([^\[\]\s]+)\]((?:(?!\[/?link[=\]])[^\n])*)\[/link\]")
 
 
+# Rich's render turns every `\[` of plain text into `[` (rich/markup.py), but its escape doubles
+# the backslashes only in front of a bracket that looks like a tag (`[a-z#/@]...]`). A Windows
+# path to a Next.js catch-all route, `app\[...slug]\page.tsx`, therefore lost the backslash in
+# front of its bracket: the label no longer read as the path it opens, and the own link was
+# dropped. One more backslash in front of every other bracket keeps them all.
+_UNTAGGED_BRACKET = re.compile(r"(\\+)(?=\[(?![a-z#/@][^\[]*?\]))")
+
+
+def _escape(text: str) -> str:
+    """`rich.markup.escape`, and the backslashes in front of a bracket it leaves alone."""
+    return _UNTAGGED_BRACKET.sub(r"\1\\", _rich_escape(text))
+
+
 def escape_markup(value: Any) -> str:
     """Other parties' `value`, safe to put into a Rich markup string: shown as written.
 
-    Escaped with `rich.markup.escape`, except that VAF's own file link
+    Escaped with `rich.markup.escape`, plus one backslash in front of each bracket it leaves
+    alone (`_escape`: Rich's render takes one off every `\\[`), except that VAF's own file link
     (`[link=file:...]<path>[/link]` whose label is the path it opens) stays a live link,
     with its label escaped. The text between two such links is escaped as one piece, so
     Rich's rule for a trailing backslash (it would escape the next tag) still holds. Control
@@ -361,10 +375,10 @@ def escape_markup(value: Any) -> str:
         target, label = match.group(1), match.group(2)
         if not _own_file_link(target, label):
             continue
-        pieces.append(_rich_escape(text[pos:match.start()]))
-        pieces.append(f"[link={target}]{_rich_escape(label)}[/link]")
+        pieces.append(_escape(text[pos:match.start()]))
+        pieces.append(f"[link={target}]{_escape(label)}[/link]")
         pos = match.end()
-    pieces.append(_rich_escape(text[pos:]))
+    pieces.append(_escape(text[pos:]))
     return "".join(pieces)
 
 

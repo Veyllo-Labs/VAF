@@ -255,6 +255,36 @@ def test_a_bracketed_path_stays_the_real_path_for_every_reader(parts, tmp_path):
         assert "Saved: " + real in _plain(out)
 
 
+@pytest.mark.parametrize("text", [
+    "app\\[...slug]\\page.tsx", "app\\[[...opt]]\\x", "a\\\\[1]", "\\[id]", "a\\[x] \\[.y]",
+    "C:\\p\\[0]\\q", "x\\\\\\[@a]"])
+def test_escape_markup_shows_every_backslash_in_front_of_a_bracket(text):
+    """Rich's render takes a backslash off every `\\[` of plain text, while its escape adds one
+    only in front of a bracket that looks like a tag. The Windows CI found it: the label of a
+    catch-all route lost its backslash and VAF's own link was dropped.
+    MUTATION: `_escape` returns `_rich_escape(text)` alone - red (all but the tag shapes)."""
+    from rich.markup import render
+    assert render(escape_markup(text)).plain == text
+
+
+@pytest.mark.parametrize("parts", BRACKETED, ids=["id", "slug", "optional"])
+def test_a_windows_route_path_keeps_its_own_link_on_any_host(parts):
+    """The Windows spelling of `test_a_bracketed_path_stays_the_real_path_for_every_reader`,
+    built with PureWindowsPath so it runs here: a backslash stands in front of each bracket.
+    MUTATION: as above - red ([...slug] and [[opt]])."""
+    from rich.console import Console as PlainConsole
+    real = str(PureWindowsPath("C:/Users/x/proj", *parts))
+    uri = PureWindowsPath(real).as_uri()
+    link = f"[link={uri}]{real}[/link]"
+    for console in (_console(), PlainConsole(file=io.StringIO(), force_terminal=True,
+                                             color_system="truecolor", width=300,
+                                             legacy_windows=False)):
+        console.print(escape_markup("Saved: " + link))
+        out = console.file.getvalue()
+        assert set(_targets(out)) == {uri}, out
+        assert real in _plain(out), out
+
+
 def test_only_file_link_writes_a_markup_link():
     """VAF's own link has one producer, so the console's rule and the link agree by
     construction. Docstrings and comments may show the shape; a regex escapes its bracket.

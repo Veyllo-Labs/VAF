@@ -74,6 +74,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **Links to Next.js catch-all routes are clickable on Windows.** In the terminal, a
+  saved file such as `app\[...slug]\page.tsx` or `app\[[...opt]]\page.tsx` was shown without
+  the backslash in front of its bracket and was not clickable. It now shows its real path and
+  opens it.
 - **A long reply full of unfinished tool-call tags no longer stalls VAF.** VAF used to hang for
   seconds or minutes while it looked for tool calls in such a reply: 128 KB took up to 27 s,
   twice per reply, and one shape took far longer. The tool calls it finds are the same as

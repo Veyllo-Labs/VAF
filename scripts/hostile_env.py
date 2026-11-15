@@ -145,10 +145,13 @@ locally, in the time the suite already takes:
                   here and failed on the macOS job with "[Errno 60] Operation
                   timed out" (three hostile_env tests). A closed port is one
                   nothing holds: bind, read the port, close. Asked on a
-                  refusal only (a bind probe: EADDRINUSE means a socket holds
-                  the port), so it costs nothing on the path that connects;
-                  installed with the slow refusal axis, and like it not on a
-                  Windows host.
+                  refusal only, so it costs nothing on the path that connects:
+                  a bind probe without SO_REUSEADDR (a holder that set it
+                  still conflicts) answers EADDRINUSE, and the port is in none
+                  of /proc/net/tcp and tcp6, where a TIME_WAIT or a connection
+                  on it would be listed and an only-bound socket never is. A
+                  port listed there stays a refusal. Installed with the slow
+                  refusal axis on Linux only; macOS has the real behaviour.
 
 WHAT IT CANNOT DO. Real Windows file semantics - ACLs, MoveFileEx sharing
 violations, the read-only-flag-only chmod - need a real Windows machine. Those
@@ -450,29 +453,55 @@ if _refusal_log and _os.name != "nt":
         except OSError:
             pass
 
+    def _in_kernel_tables(port):
+        """Whether any TCP socket of this machine has `port` as its local port in the kernel's
+        tables: a listener, a connection, a TIME_WAIT. A socket that is only bound is in none
+        of them (measured), which is what tells it apart."""
+        port = "%04X" % port
+        for table in ("/proc/net/tcp", "/proc/net/tcp6"):
+            try:
+                with open(table, encoding="ascii", errors="replace") as rows:
+                    for row in rows:
+                        fields = row.split()
+                        if len(fields) > 3 and fields[1].rpartition(":")[2] == port:
+                            return True
+            except OSError:
+                continue
+        return False
+
     def _held_unlistened(family, address):
         """A port on this machine that a TCP socket holds bound without listen(): Linux
         refuses a connect to it at once, macOS lets it time out (ETIMEDOUT). Asked only after
-        a refusal, so nothing listens there: a bind of our own that the kernel answers with
-        EADDRINUSE means a socket holds the port, in this process or another. SO_REUSEADDR
-        on the probe lets a TIME_WAIT left by an earlier connection pass, and the kernel
-        tables cannot say it instead (a socket that is only bound is in none of them)."""
+        a refusal, so nothing listens there. A bind of our own, without SO_REUSEADDR so that a
+        holder that set it still conflicts, answers EADDRINUSE for a holder in this process or
+        another; it answers the same for a TIME_WAIT or a connection on that port, and those
+        are in the kernel's tables where an only-bound socket is not, so a port listed there
+        stays a refusal. A host without the tables (macOS itself) has the real behaviour."""
+        if not _os.path.exists("/proc/net/tcp"):
+            return False
         host = address[0]
         if isinstance(host, (bytes, bytearray)):
             host = bytes(host).decode("ascii", "replace")
+        host = str(host)
         try:
-            _ipaddress.ip_address(str(host).split("%")[0])
+            _ipaddress.ip_address(host.split("%")[0])
         except ValueError:
-            host = "127.0.0.1" if family == _socket.AF_INET else "::1"
+            try:
+                # The short forms _local accepts ("127.2" is 127.0.0.2), as the C library reads them.
+                host = _socket.inet_ntoa(_socket.inet_aton(host))
+            except OSError:
+                host = "127.0.0.1" if family == _socket.AF_INET else "::1"
+            if family != _socket.AF_INET and "." in host:
+                host = "::ffff:" + host
         try:
+            port = int(address[1])
             probe = _plain_socket(family, _socket.SOCK_STREAM)
-        except OSError:
+        except (OSError, TypeError, ValueError):
             return False
         try:
-            probe.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
-            probe.bind((host, int(address[1])) + tuple(address[2:]))
+            probe.bind((host, port) + tuple(address[2:]))
         except OSError as exc:
-            return exc.errno == _errno.EADDRINUSE
+            return exc.errno == _errno.EADDRINUSE and not _in_kernel_tables(port)
         finally:
             probe.close()
         return False

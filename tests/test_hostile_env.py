@@ -528,23 +528,34 @@ assert subprocess.run([sys.executable, "-c",
 
 
 @needs_counter
+@pytest.mark.skipif(not sys.platform.startswith("linux"),
+                    reason="the axis simulates macOS on Linux; elsewhere the host's own timeout "
+                           "applies (a 0.5 s deadline raises TimeoutError without an errno)")
 def test_a_bound_port_that_does_not_listen_times_out_as_on_macos(tmp_path):
     """A socket that holds a port bound without listen(): macOS lets a connect to it time
     out, blocking, through connect_ex and through asyncio, and nothing is charged (it is no
-    refusal); a port nothing holds is refused and charged as before. On a macOS host this is
-    the real behaviour.
+    refusal). A holder that set SO_REUSEADDR is a holder too, and a short form names its own
+    address (127.2 is 127.0.0.2). A port nothing holds is refused and charged as before, and
+    so is one a TIME_WAIT reserves.
     MUTATION: drop the held-port check in the connect wrapper - red (refused); in
-    connect_ex - red (ECONNREFUSED); in sock_connect - red (refused)."""
+    connect_ex - red (ECONNREFUSED); in sock_connect - red (refused); probe with
+    SO_REUSEADDR - red (the reusing holder is refused); drop the kernel-table check - red
+    (the TIME_WAIT times out); drop the inet_aton reading - red (127.2 probes 127.0.0.1)."""
     stdout, lines = _refusal_run(tmp_path, r'''
+def times_out(sock, address):
+    try:
+        sock.connect(address)
+    except TimeoutError as exc:
+        return exc.errno == errno.ETIMEDOUT
+    return False
+
+
 holder = socket.socket()
 holder.bind(("127.0.0.1", 0))
 port = holder.getsockname()[1]
 s = socket.socket()
 s.settimeout(0.5)
-try:
-    s.connect(("127.0.0.1", port))
-except TimeoutError as exc:
-    assert exc.errno == errno.ETIMEDOUT, exc
+assert times_out(s, ("127.0.0.1", port))
 assert socket.socket().connect_ex(("127.0.0.1", port)) == errno.ETIMEDOUT
 
 
@@ -560,9 +571,31 @@ async def dial():
 print(asyncio.run(dial()))
 holder.close()
 assert refused(socket.socket(), ("127.0.0.1", port))
+
+reusing = socket.socket()
+reusing.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+reusing.bind(("127.0.0.1", 0))
+assert times_out(socket.socket(), ("127.0.0.1", reusing.getsockname()[1])), "reusing holder"
+reusing.close()
+
+two = socket.socket()
+two.bind(("127.0.0.2", 0))
+assert times_out(socket.socket(), ("127.2", two.getsockname()[1])), "short form"
+two.close()
+
+server = socket.socket()                # no SO_REUSEADDR: its TIME_WAIT conflicts with a bind
+server.bind(("127.0.0.1", 0))
+server.listen(1)
+waiting = server.getsockname()[1]
+client = socket.create_connection(("127.0.0.1", waiting))
+accepted, _ = server.accept()
+accepted.close()                        # the server's end closes first and goes to TIME_WAIT
+client.close()
+server.close()
+assert refused(socket.socket(), ("127.0.0.1", waiting)), "a TIME_WAIT is no holder"
 ''')
     assert stdout.split() == ["timed", "out"]
-    assert [(who, cost) for who, _addr, cost in lines] == [(_TEST_NAME, "2.0")]
+    assert [(who, cost) for who, _addr, cost in lines] == [(_TEST_NAME, "2.0")] * 2
 
 
 def test_the_verdict_sums_phases_and_names_the_test():

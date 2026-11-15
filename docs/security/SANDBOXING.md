@@ -1128,16 +1128,19 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   script (`bash`, `sh -s`, `. /dev/stdin`): what `echo`, `printf` and `yes` print into the
   pipe (`echo 'rm -rf /' | bash`; dash's echo decodes escapes, so both spellings are read;
   printf's format is used again while arguments are left, as printf does, `%b` decodes its
-  argument's escapes, `\c` there ends all of printf's output, and precision, `%c` and a `*`
+  argument's escapes, `\c` there ends all of printf's output, and precision (none for `%c`,
+  as bash's printf has it: `printf '%.0c%s' r 'm -rf ~'` prints `rm -rf ~`), `%c` and a `*`
   width are followed, a negative `*` precision being none; output past a bound, checked per
   directive before any padding, and a directive whose output is not modelled (a number,
-  `%ls`, `%(...)T`) are refused as unreadable text, and a `%` that starts no directive ends
+  `%ls`, `%(...)T`, also `%.0(...)T` and `%-9(...)T`) are refused as unreadable text, and a
+  `%` that starts no directive ends
   the output there, as printf stops at it), what a subshell, a
   group, a loop or a command run from text prints, every command's output in it and those
   writes joined (`( echo '...'; echo x ) | sh`, `(printf 'r'; printf 'm ...') | bash`,
   `bash -c "echo '...'" | bash`), also with redirections after its closer that leave the
-  standard output where it is (`( ... ) 2>&1 | bash`, also `>/dev/stdout`;
-  `( ... ) >f | bash` hands on nothing), a heredoc
+  standard output where it is (`( ... ) 2>&1 | bash`, also `>/dev/stdout` in any spelling,
+  `>/dev/./stdout`, `>//dev/fd/1`, and copies through another descriptor, `3>&1 >&3`,
+  `2>/dev/stdout >&2`, followed in order; `( ... ) >f | bash` hands on nothing), a heredoc
   or a here-string, also passed on through a filter (`cat <<'EOF' | sort | bash`) or a
   command that runs another one (`eval`, `sh -c`, `env -S`, a runner), and into a carried
   command or a subshell. Text from double quotes is read the way bash hands it over:
@@ -1159,7 +1162,9 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   options after `-c` too and runs the first word that is none (`bash -c -e '...'`,
   `sh -c - '...'`); a quoted script that starts like a redirection is read as well
   (`bash -c -e '>x;cmd'`). An unquoted expansion as a shell's script name may vanish, so the
-  shell's input is read too (`bash $! <<< '...'`); a quoted one (`bash "$S"`) does not. A
+  shell's input is read too (`bash $! <<< '...'`); a quoted one (`bash "$S"`, `"$*"`,
+  `"${a[*]}"`) does not, except one that expands to a word per item and to none without
+  items, which may vanish too (`bash "$@"`, `"${@:2}"`, `"${a[@]}"`, `"${!a[@]}"`). A
   newline right after a `|`
   continues the pipeline, as bash reads it.
 - **Bounds.** Every reading, the command itself included, spends one of
@@ -1187,12 +1192,18 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   heredoc file 0.10 s; `npx --x y ...` took 10 s at 100 KB before). The grammar reading
   writes its text in one pass and reads it only when it differs from the command, with a
   budget of its own at the top level; all three readings together, 33 shapes at
-  131 000 characters and ten more that once grew faster than the text (heredocs inside
-  `$( )`, a group of distinct `echo`s, a long backslash run, wide printf fields, sixty cmd.exe
-  `for` options), measured on a machine under load (load average 3 to 9): 2.0 s at most (a
-  heredoc `cat <<.` with an empty body repeated, 1.85 s at load 4; 0.60 s before, measured
-  alongside), every shape linear (8 times the length, about 8 times the time, pinned by
-  `test_grammar_reading_is_linear` and `test_long_and_distinct_shapes_are_linear`).
+  131 000 characters and 28 more that once grew faster than the text (heredocs inside
+  `$( )`, a group of distinct `echo`s, a long backslash run, wide printf fields and a run of
+  zeros in one, cmd.exe `for` options whose value is the word `for`, unclosed `a[` where a
+  command starts in six spellings, ten thousand `a[0]=1`, element subscripts, a backtick
+  text each, quoted spans inside one `${...}`, distinct substitutions in a heredoc, empty
+  lines before a heredoc, a long word beside a substitution text), measured on a machine
+  under load (load average 2 to 5): 1.85 s at most (a heredoc `cat <<.` with an empty body
+  repeated, 1.81 to 1.85 s; 0.59 s before, measured alongside), every shape linear (4 times
+  the length, about 4 times the time, pinned by `test_grammar_reading_is_linear` and
+  `test_long_and_distinct_shapes_are_linear`). The one exception is shlex's own tokenizer on
+  one long word, as before: one word of 131 000 characters takes 0.53 s, 0.50 s before. The
+  heredoc hint's search took 120 s before on 131 000 empty lines and takes 0.77 s now.
 - **Compound commands, comments and heredocs (the grammar reading).** The reading above cuts a
   command at its separators and judges simple commands, so the shell's grammar around them
   hid the command word: `{ rm -rf /; }`, `if true; then rm -rf /; fi`, `for`, `while`,
@@ -1233,10 +1244,16 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   `arr=('a;b' c)`), while a subscript (`m=([a;b]=1)`), elements over several lines
   (`m=(` NL `[a]=1` NL `)`) and an extglob group `@(...)` or `+(...)` in a text that turns
   extglob on pass; where a command starts, `NAME[...]=` reads its subscript up to the `]`,
-  blanks, operators and newlines included (`a[x;y]=1 cmd`); a blank or an operator character
-  inside `${...}` stays in its word (`${x#'/' }cmd`), and inside double quotes a
-  single-quoted span in that word still quotes when it closes before the next `}`
-  (`"${x#'"'}"`; a lone `'` there is text for a POSIX sh); a process substitution holds
+  blanks, operators, newlines and carriage returns included, its quoted spans and escapes as
+  written (`a[x;y]=1 cmd`, `a['x' ;y]=1 cmd`), and one holding a substitution with a blank
+  or an operator outside it (`a[$(x) ;y]=1 cmd`) is refused (put the index into a variable
+  first); the bracket scans of one command share a budget of four times its length, since
+  every unclosed `a[` scans to the end, and past it the command is refused (`open_brackets`:
+  close each `[`, or quote it), while an `a[` with no `]` after it costs nothing; a blank or
+  an operator character inside `${...}` stays in its word (`${x#'/' }cmd`), and inside
+  double quotes a single-quoted span in that word still quotes (`"${x#'"'}"`), one holding a
+  `}` read both ways, as bash quotes it (`"${x#'}"'}"`) and as a POSIX sh reads its lone `'`
+  as text, ending the `${` at that `}`; a process substitution holds
   across a line continuation; a carriage return inside a word stays in it (`X=` CR `1 cmd`
   runs cmd); a backtick pair is written as `$(...)` when its text
   holds a nested backtick, leaves a quote open (closed at its end) or starts with `(`, its
@@ -1266,8 +1283,12 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   120 000 draws, 106 342 of which ran the marker, with none let through; and one that
   mutates working commands ran 100 000 draws, 24 901 of which ran the marker: 2 twins
   passed, through an empty `${| }` before a `/` and empty backticks glued to the option,
-  both named below. No refusal of the reading before this change was lost in any of them
-  (bash 5.3; the suite runs 1 600 draws). The classes the differential found on the way are each pinned in
+  both named below. Run once more on the final code, with a sixth generator that builds
+  runners, splices fragments and wraps them in containers, and a guard that skips any draw
+  naming `-rf` anywhere but after the marker: 269 126, 46 983, 15 000, 85 121, 120 000 and
+  60 000 draws, of which 141 125, 29 858, 3 463, 23 102, 106 298 and 54 410 ran the
+  marker, with no twin let through. No refusal of the reading before this change was lost in
+  any of them (bash 5.3; the suite runs 1 600 draws). The classes the differential found on the way are each pinned in
   `tests/test_command_grammar_reading.py`.
 - **Named boundary: what it does not read.** cmd.exe's and PowerShell's own grammar (`%VAR%`
   as the program, the text `pwsh -Command` runs); dash's differences from bash, read as bash,

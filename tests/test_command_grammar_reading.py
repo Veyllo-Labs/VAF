@@ -195,6 +195,49 @@ _FORMS = [
     ("a+=1 rm -rf /", "destructive_removal", ""),
     ("bash -c -e 'rm -rf /'", "destructive_removal", ""),
     ("( echo 'rm -rf /' ) 2>&1 | bash", "destructive_removal", ""),
+    # a quoted word that expands to one word per item, and to none without items, where a
+    # shell's script name stands: the input is its script then
+    ("echo 'rm -rf /' | bash \"$@\"", "destructive_removal", ""),
+    ("echo 'rm -rf /' | bash \"${@}\"", "destructive_removal", ""),
+    ("echo 'rm -rf /' | bash \"${a[@]}\"", "destructive_removal", ""),
+    ("echo 'rm -rf /' | bash \"${@:2}\"", "destructive_removal", ""),
+    ("echo 'rm -rf /' | bash \"${!a[@]}\"", "destructive_removal", ""),
+    ("echo 'rm -rf /' | bash \"${a[@]#x}\"", "destructive_removal", ""),
+    ("echo 'rm -rf /' | bash \"${!pre@}\"", "destructive_removal", ""),
+    ("bash \"$@\" <<< 'rm -rf /'", "destructive_removal", ""),
+    # printf takes no precision for `%c`; a time directive with flags or a precision
+    ("printf '%.0c%s' r 'm -rf /' | bash", "destructive_removal", ""),
+    ("printf '%.0(%s)T%s' 1 'rm -rf /' | bash", "opaque_command", "shell_text"),
+    ("printf '%-0(%s)T%s' 1 ';rm -rf /' | bash", "opaque_command", "shell_text"),
+    # a subscript where a command starts holding quotes, escapes or a carriage return
+    ("a['x' ;y]=1 rm -rf /", "destructive_removal", ""),
+    ('a["x";y]=1 rm -rf /', "destructive_removal", ""),
+    ("a[" + B + "x ;y]=1 bash -c 'rm -rf /'", "destructive_removal", ""),
+    ("a[x ;'y']=1 rm -rf /", "destructive_removal", ""),
+    ("a[\r]=1 rm -rf /", "destructive_removal", ""),
+    ("a[x\r;y]=1 rm -rf /", "destructive_removal", ""),
+    # ... one whose substitution holds a quote that no reading may pair outside it, together
+    # with a newline: refused as a subscript this check cannot read
+    ("a[\n: \"$(echo \"'\")\"\n]=1 rm -rf /", "opaque_command", "subscript"),
+    ("a[\necho $'it\\'s'\n]=1 bash -c 'rm -rf /'", "opaque_command", "subscript"),
+    # a single-quoted span holding a `}` inside `"${...}"`: bash takes it for quoting
+    (": \"${x#'}\"'}\"; rm -rf /", "destructive_removal", ""),
+    # the standard output spelled another way, or copied through another descriptor
+    ("( echo 'rm -rf /' ) >/dev/./stdout | bash", "destructive_removal", ""),
+    ("( echo 'rm -rf /' ) >//dev/stdout | bash", "destructive_removal", ""),
+    ("( echo 'rm -rf /' ) >/dev/fd//1 | bash", "destructive_removal", ""),
+    ("( echo 'rm -rf /' ) 3>&1 >&3 | bash", "destructive_removal", ""),
+    ("( echo 'rm -rf /' ) 2>/dev/stdout >&2 | bash", "destructive_removal", ""),
+    ("{ echo 'rm -rf /'; } 4>&1 >&4- | bash", "destructive_removal", ""),
+    # an option of the shell that takes a value: the input is still its script
+    ("echo 'rm -rf /' | bash -O extglob", "destructive_removal", ""),
+    ("echo 'rm -rf /' | bash +O extglob", "destructive_removal", ""),
+    ("echo 'rm -rf /' | bash +o posix", "destructive_removal", ""),
+    ("echo 'rm -rf /' | bash --rcfile /dev/null", "destructive_removal", ""),
+    ("echo 'rm -rf /' | bash --init-file /dev/null", "destructive_removal", ""),
+    # echo's own redirections print nothing: the text it prints is its words alone
+    ("echo 'echo rm -rf / | bash' </dev/null | bash", "destructive_removal", ""),
+    ("</dev/null echo '{ echo 'rm -rf /'; } 2>&1 | bash' | bash", "destructive_removal", ""),
 ]
 
 
@@ -619,6 +662,12 @@ _NEIGHBOURS = [
     "bash <<EOF" + NL + "echo " + B * 3 + "$P" + NL + "EOF",
     "x=$(cat <<E" + NL + "(" + NL + "E" + NL + ")",
     "ls | xargs bash -c '2>/dev/null echo checked'",
+    # subscripts with quotes or a substitution, quoted spans in `"${...}"`, redirections that
+    # move the output, printf's time and precision
+    "a['k']=v; echo ${a[k]}", 'declare -A m; m["a b"]=1; echo ${!m[@]}',
+    "i=1; a[$i]=x; echo ${a[@]}", 'a["$k"]=1 echo hi', "arr[0]=x; arr[1]=y; echo ${arr[1]}",
+    "echo \"${x#'a'}\"", "echo \"${HOME%'/'}\"", "( echo hi ) 2>/dev/null | cat",
+    "printf '%(%F)T' -1", "printf '%.0s%s' x 'ls -la'", "printf '%05d|%-8s|' 42 ok",
 ]
 
 
@@ -993,6 +1042,9 @@ def test_the_new_shapes_name_their_way_out():
         ('P=foo; bash <<< "echo $P"', "is not exported is empty in that shell",
          "export P=foo; bash <<< 'echo $P'"),
         ("x=(a;b)", "quote that element", "x=('a;b')"),
+        ("a[$(date +%s) ;y]=1 ls", "put the index into a variable first",
+         "i=$(date +%s); a[$i]=1"),
+        ("a[;" * 3000 + "]=1", "close each one", "a[1]=1"),
     ]:
         v = classify_command(cmd, profile="host")
         assert v.blocked and words in v.reason, (cmd, v.reason)
@@ -1080,11 +1132,16 @@ def test_a_grammar_only_refusal_carries_its_own_reason():
     "x=$(cat <<E" + NL + "(" + NL + "E" + NL + ")" + NL,
     "git commit -m \"$(cat <<'EOF'" + NL + "Fix" + NL + "EOF" + NL + ")\"" + NL,
     "echo $(cat <<EOF" + NL + "$(date) x" + NL + "EOF" + NL + "); ",
+    # unclosed subscripts where a command starts, a backtick text each, many assignments
+    "a[;", "a[1;", "a[" + NL, "a[ ;", "a['" + NL, "x[ `b;", "a[0]=1 ",
 ])
 def test_grammar_reading_is_linear(unit):
     """8x the text takes at most 20x the time plus 0.05 s (the grammar text, which every
     reading writes, and the whole verdict).
-    MUTATION: search every heredoc's delimiter from the start of the text - red."""
+    MUTATION: search every heredoc's delimiter from the start of the text - red;
+    MUTATION: scan a subscript without looking where the last `]` stands - red (`a[;`);
+    MUTATION: check every earlier word of the command for an assignment again - red
+    (`a[0]=1 `)."""
     def took(length):
         text = unit * (length // len(unit))
         best = None
@@ -1113,12 +1170,24 @@ def _distinct_echoes(length):
     _distinct_echoes,
     lambda n: "bash <<EOF" + NL + B * n + "x" + NL + "EOF",  # one long backslash run
     lambda n: "printf '" + "%60000s" * (n // 7) + "' | bash",  # widths past the bound
+    lambda n: "a[;" * (n // 3) + "]=1",                    # unclosed `a[`, one `]` at the end
+    lambda n: "x=(" + "[ " * (n // 2) + ")",               # unclosed element subscripts
+    lambda n: "printf '%" + "0" * n + "' | bash",          # a run of zeros in a directive
+    lambda n: "$(x) \"" + NL * n + "\" <<E" + NL + "E",     # empty lines, a heredoc hint
+    lambda n: "echo '$(x)' [" + "a" * n,                   # a long word, a substitution text
+    lambda n: "echo 'a[" + "$(a)" * (n // 4) + "]'",       # many substitutions in a subscript
+    lambda n: "$X; " + "for /d " * (n // 7),               # cmd.exe options, value `for`
 ])
 def test_long_and_distinct_shapes_are_linear(build):
     """Texts whose parts all differ, or one long run, cost the same per character as short
     ones: 8x the text at most 20x the time plus 0.05 s.
     MUTATION: gather the output with a list membership test - red (the echo rows);
-    MUTATION: match a backslash run from every position - red (the run)."""
+    MUTATION: match a backslash run from every position - red (the run);
+    MUTATION: no budget for the bracket scans - red (`a[;` ... `]`);
+    MUTATION: a printf width that may start with `0` - red (the zeros);
+    MUTATION: blanks with newlines after a command start in the heredoc hint - red;
+    MUTATION: `_SUBSCRIPT_RE` as a whole name before the `[` - red (the long word);
+    MUTATION: a fresh writer state for each substitution in a subscript text - red."""
     def took(length):
         text = build(length)
         best = None
@@ -1155,11 +1224,116 @@ def test_a_text_output_gathers_in_linear_time():
 
 
 def test_a_cmd_for_with_many_options_is_read_at_once():
-    """cmd.exe's `for` options are matched in one parse, so sixty of them cost nothing.
-    MUTATION: let an option's value start with `/` - red (backtracks exponentially)."""
+    """cmd.exe's `for` options are read once each, so sixty of them cost nothing, and an
+    option whose value is the word `for` thousands of times costs a moment (the size is chosen
+    so a pattern that retries from every `for` takes about a second, never minutes).
+    MUTATION: let an option's value start with `/` - red (backtracks exponentially);
+    MUTATION: one pattern over the whole text - red (the square of the text)."""
     start = time.perf_counter()
     classify_command("$X -rf /; for " + "/d " * 60, profile="host")
     assert time.perf_counter() - start < 1.0
+    start = time.perf_counter()
+    assert not cp._cmd_for("$X; " + "for /d " * 3000)
+    assert time.perf_counter() - start < 0.25
+
+
+# What `_cmd_for` reads, as one pattern says it (quadratic on long texts, exact on short ones).
+_CMD_FOR_ORACLE = re.compile(
+    r"(?i)(?:^|[\s;&|(])for\s+(?:/[a-z]\s+(?:[^/\s]\S*\s+)?)*%%?[a-z]\s+in\s*\(")
+
+
+def test_cmd_for_reads_what_the_pattern_reads():
+    """3000 seeded texts of `for`, options, values and `%i in (` in every order: `_cmd_for`
+    agrees with the pattern on each.
+    MUTATION: accept a second value in a row - red; accept `for` after a value - red;
+    MUTATION: drop the `;&|(` before an attached `for` - red."""
+    words = ["for", "FOR", "(for", "a;for", "xfor", "/d", "/R", "/dd", "/", "x", "for",
+             "%a", "%%i", "in", "(", "in(", "*.txt)", "do", "/f", '"tokens=1"']
+    rng = random.Random(4242)
+    for _ in range(3000):
+        text = ""
+        for _k in range(rng.randint(1, 9)):
+            text += rng.choice(words) + rng.choice([" ", "  ", "\t", "\n", ""])
+        if rng.random() < 0.7:
+            text += rng.choice(["%a in (", "%%i in(", "%B  in  (", "%a in x"])
+        assert cp._cmd_for(text) == bool(_CMD_FOR_ORACLE.search(text)), repr(text)
+
+
+def test_unclosed_subscripts_with_no_closer_after_them_cost_no_budget():
+    """An `a[` with no `]` anywhere after it ends at the end of the text at once, so thousands
+    of them use none of the bracket budget and the command is read, not refused.
+    MUTATION: scan to the end of the text without looking where the last `]` stands - red."""
+    v = classify_command("a[1;" * 3000 + " echo ok", profile="host")
+    assert not v.blocked and v.opaque_shape != "open_brackets", v
+
+
+def test_heredoc_substitutions_merge_in_linear_time():
+    """An unquoted heredoc's substitutions, read twice and merged with a set beside the list:
+    20 000 distinct ones take a moment.
+    MUTATION: test membership against the list - red."""
+    body = NL.join("$(echo %d)" % k for k in range(20000))
+    start = time.perf_counter()
+    found = cp._heredoc_substitutions(body)
+    assert time.perf_counter() - start < 1.0
+    assert len(found) >= 20000
+
+
+class _Counting(str):
+    """A text that counts the searches made in it (`find` per character, `in` per word)."""
+    def __new__(cls, text):
+        obj = super().__new__(cls, text)
+        obj.finds = {}
+        obj.contains = {}
+        return obj
+
+    def find(self, sub, *args):
+        self.finds[sub] = self.finds.get(sub, 0) + 1
+        return super().find(sub, *args)
+
+    def __contains__(self, sub):
+        self.contains[sub] = self.contains.get(sub, 0) + 1
+        return super().__contains__(sub)
+
+
+def test_quoted_spans_in_one_expansion_look_for_its_end_once():
+    """Many single-quoted spans inside one `"${...}"` share one search for the `}`.
+    MUTATION: search the rest of the text for the `}` at every span - red."""
+    text = _Counting("echo \"${x#" + "'a'" * 500 + "}\"")
+    cp._GrammarText(text).run()
+    assert text.finds.get("}", 0) <= 2, text.finds
+
+
+def test_the_writers_of_one_text_look_for_extglob_once():
+    """The writers of a text's backtick texts share what the text says about extglob, and the
+    readings of a subscript's substitutions share one writer state.
+    MUTATION: look it up in each writer - red; MUTATION: a fresh state per substitution - red."""
+    text = _Counting("x[ `b`; " * 300)
+    cp._GrammarText(text).run()
+    assert text.contains.get("extglob", 0) == 1, text.contains
+    calls = []
+    real = cp._grammar_names
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    with mock.patch.object(cp, "_grammar_names", counting):
+        cp._subscript_text("echo 'a[" + "$(a)" * 200 + "]'")
+    assert len(calls) == 1, len(calls)
+
+
+def test_a_quoted_word_counts_as_present_only_when_it_is_one_word():
+    """`"$S"`, `"$*"`, `"${a[*]}"` and `""$S` are one word even when empty: the script name.
+    `"$@"`, `"${a[@]}"` may be none: the input is read as the script too.
+    MUTATION: take every quoted word for present - red; take every one for absent - red."""
+    for raw, absent in (('"$S"', False), ('"$*"', False), ('"${a[*]}"', False),
+                        ('""$S', False), ("'$@'", False), ('"${!x}"', False),
+                        ('"$@"', True), ('"${@:2}"', True), ('"${a[@]}"', True),
+                        ('"${!a[@]}"', True), ('"${!pre@}"', True)):
+        tok = raw.replace('"', "").replace("'", "")
+        reads = cp._script_input("bash", [tok, "<<<", "rm -rf /"], [],
+                                 [raw, "<<<", "'rm -rf /'"])
+        assert bool(reads[1]) is absent, (raw, reads)
 
 
 def test_unchanged_text_costs_no_second_reading(monkeypatch):
@@ -1187,7 +1361,7 @@ def test_a_failing_grammar_reading_refuses(monkeypatch, caplog):
     def broken(text):
         raise RuntimeError("secret-token-in-a-command")
 
-    monkeypatch.setattr(cp, "_grammar_text", broken)
+    monkeypatch.setattr(cp, "_grammar_texts", broken)
     with caplog.at_level("WARNING", logger="vaf.core.command_policy"):
         v = classify_command("echo secret-token-in-a-command", profile="host")
     assert v.blocked and v.categories == ["unreadable"], v

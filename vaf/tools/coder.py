@@ -1824,12 +1824,25 @@ class TaskManager:
     def __init__(self, base_dir: Optional[str] = None):
         self.pm: Optional[PersistenceManager] = None
         self.state: Optional[ProjectState] = None
+        # True when the last initialize() kept an unfinished plan because the caller asked
+        # to resume it.
+        self.resumed: bool = False
         if base_dir:
             self.initialize(base_dir)
-            
-    def initialize(self, base_dir: str, current_task: str = ""):
+
+    def initialize(self, base_dir: str, current_task: str = "", *, resume: bool = False):
         """Initialize persistence with the project directory: the run's resolved folder,
-        which the notes folder is pinned to (``expect_folder``)."""
+        which the notes folder is pinned to (``expect_folder``).
+
+        Which stored plan survives:
+        - a finished plan (every task completed) never does, the request plans fresh;
+        - ``resume=True`` keeps an unfinished plan exactly as stored (its tasks, statuses,
+          cursor and original request; nothing is stamped), also one with no tasks yet;
+        - otherwise a request whose text differs from the stored one (after strip) plans
+          fresh, and the same text keeps the plan (a crash-resume). A state without a stored
+          request, written before requests were stored, is kept only for an empty text.
+        """
+        self.resumed = False
         self.pm = PersistenceManager(base_dir, expect_folder=base_dir)
         project_name = os.path.basename(base_dir)
         cur = (current_task or "").strip()
@@ -1842,11 +1855,19 @@ class TaskManager:
                 bool(loaded_state.tasks)
                 and all(t.status == "completed" for t in loaded_state.tasks)
             )
+            if resume and not all_done:
+                # The caller continues this plan by name: its request stays the one the plan
+                # was made for, so a later resume still sees the original requirements.
+                self.state = loaded_state
+                self.resumed = True
+                return
             # A DIFFERENT user request must plan fresh, not resume a leftover (e.g. failed)
             # plan from a previous request. Only a genuine crash-resume of the SAME request
-            # keeps the persisted, incomplete tasks.
+            # keeps the persisted, incomplete tasks. A legacy state with no stored request
+            # counts as different: the run starts in the plan's open task, and an unrelated
+            # request must not be sent there.
             stored = (getattr(loaded_state, "task", "") or "").strip()
-            new_request = bool(cur) and bool(stored) and stored != cur
+            new_request = bool(cur) and stored != cur
             if all_done or new_request:
                 # init_project() only creates the file if it doesn't exist, so we
                 # must explicitly overwrite the stale state with a fresh ProjectState.
@@ -1984,6 +2005,25 @@ class TaskManager:
             if idx < self.state.current_task_idx:
                 self.state.current_task_idx = idx
             self.pm.save_state(self.state)
+
+    def resume_point(self) -> Optional[tuple]:
+        """Where a kept plan continues: every failed task goes back to pending (its reason
+        archived in ``description`` by reset_task_for_retry), and the cursor moves to the
+        first task that is not terminal, counted from the start of the plan. Returns
+        ``(index, title)`` of that task, or None when the plan has no open task."""
+        if not self.state or not self.pm or not self.state.tasks:
+            return None
+        for idx, task in enumerate(self.state.tasks):
+            if task.status == "failed":
+                self.reset_task_for_retry(idx, task.result or "failed")
+        self.state.current_task_idx = 0
+        self._advance_to_next_actionable()
+        self.pm.save_state(self.state)
+        set_run_progress(*self.progress_counts())
+        idx = self.state.current_task_idx
+        if idx >= len(self.state.tasks):
+            return None
+        return idx, self.state.tasks[idx].title
 
     def append_task(self, title: str, description: str = "") -> int:
         """Add one task at the end of the plan. The code audit round uses it: what the audit
@@ -3223,6 +3263,21 @@ class DeployTarget:
         return f"{self.target}{self.root}" if self.kind == "ftp" else f"{self.target}:{self.root}"
 
 
+def _continuation_call(base_dir: str) -> str:
+    """The call that continues the plan stored in ``base_dir``, as an answer with open tasks
+    recommends it. ``resume=true`` keeps the stored request and its open tasks; the same
+    call without it is a new request and plans fresh. The folder is written as a JSON string,
+    so a quote, a backslash or a newline in it reads back as the same path."""
+    return (f'coding_agent(task="complete all remaining tasks", '
+            f'project_path={json.dumps(str(base_dir), ensure_ascii=False)}, resume=true)')
+
+
+def _nothing_to_resume(folder) -> str:
+    """The answer to a resume whose folder holds no unfinished plan."""
+    return (f"Error: nothing to resume in '{folder}': no unfinished plan is stored there. "
+            "Call coding_agent without resume and with the task to do.")
+
+
 def _content_only_task(task: str) -> bool:
     """The legacy content-only mode: an automation that wants text back, no project folder
     (a temporary one instead)."""
@@ -3665,6 +3720,10 @@ class CodingAgentTool(BaseTool):
             "deploy_to": {
                 "type": "string",
                 "description": "Optional, and ONLY when the user asked for the result to go onto a server: user@host[:port]:/folder for an SSH server, or ftps://user@host[:port]/folder for a web space with FTP (ftp://... only for one without encryption). The coder then gets the ssh tool, or the ftp tool, for exactly that server and folder (upload the built files there; over ssh also run commands such as a restart); without deploy_to it reaches no server at all. The server must already be confirmed by the user: if it is new, connect once first with ssh(server=..., command='true') or ftp(server=..., action='list')."
+            },
+            "resume": {
+                "type": "boolean",
+                "description": "Optional: true continues the unfinished plan stored in project_path (its original request and its open tasks), as a coding_agent answer with open tasks tells you. Needs project_path. task is then only a note for that continuation. Without resume, a task that differs from the stored request starts a new plan."
             }
         },
         "required": ["task"]
@@ -4079,6 +4138,14 @@ Thumbs.db
         # here, before a child process, the display or its temporary folder exist.
         if kwargs.get("environment") and _content_only_task(task):
             return "Error: a content-only run has no project folder to work in an environment"
+        # Continue the plan stored in project_path instead of planning the task text. Read
+        # strictly: a direct run() caller's string "false" is not a request to resume.
+        resume = kwargs.get("resume") is True
+        if resume and not kwargs.get("project_path"):
+            return ("Error: resume needs project_path, the folder whose stored plan to "
+                    "continue.")
+        if resume and _content_only_task(task):
+            return "Error: a content-only run has no stored plan to resume"
         # The chat this run works for: in the parent the dispatcher's context, in the
         # spawned child VAF_SESSION_ID. The policy asks whether it is a messaging channel,
         # and python_exec's own check reads the person's grants for it.
@@ -4235,6 +4302,8 @@ Thumbs.db
                 _spawn_args += ("--environment", str(kwargs.get("environment")))
             if _deploy is not None:
                 _spawn_args += ("--deploy-to", str(_deploy))
+            if resume:
+                _spawn_args += ("--resume",)
             spawned = spawn_subagent(
                 "coding_agent", task,
                 args=_spawn_args,
@@ -4481,6 +4550,12 @@ Thumbs.db
             animation_running.clear()
             stop_live()
             return _choice.refusal
+        if resume and (_choice.source != "project_path" or not os.path.isdir(_choice.base_dir)):
+            # A resume works only in the folder it names: an unusable project_path falls
+            # through to another folder above, and a missing one would be created here.
+            animation_running.clear()
+            stop_live()
+            return _nothing_to_resume(kwargs.get("project_path"))
         base_dir = _choice.base_dir
         if _choice.source == "project_path":
             # Continue existing project OR create new one at specific path
@@ -4552,7 +4627,25 @@ Thumbs.db
 
         # Initialize Persistence for TaskManager (pass the task so a NEW request plans fresh
         # instead of resuming a leftover/failed plan from a previous, different request).
-        task_mgr.initialize(base_dir, current_task=task)
+        task_mgr.initialize(base_dir, current_task=task, resume=resume)
+        if resume and not task_mgr.resumed:
+            # The display and its animation thread are running by now: end them, or an
+            # in-process run leaves them drawing over the chat.
+            animation_running.clear()
+            stop_live()
+            return _nothing_to_resume(base_dir)
+        # A kept plan works for the request it was made for: every prompt below (template
+        # choice, the system prompt, each task's "Original Project Task", the final commit)
+        # reads `task`. Only this local changes; the stored request stays the original, so a
+        # later resume still sees it.
+        _stored_request = ((task_mgr.state.task if task_mgr.state else "") or "").strip()
+        if task_mgr.resumed and _stored_request and task.strip() != _stored_request:
+            task = f"{_stored_request}\n\n[Continuation note from the caller]\n{task}"
+            tui.task = task
+        # Where a kept plan (a resume, or a crash-resume of the same request) continues: its
+        # failed tasks are open again and the cursor stands on the first open task.
+        _resume_failed = task_mgr.failed_tasks() if task_mgr.todos else []
+        _kept_plan_start = task_mgr.resume_point() if task_mgr.todos else None
 
         # Snapshot of visible files at run start — lets the WebUI file tree
         # distinguish files added (A) vs modified (M) during this run.
@@ -4726,8 +4819,12 @@ Thumbs.db
                     )
             except Exception:
                 pass
+        elif _kept_plan_start is not None:
+            # The plan is already decided: guided mode would replace it with its own todos.
+            tui.append_stream("[INFO] Continuing a stored plan - skipping template")
 
-        if not skip_template and not _is_api_mode and not _existing_code_files:
+        if (not skip_template and not _is_api_mode and not _existing_code_files
+                and _kept_plan_start is None):
             tui.set_action("Analyzing task for template...")
             # CRITICAL: Force immediate update BEFORE blocking operation
             tui.append_stream("[INFO] Starting template selection...")
@@ -5111,6 +5208,16 @@ Complete this task: "{task}"
                 user_msg += f"{i+1}. {todo}\n"
             user_msg += "\n**START NOW with Task 1.**\n"
             user_msg += "The system prompt will give you detailed instructions for each step."
+        elif _kept_plan_start is not None:
+            # A kept plan: set_todos would be refused with open tasks, so it is not demanded.
+            _open_count = len([t for t in task_mgr.todos
+                               if t["status"] not in TaskManager._TERMINAL_STATUSES])
+            user_msg = f"Task: {task}\n\n"
+            user_msg += (f"This run continues a stored plan: {_open_count} of "
+                         f"{len(task_mgr.todos)} tasks are open, starting with task "
+                         f"{_kept_plan_start[0] + 1}: {_kept_plan_start[1]}\n")
+            user_msg += ("The TODO list is fixed - do not call `set_todos`. Work on the current "
+                         "task, then call `task_done`.")
         else:
             # NORMAL MODE - LLM must plan
             user_msg = f"Task: {task}\n\n"
@@ -5160,6 +5267,11 @@ Complete this task: "{task}"
             tui.append_stream(f"[GUIDED MODE] Skipping planning phase - switching to Task 1")
             # Set flag to skip the planning phase in main loop
             guided_mode_skipped_planning = True
+        if _kept_plan_start is not None and not guided_mode:
+            # A kept plan starts in its open task's context, the same switch guided mode uses.
+            guided_mode_skipped_planning = True
+            tui.append_stream(f"[RESUME] Continuing the stored plan at task "
+                              f"{_kept_plan_start[0] + 1}")
 
         # Backup for rollback on errors
         last_stable_state = current_state.clone()
@@ -6663,16 +6775,34 @@ Task {task_idx + 1}: {current_task}
             # GUIDED MODE: Skip planning phase and go directly to Task 1
             # ═══════════════════════════════════════════════════════════════
             if guided_mode_skipped_planning:
-                tui.append_stream("[GUIDED MODE] Switching to Task 1 context immediately")
+                # The task the plan stands on: 0 right after guided mode's set_todos, the
+                # first open task of a kept plan.
+                _start_idx = task_mgr.current_task_idx
+                _start_label = "[RESUME]" if _kept_plan_start is not None else "[GUIDED MODE]"
+                tui.append_stream(f"{_start_label} Switching to Task {_start_idx + 1} context immediately")
                 first_task = task_mgr.get_current_task()
                 if first_task:
-                    # Switch to Task 1 context
-                    success = switch_to_task_context(0, first_task)
+                    success = switch_to_task_context(task_mgr.current_task_idx, first_task)
                     if success:
                         sync_legacy_vars()  # Update legacy variables
-                        tui.append_stream(f"[GUIDED MODE] Now executing: {first_task[:50]}")
+                        tui.append_stream(f"{_start_label} Now executing: {first_task[:50]}")
+                        if _resume_failed:
+                            # A fresh context holds only its system and user message here,
+                            # so no tool call is waiting for an answer.
+                            history.append({
+                                "role": "system",
+                                "content": (
+                                    "These tasks failed in an earlier run and are open again:\n"
+                                    + "\n".join(f"- Task {t['id']}: {t['task']} -> "
+                                                f"{(t.get('result') or 'failed')[:200]}"
+                                                for t in _resume_failed)
+                                    + "\n\nUse the existing project files and make the "
+                                      "required changes, then call task_done."
+                                ),
+                            })
+                            _resume_failed = []
                     else:
-                        tui.append_stream("[WARN] Failed to switch to Task 1 - continuing in planning mode")
+                        tui.append_stream(f"[WARN] Failed to switch to Task {_start_idx + 1} - continuing in planning mode")
                 # Clear flag so we don't do this again
                 guided_mode_skipped_planning = False
 
@@ -11702,9 +11832,10 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                 task_status += f"\n**⚠️ Remaining tasks ({len(remaining)})**:\n" + "\n".join(f"- {t}" for t in remaining[:5])
                 if len(remaining) > 5:
                     task_status += f"\n- ... and {len(remaining) - 5} more"
-            if failed_list or remaining:
+            # A content-only run's folder is temporary and holds no plan to come back to.
+            if (failed_list or remaining) and not skip_template:
                 task_status += f"\n\n**💡 To complete all tasks, continue with:**\n"
-                task_status += f"`coding_agent(task=\"complete all remaining tasks\", project_path=\"{base_dir}\")`"
+                task_status += f"`{_continuation_call(base_dir)}`"
 
         if files_created:
             # ═══════════════════════════════════════════════════════════════
@@ -11783,7 +11914,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         "marked as done. Review the failed tasks above before continuing."
                     )
                 else:
-                    completion_note = "**Note**: Loop ended before all tasks were completed. Please continue to finish all remaining tasks."
+                    completion_note = "**Note**: Loop ended before all tasks were completed. Continue with the call above, which keeps the plan."
                 status_signal = "[VAF_CODING_AGENT_STATUS: PARTIAL]"
             else:
                 completion_header = "### ✅ Task Completed"

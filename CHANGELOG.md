@@ -78,6 +78,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   seconds or minutes while it looked for tool calls in such a reply: 128 KB took up to 27 s,
   twice per reply, and one shape took far longer. The tool calls it finds are the same as
   before.
+- **A coding run that ends with open tasks can now be continued without losing its plan.**
+  The answer suggests `coding_agent(..., resume=true)`, which keeps the original request and
+  its open tasks (failed ones are tried again) and starts straight at the next open task.
+  Before, the suggested follow-up was read as a new request and replaced the plan. The same
+  applies to the automatic continuation after a workflow.
 - **Stop now stops a tool the model is still writing.** Pressing Stop while the reply was
   streaming used to let a tool call that had already arrived run anyway, after which VAF asked
   the model again. The call is now dropped and the turn ends. A stop between two tools records

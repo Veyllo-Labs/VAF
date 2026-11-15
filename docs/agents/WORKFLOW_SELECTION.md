@@ -246,7 +246,15 @@ work.
   `Error: `) is read as a failed step.
 - **The coding agent's failure reports** open with `[VAF_CODING_AGENT_STATUS: FAILED]` or
   `### ❌` (`Task Failed`, `Repeated Error Detected`); both are shared openers. A `PARTIAL` or
-  `COMPLETE` report is not a failure.
+  `COMPLETE` report is not a failure. After a workflow whose coder step ended without
+  `[VAF_CODING_AGENT_STATUS: COMPLETE]` and with open tasks, `Agent._try_workflow` runs the
+  coder once more on the folder the report names (its `Full Path` line), with `resume=true`
+  and a short constant task: the coder keeps the plan stored there, its original request and
+  its open tasks, and starts at the first open one (see "The plan store" in
+  [CODER_ARCHITECTURE.md](CODER_ARCHITECTURE.md)). Before, it sent a hand-written task text,
+  which the coder read as a new request and planned fresh. The continuation counts as done
+  when its answer carries the `COMPLETE` signal; otherwise both answers are shown, with the
+  call that continues the plan.
 - **A spawned helper that failed or timed out in the queue is a failed step.** The sub-agent
   wait (`_await_subagent`) reads the IPC status and answers `Error: <tool> did not finish:
   <reason>`, whatever the child's text was.

@@ -9029,64 +9029,28 @@ class Agent:
                             # Don't just suggest - ACTIVELY call coding_agent again
                             UI.event("Workflow", "Detected incomplete tasks - Main Agent intervening", style="warning")
                             
-                            # Call coding_agent again with explicit instructions
-                            from vaf.tools.coder import CodingAgentTool
+                            # Call coding_agent again on the plan the coder stored in that
+                            # folder: resume keeps its original request and open tasks, where
+                            # a new task text would be a new request and plan fresh.
+                            from vaf.tools.coder import _continuation_call
                             coding_tool = all_tools.get("coding_agent")
                             if coding_tool:
-                                # Extract current task status from output
-                                task_match = re.search(r'Tasks:\s*(\d+)/(\d+)', final_output)
-                                completed_tasks = int(task_match.group(1)) if task_match else 0
-                                total_tasks = int(task_match.group(2)) if task_match else 0
-                                
-                                # Extract remaining tasks from output
-                                remaining_tasks = []
-                                if "Remaining tasks" in final_output or "Tasks:" in final_output:
-                                    # Try to extract task list from output
-                                    task_list_match = re.search(r'Tasks:.*?\n(.*?)(?:\n\n|\n─)', final_output, re.DOTALL)
-                                    if task_list_match:
-                                        task_text = task_list_match.group(1)
-                                        # Extract incomplete tasks (lines starting with ○ or ⠴)
-                                        for line in task_text.split('\n'):
-                                            if '○' in line or '⠴' in line or '⠦' in line or '⠧' in line or '⠇' in line:
-                                                # Extract task text (remove status icons)
-                                                task_text_clean = re.sub(r'[○⬤⠴⠦⠧⠇]', '', line).strip()
-                                                if task_text_clean:
-                                                    remaining_tasks.append(task_text_clean)
-                                
-                                # Build context-aware continue task
-                                context_info = f"**Current Status:** {completed_tasks}/{total_tasks} tasks completed.\n"
-                                if remaining_tasks:
-                                    context_info += f"**Remaining Tasks:**\n" + "\n".join(f"- {t}" for t in remaining_tasks[:5]) + "\n\n"
-                                else:
-                                    context_info += f"**Note:** Check the TODO list in the project to see remaining tasks.\n\n"
-                                
-                                continue_task = (
-                                    f"Continue working on the EXISTING project at: {project_path_hint}\n\n"
-                                    f"{context_info}"
-                                    f"**IMPORTANT:**\n"
-                                    f"- Read the existing files to understand what's already done\n"
-                                    f"- Check the TODO list status (some tasks may already be completed)\n"
-                                    f"- Continue from where you left off - do NOT start over\n"
-                                    f"- Complete ONLY the remaining tasks\n"
-                                    f"- Replace ALL remaining placeholders with real content\n"
-                                    f"- Use the original request '{user_input}' as context for content\n"
-                                    f"- Do NOT recreate files that are already done - only modify what's needed"
-                                )
-                                
                                 UI.event("Workflow", "↻ Continuing work on remaining tasks...", style="info")
                                 # The caller's identity, by the same assignment every dispatch
                                 # uses: a bare run() here gave the coder no scope, and with no
                                 # scope the account allowlist reads as unrestricted.
                                 _continue_args = _assign_declared_identity(
-                                    coding_tool, {"task": continue_task, "project_path": project_path_hint},
+                                    coding_tool,
+                                    {"task": "Continue the open tasks of the stored plan.",
+                                     "project_path": project_path_hint, "resume": True},
                                     user_scope_id=getattr(self, "_current_user_scope_id", None),
                                     username=getattr(self, "_current_username", None),
                                     user_role=getattr(self, "_current_user_role", None),
                                 )
                                 continuation_result = coding_tool.run(**_continue_args)
-                                
-                                # Check if NOW everything is complete
-                                if "ALL TASKS COMPLETED" in continuation_result or "Tasks: 5/5" in continuation_result:
+
+                                # Check if NOW everything is complete: the coder's own signal.
+                                if "[VAF_CODING_AGENT_STATUS: COMPLETE]" in continuation_result:
                                     final_output = continuation_result
                                     incomplete_tasks_hint = ""
                                 else:
@@ -9100,8 +9064,8 @@ class Agent:
                             else:
                                 incomplete_tasks_hint = (
                                     f"\n\n[!] **Note**: The coding agent has incomplete tasks. "
-                                    f"To complete all remaining tasks, use:\n"
-                                    f"`coding_agent(task=\"continue and complete all remaining tasks\", project_path=\"{project_path_hint}\")`"
+                                    f"To complete them, use:\n"
+                                    f"`{_continuation_call(project_path_hint)}`"
                                 )
                         else:
                             incomplete_tasks_hint = (

@@ -1319,6 +1319,13 @@ What to expect:
   ignores a path in the task text that points elsewhere, and creates new projects under
   the caller's own `Documents/VAF_Projects/<uid8>/`. A scope-less caller is the machine
   owner, as everywhere, and is not confined.
+- **A coder run that ends with open tasks keeps its plan.** The plan stays in the
+  project's `.vaf/tasks.json`, and the answer names the call that continues it,
+  `coding_agent(..., project_path=..., resume=true)`: the original request and the open
+  tasks are kept, failed ones are tried again, and the run starts at the next open task.
+  Calling it again with a different task text and without `resume` is a new request and
+  plans fresh. If your application offers a "continue" action of its own, pass
+  `resume=True` with the folder from the answer's `Full Path` line.
 - **The coder needs a sandbox.** The coding agent's shell needs bubblewrap or
   Docker; its test runner and `python_sandbox` need Docker specifically (see
   [Security posture](#security-posture)). Without them, those steps return an

@@ -190,7 +190,7 @@ Inside the agentic loop the same two tools are registered as base_dir-wrapped lo
     admin's picker via `GET /api/users/tool-universe`.
 *   **IF NOT (Main Process):**
     *   Check `Config.sub_agents_in_separate_terminals`.
-    *   **Spawning:** Uses `sys.executable` to spawn a NEW process via `python -m vaf.main subagent run coding_agent`.
+    *   **Spawning:** Uses `sys.executable` to spawn a NEW process via `python -m vaf.main subagent run coding_agent`. The call's choices cross as arguments, never as environment variables: `--project-path`, `--environment`, `--deploy-to` and `--resume` (see "The plan store" below).
     *   **IPC:** Creates a task in `subagent_ipc` and passes the ID.
     *   **Return:** Returns a placeholder string `[SUBAGENT_ASYNC:...]` to the main agent.
 *   **IF YES (Sub-Agent Process):**
@@ -204,19 +204,93 @@ Inside the agentic loop the same two tools are registered as base_dir-wrapped lo
     *   **IF API mode:** Templates are **skipped entirely** - capable API models plan and write without scaffolding. The agent still calls `set_todos` itself.
     *   **IF local model (`provider == "local"` only):** Template selection logic runs as normal; the `:8080` health check applies only here.
 *   **Template Logic (local models only):**
+    *   **Kept-plan guard:** templates are skipped when the run continues a stored plan (`[INFO] Continuing a stored plan - skipping template`): guided mode would replace that plan with its own todos, also in a folder that has no code files yet.
     *   **Edit-mode guard:** templates are skipped entirely when `base_dir` already contains code files (html/css/js/py/...). `TemplateManager.generate_files()` writes into `base_dir` and would overwrite the user's work - a follow-up task whose text merely mentions "Website" must never replace a finished site with placeholder scaffolding. Existing projects always go through normal planning, where the fresh task context injects the existing file list for editing. Telemetry event: `template_skipped_existing_project`.
     *   Checks task keywords for template type ("website", "html", etc.) with an LLM-based fallback detector. HTML-specific keywords (`index.html`, `.html`, `html datei`) are included to prevent misclassification.
     *   If a matching template exists, copies files to `base_dir`.
     *   Sets `template_files` list for later reference (soft guidance, not enforcement).
 *   **System Prompt Generation:**
     *   Generates the **Supervisor System Prompt**.
-    *   **Crucial Instruction:** "Your FIRST action MUST be to call `set_todos`".
+    *   **Crucial Instruction:** "Your FIRST action MUST be to call `set_todos`". Not for a kept plan: its user message says how many tasks are open and that the todo list is fixed, and the run starts in the open task's context (below).
     *   **Hidden Tools:** Explicitly hides `task_done` from the prompt text to force planning.
     *   **Template language:** Framed as **guidance** ("recommended workflow", "good baseline") - not as hard rules. The agent is free to deviate from template structure if the task calls for it.
     *   **Task planning rules (injected into system prompt):**
         -   Single-file deliverable → exactly 1 task. Multi-file → one task per output file.
         -   No planning tasks (e.g. "Design the layout") - every task must produce at least one `write_file` call.
         -   No meta-files (PLAN.md, STRUCTURE.md, etc.) written to the project directory.
+
+#### The plan store: new request, crash-resume and `resume`
+
+The plan lives in the project's `.vaf/tasks.json` (`ProjectState`: the tasks with their
+statuses, the cursor `current_task_idx`, and `task`, the request the plan was made for).
+`TaskManager.initialize(base_dir, current_task, resume=...)` decides whether a stored plan
+survives the new run:
+
+| Stored state | Call | Result |
+|---|---|---|
+| none | any | a fresh state with the call's text as its request |
+| every task completed | any | replaced by a fresh state (a finished plan is never continued) |
+| unfinished | `resume=True` | kept exactly as stored: tasks, statuses, cursor and the original request; nothing is stamped, also when it has no tasks yet (a run that stopped before `set_todos`); `resumed` is True |
+| unfinished | the same text, after strip | kept (a crash-resume) |
+| unfinished | an empty text | kept |
+| unfinished | a different text | replaced: a new request plans fresh |
+| unfinished, no stored request (written before requests were stored) | any non-empty text | replaced: only `resume=True` or an empty text keep it, because a kept plan's run starts straight in its open task |
+
+`coding_agent(task=..., project_path=..., resume=true)` is the explicit continuation. `run()`
+reads the flag strictly (`kwargs.get("resume") is True`) and refuses, before the history
+shortcut and before the spawn, a resume without `project_path` and a resume of a content-only
+task. The spawned child gets `--resume`. A `project_path` that does not exist, or that the
+folder choice did not use (an unsafe folder falls through to another source), is answered
+`Error: nothing to resume in '<path>'` before a folder or a repository is created; so is a
+folder with no unfinished plan, after `initialize`. The display is ended on both answers.
+
+A kept plan (a resume, or a crash-resume of the same text):
+
+*   **Works for the stored request.** The run's `task` becomes the stored request, and a call
+    text that differs from it is appended as `[Continuation note from the caller]`. Only the
+    run's local changes, never `state.task`, so a later resume still sees the original. The
+    template choice, the system prompt, each task's `Original Project Task` line, the
+    single-file rule and the final commit message read it.
+*   **Continues at its first open task.** `TaskManager.resume_point()` puts every failed task
+    back to pending through `reset_task_for_retry` (the reason archived as `Previous attempt:`
+    in `description`), moves the cursor to the first task that is not terminal, counted from
+    the start of the plan, and returns `(index, title)`. The run then starts in that task's
+    context through the same flag guided mode uses (`guided_mode_skipped_planning`, switching
+    to `task_mgr.current_task_idx`, labelled `[RESUME]`), with one system note in that fresh
+    context naming the tasks that failed before and why. Before, a kept plan started in the
+    planning context, where `set_todos` is refused while tasks are open, and reached a task
+    only through stuck detection.
+*   **Skips the template** (the kept-plan guard above).
+
+The coder's answer with open tasks names the continuation, built once by
+`_continuation_call(base_dir)`:
+`coding_agent(task="complete all remaining tasks", project_path="<folder>", resume=true)`, the
+folder written as a JSON string so any path reads back exactly. A content-only run's answer
+names none, because its temporary folder holds no plan to come back to. The main agent's
+automatic continuation after a workflow passes `resume` in code (see
+[WORKFLOW_SELECTION.md](WORKFLOW_SELECTION.md)). A model that sends a different text without
+`resume` still gets a fresh plan: that is the rule for a new request, unchanged.
+
+NAMED BOUNDARIES:
+*   **The stored request is project content.** `tasks.json` lives in the project folder, which
+    the coder's own `bash` can write, so the stored request and task titles a resume reads into
+    the prompt have the trust of `.vaf/codex.md` and `memory.md`, which every task prompt
+    already reads whole (section C). The folder's write gate (`project_dir_refusal`) is the
+    boundary, and the same gate decides who may resume; a room member resumes the plan stored
+    in the room's shared folder, as they could already edit it.
+*   **The target-file hint is not re-derived on resume.** A hint taken from a path in the
+    original request text (`_choose_base_dir` reads the call's text) is absent in the resumed
+    run; the kept plan's task titles name their files (one task per output file).
+*   **Two runs on one folder at once** (a resume while another chat's coder works there):
+    `tasks.json` is last-writer-wins, as for any two runs. The same-session duplicate guard in
+    the dispatch covers the common case.
+*   **The workflow validation retry** appends a correction to the step's text and therefore
+    plans fresh: a corrected request by design.
+*   **The IPC task title** of a resumed child shows the call's text (the note), not the stored
+    request.
+
+Pinned by `tests/test_coder_task_resume.py`, including two seeded fuzz tests (the call reads
+back every path; the keep-or-replace decision against the table above).
 
 ### C. Hierarchical Context Setup (Lines ~2200-2400)
 *   **`ContextState` Class:** Defined locally to hold `ContextManager`, `history`, `phase`, and `files_created` for a specific scope.
@@ -562,7 +636,7 @@ The prompt has always stated these rules ("run_tests must be green before `task_
     3.  Then the code audit rounds (section 5b): commit, review `_run_start_sha..HEAD`, first check, deep check, one fix task per round with what is new; repeat until clean, nothing new, incomplete or the limit.
     4.  End-of-run cleanup of stale `PARTIAL_*` files.
     5.  DOCUMENT phase (section 5a): one model call writes or updates the README from what git says changed. It runs after the audit, so the README it writes is not reviewed.
-    6.  Final commit, then the summary: files, task status, the commit line and the audit outcome line.
+    6.  Final commit, then the summary: files, task status, the commit line and the audit outcome line. With open or failed tasks, the task status ends with the call that continues the plan, `_continuation_call(base_dir)` (`resume=true`, see "The plan store" in section B); the answer of a run that created no files carries the same section.
 *   **Final Commit (every exit path):** before the final summary is built, `_final_commit(base_dir, message)` runs `git add -A` and commits when changes exist. Each code audit round commits through the same helper first (`... Code audit round k: the state under review`), so the final commit may find nothing new besides the README. The commit message is `VAF Coder: <task excerpt>` plus a status line (`Status: COMPLETE|PARTIAL (n/m tasks)`); runs with failed or remaining tasks commit too, so no work is ever left untracked. If no git identity is configured, the commit retries once with a one-off VAF identity (`-c user.name=... -c user.email=...`, the user's git config is never modified); `commit_project_state` in `vaf/tools/project_git.py` holds that retry for both this commit and the rollback's own. Unsafe directories and CONTENT_ONLY temp dirs are excluded. The result line appears in the final summary. These commits are what powers the history/rollback delegation (section 3.A0).
 *   **Logic:**
     *   Stops TUI thread (`live.stop()`).

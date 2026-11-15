@@ -87,6 +87,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - A tool call whose arguments are nested more than 100 levels deep is answered with a refusal
   the model can act on, instead of ending the file librarian's or the coding agent's run or
   showing "maximum recursion depth exceeded"; the tool does not run.
+- The coding agent stops when the model sends the same refused tool call three times in a row,
+  instead of asking it again until you press Stop. When one reply sets the to-do list and calls
+  more tools, the answers to those calls now reach the model too.
 - A reply in which the model wrote a tool-call list with a malformed entry (for example
   `{"tool_calls": [1]}`) no longer ends the turn with an error; the text is shown as written,
   and arguments that are not an object are refused with their type named instead of running

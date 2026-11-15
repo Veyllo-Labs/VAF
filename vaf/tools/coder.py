@@ -1613,6 +1613,22 @@ class CoderTUI:
 # Agentic Loop Controller
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _repeated_refusal(loop, fn_name: str, refusal: str) -> bool:
+    """Count a call refused before dispatch; True when it is the third identical one in a row.
+
+    The same bound the repeated write-error stop applies (three identical errors in a row
+    end the run). The streak lives on the loop as ``refusal_streak`` and every call that
+    gets past the refusal resets it, so only consecutive refusals count. The key is the
+    tool name and the refusal text, never the arguments: a refused call's arguments may be
+    the very value that is too deep to walk.
+    """
+    key = f"{fn_name}:{refusal[:200]}"
+    last, count = getattr(loop, "refusal_streak", (None, 0))
+    count = count + 1 if key == last else 1
+    loop.refusal_streak = (key, count)
+    return count >= 3
+
+
 class AgenticLoop:
     """
     Controls the agentic execution loop.
@@ -8096,8 +8112,11 @@ Task {task_idx + 1}: {current_task}
                                         tool_infos.append(f"[TOOL] {fn_name}({args_str})")
                                     else:
                                         tool_infos.append(f"[TOOL] {fn_name}()")
-                                except (json.JSONDecodeError, TypeError):
-                                    # If parsing fails, just show the raw arguments (truncated)
+                                except (ValueError, TypeError, AttributeError, RecursionError):
+                                    # If parsing fails, just show the raw arguments (truncated).
+                                    # Text too deep to decode raises RecursionError and a bare
+                                    # list has no items(); both used to escape to the stream
+                                    # handler below, which ends the whole run.
                                     args_display = fn_args[:100] + "..." if len(fn_args) > 100 else fn_args
                                     tool_infos.append(f"[TOOL] {fn_name}({args_display})")
                         
@@ -9523,6 +9542,16 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                     # Do NOT log raw arguments (can include file contents). Length is enough for debugging.
                     _log_to_file(f"Tool {i+1} Args Len: {len(tc_args) if tc_args else 0}")
 
+            # CRITICAL: Save the history reference NOW, once for the whole batch, before any
+            # tool runs. Some tools (set_todos) trigger a context switch via
+            # sync_legacy_vars(), which reassigns `history` to the NEW context. Every answer
+            # in this batch must go into the history that holds the assistant message
+            # owning these calls, otherwise we get an orphaned role='tool' message in the
+            # fresh task context: strict providers answer it with a 400 ("Messages with
+            # role 'tool' must be a response to a preceding message with 'tool_calls'"),
+            # and the request builder drops it, so the model never sees that answer. Taken
+            # per call, a call AFTER set_todos in the same batch landed in the new context.
+            _history_at_dispatch = history
             for tc in tool_calls:
                 fn_name = tc['function']['name'].strip()
                 # The name the model asked for, before any alias is resolved below: the
@@ -9530,15 +9559,6 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                 # alias is routed to (web_deep_search), so authorisation asks with this one.
                 _requested_fn_name = fn_name
                 fn_args_str = tc['function']['arguments']
-
-                # CRITICAL: Save history reference NOW, before tool execution.
-                # Some tools (set_todos) trigger a context switch via sync_legacy_vars(),
-                # which reassigns `history` to the NEW context. The tool result must go
-                # into the history that was active when this tool was called, otherwise
-                # we get an orphaned role='tool' message in the fresh task context,
-                # causing a 400: "Messages with role 'tool' must be a response to a
-                # preceding message with 'tool_calls'".
-                _history_at_dispatch = history
 
                 # Messages that tool handlers want to append to history (nudges, linter
                 # output, truncation warnings, etc.) MUST be added AFTER the tool result,
@@ -9738,7 +9758,18 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         "name": fn_name,
                         "content": _args_refusal,
                     })
+                    # A refused call never reaches the doom-loop signature below, and every
+                    # reply resets the idle clock, so a model that sends it again and again
+                    # would be asked forever. Three identical refusals in a row end the run,
+                    # the rule three identical write errors already follow.
+                    if _repeated_refusal(loop, fn_name, _args_refusal):
+                        return (
+                            f"### Repeated Refused Call\n\n"
+                            f"The model sent the same refused `{fn_name}` call 3 times in a "
+                            f"row:\n\n{_args_refusal}\n\nStopped to prevent an endless loop."
+                        )
                     continue
+                loop.refusal_streak = (None, 0)
 
                 # Reset consecutive_task_done counter if a different tool is called
                 if fn_name != "task_done" and hasattr(loop, 'consecutive_task_done'):
@@ -11186,8 +11217,9 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                                             _strip_orig_len = len(_parsed['content'])
                                                             _parsed['content'] = f'[content omitted — {_strip_orig_len} bytes written to disk]'
                                                             _htc['function']['arguments'] = json.dumps(_parsed, ensure_ascii=False)
-                                                    except json.JSONDecodeError:
-                                                        # Raw args are malformed (unescaped chars in HTML content).
+                                                    except (json.JSONDecodeError, RecursionError):
+                                                        # Raw args are malformed (unescaped chars in HTML content),
+                                                        # or nested too deep to decode.
                                                         # Replace the entire arguments string with a clean placeholder.
                                                         _placeholder = {
                                                             'path': fn_args.get('path', ''),

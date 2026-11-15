@@ -83,6 +83,28 @@ def test_nesting_depth_of_a_shared_value_costs_its_nodes_not_its_paths():
     assert nesting_depth(value, limit=10) == 11
 
 
+def test_the_module_imports_only_the_standard_library():
+    """`tool_dispatch` imports it at module level, under the slim-base rule, and the app
+    link protocol promises to stay stdlib only; one heavy import here breaks both."""
+    import ast
+    import inspect
+    import sys
+
+    import vaf.core.nesting as nesting
+
+    tree = ast.parse(inspect.getsource(nesting))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            names = [node.module or ""]
+        elif isinstance(node, ast.Import):
+            names = [a.name for a in node.names]
+        else:
+            continue
+        for name in names:
+            top = name.split(".")[0]
+            assert top == "__future__" or top in sys.stdlib_module_names, name
+
+
 def test_nesting_depth_reaches_a_shared_value_at_its_deepest_level():
     """A list reached shallow first and deep later must be measured from the deep place."""
     inner = [[[]]]                       # depth 3

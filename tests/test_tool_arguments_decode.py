@@ -507,6 +507,160 @@ def test_the_coder_asks_the_decoder_before_its_doom_loop_signature():
     assert asked < signed
 
 
+# The coder's tool loop has no driver in the suite (it needs a streaming model, a TUI and a
+# task manager at once), so its structure is pinned through the syntax tree: what a
+# mutation would have to change to break the behaviour, these tests read.
+
+def _coder_run_tree():
+    """`CodingAgentTool.run` as a syntax tree, taken from the parsed module (its source holds
+    column-0 text inside strings, so it cannot be dedented and parsed on its own)."""
+    import ast
+
+    import vaf.tools.coder as coder
+    tree = ast.parse(inspect.getsource(coder))
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "CodingAgentTool")
+    return next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "run")
+
+
+def _bodies(tree):
+    """Every statement list in the tree, so a statement can be found with its neighbours."""
+    import ast
+    for node in ast.walk(tree):
+        for field in ("body", "orelse", "finalbody"):
+            stmts = getattr(node, field, None)
+            if isinstance(stmts, list) and stmts and isinstance(stmts[0], ast.stmt):
+                yield stmts
+        if isinstance(node, ast.Try):
+            for handler in node.handlers:
+                yield handler.body
+
+
+def _assigns(node, name: str) -> bool:
+    import ast
+    return isinstance(node, ast.Assign) and any(
+        isinstance(t, ast.Name) and t.id == name for t in node.targets)
+
+
+def test_the_coder_answers_a_refused_call_and_skips_it():
+    """The refusal block between the decoder and the doom-loop signature: answered as a
+    `role: tool` message to the call, then `continue`, with nothing that could short-circuit
+    the condition; three identical refusals in a row end the run; any call that gets past
+    resets the streak."""
+    import ast
+    tree = _coder_run_tree()
+    asked = [n for n in ast.walk(tree) if _assigns(n, "_args_refusal")]
+    signed = [n for n in ast.walk(tree) if _assigns(n, "action_sig")]
+    assert len(asked) == 1 and len(signed) == 1
+    assert "decode_arguments" in ast.unparse(asked[0].value)
+    blocks = [n for n in ast.walk(tree) if isinstance(n, ast.If)
+              and "_args_refusal" in ast.unparse(n.test)
+              and not ast.unparse(n.test).startswith("_repeated_refusal(")]
+    assert len(blocks) == 1, [ast.unparse(b.test) for b in blocks]
+    block = blocks[0]
+    assert isinstance(block.test, ast.Name) and block.test.id == "_args_refusal", \
+        ast.unparse(block.test)
+    assert asked[0].lineno < block.lineno < signed[0].lineno
+
+    answer = block.body[0]
+    assert ast.unparse(answer).startswith("_history_at_dispatch.append("), ast.unparse(answer)
+    message = answer.value.args[0]
+    fields = {ast.literal_eval(k): v for k, v in zip(message.keys, message.values)}
+    assert ast.literal_eval(fields["role"]) == "tool"
+    assert ast.unparse(fields["tool_call_id"]) == "tc['id']"
+    assert ast.unparse(fields["content"]) == "_args_refusal"
+    assert isinstance(block.body[-1], ast.Continue)
+
+    stops = [s for s in block.body if isinstance(s, ast.If)
+             and ast.unparse(s.test) == "_repeated_refusal(loop, fn_name, _args_refusal)"]
+    assert len(stops) == 1 and isinstance(stops[0].body[-1], ast.Return)
+
+    for stmts in _bodies(tree):
+        if block in stmts:
+            after = stmts[stmts.index(block) + 1]
+            assert ast.unparse(after) == "loop.refusal_streak = (None, 0)", ast.unparse(after)
+            break
+    else:
+        raise AssertionError("the refusal block has no statement after it")
+
+
+def test_three_identical_refusals_in_a_row_end_the_coder_run():
+    from vaf.tools.coder import AgenticLoop, _repeated_refusal
+    loop = AgenticLoop()
+    refusal = _DEEP.format("set_todos")
+    assert [_repeated_refusal(loop, "set_todos", refusal) for _ in range(3)] == [False, False, True]
+    loop.refusal_streak = (None, 0)             # a call got past the refusal
+    assert not _repeated_refusal(loop, "set_todos", refusal)
+    assert not _repeated_refusal(loop, "set_todos", refusal)
+    assert not _repeated_refusal(loop, "read_file", refusal)   # another call breaks the row
+    assert not _repeated_refusal(loop, "set_todos", refusal)
+    assert not _repeated_refusal(loop, "set_todos", "Tool Error: something else")
+
+
+def test_every_answer_of_a_coder_batch_goes_to_the_history_that_owns_it():
+    """`set_todos` switches `history` to a new task context. Taken per call, the history a
+    later call in the same batch answered into was the new one, where the call has no
+    owning assistant message: the request builder drops such an answer, so the model never
+    saw it. The reference is taken once, before the batch."""
+    import ast
+    tree = _coder_run_tree()
+    loops = [n for n in ast.walk(tree) if isinstance(n, ast.For)
+             and ast.unparse(n.iter) == "tool_calls" and ast.unparse(n.target) == "tc"
+             and any(_assigns(s, "_args_refusal") for s in ast.walk(n))]
+    assert len(loops) == 1
+    batch = loops[0]
+    assert not [s for s in ast.walk(batch) if _assigns(s, "_history_at_dispatch")]
+    for stmts in _bodies(tree):
+        if batch in stmts:
+            before = stmts[stmts.index(batch) - 1]
+            assert ast.unparse(before) == "_history_at_dispatch = history", ast.unparse(before)
+            break
+    else:
+        raise AssertionError("the batch loop was not found in a statement list")
+
+
+def _catches_recursion(handler_type) -> bool:
+    import ast
+    if handler_type is None:
+        return True
+    names = handler_type.elts if isinstance(handler_type, ast.Tuple) else [handler_type]
+    return any(ast.unparse(n) in ("RecursionError", "RuntimeError", "Exception",
+                                  "BaseException") for n in names)
+
+
+def test_every_coder_json_decode_survives_text_too_deep_to_decode():
+    """`json.loads` raises RecursionError, not a ValueError, on text nested deeper than the
+    interpreter can decode. The display loop that shows a tool call caught only
+    `JSONDecodeError`, so the error reached the stream handler, which ends the whole coder
+    run. Every decode in the module must be inside a `try` whose own handlers catch it.
+
+    Named exception: the SSE frame (`chunk = json.loads(data_str)`). The provider builds that
+    frame, and the model's arguments are a string field inside it, so model output cannot
+    nest it."""
+    import ast
+
+    import vaf.tools.coder as coder
+    tree = ast.parse(inspect.getsource(coder))
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    checked, missing = 0, []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "loads" and ast.unparse(node.func.value) in ("json", "_json")):
+            continue
+        if _assigns(parents.get(node), "chunk"):
+            continue
+        cur, owner = node, None
+        while cur in parents:
+            parent = parents[cur]
+            if isinstance(parent, ast.Try) and cur in parent.body:
+                owner = parent
+                break
+            cur = parent
+        checked += 1
+        if owner is None or not any(_catches_recursion(h.type) for h in owner.handlers):
+            missing.append(f"line {node.lineno}: {ast.unparse(node)}")
+    assert checked >= 8 and not missing, missing
+
+
 def _funnel(monkeypatch):
     monkeypatch.setattr("vaf.core.trust.get_tool_policy", lambda *a, **k: "always")
     spy = _Spy()
@@ -540,6 +694,44 @@ def test_the_funnel_refuses_a_dict_that_contains_itself(monkeypatch):
     assert outcome.dispatched is False
     _assert_retryable_refusal(outcome.result, spy.name)
     assert spy.calls == [] and events == []
+
+
+class _ArraySpy(_Spy):
+    """`tasks` is an array, so the schema repair parses a string holding a JSON array."""
+    name = "array_spy"
+    parameters = {"type": "object", "properties": {"tasks": {"type": "array"}}}
+
+
+def test_the_funnel_measures_what_the_schema_repair_made(monkeypatch):
+    """A call one level deep whose string field holds a JSON array 500 deep: the repair
+    parses it into a list, and the tool used to receive that list (measured through
+    `edit_file.edits` and `update_working_memory.tasks`, up to 9999 deep). Depth 500 decodes
+    on every supported interpreter, so the case is the same everywhere."""
+    monkeypatch.setattr("vaf.core.trust.get_tool_policy", lambda *a, **k: "always")
+    spy = _ArraySpy()
+    events: list = []
+    caller = ToolCaller({spy.name: spy}, on_event=events.append)
+    outcome = caller.call(spy.name, {"tasks": _list_nesting(500)})
+    _assert_retryable_refusal(outcome.result, spy.name)
+    assert spy.calls == []
+    assert outcome.dispatched is True       # after tool_start, like a schema error
+    assert caller.execute(spy.name, {"tasks": '["a", ["b"]]'}) == "ran"
+    assert spy.calls == [{"tasks": ["a", ["b"]]}]
+
+
+def test_the_funnel_refuses_a_deep_list_of_pairs(monkeypatch):
+    """The sandbox tool bridge forwards `args` from model-written code as they are, so a
+    list reaches `ToolCaller.call`. 3000 deep it raised `RecursionError`."""
+    spy, events, caller = _funnel(monkeypatch)
+    for raw in ([["plan", _deep_list(3000)]], [("other", _deep_list(100))]):
+        outcome = caller.call(spy.name, raw)
+        assert outcome.dispatched is False
+        _assert_retryable_refusal(outcome.result, spy.name)
+    assert spy.calls == [] and events == []
+    # A list of pairs runs as the dict it makes, up to the limit of that dict.
+    assert caller.execute(spy.name, [("plan", "x")]) == "ran"
+    assert caller.execute(spy.name, [("other", _deep_list(99))]) == "ran"
+    assert spy.calls[0] == {"plan": "x"} and len(spy.calls) == 2
 
 
 def _funnel_outcome(monkeypatch, raw) -> tuple:

@@ -315,8 +315,10 @@ def test_the_module_stays_importable_on_the_slim_base():
            if re.match(r"^(import|from) ", l)]
     # The one VAF module allowed here is the channel registry, which is itself stdlib only
     # (tests/test_channel_registry_sync.py pins that), so importing it costs the slim base
-    # nothing: it is where the chat sources this module judges are declared.
-    allowed = ("from vaf.core.channels import ",)
+    # nothing: it is where the chat sources this module judges are declared. The depth walk
+    # is stdlib only as well (tests/test_nesting_depth.py pins that), and the decoder asks it
+    # on every call.
+    allowed = ("from vaf.core.channels import ", "from vaf.core.nesting import ")
     assert all("vaf" not in l or l.startswith(allowed) for l in top), top
 
 

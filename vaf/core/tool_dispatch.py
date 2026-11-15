@@ -38,6 +38,7 @@ from typing import Any
 
 from vaf.core.channels import (CHAT_CHANNELS, CHAT_SESSION_PREFIXES, HOLDER_DEVICE_CHANNELS,
                                HOLDER_DEVICE_SESSION_PREFIXES)
+from vaf.core.nesting import nesting_depth
 
 
 def make_json_serializable(obj: Any) -> Any:
@@ -280,16 +281,17 @@ def decode_arguments(name: str, raw: Any) -> tuple[dict, str | None]:
     already.
 
     Arguments nested deeper than `MAX_ARGUMENT_DEPTH` levels are refused too, as text and as
-    a dict passed through alike, because every later walk over them is Python-recursive:
-    `make_json_serializable` when `ToolRequest` is built, `mask_secret_args` at the gate,
-    the previews, the tools themselves. A value about 1000 levels deep used to raise out of
-    the first of those: the chat loop answered "maximum recursion depth exceeded", and a
-    `ToolCaller.execute` call, the librarian's run or the coder's run ended. Text nested deeper than the interpreter can decode
-    at all (about 10,000 levels on 3.13, less inside a deep call stack) makes `json.loads`
-    raise `RecursionError`, which is not a `ValueError`; such text is over the limit by
-    definition and gets the same depth refusal.
+    a dict passed through alike, because the walks over them on the way to a tool are
+    Python-recursive: `make_json_serializable` when `ToolRequest` is built,
+    `mask_secret_args` at the gate, the previews. A value about 1000 levels deep used to
+    raise out of the first of those: the chat loop answered "maximum recursion depth
+    exceeded", and a `ToolCaller.execute` call, the librarian's run or the coder's run
+    ended. Text nested deeper than the interpreter can decode at all (about 10,000 levels
+    on 3.13, less inside a deep call stack) makes `json.loads` raise `RecursionError`, which
+    is not a `ValueError`; such text is over the limit by definition and gets the same
+    depth refusal. The schema repair can parse a string field into a list, so the funnel
+    measures the repaired arguments again before the tool gets them (`ToolCaller._dispatch`).
     """
-    from vaf.core.nesting import nesting_depth
     if raw is None:
         return {}, None
     if isinstance(raw, dict):
@@ -1607,8 +1609,10 @@ class ToolCaller:
         ``args`` may be the JSON text the model sent, as it arrived: text that is not a JSON
         object is refused (`decode_arguments`) and nothing runs, where a loop's own
         ``json.loads`` with a ``{}`` fallback would run the tool without its arguments.
-        Arguments nested deeper than ``MAX_ARGUMENT_DEPTH``, as text or as a dict, are
-        refused the same way, so this call does not raise for them either.
+        Arguments nested deeper than ``MAX_ARGUMENT_DEPTH``, as text, a dict or a list of
+        (name, value) pairs, are refused the same way, so this call does not raise for them
+        either; so are arguments the schema repair turned that deep, after ``tool_start``,
+        like a schema error.
 
         The ORDER below is contract, not convenience, and three parts of it were only
         discovered by measuring (tests/test_dispatch_event_baseline.py):
@@ -1653,6 +1657,12 @@ class ToolCaller:
         # embedder or the coder hands over a dict it decoded itself.
         if isinstance(args, (str, dict)):
             args, malformed = decode_arguments(name, args)
+        elif (isinstance(args, (list, tuple))
+              and nesting_depth(args, MAX_ARGUMENT_DEPTH + 1) > MAX_ARGUMENT_DEPTH + 1):
+            # A list of (name, value) pairs runs as the dict it makes, and it can come from
+            # model-written code (the sandbox tool bridge forwards its `args` as they are).
+            # The outer list and each pair stand for the one level of that dict, hence + 1.
+            args, malformed = {}, _too_deep(name)
         self._audit_log(name, args)
         if malformed:
             # Like a schema error, about THIS call and nothing else; unlike one, there are no
@@ -1961,6 +1971,12 @@ class ToolCaller:
         tool_args = dict(args) if args else {}
         tool_args, errors = repair_arguments(tool, tool_args, tool_name=name,
                                              model_name=self.model_name)
+        # The repair parses a string field holding a JSON array (and wraps strings and
+        # items), so a call one level deep can come out of it thousands of levels deep:
+        # measured through `edit_file.edits` and `update_working_memory.tasks`. What the
+        # tool gets is held to the same limit as what the model sent.
+        if nesting_depth(tool_args, MAX_ARGUMENT_DEPTH) > MAX_ARGUMENT_DEPTH:
+            return _too_deep(name)
         assign_declared_identity(
             tool, tool_args, user_scope_id=self.user_scope_id,
             username=self.username, user_role=self.user_role, session_id=self.session_id,

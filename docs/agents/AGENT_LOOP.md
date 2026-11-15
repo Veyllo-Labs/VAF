@@ -246,6 +246,11 @@ all optional, answered "Working Memory updated." for a call whose string value t
 not quoted, the plan it carried was lost, and the next turn worked from the stale one (2 of
 560 stored calls). The prefix is not "error", so the "do not retry" nudge stays off: this is
 the one failure a retry fixes. The know-how re-feed skips it too, because the tool never ran.
+Arguments nested deeper than 100 levels (`MAX_ARGUMENT_DEPTH`) get the same treatment, with
+`Tool Error: the arguments of this '<tool>' call are nested deeper than 100 levels, so nothing
+was run`: such a value used to raise in the funnel's recursive walks and come back as
+`Error executing tool: maximum recursion depth exceeded`, after a two-second pause and an error
+line on the console.
 
 **The batch is taken whole.** DeepSeek emits several `<invoke>` blocks inside one
 `<｜｜DSML｜｜tool_calls>` wrapper; recovering only the first left the rest to be erased by

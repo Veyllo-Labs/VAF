@@ -138,6 +138,17 @@ locally, in the time the suite already takes:
                   in a thread that outlived its test is charged "after" the
                   test that finished last; a child process inherits the log
                   and the running test's name.
+  UNLISTENED PORT a connect to a local port that a TCP socket holds bound
+                  without listen() times out (ETIMEDOUT), as on macOS, where
+                  Linux refuses it at once. A test that took such a port for
+                  a closed one (bind, keep the socket, never listen) passed
+                  here and failed on the macOS job with "[Errno 60] Operation
+                  timed out" (three hostile_env tests). A closed port is one
+                  nothing holds: bind, read the port, close. Asked on a
+                  refusal only (a bind probe: EADDRINUSE means a socket holds
+                  the port), so it costs nothing on the path that connects;
+                  installed with the slow refusal axis, and like it not on a
+                  Windows host.
 
 WHAT IT CANNOT DO. Real Windows file semantics - ACLs, MoveFileEx sharing
 violations, the read-only-flag-only chmod - need a real Windows machine. Those
@@ -439,11 +450,45 @@ if _refusal_log and _os.name != "nt":
         except OSError:
             pass
 
+    def _held_unlistened(family, address):
+        """A port on this machine that a TCP socket holds bound without listen(): Linux
+        refuses a connect to it at once, macOS lets it time out (ETIMEDOUT). Asked only after
+        a refusal, so nothing listens there: a bind of our own that the kernel answers with
+        EADDRINUSE means a socket holds the port, in this process or another. SO_REUSEADDR
+        on the probe lets a TIME_WAIT left by an earlier connection pass, and the kernel
+        tables cannot say it instead (a socket that is only bound is in none of them)."""
+        host = address[0]
+        if isinstance(host, (bytes, bytearray)):
+            host = bytes(host).decode("ascii", "replace")
+        try:
+            _ipaddress.ip_address(str(host).split("%")[0])
+        except ValueError:
+            host = "127.0.0.1" if family == _socket.AF_INET else "::1"
+        try:
+            probe = _plain_socket(family, _socket.SOCK_STREAM)
+        except OSError:
+            return False
+        try:
+            probe.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+            probe.bind((host, int(address[1])) + tuple(address[2:]))
+        except OSError as exc:
+            return exc.errno == _errno.EADDRINUSE
+        finally:
+            probe.close()
+        return False
+
+    def _unanswered(address):
+        return TimeoutError(
+            _errno.ETIMEDOUT, "timed out in the hostile environment, as macOS lets a connect "
+            "to a bound port that does not listen time out: " + str(address[0]) + ":"
+            + str(address[1]))
+
     def _refused(address):
         return ConnectionRefusedError(
             _errno.ECONNREFUSED, "refused by the hostile environment, never dialed: "
             + str(address[0]) + ":" + str(address[1]))
 
+    _plain_socket = _socket.socket
     _plain_connect = _socket.socket.connect
     _plain_connect_ex = _socket.socket.connect_ex
 
@@ -458,6 +503,8 @@ if _refusal_log and _os.name != "nt":
         try:
             return _plain_connect(self, address)
         except ConnectionRefusedError:
+            if _tcp(self) and _local(address) and _held_unlistened(self.family, address):
+                raise _unanswered(address) from None
             if counted:
                 _charge(address, self.gettimeout())
             raise
@@ -469,6 +516,9 @@ if _refusal_log and _os.name != "nt":
                 _charge(address, self.gettimeout())
             return _errno.ECONNREFUSED
         code = _plain_connect_ex(self, address)
+        if code == _errno.ECONNREFUSED and _tcp(self) and _local(address) \\
+                and _held_unlistened(self.family, address):
+            return _errno.ETIMEDOUT
         if code == _errno.ECONNREFUSED and counted:
             _charge(address, self.gettimeout())
         return code
@@ -492,6 +542,9 @@ if _refusal_log and _os.name != "nt":
         try:
             return await _plain_sock_connect(self, sock, address)
         except ConnectionRefusedError:
+            # A service port was refused above without a dial; something may listen there.
+            if counted and not _forced(address) and _held_unlistened(sock.family, address):
+                raise _unanswered(address) from None
             if counted:
                 _charge(address, None)
             raise
@@ -695,6 +748,9 @@ def main() -> int:
             f"shorter timeout), at most {_REFUSAL_BUDGET_S:g} s per test; ports "
             f"{', '.join(str(port) for port in _VAF_SERVICE_PORTS)} refused without a dial"
             if os.name != "nt" else "real host, Windows pays the real wait"))
+        print(f"  unlistened port " + (
+            "a connect to a bound port that does not listen times out, as on macOS"
+            if sys.platform.startswith("linux") else "real host, not simulated"))
         print()
         code = subprocess.run([sys.executable, "-m", "pytest", "-p", "vaf_hostile_refusals", *args],
                               cwd=str(ROOT), env=env).returncode

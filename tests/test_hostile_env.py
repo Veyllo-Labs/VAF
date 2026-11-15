@@ -81,7 +81,9 @@ needs_counter = pytest.mark.skipif(
 
 
 # The SLOW REFUSAL axis. `pre` runs before the snippet is installed, `post` after;
-# `closed_port()` binds without listen(), so a connect to it is refused at once.
+# `closed_port()` is a port nothing holds: bound, read and closed again. A socket kept
+# bound without listen() is refused at once on Linux but times out on macOS (the
+# UNLISTENED PORT axis), so it is no closed port on every host.
 _REFUSAL_CHILD = r'''
 import asyncio, errno, json, os, socket, subprocess, sys, time
 snippet, pre, post = sys.argv[1:4]
@@ -90,7 +92,9 @@ snippet, pre, post = sys.argv[1:4]
 def closed_port():
     holder = socket.socket()
     holder.bind(("127.0.0.1", 0))
-    return holder, holder.getsockname()[1]
+    port = holder.getsockname()[1]
+    holder.close()
+    return None, port
 
 
 def refused(sock, address):
@@ -157,7 +161,9 @@ try:
 except OSError:
     print("no ipv6")
 else:
-    assert refused(socket.socket(socket.AF_INET6), ("::1", holder6.getsockname()[1]))
+    port6 = holder6.getsockname()[1]
+    holder6.close()
+    assert refused(socket.socket(socket.AF_INET6), ("::1", port6))
 ''')
     elapsed, *ipv6 = stdout.split()
     assert float(elapsed) < 1.0
@@ -493,6 +499,7 @@ assert "sitecustomize" in sys.modules
 holder = socket.socket()
 holder.bind(("127.0.0.1", 0))
 port = holder.getsockname()[1]
+holder.close()                  # nothing holds it: refused on every host
 counted = socket.socket.connect
 socket.socket.connect = lambda self, address: None
 socket.socket.connect = counted
@@ -518,6 +525,44 @@ assert subprocess.run([sys.executable, "-c",
     who = [line.split("\t")[0] for line in log.read_text(encoding="utf-8").splitlines()]
     assert who == [_TEST_NAME, _TEST_NAME, "after tests/test_example.py::test_pays",
                    "outside any test"]
+
+
+@needs_counter
+def test_a_bound_port_that_does_not_listen_times_out_as_on_macos(tmp_path):
+    """A socket that holds a port bound without listen(): macOS lets a connect to it time
+    out, blocking, through connect_ex and through asyncio, and nothing is charged (it is no
+    refusal); a port nothing holds is refused and charged as before. On a macOS host this is
+    the real behaviour.
+    MUTATION: drop the held-port check in the connect wrapper - red (refused); in
+    connect_ex - red (ECONNREFUSED); in sock_connect - red (refused)."""
+    stdout, lines = _refusal_run(tmp_path, r'''
+holder = socket.socket()
+holder.bind(("127.0.0.1", 0))
+port = holder.getsockname()[1]
+s = socket.socket()
+s.settimeout(0.5)
+try:
+    s.connect(("127.0.0.1", port))
+except TimeoutError as exc:
+    assert exc.errno == errno.ETIMEDOUT, exc
+assert socket.socket().connect_ex(("127.0.0.1", port)) == errno.ETIMEDOUT
+
+
+async def dial():
+    try:
+        await asyncio.open_connection("127.0.0.1", port)
+    except TimeoutError:
+        return "timed out"
+    except ConnectionRefusedError:
+        return "refused"
+
+
+print(asyncio.run(dial()))
+holder.close()
+assert refused(socket.socket(), ("127.0.0.1", port))
+''')
+    assert stdout.split() == ["timed", "out"]
+    assert [(who, cost) for who, _addr, cost in lines] == [(_TEST_NAME, "2.0")]
 
 
 def test_the_verdict_sums_phases_and_names_the_test():

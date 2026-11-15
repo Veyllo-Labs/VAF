@@ -71,10 +71,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
-- **Escape leaves the agent window on a narrow screen again, and a chat you left scrolled up
-  comes back at the same message.** Before, Escape left the full-screen agent window on top of
-  the Menu button, and returning to a chat whose agent window reopened landed about 85 px off,
-  on a wide screen as well as on a narrow one.
+- **Narrow screens: Escape closes the agent window, and a chat you left scrolled up comes back
+  at the same message.** Before, Escape did nothing there and the back arrow stayed over the
+  Menu button. Returning to a chat whose agent window reopened landed about 85 px off, on wide
+  screens too.
 - **An automation no longer delivers the model's reasoning as its result.** When a run's reply
   held nothing but marked reasoning, or its last words never reached the stream (such as the
   note that a background task started), the result fell back to a guess: it delivered the

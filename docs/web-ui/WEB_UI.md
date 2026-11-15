@@ -1382,15 +1382,24 @@ The Web UI runs alongside the CLI interface:
   the first visible message with its offset from the top edge (`readChatAnchor`,
   `web/components/chat/chatAnchor.ts`); the return places that message there again through
   `scrollChatToMessage(idx, offset)` and uses the number only when the bubble is not rendered
-  (its turn lies outside the virtual window, which every switch resets). A number alone lands on
+  (its turn lies outside the virtual window, which every switch resets) or its message is not
+  found. A message has no id, so the anchor carries a key (`anchorKey`): its role, its place
+  among the rows that are not `system` and the start of its text. The kept picture holds the
+  browser's own log lines, which the server's transcript lacks, so a log line above the message
+  shifts its index after the swap; `resolveAnchor` finds it again by that place, and the index
+  the guard holds is re-resolved on every commit of the messages. A number alone lands on
   other content whenever the column's width differs between leaving and coming back, and the
   agent window decides that width: it reopens after the return, narrowing the column over
   300 ms, or stays closed because its worker finished meanwhile. The server's transcript is
   placed by the saved message as well, and from the end of the chat's replay the position guard
   holds that message at its offset until the bottom pin's deadline (`BOTTOM_PIN_MS`), the same
   lifetime as the stick of a chat left at its bottom; a wheel, touch, key or press on the
-  scroller ends it, and so does a jump of the prompt navigator, whose rail sits outside the
-  column. `preserveChatScroll` stands down while that hold runs: the replayed window reopened
+  scroller ends it, and so do a jump of the prompt navigator, whose rail sits outside the
+  column, and a send (the chat's and the Veyllo App room's), whose box is outside it too: both
+  are the person asking for another place (`endReturnHold`). Input of the last 300 ms only
+  postpones the hold; only its deadline ends it otherwise. A chat switch ends the bottom pin of
+  the chat being left, so a pin still running cannot pull the chat switched to down to its
+  bottom. `preserveChatScroll` stands down while that hold runs: the replayed window reopened
   through it, and it took the height change between its call and the next frame for content
   added above the view, while the server's picture is shorter at its end than the kept one.
   That moved the view 84 px off the saved message, measured on a running chat with its coder

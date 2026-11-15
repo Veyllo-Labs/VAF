@@ -159,8 +159,10 @@ def test_escape_leaves_the_agent_window_sheet_below_lg():
     assert "subAgentSheetOpen" in gates, f"the layer is not keyed on the sheet being open: {active.strip()}"
     gate_vars = [g for g in gates if g != "subAgentSheetOpen"]
     assert gate_vars, "the layer is active on desktop too - it would eat Escape over the dock"
-    assert any(f"const {g} = useIsMobile('(max-width: 1023px)');" in src for g in gate_vars), \
-        f"the sheet's layer is not gated on the lg breakpoint (max-width: 1023px): {active.strip()}"
+    # 1023.98: Tailwind's max-lg is "not min-width 1024px", so a zoomed 1023.5 px viewport
+    # shows the sheet and needs the layer too.
+    assert any(f"const {g} = useIsMobile('(max-width: 1023.98px)');" in src for g in gate_vars), \
+        f"the sheet's layer is not gated on the lg breakpoint (max-width: 1023.98px): {active.strip()}"
     escape = block.split("onEscape:", 1)[1]
     assert "setSubAgentSheetOpen(false)" in escape, "Escape no longer closes the sheet"
     assert "isOpen" not in escape and "setSubAgentState" not in escape and "closeSubAgentWindow" not in escape, \

@@ -95,8 +95,10 @@ the window keeps its state and the pill opens the same window again.
 
 - The back chevron.
 - Escape, through the shared Escape ladder (`useEscapeLayer` at level 70, the sheet's z-index).
-  The layer is gated on `useIsMobile('(max-width: 1023px)')`, the same `lg` cut as the sheet's
-  `max-lg:` classes, so from `lg` up nothing is registered and the desktop dock's Escape
+  The layer is gated on `useIsMobile('(max-width: 1023.98px)')`, the same `lg` cut as the
+  sheet's `max-lg:` classes (Tailwind writes those as "not min-width 1024px", so a zoomed
+  viewport between 1023 and 1024 px counts as narrow too), so from `lg` up nothing is
+  registered and the desktop dock's Escape
   behaviour is untouched (the code viewer in the dock still closes on Escape there). Before,
   nothing but the chevron closed the sheet: after Escape the chevron stayed over the Menu
   button and took its tap (measured at 390 px, light and dark).
@@ -105,8 +107,11 @@ Inside the sheet the ladder answers before the code viewer's and the agent windo
 Escape listeners, so below `lg` Escape on a sheet showing the code viewer closes the sheet,
 not the viewer: it is the chevron's action, it closes nothing the person was working in, and
 one rule holds for the whole sheet. The same holds for the window's idle context menu, which
-closes on the next tap anywhere, and for the name field of a new folder in the coder's file
-tree, which keeps its draft and is cancelled with its own button.
+closes on the next tap anywhere, for the name field of a new folder in the coder's file
+tree, which keeps its draft and is cancelled with its own button, and for the code editor's
+own popups (find, suggestions), which the ladder's capture-phase listener reaches first: they
+stay open, and the editor's own close buttons or a click elsewhere end them. Without a keyboard,
+on a phone, none of this arises.
 
 ## Reusable patterns (copy the class strings)
 

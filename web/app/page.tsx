@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 
-import React, { useCallback, useEffect, useMemo, useState, useRef, Fragment, Suspense } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useState, useRef, Fragment, Suspense } from 'react';
 import { createPortal } from 'react-dom';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useFormatter, useTranslations } from 'next-intl';
@@ -28,7 +28,7 @@ import type { EditorFileInfo } from '@/lib/editorFile';
 import { cacheChat, purgeLegacySessionCache } from '@/lib/sessionCache';
 import { connectAccount, markMissingBaselineReload, MISSING_BASELINE_RELOAD_KEY } from '@/lib/socketAccount';
 import { historyMessage, entryActivity, keepCachedOrphan, ComposerDrafts, LiveHistoryHold, planReplay, closesOwnWorkflow } from '@/components/chat/liveView';
-import { anchoredScrollTop, pickAnchor, type ChatAnchor, type ChatAnchorRow } from '@/components/chat/chatAnchor';
+import { anchoredScrollTop, anchorKey, pickAnchor, resolveAnchor, type ChatAnchor, type ChatAnchorRow } from '@/components/chat/chatAnchor';
 import SettingsModal, { type SettingsModalProps } from '@/components/SettingsModal';
 import { AgentAvatar, SPECIALIST_SKIN, SUBAGENT_ACCENT, type AvatarMode, type SubAgentKind } from '@/components/AgentAvatar';
 import { VoiceEnrollmentCall } from '@/components/VoiceEnrollmentCall';
@@ -4949,7 +4949,9 @@ function VAFDashboardContent() {
     // offset from that edge; null when no bubble is rendered. Saved when a chat is left,
     // because the number alone lands on other content when the column's width differs on
     // the return (the agent window reopens, or stays closed because its worker finished).
-    const readChatAnchor = useCallback((): ChatAnchor | null => {
+    // `shown` is the array the bubbles were rendered from: the anchor carries that message's
+    // key, so the server's transcript, which lacks the browser's log lines, still finds it.
+    const readChatAnchor = useCallback((shown: Message[]): ChatAnchor | null => {
         const c = containerRef.current;
         if (!c) return null;
         const rows: ChatAnchorRow[] = [];
@@ -4959,7 +4961,8 @@ function VAFDashboardContent() {
             const r = el.getBoundingClientRect();
             rows.push({ idx, top: r.top, bottom: r.bottom });
         });
-        return pickAnchor(rows, c.getBoundingClientRect().top);
+        const picked = pickAnchor(rows, c.getBoundingClientRect().top);
+        return picked && { ...picked, key: anchorKey(shown, picked.idx) ?? undefined };
     }, []);
 
     const artifactDirtyRef = useRef(false);
@@ -5151,9 +5154,23 @@ function VAFDashboardContent() {
     const bottomPinUntilRef = useRef(0);
     // The counterpart for a chat left scrolled up: its saved position, parked again for the
     // server's transcript, and from the end of its replay held by its first visible message
-    // until the same deadline (`armed`). A switch overwrites it, a touch or a prompt jump
-    // ends it.
-    const returnAnchorRef = useRef<{ sid: string; saved: SavedChatScroll & { anchor: ChatAnchor }; armed: boolean } | null>(null);
+    // until the same deadline (`armed`). A switch overwrites it; a touch, a prompt jump or a
+    // send ends it. `idx` is where its message is in the messages on screen (resolveAnchor),
+    // null when it is not there.
+    const returnAnchorRef = useRef<{ sid: string; saved: SavedChatScroll & { anchor: ChatAnchor }; armed: boolean; idx: number | null } | null>(null);
+    // Re-resolved on every commit of the messages, before the next frame of the position guard
+    // (a layout effect): the server's transcript replaces the kept picture, and the guard
+    // measures the bubble that carries this index in the DOM it is holding.
+    useLayoutEffect(() => {
+        const back = returnAnchorRef.current;
+        if (back) back.idx = resolveAnchor(messages, back.saved.anchor);
+    }, [messages]);
+    // The person asked for another place (a prompt jump, a send that follows the answer):
+    // no return hold and no bottom pin may pull the view back from it.
+    const endReturnHold = () => {
+        returnAnchorRef.current = null;
+        bottomPinUntilRef.current = 0;
+    };
     // The server's transcript of the chat coming back is placed by its saved position too,
     // as the bottom stick parks 'bottom' for a chat left at its bottom.
     const parkReturnAnchor = (sid: string) => {
@@ -5236,7 +5253,10 @@ function VAFDashboardContent() {
         // here, wherever the person was reading. Scrolling up DURING the send still holds the
         // view (the scroll listener, and `goToTakenLine` at the answer), and so does scrolling
         // in the moment between the answer and the frame that would follow it (`followFrom`).
+        // A return hold still running would pull the view back from the line: the box is
+        // outside the scroller, so the send is no touch that ends it.
         isAtBottomRef.current = true;
+        endReturnHold();
         setAppRoomSending(next);
         setAppRoomError('');
         const sentFrom = roomViewRef.current?.room.roomId ?? null;
@@ -5319,7 +5339,7 @@ function VAFDashboardContent() {
                 sessionScrollPositions.current[currentSessionId] = {
                     scrollTop: container.scrollTop,
                     wasAtBottom: isAtBottomRef.current,
-                    anchor: readChatAnchor(),
+                    anchor: readChatAnchor(messages),
                 };
             }
             sessionLoadingStates.current[currentSessionId] = {
@@ -5392,7 +5412,7 @@ function VAFDashboardContent() {
         stickToBottomRef.current = (!savedScroll || savedScroll.wasAtBottom) ? id : null;
         const savedAnchor = savedScroll && !savedScroll.wasAtBottom ? savedScroll.anchor : null;
         returnAnchorRef.current = savedScroll && savedAnchor
-            ? { sid: id, saved: { ...savedScroll, anchor: savedAnchor }, armed: false }
+            ? { sid: id, saved: { ...savedScroll, anchor: savedAnchor }, armed: false, idx: resolveAnchor(cached, savedAnchor) }
             : null;
         // The pin of the chat being left ends here; this chat arms its own at its replay.
         bottomPinUntilRef.current = 0;
@@ -8292,9 +8312,12 @@ function VAFDashboardContent() {
                 }
                 // A chat left scrolled up comes back at the same message and offset; the
                 // number below is the fallback when that bubble is not rendered (its turn lies
-                // outside the virtual window, which every switch resets).
-                if (restore !== 'bottom' && !restore.wasAtBottom && restore.anchor
-                    && scrollChatToMessage(restore.anchor.idx, restore.anchor.offset)) return;
+                // outside the virtual window, which every switch resets) or its message is not
+                // in these messages any more. The index is resolved against the messages this
+                // render drew: the server's transcript lacks the browser's log lines.
+                const anchor = restore !== 'bottom' && !restore.wasAtBottom ? restore.anchor : null;
+                const at = anchor ? resolveAnchor(messages, anchor) : null;
+                if (anchor && at !== null && scrollChatToMessage(at, anchor.offset)) return;
                 setChatScroll(restore === 'bottom' || restore.wasAtBottom
                     ? container.scrollHeight
                     : restore.scrollTop);
@@ -8450,8 +8473,8 @@ function VAFDashboardContent() {
             if (bottomPinUntilRef.current > performance.now() && performance.now() - lastHuman >= 300) {
                 const back = heldReturnAnchor();
                 if (back) {
-                    const row = el.querySelector<HTMLElement>(`[data-msg-idx="${back.saved.anchor.idx}"]`);
-                    // Not rendered: the number the restore wrote stands.
+                    const row = back.idx === null ? null : el.querySelector<HTMLElement>(`[data-msg-idx="${back.idx}"]`);
+                    // Not rendered, or its message is gone: the number the restore wrote stands.
                     if (row) {
                         const target = anchoredScrollTop(el.scrollTop, row.getBoundingClientRect().top,
                             el.getBoundingClientRect().top, back.saved.anchor.offset);
@@ -8463,9 +8486,12 @@ function VAFDashboardContent() {
                 } else {
                     scrollIntentRef.current = Math.max(0, el.scrollHeight - el.clientHeight);
                 }
-            } else if (returnAnchorRef.current?.armed) {
+            } else if (returnAnchorRef.current?.armed && bottomPinUntilRef.current <= performance.now()) {
                 // The hold is over (deadline passed): a later transcript of this chat is placed
-                // where it is, not at the position of the return.
+                // where it is, not at the position of the return. Only the deadline ends it here:
+                // input of the last 300 ms merely postpones the hold (a scroll in the chat being
+                // left, then a replay of this one inside that window), and clearing it then
+                // handed the rest of the deadline to the bottom pin below.
                 returnAnchorRef.current = null;
             }
             const want = scrollIntentRef.current;
@@ -8690,7 +8716,11 @@ function VAFDashboardContent() {
         // whole reply appeared out of sight below. Reading further up DURING a
         // stream still stops the view from being dragged down; that is the
         // scroll listener's job and it is not touched here.
+        // A return hold still running (a chat just came back scrolled up) would pull the view
+        // back to its saved message every frame: the composer is outside the scroller, so the
+        // send is no touch that ends it.
         isAtBottomRef.current = true;
+        endReturnHold();
         expectNewAssistantRef.current = true;
         lastUserSendTimeRef.current = Date.now();
         // A place from an earlier turn of this chat is over: a turn stopped within the
@@ -9720,7 +9750,9 @@ function VAFDashboardContent() {
     // code viewer's and the window's own Escape listeners inside it, so a press never closes
     // something the person was working in while the sheet stays. From `lg` up there is no
     // sheet and no layer: the desktop dock's Escape behaviour is untouched.
-    const dockIsSheet = useIsMobile('(max-width: 1023px)');
+    // 1023.98, not 1023: Tailwind's `max-lg` is "not min-width 1024px", and a zoomed viewport
+    // between 1023 and 1024 px shows the sheet too.
+    const dockIsSheet = useIsMobile('(max-width: 1023.98px)');
     useEscapeLayer({ active: subAgentSheetOpen && dockIsSheet, level: 70, onEscape: () => setSubAgentSheetOpen(false) });
 
     useEffect(() => {
@@ -10445,8 +10477,7 @@ function VAFDashboardContent() {
                                 // A jump the person asked for ends a return hold: the rail sits
                                 // outside the column, so its click is no touch of the scroller,
                                 // and the hold would pull the view back to where it came back.
-                                returnAnchorRef.current = null;
-                                bottomPinUntilRef.current = 0;
+                                endReturnHold();
                                 // Widen the virtual window first when this turn is not rendered.
                                 // The window is cut by TURNS, not by messages: visibleMessages
                                 // keeps the last MSG_TURNS + msgOffset user prompts, so what is

@@ -294,10 +294,12 @@ To prevent "Context Drift" (where the agent gets distracted by sub-agent status 
 
 When the model returns no user-facing answer (e.g. only `<think>` content or empty text), the main agent treats this as an **empty response** and retries instead of accepting it. Implementation is in `vaf/core/agent.py` (chat loop).
 
-- **First empty (retry count 0):** History is set to the current snapshot (system + user) **plus one assistant message** containing the model’s last output (including thinking). A system nudge is appended instructing the model to provide a clear final answer or call tools. No temperature change; one short delay then retry. This lets the model see its own reasoning and the explicit “answer now” instruction.
-- **Second and later empties:** History is reset to the snapshot only (system + user; tool calls and tool results from the turn are preserved). Thinking-only assistant messages are dropped. The same nudge is added, temperature is varied (sweep) to break loops, and at high retry counts proactive context clearing and emergency context management run before a hard stop (after a fixed number of retries).
+A reply that is only a code block is an answer: the code inside a closed fence counts, markup included. The details, and the turn start the retries use, are in row 9 of [AGENT_LOOP.md](../agents/AGENT_LOOP.md).
 
-This two-phase approach reduces endless “think-only” loops while still using the first failed attempt as context for one retry.
+- **First empty (retry count 0):** History keeps every message the turn committed, verbatim and in order: its tool calls and tool results (so the model does not run finished calls again), the answers already shown and the notes under them. Only what an earlier empty retry of the same turn appended is dropped, matched by identity. Then one assistant message with the model's last output (its reasoning marked as a `<think>` block, or `[Empty]`) and a system nudge to give a clear final answer or call tools are appended. No temperature change; one short delay then retry. The retry request extends the failed one, so the model sees its own reasoning and the explicit "answer now" instruction.
+- **Second and later empties:** History is reset to the turn's base (everything before the turn) plus the turn's tool exchanges, a result over 2500 characters cut once; text rounds and system notes are dropped (kept answers stay part of the returned reply). A shorter nudge is added and the temperature is varied (sweep) to break loops. At a high retry count the emergency `manage_context` runs, and after a fixed number of retries the turn stops. There is no separate clear down to the request before that: it could only drop the tool exchanges, and the turn would loop on them.
+
+This two-phase approach reduces endless "think-only" loops while still using the first failed attempt, with everything the turn did, as context for one retry.
 
 **Tool-loop protection:** To avoid unbounded tool-call loops the agent enforces a two-stage limit per user turn. A "turn" here is one model response that calls tools, however many calls it contains.
 

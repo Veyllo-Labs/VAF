@@ -101,7 +101,8 @@ is always the cleaned final answer: every answer of the turn, without the narrat
 model streamed before a tool call ("I will check..."). Reasoning is removed where the model
 marked it, through its reasoning channel or its own `<think>` (or `<thinking>`) tags in any
 case; a `<think>` the model never closed cuts the answer there, also when the answer only
-quotes the tag. Plain text is the answer, in any language. A turn's failure reaches `on_token` too;
+quotes the tag. Plain text is the answer, in any language. The rule is
+`vaf.strip_think_blocks(text, greedy=True)`, which you can call yourself. A turn's failure reaches `on_token` too;
 `agent.last_turn` says whether one did (see "A complete example, with error handling").
 
 One turn can be several generations: an answer, a tool call, another answer, or a
@@ -141,7 +142,8 @@ answer = agent.complete("Classify this ticket: ...", max_tokens=200)
 The guarantees, each the reason this exists instead of "just call run()":
 it does NOT enter the conversation (the history is untouched - a `run()` after a
 `complete()` sees nothing of it), no tools run, nothing is written to memory or a
-session, `<think>` reasoning blocks are stripped, and the return value is
+session, reasoning is stripped by `vaf.strip_think_blocks` (`<think>`/`<thinking>` in any
+case, `<redacted_reasoning>`, an unclosed opener cutting to the end), and the return value is
 `Optional[str]`: text, or `None` when no backend answered - never an exception
 and never an error message dressed as content, so the result is safe to store
 without inspection. The first use pays the same one-time engine build as the
@@ -641,7 +643,8 @@ readable = [{"role": m["role"], "content": text}
 
 Store `metadata` beside the copy as it is (None for most turns) and hand it back with the
 message; its keys are VAF's own and not part of the promise. If you clean the stream before
-you store it (strip reasoning, collapse blank lines), pass that function as the third
+you store it (strip reasoning with `vaf.strip_think_blocks`, collapse blank lines), pass that
+function as the third
 argument, `vaf.stored_turn_copy("".join(streamed), agent.last_turn, clean)`: the answer
 and the failure are cleaned apart, so the failure stays the copy's exact tail and still
 comes off. Cleaning the stored copy afterwards can change the failure, and a message whose
@@ -3395,6 +3398,16 @@ Stable public surface (safe to build on):
   `[Error] ` status or a provider's `[API Error from` sentinel anywhere in it, also
   after text an earlier round streamed. A reply that quotes either marker counts as a
   failure, the safe side. Never raises; anything but a non-empty string is False.
+- `vaf.strip_think_blocks(text, *, greedy=False) -> str` - a model's marked reasoning out of
+  its text, by the rule VAF's own reply cleaner, messenger lane, speech and memory use. The
+  promise: the marks are `<think>` and `<thinking>` in any case and `<redacted_reasoning>`
+  (lowercase); a block closes at its first closer, or with `greedy=True` one block runs from
+  the first opener to the last closer (what `run()`'s return value uses); an opener left
+  unclosed cuts the text to the end; stray tags are dropped; the result is stripped; a falsy
+  input comes back as it is; it never raises on a string. Two named boundaries: blocks of the
+  two kinds that cross each other (`<redacted_reasoning><think></redacted_reasoning>Q</think>`)
+  keep Q as text, and text after `<redacted_reasoning>...</think>` is kept, as the chat shows
+  it. Plain text is never guessed away.
 - `vaf.terminal_text(value) -> str` - text as a terminal may show it. The promise is the
   removed set (every complete escape sequence as a whole; then every C0 character but tab
   and newline, DEL, every C1 character, the twelve bidirectional controls and lone
@@ -3433,7 +3446,7 @@ façade, and no embedder has asked for one. If you need it, say so - the export 
 one lazy branch away, and it is not being added on speculation.
 `vaf.ToolCaller`, `vaf.ToolCallOutcome`, `vaf.advise_tools`, `vaf.ToolRequest`, `vaf.set_account_allowlist_resolver`,
 `vaf.extract_pdf_markdown`, `vaf.install_thread_excepthook`, `vaf.is_error_reply`,
-`vaf.terminal_text`, `vaf.own_links_as_labels`, `vaf.TurnStatus`, `vaf.TurnRound`,
+`vaf.strip_think_blocks`, `vaf.terminal_text`, `vaf.own_links_as_labels`, `vaf.TurnStatus`, `vaf.TurnRound`,
 `vaf.stored_turn_copy`, `vaf.returned_turn_copy` and `vaf.model_text` are the deliberate exceptions: they live in `vaf.core` but are re-exported on the façade, and the
 façade names are the ones to import.
 

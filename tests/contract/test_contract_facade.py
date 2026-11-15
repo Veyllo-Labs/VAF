@@ -98,6 +98,7 @@ EXPORTED = [
     "stop_account_work",
     "stop_session",
     "stored_turn_copy",
+    "strip_think_blocks",
     "terminal_text",
     "unread_counts",
     "user_jail",

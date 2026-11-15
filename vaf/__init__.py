@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from .core.log_helper import install_thread_excepthook
     from .core.automation_triggers import RoomTriggerWatch
     from .core.code_audit import AuditFinding, AuditReport, code_audit
-    from .core.completion import is_error_reply
+    from .core.completion import is_error_reply, strip_think_blocks
     from .core.data_stores import is_vaf_state
     from .core.environments import EnvironmentManager, get_environment_manager
     from .core.fair_queue import QueueBusy, ResourceQueue, WaitInfo, queue_metrics, resource_queue
@@ -72,7 +72,8 @@ __all__ = ["__version__", "Agent", "AuditFinding", "AuditReport", "BOOKKEEPING_K
            "run_project_git", "safe_entry_name", "set_account_allowlist_resolver",
            "set_account_directory_resolver",
            "set_confirmation_bypass_resolver", "set_tool_policy", "stop_account_work",
-           "stop_session", "stored_turn_copy", "terminal_text", "unread_counts", "user_jail"]
+           "stop_session", "stored_turn_copy", "strip_think_blocks", "terminal_text",
+           "unread_counts", "user_jail"]
 
 
 def __getattr__(name):
@@ -204,6 +205,15 @@ def __getattr__(name):
         # module level. See docs/EMBEDDING.md.
         from .core.completion import is_error_reply
         return is_error_reply
+    if name == "strip_think_blocks":
+        # A model's marked reasoning out of its text: <think> and <thinking> blocks in any
+        # case and <redacted_reasoning> blocks, an unclosed opener cutting to the end. Every
+        # reader that stores or forwards a stream needs this rule; VAF's own lanes carried
+        # twenty-one hand copies of it that disagreed, and the messenger lane sent a block
+        # in capitals or one the model never closed. Stdlib at module level. See
+        # docs/EMBEDDING.md.
+        from .core.completion import strip_think_blocks
+        return strip_think_blocks
     if name == "terminal_text":
         # Text from somebody else as a terminal may show it: escape sequences and control
         # characters removed, so a model reply, a room entry or a peer's message cannot set the

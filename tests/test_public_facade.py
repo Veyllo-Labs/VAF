@@ -76,6 +76,7 @@ def test_facade_exports_exactly_the_documented_surface():
         "run_project_git", "safe_entry_name", "set_account_allowlist_resolver",
         "set_account_directory_resolver", "set_confirmation_bypass_resolver",
         "set_tool_policy", "stop_account_work", "stop_session", "stored_turn_copy",
+        "strip_think_blocks",
         "terminal_text", "unread_counts", "user_jail",
     ]
     assert dir(vaf) == sorted(vaf.__all__)

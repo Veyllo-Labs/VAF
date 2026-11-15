@@ -152,6 +152,9 @@ This is the contract. Treat it as a stable API.
   workflow engine's terminal link) shown as the path it opens, every other
   character kept, for text shown anywhere but a terminal; what VAF's web chat,
   messengers and Veyllo App apply (contract in [EMBEDDING.md](EMBEDDING.md))
+- `vaf.strip_think_blocks` - a model's marked reasoning out of its text, the one
+  rule VAF's reply cleaner, messenger lane, speech, compose box and memory use
+  (contract in [EMBEDDING.md](EMBEDDING.md))
 - the `vaf.tools` entry-point group
 - documented config keys
 
@@ -166,7 +169,8 @@ The authoritative list is `vaf.__all__` plus that page; this one is a summary.
   `extract_pdf_markdown`, `set_account_allowlist_resolver`,
   `account_allows_tool`, `contained_path`, `safe_entry_name`,
   `PathEscape`, `is_remote_path`, `is_error_reply`, `TurnStatus`, `stored_turn_copy`,
-  `returned_turn_copy`, `model_text`, `terminal_text`, `own_links_as_labels`) are the deliberate
+  `returned_turn_copy`, `model_text`, `terminal_text`, `own_links_as_labels`,
+  `strip_think_blocks`) are the deliberate
   exceptions - import them from `vaf`, not from `vaf.core`.
 - private methods and attributes (leading underscore)
 

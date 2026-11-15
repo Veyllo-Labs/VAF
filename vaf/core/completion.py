@@ -132,28 +132,139 @@ def is_metadata_frame(chunk: str) -> bool:
 # <thinking> is the same marker: the chat's parseThinkBlocks (web/app/page.tsx) reads it so.
 _THINK_TAG = re.compile(r"<(/?)think(?:ing)?>", re.IGNORECASE)
 
+# Case-sensitive on purpose: the models that emit this family write it in lowercase only.
+_REDACTED_OPEN = "<redacted_reasoning>"
+_REDACTED_CLOSE = "</redacted_reasoning>"
+
 
 def strip_think_blocks(text: str, *, greedy: bool = False) -> str:
-    """Remove model reasoning from a one-shot result, strictly.
+    """Remove the reasoning a model MARKED from its text, strictly: THE rule for every
+    reader that must not pass a model's reasoning on (a reply, a messenger send, speech,
+    a stored memory, a one-shot result).
 
-    Closed ``<think>...</think>`` (or ``<thinking>``) blocks are removed; an UNCLOSED
-    opener truncates from the marker to the end (a result that is all reasoning must
-    become empty, not leak); stray close markers are dropped. Case-insensitive, like the
-    models are. A tag that only forms once a block is dropped ("<" + block + "think>")
-    is a marker too and cuts the text there: removed text can never re-form a block.
+    Three marks: ``<think>`` and ``<thinking>`` in any case, like the models write them,
+    and ``<redacted_reasoning>`` (lowercase). Closed blocks are removed, each closed at
+    its first closer; an UNCLOSED opener truncates from the marker to the end (a text
+    that is all reasoning must become empty, not leak); stray close markers are dropped.
+    A tag that only forms once a block is dropped ("<" + block + "think>") is a marker
+    too and cuts the text there: removed text can never re-form a block. The result is
+    stripped; a falsy input comes back as it is.
 
-    ``greedy``: one block from the FIRST opener to the LAST closer, for a turn's reply,
-    where a weak model sometimes quotes a ``</think>`` mid-reasoning (an earlier reply)
-    and a block closed at the first one would leak the rest of its reasoning. A tag that
-    forms where that slice joins the text ("a</th" + block + "ink>b") is read by the walk
-    like any other: a closer there is dropped as a stray one ("ab"), an opener cuts.
+    ``greedy``: one think block from the FIRST opener to the LAST closer, for a turn's
+    reply, where a weak model sometimes quotes a ``</think>`` mid-reasoning (an earlier
+    reply) and a block closed at the first one would leak the rest of its reasoning. A
+    tag that forms where that slice joins the text ("a</th" + block + "ink>b") is read by
+    the walk like any other: a closer there is dropped as a stray one ("ab"), an opener
+    cuts.
 
-    Linear in the text: at most three passes over it. A lazy ``<think>.*?</think>``
-    rescans to the end from every unclosed opener (9.7 s on 128 KB of them), and a
-    pass per joined tag rescans once per tag (9.8 s on 128 KB of nested joined closers).
+    The order of the passes: redacted blocks go first, because a ``<think>`` the model
+    quotes inside one would otherwise cut the text before the block's closer, leak the
+    block and lose the answer; then the think blocks. A redacted tag that only formed once
+    a think block was dropped ("<redacted_" + block + "reasoning>"), or a redacted closer
+    with no opener, gets a second pass in which a stray closer is dropped and an opener
+    still left without its closer cuts the text; a think tag that pass joins
+    ("<thi" + closer + "nk>") is read once more, so it cuts too.
+
+    Named boundaries: blocks of the two kinds that CROSS each other, a think tag inside a
+    redacted block pairing with one outside it
+    (``<redacted_reasoning><think></redacted_reasoning>Q</think>``), have no right
+    reading; the redacted block goes first and Q is kept as text (about 2 in 1,000
+    adversarial fuzz draws, all of this class). Text after
+    ``<redacted_reasoning>...</think>`` is kept, as the chat shows it: a think closer
+    quoted inside a redacted block the model never closed cannot be told from that shape.
+    A stray ``</redacted_reasoning>`` that the second think pass itself joins stays as
+    text: a closer opens nothing, so no reasoning follows it out.
+
+    Linear in the text: a fixed number of passes, none of which rescans what it already
+    read. A lazy ``<think>.*?</think>`` rescans to the end from every unclosed opener
+    (9.7 s on 128 KB of them), and a pass per joined tag rescans once per tag (9.8 s on
+    128 KB of nested joined closers).
     """
     if not text:
         return text
+    t = drop_redacted_blocks(text, cut_unclosed=False)
+    t = _strip_think_tags(t, greedy)
+    if _REDACTED_OPEN in t or _REDACTED_CLOSE in t:
+        t = _strip_think_tags(drop_redacted_blocks(t, cut_unclosed=True), greedy)
+        t = t.split(_REDACTED_OPEN, 1)[0]  # an opener that this cleanup itself joined
+    return t.strip()
+
+
+def drop_redacted_blocks(text: str, *, cut_unclosed: bool) -> str:
+    """Every ``<redacted_reasoning>`` block out, each closed at its first closer, in one walk.
+
+    Without ``cut_unclosed`` an opener without a closer is kept as text, and so is a closer
+    without an opener: the exact output of a lazy
+    ``<redacted_reasoning>.*?</redacted_reasoning>`` (the web chat's stored copy keeps
+    everything else as written). With ``cut_unclosed`` such an opener cuts the text there
+    and a stray closer is dropped (`strip_think_blocks`'s second pass).
+
+    Linear: the next opener and the next closer are each found once and kept until the walk
+    passes them, where the lazy regex rescans to the end from every unclosed opener (about
+    4 s on 128 KB of them).
+    """
+    kept, pos = [], 0
+    if not cut_unclosed:
+        while True:
+            start = text.find(_REDACTED_OPEN, pos)
+            if start < 0:
+                break
+            end = text.find(_REDACTED_CLOSE, start + len(_REDACTED_OPEN))
+            if end < 0:
+                break  # no closer follows: no later opener can be closed either
+            kept.append(text[pos:start])
+            pos = end + len(_REDACTED_CLOSE)
+        kept.append(text[pos:])
+        return "".join(kept)
+    opener, closer = text.find(_REDACTED_OPEN), text.find(_REDACTED_CLOSE)
+    while True:
+        if closer >= 0 and (opener < 0 or closer < opener):
+            # A closer with no opener before it. An opener holds no "<" after its first
+            # character, so the cached opener still lies at or after the new position.
+            kept.append(text[pos:closer])
+            pos = closer + len(_REDACTED_CLOSE)
+            closer = text.find(_REDACTED_CLOSE, pos)
+            continue
+        if opener < 0:
+            break
+        kept.append(text[pos:opener])
+        if closer < 0:
+            return "".join(kept)  # never closed: the rest is reasoning
+        pos = closer + len(_REDACTED_CLOSE)
+        opener = text.find(_REDACTED_OPEN, pos)
+        closer = text.find(_REDACTED_CLOSE, pos)
+    kept.append(text[pos:])
+    return "".join(kept)
+
+
+def split_think_blocks(text: str) -> tuple:
+    """(visible, blocks): the inner texts of the closed ``<think>``/``<thinking>`` blocks, in
+    order, and the text with each such block, tags included, replaced by one space.
+
+    Each block closes at its FIRST closer and openers inside it are ignored; an unclosed
+    opener and stray closers stay in the visible text as written. For the readers that
+    compare a reply with its own reasoning rather than remove it (the echo check, the
+    compose lane's leak check). One walk, where the lazy ``findall`` it replaces rescans
+    to the end from every unclosed opener.
+    """
+    text = text or ""
+    visible, blocks, pos, start = [], [], 0, None
+    for m in _THINK_TAG.finditer(text):
+        if start is None:
+            if not m.group(1):
+                start = m
+        elif m.group(1):
+            visible.append(text[pos:start.start()])
+            visible.append(" ")
+            blocks.append(text[start.end():m.start()])
+            pos, start = m.end(), None
+    visible.append(text[pos:])
+    return "".join(visible), blocks
+
+
+def _strip_think_tags(text: str, greedy: bool) -> str:
+    """The think half of `strip_think_blocks`: closed blocks out, an unclosed opener cuts,
+    stray tags dropped, a tag joined by a dropped block cuts. At most three passes."""
     if greedy:
         tags = [(m.start(), m.end(), bool(m.group(1))) for m in _THINK_TAG.finditer(text)]
         first_open = next((t for t in tags if not t[2]), None)

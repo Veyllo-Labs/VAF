@@ -253,7 +253,8 @@ made `CLAUDE.md -> AGENTS.md` unreadable on the Windows job only.
 ## 18. A needle is never a prefix of the runner's own temporary folder.
 A test that records the paths a tool touched and searches them for `C:\\Users` (a share
 spelling it handed in) finds every path of its own `tmp_path` on the Windows runner, whose
-temporary folder is under `C:\\Users\\runneradmin`; on macOS it is under `/private/var`.
+temporary folder is under the runner account's profile in `C:\\Users`; on macOS it is
+under `/private/var`.
 
 ## 19. An elapsed time measured with `monotonic()` is not held to the exact sleep.
 `time.monotonic()` ticks at about 15.6 ms on Windows, so a real `sleep(0.05)` can measure
@@ -1829,7 +1830,7 @@ def test_no_needle_matches_the_runners_temporary_folder():
     """MUTATION: `"C:\\\\Users"` back into `_SHARE_MARKS` in tests/test_remote_path_refused.py -
     red."""
     hits = [f"{rel}:{no}" for rel, tree, _ in _test_trees() for no in _runner_prefix_needles(tree)]
-    assert hits == [], ("the Windows runner's tmp_path is under C:\\Users\\runneradmin and the "
+    assert hits == [], ("the Windows runner's tmp_path is under its account's profile in C:\\Users and the "
                         "macOS one under /private/var; make the needle the spelling itself: "
                         + ", ".join(hits))
 

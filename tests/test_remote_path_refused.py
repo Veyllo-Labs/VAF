@@ -507,7 +507,9 @@ def test_the_path_simulation_holds_where_os_path_is_ntpath(monkeypatch):
 
 
 # What a disk call on one of the REMOTE spellings carries, also after a join onto a folder.
-_SHARE_MARKS = ("evil.example", "pipe", "C:\\Users", "Ubuntu")
+# The spellings' own names, never a folder the runner's tmp_path lies under: a bare
+# "C:\\Users" matched every path of the test's own on the Windows runner.
+_SHARE_MARKS = ("evil.example", "pipe", "Users\\a\\x", "Ubuntu")
 
 
 def _share_touches(seen):

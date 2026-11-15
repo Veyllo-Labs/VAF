@@ -50,9 +50,11 @@ PARSEABLE = "arr[i] [conceal]h[/conceal] [link=https://e.org]z[/link]"
 OWN = "[link=file:///tmp/p]/tmp/p[/link]"
 
 
+# legacy_windows=False on every console here: Rich asks the real console for VT mode when
+# it is built, and on a Windows runner there is none, so it would write no OSC 8 link at all.
 def _console(buf=None):
     return TerminalConsole(file=buf if buf is not None else io.StringIO(), force_terminal=True,
-                           color_system="truecolor", width=200)
+                           color_system="truecolor", width=200, legacy_windows=False)
 
 
 def _out(console) -> str:
@@ -72,7 +74,7 @@ def _plain(out: str) -> str:
 def _render_plain(markup: str) -> str:
     from rich.console import Console as PlainConsole
     console = PlainConsole(file=io.StringIO(), force_terminal=True, color_system="truecolor",
-                           width=200)
+                           width=200, legacy_windows=False)
     console.print(markup)
     return console.file.getvalue()
 
@@ -245,7 +247,8 @@ def test_a_bracketed_path_stays_the_real_path_for_every_reader(parts, tmp_path):
     assert own_links_as_labels("Saved: " + link) == "Saved: " + real   # the stored copy
 
     for console in (_console(), PlainConsole(file=io.StringIO(), force_terminal=True,
-                                             color_system="truecolor", width=300)):
+                                             color_system="truecolor", width=300,
+                                             legacy_windows=False)):
         console.print(escape_markup("Saved: " + link))
         out = console.file.getvalue()
         assert set(_targets(out)) == {uri}, out
@@ -1049,7 +1052,7 @@ def test_the_drain_shows_results_as_written_and_consumes_them(monkeypatch):
     assert set(_targets(out)) == {"file:///tmp/p"}
 
     plain_console = PlainConsole(file=io.StringIO(), force_terminal=True,
-                                 color_system="truecolor", width=200)
+                                 color_system="truecolor", width=200, legacy_windows=False)
     ipc, _ = _drain(monkeypatch, plain_console)
     assert ipc.consumed == everything
     out = plain_console.file.getvalue()
@@ -1278,7 +1281,8 @@ def test_emoji_codes_are_text_on_vafs_consoles(ui_console):
 
 
 def _render_emoji_on(text: str) -> str:
-    console = TerminalConsole(file=io.StringIO(), force_terminal=True, emoji=True, width=200)
+    console = TerminalConsole(file=io.StringIO(), force_terminal=True, emoji=True, width=200,
+                              legacy_windows=False)
     console.print(text)
     return console.file.getvalue()
 

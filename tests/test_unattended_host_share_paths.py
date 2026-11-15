@@ -11,6 +11,7 @@ a yes runs it. Every command here is a Python literal that is classified, never 
 tests patch the runners and assert they were never reached.
 """
 import subprocess
+import time
 
 import pytest
 
@@ -224,18 +225,25 @@ def test_the_share_reading_stays_linear_in_the_length(unit, monkeypatch):
     piece made it quadratic: 130 K characters of `\\\\h\\s:` took 27.6 s and 2.7 GB, now
     about 0.3 s. As the other timing tests: 8 times the length may take at most about 20 times
     as long (quadratic would be 64), and the 128 K cap stays well under a second.
+    The ratio is taken of the share reading alone: the whole check also runs shlex, whose
+    tokenizer is quadratic on one long word (the reason for the length cap, see
+    command_policy), and with it the ratio was 24 on the Windows runner and 47 on the macOS
+    one at the same lengths. The whole check is held to an absolute bound at the cap.
     MUTATION: read a colon's suffix to the end of the piece - red."""
     monkeypatch.setattr(command_policy, "_windows_host", lambda: True)
 
     def text(n):
         return "dir " + unit * (n // len(unit))
 
-    def classify(t):
-        classify_command(t, profile="host_unattended")
+    def read(t):
+        share_paths(t, windows=True)
 
-    small, large = _best_of_three(classify, text(8192)), _best_of_three(classify, text(65536))
+    small, large = _best_of_three(read, text(8192)), _best_of_three(read, text(65536))
     assert large <= 20 * small + 0.05, (small, large)
-    assert _best_of_three(share_paths, text(128 * 1024 - 8)) < 1.0
+    assert _best_of_three(read, text(128 * 1024 - 8)) < 1.0
+    started = time.perf_counter()
+    classify_command(text(128 * 1024 - 8), profile="host_unattended")
+    assert time.perf_counter() - started < 10.0
 
 
 def test_many_different_pieces_stay_linear(monkeypatch):

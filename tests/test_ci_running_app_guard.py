@@ -31,6 +31,15 @@ _TITLE = "next-" + "server"
 _FULL_TITLE = _TITLE + " (v16.4.2)"
 _SLEEP = "import time; time.sleep(20)"
 
+
+def _spawn_titled():
+    """A process whose argv[0] is the Next server's title. Not the Python running the suite:
+    the python.org framework build on macOS starts through a launcher that executes the real
+    interpreter again with its own argv[0], and the title is gone before the table is read.
+    `sleep` keeps the argv it was started with on every POSIX host."""
+    import shutil
+    return _spawn([_FULL_TITLE, "20"], executable=shutil.which("sleep") or "/bin/sleep")
+
 posix_only = pytest.mark.skipif(os.name == "nt", reason="ci_check.sh is bash and never runs on Windows")
 linux_only = pytest.mark.skipif(not sys.platform.startswith("linux"), reason="prctl(PR_SET_NAME) is Linux")
 
@@ -126,7 +135,7 @@ def test_title_shapes_are_a_next_server(name, argv, expected):
 @posix_only
 def test_a_retitled_argv0_is_reported():
     mod = _module()
-    fake = _spawn([_FULL_TITLE, "-c", _SLEEP], executable=sys.executable)
+    fake = _spawn_titled()
     try:
         hits = {m.pid: m.kind for m in mod.find_running_app()}
     finally:
@@ -245,7 +254,7 @@ def test_tray_matcher_is_the_frameworks(monkeypatch, tmp_path):
 def test_refusal_names_pid_and_command():
     env = dict(os.environ)
     env["PYTHONPATH"] = str(_REPO)
-    fake = _spawn([_FULL_TITLE, "-c", _SLEEP], executable=sys.executable)
+    fake = _spawn_titled()
     try:
         run = subprocess.run([sys.executable, str(_SCRIPT)], capture_output=True, text=True,
                              env=env, timeout=60)

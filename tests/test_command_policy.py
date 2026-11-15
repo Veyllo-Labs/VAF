@@ -274,13 +274,21 @@ def test_python_ftp_handed_to_exec_or_named_by_keyword_is_seen(code):
     assert python_code_categories(code) == ["ftp_transfer"], code
 
 
-def test_python_ftp_nested_past_the_parse_depth_is_searched_as_text():
-    """MUTATION: return [] past _MAX_CODE_DEPTH - red."""
+@pytest.mark.parametrize("windows", [False, True], ids=["posix", "windows"])
+def test_python_ftp_nested_past_the_parse_depth_is_searched_as_text(monkeypatch, windows):
+    """The host is pinned both ways: the nested reprs double their backslashes into runs,
+    and past the parse depth the text is searched as text, where Windows reads `\\\\exec` as
+    a share name. That is the fail-safe reading of unparsed text, and a test that asked the
+    real host saw it only on the Windows runner.
+    MUTATION: return [] past _MAX_CODE_DEPTH - red."""
+    from vaf.core import command_policy
     from vaf.core.command_policy import _MAX_CODE_DEPTH, python_code_categories
+    monkeypatch.setattr(command_policy, "_windows_host", lambda: windows)
     code = "import ftplib"
     for _ in range(_MAX_CODE_DEPTH + 3):
         code = f"exec({code!r})"
-    assert python_code_categories(code) == ["ftp_transfer"]
+    assert python_code_categories(code) == (["ftp_transfer", "share_path"] if windows
+                                            else ["ftp_transfer"])
     assert python_code_categories('exec("print(1)")') == []
 
 

@@ -360,8 +360,11 @@ def test_a_project_mount_must_be_the_persons_own_and_safe(docker, mgr, monkeypat
 # -- the mounted folder is the folder that was checked, at every start --------------
 
 def _symlink_or_skip(link, target):
+    # The link's kind follows its target: Windows makes file and directory links, and a
+    # directory link to a file cannot be opened as a file there (POSIX ignores the flag).
+    is_dir = os.path.isdir(os.path.join(os.path.dirname(link), target))
     try:
-        os.symlink(target, link, target_is_directory=True)
+        os.symlink(target, link, target_is_directory=is_dir)
     except (OSError, NotImplementedError):
         pytest.skip("symlinks are not available here")
 

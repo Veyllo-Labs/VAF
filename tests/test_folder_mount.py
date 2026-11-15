@@ -198,7 +198,9 @@ def test_a_started_fd_of_ten_and_more_is_reported_under_every_sh(tmp_path, shell
 @_LANE
 def test_a_folder_swapped_on_the_host_after_the_mount_stays_the_held_one(world):
     """The namespace is set up and the guard has passed (its byte arrived); the payload waits
-    on a pipe while the host renames A aside and links A to B, then lists A.
+    on a pipe while the host renames A aside and links A to B, then lists A. The pipe is the
+    payload's stdin: dash (/bin/sh on Ubuntu) reads one digit in `<&n`, and the pipe's number
+    is 10 or more there.
     MUTATION: a shared root (`--dev-bind / /` instead of the tmpfs root and its binds) - red
     (it lists B's files)."""
     a = str(world.a)
@@ -209,9 +211,9 @@ def test_a_folder_swapped_on_the_host_after_the_mount_stays_the_held_one(world):
             rr, wr = os.pipe()
             argv = (folder_mount.namespace_argv(held, a)
                     + folder_mount.guard_argv(a, held.identity,
-                                              ["/bin/sh", "-c", f"read x <&{rr}; ls -a {a}"],
+                                              ["/bin/sh", "-c", f"read x; ls -a {a}"],
                                               started_fd=ws))
-            proc = subprocess.Popen(argv, pass_fds=(ws, rr), stdout=subprocess.PIPE,
+            proc = subprocess.Popen(argv, pass_fds=(ws,), stdin=rr, stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE, text=True)
             os.close(ws)
             os.close(rr)

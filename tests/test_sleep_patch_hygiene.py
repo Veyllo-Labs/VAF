@@ -209,16 +209,18 @@ def test_only_on_thread_fakes_on_the_caller_and_sleeps_for_real_elsewhere():
 
     took = {}
 
+    # perf_counter, not monotonic: monotonic ticks at about 15.6 ms on Windows, where a real
+    # sleep(0.05) measured 0.047 s. The bound only tells a real sleep from the fake's none.
     def other():
-        start = time.monotonic()
+        start = time.perf_counter()
         sleep(0.05)
-        took["s"] = time.monotonic() - start
+        took["s"] = time.perf_counter() - start
 
     t = threading.Thread(target=other)
     t.start()
     t.join(5)
     assert calls == [7], "another thread reached the fake"
-    assert took["s"] >= 0.05, "another thread did not really sleep"
+    assert took["s"] >= 0.04, "another thread did not really sleep"
 
 
 def test_only_on_thread_can_name_a_thread_before_it_starts():
@@ -232,10 +234,10 @@ def test_only_on_thread_can_name_a_thread_before_it_starts():
     t.start()
     t.join(5)
     assert calls == [3]
-    start = time.monotonic()
+    start = time.perf_counter()        # not monotonic (see the test above)
     sleep(0.05)
     assert calls == [3], "the caller reached a fake meant for another thread"
-    assert time.monotonic() - start >= 0.05
+    assert time.perf_counter() - start >= 0.04
 
 
 def test_a_raising_fake_raises_on_its_owner_thread_only():

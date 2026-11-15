@@ -43,6 +43,17 @@ def _hostile():
     return module
 
 
+def _resolver_takes(host) -> bool:
+    """Whether this host's resolver reads `host`. glibc reads the shorthand 127.1 as
+    127.0.0.1; Windows' getaddrinfo refuses it (error 11001) before any connect is made, so
+    there the spelling never reaches the guard at all."""
+    try:
+        socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        return False
+    return True
+
+
 def _listener(family=socket.AF_INET, host="127.0.0.1"):
     server = socket.create_server((host, 0), family=family, backlog=8)
     server.settimeout(0.3)
@@ -76,6 +87,8 @@ def test_a_listed_port_is_refused_without_a_dial(monkeypatch):
     server, port = _listener()
     _refuse(monkeypatch, port)
     for host in ("127.0.0.1", "localhost", "127.1"):
+        if host != "127.0.0.1" and not _resolver_takes(host):
+            continue
         with pytest.raises(ConnectionRefusedError, match=r"never dialed: .*\(tests/conftest\.py\)"):
             socket.create_connection((host, port), timeout=2)
     with pytest.raises(ConnectionRefusedError, match=r"tests/conftest\.py"):

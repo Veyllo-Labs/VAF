@@ -274,7 +274,12 @@ def _another_run_ends_while_this_one_waits(monkeypatch, sid):
         assert devtools.calls >= 2, "run B never waited for the browser"
         bi.agent_run_ended()                    # A ends normally
         at_a_end = devtools.calls
-        _time.sleep(1.0)
+        # B's next dial comes one backoff pause (1 s) after its second one, so a fixed 1 s
+        # sleep here raced it on a slow runner: wait for the dial, or for B to end.
+        deadline = _time.monotonic() + 4.0
+        while (devtools.calls <= at_a_end and run_b.is_alive()
+               and _time.monotonic() < deadline):
+            _time.sleep(0.05)
         assert run_b.is_alive(), f"run B ended when run A did: {box.get('result')}"
         assert devtools.calls > at_a_end, "run B stopped waiting when run A ended"
         tq.request_stop(sid)                    # now B is stopped

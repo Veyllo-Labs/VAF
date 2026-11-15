@@ -692,8 +692,12 @@ def test_tui_app_room_row_and_replay(monkeypatch, tmp_path):
             app.action_toggle_sessions()
             panel = app.query_one("#sessions", SessionsPanel)
             lv = panel.query_one("#session-list", ListView)
-            assert await _settle(pilot, lambda: len(lv.children) >= 2)
-            first = str(lv.children[0].query_one("Static").render())
+            # The items are mounted before their own children: wait for the row's text.
+            def _first_row():
+                rows = list(lv.children)
+                return rows[0].query("Static") if len(rows) >= 2 else ()
+            assert await _settle(pilot, lambda: len(_first_row()) > 0)
+            first = str(_first_row().first().render())
             assert f"{_APP_ROOM_MARK} Veyllo App" in first
             lv.index = 0
             await pilot.press("enter")

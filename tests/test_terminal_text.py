@@ -236,7 +236,9 @@ def test_no_plain_rich_console_is_constructed_or_imported_in_vaf():
 
 def _rendered(console_kwargs, *renderables, **print_kwargs) -> str:
     out = io.StringIO()
-    console = TerminalConsole(file=out, width=200, **console_kwargs)
+    # Not a legacy Windows console, which writes no OSC 8 link: Rich decides that at
+    # construction by asking the real console, and a Windows runner has no VT mode.
+    console = TerminalConsole(file=out, width=200, legacy_windows=False, **console_kwargs)
     for renderable in renderables:
         console.print(renderable, **print_kwargs)
     return out.getvalue()
@@ -873,6 +875,8 @@ def _cli_process(body: str) -> subprocess.CompletedProcess:
 
 
 def _unsafe_bytes(data: bytes) -> list:
+    # A text stream ends a line with \r\n on Windows; a CR on its own still counts.
+    data = data.replace(b"\r\n", b"\n")
     return sorted({hex(b) for b in data if (b < 0x20 and b not in (9, 10)) or 0x7F <= b <= 0x9F})
 
 

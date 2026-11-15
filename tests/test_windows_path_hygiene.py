@@ -205,6 +205,70 @@ disk, where a Linux checkout holds LF. Measured when this was added: 12 test mod
 node on a source they read, one of them searched it for a newline. The rule: cut or
 search in Python after the LF normalization and hand node the result, or normalize in
 the script (`.replace(/\r\n/g, '\n')`) before the first newline needle.
+
+Sections 12 to 21 hold the same shape for the other two runners as well: a spelling
+that this workstation runs one way and the Ubuntu, macOS or Windows runner another.
+Each was a red CI job while every local gate was green.
+
+## 12. A shell redirection never names a file descriptor of two digits.
+dash, /bin/sh on Debian and Ubuntu, reads one digit in `<&n` and `>&n`: `read x <&12`
+is "Syntax error: Bad fd number" there, and a pipe's number is 10 or more in any process
+with a few files open. Here /bin/sh is bash, which takes any number. The Ubuntu jobs
+failed on a test that interpolated a pipe into `/bin/sh -c f"read x <&{fd}"`. The rule:
+pass the descriptor as stdin, or name it as `/proc/self/fd/<n>` (vaf/core/folder_mount.py).
+
+## 13. A test does not rename argv[0] of the Python it starts.
+`Popen([title, ...], executable=sys.executable)` sets the process title on Linux. The
+python.org framework build on macOS starts through a launcher that executes the real
+interpreter again with its own argv[0], so the title is gone before anyone reads the
+process table: the running-app guard tests found no fake server on the macOS job. A test
+that needs a retitled process starts a program that does not execute itself again
+(`/bin/sleep` with the title as argv[0]).
+
+## 14. A test that reads OSC 8 links builds its console with `legacy_windows=False`.
+Rich decides at construction whether the console is a legacy Windows one, by asking the
+real console for virtual-terminal mode; on the Windows runner there is none, and a legacy
+console writes no hyperlink at all. Every link assertion of the terminal-text suites
+failed there (26 tests), while the links were written as before on any terminal with VT.
+
+## 15. Bytes are compared with the Windows line end in mind.
+A text-mode write (`write_text`, a child's stderr) ends a line with `\\r\\n` on Windows.
+A test that reads such a file back as bytes and compares it with `b"...\\n"`, or scans a
+child's captured bytes for control characters and allows LF but not CR, fails there for a
+reason unrelated to its subject. Write the fixture with `write_bytes`, and let a control
+scan take `\\r\\n` as the line end it is.
+
+## 16. A test that removes a git repository it made can remove a read-only file.
+git writes its object files read-only. Linux removes them with the folder's write bit
+alone; Windows refuses to delete a read-only file, so `shutil.rmtree` of a repository a
+test committed into raised "Access is denied" on the Windows job (eight results, four tests).
+Pass an error handler that clears the bit (tests/test_code_audit_folder_pinned.py).
+
+## 17. A link helper makes a link of its target's own kind.
+Windows has file links and directory links; `os.symlink(target, link,
+target_is_directory=True)` to a file makes a link that cannot be opened as a file.
+POSIX ignores the flag. A helper that passes `True` for whatever target it is handed
+made `CLAUDE.md -> AGENTS.md` unreadable on the Windows job only.
+
+## 18. A needle is never a prefix of the runner's own temporary folder.
+A test that records the paths a tool touched and searches them for `C:\\Users` (a share
+spelling it handed in) finds every path of its own `tmp_path` on the Windows runner, whose
+temporary folder is under `C:\\Users\\runneradmin`; on macOS it is under `/private/var`.
+
+## 19. An elapsed time measured with `monotonic()` is not held to the exact sleep.
+`time.monotonic()` ticks at about 15.6 ms on Windows, so a real `sleep(0.05)` can measure
+0.047 s: the fake-sleep guard's own test failed there. A lower bound on a real wait is
+measured with `time.perf_counter()`, or kept well below the sleep.
+
+## 20. A Textual test waits for the widget it queries, not only for its parent.
+`len(list_view.children) >= 2` is true as soon as the items are mounted, before their own
+children are; a `children[0].query_one("Static")` right after it found nothing on the
+slower Windows runner. The settle predicate names the query itself.
+
+## 21. A shorthand IPv4 address is handed to a resolver only where it takes one.
+glibc's getaddrinfo reads `127.1` as 127.0.0.1; Windows' refuses it with error 11001,
+before any connect is made. A test that loops create_connection over such spellings asks
+first (`_resolver_takes`) whether this host's resolver accepts the spelling.
 """
 import ast
 import ntpath
@@ -1481,3 +1545,375 @@ def test_no_node_script_searches_a_source_it_read_for_a_newline():
         "checkout the file holds \\r\\n and the needle finds nothing. Cut it in Python after "
         "the LF normalization and pass the result in, or normalize in the script first: "
         + ", ".join(hits))
+
+
+# ── 12 to 21: one runner's reading of a spelling this workstation reads another way ──────
+
+_SELF = "tests/test_windows_path_hygiene.py"
+
+
+def _test_trees(roots=("tests/",)):
+    """(rel, tree, source) of every tracked module under `roots` but this one."""
+    for rel, path in _tracked_python_files(roots):
+        if rel == _SELF:
+            continue
+        source = path.read_text(encoding="utf-8", errors="ignore")
+        try:
+            yield rel, ast.parse(source), source
+        except SyntaxError:
+            continue
+
+
+def _call_name(call) -> str:
+    func = call.func
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return func.id if isinstance(func, ast.Name) else ""
+
+
+def _keyword(call, name):
+    return next((k.value for k in call.keywords if k.arg == name), None)
+
+
+# 12 -- a two-digit file descriptor in a shell redirection
+
+_FD_REDIRECT_LITERAL = re.compile(r"[<>]&\s*\d{2,}")
+
+
+def _fd_redirections(tree) -> list:
+    """Lines of a `<&{x}`/`>&{x}` f-string, or a literal `<&12`: dash reads one digit there."""
+    hits = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.JoinedStr):
+            parts = node.values
+            for before, after in zip(parts, parts[1:]):
+                if (isinstance(before, ast.Constant) and isinstance(before.value, str)
+                        and re.search(r"[<>]&\s*$", before.value)
+                        and isinstance(after, ast.FormattedValue)):
+                    hits.append(node.lineno)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if _FD_REDIRECT_LITERAL.search(node.value):
+                hits.append(node.lineno)
+    return hits
+
+
+def test_the_fd_redirection_scanner_reads_both_spellings():
+    assert _fd_redirections(ast.parse('c = f"read x <&{rr}; ls"')) == [1]
+    assert _fd_redirections(ast.parse('c = "echo x >&12"')) == [1]
+    assert _fd_redirections(ast.parse('c = "echo x >&2; read y < /proc/self/fd/12"')) == []
+
+
+def test_no_shell_redirection_names_a_two_digit_fd():
+    """MUTATION: put back `read x <&{rr}` in tests/test_folder_mount.py - red."""
+    hits = [f"{rel}:{no}" for rel, tree, _ in _test_trees(("vaf/", "scripts/", "tests/"))
+            for no in _fd_redirections(tree)]
+    assert hits == [], ("dash (/bin/sh on Ubuntu) reads one digit in `<&n`/`>&n`; pass the "
+                        "descriptor as stdin or as /proc/self/fd/<n>: " + ", ".join(hits))
+
+
+# 13 -- argv[0] of the Python a test starts
+
+def _retitled_python(tree) -> list:
+    hits = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and (_call_name(node) in _SPAWNERS
+                                           or "spawn" in _call_name(node)):
+            exe = _keyword(node, "executable")
+            if (isinstance(exe, ast.Attribute) and exe.attr == "executable"
+                    and isinstance(exe.value, ast.Name) and exe.value.id == "sys"):
+                hits.append(node.lineno)
+    return hits
+
+
+def test_no_test_retitles_the_python_it_starts():
+    """MUTATION: spawn the fake server as `[title, "-c", ...]` with
+    `executable=sys.executable` again in tests/test_ci_running_app_guard.py - red."""
+    hits = [f"{rel}:{no}" for rel, tree, _ in _test_trees() for no in _retitled_python(tree)]
+    assert hits == [], ("the macOS framework Python executes itself again and drops a "
+                        "retitled argv[0]; start a program that does not (/bin/sleep): "
+                        + ", ".join(hits))
+
+
+# 14 -- OSC 8 assertions and Rich's legacy Windows console
+
+def _consoles_without_legacy_choice(tree) -> list:
+    return [node.lineno for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and _call_name(node).endswith("Console")
+            and _keyword(node, "legacy_windows") is None]
+
+
+def test_the_legacy_console_class_is_real():
+    import io
+
+    from rich.console import Console
+    for legacy, expected in ((True, False), (False, True)):
+        console = Console(file=io.StringIO(), force_terminal=True, color_system="truecolor",
+                          legacy_windows=legacy)
+        console.print("[link=file:///tmp/p]/tmp/p[/link]")
+        assert ("\x1b]8;" in console.file.getvalue()) is expected
+
+
+def test_every_console_of_an_osc8_test_rules_out_the_legacy_console():
+    """MUTATION: drop `legacy_windows=False` from `_console` in tests/test_terminal_markup.py
+    - red."""
+    hits = [f"{rel}:{no}" for rel, tree, source in _test_trees() if "]8;" in source
+            for no in _consoles_without_legacy_choice(tree)]
+    assert hits == [], ("a test that reads OSC 8 links builds a console that Rich makes a "
+                        "legacy Windows one on the Windows runner, which writes no link; pass "
+                        "legacy_windows=False: " + ", ".join(hits))
+
+
+# 15 -- the Windows line end in bytes
+
+# path -> reason a bytes literal with a newline is compared with a read there.
+_BYTES_NEWLINE_ALLOWED = {
+    "tests/test_writes_do_not_follow_links.py": "the ftp sink under test writes the bytes itself",
+}
+
+
+def _crlf_taken(func) -> bool:
+    """The function turns `\\r\\n` into a line end before it scans."""
+    return any(isinstance(n, ast.Constant) and n.value in (b"\r\n", "\r\n")
+               for n in ast.walk(func))
+
+
+def _bytes_newline_compares(tree) -> list:
+    """A `b"...\\n"` compared with `.read()`/`.read_bytes()`, and a control-byte scan that lets
+    LF (10) through but not CR (13), in a function that does not take `\\r\\n` as a line end."""
+    hits = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare) or not any(isinstance(op, ast.Eq)
+                                                         for op in node.ops):
+            continue
+        sides = [node.left, *node.comparators]
+        literal = any(isinstance(s, ast.Constant) and isinstance(s.value, bytes)
+                      and b"\n" in s.value for s in sides)
+        read = any(isinstance(s, ast.Call) and _call_name(s) in ("read", "read_bytes")
+                   for s in sides)
+        if literal and read:
+            hits.append(node.lineno)
+    for func in ast.walk(tree):
+        if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)) or _crlf_taken(func):
+            continue
+        for node in ast.walk(func):
+            if not (isinstance(node, ast.Compare)
+                    and any(isinstance(op, ast.NotIn) for op in node.ops)):
+                continue
+            for side in node.comparators:
+                if isinstance(side, (ast.Tuple, ast.Set, ast.List)):
+                    ints = {e.value for e in side.elts if isinstance(e, ast.Constant)
+                            and isinstance(e.value, int)}
+                    if 10 in ints and 13 not in ints:
+                        hits.append(node.lineno)
+    return sorted(set(hits))
+
+
+def test_the_crlf_bytes_class_is_real(tmp_path):
+    target = tmp_path / "f.txt"
+    with open(target, "w", encoding="utf-8", newline="\r\n") as f:   # what write_text does there
+        f.write("A-OWN\n")
+    assert target.read_bytes() != b"A-OWN\n"
+    assert _bytes_newline_compares(ast.parse('assert f.read() == b"A\\n"')) == [1]
+    assert _bytes_newline_compares(ast.parse(
+        "def f(d):\n    return [b for b in d if b not in (9, 10)]\n")) == [2]
+    assert _bytes_newline_compares(ast.parse(
+        "def f(d):\n    d = d.replace(b'\\r\\n', b'\\n')\n"
+        "    return [b for b in d if b not in (9, 10)]\n")) == []
+
+
+def test_no_bytes_comparison_forgets_the_windows_line_end():
+    """MUTATION: compare `f.read() == b"A-OWN\\n"` again in
+    tests/test_code_audit_folder_pinned.py - red; drop the `\\r\\n` line end from
+    `_unsafe_bytes` in tests/test_terminal_text.py - red."""
+    hits = [f"{rel}:{no}" for rel, tree, _ in _test_trees() if rel not in _BYTES_NEWLINE_ALLOWED
+            for no in _bytes_newline_compares(tree)]
+    assert hits == [], ("a text-mode write ends a line with \\r\\n on Windows; write the fixture "
+                        "as bytes, or take \\r\\n as a line end: " + ", ".join(hits))
+
+
+def test_the_bytes_newline_allowlist_carries_no_dead_entries():
+    for rel in _BYTES_NEWLINE_ALLOWED:
+        assert _bytes_newline_compares(ast.parse((_REPO / rel).read_text(encoding="utf-8"))), rel
+
+
+# 16 -- shutil.rmtree of a repository a test committed into
+
+# (path, the removed folder as written) -> why nothing read-only can be in it.
+_RMTREE_ALLOWED = {
+    ("tests/test_project_git_runner.py", "pack"): "a fresh repository's pack folder is empty",
+    ("tests/test_project_git_runner.py", "hooks"): "git writes its sample hooks writable",
+}
+
+
+def _bare_rmtrees(tree, source, rel="") -> list:
+    """`shutil.rmtree(<a folder held in a name>)` with no error handler, in a module that
+    commits with git. A folder spelled with a fixed part under it (`x / ".vaf"`) is one the
+    test knows; a folder held in a name may be the whole repository."""
+    if "commit" not in source or "git" not in source:
+        return []
+    return [node.lineno for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and _call_name(node) == "rmtree" and node.args
+            and isinstance(node.args[0], (ast.Name, ast.Attribute))
+            and (rel, ast.unparse(node.args[0])) not in _RMTREE_ALLOWED
+            and not any(_keyword(node, k) is not None for k in ("onexc", "onerror",
+                                                                 "ignore_errors"))]
+
+
+def test_the_read_only_class_is_real(tmp_path):
+    import stat
+    target = tmp_path / "obj"
+    target.write_bytes(b"x")
+    target.chmod(stat.S_IREAD)
+    assert not os.access(target, os.W_OK) or os.geteuid() == 0   # what git leaves behind
+    assert _bare_rmtrees(ast.parse("shutil.rmtree(p)"), "git commit") == [1]
+    assert _bare_rmtrees(ast.parse("shutil.rmtree(p, onexc=h)"), "git commit") == []
+    target.chmod(stat.S_IREAD | stat.S_IWRITE)
+
+
+def test_no_git_test_removes_a_repository_without_a_read_only_handler():
+    """MUTATION: `shutil.rmtree(folder)` without the handler in
+    tests/test_code_audit_folder_pinned.py - red."""
+    hits = [f"{rel}:{no}" for rel, tree, source in _test_trees()
+            for no in _bare_rmtrees(tree, source, rel)]
+    assert hits == [], ("git's objects are read-only and Windows refuses to delete them; "
+                        "pass an onexc/onerror handler that clears the bit: " + ", ".join(hits))
+
+
+# 17 -- a link helper fixes the link's kind for any target
+
+def _fixed_kind_link_helpers(tree) -> list:
+    hits = []
+    for func in ast.walk(tree):
+        if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        params = {a.arg for a in func.args.args + func.args.kwonlyargs}
+        for node in ast.walk(func):
+            if not (isinstance(node, ast.Call) and _call_name(node) in ("symlink", "symlink_to")):
+                continue
+            kind = _keyword(node, "target_is_directory")
+            if kind is None and _call_name(node) == "symlink" and len(node.args) > 2:
+                kind = node.args[2]
+            target = node.args[0] if node.args else None
+            if (isinstance(kind, ast.Constant) and kind.value is True
+                    and isinstance(target, ast.Name) and target.id in params):
+                hits.append(node.lineno)
+    return hits
+
+
+def test_no_link_helper_makes_every_link_a_directory_link():
+    """MUTATION: `os.symlink(target, link, target_is_directory=True)` back in
+    tests/test_git_and_notes_folder_pinned.py's `_symlink_or_skip` - red."""
+    assert _fixed_kind_link_helpers(ast.parse(
+        "def f(link, target):\n    os.symlink(target, link, target_is_directory=True)\n")) == [2]
+    hits = [f"{rel}:{no}" for rel, tree, _ in _test_trees() for no in _fixed_kind_link_helpers(tree)]
+    assert hits == [], ("a directory link to a file cannot be opened as a file on Windows; "
+                        "decide the kind from the target: " + ", ".join(hits))
+
+
+# 18 -- a needle that the runner's temporary folder holds
+
+# The roots themselves, not a folder under them a test names as a seam value.
+_RUNNER_TEMP_PREFIXES = {"C:\\Users", "C:\\Users\\", "C:/Users", "\\Users", "AppData",
+                         "runneradmin", "/private/var", "/home/runner"}
+
+
+def _runner_prefix_needles(tree) -> list:
+    """A collection of string needles holding a prefix of a CI runner's temporary folder."""
+    return [node.lineno for node in ast.walk(tree)
+            if isinstance(node, (ast.Tuple, ast.List, ast.Set))
+            and any(isinstance(e, ast.Constant) and e.value in _RUNNER_TEMP_PREFIXES
+                    for e in node.elts)]
+
+
+def test_no_needle_matches_the_runners_temporary_folder():
+    """MUTATION: `"C:\\\\Users"` back into `_SHARE_MARKS` in tests/test_remote_path_refused.py -
+    red."""
+    hits = [f"{rel}:{no}" for rel, tree, _ in _test_trees() for no in _runner_prefix_needles(tree)]
+    assert hits == [], ("the Windows runner's tmp_path is under C:\\Users\\runneradmin and the "
+                        "macOS one under /private/var; make the needle the spelling itself: "
+                        + ", ".join(hits))
+
+
+# 19 -- an elapsed monotonic() held to the exact sleep
+
+def _exact_sleep_bounds(tree) -> list:
+    hits = []
+    for func in ast.walk(tree):
+        if not isinstance(func, ast.FunctionDef) or not func.name.startswith("test"):
+            continue
+        body = ast.unparse(func)
+        if "monotonic" not in body:
+            continue
+        slept = {n.args[0].value for n in ast.walk(func)
+                 if isinstance(n, ast.Call) and _call_name(n) == "sleep" and n.args
+                 and isinstance(n.args[0], ast.Constant) and isinstance(n.args[0].value, float)}
+        for node in ast.walk(func):
+            if (isinstance(node, ast.Compare) and any(isinstance(o, ast.GtE) for o in node.ops)
+                    and any(isinstance(c, ast.Constant) and c.value in slept
+                            for c in node.comparators)):
+                hits.append(node.lineno)
+    return hits
+
+
+def test_no_monotonic_elapsed_is_held_to_the_exact_sleep():
+    """MUTATION: measure `time.monotonic() - start >= 0.05` again in
+    tests/test_sleep_patch_hygiene.py - red."""
+    hits = [f"{rel}:{no}" for rel, tree, _ in _test_trees() for no in _exact_sleep_bounds(tree)]
+    assert hits == [], ("time.monotonic() ticks at about 15.6 ms on Windows; measure a real "
+                        "wait with time.perf_counter(): " + ", ".join(hits))
+
+
+# 20 -- a Textual query into a child that may not be mounted yet
+
+_CHILD_QUERY = re.compile(r"\.children\[-?\d+\]\.query_one\(")
+
+
+def test_no_textual_test_queries_into_a_child_it_did_not_wait_for():
+    """MUTATION: `lv.children[0].query_one("Static")` after a settle on the count, back in
+    tests/test_app_link_room.py - red."""
+    hits = [f"{rel}:{no}" for rel, _tree, source in _test_trees()
+            for no, line in enumerate(source.splitlines(), 1) if _CHILD_QUERY.search(line)]
+    assert hits == [], ("a list's items are mounted before their own children; settle on the "
+                        "query itself: " + ", ".join(hits))
+
+
+# 21 -- a shorthand IPv4 spelling handed to the resolver
+
+def _shorthand(text) -> bool:
+    import ipaddress
+    import socket
+    if not isinstance(text, str) or "." not in text or not re.fullmatch(r"[0-9.]+", text):
+        return False
+    try:
+        ipaddress.ip_address(text)
+        return False
+    except ValueError:
+        pass
+    try:
+        socket.inet_aton(text)
+        return True
+    except OSError:
+        return False
+
+
+def _unasked_shorthand_dials(tree) -> list:
+    hits = []
+    for func in ast.walk(tree):
+        if not isinstance(func, ast.FunctionDef):
+            continue
+        calls = {_call_name(n) for n in ast.walk(func) if isinstance(n, ast.Call)}
+        if not calls & {"create_connection", "getaddrinfo"} or "_resolver_takes" in calls:
+            continue
+        hits += [n.lineno for n in ast.walk(func)
+                 if isinstance(n, ast.Constant) and _shorthand(n.value)]
+    return hits
+
+
+def test_no_shorthand_address_reaches_a_resolver_unasked():
+    """MUTATION: loop create_connection over `("127.0.0.1", "localhost", "127.1")` again in
+    tests/test_service_port_guard.py - red."""
+    assert _unasked_shorthand_dials(ast.parse(
+        "def t():\n    for h in ('127.1',):\n        socket.create_connection((h, 1))\n")) == [2]
+    hits = [f"{rel}:{no}" for rel, tree, _ in _test_trees() for no in _unasked_shorthand_dials(tree)]
+    assert hits == [], ("Windows' getaddrinfo refuses 127.1 (error 11001) before any connect; "
+                        "ask _resolver_takes first: " + ", ".join(hits))

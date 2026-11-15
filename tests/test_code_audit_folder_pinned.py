@@ -18,6 +18,8 @@ import ast
 import json
 import os
 import shutil
+import stat
+import sys
 import threading
 from pathlib import Path
 
@@ -62,13 +64,25 @@ def pair(world):
     _restore(world.a)
 
 
+def _rmtree(folder) -> None:
+    """Remove a repository folder, git's read-only object files included: Windows refuses to
+    delete a file whose read-only bit is set, where Linux asks only the folder's write bit."""
+    def _writable_again(func, path, _exc):
+        os.chmod(path, stat.S_IWRITE)
+        func(path)
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(folder, onexc=_writable_again)
+    else:
+        shutil.rmtree(folder, onerror=_writable_again)
+
+
 def _restore(folder: Path) -> None:
     aside = folder.with_name(folder.name + "-aside")
     if os.path.lexists(aside):
         if os.path.islink(folder):
             os.unlink(folder)
         elif folder.exists():
-            shutil.rmtree(folder)
+            _rmtree(folder)
         os.rename(aside, folder)
 
 
@@ -144,7 +158,8 @@ def test_open_for_read_reads_a_file_and_refuses_a_link_and_a_moved_folder(world,
     monkeypatch.setattr(path_jail, "_DIR_FD", handles and path_jail._DIR_FD)
     a = world.a
     with path_jail.open_for_read(str(a / "f.txt"), expect_folder=str(a)) as f:
-        assert f.read() == b"A-OWN\n"
+        # The fixture wrote it in text mode, so on Windows the line ends with \r\n.
+        assert f.read().rstrip(b"\r\n") == b"A-OWN"
     _symlink_or_skip(a / "link.txt", world.b / "f.txt")
     with pytest.raises(path_jail.PathEscape):
         path_jail.open_for_read(str(a / "link.txt"))
@@ -452,7 +467,7 @@ def test_a_folder_replaced_at_its_name_before_the_end_fails_the_run(pair, monkey
     assert json.loads((pair.a / ".git" / "vaf-audit" / "last.json").read_text(
         encoding="utf-8")) == kept
     assert _no_state(aside)
-    shutil.rmtree(pair.a)
+    _rmtree(pair.a)
     os.rename(aside, pair.a)
 
 
@@ -468,7 +483,7 @@ def _replace_with_repo(folder: Path, kept: dict) -> Path:
 
 
 def _put_back(folder: Path, aside: Path) -> None:
-    shutil.rmtree(folder)
+    _rmtree(folder)
     os.rename(aside, folder)
 
 

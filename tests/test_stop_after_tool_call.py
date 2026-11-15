@@ -135,6 +135,16 @@ def _no_calls_committed(agent):
 
 @pytest.fixture
 def agent(monkeypatch, tmp_path):
+    # Two local dials a turn makes here, refused under test: the `analyze_image` rider asks
+    # `vision_available()`, which reads the installation's provider (the scratch home's
+    # default, local) and probes 127.0.0.1:8080 once per turn; and the context-status push
+    # falls back to HTTP on 127.0.0.1:8001 without a server loop. The fuzz runs 40 turns in
+    # one test, so each refusal adds up. Neither is what these tests are about.
+    import vaf.core.vision_infer as vision_infer
+    from vaf.core import web_interface
+    monkeypatch.setattr(vision_infer, "vision_available", lambda: False)
+    monkeypatch.setattr(web_interface.get_web_interface(), "_http_fallback_push",
+                        lambda data: None)
     return make_agent(monkeypatch, tmp_path)
 
 

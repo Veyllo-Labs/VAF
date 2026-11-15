@@ -1129,12 +1129,15 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   pipe (`echo 'rm -rf /' | bash`; dash's echo decodes escapes, so both spellings are read;
   printf's format is used again while arguments are left, as printf does, `%b` decodes its
   argument's escapes, `\c` there ends all of printf's output, and precision, `%c` and a `*`
-  width are followed; output past a bound is refused as unreadable text), what a subshell, a
+  width are followed, a negative `*` precision being none; output past a bound, checked per
+  directive before any padding, and a directive whose output is not modelled (a number,
+  `%ls`, `%(...)T`) are refused as unreadable text, and a `%` that starts no directive ends
+  the output there, as printf stops at it), what a subshell, a
   group, a loop or a command run from text prints, every command's output in it and those
   writes joined (`( echo '...'; echo x ) | sh`, `(printf 'r'; printf 'm ...') | bash`,
   `bash -c "echo '...'" | bash`), also with redirections after its closer that leave the
-  standard output where it is (`( ... ) 2>&1 | bash`; `( ... ) >f | bash` hands on
-  nothing), a heredoc
+  standard output where it is (`( ... ) 2>&1 | bash`, also `>/dev/stdout`;
+  `( ... ) >f | bash` hands on nothing), a heredoc
   or a here-string, also passed on through a filter (`cat <<'EOF' | sort | bash`) or a
   command that runs another one (`eval`, `sh -c`, `env -S`, a runner), and into a carried
   command or a subshell. Text from double quotes is read the way bash hands it over:
@@ -1149,10 +1152,15 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   passed on through `cat <<EOF | bash`): quote it (`<<'EOF'`, `<<< '...'`), so the shell
   reads the variables itself (a variable that is not exported is empty in that shell: export
   it, or write its value in), or escape it (`\$P`, which an unquoted heredoc hands on as
-  `$P`; `\\$P` expands); a quoted heredoc passes. Assignment words before a program are
+  `$P`; `\\$P` expands); a quoted heredoc passes. A here-string written `$'...'` hands the
+  shell its decoded text and expands nothing (`bash <<< $'set -e\nmake'` passes). Assignment
+  words before a program are
   stepped over in every form bash takes (`a+=1 cmd`, `a[0]=1 cmd`), and a shell reads its
   options after `-c` too and runs the first word that is none (`bash -c -e '...'`,
-  `sh -c - '...'`). A newline right after a `|`
+  `sh -c - '...'`); a quoted script that starts like a redirection is read as well
+  (`bash -c -e '>x;cmd'`). An unquoted expansion as a shell's script name may vanish, so the
+  shell's input is read too (`bash $! <<< '...'`); a quoted one (`bash "$S"`) does not. A
+  newline right after a `|`
   continues the pipeline, as bash reads it.
 - **Bounds.** Every reading, the command itself included, spends one of
   `MAX_NESTED_COMMANDS` (64), so one command carries at most 63 nested readings, each
@@ -1179,9 +1187,12 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   heredoc file 0.10 s; `npx --x y ...` took 10 s at 100 KB before). The grammar reading
   writes its text in one pass and reads it only when it differs from the command, with a
   budget of its own at the top level; all three readings together, 33 shapes at
-  131 000 characters, measured on a machine under load (load average 9): 2.0 s at most (a
-  heredoc `cat <<.` with an empty body repeated; 0.74 s before, measured alongside), every
-  shape linear (8 times the length, about 8 times the time).
+  131 000 characters and ten more that once grew faster than the text (heredocs inside
+  `$( )`, a group of distinct `echo`s, a long backslash run, wide printf fields, sixty cmd.exe
+  `for` options), measured on a machine under load (load average 3 to 9): 2.0 s at most (a
+  heredoc `cat <<.` with an empty body repeated, 1.85 s at load 4; 0.60 s before, measured
+  alongside), every shape linear (8 times the length, about 8 times the time, pinned by
+  `test_grammar_reading_is_linear` and `test_long_and_distinct_shapes_are_linear`).
 - **Compound commands, comments and heredocs (the grammar reading).** The reading above cuts a
   command at its separators and judges simple commands, so the shell's grammar around them
   hid the command word: `{ rm -rf /; }`, `if true; then rm -rf /; fi`, `for`, `while`,
@@ -1214,13 +1225,20 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   heredoc ends with that text); a heredoc in a subshell keeps a renamed delimiter whose body
   comes after the subshell (`( cat <<. )` NL ...); arithmetic reads its text as if in double
   quotes, so a `'` quotes nothing in `$((...))`, `((...))`, `for ((...))`, `$[...]` and a
-  substring's offset and length (`${x:'$(cmd)'}` runs cmd), and an unclosed `$[` there ends
+  substring's offset and length (`${x:'$(cmd)'}` runs cmd), though a `))` inside such a span
+  ends nothing, and an unclosed `$[` there ends
   at the arithmetic's own `)`; an operator, a redirection or a `(` inside an array
   assignment's parentheses (`x=(a;` NL `cmd`) is a syntax error after which bash drops that
   line and runs the next one, so such a command is refused (quote the element:
-  `arr=('a;b' c)`), while a subscript (`m=([a;b]=1)`) and an extglob group in a text that
-  turns extglob on (`x=(@(a|b))`) pass; a blank or an operator character inside `${...}`
-  stays in its word (`${x#'/' }cmd`); a backtick pair is written as `$(...)` when its text
+  `arr=('a;b' c)`), while a subscript (`m=([a;b]=1)`), elements over several lines
+  (`m=(` NL `[a]=1` NL `)`) and an extglob group `@(...)` or `+(...)` in a text that turns
+  extglob on pass; where a command starts, `NAME[...]=` reads its subscript up to the `]`,
+  blanks, operators and newlines included (`a[x;y]=1 cmd`); a blank or an operator character
+  inside `${...}` stays in its word (`${x#'/' }cmd`), and inside double quotes a
+  single-quoted span in that word still quotes when it closes before the next `}`
+  (`"${x#'"'}"`; a lone `'` there is text for a POSIX sh); a process substitution holds
+  across a line continuation; a carriage return inside a word stays in it (`X=` CR `1 cmd`
+  runs cmd); a backtick pair is written as `$(...)` when its text
   holds a nested backtick, leaves a quote open (closed at its end) or starts with `(`, its
   line continuations joined first (also in a comment there) and a parenthesis it leaves open
   closed as well, and `$$(` as `${$}(`; an array inside an array is the same syntax error,
@@ -1239,16 +1257,17 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   (comments with apostrophes, heredocs with every kind of delimiter, `$'...'` with `\'`, line
   continuations, every reserved word and brace form, `!`, `time`, `coproc`, functions,
   leading redirections, pipes into groups, `env -S`, `find -exec`) through bash with a marker
-  program in the dangerous one's place, and checks the twin with `rm -rf` in its place:
-  300 000 draws, 179 173 of which ran the marker, and every one of their twins refused on
-  host, jailed and remote; two further generators (nested quote levels, carriers, arrays,
-  arithmetic and heredocs inside substitutions) ran 60 000 and 15 000 draws, 39 656 and
-  3 444 of which ran the marker, again with no twin let through; a generator that mutates
-  working commands (inserted operators, reserved words and quotes, cut and swapped spans)
-  ran 200 000 draws, 49 729 of which ran the marker: 7 twins passed, six only through a
-  glob that a file an earlier draw left behind turned into `-rf` and one through an empty
-  substitution glued to the option, both named below (bash 5.3; the suite runs 1 600
-  draws). The classes the differential found on the way are each pinned in
+  program in the dangerous one's place (each draw in a fresh empty folder, with a PATH of
+  harmless tools only), and checks the twin with `rm -rf` in its place: 300 000 draws,
+  165 124 of which ran the marker, and every one of their twins refused on host, jailed and
+  remote; two further generators (nested quote levels, carriers, arrays, arithmetic and
+  heredocs inside substitutions) ran 60 000 and 15 000 draws, 38 369 and 3 432 of which ran
+  the marker, again with no twin let through; one that wraps a carrier in quoting layers ran
+  120 000 draws, 106 342 of which ran the marker, with none let through; and one that
+  mutates working commands ran 100 000 draws, 24 901 of which ran the marker: 2 twins
+  passed, through an empty `${| }` before a `/` and empty backticks glued to the option,
+  both named below. No refusal of the reading before this change was lost in any of them
+  (bash 5.3; the suite runs 1 600 draws). The classes the differential found on the way are each pinned in
   `tests/test_command_grammar_reading.py`.
 - **Named boundary: what it does not read.** cmd.exe's and PowerShell's own grammar (`%VAR%`
   as the program, the text `pwsh -Command` runs); dash's differences from bash, read as bash,
@@ -1265,8 +1284,16 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   `set -x`, `PROMPT_COMMAND`, `BASH_ENV`, `mapfile`/`readarray -C`, `complete -C`, `bind -x`
   (`trap`'s command is read); the output of other programs piped into a shell beyond those
   named above, also text `sed` or `cut` changes on its way in; a function used as the shell
-  for its input (`f() { bash; }; echo ... | f`); an empty substitution glued to an option
-  (`rm $()-rf /`); an unset variable before a `/` (`rm -rf $X/`, a variable's value) and a glob
+  for its input (`f() { bash; }; echo ... | f`) or as what prints into one
+  (`f() { echo ...; }; f | bash`); a glob as a shell's script name, which `nullglob` can turn
+  into nothing (`bash *.q <<< ...`); extglob groups `!(...)`, `*(...)` and `?(...)` in an
+  array, refused as a syntax error or an expansion though bash runs them with extglob on; an
+  empty substitution or expansion glued to an option (`rm $()-rf /`, `rm $@-rf /`); a variable
+  or an empty substitution
+  before a `/` with no folder written in front of it (also `rm -rf ${ }/`): `rm -rf $X/`
+  passes, since the text cannot show that X is
+  empty, and only a variable after a written protected folder is refused (`~/.cache/$X`, not
+  `$HOME/.cache/$X`); and a glob
   a file name turns into an option (`rm *` beside a file named `-rf`), both the state of the
   machine rather than the text; a shell's own error messages fed into a shell (`cmd 2>&1 |
   bash` hands on `command not found` lines that quote the command word). A

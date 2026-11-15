@@ -187,6 +187,14 @@ _FORMS = [
     ('bash -c "{ echo \'rm -rf /\'; }" | bash', "destructive_removal", ""),
     ('eval "{ echo \'rm -rf /\'; }" | bash', "destructive_removal", ""),
     ('uv run bash -c "{ echo \'rm -rf /\'; }" | bash', "destructive_removal", ""),
+    # ... with a second command after the print, so only the joined output holds the removal
+    ('eval "{ echo \'rm -rf /\'; echo ls; }" | bash', "destructive_removal", ""),
+    ('bash -c "if true; then echo \'rm -rf /\'; echo ls; fi" | bash', "destructive_removal", ""),
+    ("sh -c '{ echo \"rm -rf /\"; echo ls; }' | sh", "destructive_removal", ""),
+    # an assignment with `+=`, options after `-c`, redirections after a subshell's closer
+    ("a+=1 rm -rf /", "destructive_removal", ""),
+    ("bash -c -e 'rm -rf /'", "destructive_removal", ""),
+    ("( echo 'rm -rf /' ) 2>&1 | bash", "destructive_removal", ""),
 ]
 
 
@@ -601,6 +609,16 @@ _NEIGHBOURS = [
     "printf '%-10s|%5.2f\\n' name 3.14159",
     'echo `date +%s` $$ "$$" ${$}',
     'bash "$SCRIPT" --verbose', "echo ${x:-a<b} ${y//;/,}",
+    # arrays over several lines, a quoted script name, `$'...'` here-strings, three backslashes
+    "declare -A m=(" + NL + "  [a]=1" + NL + "  [b]=2" + NL + ")",
+    "x=(" + NL + "[0]=zero" + NL + "[1]=one" + NL + ")",
+    "declare -A m=( [k1]=\"v 1\"" + NL + "  [k2]=\"v 2\" )",
+    "bash <<'EOF'" + NL + "declare -A m=(" + NL + "  [a]=1" + NL + ")" + NL + "EOF",
+    'bash "$SCRIPT" <<< "$INPUT"', "printf '%s\\n' \"$ans\" | bash \"$S\"",
+    "bash <<< $'set -e\\nmake'", "sh <<< $'ls\\npwd'", "bash <<< $': `ls`'",
+    "bash <<EOF" + NL + "echo " + B * 3 + "$P" + NL + "EOF",
+    "x=$(cat <<E" + NL + "(" + NL + "E" + NL + ")",
+    "ls | xargs bash -c '2>/dev/null echo checked'",
 ]
 
 
@@ -813,6 +831,84 @@ def test_harmless_neighbours_still_pass(cmd):
     ("x=(a 'b c' x=(a 'b \"d\")\nrm -rf /", "opaque_command"),
     ("eval 'rm -rf /<()'", "destructive_removal"),
     ("echo ! ;\nfind . -maxdepth 0 -exec env X=1 $exec rm -rf / \\; | cat || : <<E\nit's\nE", "opaque_command"),
+    # round 3: scripts a heredoc feeds a shell inside `( )`, `$( )` or backticks (the body's
+    # own last line kept, its closers on a comment line), `$((` with `$'...'`, subscripts
+    # where a command starts, a single-quoted span in `${...}` within double quotes, the
+    # standard output by its path, a quoted `-c` script that starts like a redirection,
+    # printf's negative `*` precision and the directives it does not model
+    ('\'\';for n do "";done\n: $((:)&bash<<<$\'x="$(\\\'\\\' "\\\'")";if true;then(echo \\\'rm -rf /\\\')|bash\\nfor n do "";done\\nfi\')', 'destructive_removal'),
+    ("o $'\\''$(: $(())&bash<<W\neval '\\''\neval '\\''rm -rf /'\\\\'\nW)", 'destructive_removal'),
+    (": $((:)&time { bash<<<$': $(\\'\\')&sh<<<\\'rm -rf /\\''\n})", 'destructive_removal'),
+    (': `bash<<W\n#\'\nbash -c \'(echo \'\\\'\'rm -rf /\'\\\\\\\'\')>&1|bash;\\"\'`', 'destructive_removal'),
+    (": `bash<<W\n(a #'\n)\n(echo 'rm -rf /')>&1|bash\nW`", 'destructive_removal'),
+    ('(""sh<<W\n\\\\\';sh -c \'env rm -rf /\'\nW\n)', 'destructive_removal'),
+    (': `"";(\'\')\nsh<<W\n: "\\\\$("\'")"\n. /dev/stdin<<<\'rm -rf /\'\nW`', 'destructive_removal'),
+    ("(bash<<'W'\n# it's\nbash -c 'rm -rf /'\nW\n)", 'destructive_removal'),
+    ("x=$(bash<<'W'\n# it's\nbash -c 'rm -rf /'\nW\n)", 'destructive_removal'),
+    ("(cat<<'W'|bash\n# it's\nbash -c 'rm -rf /'\nW\n)", 'destructive_removal'),
+    ("(bash<<'W'\n# it's\necho 'rm -rf /'|bash\nW\n)", 'destructive_removal'),
+    (": `bash<<W\n#'\necho 'rm -rf /'|bash\nW`", 'destructive_removal'),
+    (': `bash <<W\n: "\\\\\\${x#"\'"}"\nbash -c \'rm -rf /\'\nW`', 'destructive_removal'),
+    (": $((:)&bash<<<$'(echo \\'rm -rf /\\')|bash')", 'destructive_removal'),
+    ('a[ ]=1 rm -rf /', 'destructive_removal'),
+    ('a[1 + 1]=1 rm -rf /', 'destructive_removal'),
+    ('a[x;y]=1 rm -rf /', 'destructive_removal'),
+    ('a[x|y]=1 rm -rf /', 'destructive_removal'),
+    ('a[x&y]=1 rm -rf /', 'destructive_removal'),
+    ('a[\n]=1 rm -rf /', 'destructive_removal'),
+    ("a[ ]=1 bash -c 'rm -rf /'", 'destructive_removal'),
+    ('b=2 a[x y]=1 rm -rf /', 'destructive_removal'),
+    (': "${x#\'"\'}"; rm -rf /', 'destructive_removal'),
+    ('echo "${x:-\'"\'}"\nrm -rf /', 'destructive_removal'),
+    ('echo "${x/\'"\'/}"; rm -rf /', 'destructive_removal'),
+    ('echo "${x%\'"\'}"; rm -rf /', 'destructive_removal'),
+    ('echo "${x##\'"\'}"; rm -rf /', 'destructive_removal'),
+    ('echo "${x//\'"\'/}"; rm -rf /', 'destructive_removal'),
+    ("( echo 'rm -rf /' ) >/dev/stdout | bash", 'destructive_removal'),
+    ("( echo 'rm -rf /' ) >/dev/fd/1 | bash", 'destructive_removal'),
+    ("( echo 'rm -rf /' ) >/proc/self/fd/1 | bash", 'destructive_removal'),
+    ("bash -c -e '>x;{rm,-rf,/}'", 'opaque_command'),
+    ("bash -c -- '>x;IFS=,;a=rm,-rf,/;$a'", 'opaque_command'),
+    ("sudo bash -c -- '2>/dev/null;{rm,-rf,~}'", 'opaque_command'),
+    ("bash -c -e '&>x;{rm,-rf,/}'", 'opaque_command'),
+    ("printf '%.*s%s' -1 r 'm -rf /' | bash", 'destructive_removal'),
+    ("printf '%ls' 'rm -rf /' | bash", 'opaque_command'),
+    ("printf '%(r)Tm -rf /' | bash", 'opaque_command'),
+    ("printf '%.0drm -rf /' 0 | bash", 'opaque_command'),
+    # round 3, the fuzz runs: a lone `'` in `${x:-...}` within double quotes for a POSIX
+    # sh, `<\` NL `(`, and a `$((` read as a substitution with backticks inside
+    ('{fd}>/dev/null : \nsh -c \': "${x:-\'\\\'\'}"\n\n{ echo \'\\\'\'rm -rf /\'\\\'\'; } | bash\'', 'destructive_removal'),
+    (': $[ 1 + 1 ]\nsh -c \': "${x:-\'\\\'\'}"\n\ncase x in x) eval \'\\\'\'rm -rf /\'\\\'\'\n;; esac\'', 'destructive_removal'),
+    ('sh -c \': "${x:-\'\\\'\'}"; time { printf \'\\\'\'%s\\n\'\\\'\' \'\\\'\'rm -rf /\'\\\'\' | sh\n\n{ : ; }\n}; { : ; }\'', 'destructive_removal'),
+    ('[[ -n x ]] || echo ${x:;;-a} && bash < <\\\n(echo \'>/dev/null rm -rf "/"\')', 'opaque_command'),
+    (': ${x:+$(echo \'}\')}; x=$((( x = 1 << 2 ))\n\n: `cat <<"Q"\n)\nQ\n( : \\${#x}; printf \'%s\\\\n\' \'rm -rf /\' | sh\n)\necho \\$"x"`\n)', 'destructive_removal'),
+    # a body line `<<WORD` of a heredoc in a subshell; printf stops at a `%` that starts no
+    # directive
+    ('echo `echo it\'s` && ( cat <<. )\n<<EOF\nit\'s\n.\n</dev/null $\'\\x72m\' -rf /\necho "it\'s" ;\ncat <<EOF\nit\'s\nEOF', 'destructive_removal'),
+    ("printf '%s%\\n' 'rm -rf /' | bash", 'destructive_removal'),
+    # a `${...}` with blanks in a heredoc delimiter; a quoted span inside `for (( ))`, which
+    # bash skips while it looks for the end
+    ("<<.${rf( /fd}>o rm -rf /", "destructive_removal"),
+    ("for (( i=0;1; i+'+ ));  i<1; i+'+ )); do rm -rf /; done", "destructive_removal"),
+    # `((` that is two subshells, its output piped into a shell
+    ("(( echo 'rm -rf /'); echo x ) | bash", "destructive_removal"),
+    ("echo $'a\\x27b'\n(( echo 'function f { rm -rf /; }; f'); echo x ) | bash; x=$'\\''", "destructive_removal"),
+    # a subshell heredoc's script with a here-string, and with a heredoc of its own that ends
+    # inside it
+    ("( bash <<'W' )\n. /dev/stdin <<< 'rm -rf /'\nW", "destructive_removal"),
+    ("( bash <<'W' )\ncat <<'E'\nit's\nE\nrm -rf /\nW", "destructive_removal"),
+    # `coproc` before a reserved word, `"${x#"'"}"` inside a `$((` that is no arithmetic,
+    # and a script in backticks whose own heredoc runs to its end
+    ('echo \'a\'"\'"\'b\' ;\ncat <<$"EOF"\nit\'s\nEOF\ncoproc for (( i=0; i<1; i++ )) do r$\'m\' -rf /; done\n\necho $(echo a # it\'s\n)\n\ncat <<E\'O\'F\nx\nEOF', 'destructive_removal'),
+    ('{ : ; }\n\nx=$(x=$(( { : ; } ;\ntime { : "${x#"\'"}" ;\n: "$(( 1 ))" \'))\'; bash <(echo \'rm -rf /\')\n}\n)\n) && : $(( 1 << 2 )); cat <<< \'it\'\\\'\'s\'\n)', 'opaque_command'),
+    (': "$(( 1 ))" \'))\' ;\n( : `bash <<W\ncat <<E\nit\\\\\\\\\'s \\\\\\\\\\\\\\$( \\\\\\\\\\\\\\`\nE\nbash <<W\nx="\\\\\\\\\\\\\\$(printf \'%s\' "\'")"\n\n: "\\\\\\\\\\\\\\$(( 1 ))" \'))\'\nprintf \'%s\\\\\\\\\\\\\\\\n\' \'rm -rf /\' | sh\nW\nW\n\n: "\\${x#"\'"}"`\n)', 'nested_too_deep'),
+    # a substitution's own heredoc in a subshell heredoc's body keeps its text; a carriage
+    # return inside a word (`X=` CR `1 cmd`)
+    ("( cat <<. )\nit's\n. && x=$( cat <<'EOS' | bash\ntimeout 2 rm -rf $'/'\nEOS\n) && echo $'it\\'s'", 'destructive_removal'),
+    ("( cat <<. )\nit's\n. ;\n: ${ source /dev/stdin <<< $'\\x3c\\x3c\\x3cx\\x20rm\\x20\\x2drf\\x20\\x27\\x2f\\x27'; }", 'destructive_removal'),
+    ("( cat <<. )\nit's\n. ;\necho { && : $(for ((;;)) do source /dev/stdin <<< $'\\x3c\\x3c\\x3cx\\x20\\x24\\x27\\x5c162m\\x27\\x20\\x2drf\\x20\\x2f\\x20\\x3c\\x2fdev\\x2fnull'; break; done)\n\nx=$'\\''", 'destructive_removal'),
+    ('echo esac && ( cat <<. )\nit\'s\n.; : ${ source /dev/stdin <<< "{fd}>o.txt \\$\'\\\\162m\' -rf / >|o.txt"; }\ncat <<-EOF\n\tit\'s\n\tEOF', 'destructive_removal'),
+    ('X=\r1 Y=2 eval eval \'"rm" -rf /<<.\' && echo $"it\'s"', 'destructive_removal'),
 ])
 def test_what_the_differential_found_is_read(cmd, category):
     """Each row is a class the bash differential found while the grammar reading was built:
@@ -829,7 +925,23 @@ def test_what_the_differential_found_is_read(cmd, category):
 # Refused at the base and found passing by a fuzz run of this reading: kept refused (bash
 # reads `<<` before an operator as a syntax error, so nothing runs; the base read the
 # here-string as the shell's script).
-_BASE_REFUSALS = ["bash << <<< 'rm -rf /'"]
+_BASE_REFUSALS = [
+    'cat <<< "("\nbash <<\'W\'\nbash <<< $\'( echo \\\\#\\\' ;\\neval \\\'rm -rf /\\\'\\n)\\n: ${x:+$(echo \\\'}\\\')}\'\nW',
+    "bash <<< $'( echo \\\\#\\' ;\\n{fd}>/dev/null : \\n\\na=1 rm -rf /\\n); : $\\'\\\\x27\\''; {fd}>/dev/null : ",
+    "bash <<< $'( : )\\necho \\\\#\\' && echo \\'rm -rf /\\' | bash'",
+    "a+=`1 $'\\x72m' -rf /\ncat <<$X\nit's\n$;X",
+    "a+=`1 rm -rf /\necho $'it\\'s'\n\n#'",
+    "a+=1`<<. r\\m -rf /\n\ncat <<$X\nit's\n$X",
+    ': "${x:-\'}"; ( bash <<< $\': $\\\'\\\\x27\\\'\\n\\n:<<\\\'Z\\\'\\n`\\nZ\\n: $(x=( [1]=a [2]=\\\'b\\\' ) ;\\nbash -c \\\'# it\\\'\\\\\\\'\\\'s\\n{ echo \\\'\\\\\\\'\\\'rm -rf /\\\'\\\\\\\'\\\'; } | bash\\\'\\n)\'\n: `: \'(\'`\n)',
+    ': "${x:-\'}"; bash <<< $\'if true; then : `echo it\\\\\\\'s` && eval \\\'rm -rf /\\\'\\n\\n: <(:)\\nfi\\ncase x in (x) : ;; *) : ;; esac ;\\necho a\\\\\\nb\'',
+    'bash <<< $\': "${x:-\\\'}"; : "$(: $[ 1 + 1 ] && if true; then # it\\\'s\\na=1 rm -rf /\\necho -- \\\'--\\\'\\nfi\\n)"\' && cat <<-\'T\'\n\t"\n\tT',
+    'cat <<-\'T\'\n\t"\n\tT\nbash <<\'W\'\nsh -c \'# don\'\\\'\'t $( (\necho \\#\'\\\'\'; f() { : $(echo \'\\\'\')\'\\\'\') ;\nbash <<< $\'\\\'\': `echo it\\\\\\\'\\\'\'s`; a=1 rm -rf /\\n: $(( 1 << 2 ))\'\\\'\'\n\n: it\\\'\\\'\'s\n}; f\' ;\ncat <<"Q"\n)\nQ\nW\n\nx=(a \'b c\' "d)")',
+    'printf \'%s\\n\' "it\'s"\nbash <<< $\'x=$(echo \\\\#\\\' ;\\n: $[ 1 + 1 ]; bash <<\\\'E9\\\'\\nrm -rf /\\nE9\\n)\\ncat <<< \\\'it\\\'\\\\\\\'\\\'s\\\'\'',
+    'cat <<EOF\nEO\\\nF && find . -maxdepth 0 -exec bash -c \'echo \'\\\'\'echo "${u:-$(builtin command rm -r\'\\\'\'\\\'\\\'\'\'\\\'\'\'\\\'\'\\\'\\\'\'\'\\\'\'f /)}"\'\\\'\' | bash\' \\; && cat <<EOF $(echo a)\nit\'s\nEOF',
+    "bash << <<< 'rm -rf /'",
+    # bash runs the marker; refused, here by its depth (nested quote levels in backticks)
+    'sh -c \': `: $(\\\'\'\'\\\'\')\nbash<<W\n:()if :;then "";fi\neval "\'\\\'\'\\\\\\"\'\\\'\'\nprintf \'%s\\\'\'rm -rf /\'\\\'\'|sh"\nW`\'',
+]
 
 
 @pytest.mark.parametrize("cmd", _BASE_REFUSALS)
@@ -885,6 +997,18 @@ def test_the_new_shapes_name_their_way_out():
         v = classify_command(cmd, profile="host")
         assert v.blocked and words in v.reason, (cmd, v.reason)
         assert not classify_command(way_out, profile="host").blocked, way_out
+
+
+def test_the_way_out_sentences_fit_their_command():
+    """The removal sentence about a variable comes only with an `rm` whose target carries one,
+    and cmd.exe's way out stands first, before the reason the bash reading gives.
+    MUTATION: look for the variable anywhere in the text - red;
+    MUTATION: append the cmd.exe sentence at the end - red."""
+    for cmd in ("rm -rf ~ && echo /tmp/$X", "echo ~/a/$X; rm -rf /"):
+        v = classify_command(cmd, profile="host")
+        assert v.blocked and "may be empty" not in v.reason, (cmd, v.reason)
+    v = classify_command("for %i in (*.txt) do echo %i", profile="host")
+    assert v.reason.startswith("Command contains a forbidden pattern: cmd.exe's"), v.reason
 
 
 @pytest.mark.parametrize("cmd", [
@@ -953,6 +1077,9 @@ def test_a_grammar_only_refusal_carries_its_own_reason():
 @pytest.mark.parametrize("unit", [
     "echo a # it's" + NL, "{ ", "if true; then ", "cat <<." + NL + "x's" + NL + "." + NL,
     "echo $'a" + B + "'b' ", "r" + B + NL, "cat <<." + NL + "." + NL, "((a) ); ",
+    "x=$(cat <<E" + NL + "(" + NL + "E" + NL + ")" + NL,
+    "git commit -m \"$(cat <<'EOF'" + NL + "Fix" + NL + "EOF" + NL + ")\"" + NL,
+    "echo $(cat <<EOF" + NL + "$(date) x" + NL + "EOF" + NL + "); ",
 ])
 def test_grammar_reading_is_linear(unit):
     """8x the text takes at most 20x the time plus 0.05 s (the grammar text, which every
@@ -970,6 +1097,69 @@ def test_grammar_reading_is_linear(unit):
         return best
     short, long = took(2000), took(16000)
     assert long <= 20 * short + 0.05, (unit, short, long)
+
+
+def _distinct_echoes(length):
+    parts, k, size = [], 0, 0
+    while size < length:
+        parts.append("echo a%d; " % k)
+        size += len(parts[-1])
+        k += 1
+    return "".join(parts)
+
+
+@pytest.mark.parametrize("build", [
+    lambda n: "{ " + _distinct_echoes(n) + "} | sh",       # every write a text of its own
+    _distinct_echoes,
+    lambda n: "bash <<EOF" + NL + B * n + "x" + NL + "EOF",  # one long backslash run
+    lambda n: "printf '" + "%60000s" * (n // 7) + "' | bash",  # widths past the bound
+])
+def test_long_and_distinct_shapes_are_linear(build):
+    """Texts whose parts all differ, or one long run, cost the same per character as short
+    ones: 8x the text at most 20x the time plus 0.05 s.
+    MUTATION: gather the output with a list membership test - red (the echo rows);
+    MUTATION: match a backslash run from every position - red (the run)."""
+    def took(length):
+        text = build(length)
+        best = None
+        for _ in range(3):
+            start = time.perf_counter()
+            classify_command(text, profile="host_unattended")
+            spent = time.perf_counter() - start
+            best = spent if best is None else min(best, spent)
+        return best
+    short, long = took(4000), took(32000)
+    assert long <= 20 * short + 0.05, (short, long)
+
+
+def test_printf_stops_at_a_percent_that_starts_no_directive():
+    """printf prints up to a `%` that starts no directive and stops (measured with bash:
+    `printf '[%s%!x]' abc` prints `[abc`).
+    MUTATION: go on past it inside the format - red; at its end - red."""
+    assert cp._printf_output("[%s%!x]", ["abc"], limit=999) == "[abc"
+    assert cp._printf_output("echo ok%!%s", ["; rm -rf /"], limit=999) == "echo ok"
+    assert cp._printf_output("%s%", ["x"], limit=999) == "x"
+    assert cp._printf_output("100%%", [], limit=999) == "100%"
+
+
+def test_a_text_output_gathers_in_linear_time():
+    """What a text writes is gathered with a set beside the list: 20 000 distinct writes take
+    a moment, not seconds.
+    MUTATION: test membership against the list - red."""
+    out = cp._Output()
+    start = time.perf_counter()
+    for k in range(20000):
+        out.add("", ("echo %d" % k,))
+    assert time.perf_counter() - start < 1.0
+    assert len(out.texts) == 20000
+
+
+def test_a_cmd_for_with_many_options_is_read_at_once():
+    """cmd.exe's `for` options are matched in one parse, so sixty of them cost nothing.
+    MUTATION: let an option's value start with `/` - red (backtracks exponentially)."""
+    start = time.perf_counter()
+    classify_command("$X -rf /; for " + "/d " * 60, profile="host")
+    assert time.perf_counter() - start < 1.0
 
 
 def test_unchanged_text_costs_no_second_reading(monkeypatch):

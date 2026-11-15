@@ -712,6 +712,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   - An array with `;`, `|`, `&`, `<`, `>` or `(` unquoted between its parentheses
     (`arr=(a;b)`, a syntax error after which bash runs the next line): quote the element
     (`arr=('a;b')`).
+  - `printf` piped into a shell with a directive other than `%s`, `%b`, `%c` or `%q`
+    (`printf '%d ...' 3 | bash`, `%(...)T`): print the script with `%s`, or write it out.
 
   `find / -delete` and `find / -exec rm -rf {} +` are refused too; a `find` with a test
   before its `-exec` (`find ~ -name '*.tmp' -exec rm -rf {} +`) passes as before. Takes

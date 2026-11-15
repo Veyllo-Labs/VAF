@@ -39,6 +39,7 @@ import time
 import pytest
 import requests
 
+from fake_clock import only_on_thread
 from test_local_engine_wiring import _local_agent, _Resp, _Stream
 from vaf.core.context import tool_result_is_error
 from vaf.core.platform import Platform
@@ -201,7 +202,9 @@ def test_the_chat_loop_answers_a_too_deep_call_in_its_own_message(monkeypatch, t
     monkeypatch.setattr(agent.tools["web_search"], "run",
                         lambda **kw: ran.append(kw) or "Ergebnis.", raising=False)
     # The loop pauses two seconds after every error result; nothing here needs the pause.
-    monkeypatch.setattr("vaf.core.agent.time.sleep", lambda *_a, **_k: None)
+    # `time` is the shared module, so the fake is limited to this thread, the one chat_step
+    # runs on.
+    monkeypatch.setattr("vaf.core.agent.time.sleep", only_on_thread(lambda _s: None))
     call = {"tool_calls": [{"index": 0, "id": "c1", "type": "function",
                             "function": {"name": "web_search",
                                          "arguments": _list_nesting(depth)}}]}

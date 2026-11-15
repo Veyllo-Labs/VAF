@@ -257,7 +257,8 @@ def test_a_refusal_answers_the_call_and_nothing_else_runs():
     for site in sites:
         # 1400: the local-tool chain also asks the remote-path refusal before its answer.
         block = site[:1400]
-        assert "history.append(" in block and "\n                        continue\n" in block, block[:500]
+        # The batch's own history: `history` may already be a fresh task context.
+        assert "_history_at_dispatch.append(" in block and "\n                        continue\n" in block, block[:500]
 
 
 

@@ -88,8 +88,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   the model can act on, instead of ending the file librarian's or the coding agent's run or
   showing "maximum recursion depth exceeded"; the tool does not run.
 - The coding agent stops when the model sends the same refused tool call three times in a row,
-  instead of asking it again until you press Stop. When one reply sets the to-do list and calls
-  more tools, the answers to those calls now reach the model too.
+  instead of asking it again until you press Stop. This stop, and the stop after the same file
+  error three times in a row, now keep the work: it is committed, and the answer lists the
+  project, its files and the open tasks below the reason for the stop. When one reply sets the
+  to-do list and calls more tools, the answers to those calls stay with that reply instead of
+  landing in the new task's context, where they were thrown away.
 - A reply in which the model wrote a tool-call list with a malformed entry (for example
   `{"tool_calls": [1]}`) no longer ends the turn with an error; the text is shown as written,
   and arguments that are not an object are refused with their type named instead of running

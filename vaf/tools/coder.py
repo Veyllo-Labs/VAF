@@ -13,6 +13,7 @@ Design Philosophy: Plan-Do-Check-Act:
 """
 
 import requests
+import hashlib
 import json
 import os
 import re
@@ -1613,20 +1614,46 @@ class CoderTUI:
 # Agentic Loop Controller
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _repeated_refusal(loop, fn_name: str, refusal: str) -> bool:
-    """Count a call refused before dispatch; True when it is the third identical one in a row.
+def _repeated_refusal(loop, fn_name: str, raw_args, refusal: str) -> bool:
+    """Count a call refused before dispatch; True when it is the same refused call the third
+    time in a row.
 
     The same bound the repeated write-error stop applies (three identical errors in a row
     end the run). The streak lives on the loop as ``refusal_streak`` and every call that
-    gets past the refusal resets it, so only consecutive refusals count. The key is the
-    tool name and the refusal text, never the arguments: a refused call's arguments may be
-    the very value that is too deep to walk.
+    gets past the refusal resets it, so only consecutive refusals count. "The same call" is
+    the tool name, a hash of the raw argument text as the model sent it, and the refusal: a
+    hash reads the text as bytes and never walks a value, so a call nested too deep to walk
+    is keyed as safely as any other. Arguments that did not arrive as text (a provider that
+    hands over a decoded object) are keyed by the tool name and the refusal alone.
     """
-    key = f"{fn_name}:{refusal[:200]}"
+    digest = (hashlib.sha256(raw_args.encode("utf-8", "surrogatepass")).hexdigest()
+              if isinstance(raw_args, str) else type(raw_args).__name__)
+    key = f"{fn_name}:{digest}:{refusal[:200]}"
     last, count = getattr(loop, "refusal_streak", (None, 0))
     count = count + 1 if key == last else 1
     loop.refusal_streak = (key, count)
     return count >= 3
+
+
+_STATUS_TAG = "[VAF_CODING_AGENT_STATUS:"
+
+
+def _stopped_outcome(stop_report: str, outcome: str) -> str:
+    """The run's outcome, led by the report of a stop that ended the loop early.
+
+    A stop inside a tool-call batch (the same error or the same refused call three times in
+    a row) used to `return` its report on the spot, skipping the common end: no final commit
+    of the work done so far, no project summary, no list of open tasks. It now leaves through
+    that end, and this puts the report first. The report opens with the failure heading every
+    lane reads as a failure (`### ❌`, `vaf.core.context`), so the run still counts as failed,
+    and the summary after it keeps what the run did. The summary's own status tag goes,
+    because the lanes read a tag only at the start of the answer.
+    """
+    if not stop_report:
+        return outcome
+    if outcome.startswith(_STATUS_TAG):
+        outcome = outcome.split("\n", 1)[1].lstrip("\n") if "\n" in outcome else ""
+    return f"{stop_report}\n\n{outcome}"
 
 
 class AgenticLoop:
@@ -5151,7 +5178,7 @@ Complete this task: "{task}"
             Switch to task context with rollback on failure.
             Returns True on success, False on failure.
             """
-            nonlocal current_state, last_stable_state, context_states
+            nonlocal current_state, last_stable_state, context_states, _history_at_dispatch
 
             try:
                 # Save current state for rollback
@@ -5205,6 +5232,10 @@ Complete this task: "{task}"
                 tui.append_stream(f"[ERROR] Context switch failed: {str(e)[:100]}")
                 current_state = last_stable_state
                 sync_legacy_vars()
+                # The rollback state is a copy (`clone()` copies the history list), so the
+                # list a running tool-call batch answers into is no longer the one sent. The
+                # copy holds the assistant message owning the batch, so answer into it.
+                _history_at_dispatch = history
 
                 try:
                     if lg:
@@ -6574,7 +6605,10 @@ Task {task_idx + 1}: {current_task}
                 pass
 
         _trace("=== AGENTIC LOOP STARTED ===")
-        
+
+        # The report of a stop that ends the run from inside a tool-call batch; the common end
+        # after the loop puts it first in the outcome (`_stopped_outcome`).
+        _loop_stop_report = ""
         while True:
             loop.increment_loop()
             tui.increment_loop()
@@ -9696,8 +9730,8 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                     files_created.append(full_path)
                                 
                                 # Add a fake success message to history
-                                history.append({
-                                    "role": "tool", 
+                                _history_at_dispatch.append({
+                                    "role": "tool",
                                     "tool_call_id": tc['id'],
                                     "name": "write_file",
                                     "content": f"✓ File {path} already exists with identical content. No changes made. You can proceed to the next task."
@@ -9705,6 +9739,9 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                 # Update context state
                                 current_state.history = history
                                 context_states[current_state.phase] = current_state
+                                # Answered without reaching the refusal below, so this call
+                                # ends a run of refused calls like any other that gets past.
+                                loop.refusal_streak = (None, 0)
                                 continue # Skip to next tool
                             else:
                                 fn_args = extracted_args
@@ -9760,14 +9797,16 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                     })
                     # A refused call never reaches the doom-loop signature below, and every
                     # reply resets the idle clock, so a model that sends it again and again
-                    # would be asked forever. Three identical refusals in a row end the run,
-                    # the rule three identical write errors already follow.
-                    if _repeated_refusal(loop, fn_name, _args_refusal):
-                        return (
-                            f"### Repeated Refused Call\n\n"
+                    # would be asked forever. The same refused call three times in a row ends
+                    # the run, the rule three identical write errors already follow; the run
+                    # still leaves through the common end below (final commit, summary).
+                    if _repeated_refusal(loop, fn_name, fn_args_str, _args_refusal):
+                        _loop_stop_report = (
+                            f"### ❌ Repeated Refused Call\n\n"
                             f"The model sent the same refused `{fn_name}` call 3 times in a "
                             f"row:\n\n{_args_refusal}\n\nStopped to prevent an endless loop."
                         )
+                        break
                     continue
                 loop.refusal_streak = (None, 0)
 
@@ -10576,7 +10615,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         session_id=caller_session,
                     )
                     if _refusal is not None:
-                        history.append({"role": "tool", "tool_call_id": tc['id'], "name": fn_name, "content": _refusal})
+                        _history_at_dispatch.append({"role": "tool", "tool_call_id": tc['id'], "name": fn_name, "content": _refusal})
                         continue
                     url = fn_args.get("url", "")
                     selector = fn_args.get("selector", "")
@@ -10602,7 +10641,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         session_id=caller_session,
                     )
                     if _refusal is not None:
-                        history.append({"role": "tool", "tool_call_id": tc['id'], "name": fn_name, "content": _refusal})
+                        _history_at_dispatch.append({"role": "tool", "tool_call_id": tc['id'], "name": fn_name, "content": _refusal})
                         continue
                     query = fn_args.get("query", "")
                     max_results = min(fn_args.get("max_results", 5), 10)  # Max 10 results
@@ -10710,7 +10749,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                         # reach the branch that reports a file as written.
                         tui.append_stream(f"{fn_name} refused")
                         _log_to_file(f"[DISPATCH] {fn_name} refused: {_refusal[:160]}")
-                        history.append({"role": "tool", "tool_call_id": tc['id'], "name": fn_name, "content": _refusal})
+                        _history_at_dispatch.append({"role": "tool", "tool_call_id": tc['id'], "name": fn_name, "content": _refusal})
                         continue
                     
                     # An image the coder looks at is one of ITS files: a relative path means its
@@ -10739,12 +10778,12 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                             _emsg = "ERROR: call set_todos FIRST, then edit files."
                             tui.append_stream("edit_file rejected - call set_todos FIRST!")
                             _guard_event("gate", "edit blocked: no plan yet", "set_todos required first")
-                            history.append({"role": "tool", "tool_call_id": tc['id'], "name": fn_name, "content": _emsg})
+                            _history_at_dispatch.append({"role": "tool", "tool_call_id": tc['id'], "name": fn_name, "content": _emsg})
                             continue
                         _epath = fn_args.get("path", "")
                         _ebr = _meta_file_block_reason(_epath, current_state.phase)
                         if _ebr:
-                            history.append({"role": "tool", "tool_call_id": tc['id'], "name": fn_name, "content": _ebr})
+                            _history_at_dispatch.append({"role": "tool", "tool_call_id": tc['id'], "name": fn_name, "content": _ebr})
                             continue
                         if _epath and not os.path.isabs(_epath):
                             fn_args["path"] = os.path.join(base_dir, _epath)
@@ -10760,7 +10799,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                             tui.append_stream("edit_file rejected - read the file first!")
                             _guard_event("gate", "edit blocked: file not read",
                                          os.path.basename(fn_args.get("path", ""))[:60])
-                            history.append({"role": "tool", "tool_call_id": tc['id'], "name": fn_name, "content": _rbr})
+                            _history_at_dispatch.append({"role": "tool", "tool_call_id": tc['id'], "name": fn_name, "content": _rbr})
                             continue
 
                     if fn_name == "write_file":
@@ -10800,7 +10839,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                 _bn = os.path.basename(fn_args.get("path", "")).lower()
                                 tui.append_stream(f"[GUARD] write_file blocked: {_bn} is a meta file")
                                 _guard_event("gate", "write blocked: meta file", _bn[:60])
-                                history.append({"role": "tool", "tool_call_id": tc['id'], "name": fn_name, "content": _block_reason})
+                                _history_at_dispatch.append({"role": "tool", "tool_call_id": tc['id'], "name": fn_name, "content": _block_reason})
                                 continue
 
                             # SEARCH-BEFORE-BUILD NOTE (never blocks): a brand-new file
@@ -10837,7 +10876,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                 )
                                 tui.append_stream("write_file rejected - call set_todos FIRST!")
                                 _guard_event("gate", "write blocked: no plan yet", "set_todos required first")
-                                history.append({
+                                _history_at_dispatch.append({
                                     "role": "tool",
                                     "tool_call_id": tc['id'],
                                     "name": fn_name,
@@ -11027,7 +11066,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                     "real project files in the sandbox and returns the actual pass/fail result.\n"
                                     "python_sandbox is otherwise for pure computation (math, algorithms, string processing)."
                                 )
-                                history.append({"role": "tool", "tool_call_id": tc['id'], "content": result})
+                                _history_at_dispatch.append({"role": "tool", "tool_call_id": tc['id'], "content": result})
                                 _log_to_file(f"[GUARD] python_sandbox blocked (project file I/O detected)")
                                 tui.append_stream("[GUARD] python_sandbox blocked — use write_file/read_file for project files")
                                 continue
@@ -11104,7 +11143,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                 if len(loop.error_history) >= 3:
                                     last_3 = loop.error_history[-3:]
                                     if len(set(last_3)) == 1:  # All same error
-                                        return (
+                                        _loop_stop_report = (
                                             f"### ❌ Repeated Error Detected\n\n"
                                             f"The same error occurred 3 times in a row:\n"
                                             f"**File**: {path}\n"
@@ -11121,6 +11160,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                             f"4. Try a different file path\n\n"
                                             f"Stopped to prevent infinite loop."
                                         )
+                                        break
                             elif os.path.exists(path):
                                 # Success - clear error history
                                 loop.error_history = []
@@ -11369,7 +11409,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                             if len(loop.error_history) >= 3:
                                 last_3 = loop.error_history[-3:]
                                 if len(set(last_3)) == 1:  # All same error
-                                    return (
+                                    _loop_stop_report = (
                                         f"### ❌ Repeated Error Detected\n\n"
                                         f"The same error occurred 3 times in a row:\n"
                                         f"**File**: {fn_args.get('path', 'unknown')}\n"
@@ -11384,6 +11424,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                                         f"3. Try a different file path\n\n"
                                         f"Stopped to prevent infinite loop."
                                     )
+                                    break
                 
                 # Update TUI after tool execution
                 live.update(tui.render())
@@ -11511,6 +11552,12 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                 for _ptm in _post_tool_messages:
                     _history_at_dispatch.append(_ptm)
 
+            # A stop inside the batch (the same error or the same refused call three times in
+            # a row) left the batch with `break`; it leaves the run here, through the common
+            # end below, so the work is committed and summarised like on every other exit.
+            if _loop_stop_report:
+                break
+
         # ═══════════════════════════════════════════════════════════════════
         # LOOP ENDED (timeout or max empty)
         # ═══════════════════════════════════════════════════════════════════
@@ -11613,7 +11660,8 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
             # ═══════════════════════════════════════════════════════════════
             # CONTENT_ONLY MODE: Return actual file content instead of summary
             # ═══════════════════════════════════════════════════════════════
-            if skip_template:
+            # A run stopped early reports the stop, never a file's content as its answer.
+            if skip_template and not _loop_stop_report:
                 # CONTENT_ONLY mode: Return the actual content of the created file(s)
                 # Priority: Single file > Main file (index.html, main.py, etc.) > First file
                 main_file = None
@@ -11700,9 +11748,11 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
 
             # Determine completion status
             # EXPLICIT SIGNAL for Main Agent: [VAF_CODING_AGENT_STATUS]
-            if has_incomplete_tasks:
+            if has_incomplete_tasks or _loop_stop_report:
                 completion_header = "### ⚠️ Task Partially Complete"
-                if failed_list:
+                if _loop_stop_report:
+                    completion_note = "**Note**: The run was stopped early; the reason is at the top."
+                elif failed_list:
                     completion_note = (
                         "**Note**: Some tasks FAILED goal verification despite retries — they were NOT silently "
                         "marked as done. Review the failed tasks above before continuing."
@@ -11715,7 +11765,7 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                 completion_note = "**Note**: All tasks have been completed. Review files for any final adjustments."
                 status_signal = "[VAF_CODING_AGENT_STATUS: COMPLETE]"
             
-            return (
+            return _stopped_outcome(_loop_stop_report, (
                 f"{status_signal}\n\n"  # Explicit signal for Main Agent parsing
                 f"{completion_header}\n\n"
                 f"**📁 Project Directory**: {dir_link}\n"
@@ -11731,14 +11781,14 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                 f"**🔧 To continue working on this project, use:**\n"
                 f"`coding_agent(task=\"your task\", project_path=\"{base_dir}\")`"
                 f"{placeholder_warning}"
-            )
+            ))
         else:
             # Even if no files were created, show the directory
             dir_link = _get_clickable_path(base_dir)
             folder_opened = _open_folder(base_dir)
             folder_status = "✅ Folder opened in file manager" if folder_opened else "📂 Folder ready"
             
-            return (
+            return _stopped_outcome(_loop_stop_report, (
                 f"[VAF_CODING_AGENT_STATUS: FAILED]\n\n"  # Explicit signal for Main Agent
                 f"### ❌ Task Failed\n\n"
                 f"**📁 Project Directory**: {dir_link}\n"
@@ -11749,8 +11799,8 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                 f"**💡 Suggestion**: Try a more specific task description.\n\n"
                 f"**🔧 To retry, use:**\n"
                 f"`coding_agent(task=\"your task\", project_path=\"{base_dir}\")`"
-            )
-        
+            ))
+
         # CRITICAL: Always stop Live display at the end of the method
         # This prevents "zombie" TUI threads that cause multiple header boxes
         stop_live()

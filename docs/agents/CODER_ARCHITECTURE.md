@@ -320,14 +320,20 @@ any lane, including a messaging channel. Now:
    `decode_arguments` about the arguments it will actually use, the `set_todos` list fix
    included: text that is not an object, or an object nested deeper than 100 levels, is
    answered with the funnel's refusal and never run, where such a value used to end the
-   whole coder run. The same refusal three times in a row ends the run (`_repeated_refusal`,
-   the rule three identical write errors follow), because a refused call never reaches the
-   doom-loop detector and every reply resets the idle clock. Every answer of one batch goes
-   into the history that holds the assistant message owning the calls, taken once before the
-   batch: `set_todos` switches `history` to a new task context, and an answer that landed
-   there had no owning call and was dropped before the next request. The loop that shows a
-   call's arguments on screen catches `RecursionError` as well, so text too deep to decode
-   no longer reaches the stream handler, which ends the run.
+   whole coder run. The same refused call three times in a row (same tool, same raw
+   argument text by hash, same refusal) ends the run (`_repeated_refusal`, the rule three
+   identical write errors follow), because a refused call never reaches the doom-loop
+   detector and every reply resets the idle clock. Both stops leave the loop through the
+   common end, so the work is committed and the outcome carries the project summary and the
+   open tasks after the stop's report, which comes first and keeps the run a failure
+   (`_stopped_outcome`). Every tool answer of one batch, early refusals included, goes into
+   the history that holds the assistant message owning the calls, taken once before the
+   batch (and again after a failed context switch, whose rollback state is a copy):
+   `set_todos` switches `history` to a fresh task context, and an answer that landed there
+   had no owning call and was dropped before the next request. The answers stay with the
+   context that asked for them; a fresh task context does not send them again. The loop that
+   shows a call's arguments on screen catches `RecursionError` as well, so text too deep to
+   decode no longer reaches the stream handler, which ends the run.
 
 There is **no confirmation gate** in this lane. Deliberate: the coder runs unattended and
 uses its tools at full strength, `host_bash` included and also for a chat that started on a

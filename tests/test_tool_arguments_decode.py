@@ -551,7 +551,8 @@ def test_the_coder_answers_a_refused_call_and_skips_it():
     asked = [n for n in ast.walk(tree) if _assigns(n, "_args_refusal")]
     signed = [n for n in ast.walk(tree) if _assigns(n, "action_sig")]
     assert len(asked) == 1 and len(signed) == 1
-    assert "decode_arguments" in ast.unparse(asked[0].value)
+    assert ast.unparse(asked[0].value) == \
+        "decode_arguments(fn_name, fn_args if fn_args else fn_args_str)[1]"
     blocks = [n for n in ast.walk(tree) if isinstance(n, ast.If)
               and "_args_refusal" in ast.unparse(n.test)
               and not ast.unparse(n.test).startswith("_repeated_refusal(")]
@@ -570,30 +571,139 @@ def test_the_coder_answers_a_refused_call_and_skips_it():
     assert ast.unparse(fields["content"]) == "_args_refusal"
     assert isinstance(block.body[-1], ast.Continue)
 
-    stops = [s for s in block.body if isinstance(s, ast.If)
-             and ast.unparse(s.test) == "_repeated_refusal(loop, fn_name, _args_refusal)"]
-    assert len(stops) == 1 and isinstance(stops[0].body[-1], ast.Return)
+    stops = [s for s in block.body if isinstance(s, ast.If) and ast.unparse(s.test)
+             == "_repeated_refusal(loop, fn_name, fn_args_str, _args_refusal)"]
+    assert len(stops) == 1
+    assert _assigns(stops[0].body[0], "_loop_stop_report")
+    assert isinstance(stops[0].body[-1], ast.Break)
 
+    reset = "loop.refusal_streak = (None, 0)"
     for stmts in _bodies(tree):
         if block in stmts:
             after = stmts[stmts.index(block) + 1]
-            assert ast.unparse(after) == "loop.refusal_streak = (None, 0)", ast.unparse(after)
+            assert ast.unparse(after) == reset, ast.unparse(after)
             break
     else:
         raise AssertionError("the refusal block has no statement after it")
+    # A call that leaves the batch iteration BEFORE the refusal block was answered without
+    # being refused, so it ends a run of refusals too (the identical-content shortcut).
+    batch = _batch_loop(tree)
+    early = [n for n in ast.walk(batch) if isinstance(n, ast.Continue)
+             and n.lineno < block.lineno and _innermost_loop(batch, n) is batch]
+    assert early, "no early continue found; the shortcut moved"
+    for stmts in _bodies(batch):
+        for i, stmt in enumerate(stmts):
+            if stmt in early:
+                assert i > 0 and ast.unparse(stmts[i - 1]) == reset, ast.unparse(stmts[i - 1])
+
+
+def _batch_loop(tree):
+    import ast
+    loops = [n for n in ast.walk(tree) if isinstance(n, ast.For)
+             and ast.unparse(n.iter) == "tool_calls" and ast.unparse(n.target) == "tc"
+             and any(_assigns(s, "_args_refusal") for s in ast.walk(n))]
+    assert len(loops) == 1
+    return loops[0]
+
+
+def _innermost_loop(root, target):
+    """The nearest For/While above ``target`` inside ``root`` (``root`` itself counts)."""
+    import ast
+    parents = {c: p for p in ast.walk(root) for c in ast.iter_child_nodes(p)}
+    cur = target
+    while cur in parents:
+        cur = parents[cur]
+        if isinstance(cur, (ast.For, ast.While)):
+            return cur
+    return None
 
 
 def test_three_identical_refusals_in_a_row_end_the_coder_run():
     from vaf.tools.coder import AgenticLoop, _repeated_refusal
     loop = AgenticLoop()
     refusal = _DEEP.format("set_todos")
-    assert [_repeated_refusal(loop, "set_todos", refusal) for _ in range(3)] == [False, False, True]
+    raw = _list_nesting(9998)
+    assert [_repeated_refusal(loop, "set_todos", raw, refusal) for _ in range(3)] \
+        == [False, False, True]
     loop.refusal_streak = (None, 0)             # a call got past the refusal
-    assert not _repeated_refusal(loop, "set_todos", refusal)
-    assert not _repeated_refusal(loop, "set_todos", refusal)
-    assert not _repeated_refusal(loop, "read_file", refusal)   # another call breaks the row
-    assert not _repeated_refusal(loop, "set_todos", refusal)
-    assert not _repeated_refusal(loop, "set_todos", "Tool Error: something else")
+    assert not _repeated_refusal(loop, "set_todos", raw, refusal)
+    assert not _repeated_refusal(loop, "set_todos", raw, refusal)
+    assert not _repeated_refusal(loop, "read_file", raw, refusal)   # another call breaks the row
+    assert not _repeated_refusal(loop, "set_todos", raw, refusal)
+    assert not _repeated_refusal(loop, "set_todos", raw, "Tool Error: something else")
+    # The same refusal for different calls is not the same call: three list-shaped calls
+    # all get "a JSON list, not an object", and none of them repeats.
+    loop.refusal_streak = (None, 0)
+    listed = _DEEP.format("set_todos").replace("nested deeper", "a list")
+    assert [_repeated_refusal(loop, "set_todos", text, listed)
+            for text in ('["a"]', "[1, 2, 3]", "[[]]")] == [False, False, False]
+    # Arguments that did not arrive as text are keyed by tool and refusal alone.
+    assert [_repeated_refusal(loop, "set_todos", {"tasks": 1}, listed) for _ in range(3)] \
+        == [False, False, True]
+
+
+def test_a_stop_in_the_batch_leaves_through_the_common_end():
+    """The same error or the same refused call three times in a row used to `return` from
+    inside the batch: no final commit, no summary, no open tasks. Each stop now records its
+    report and leaves the batch with `break`, the main loop breaks right after the batch,
+    and both final answers lead with the report (`_stopped_outcome`)."""
+    import ast
+    tree = _coder_run_tree()
+    batch = _batch_loop(tree)
+    # The one return allowed: CONTENT_ONLY `task_done` answers with the file itself, and that
+    # mode never commits (`skip_template`). A nested helper's own return does not leave run.
+    nested = {id(r) for f in ast.walk(batch) if isinstance(f, (ast.FunctionDef, ast.Lambda))
+              for r in ast.walk(f) if isinstance(r, ast.Return)}
+    returns = [ast.unparse(n) for n in ast.walk(batch)
+               if isinstance(n, ast.Return) and id(n) not in nested]
+    assert returns == ["return content"], returns
+    records = []
+    for stmts in _bodies(batch):
+        for i, stmt in enumerate(stmts):
+            if _assigns(stmt, "_loop_stop_report"):
+                records.append(stmt)
+                assert isinstance(stmts[i + 1], ast.Break), ast.unparse(stmts[i + 1])
+                assert _innermost_loop(batch, stmts[i + 1]) is batch
+    assert len(records) == 3, len(records)          # the refusal and both write-error stops
+    for stmts in _bodies(tree):
+        if batch in stmts:
+            after = stmts[stmts.index(batch) + 1]
+            assert ast.unparse(after) == "if _loop_stop_report:\n    break", ast.unparse(after)
+            break
+    else:
+        raise AssertionError("the batch loop was not found in a statement list")
+    main = next(n for n in ast.walk(tree) if isinstance(n, ast.While) and batch in ast.walk(n))
+    nested_fns = {id(r) for f in ast.walk(tree) if isinstance(f, (ast.FunctionDef, ast.Lambda))
+                  and f is not tree for r in ast.walk(f) if isinstance(r, ast.Return)}
+    finals = [ast.unparse(n.value) for n in ast.walk(tree) if isinstance(n, ast.Return)
+              and n.lineno > main.end_lineno and id(n) not in nested_fns]
+    led = [f for f in finals if f.startswith("_stopped_outcome(_loop_stop_report, ")]
+    assert len(led) == 2, finals                     # the summary and the no-files answer
+    assert sorted(set(finals) - set(led)) == ["content"], finals
+    # After the loop, the CONTENT_ONLY answer (a file's text) is not given for a stopped run.
+    content_only = [ast.unparse(n.test) for n in ast.walk(tree) if isinstance(n, ast.If)
+                    and n.lineno > main.end_lineno and "skip_template" in ast.unparse(n.test)
+                    and any(isinstance(r, ast.Return) for r in ast.walk(n))]
+    assert content_only == ["skip_template and (not _loop_stop_report)"], content_only
+
+
+def test_a_stopped_outcome_leads_with_the_stop_and_still_reads_as_failed():
+    from vaf.core.context import tool_result_is_error
+    from vaf.tools.coder import _stopped_outcome
+    from vaf.workflows.engine import _step_failure_reason
+
+    summary = ("[VAF_CODING_AGENT_STATUS: PARTIAL]\n\n### ⚠️ Task Partially Complete\n\n"
+               "**📁 Project Directory**: /home/user/demo\n**⚠️ Remaining tasks (1)**:\n- b")
+    assert _stopped_outcome("", summary) == summary
+    stop = ("### ❌ Repeated Refused Call\n\nThe model sent the same refused `set_todos` call "
+            "3 times in a row:\n\nTool Error: x\n\nStopped to prevent an endless loop.")
+    out = _stopped_outcome(stop, summary)
+    assert out.startswith(stop + "\n\n### ⚠️ Task Partially Complete")
+    assert "VAF_CODING_AGENT_STATUS" not in out
+    assert "/home/user/demo" in out and "Remaining tasks" in out
+    assert tool_result_is_error(out) and tool_result_is_error(out, content_carrying=True)
+    assert _step_failure_reason(out).startswith(
+        "Tool returned error message: Repeated Refused Call. The model sent the same")
 
 
 def test_every_answer_of_a_coder_batch_goes_to_the_history_that_owns_it():
@@ -603,11 +713,7 @@ def test_every_answer_of_a_coder_batch_goes_to_the_history_that_owns_it():
     saw it. The reference is taken once, before the batch."""
     import ast
     tree = _coder_run_tree()
-    loops = [n for n in ast.walk(tree) if isinstance(n, ast.For)
-             and ast.unparse(n.iter) == "tool_calls" and ast.unparse(n.target) == "tc"
-             and any(_assigns(s, "_args_refusal") for s in ast.walk(n))]
-    assert len(loops) == 1
-    batch = loops[0]
+    batch = _batch_loop(tree)
     assert not [s for s in ast.walk(batch) if _assigns(s, "_history_at_dispatch")]
     for stmts in _bodies(tree):
         if batch in stmts:
@@ -616,6 +722,29 @@ def test_every_answer_of_a_coder_batch_goes_to_the_history_that_owns_it():
             break
     else:
         raise AssertionError("the batch loop was not found in a statement list")
+
+    # Every answer, the early refusals included (a share path, the coder allowlist, a write
+    # before the plan), goes to the batch's history, never to `history`, which set_todos may
+    # have switched to a fresh task context by then.
+    writes = [n for n in ast.walk(batch) if isinstance(n, ast.Call)
+              and isinstance(n.func, ast.Attribute) and n.func.attr in ("append", "extend", "insert")
+              and isinstance(n.func.value, ast.Name) and "history" in n.func.value.id]
+    answers = [n for n in writes if n.args and isinstance(n.args[0], ast.Dict)
+               and any(isinstance(k, ast.Constant) and k.value == "role" for k in n.args[0].keys)]
+    assert len(answers) >= 15, len(answers)
+    stray = [f"line {n.lineno}: {ast.unparse(n.func)}" for n in writes
+             if n.func.value.id != "_history_at_dispatch"]
+    assert not stray, stray
+
+    # A failed context switch rolls back to a COPY of the history, so the batch follows it.
+    switch = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
+                  and n.name == "switch_to_task_context")
+    assert any(isinstance(n, ast.Nonlocal) and "_history_at_dispatch" in n.names
+               for n in ast.walk(switch))
+    rollback = next(n for n in ast.walk(switch) if isinstance(n, ast.Try)).handlers[0].body
+    lines = [ast.unparse(s) for s in rollback]
+    assert "sync_legacy_vars()" in lines
+    assert lines.index("_history_at_dispatch = history") > lines.index("sync_legacy_vars()")
 
 
 def _catches_recursion(handler_type) -> bool:

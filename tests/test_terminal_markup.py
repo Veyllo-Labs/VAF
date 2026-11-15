@@ -262,9 +262,24 @@ def test_escape_markup_shows_every_backslash_in_front_of_a_bracket(text):
     """Rich's render takes a backslash off every `\\[` of plain text, while its escape adds one
     only in front of a bracket that looks like a tag. The Windows CI found it: the label of a
     catch-all route lost its backslash and VAF's own link was dropped.
-    MUTATION: `_escape` returns `_rich_escape(text)` alone - red (all but the tag shapes)."""
+    MUTATION: `_escape` without its last step (`_UNTAGGED_BRACKET`) - red (all but the tag
+    shapes)."""
     from rich.markup import render
     assert render(escape_markup(text)).plain == text
+
+
+@pytest.mark.parametrize("tail", ["[id]", "[.x]", "x"])
+def test_escape_markup_stays_linear_on_a_run_of_backslashes(tail):
+    """Other parties' text: a run of backslashes before a tag, before a bracket of the other
+    kind and before plain text. Rescanned from every position of the run, either case took
+    1.1 to 1.3 s at 16 K backslashes. As the other timing tests: 8 times the length may take
+    at most about 20 times as long (quadratic would be 64).
+    MUTATION: drop `(?<!\\\\)` from `_UNTAGGED_BRACKET` - red ([id], x); from `_TAG_BRACKET` -
+    red ([.x], x)."""
+    from test_unattended_host_share_paths import _best_of_three
+    small = _best_of_three(escape_markup, "\\" * 8192 + tail)
+    large = _best_of_three(escape_markup, "\\" * 65536 + tail)
+    assert large <= 20 * small + 0.05, (small, large)
 
 
 @pytest.mark.parametrize("parts", BRACKETED, ids=["id", "slug", "optional"])
@@ -584,7 +599,7 @@ def test_only_vafs_own_link_becomes_its_label(text, expected):
 
 
 def test_an_own_link_with_a_bracketed_path_becomes_that_path():
-    """`file_link` of a Next.js route: the label is the raw path. MUTATION: `_rich_escape`
+    """`file_link` of a Next.js route: the label is the raw path. MUTATION: `_escape`
     the label - red (`\\[id]`); return the text unchanged - red."""
     from vaf.core.terminal_text import file_link
 

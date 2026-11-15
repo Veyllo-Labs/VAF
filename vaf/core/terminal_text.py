@@ -163,7 +163,6 @@ from urllib.parse import unquote, urlsplit
 from rich.cells import cell_len
 from rich.console import Console, ConsoleOptions, RenderableType
 from rich.errors import MarkupError
-from rich.markup import escape as _rich_escape
 from rich.segment import Segment
 from rich.text import Span, Text
 
@@ -342,12 +341,21 @@ _MARKUP_LINK_RE = re.compile(r"\[link=([^\[\]\s]+)\]((?:(?!\[/?link[=\]])[^\n])*
 # path to a Next.js catch-all route, `app\[...slug]\page.tsx`, therefore lost the backslash in
 # front of its bracket: the label no longer read as the path it opens, and the own link was
 # dropped. One more backslash in front of every other bracket keeps them all.
-_UNTAGGED_BRACKET = re.compile(r"(\\+)(?=\[(?![a-z#/@][^\[]*?\]))")
+# Both patterns start only where a run of backslashes starts (`(?<!\\)`): Rich's own pattern,
+# unanchored, rescanned such a run from each of its positions when no tag followed, and this one
+# when a tag did, quadratic on other parties' text (16 K backslashes: 1.1 and 1.3 s, measured).
+# Anchored they give Rich's result unchanged: its leftmost match in a run starts at the run.
+_TAG_BRACKET = re.compile(r"(?<!\\)(\\*)(\[[a-z#/@][^\[]*?\])")
+_UNTAGGED_BRACKET = re.compile(r"(?<!\\)(\\+)(?=\[(?![a-z#/@][^\[]*?\]))")
 
 
 def _escape(text: str) -> str:
-    """`rich.markup.escape`, and the backslashes in front of a bracket it leaves alone."""
-    return _UNTAGGED_BRACKET.sub(r"\1\\", _rich_escape(text))
+    """`rich.markup.escape` in linear time, and the backslashes in front of a bracket it
+    leaves alone."""
+    text = _TAG_BRACKET.sub(lambda m: m.group(1) * 2 + "\\" + m.group(2), text)
+    if text.endswith("\\") and not text.endswith("\\\\"):
+        text += "\\"                   # Rich's rule: a final backslash would escape the next tag
+    return _UNTAGGED_BRACKET.sub(r"\1\\", text)
 
 
 def escape_markup(value: Any) -> str:
@@ -369,7 +377,7 @@ def escape_markup(value: Any) -> str:
         return ""
     text = value if isinstance(value, str) else str(value)
     if "[" not in text:
-        return _rich_escape(text)
+        return _escape(text)
     pieces, pos = [], 0
     for match in _MARKUP_LINK_RE.finditer(text):
         target, label = match.group(1), match.group(2)

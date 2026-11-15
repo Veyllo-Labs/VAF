@@ -31,9 +31,11 @@ MUTATIONS, each turns the named test red. On the API lane two changes keep a cut
 calls from running, the exit after the stream and the guard around the call conversion, so
 the API rows of the first mutation need the second one as well:
 - move the stop exit back below `_final_answer_probe`
-  -> test_a_stop_after_a_call_on_every_lane[server], [library],
+  -> test_a_stop_after_a_streamed_call_runs_nothing[anthropic-tool-use],
+     test_a_stop_after_a_call_on_every_lane[server], [library],
      test_a_stopped_text_call_does_not_run[xml], [in-think],
-     test_no_guard_judges_a_stopped_round[grounding], the fuzz (all seeds: the text call);
+     test_no_guard_judges_a_stopped_round[grounding], [refused-call-server],
+     the fuzz (all seeds: the text call);
 - that, and drop the `if not _generation_stopped:` around the API lane's call conversion
   -> also test_a_stop_after_a_streamed_call_runs_nothing,
      test_a_stop_inside_a_batch_or_its_arguments[second-call], [mid-arguments],
@@ -44,15 +46,18 @@ the API rows of the first mutation need the second one as well:
   -> test_a_stop_on_the_first_chunk_asks_nothing_again, the fuzz (all seeds);
 - place the stop exit just before `# 1. Handle Tool Calls` (after the guards)
   -> test_no_guard_judges_a_stopped_round[grounding];
-- place it just before the tool section and drop the conversion guard
-  -> test_no_guard_judges_a_stopped_round[refused-call] (the blocked-batch regenerate);
+- place it just before the tool section (after the blocked-batch regenerate)
+  -> test_no_guard_judges_a_stopped_round[grounding], [refused-call-server];
+     with the conversion guard dropped as well, also [refused-call];
 - drop the answering loop in the stop before a tool (marker only)
   -> test_a_stop_before_the_first_tool_answers_the_call,
      test_a_stop_between_tools_answers_the_rest_and_keeps_the_notes, the fuzz (all seeds);
 - answer only the current call there
   -> test_a_stop_between_tools_answers_the_rest_and_keeps_the_notes, the fuzz (all seeds);
 - flush the deferred notes before the not-run results
-  -> test_a_stop_between_tools_answers_the_rest_and_keeps_the_notes (adjacency).
+  -> test_a_stop_between_tools_answers_the_rest_and_keeps_the_notes (adjacency);
+- drop the stop check before an inner call of `multi_tool_use.parallel`, or let it clear the
+  stop -> test_a_stop_inside_a_parallel_wrapper_runs_no_later_inner_call.
 """
 import copy
 import json
@@ -135,8 +140,15 @@ def agent(monkeypatch, tmp_path):
 
 # ── AC1: the API lane ───────────────────────────────────────────────────────
 
-def test_a_stop_after_a_streamed_call_runs_nothing(agent):
-    streamed, out = _drive(agent, [["Einen Moment. ", _frame(("c1", "{}")), STOP, FIN]])
+@pytest.mark.parametrize("call", [
+    pytest.param(_frame(("c1", "{}")), id="openai-frame"),
+    # Anthropic's `tool_use` frame lands in the round's calls inside the stream, so the call
+    # conversion never sees it: only the exit after the stream keeps it from running.
+    pytest.param(json.dumps({"tool_use": {"id": "tu1", "name": TASK, "input": {}}}),
+                 id="anthropic-tool-use"),
+])
+def test_a_stop_after_a_streamed_call_runs_nothing(agent, call):
+    streamed, out = _drive(agent, [["Einen Moment. ", call, STOP, FIN]])
     assert len(agent.tools[TASK].calls) == 0, "the stopped call ran"
     assert len(agent.requests) == 1, "the turn asked the model again after the stop"
     assert out == "Einen Moment."
@@ -293,8 +305,22 @@ def test_a_stopped_text_call_does_not_run(agent, text):
 
 # ── AC7: no guard judges a stopped round ────────────────────────────────────
 
-@pytest.mark.parametrize("guard", ["grounding", "refused-call"])
+@pytest.mark.parametrize("guard", ["grounding", "refused-call", "refused-call-server"])
 def test_no_guard_judges_a_stopped_round(agent, monkeypatch, guard):
+    if guard == "refused-call-server":
+        # The server lane turns its streamed calls into the round's calls after the stream, so
+        # the blocked-batch regenerate would see them; on the API lane the conversion guard
+        # already keeps them out. No text: the regenerate only replaces a round without an
+        # answer.
+        import vaf.core.agent as agent_mod
+        monkeypatch.setattr(agent_mod, "_find_redundant_read_call", lambda h, fn, fa: True)
+        _on_server(agent, monkeypatch, [list(_LANE_ROUND[1:])])
+        out = agent.chat_step(user_input=ASK, raw_user_input=ASK, stream_callback=lambda c: None)
+        assert len(agent.requests) == 1, "the blocked-batch regenerate asked again after the stop"
+        assert len(agent.tools[TASK].calls) == 0
+        assert out == MARK
+        _no_calls_committed(agent)
+        return
     if guard == "grounding":
         judged = []
 
@@ -367,6 +393,29 @@ def test_a_stop_between_tools_answers_the_rest_and_keeps_the_notes(agent, monkey
     head, _ = _tool_error_note_parts(TASK)
     assert tail[3]["role"] == "system" and tail[3]["content"].startswith(head), tail
     assert tail[4:] == [{"role": "assistant", "content": MARK}], tail
+    assert_adjacent(agent.history)
+
+
+def test_a_stop_inside_a_parallel_wrapper_runs_no_later_inner_call(agent):
+    """A `multi_tool_use.parallel` call with two inner calls; the first presses Stop in its
+    run. The second inner call is recorded as not run, and the batch's own check after the
+    wrapper ends the turn."""
+    agent.tools[TASK].on_run = agent.press_stop
+    wrapper = json.dumps({"tool_uses": [
+        {"recipient_name": TASK, "parameters": {"packages": ["a"]}},
+        {"recipient_name": TASK, "parameters": {"packages": ["b"]}}]})
+    batch = json.dumps({"tool_calls": [{"index": 0, "id": "c1", "type": "function",
+                                        "function": {"name": "multi_tool_use.parallel",
+                                                     "arguments": wrapper}}]})
+    _, out = _drive(agent, [["Einen Moment. ", batch, FIN]])
+    assert [c.get("packages") for c in agent.tools[TASK].calls] == [["a"]], \
+        "an inner call ran after the stop"
+    assert len(agent.requests) == 1, "the turn went on after the stop"
+    assert out == MARK
+    result = next(m for m in agent.history if m.get("role") == "tool"
+                  and m.get("tool_call_id") == "c1")
+    assert STOPPED_CALL_RESULT in result["content"], result
+    assert not _stop_pending()
     assert_adjacent(agent.history)
 
 

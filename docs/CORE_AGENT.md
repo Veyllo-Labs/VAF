@@ -208,7 +208,8 @@ the answer and returns it:
 
 A running turn is stopped with `vaf.stop_session(session_id)` (underneath,
 `TaskQueue().request_stop`). The engine checks at the loop top, between stream chunks, before
-each tool and after a tool round; a stop in the stream runs none of that round's tool calls.
+each tool (the calls inside a `multi_tool_use.parallel` wrapper included) and after a tool
+round; a stop in the stream runs none of that round's tool calls.
 
 ## complete
 

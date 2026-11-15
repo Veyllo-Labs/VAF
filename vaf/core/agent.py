@@ -15327,6 +15327,10 @@ class Agent:
         """Provider artefact: a wrapper whose payload is a list of other tool calls.
         Recurses through execute_tool SEQUENTIALLY on purpose - dispatching them in parallel
         would bypass the gating and the UI prompts each inner call is entitled to."""
+        # The same read-only stop check every inner call's dispatch gets; never cleared here, so
+        # the batch's own stop check after this wrapper ends the turn.
+        _stop_pending = _session_stop_check(self._dispatch_session_id())
+
         def run_multi_tool_use(call_args: dict | None) -> str:
             tool_uses = (call_args or {}).get("tool_uses", [])
             if not tool_uses:
@@ -15350,6 +15354,11 @@ class Agent:
                         tool_args = json.loads(tool_args)
                     except Exception:
                         tool_args = {}
+
+                # A stop pressed during an earlier inner call: this one does not run.
+                if _stop_pending():
+                    results.append({"tool": tool_name, "success": False, "result": STOPPED_CALL_RESULT})
+                    continue
 
                 # Run sequentially to preserve tool gating/UI prompts.
                 result = self.execute_tool(tool_name, tool_args)

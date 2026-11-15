@@ -611,7 +611,10 @@ streamed ran, and the turn asked the model again. The stop before a tool comes a
 batch's `tool_calls` message is committed, so it answers that call and every later call of
 the batch with `STOPPED_CALL_RESULT` (calls that ran keep their real results), then the
 deferred notes of the calls that ran, then the marker: the shape `_turn_closing` leaves, so
-the stored history stays a valid tool sequence (Rule 4.1). Named boundaries: a retry's wait
+the stored history stays a valid tool sequence (Rule 4.1). Inside a `multi_tool_use.parallel`
+wrapper the stop is read before each inner call without consuming it: the inner calls after
+the press are recorded as `STOPPED_CALL_RESULT` in the wrapper's result and do not run, and
+the batch's own check after the wrapper ends the turn. Named boundaries: a retry's wait
 (1-3 s) ends in `continue`, and the loop top sees a stop after it; the emergency loop breaker
 still returns with the batch's later calls unanswered, and the local server's request retries
 do not check a stop (both measured, separate fixes). Guard:

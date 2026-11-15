@@ -23,6 +23,11 @@ Mutations that turn these tests red (each run and restored):
 - dialect 3 walks the names sorted: the ``name_order`` row;
 - dialect 3 runs although a named dialect found a call: the ``named_dialect_wins`` row;
 - the tool_use strip runs before the invoke strip: the ``invoke_joins_tool_use`` row;
+- a parameter, tool_use or tool-tag opener inside a match is tried again: the
+  ``param_inside_value``, ``tool_use_inside_body`` and ``tool_tag_nested`` rows;
+- the position index steps by the needle's length: the ``overlapping_closer`` row;
+- the invoke search keeps its no-closer guard but loses the cut at the last closer: the
+  ``invoke_after_valid`` shape in the cost test;
 - a tool tag closes at any closer: the prose test (a Markdown line names ``<web_search>``);
 - the fuzz catches every mutation of this list that changes a result, within its 2,000 draws;
 - each lazy regex put back (the uncut invoke search, the parameter, tool_use, child-tag,
@@ -220,6 +225,16 @@ SHAPES = {
     "tool_use_bare_heads": ("", "<tool_use ", "</tool_use>"),
     "wrapper_heads": ("invoke name= ", "<calls ", ""),
     "tool_use_name_heads": ("", '<tool_use name="a" ', "</tool_use>"),
+    # A valid block first, then unclosed openers: a closer exists, so a lane that only checks
+    # for one at all would still rescan from every later opener.
+    "invoke_after_valid": ('<invoke name="web_search">x</invoke>', '<invoke name="web_search">', ""),
+    "params_after_valid": ('<invoke name="web_search"><parameter name="q">x</parameter>',
+                           '<parameter name="q">', "</invoke>"),
+    "tool_use_after_valid": ('<tool_use name="web_search"><q>1</q></tool_use>',
+                             '<tool_use name="web_search">', ""),
+    "children_after_valid": ('<tool_use name="web_search"><b>1</b>', "<a>", "</tool_use>"),
+    "tool_tags_after_valid": ("<web_search>x</web_search>", "<web_search>", ""),
+    "wrappers_after_valid": ("invoke name= <calls>", "<calls ", ""),
 }
 
 # Rows whose result on the regex implementation is pinned here as well: (text, names,
@@ -245,6 +260,14 @@ PINNED = {
     "named_dialect_wins": ('<tool_use name="web_search"><q>1</q></tool_use>'
                            "<web_search><q>2</q></web_search>", ["web_search"],
                            [("web_search", {"q": 1})], None),
+    "param_inside_value": ('<invoke name="web_search"><parameter name="a">x<parameter name="b">'
+                           "y</parameter></invoke>", None,
+                           [("web_search", {"a": 'x<parameter name="b">y'})], None),
+    "tool_use_inside_body": ('<tool_use name="web_search"><tool_use name="read_file">'
+                             "</tool_use>", None, [("web_search", {})], None),
+    "tool_tag_nested": ("<web_search><web_search>1</web_search>", ["web_search"],
+                        [("web_search", {})], None),
+    "overlapping_closer": ("x<a></a</a></a></a>x", ["a></a"], [("a></a", {})], None),
 }
 
 CORPUS = {
@@ -323,7 +346,7 @@ _KB = 1024
 # The sizes on the regex implementation took 3 to 27 s; the cubic head 14.4 s at 32 KB, and the
 # two mildest quadratic shapes 2.5 and 4.3 s at 256 KB.
 _SIZES = {"tool_use_name_heads": 32 * _KB, "tool_tag_heads": 256 * _KB,
-          "wrapper_heads": 256 * _KB}
+          "wrapper_heads": 256 * _KB, "wrappers_after_valid": 256 * _KB}
 _COST_BOUND = 0.5
 
 
@@ -394,7 +417,7 @@ def test_dead_regexes_are_gone():
         assert not hasattr(recovery, name), f"{name} is back in tool_call_recovery"
     pattern = re.compile(r"\b(?:" + "|".join(_DEAD) + r")\b")
     vaf_dir = Path(__file__).resolve().parents[1] / "vaf"
-    hits = [str(p.relative_to(vaf_dir)) for p in vaf_dir.rglob("*.py")
+    hits = [p.relative_to(vaf_dir).as_posix() for p in vaf_dir.rglob("*.py")
             if pattern.search(p.read_text(encoding="utf-8", errors="replace"))]
     assert hits == [], f"a removed regex is referenced again: {hits}"
 

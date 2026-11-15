@@ -75,8 +75,9 @@ class _Positions:
 
     @classmethod
     def of(cls, text: str, needle: str) -> "_Positions":
-        # Stepping by one keeps overlapping occurrences, as a regex attempt at every
-        # position would see them.
+        # Stepping by one, not by the needle's length: ">", '"' and the fixed closers cannot
+        # overlap themselves, but a tool closer can when the caller's tool name holds "<" and
+        # ">" (</a></a> for the name "a></a"), and the regex finds such a closer too.
         at = []
         i = text.find(needle)
         while i >= 0:
@@ -125,10 +126,9 @@ def _parameters(body: str):
     a regex attempt at that position would be; positions inside a match are skipped.
     """
     gts = closers = None
-    taken = 0
     p = body.find("<parameter")
     while p >= 0:
-        head = _PARAM_HEAD_RE.match(body, p) if p >= taken else None
+        head = _PARAM_HEAD_RE.match(body, p)
         if head is None:
             p = body.find("<parameter", p + 1)
             continue
@@ -143,8 +143,8 @@ def _parameters(body: str):
             # A later opener's head ends later, so its ">" and its closer would too.
             return
         yield head.group(1), body[head.end():g], body[g + 1:c]
-        taken = c + len("</parameter>")
-        p = body.find("<parameter", taken)
+        # The next attempt starts after the match, so an opener inside its value is skipped.
+        p = body.find("<parameter", c + len("</parameter>"))
 
 
 def _tool_use_blocks(text: str):
@@ -247,10 +247,9 @@ def _tool_tag_blocks(text: str, tool: str, gts: _Positions):
     opener = "<" + tool
     closer = "</" + tool + ">"
     closers = None
-    taken = 0
     p = text.find(opener)
     while p >= 0:
-        h = head.match(text, p) if p >= taken else None
+        h = head.match(text, p)
         if h is None:
             p = text.find(opener, p + 1)
             continue
@@ -264,8 +263,8 @@ def _tool_tag_blocks(text: str, tool: str, gts: _Positions):
             # A later opener's ">" is this one or a later one, so it has no closer either.
             return
         yield text[g + 1:c]
-        taken = c + len(closer)
-        p = text.find(opener, taken)
+        # The next attempt starts after the match, so an opener inside its body is skipped.
+        p = text.find(opener, c + len(closer))
 
 
 def _mk(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -315,7 +314,9 @@ def extract_xml_tool_calls(content: str, valid_names=None) -> list:
     generation round, holding the interpreter lock throughout. The results are those of the
     regexes, match for match. Named boundaries: dialect 3 is one pass per tool name (T * n,
     8 ms for 152 names on 128 KB of prose), because the result follows the order of the names;
-    the reply length itself is not capped.
+    the reply length itself is not capped, and neither is the index: a list of positions costs
+    about 36 bytes per needle found, 150 MB for a reply of 4 MB of ``>`` (5 MB at 128 KB). An
+    ``array('l')`` would hold 35 MB there, but built 1.5 times and looked up 2.3 times slower.
     """
     if not content:
         return []

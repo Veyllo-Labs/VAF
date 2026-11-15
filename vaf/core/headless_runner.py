@@ -1024,10 +1024,13 @@ def _prepare_channel_outbound(text: str, *, closed_reasoning_only: bool = False)
     path, and the markup around it is noise there; any other link stays as written.
 
     `closed_reasoning_only` removes only the CLOSED reasoning blocks, for the one question
-    whether the turn failed (`_reply_failure`); what is sent never takes it."""
+    whether the turn failed (`_reply_failure`); what is sent never takes it. Each removed
+    block becomes a line break there, so removing a block never joins a later line onto the
+    line of a failure the owner is sent."""
     out = own_links_as_labels(text)
     if closed_reasoning_only:
-        out = split_think_blocks(drop_redacted_blocks(out, cut_unclosed=False))[0]
+        out = split_think_blocks(drop_redacted_blocks(out, cut_unclosed=False, sep="\n"),
+                                 sep="\n")[0]
     else:
         out = strip_think_blocks(out)
     out = _strip_tool_calls_json(out)
@@ -1039,26 +1042,24 @@ def _prepare_channel_outbound(text: str, *, closed_reasoning_only: bool = False)
 
 
 def _failure_end(text: str, start: int) -> int:
-    """Where the failure that begins at `start` ends: a provider's `[API Error from ...]` at
-    its own closing bracket (brackets inside it balanced), the engine's `[Error] ...` at the
-    end of its line; either at the end of the text when nothing closes it."""
+    """Where the failure that begins at `start` ends: never past the end of its line, and a
+    provider's `[API Error from ...]` already at its own closing bracket on that line
+    (brackets inside it balanced). A failure's later lines stay behind on purpose: reasoning
+    that only quotes a failure goes on there, and no reasoning reaches the owner, even at the
+    cost of a provider's diagnostic that spans lines."""
     from vaf.core.completion import _ERROR_SENTINEL
+    newline = text.find("\n", start)
+    line_end = len(text) if newline < 0 else newline
     if text.startswith(_ERROR_SENTINEL, start):
         depth = 0
-        for i in range(start, len(text)):
+        for i in range(start, line_end):
             if text[i] == "[":
                 depth += 1
             elif text[i] == "]":
                 depth -= 1
                 if depth == 0:
                     return i + 1
-            elif text[i] == "\n" and depth == 1:
-                break  # an unclosed sentinel ends with its line, like the engine's status
-        else:
-            return len(text)
-        return i
-    newline = text.find("\n", start)
-    return len(text) if newline < 0 else newline
+    return line_end
 
 
 def _reply_failure(text: str) -> str:
@@ -1088,19 +1089,23 @@ def _channel_reply_text(text: str, turn: TurnStatus = None) -> str:
     that the turn failed, without the reasoning around it. The failure is the engine's own
     record when it has one (`turn.failure`, the exact streamed failure text); otherwise the
     one `_reply_failure` finds outside the closed reasoning, which ends at its own end
-    (`_failure_end`): a provider's failure at its closing bracket, the engine's status at the
-    end of its line, so the rest of a line that only quotes "[Error] ..." in reasoning the
-    model never closed goes with it. `turn` is passed for the owner's chats only: a contact
-    never gets here with a failure, because `_deliver_channel_reply` answers such a turn
-    with the fixed sentence first."""
+    (`_failure_end`): never past the end of its line, a provider's failure already at its
+    closing bracket, so the rest of a line that only quotes "[Error] ..." in reasoning the
+    model never closed goes with it. Named boundary: a found failure's later lines stay
+    behind, a provider's diagnostic that spans lines included, because reasoning that quotes
+    a failure goes on there and none of it may reach the owner. The engine's record is
+    selected first: it is added unless the visible text already holds exactly that failure,
+    also when the visible answer carries an error of its own. `turn` is passed for the
+    owner's chats only: a contact never gets here with a failure, because
+    `_deliver_channel_reply` answers such a turn with the fixed sentence first."""
     from vaf.core.completion import is_error_reply
     visible = _prepare_channel_outbound(text)
+    recorded = _prepare_channel_outbound(turn.failure) if turn is not None and turn.failure else ""
+    if recorded:
+        return visible if recorded in visible else f"{visible}\n\n{recorded}".strip()
     if is_error_reply(visible):
         return visible
-    if turn is not None and turn.failure:
-        failure = _prepare_channel_outbound(turn.failure)
-    else:
-        failure = _reply_failure(text)
+    failure = _reply_failure(text)
     if failure and failure not in visible:
         return f"{visible}\n\n{failure}".strip()
     return visible

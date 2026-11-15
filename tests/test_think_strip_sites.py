@@ -240,6 +240,12 @@ def test_web_copy_keeps_thinking():
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Lazy block regexes that stay, each for a reason the primitive cannot serve.
+#
+# Named boundary: the voice lane's own tag stripper (`voice_agent._strip_reasoning`, a wider
+# family of marks with attributes allowed) builds its pattern from a variable inside an
+# f-string, which folds to `<({})...` here, so this AST check does not see it. It stays the
+# voice lane's own on purpose (docs/agents/VOICE_AGENT.md); it is still a lazy regex, and
+# making it linear on the same family is open work there, not a reason to copy it elsewhere.
 ALLOWED_HAND_COPIES = {
     # The terminal's display whitespace fix re-emits the block (group 1): it keeps it on purpose.
     "vaf/cli/cmd/run.py": 1,

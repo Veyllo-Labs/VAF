@@ -354,6 +354,33 @@ def test_the_owner_gets_a_provider_failure_up_to_its_closing_bracket(delivered):
     assert delivered == [("telegram", "Answer.\n\n[API Error from x: {'error': [1, 2]}]")]
 
 
+@pytest.mark.parametrize("text, expected", [
+    ("Answer\n<think>tool said [API Error from x: [code 5\nSECRET line two\nSECRET three",
+     "Answer\n\n[API Error from x: [code 5"),
+    ("Answer\n<think>tool said [Error] API backend failure: x <redacted_reasoning>plan\n"
+     "more</redacted_reasoning> SECRET after",
+     "Answer\n\n[Error] API backend failure: x"),
+], ids=["nested-bracket-across-lines", "closed-block-joins-a-line"])
+def test_a_found_failure_never_carries_a_later_line(delivered, text, expected):
+    """No reasoning line after a quoted failure reaches the owner: the failure ends at its
+    line, whatever its brackets, and a closed block removed from the judging copy is a line
+    break there, so it never joins a later line onto the failure's. MUTATIONS: stop at a line
+    break only one bracket deep - red on nested-bracket-across-lines; remove the closed blocks
+    without a line break - red on closed-block-joins-a-line."""
+    hr._deliver_channel_reply(_delivery_task("telegram", from_contact=False), text)
+    assert delivered == [("telegram", expected)]
+
+
+def test_the_engines_record_is_added_also_after_an_error_of_the_answer(delivered):
+    """The visible answer carries an error of its own, and the turn failed with another one
+    that an unclosed block hid: the owner gets both. MUTATION: return the visible text first
+    whenever it holds an error - red (the recorded failure is lost)."""
+    text = "Lookup: [Error] cached lookup failed\n<think>retrying " + _KEY_ERROR
+    hr._deliver_channel_reply(_delivery_task("telegram", from_contact=False), text,
+                              turn=TurnStatus(failed=True, failure=_KEY_ERROR))
+    assert delivered == [("telegram", "Lookup: [Error] cached lookup failed\n\n" + _KEY_ERROR)]
+
+
 def test_the_owner_gets_the_engines_record_of_the_failure(delivered):
     """The engine recorded the turn's failure: that exact text goes after the outbound text,
     whatever the reasoning around a quoted marker says. MUTATION: ignore `turn.failure` in

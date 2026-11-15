@@ -163,7 +163,11 @@ _TOOL_CALL_TAILS = tuple(re.compile(p, re.DOTALL | re.MULTILINE) for p in (
 def strip_tool_call_tails(text: str) -> str:
     """Leaked tool-call JSON off the end of a model's text, by the one pattern list the
     reply cleaner (`Agent._sanitize_response`) and the messenger chain
-    (`headless_runner._strip_tool_calls_json`) share. Not stripped: the caller strips."""
+    (`headless_runner._strip_tool_calls_json`) share. Not stripped: the caller strips.
+
+    Named boundary: internal on purpose, not on the facade. It has two engine callers, the
+    text `run()` returns has already been through it (`Agent._clean_reasoning`), and no
+    embedder need for it has been measured."""
     for pattern in _TOOL_CALL_TAILS:
         text = pattern.sub("", text)
     return text
@@ -234,14 +238,15 @@ def strip_think_blocks(text: str, *, greedy: bool = False) -> str:
     return t.strip()
 
 
-def drop_redacted_blocks(text: str, *, cut_unclosed: bool) -> str:
+def drop_redacted_blocks(text: str, *, cut_unclosed: bool, sep: str = "") -> str:
     """Every ``<redacted_reasoning>`` block out, each closed at its first closer, in one walk.
 
     Without ``cut_unclosed`` an opener without a closer is kept as text, and so is a closer
     without an opener: the exact output of a lazy
     ``<redacted_reasoning>.*?</redacted_reasoning>`` (the web chat's stored copy keeps
-    everything else as written). With ``cut_unclosed`` such an opener cuts the text there
-    and a stray closer is dropped (`strip_think_blocks`'s second pass).
+    everything else as written), each removed block replaced by ``sep``. With
+    ``cut_unclosed`` such an opener cuts the text there and a stray closer is dropped
+    (`strip_think_blocks`'s second pass).
 
     Linear: the next opener and the next closer are each found once and kept until the walk
     passes them, where the lazy regex rescans to the end from every unclosed opener (about
@@ -257,6 +262,7 @@ def drop_redacted_blocks(text: str, *, cut_unclosed: bool) -> str:
             if end < 0:
                 break  # no closer follows: no later opener can be closed either
             kept.append(text[pos:start])
+            kept.append(sep)
             pos = end + len(_REDACTED_CLOSE)
         kept.append(text[pos:])
         return "".join(kept)
@@ -281,9 +287,9 @@ def drop_redacted_blocks(text: str, *, cut_unclosed: bool) -> str:
     return "".join(kept)
 
 
-def split_think_blocks(text: str) -> tuple:
+def split_think_blocks(text: str, *, sep: str = " ") -> tuple:
     """(visible, blocks): the inner texts of the closed ``<think>``/``<thinking>`` blocks, in
-    order, and the text with each such block, tags included, replaced by one space.
+    order, and the text with each such block, tags included, replaced by ``sep`` (one space).
 
     Each block closes at its FIRST closer and openers inside it are ignored; an unclosed
     opener and stray closers stay in the visible text as written. For the readers that
@@ -299,7 +305,7 @@ def split_think_blocks(text: str) -> tuple:
                 start = m
         elif m.group(1):
             visible.append(text[pos:start.start()])
-            visible.append(" ")
+            visible.append(sep)
             blocks.append(text[start.end():m.start()])
             pos, start = m.end(), None
     visible.append(text[pos:])

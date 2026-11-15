@@ -1876,12 +1876,17 @@ was run` and the tool never runs, where the usual `json.loads` with a `{}` fallb
 would run it without the arguments the model meant - VAF's own loops did exactly
 that until a tool whose parameters were all optional reported success for a call it
 had never received. Handing the text over is how your loop gets that refusal for free.
+Arguments nested deeper than 100 levels (`vaf.core.tool_dispatch.MAX_ARGUMENT_DEPTH`,
+the arguments object counts as level 1) are refused with `Tool Error: the arguments of
+this '<tool>' call are nested deeper than 100 levels, so nothing was run`, whether you
+pass text or a dict you decoded yourself: every later stage walks the arguments
+recursively, and such a value used to raise out of `execute()`.
 
 It never raises for a tool failure and never blocks on a human. Everything comes
 back as a string: `Security Error: ...` for a policy block, a name outside the
 allowed set, the account allowlist, your authorizer's `deny()` or a revoked account,
 `Tool Error: ...`
-for malformed arguments, a schema failure or an exception inside the tool, `Error: Unknown tool
+for malformed or too deeply nested arguments, a schema failure or an exception inside the tool, `Error: Unknown tool
 '<name>'` for a name no registered tool carries, the
 `vaf.markers.TOOL_CONFIRMATION_REQUIRED` marker when a gated tool had nobody to
 ask, `[CANCELLED] ...` when the person at the gate said no, and whatever your
@@ -1892,8 +1897,8 @@ never sees a blocked tool reported as having run.
 the same pipeline and returns a `vaf.ToolCallOutcome` whose first two fields are `result`,
 exactly what `execute()` would have returned, and `dispatched`, which is `True`
 exactly when the call emitted `tool_start`. It is `False` for every stage that turns
-a call away before the tool can do anything: arguments that are not a JSON object, a
-revoked account, a name outside the allowed set, a policy block, the account
+a call away before the tool can do anything: arguments that are not a JSON object,
+arguments nested deeper than 100 levels, a revoked account, a name outside the allowed set, a policy block, the account
 allowlist, your authorizer's `deny()`, an `after_policy` hook's string, and the
 confirmation gate (refused or cancelled). An unknown name, a `before_dispatch`
 refusal, a schema error, a tool that raised and a tool that was stopped or ran out

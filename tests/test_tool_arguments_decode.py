@@ -17,24 +17,32 @@ the librarian and an embedder's own loop pass them. The refusal starts with "Too
 which every surface reads as a failure, and NOT with "error", which would make the chat loop
 tell the model never to try again: this is the one failure a retry fixes.
 
-Text nested deeper than the interpreter can decode gets the same refusal. `json.loads` raises
-`RecursionError` there, which is not a `ValueError`, so it used to escape the decoder and end
-the chat turn, the coder's tool loop or a `ToolCaller.execute` call. The depth limit depends
-on the interpreter (about 1000 before 3.12, about 10,000 on 3.13, and lower inside the chat
-loop's frames), so the tests use depths that fail everywhere and never pin the number.
+Arguments nested deeper than `MAX_ARGUMENT_DEPTH` (100) levels are refused as well, as text
+and as a dict alike, with a refusal that names the limit. Every walk after the decoder is
+Python-recursive (`make_json_serializable` when the request is built, `mask_secret_args` at
+the gate, the previews, the tools), and a value about 1000 levels deep used to raise out of
+`ToolCaller.execute`, end the librarian's run, end the coder's run at its doom-loop
+signature, or come back from the chat loop as "maximum recursion depth exceeded". Text nested
+deeper than the interpreter can decode at all makes `json.loads` raise `RecursionError`
+(about 1000 levels before 3.12, about 10,000 on 3.13, lower inside the chat loop's frames);
+it is over the limit by definition and gets the same depth refusal.
 
 MUTATION: restore `except: arguments = {}` in `chat_step` and the chat test goes red (the
 tool runs); drop the string branch in `ToolCaller.execute` and the funnel test goes red;
-narrow the decoder's catch back to `except ValueError` and every too-deep test and the fuzz
-go red with `RecursionError`; make the decoder walk the text quadratically before parsing
-and the megabyte cost test goes red. `VAF_DECODE_FUZZ_DRAWS` runs a larger seeded draw count
-outside the suite.
+drop the decoder's `RecursionError` branch and every too-deep test and the fuzz go red with
+`RecursionError`; make the decoder walk the text quadratically before parsing and the
+megabyte cost test goes red. Remove the depth check and the deep-decoded tests and the depth
+fuzz go red; write `>=` and the depth-100 cases are refused; narrow the funnel back to text
+and the dict cases raise. `VAF_DECODE_FUZZ_DRAWS` and `VAF_DEPTH_FUZZ_DRAWS` run larger
+seeded draw counts outside the suite.
 """
 import inspect
 import json
 import os
+import pathlib
 import random
 import time
+import uuid
 
 import pytest
 import requests
@@ -145,12 +153,13 @@ def test_the_librarian_and_the_coder_ask_the_same_decoder():
     assert "caller.execute(fn_name, tc['function']['arguments'])" in lib
     assert "fn_args = {}" not in lib
     run = inspect.getsource(coder.CodingAgentTool.run)
-    assert "decode_arguments(fn_name, fn_args_str)" in run
+    assert "decode_arguments(fn_name, fn_args if fn_args else fn_args_str)" in run
 
 
 # ── arguments nested deeper than the interpreter can decode ──────────────────────────
 
 _PREFIX = "Tool Error: the arguments of this 'web_search' call"
+_DEEP = "Tool Error: the arguments of this '{}' call are nested deeper than 100 levels"
 
 
 def _list_nesting(depth: int) -> str:
@@ -161,8 +170,8 @@ def _object_nesting(depth: int) -> str:
     return '{"a":' * depth + "1" + "}" * depth
 
 
-def _assert_retryable_refusal(refusal):
-    assert refusal.startswith(_PREFIX + " are not valid JSON ("), refusal[:200]
+def _assert_retryable_refusal(refusal, tool="web_search"):
+    assert refusal.startswith(_DEEP.format(tool)), refusal[:200]
     assert "nothing was run" in refusal
     assert tool_result_is_error(refusal)
     assert not refusal.lower().startswith(("error", "failed", "❌"))
@@ -184,18 +193,47 @@ def test_the_funnel_refuses_too_deep_text(monkeypatch):
     monkeypatch.setattr("vaf.core.trust.get_tool_policy", lambda *a, **k: "always")
     spy = _Spy()
     out = ToolCaller({spy.name: spy}).execute(spy.name, _list_nesting(10_000))
-    assert out.startswith("Tool Error: the arguments of this 'spy_tool' call are not valid JSON (")
-    assert "nothing was run" in out
+    _assert_retryable_refusal(out, spy.name)
     assert spy.calls == []
+
+
+def test_malformed_shallow_text_keeps_its_own_refusal():
+    """The depth branch is split off the parse branch: an unquoted value still names the
+    parse error, byte for byte as before."""
+    with pytest.raises(ValueError) as parse_error:
+        json.loads(MALFORMED)
+    args, refusal = decode_arguments("web_search", MALFORMED)
+    assert args == {}
+    assert refusal == (_PREFIX + f" are not valid JSON ({parse_error.value}), so nothing was "
+                       "run. Call it again with a JSON object whose string values are all in "
+                       "double quotes.")
 
 
 @pytest.mark.parametrize("depth", [9990, 10_000, 100_000])
 def test_the_chat_loop_answers_a_too_deep_call_in_its_own_message(monkeypatch, tmp_path, depth):
     """A real `chat_step` against the local stub, the call arriving as a structured delta.
 
-    Depth 9990 decodes at the top level of a 3.13 interpreter and fails inside the loop's
-    frames, so its tail (list type or recursion) is not pinned; the deeper two fail on every
-    supported version."""
+    Depth 9990 decodes at the top level of a 3.13 interpreter and may fail inside the loop's
+    frames; either way it is over the depth limit, so all three get the depth refusal."""
+    _chat_turn_answers_with_the_depth_refusal(monkeypatch, tmp_path, _list_nesting(depth))
+
+
+def test_the_chat_loop_answers_a_deep_decoded_call(monkeypatch, tmp_path):
+    """Text that decodes fine, 3001 levels deep: before the limit it reached the funnel as a
+    dict and came back as "Error executing tool: maximum recursion depth exceeded", after a
+    two-second pause and an error line on the console."""
+    errors = _chat_turn_answers_with_the_depth_refusal(
+        monkeypatch, tmp_path, '{"query": ' + _list_nesting(3000) + "}")
+    assert not [e for e in errors if "web_search" in str(e)], errors
+
+
+def _chat_turn_answers_with_the_depth_refusal(monkeypatch, tmp_path, arguments) -> list:
+    """Drive one real `chat_step` whose model calls `web_search` with ``arguments``; assert
+    the call is answered once, adjacent, with the depth refusal, and the tool never ran.
+    Returns what the loop printed through `UI.error`."""
+    from vaf.cli.ui import UI
+    errors = []
+    monkeypatch.setattr(UI, "error", staticmethod(lambda text: errors.append(text)))
     agent = _local_agent(monkeypatch, tmp_path)
     assert "web_search" in agent.tools, "the stub agent has no web_search to dispatch"
     ran = []
@@ -206,8 +244,7 @@ def test_the_chat_loop_answers_a_too_deep_call_in_its_own_message(monkeypatch, t
     # runs on.
     monkeypatch.setattr("vaf.core.agent.time.sleep", only_on_thread(lambda _s: None))
     call = {"tool_calls": [{"index": 0, "id": "c1", "type": "function",
-                            "function": {"name": "web_search",
-                                         "arguments": _list_nesting(depth)}}]}
+                            "function": {"name": "web_search", "arguments": arguments}}]}
     seen = []
 
     def post(url, json=None, **kw):
@@ -228,9 +265,8 @@ def test_the_chat_loop_answers_a_too_deep_call_in_its_own_message(monkeypatch, t
     answer = hist[asked[0] + 1]
     assert answer.get("role") == "tool" and answer.get("tool_call_id") == "c1", answer
     assert len([m for m in hist if m.get("role") == "tool"]) == 1
-    assert answer["content"].startswith(_PREFIX), answer["content"][:200]
-    if depth >= 10_000:
-        assert answer["content"].startswith(_PREFIX + " are not valid JSON ("), answer["content"][:200]
+    _assert_retryable_refusal(answer["content"])
+    return errors
 
 
 def _seconds(raw) -> float:
@@ -306,12 +342,25 @@ def _same_json(left, right) -> bool:
     return True
 
 
+def _true_depth(value) -> int:
+    """Container levels, counted with its own stack and without `nesting_depth`: the reference
+    must not share the code it checks. Decoded JSON has no sharing and no cycles."""
+    deepest, stack = 0, [(value, 1)]
+    while stack:
+        node, level = stack.pop()
+        if isinstance(node, (dict, list, tuple)):
+            deepest = max(deepest, level)
+            stack.extend((child, level + 1)
+                         for child in (node.values() if isinstance(node, dict) else node))
+    return deepest
+
+
 def _reference(raw):
-    """What the decoder must answer: (args, None) or the string "refuse"."""
+    """What the decoder must answer: (args, None), "refuse" or "refuse-depth"."""
     if raw is None:
         return {}, None
     if isinstance(raw, dict):
-        return raw, None
+        return ("refuse-depth" if _true_depth(raw) > 100 else (raw, None))
     if not isinstance(raw, str):
         return "refuse"
     text = raw.strip()
@@ -326,13 +375,13 @@ def _reference(raw):
     if value is None:
         return {}, None
     if isinstance(value, dict):
-        return value, None
+        return ("refuse-depth" if _true_depth(value) > 100 else (value, None))
     return "refuse"
 
 
 def _fuzz(draws: int, seed: int = 0xDEC0DE) -> dict:
     rng = random.Random(seed)
-    stats = {"draws": 0, "refused": 0, "boundary": 0}
+    stats = {"draws": 0, "refused": 0, "too_deep": 0}
     for i in range(draws):
         raw = _fuzz_input(rng)
         ctx = f"draw {i}, input {str(raw)[:80]!r}... ({len(str(raw))} chars)"
@@ -346,17 +395,18 @@ def _fuzz(draws: int, seed: int = 0xDEC0DE) -> dict:
         assert refusal is None or (isinstance(refusal, str) and refusal.startswith(_PREFIX)), ctx
         want = _reference(raw)
         stats["draws"] += 1
-        if want in ("refuse", "refuse-depth"):
-            # The decoder runs a frame deeper than the reference, so where the reference ran
-            # out of depth, it did too.
+        if want == "refuse-depth":
+            # A value too deep to decode at the reference's stack depth is far over the limit,
+            # so the decoder answers it with the depth refusal wherever its own decode stops.
+            assert args == {} and refusal is not None, ctx
+            assert refusal.startswith(_DEEP.format("web_search")), ctx
+            stats["refused"] += 1
+            stats["too_deep"] += 1
+        elif want == "refuse":
             assert args == {} and refusal is not None, ctx
             stats["refused"] += 1
-        elif refusal is not None:
-            # The one tolerated disagreement: a value right at the depth limit decoded at the
-            # reference's stack depth and ran out one frame further down.
-            assert args == {} and "recursion" in refusal, ctx
-            stats["boundary"] += 1
         else:
+            assert refusal is None, ctx
             if isinstance(raw, dict):
                 assert args is raw, ctx
             assert _same_json(args, want[0]), ctx
@@ -367,4 +417,360 @@ def test_decode_fuzz_never_raises_and_agrees_with_json():
     """1,000 seeded draws in about a second; `VAF_DECODE_FUZZ_DRAWS` runs more outside the
     suite. The deep and near-limit depths are drawn on purpose."""
     stats = _fuzz(int(os.environ.get("VAF_DECODE_FUZZ_DRAWS", "1000")))
-    assert stats["draws"] > 0 and stats["refused"] > 0, stats
+    assert stats["draws"] > 0 and stats["refused"] > 0 and stats["too_deep"] > 0, stats
+
+
+# ── arguments that decode, but nest deeper than MAX_ARGUMENT_DEPTH ───────────────────
+#
+# Deep values are built with loops and deep text with string operations, never with
+# recursion or `json.dumps`: on 3.10 and 3.11 the encoder stops at about 1000 levels.
+
+def _deep_list(depth: int) -> list:
+    value: list = []
+    for _ in range(depth - 1):
+        value = [value]
+    return value
+
+
+def _deep_dict(depth: int) -> dict:
+    value: dict = {}
+    for _ in range(depth - 1):
+        value = {"k": value}
+    return value
+
+
+def _deep_text(depth: int, inner: str) -> str:
+    """``{"plan": ...}`` as text, ``depth`` levels deep with the arguments object."""
+    if inner == "list":
+        return '{"plan": ' + _list_nesting(depth - 1) + "}"
+    return '{"plan": ' + '{"k": ' * (depth - 2) + "{}" + "}" * (depth - 2) + "}"
+
+
+def _deep_args(depth: int, inner: str) -> dict:
+    return {"plan": (_deep_list if inner == "list" else _deep_dict)(depth - 1)}
+
+
+def _shared_lists(levels: int) -> list:
+    """``levels`` lists that each hold the next one twice: 2**levels paths, depth levels + 1."""
+    node: list = []
+    for _ in range(levels):
+        node = [node, node]
+    return node
+
+
+def _self_containing() -> dict:
+    loop: dict = {"plan": "x"}
+    loop["again"] = loop
+    return loop
+
+
+@pytest.mark.parametrize("lane", ["dict", "text"])
+@pytest.mark.parametrize("inner", ["list", "dict"])
+def test_a_dict_one_level_too_deep_is_refused(lane, inner):
+    at_limit = _deep_args(100, inner)
+    raw = _deep_text(100, inner) if lane == "text" else at_limit
+    args, refusal = decode_arguments("web_search", raw)
+    assert refusal is None
+    if lane == "dict":
+        assert args is at_limit
+    else:
+        assert args == at_limit
+    over = _deep_text(101, inner) if lane == "text" else _deep_args(101, inner)
+    args, refusal = decode_arguments("web_search", over)
+    assert args == {}
+    _assert_retryable_refusal(refusal)
+
+
+def test_a_dict_that_contains_itself_is_refused():
+    args, refusal = decode_arguments("web_search", _self_containing())
+    assert args == {}
+    _assert_retryable_refusal(refusal)
+
+
+def test_the_set_todos_wrap_is_bounded():
+    """The coder wraps a bare list for `set_todos` into ``{"tasks": ...}``, one level deeper
+    than what it decoded; 9999 levels made its doom-loop `json.dumps` raise outside any
+    `try` and end the whole run. The coder now asks the decoder about the wrapped dict. The
+    list is built in Python, so the case is the same on every interpreter version."""
+    args, refusal = decode_arguments("set_todos", {"tasks": _deep_list(9998)})
+    assert args == {}
+    _assert_retryable_refusal(refusal, "set_todos")
+
+
+def test_the_coder_asks_the_decoder_before_its_doom_loop_signature():
+    """No test drives the coder's inner loop, so the order is read from the source: the
+    decoder must judge the arguments the loop will use before `json.dumps` walks them."""
+    import vaf.tools.coder as coder
+    run = inspect.getsource(coder.CodingAgentTool.run)
+    asked = run.index("decode_arguments(fn_name, fn_args if fn_args else fn_args_str)")
+    signed = run.index('action_sig = f"{fn_name}:{json.dumps(fn_args, sort_keys=True)')
+    assert asked < signed
+
+
+def _funnel(monkeypatch):
+    monkeypatch.setattr("vaf.core.trust.get_tool_policy", lambda *a, **k: "always")
+    spy = _Spy()
+    events: list = []
+    return spy, events, ToolCaller({spy.name: spy}, on_event=events.append)
+
+
+_FUNNEL_CASES = (
+    [(inner, depth, lane) for inner in ("list", "dict") for depth in (101, 996, 3000, 9000)
+     for lane in ("text", "dict")]
+    + [(inner, depth, "dict") for inner in ("list", "dict") for depth in (20_000, 100_000)]
+)
+
+
+@pytest.mark.parametrize("inner,depth,lane", _FUNNEL_CASES,
+                         ids=[f"{i}-{d}-{lane}" for i, d, lane in _FUNNEL_CASES])
+def test_the_funnel_refuses_deep_decoded_arguments(monkeypatch, inner, depth, lane):
+    """`ToolCaller.call` with text or with a dict: no exception, nothing dispatched, no event.
+    From about 996 levels on, this raised `RecursionError` out of `ToolRequest`."""
+    spy, events, caller = _funnel(monkeypatch)
+    raw = _deep_text(depth, inner) if lane == "text" else _deep_args(depth, inner)
+    outcome = caller.call(spy.name, raw)
+    assert outcome.dispatched is False
+    _assert_retryable_refusal(outcome.result, spy.name)
+    assert spy.calls == [] and events == []
+
+
+def test_the_funnel_refuses_a_dict_that_contains_itself(monkeypatch):
+    spy, events, caller = _funnel(monkeypatch)
+    outcome = caller.call(spy.name, _self_containing())
+    assert outcome.dispatched is False
+    _assert_retryable_refusal(outcome.result, spy.name)
+    assert spy.calls == [] and events == []
+
+
+def _funnel_outcome(monkeypatch, raw) -> tuple:
+    spy, events, caller = _funnel(monkeypatch)
+    outcome = caller.call(spy.name, raw)
+    return outcome.result, outcome.dispatched, spy.calls, [e.get("type") for e in events]
+
+
+@pytest.mark.parametrize("lane", ["dict", "text"])
+def test_the_funnel_at_the_limit_behaves_as_without_it(monkeypatch, lane):
+    """Depth 100 passes, and the call goes on exactly as it did before the check existed:
+    here to the schema refusal, because `plan` is a string parameter."""
+    import vaf.core.tool_dispatch as tool_dispatch
+    raw = (lambda: _deep_text(100, "list")) if lane == "text" else (lambda: _deep_args(100, "list"))
+    with_limit = _funnel_outcome(monkeypatch, raw())
+    monkeypatch.setattr(tool_dispatch, "MAX_ARGUMENT_DEPTH", 10 ** 9)
+    without = _funnel_outcome(monkeypatch, raw())
+    assert with_limit == without
+    assert with_limit[0].startswith("Tool Error:") and "nested deeper" not in with_limit[0]
+    assert with_limit[2] == []
+
+
+def test_the_librarian_survives_a_deep_decoded_call():
+    """The librarian hands the model's text to the funnel. A value about 1000 levels deep
+    raised out of `caller.execute`, and the loop's `except Exception` ended the whole run
+    with "Error: maximum recursion depth exceeded"."""
+    from unittest.mock import patch
+
+    from test_librarian_shared_dispatch import _API_CONFIG, SCOPE, _Recorder
+    from vaf.tools.librarian import LibrarianTool
+
+    tool = _Recorder("read_file")
+    chunks = [json.dumps({"tool_calls": [
+        {"id": "call_1", "type": "function",
+         "function": {"name": tool.name, "arguments": '{"path": ' + _list_nesting(3000) + "}"}},
+    ]})]
+
+    class _Backend:
+        def __init__(self, *a, **k):
+            self._first = True
+
+        def chat_completion(self, **kwargs):
+            if self._first:
+                self._first = False
+                yield from chunks
+            else:
+                yield "done"
+
+    librarian = LibrarianTool()
+    librarian.tools = {tool.name: tool}
+    with patch("vaf.core.api_backend.APIBackendManager", _Backend), \
+         patch("vaf.core.config.Config.load", classmethod(lambda cls: _API_CONFIG)):
+        out = librarian._execute_with_llm(
+            "do the thing", caller=librarian._make_caller(user_scope_id=SCOPE, user_role="user"))
+
+    assert "maximum recursion depth" not in out, out[:300]
+    assert _DEEP.format("read_file") in out, out[:300]
+    assert tool.seen is None, "the sub-tool ran"
+
+
+# ── cost: linear in containers, constant for deep values, nodes not paths when shared ─
+
+def _best_of_three(raw) -> tuple:
+    best, got = float("inf"), None
+    for _ in range(3):
+        start = time.perf_counter()
+        got = decode_arguments("web_search", raw)
+        best = min(best, time.perf_counter() - start)
+    return best, got
+
+
+def test_the_depth_check_costs_little():
+    """Bounds with CI headroom; measured locally in the build report."""
+    seconds, (args, refusal) = _best_of_three({"plan": _deep_dict(100_000)})
+    assert refusal and args == {} and seconds < 0.05, seconds
+
+    shared = {"plan": _shared_lists(22)}                 # depth 24, 2**22 paths
+    seconds, (args, refusal) = _best_of_three(shared)
+    assert refusal is None and args is shared and seconds < 0.25, seconds
+
+    wide = '{"plan": [' + ",".join(['["abcd"]'] * 150_000) + "]}"
+    assert len(wide) > 1_350_000
+    seconds, (args, refusal) = _best_of_three(wide)
+    assert refusal is None and len(args["plan"]) == 150_000 and seconds < 2.0, seconds
+
+
+# ── seeded fuzz over the funnel: never raises, refuses over 100, unchanged up to 100 ─
+
+_TEXT_LEAVES = ["", 1, "x", None, True]
+_PY_LEAVES = _TEXT_LEAVES + [pathlib.Path("/p"), uuid.UUID(int=7)]
+
+
+def _spine_depth(rng: random.Random) -> int:
+    pick = rng.random()
+    if pick < 0.3:
+        return max(1, rng.randint(0, 20))
+    if pick < 0.6:
+        return rng.randint(95, 105)
+    if pick < 0.7:
+        return rng.randint(990, 1000)
+    return int(10 ** rng.uniform(2, 4.30103))         # 100 .. 20,000, log-uniform
+
+
+def _tree(rng: random.Random, depth: int, python: bool):
+    """A value exactly ``depth`` container levels deep, the arguments dict on top, plus its
+    JSON text on the text lane. Both are built bottom-up in one pass: the text as a list of
+    prefixes and suffixes around the spine, so a 20,000-level value costs linear time."""
+    leaves = _PY_LEAVES if python else _TEXT_LEAVES
+    kinds = ("dict", "list", "tuple") if python else ("dict", "list")
+    leaf = rng.choice(leaves)
+    node = leaf
+    heads: list = []
+    tails: list = []
+    for level in range(depth - 1):
+        kind = rng.choice(kinds)
+        siblings = [rng.choice(leaves) for _ in range(rng.randint(0, 4))]
+        if level and siblings and rng.random() < 0.2:
+            siblings[0] = rng.choice([{}, []])      # shallow, never deeper than the spine
+        at = rng.randint(0, len(siblings))
+        before, after = siblings[:at], siblings[at:]
+        if kind == "dict":
+            keys = [f"k{i}" for i in range(len(siblings) + 1)]
+            node = dict(zip(keys, before + [node] + after))
+            if not python:
+                head = ", ".join(f'"{k}": {json.dumps(v)}' for k, v in zip(keys, before))
+                tail = ", ".join(f'"{k}": {json.dumps(v)}' for k, v in zip(keys[at + 1:], after))
+                heads.append("{" + head + (", " if head else "") + f'"{keys[at]}": ')
+                tails.append((", " if tail else "") + tail + "}")
+        else:
+            items = before + [node] + after
+            node = items if kind == "list" else tuple(items)
+            if not python:
+                head = ", ".join(json.dumps(v) for v in before)
+                tail = ", ".join(json.dumps(v) for v in after)
+                heads.append("[" + head + (", " if head else ""))
+                tails.append((", " if tail else "") + tail + "]")
+    key = rng.choice(["plan", "other"])     # `other` is outside the schema, so the spy runs
+    value = {key: node}
+    text = None
+    if not python:
+        text = (f'{{"{key}": ' + "".join(reversed(heads)) + json.dumps(leaf)
+                + "".join(tails) + "}")
+    return value, text
+
+
+def _depth_draw(rng: random.Random):
+    """(raw, true depth, the plain value for the depth oracle, a shared value to time with
+    its depth, or None)."""
+    pick = rng.random()
+    if pick < 0.5:
+        depth = _spine_depth(rng)
+        value, text = _tree(rng, depth, python=False)
+        return text, depth, value, None
+    if pick < 0.55:
+        # A shared DAG: the depth oracle times the big one; the funnel gets either a small
+        # DAG at or under the limit (the copy walks after the check follow paths, which is
+        # unchanged behaviour and not this check's to bound), or the big one pushed past it.
+        levels = rng.randint(14, 22)
+        big = _shared_lists(levels)
+        if rng.random() < 0.5:
+            small = rng.randint(1, 10)
+            return {"plan": _shared_lists(small)}, small + 2, None, (big, levels + 1)
+        wrap = rng.randint(100 - levels - 1, 100 - levels + 20)
+        value = big
+        for _ in range(wrap):
+            value = [value]
+        return {"plan": value}, 1 + wrap + levels + 1, None, (big, levels + 1)
+    if pick < 0.57:
+        loop = _self_containing()
+        return (loop if rng.random() < 0.5 else {"plan": [loop]}), float("inf"), None, None
+    depth = _spine_depth(rng)
+    value, _text = _tree(rng, depth, python=True)
+    return value, depth, value, None
+
+
+def _depth_fuzz(monkeypatch, draws: int, seed: int = 0xDE97A) -> dict:
+    import copy
+
+    import vaf.core.tool_dispatch as tool_dispatch
+    from vaf.core.nesting import nesting_depth
+
+    rng = random.Random(seed)
+    stats = {"draws": 0, "refused": 0, "passed": 0, "ran": 0, "dags": 0, "cycles": 0}
+    for i in range(draws):
+        raw, depth, plain, dag = _depth_draw(rng)
+        lane = "text" if isinstance(raw, str) else "dict"
+        ctx = f"draw {i}, {lane} lane, depth {depth}"
+        if depth == float("inf"):
+            stats["cycles"] += 1
+        if dag is not None:
+            shared, shared_depth = dag
+            stats["dags"] += 1
+            start = time.perf_counter()
+            got = nesting_depth(shared, 100)
+            took = time.perf_counter() - start
+            assert got == shared_depth, ctx
+            assert took < 0.5, f"{ctx}: {took:.2f} s for a shared value: paths, not nodes"
+        if plain is not None:
+            assert nesting_depth(plain, 100) == min(depth, 101), ctx
+        if lane == "dict" and depth != float("inf"):
+            assert nesting_depth(raw, 100) == min(depth, 101), ctx
+        try:
+            if depth > 100:
+                got = _funnel_outcome(monkeypatch, raw)
+            else:
+                monkeypatch.setattr(tool_dispatch, "MAX_ARGUMENT_DEPTH", 100)
+                got = _funnel_outcome(monkeypatch, copy.deepcopy(raw))
+                monkeypatch.setattr(tool_dispatch, "MAX_ARGUMENT_DEPTH", 10 ** 9)
+                unchecked = _funnel_outcome(monkeypatch, copy.deepcopy(raw))
+                monkeypatch.setattr(tool_dispatch, "MAX_ARGUMENT_DEPTH", 100)
+        except BaseException as exc:  # noqa: BLE001 - the oracle is "never raises"
+            raise AssertionError(f"{ctx} raised {type(exc).__name__}: {exc}") from exc
+        result, dispatched, calls, events = got
+        stats["draws"] += 1
+        if depth > 100:
+            assert result.startswith(_DEEP.format("spy_tool")), f"{ctx}: {result[:200]}"
+            assert dispatched is False and calls == [] and events == [], ctx
+            stats["refused"] += 1
+        else:
+            assert got == unchecked, ctx
+            stats["passed"] += 1
+            stats["ran"] += bool(calls)
+    return stats
+
+
+def test_argument_depth_fuzz(monkeypatch):
+    """300 seeded draws over both lanes of `ToolCaller.call` (measured in the build report);
+    `VAF_DEPTH_FUZZ_DRAWS` runs more outside the suite. Depths cluster at the limit, around
+    the first recursive walk that broke (990-1000) and log-uniform up to 20,000; the dict
+    lane adds tuples, Path and UUID leaves, shared DAGs and cycles."""
+    stats = _depth_fuzz(monkeypatch, int(os.environ.get("VAF_DEPTH_FUZZ_DRAWS", "300")))
+    print(f"depth fuzz, seed 0xDE97A: {stats}")
+    assert stats["refused"] > 0 and stats["passed"] > 0 and stats["ran"] > 0, stats
+    assert stats["dags"] > 0 and stats["cycles"] > 0, stats

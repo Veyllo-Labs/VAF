@@ -249,6 +249,20 @@ def repair_arguments(tool: Any, args: dict, *, tool_name: str,
     return args, errors
 
 
+# How deeply a tool call's arguments may nest, counting containers (the arguments object is
+# level 1). The deepest schema among the built-in tools allows 5, so this is 20 times that,
+# and about 10 times below the first recursive walk that breaks on the way to a tool
+# (`make_json_serializable` at about 998 levels, `copy.deepcopy` at about 499). The same on
+# every supported Python version, unlike the decoder's own limit.
+MAX_ARGUMENT_DEPTH = 100
+
+
+def _too_deep(name: str) -> str:
+    return (f"Tool Error: the arguments of this '{name}' call are nested deeper than "
+            f"{MAX_ARGUMENT_DEPTH} levels, so nothing was run. Call it again with flatter "
+            "arguments.")
+
+
 def decode_arguments(name: str, raw: Any) -> tuple[dict, str | None]:
     """A model's tool-call arguments as a dict, or the refusal that answers the call instead.
 
@@ -262,18 +276,25 @@ def decode_arguments(name: str, raw: Any) -> tuple[dict, str | None]:
     and it opens with the error prefix every surface reads as a failure.
 
     Missing or empty arguments are an empty object, not an error: that is how a tool without
-    parameters is called. A dict passes through, for a lane that decoded already.
+    parameters is called. A dict passes through as the same object, for a lane that decoded
+    already.
 
-    Text nested deeper than the interpreter can decode (the limit depends on the version: about
-    1000 levels before 3.12, about 10,000 on 3.13, less inside a deep call stack) gets the same
-    refusal. `json.loads` raises `RecursionError` there, which is not a `ValueError`, and it
-    used to escape and end the chat turn, the coder's tool loop or a `ToolCaller.execute` call.
-    Named boundary: a value that DOES decode but is nested deeper than the Python recursion
-    limit still raises later, in `make_json_serializable` when `ToolCallContext` is built.
+    Arguments nested deeper than `MAX_ARGUMENT_DEPTH` levels are refused too, as text and as
+    a dict passed through alike, because every later walk over them is Python-recursive:
+    `make_json_serializable` when `ToolRequest` is built, `mask_secret_args` at the gate,
+    the previews, the tools themselves. A value about 1000 levels deep used to raise out of
+    the first of those: the chat loop answered "maximum recursion depth exceeded", and a
+    `ToolCaller.execute` call, the librarian's run or the coder's run ended. Text nested deeper than the interpreter can decode
+    at all (about 10,000 levels on 3.13, less inside a deep call stack) makes `json.loads`
+    raise `RecursionError`, which is not a `ValueError`; such text is over the limit by
+    definition and gets the same depth refusal.
     """
+    from vaf.core.nesting import nesting_depth
     if raw is None:
         return {}, None
     if isinstance(raw, dict):
+        if nesting_depth(raw, MAX_ARGUMENT_DEPTH) > MAX_ARGUMENT_DEPTH:
+            return {}, _too_deep(name)
         return raw, None
     if isinstance(raw, str):
         text = raw.strip()
@@ -281,13 +302,17 @@ def decode_arguments(name: str, raw: Any) -> tuple[dict, str | None]:
             return {}, None
         try:
             value = json.loads(text)
-        except (ValueError, RecursionError) as exc:
+        except RecursionError:
+            return {}, _too_deep(name)
+        except ValueError as exc:
             return {}, (f"Tool Error: the arguments of this '{name}' call are not valid JSON "
                         f"({exc}), so nothing was run. Call it again with a JSON object whose "
                         "string values are all in double quotes.")
         if value is None:
             return {}, None
         if isinstance(value, dict):
+            if nesting_depth(value, MAX_ARGUMENT_DEPTH) > MAX_ARGUMENT_DEPTH:
+                return {}, _too_deep(name)
             return value, None
         raw = value
     return {}, (f"Tool Error: the arguments of this '{name}' call are a JSON "
@@ -1582,6 +1607,8 @@ class ToolCaller:
         ``args`` may be the JSON text the model sent, as it arrived: text that is not a JSON
         object is refused (`decode_arguments`) and nothing runs, where a loop's own
         ``json.loads`` with a ``{}`` fallback would run the tool without its arguments.
+        Arguments nested deeper than ``MAX_ARGUMENT_DEPTH``, as text or as a dict, are
+        refused the same way, so this call does not raise for them either.
 
         The ORDER below is contract, not convenience, and three parts of it were only
         discovered by measuring (tests/test_dispatch_event_baseline.py):
@@ -1622,7 +1649,9 @@ class ToolCaller:
         tool = self.tools.get(name)
 
         malformed = None
-        if isinstance(args, str):
+        # A dict is asked too: it may be nested too deep for the recursive walks below, and an
+        # embedder or the coder hands over a dict it decoded itself.
+        if isinstance(args, (str, dict)):
             args, malformed = decode_arguments(name, args)
         self._audit_log(name, args)
         if malformed:

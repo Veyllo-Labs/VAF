@@ -9725,18 +9725,20 @@ Call `write_file`, `read_file`, or `task_done` RIGHT NOW."""
                 # Arguments that are not a JSON object, and that the recovery above could not
                 # read either, are answered with the funnel's refusal and never run: `{}`
                 # would run the tool without what the model meant (tool_dispatch.
-                # decode_arguments). Answered here, before the `continue`, like the doom loop.
-                if not fn_args:
-                    from vaf.core.tool_dispatch import decode_arguments
-                    _args_refusal = decode_arguments(fn_name, fn_args_str)[1]
-                    if _args_refusal:
-                        _history_at_dispatch.append({
-                            "role": "tool",
-                            "tool_call_id": tc['id'],
-                            "name": fn_name,
-                            "content": _args_refusal,
-                        })
-                        continue
+                # decode_arguments). The arguments the loop WILL use are asked too, the
+                # set_todos list fix included: nested too deep, they would raise in the
+                # doom-loop signature's `json.dumps` below, which no `try` encloses.
+                # Answered here, before the `continue`, like the doom loop.
+                from vaf.core.tool_dispatch import decode_arguments
+                _args_refusal = decode_arguments(fn_name, fn_args if fn_args else fn_args_str)[1]
+                if _args_refusal:
+                    _history_at_dispatch.append({
+                        "role": "tool",
+                        "tool_call_id": tc['id'],
+                        "name": fn_name,
+                        "content": _args_refusal,
+                    })
+                    continue
 
                 # Reset consecutive_task_done counter if a different tool is called
                 if fn_name != "task_done" and hasattr(loop, 'consecutive_task_done'):

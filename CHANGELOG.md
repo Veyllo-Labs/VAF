@@ -84,6 +84,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   when the model answers empty after using a tool, the retry keeps the tool results instead of
   running the tool a second time. Stopping a reply now returns the text without the model's
   reasoning, together with the answers the turn had already given.
+- A tool call whose arguments are nested more than 100 levels deep is answered with a refusal
+  the model can act on, instead of ending the file librarian's or the coding agent's run or
+  showing "maximum recursion depth exceeded"; the tool does not run.
 - A reply in which the model wrote a tool-call list with a malformed entry (for example
   `{"tool_calls": [1]}`) no longer ends the turn with an error; the text is shown as written,
   and arguments that are not an object are refused with their type named instead of running

@@ -315,7 +315,12 @@ any lane, including a messaging channel. Now:
    `channel_restrictions`), the account allowlist again where a resolver is registered, the
    identity assignment, the input repair, the audit line, and a bounded run on each tool's own
    declared budget. The two calls the loop answers inline (`web_fetch`, `web_deep_search`: no
-   tool object runs) get the policy from `_coder_dispatch_refusal` instead.
+   tool object runs) get the policy from `_coder_dispatch_refusal` instead. Before any of
+   this, and before the doom-loop signature (a `json.dumps` of the arguments), the loop asks
+   `decode_arguments` about the arguments it will actually use, the `set_todos` list fix
+   included: text that is not an object, or an object nested deeper than 100 levels, is
+   answered with the funnel's refusal and never run, where such a value used to end the
+   whole coder run.
 
 There is **no confirmation gate** in this lane. Deliberate: the coder runs unattended and
 uses its tools at full strength, `host_bash` included and also for a chat that started on a

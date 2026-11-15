@@ -20,6 +20,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from vaf.core.nesting import nesting_depth
+
 PROTOCOL_VERSION = 1
 ALPN = "vaf-link/1"
 SNI_LINK = "link.vaf.internal"
@@ -218,19 +220,6 @@ def _no_duplicates(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
     return out
 
 
-def _depth(value: Any) -> int:
-    deepest, stack = 0, [(value, 1)]
-    while stack:
-        node, level = stack.pop()
-        if isinstance(node, dict):
-            deepest = max(deepest, level)
-            stack.extend((v, level + 1) for v in node.values())
-        elif isinstance(node, list):
-            deepest = max(deepest, level)
-            stack.extend((v, level + 1) for v in node)
-    return deepest
-
-
 def decode_json_payload(payload: bytes) -> Dict[str, Any]:
     try:
         obj = json.loads(payload.decode("utf-8"), object_pairs_hook=_no_duplicates)
@@ -240,7 +229,7 @@ def decode_json_payload(payload: bytes) -> Dict[str, Any]:
         raise FrameError("not JSON") from exc
     if not isinstance(obj, dict) or not isinstance(obj.get("t"), str):
         raise FrameError("not a message object")
-    if _depth(obj) > MAX_JSON_DEPTH:
+    if nesting_depth(obj, MAX_JSON_DEPTH) > MAX_JSON_DEPTH:
         raise FrameError("nested too deep")
     return obj
 

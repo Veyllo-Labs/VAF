@@ -11,16 +11,22 @@ way. The index was taken at the start of the turn; a compression after a tool re
 the list, and the slice then cut an assistant `tool_calls` message off its result.
 
 The REAL `chat_step` on the API lane with only `api_backend.chat_completion` faked, and the
-retry's three pure helpers under a seeded fuzz.
+retry's four pure helpers under a seeded fuzz.
 
 MUTATIONS, each turns the named test red:
 - restore `self.history[:history_snapshot_len + 1] + [round]` at the first retry
-  -> test_first_retry_keeps_the_tool_exchange, test_first_retry_keeps_a_kept_answer_and_its_note;
+  -> test_first_retry_keeps_the_tool_exchange, test_first_retry_keeps_a_kept_answer_and_its_note,
+     test_first_retry_after_the_delay_reset;
 - keep only `_turn_tool_exchanges(...)` of the turn at the first retry
   -> test_first_retry_keeps_a_kept_answer_and_its_note;
 - skip the `drop_ids` filter in `_history_for_first_retry`
   -> test_first_retry_drops_only_what_earlier_retries_added,
-     test_first_retry_after_the_delay_reset, the retry fuzz (P4);
+     test_an_earlier_retry_message_before_a_fallen_back_start_goes_too,
+     test_first_retry_after_the_delay_reset, the retry fuzz (P0, P4);
+- apply that filter only after a start index (`history[:2] + filtered(history[2:])`)
+  -> test_an_earlier_retry_message_before_a_fallen_back_start_goes_too, the retry fuzz;
+- skip the filter on the part before the start in `_history_for_later_retry`
+  -> test_an_earlier_retry_message_before_a_fallen_back_start_goes_too, the retry fuzz (P0);
 - match the dropped messages by text instead of identity
   -> test_first_retry_drops_only_what_earlier_retries_added (the quoting reply);
 - return `fallback + 1` from `_turn_start_index` without the identity search
@@ -39,14 +45,15 @@ import pytest
 from fake_clock import only_on_thread
 
 import vaf
-from vaf.core.agent import (_history_for_first_retry, _turn_start_index,
-                            _turn_tool_exchanges)
+from vaf.core.agent import (_history_for_first_retry, _history_for_later_retry,
+                            _turn_start_index, _turn_tool_exchanges)
 from vaf.core.platform import Platform
 
 SESSION = "green123456"
 ASK = "Bitte installiere mir die Pakete aus der Liste"
 TASK = "python_sandbox"
 TOOL = "TOOL"          # a script step: announce, then call the tool
+TOOL2 = "TOOL2"        # a script step: announce, then call the tool twice in one round
 STOP = "STOP"          # inside a step's chunks: the user presses Stop before the next chunk
 FIRST_NUDGE = "You only provided thinking but no final answer for the user."
 LATER_NUDGE = "You didn't provide a final answer."
@@ -63,22 +70,30 @@ class _Install(vaf.BaseTool):
 
     def __init__(self):
         self.calls = []
+        self.on_run = None      # called inside each run, e.g. to press Stop meanwhile
 
     def run(self, **kwargs):
         self.calls.append(kwargs)
+        if self.on_run is not None:
+            self.on_run()
         return "10/10 installed"
 
 
-def _tool_call(n):
-    return json.dumps({"tool_calls": [{"index": 0, "id": f"c{n}", "type": "function",
-                                       "function": {"name": TASK, "arguments": "{}"}}]})
+def _tool_call(n, count=1):
+    """One streamed round's tool calls: ids `c<n>`, then `c<n>b` for a second call, whose
+    arguments differ (loop protection refuses a repeated identical call in one batch)."""
+    calls = [(f"c{n}", "{}"), (f"c{n}b", '{"packages": ["numpy"]}')][:count]
+    return json.dumps({"tool_calls": [{"index": i, "id": cid, "type": "function",
+                                       "function": {"name": TASK, "arguments": args}}
+                                      for i, (cid, args) in enumerate(calls)]})
 
 
 def make_agent(monkeypatch, tmp_path):
     """The real Agent on the API lane. `agent.run(script)` drives one turn: each streamed
     main request takes the next step, a text, a list of chunks (`STOP` among them presses
-    Stop), or `TOOL`. A non-streamed request (the fallback for an empty stream) answers
-    nothing, so an empty step stays empty. Returns (streamed text, return value)."""
+    Stop), `TOOL` or `TOOL2`. A non-streamed request (the fallback for an empty stream)
+    answers nothing, so an empty step stays empty. `agent.press_stop()` presses Stop from
+    anywhere, a tool's `on_run` included. Returns (streamed text, return value)."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: tmp_path / "data"))
     for var in ("VAF_IN_SUBAGENT_TERMINAL", "VAF_THINKING_MODE", "VAF_IN_AUTOMATION"):
@@ -103,6 +118,7 @@ def make_agent(monkeypatch, tmp_path):
     stop = {"now": False}
     monkeypatch.setattr(TaskQueue, "should_stop", lambda self, sid: stop["now"])
     monkeypatch.setattr(TaskQueue, "clear_stop", lambda self, sid: stop.update(now=False))
+    a.press_stop = lambda: stop.update(now=True)
 
     def run(script, user_input=ASK):
         script = list(script)
@@ -117,9 +133,9 @@ def make_agent(monkeypatch, tmp_path):
             if len(a.requests) > 12:
                 raise AssertionError("runaway turn: more than twelve main requests")
             step = script.pop(0) if script else "Fertig."
-            if step == TOOL:
+            if step in (TOOL, TOOL2):
                 yield "Einen Moment. "
-                yield _tool_call(len(a.requests))
+                yield _tool_call(len(a.requests), 2 if step == TOOL2 else 1)
                 yield json.dumps({"finish_reason": "tool_calls"})
                 return
             for chunk in ([step] if isinstance(step, str) else step):
@@ -260,10 +276,31 @@ def test_first_retry_drops_only_what_earlier_retries_added():
                quoting, later_nudge]
     new_round = {"role": "assistant", "content": "[Empty]"}
     new_nudge = {"role": "system", "content": FIRST_NUDGE}
-    out = _history_for_first_retry(history, 2, {id(old_round), id(old_nudge), id(later_nudge)},
+    out = _history_for_first_retry(history, {id(old_round), id(old_nudge), id(later_nudge)},
                                    new_round, new_nudge)
     assert [id(m) for m in out] == [id(m) for m in (history[0], base, call, result, quoting,
                                                     new_round, new_nudge)]
+
+
+def test_an_earlier_retry_message_before_a_fallen_back_start_goes_too():
+    """A turn started without input on a history with no user message, the base dropped by
+    the emergency purge: the start falls back to an index, which lies after an earlier
+    retry's nudge (the fuzz shape `[sys, nudge, call, result]`, start 2). Both retries drop
+    that nudge all the same: it is this turn's own message, wherever it sits."""
+    sys_msg = {"role": "system", "content": "sys"}
+    old_nudge = {"role": "system", "content": LATER_NUDGE}
+    call = {"role": "assistant", "content": None, "tool_calls": [{"id": "c1"}]}
+    result = {"role": "tool", "tool_call_id": "c1", "content": "10/10 installed"}
+    history = [sys_msg, old_nudge, call, result]
+    start = _turn_start_index(history, {"role": "system", "content": "the dropped base"}, 1)
+    assert start == 2
+    new_round = {"role": "assistant", "content": "[Empty]"}
+    new_nudge = {"role": "system", "content": FIRST_NUDGE}
+    first = _history_for_first_retry(history, {id(old_nudge)}, new_round, new_nudge)
+    assert [id(m) for m in first] == [id(m) for m in (sys_msg, call, result, new_round,
+                                                      new_nudge)]
+    later = _history_for_later_retry(history, start, {id(old_nudge)})
+    assert [id(m) for m in later] == [id(m) for m in (sys_msg, call, result)]
 
 
 def test_first_retry_after_the_delay_reset(agent):
@@ -381,11 +418,20 @@ def _broken_calls(history):
     return {id(m) for m in history if _calls_of(m)} - set(_complete_exchanges(history))
 
 
-def _check(before, after, start, *, later, pre_turn, request):
-    # P1: the prefix through the base is the same objects, and it is exactly what came
-    # before the turn: no turn message in it, no pre-turn message after it.
-    assert [id(m) for m in after[:start]] == [id(m) for m in before[:start]], "P1 prefix"
-    assert {id(m) for m in after[:start]} == {id(m) for m in before if id(m) in pre_turn}, "P1 turn"
+def _check(before, after, *, later, drop, pre_turn, request, start=None, start_known=True):
+    # P0: nothing an earlier retry of this turn appended survives, wherever it sat.
+    assert not any(id(m) in drop for m in after), "P0 earlier retry message"
+    if later:
+        # P1: the part before the start is the same objects, minus the retries' messages;
+        # where the start can be known (the base is there, or the request), it is exactly
+        # what came before the turn: no turn message in it, no pre-turn message after it.
+        head = [m for m in before[:start] if id(m) not in drop]
+        assert [id(m) for m in after[:len(head)]] == [id(m) for m in head], "P1 prefix"
+        if start_known:
+            assert {id(m) for m in head} == {id(m) for m in before if id(m) in pre_turn}, "P1 turn"
+    else:
+        # P4: the whole history minus what the retries added, in order.
+        assert [id(m) for m in after] == [id(m) for m in before if id(m) not in drop], "P4 turn"
     # P2: every complete exchange stays complete, same objects in the same order; a later
     # retry may hand a truncated copy of a result.
     for aid, results in _complete_exchanges(before).items():
@@ -402,7 +448,7 @@ def _check(before, after, start, *, later, pre_turn, request):
     # P3: no call cut off from its results that was not already cut off.
     assert _broken_calls(after) <= _broken_calls(before), "P3 adjacency"
     # P6: the request is always there.
-    assert any(m is request for m in after), "P6 request"
+    assert request is None or any(m is request for m in after), "P6 request"
 
 
 def _tool_round(rng, counter):
@@ -437,14 +483,22 @@ def _one_retry_turn(rng):
     counter = [0]
     sys_msg = {"role": "system", "content": "sys"}
     history = [sys_msg]
-    for k in range(rng.randint(0, 6)):
-        history.append({"role": "user" if k % 2 == 0 else "assistant", "content": f"alt {k}"})
-    request = {"role": "user", "content": ASK}
-    history.append(request)
-    base = request
-    if rng.random() < 0.3:
-        base = {"role": "system", "content": "onboarding note"}
-        history.append(base)
+    if rng.random() < 0.2:
+        # A turn started without input on a history that holds no user message: the base is
+        # the previous last message, and no request is there to fall back on.
+        for k in range(rng.randint(0, 6)):
+            history.append({"role": "assistant" if k % 2 == 0 else "system", "content": f"alt {k}"})
+        request = None
+        base = history[-1]
+    else:
+        for k in range(rng.randint(0, 6)):
+            history.append({"role": "user" if k % 2 == 0 else "assistant", "content": f"alt {k}"})
+        request = {"role": "user", "content": ASK}
+        history.append(request)
+        base = request
+        if rng.random() < 0.3:
+            base = {"role": "system", "content": "onboarding note"}
+            history.append(base)
     # The objects themselves are held, so an id stays theirs after a compression drops them.
     pre_turn_objects = list(history)
     pre_turn = {id(m) for m in pre_turn_objects}
@@ -459,41 +513,44 @@ def _one_retry_turn(rng):
             history.extend([{"role": "assistant", "content": "Antwort eins steht."},
                             {"role": "system", "content": "[System: You still have pending tasks]"}])
         elif ev < 0.52:
-            anchor = history.index(request)
+            anchor = history.index(request) if request is not None else 0
             if anchor > 1 and rng.random() < 0.6:
                 k = rng.randint(1, anchor - 1)
                 del history[1:1 + k]
             else:
+                # The emergency purge: system, the request when it lies before the tail, the
+                # last six.
                 tail_start = max(1, len(history) - 6)
                 anchor_msg = [request] if 1 <= anchor < tail_start else []
                 history[:] = [sys_msg] + anchor_msg + history[tail_start:]
         elif ev < 0.6:
             count = 0                                   # the API delay path's reset
         elif count == 0:
-            start = _turn_start_index(history, base, fallback)
             drop = {id(m) for m in added}
             r = {"role": "assistant", "content": "[Empty]"}
             n = {"role": "system", "content": FIRST_NUDGE}
-            out = _history_for_first_retry(history, start, drop, r, n)
-            _check(history, out[:-2], start, later=False, pre_turn=pre_turn, request=request)
-            # P4: the turn minus what the retries added, then exactly the new pair.
-            assert [id(m) for m in out[start:-2]] == [
-                id(m) for m in history[start:] if id(m) not in drop], "P4 turn"
+            out = _history_for_first_retry(history, drop, r, n)
+            _check(history, out[:-2], later=False, drop=drop, pre_turn=pre_turn,
+                   request=request)
             assert out[-2] is r and out[-1] is n, "P4 pair"
             history = out
             added.extend((r, n))
             count = 1
         else:
             start = _turn_start_index(history, base, fallback)
-            out = history[:start] + _turn_tool_exchanges(history[start:])
-            _check(history, out, start, later=True, pre_turn=pre_turn, request=request)
-            # P5: nothing but exchanges after the base, every result within the cut, and a
+            known = any(m is base for m in history) or request is not None
+            drop = {id(m) for m in added}
+            out = _history_for_later_retry(history, start, drop)
+            _check(history, out, later=True, drop=drop, pre_turn=pre_turn, request=request,
+                   start=start, start_known=known)
+            # P5: nothing but exchanges after the start, every result within the cut, and a
             # second pass changes nothing.
-            for m in out[start:]:
+            head = len(out) - len(_turn_tool_exchanges(history[start:]))
+            for m in out[head:]:
                 assert m.get("role") == "tool" or _calls_of(m), "P5 text after the base"
                 if m.get("role") == "tool":
                     assert len(str(m.get("content"))) <= 2500, "P5 result length"
-            again = out[:start] + _turn_tool_exchanges(out[start:])
+            again = _history_for_later_retry(out, head, drop)
             assert [id(m) for m in again] == [id(m) for m in out], "P5 idempotent"
             nudge = {"role": "system", "content": LATER_NUDGE}
             history = out + [nudge]

@@ -361,20 +361,23 @@ def _turn_start_index(history: list, base, fallback: int) -> int:
     return max(0, min(fallback + 1, len(history)))
 
 
-def _history_for_first_retry(history: list, start: int, drop_ids: set,
+def _history_for_first_retry(history: list, drop_ids: set,
                              round_msg: dict, nudge_msg: dict) -> list:
     """The history the first empty-answer retry sends: the turn as committed, then the empty
     round and the nudge.
 
-    Everything the turn committed after its base stays, verbatim and in order: its tool
-    exchanges (resetting them made the model run finished calls again), the answers the user
-    was already shown and the notes that answer them. That is the request that just failed
-    plus two messages, so the retry extends it as a prefix. Dropped are only the messages an
-    EARLIER empty retry of this turn appended (`drop_ids`, by identity, never by text: a model
-    reply that quotes a nudge is the model's). Those were appended at the end of a round
-    without tool calls, so removing them never separates a call from its results."""
-    turn = [m for m in history[start:] if id(m) not in drop_ids]
-    return history[:start] + turn + [round_msg, nudge_msg]
+    Everything the turn committed stays, verbatim and in order: its tool exchanges (resetting
+    them made the model run finished calls again), the answers the user was already shown and
+    the notes that answer them. That is the request that just failed plus two messages, so the
+    retry extends it as a prefix. Dropped are only the messages an EARLIER empty retry of this
+    turn appended (`drop_ids`, by identity, never by text: a model reply that quotes a nudge is
+    the model's). Those were appended at the end of a round without tool calls, so removing
+    them never separates a call from its results. No turn start is needed for that: the
+    objects in `drop_ids` are this turn's own retry messages wherever they sit, and a start
+    index can lie after one of them (the base gone and no request left to find)."""
+    if not drop_ids:
+        return history + [round_msg, nudge_msg]
+    return [m for m in history if id(m) not in drop_ids] + [round_msg, nudge_msg]
 
 
 _SNAPSHOT_RESULT_MAX = 2500
@@ -405,6 +408,18 @@ def _turn_tool_exchanges(turn: list, max_result_chars: int = _SNAPSHOT_RESULT_MA
             else:
                 kept.append(msg)
     return kept
+
+
+def _history_for_later_retry(history: list, start: int, drop_ids: set) -> list:
+    """The history a later empty-answer retry starts from: everything before the turn's start
+    (`_turn_start_index`), then only the turn's tool exchanges (`_turn_tool_exchanges`). What
+    an earlier empty retry of this turn appended (`drop_ids`, by identity) goes from the part
+    before the start too, for the reason `_history_for_first_retry` gives: a start that fell
+    back to an index can lie after one of them."""
+    head = history[:start]
+    if drop_ids:
+        head = [m for m in head if id(m) not in drop_ids]
+    return head + _turn_tool_exchanges(history[start:])
 
 
 # How often one turn may re-generate because loop protection refused every call of a
@@ -484,7 +499,10 @@ def _final_answer_probe(full_content: str) -> str:
     readings = []
     for greedy in (False, True):
         clean = strip_think_blocks(full_content or "", greedy=greedy)
-        clean = _drop_angle_tags(clean)                        # remaining XML (e.g. <tool_call>)
+        # Remaining XML (e.g. <tool_call>) goes, but not inside a closed code fence: there
+        # `<input type="text">` is the code the user asked for, and dropping it as a tag left a
+        # code-only HTML reply empty. Reasoning tags are already gone, inside fences too.
+        clean = _drop_angle_tags_outside_fences(clean)
         # Code fences: the fence LINES go (a run of backticks plus an optional language tag,
         # alone on its line), then any marker left inside a line; the code stays. A fence with
         # nothing in it is still nothing. Both steps are linear: the line pattern is anchored
@@ -519,6 +537,31 @@ def _drop_angle_tags(text: str) -> str:
         pos = end + 1
     kept.append(text[pos:])
     return "".join(kept)
+
+
+def _drop_angle_tags_outside_fences(text: str) -> str:
+    """`_drop_angle_tags` on the text OUTSIDE closed code fences; a fenced block, its fence
+    lines included, is kept as it is.
+
+    A fence is a line `_FENCE_LINE_RE` matches, and the fence lines pair up in order: the
+    first opens, the next closes. Only such a pair protects. An opener the reply never closes
+    protects nothing, so leaked markup after a stray fence line is still taken for markup and
+    not for code. Each stretch between two blocks is cleaned as a whole, so a tag that spans
+    its lines goes as before; text without a fence pair is `_drop_angle_tags(text)` exactly.
+    Linear: one split, one anchored match per line, one walk per stretch."""
+    if "```" not in text:
+        return _drop_angle_tags(text)
+    lines = text.split("\n")
+    fences = [i for i, line in enumerate(lines) if _FENCE_LINE_RE.fullmatch(line)]
+    if len(fences) < 2:
+        return _drop_angle_tags(text)
+    parts, pos = [], 0
+    for opener, closer in zip(fences[0::2], fences[1::2]):
+        parts.append(_drop_angle_tags("\n".join(lines[pos:opener])))
+        parts.append("\n".join(lines[opener:closer + 1]))
+        pos = closer + 1
+    parts.append(_drop_angle_tags("\n".join(lines[pos:])))
+    return "\n".join(parts)
 
 
 def _join_turn_answers(kept: list, tail: str) -> str:
@@ -13865,9 +13908,7 @@ class Agent:
                         )
                     }
                     self.history = _history_for_first_retry(
-                        self.history,
-                        _turn_start_index(self.history, _turn_base, history_snapshot_len),
-                        {id(m) for m in _empty_retry_added},
+                        self.history, {id(m) for m in _empty_retry_added},
                         _round_msg, _nudge_msg)
                     _empty_retry_added.extend((_round_msg, _nudge_msg))
                     empty_retry_count += 1
@@ -13878,40 +13919,23 @@ class Agent:
                 # exchanges (drop the text rounds, temp sweep, emergency clear). The exchanges
                 # stay, or the turn loops: call the tool, answer empty, reset, call the tool.
                 _start = _turn_start_index(self.history, _turn_base, history_snapshot_len)
-                _exchanges = _turn_tool_exchanges(self.history[_start:])
-                tools_preserved = sum(1 for m in _exchanges if m.get("role") == "tool")
+                _retry_ids = {id(m) for m in _empty_retry_added}
+                tools_preserved = sum(1 for m in _turn_tool_exchanges(self.history[_start:])
+                                      if m.get("role") == "tool")
                 if tools_preserved > 0:
                     UI.event("Snapshot", f"Advanced snapshot: Preserved {tools_preserved} tool messages", style="success")
-                    self.history = self.history[:_start] + _exchanges
+                    self.history = _history_for_later_retry(self.history, _start, _retry_ids)
                 else:
-                    # No tools to preserve, standard reset
-                    self.history = self.history[:_start]
+                    # No tools to preserve, standard reset: the part before the turn's start.
+                    self.history = _history_for_later_retry(self.history[:_start], _start, _retry_ids)
                     UI.event("Debug", f"Reset to user prompt snapshot (preserving query)", style="dim")
 
-                # ═══════════════════════════════════════════════════════════════
-                # PROACTIVE CONTEXT CLEARING (aggressive clear a few attempts before hard limit)
-                # In thinking mode (background pass), limit retries aggressively — no user is waiting
-                # ═══════════════════════════════════════════════════════════════
+                # No separate "aggressive" clear a few attempts before the hard limit: the reset
+                # above already leaves nothing but the base and the turn's tool exchanges, so a
+                # clear down to the request alone could only drop those exchanges, and the turn
+                # would loop on them as described above.
+                # In thinking mode (background pass), limit retries aggressively: no user is waiting.
                 _is_thinking_mode = self._is_thinking_run()
-                _proactive_clear_at = 2 if _is_thinking_mode else 8
-                if empty_retry_count == _proactive_clear_at:
-                    # Calculate tokens before
-                    tokens_before, _ = self.get_token_usage(include_tools=not disable_tools)
-                    
-                    UI.event("System", f"Early Warning ({empty_retry_count}) - Aggressive Context Clearing...", style="dim")
-                    
-                    # Preservation Strategy: everything up to the turn's base, then the turn's
-                    # tool exchanges (the same selection as the reset above, idempotent).
-                    _start = _turn_start_index(self.history, _turn_base, history_snapshot_len)
-                    _cleared = self.history[:_start] + _turn_tool_exchanges(self.history[_start:])
-                    if len(_cleared) < len(self.history):
-                        self.history = _cleared
-
-                        # Calculate tokens after (estimate)
-                        tokens_after, _ = self.get_token_usage(include_tools=not disable_tools)
-                        UI.event("Context", f"Cleared: {tokens_before} -> {tokens_after} Tokens | Snapshot preserved", style="dim")
-                    else:
-                         UI.event("Context", "History already minimal - skipping clear.", style="dim")
 
                 # ═══════════════════════════════════════════════════════════════
                 # CONTEXT OVERFLOW DETECTION (Fix for Issue #VAF-CTX-001)
@@ -13936,7 +13960,7 @@ class Agent:
                 # Reset to the turn's base and its tool exchanges once more: the emergency
                 # manage_context above may have rebuilt the list, so the start is found again.
                 _start = _turn_start_index(self.history, _turn_base, history_snapshot_len)
-                self.history = self.history[:_start] + _turn_tool_exchanges(self.history[_start:])
+                self.history = _history_for_later_retry(self.history, _start, _retry_ids)
                 UI.event("Debug", f"Reset to user prompt snapshot (preserving query)", style="dim")
 
                 # Add a brief system prompt to nudge the model

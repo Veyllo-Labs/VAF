@@ -17,7 +17,17 @@ bubble the user was reading off the screen and asked again, and every guard that
 probe whether it may retract lost that protection for code. The probe now drops the fence
 markers and counts the code; a fence with nothing in it stays nothing.
 
+Inside a closed fence nothing is read as a tag either: the leftover-tag strip ran before the
+fence step and took a code-only HTML reply (`<input type="text">`) for markup, so it was
+empty again. Reasoning is stripped before, inside fences too, and an opener that is never
+closed protects nothing.
+
 MUTATIONS for that part, each turns the named test red:
+- strip tags with `_drop_angle_tags` again, fences or not
+  -> test_a_code_only_reply_counts[html, xml, jsx], test_a_code_only_reply_is_an_answer[html],
+     the fence fuzz (oracle d);
+- let an unclosed opener protect to the end of the text
+  -> test_a_fence_protects_no_reasoning_and_no_stray_markup[unclosed-fence];
 - restore `re.sub(r'```[\\s\\S]*?```', '', clean)` -> test_a_code_only_reply_is_an_answer and
   the fence fuzz (oracle b);
 - drop the fence-line step and keep only `replace("```", "")`
@@ -183,23 +193,48 @@ def test_a_generation_whose_every_call_was_blocked_is_regenerated():
 # ── a reply that is only code ────────────────────────────────────────────────
 
 CODE_ONLY = "```python\nprint('hallo welt')\n```"
+HTML_ONLY = '```html\n<input type="text">\n```'
+CODE_ONLY_REPLIES = [
+    pytest.param(CODE_ONLY, id="python"),
+    pytest.param(HTML_ONLY, id="html"),
+    pytest.param('```xml\n<config><item name="a"/></config>\n```', id="xml"),
+    pytest.param("```jsx\n<Button onClick={save} />\n```", id="jsx"),
+]
 
 
-def test_a_code_only_reply_is_an_answer(monkeypatch, tmp_path):
-    """The probe counts the code, and on the real `chat_step` that reply is one request, never
-    retracted, and the returned answer."""
+@pytest.mark.parametrize("reply", CODE_ONLY_REPLIES)
+def test_a_code_only_reply_counts(reply):
+    """Inside a closed fence nothing is read as a tag: markup there is the code asked for."""
+    assert _final_answer_probe(reply) != ""
+
+
+@pytest.mark.parametrize("reply", [pytest.param(CODE_ONLY, id="python"),
+                                   pytest.param(HTML_ONLY, id="html")])
+def test_a_code_only_reply_is_an_answer(monkeypatch, tmp_path, reply):
+    """On the real `chat_step` a code-only reply is one request, never retracted, and the
+    returned answer."""
     from test_empty_retry_history import make_agent
 
-    assert _final_answer_probe(CODE_ONLY) != ""
     agent = make_agent(monkeypatch, tmp_path)
     retracted = []
     monkeypatch.setattr(agent, "_retract_streamed_reply",
                         lambda *a, **k: retracted.append(a))
-    streamed, returned = agent.run([CODE_ONLY])
+    streamed, returned = agent.run([reply])
     assert len(agent.requests) == 1, "the code reply was asked again"
     assert retracted == []
-    assert returned == CODE_ONLY
-    assert streamed.startswith(CODE_ONLY)
+    assert returned == reply
+    assert streamed.startswith(reply)
+
+
+@pytest.mark.parametrize("reply", [
+    pytest.param("```html\n<think>x</think>\n```", id="reasoning-in-a-fence"),
+    pytest.param("```\n<tool_call><arg/></tool_call>", id="unclosed-fence"),
+    pytest.param("<tool_call>\n```\n```", id="markup-outside"),
+])
+def test_a_fence_protects_no_reasoning_and_no_stray_markup(reply):
+    """Reasoning is stripped before the fences are looked at, so a fence never turns it into
+    an answer; an opener that is never closed protects nothing."""
+    assert _final_answer_probe(reply) == ""
 
 
 @pytest.mark.parametrize("reply", [
@@ -242,8 +277,15 @@ _PIECES = ["<think>", "</think>", "<THINKING>", "</thinking>", "<redacted_reason
 _TAGS = ["", "python", "c++", "json", "objective-c"]
 
 
-def _text(rng, most=8):
-    return "".join(rng.choice(_PIECES) for _ in range(rng.randint(0, most)))
+# Pieces without a lone angle bracket (every tag in them is whole), and pieces without any.
+_WHOLE_TAG_PIECES = [p for p in _PIECES if p not in ("<", ">")]
+_ANGLE_FREE_PIECES = [p for p in _PIECES if "<" not in p and ">" not in p]
+_MARKUP = ['<input type="text">', "<div>", "</div>", "<a/>", "<Button onClick={go} />",
+           '<?xml version="1.0"?>', "<tool_call>", "<", ">"]
+
+
+def _text(rng, most=8, pieces=_PIECES):
+    return "".join(rng.choice(pieces) for _ in range(rng.randint(0, most)))
 
 
 def _fence_stripped(text):
@@ -266,15 +308,19 @@ def _only_fence_markers_lost(text):
 
 def probe_fence_mismatches(seed, draws):
     """Oracles: (a) without a backtick the probe is the one from before; (b) a fence on its
-    own lines around X counts as X alone does; (c) where the old probe found an answer and the
-    new one finds none, there was nothing but fence markers to find (a lone opener)."""
+    own lines around X counts as X alone does, for an X without angle brackets (inside a
+    fence a tag is code and counts, outside it does not, which is the change); (c) where the
+    old probe found an answer and the new one finds none, there was nothing but fence markers
+    to find (a lone opener); (d) a code-only reply that holds markup counts."""
     rng = random.Random(seed)
     bad = []
     for _ in range(draws):
         plain = _text(rng, 12)
         if _final_answer_probe(plain) != _probe_before_the_fence_change(plain):
             bad.append(("a", plain))
-        a, x, b = _text(rng), _text(rng), _text(rng)
+        a = _text(rng, pieces=_WHOLE_TAG_PIECES)
+        x = _text(rng, pieces=_ANGLE_FREE_PIECES)
+        b = _text(rng, pieces=_WHOLE_TAG_PIECES)
         a = a + "\n" if a and rng.random() < 0.8 else ""
         b = "\n" + b if b and rng.random() < 0.8 else ""
         fenced = f"{a}```{rng.choice(_TAGS)}\n{x}\n```{b}"
@@ -285,6 +331,11 @@ def probe_fence_mismatches(seed, draws):
         if (_probe_before_the_fence_change(mixed) and not _final_answer_probe(mixed)
                 and not _only_fence_markers_lost(mixed)):
             bad.append(("c", mixed))
+        code = _text(rng, 4, _ANGLE_FREE_PIECES).replace("```", "") + rng.choice(_MARKUP[:-2])
+        code += _text(rng, 4, _MARKUP + _ANGLE_FREE_PIECES)
+        markup_only = f"```{rng.choice(_TAGS)}\n{code}\n```"
+        if not _final_answer_probe(markup_only):
+            bad.append(("d", markup_only))
     return bad
 
 

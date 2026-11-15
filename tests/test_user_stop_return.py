@@ -19,13 +19,17 @@ MUTATIONS, each turns the named test red:
   -> test_a_midstream_stop_returns_the_cleaned_text[open-think], [redacted], [closed-think],
      and test_a_stop_after_an_answer_returns_the_answer[midstream-*];
 - drop the `_join_turn_answers` branch of `_end_turn_on_stop`
-  -> test_a_stop_after_an_answer_returns_the_answer (all three);
+  -> test_a_stop_after_an_answer_returns_the_answer (all three) and the two tool-exit tests;
+- return the bare marker at the exit after a tool round
+  -> test_a_stop_during_a_tool_returns_the_answer_first;
+- return the bare marker at the exit between tools
+  -> test_a_stop_between_two_tools_returns_the_answer_first;
 - drop the `_last_kept_is_final` condition there
   -> test_a_stop_after_a_bounced_reply_returns_no_kept_text.
 """
 import pytest
 
-from test_empty_retry_history import STOP, make_agent
+from test_empty_retry_history import STOP, TASK, TOOL, TOOL2, make_agent
 
 MARK = "[Generation stopped by user]"
 FIRST = "Antwort eins steht."
@@ -77,6 +81,30 @@ def test_a_stop_after_an_answer_returns_the_answer(agent, monkeypatch, script, r
     _, out = agent.run(script)
     assert out == returned
     assert agent.last_turn.failed is False
+
+
+def test_a_stop_during_a_tool_returns_the_answer_first(agent, monkeypatch):
+    """The exit after a tool round: an answer, the auto-continue, a round with one tool call
+    whose run presses Stop. The tool finishes, the stop is seen after it, and the return is
+    the earlier answer with the marker."""
+    _auto_continue_once(agent, monkeypatch)
+    agent.tools[TASK].on_run = agent.press_stop
+    _, out = agent.run([FIRST, TOOL])
+    assert len(agent.tools[TASK].calls) == 1
+    assert len(agent.requests) == 2, "the turn went on after the stop"
+    assert out == f"{FIRST}\n\n{MARK}"
+
+
+def test_a_stop_between_two_tools_returns_the_answer_first(agent, monkeypatch):
+    """The exit between tools: an answer, the auto-continue, a round with two tool calls, the
+    first of which presses Stop. The second call never runs, and the return is the earlier
+    answer with the marker."""
+    _auto_continue_once(agent, monkeypatch)
+    agent.tools[TASK].on_run = agent.press_stop
+    _, out = agent.run([FIRST, TOOL2])
+    assert len(agent.tools[TASK].calls) == 1, "the second call ran after the stop"
+    assert len(agent.requests) == 2, "the turn went on after the stop"
+    assert out == f"{FIRST}\n\n{MARK}"
 
 
 def test_a_stop_after_a_bounced_reply_returns_no_kept_text(agent, monkeypatch):

@@ -255,6 +255,18 @@ skipped while its neighbours still run - unlike the wire-JSON lane, which refuse
 object for one foreign name because that format is a SINGLE structure and a bad name makes
 all of it suspect.
 
+**A malformed wire-JSON item refuses the whole leak, too.** An item that is not an object,
+a `function` that is not an object, or a name that is not a non-empty string is treated like
+a foreign name: `extract_wire_json_tool_calls` returns nothing, no call is built, and the text
+stays in the reply as the model wrote it (the strip runs only for recovered calls). The name
+rule holds without a name list as well, which is how the coder calls it. The item loop used to
+assume objects, so a reply holding `{"tool_calls": [1]}` raised out of `chat_step` and ended
+the turn, and a number as the name was dispatched under its repr. Arguments that are a JSON
+value but not an object (`0`, `false`, `[1]`) are passed on as JSON text, so
+`decode_arguments` answers the call in its own tool message with the type it got; they used to
+become `{}` and run the tool with nothing. An id that is not a non-empty string gets a
+synthetic one.
+
 **Every lane knows every dialect.** The main agent, the librarian and the coder each parse
 model content on their own fallback path; a dialect only one of them knows means the same
 leak "works in chat but hangs the coder". The coder is the one deliberate difference: it

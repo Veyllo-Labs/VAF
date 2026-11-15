@@ -191,6 +191,25 @@ def extract_wire_json_tool_calls(content: str, valid_names=None):
     a missing id gets a synthetic one. When ``valid_names`` is given, every
     recovered name must be known - one foreign name refuses the WHOLE leak
     (half-executing a hallucinated batch is worse than executing none of it).
+
+    A MALFORMED item refuses the whole leak the same way: an item that is not
+    an object, a ``function`` that is not an object, or a name that is not a
+    non-empty string (also without ``valid_names``, the coder's call shape:
+    a number used to be dispatched under its repr). The text then stays in
+    the reply as written. The item loop once assumed dicts, so a reply holding
+    ``{"tool_calls": [1]}`` raised out of ``chat_step`` and ended the turn.
+    Arguments that are a JSON value but not an object or a string (``0``,
+    ``false``, ``[1]``) are passed on as JSON TEXT, so ``decode_arguments``
+    answers the call in its own tool message with the type it got; they used
+    to collapse to ``"{}"`` (the tool ran with no arguments) or to a Python
+    repr (``"True"``, refused as a parse error instead of by type). An id that
+    is not a non-empty string gets a synthetic one.
+
+    Contract: for any ``str`` or ``None`` input this never raises and returns
+    a list of ``{"id": non-empty str, "type": "function", "function":
+    {"name": non-empty str, "arguments": str}}``. The guards are explicit type
+    checks rather than a catch around the loop, which would also hide a real
+    bug in the valid path.
     """
     span = _wire_json_span(content)
     if not span:
@@ -200,25 +219,42 @@ def extract_wire_json_tool_calls(content: str, valid_names=None):
         data = json.loads(content[start:end])
     except Exception:
         return []
+    # The span opens with "{" and closes at its matching "}", so a successful
+    # decode is always an object.
     calls = data.get("tool_calls")
     if not isinstance(calls, list) or not calls:
         return []
     out = []
     for c in calls:
-        fn = (c or {}).get("function") or {}
-        name = str(fn.get("name") or "").strip()
+        if not isinstance(c, dict):
+            return []
+        fn = c.get("function")
+        if not isinstance(fn, dict):
+            return []
+        name = fn.get("name")
+        if not isinstance(name, str):
+            return []
+        name = name.strip()
         if not name:
             return []
         if valid_names is not None and name not in valid_names:
             return []
         args = fn.get("arguments")
-        if isinstance(args, dict):
-            args = json.dumps(args)
-        leaked_id = str((c or {}).get("id") or "").strip()
+        if args is None or args == "":
+            args = "{}"
+        elif not isinstance(args, str):
+            # dict, list, number or bool: JSON text, never a Python repr, so the
+            # dispatch judges the value the model actually wrote.
+            try:
+                args = json.dumps(args)
+            except (TypeError, ValueError, RecursionError):
+                return []
+        leaked_id = c.get("id")
+        leaked_id = leaked_id.strip() if isinstance(leaked_id, str) else ""
         out.append({
             "id": leaked_id or f"call_synth_{int(time.time())}_{os.urandom(2).hex()}",
             "type": "function",
-            "function": {"name": name, "arguments": str(args or "{}")},
+            "function": {"name": name, "arguments": args},
         })
     return out
 

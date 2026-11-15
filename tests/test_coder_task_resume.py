@@ -657,6 +657,13 @@ def test_the_workflow_continuation_resumes_and_reads_the_status_signal():
     done = _ifs_naming(fn, "[VAF_CODING_AGENT_STATUS: COMPLETE]", "continuation_result")
     assert len(done) == 1
     assert _calls(fn, "_continuation_call")
+    # Both continuation sites name why no deploy_to is passed, and where that is explained.
+    # MUTATION: delete either comment - red.
+    lines = src.splitlines()
+    for i, line in enumerate(lines):
+        if "_continuation_call" in line:
+            near = "\n".join(lines[max(0, i - 3):i + 1])
+            assert "deploy_to" in near and "CODER_ARCHITECTURE" in near, near
 
 
 # ── AC12: the schema ────────────────────────────────────────────────────────────────────
@@ -748,22 +755,130 @@ def test_a_fix_task_stores_its_instructions(tmp_path):
 
 
 def test_every_fresh_task_context_carries_the_stored_instructions():
-    """The fix task's first context, a retry's and a resumed run's all come from one place.
-    MUTATION: drop the injection in switch_to_task_context - red.
+    """Every path that builds a task context goes through one constructor, and the constructor
+    reads the task's stored instructions: the switch, the next task after a task_done, a retry
+    and a resumed run. Before, only the switch read them, and finishing the task before an
+    audit fix task built the fix task's context without its findings (the task_done path
+    calls the constructor directly).
+    MUTATION: move the injection back into switch_to_task_context - red.
+    MUTATION: drop the bound on the stored text - red.
     MUTATION: let the audit round append its findings to the history again instead of
     storing them - red."""
     tree = _run_tree()
-    switch = _nested(tree, "switch_to_task_context")
-    asked = _calls(switch, "task_mgr.task_instructions")
+    build = _nested(tree, "create_fresh_context_for_task")
+    asked = _calls(build, "task_mgr.task_instructions")
     assert len(asked) == 1 and ast.unparse(asked[0].args[0]) == "task_idx"
-    fresh = _first_call(switch, "create_fresh_context_for_task")
-    appended = _calls(switch, "task_hist.append")
-    assert len(appended) == 1 and appended[0].lineno > fresh
+    assert _calls(build, "_bounded_instructions")
+    appended = _calls(build, "task_history.append")
+    assert len(appended) == 1 and appended[0].lineno > asked[0].lineno
+    returned = [n for n in ast.walk(build) if isinstance(n, ast.Return)]
+    assert all(r.lineno > appended[0].lineno for r in returned)
+    # No second copy anywhere else in the run.
+    assert len(_calls(tree, "task_mgr.task_instructions")) == 1
+    # The paths that build a context: the switch and the task_done/stuck/auto paths all call
+    # the constructor, so all of them get the instructions.
+    assert len(_calls(tree, "create_fresh_context_for_task")) >= 5
     audit = _nested(tree, "_maybe_start_audit_round")
     added = _calls(audit, "task_mgr.append_task")
     assert len(added) == 1
     assert "instructions" in {k.arg for k in added[0].keywords}
     assert not _calls(audit, "history.append")
+
+
+def test_finishing_the_task_before_a_fix_task_hands_on_its_findings(tmp_path):
+    """The task_done path builds the next context for `task_mgr.current_task_idx` after
+    `complete_current_task`; in a resumed plan [A, audit fix task B] that index is B and its
+    stored findings are what the constructor reads.
+    MUTATION: have complete_current_task skip past the next task - red."""
+    d = str(tmp_path)
+    tm = _plan(d, statuses=("pending",))
+    fix = tm.append_task("Fix the code audit findings (round 1)", description="1 finding(s)",
+                         instructions="CODE AUDIT ROUND 1 - fix b.py line 9")
+    again = TaskManager()
+    again.initialize(d, current_task="complete all remaining tasks", resume=True)
+    assert again.resume_point() == (0, "write file0.html")
+    again.complete_current_task("done")
+    assert again.current_task_idx == fix
+    assert again.task_instructions(again.current_task_idx) == "CODE AUDIT ROUND 1 - fix b.py line 9"
+    # The task_done path passes exactly that index to the constructor.
+    tree = _run_tree()
+    built = [c for c in _calls(tree, "create_fresh_context_for_task")
+             if ast.unparse(c.args[0]) == "task_idx"]
+    sets = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)
+            and ast.unparse(n.targets[0]) == "task_idx"
+            and ast.unparse(n.value) == "task_mgr.current_task_idx"]
+    assert built and sets
+
+
+def test_stored_instructions_are_bounded_where_they_enter_the_context():
+    """tasks.json is project content the run's own shell can write, and the instructions go
+    into every request of the task.
+    MUTATION: drop the bound - red."""
+    from vaf.tools.coder import _INSTRUCTIONS_MAX_CHARS, _bounded_instructions
+    short = "fix a.py line 3"
+    assert _bounded_instructions(short) == short
+    assert _bounded_instructions("") == "" and _bounded_instructions(None) == ""
+    whole = "x" * _INSTRUCTIONS_MAX_CHARS
+    assert _bounded_instructions(whole) == whole
+    cut = _bounded_instructions("y" * (_INSTRUCTIONS_MAX_CHARS + 500))
+    assert cut.startswith("y" * _INSTRUCTIONS_MAX_CHARS)
+    assert cut.endswith("[... cut: 500 more characters of the stored instructions]")
+    assert len(cut) < _INSTRUCTIONS_MAX_CHARS + 100
+    # The run's own fix prompt (findings bounded near 20_000 plus header lines) stays whole.
+    assert _INSTRUCTIONS_MAX_CHARS >= 20_000 + 2_000
+
+
+@pytest.mark.parametrize("planted,expected", [
+    (None, 0), ("", 0), ([], 0), ([1], 0), ({}, 0), ("x", 0), (-3, 0), (True, 0), (2.5, 0),
+    ("2", 2), (" 3 ", 3), (4, 4),
+])
+def test_a_planted_cursor_is_a_non_negative_int(tmp_path, planted, expected):
+    """A null, "" or list as `current_task_idx` raised TypeError out of a resume.
+    MUTATION: drop the cursor coercion in ProjectState.__post_init__ - red."""
+    assert ProjectState(project_name="p", current_task_idx=planted).current_task_idx == expected
+    _tasks_file(tmp_path).parent.mkdir(parents=True)
+    _tasks_file(tmp_path).write_text(json.dumps({
+        "project_name": "p", "task": "build", "current_task_idx": planted,
+        "tasks": [{"id": i + 1, "title": f"t{i}", "status": s}
+                  for i, s in enumerate(["completed", "failed", "pending", "pending", "pending"])]}))
+    tm = TaskManager()
+    tm.initialize(str(tmp_path), current_task="go", resume=True)
+    assert tm.resumed is True
+    assert tm.resume_point() == (1, "t1")
+
+
+def test_a_plan_gone_between_the_read_and_the_load_writes_nothing(tmp_path, monkeypatch):
+    """The read-only check and the load are two reads; a plan removed or finished between
+    them is still nothing to resume, and still nothing is written.
+    MUTATION: drop the backstop after the load in initialize - red (a fresh plan store is
+    written and stamped with the continuation text)."""
+    gone, done = tmp_path / "gone", tmp_path / "done"
+    gone.mkdir()
+    done.mkdir()
+    _plan(str(gone), statuses=("pending",))
+    _plan(str(done), statuses=("pending",))
+    real = TaskManager.stored_unfinished_plan.__func__
+
+    def read_then_change(cls, base_dir):
+        answer = real(cls, base_dir)
+        if base_dir == str(gone):
+            _tasks_file(gone).unlink()
+        else:
+            data = json.loads(_tasks_file(done).read_text(encoding="utf-8"))
+            for t in data["tasks"]:
+                t["status"] = "completed"
+            _tasks_file(done).write_text(json.dumps(data), encoding="utf-8")
+        return answer
+
+    monkeypatch.setattr(TaskManager, "stored_unfinished_plan", classmethod(read_then_change))
+    for folder in (gone, done):
+        tm = TaskManager()
+        tm.initialize(str(folder), current_task="complete all remaining tasks", resume=True)
+        after = _listing(folder)
+        assert tm.resumed is False and tm.state is None, folder.name
+        assert ".vaf/tasks.json" not in after or b"complete all remaining tasks" not in \
+            after[".vaf/tasks.json"], folder.name
+    assert not _tasks_file(gone).exists()
 
 
 # ── Fuzz: the continuation call and the keep-or-replace decision ───────────────────────

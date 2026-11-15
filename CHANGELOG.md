@@ -85,6 +85,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   applies to the automatic continuation after a workflow. A run that was to deploy keeps its
   server in the suggested call, an open code audit fix task keeps its findings, and a
   continuation for a folder with nothing to continue is refused without changing the folder.
+- A deploy folder written with a space or line break at its start or end (`deploy_to`) is
+  now refused. Before, `user@host:/var/www/site/ /` could end up deploying into the parent
+  folder.
 - **Stop now stops a tool the model is still writing.** Pressing Stop while the reply was
   streaming used to let a tool call that had already arrived run anyway, after which VAF asked
   the model again. The call is now dropped and the turn ends. A stop between two tools records

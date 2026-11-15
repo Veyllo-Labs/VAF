@@ -9032,6 +9032,8 @@ class Agent:
                             # Call coding_agent again on the plan the coder stored in that
                             # folder: resume keeps its original request and open tasks, where
                             # a new task text would be a new request and plan fresh.
+                            # NAMED BOUNDARY: no deploy_to here; see "The plan store" in
+                            # docs/agents/CODER_ARCHITECTURE.md.
                             from vaf.tools.coder import _continuation_call
                             coding_tool = all_tools.get("coding_agent")
                             if coding_tool:
@@ -9065,6 +9067,7 @@ class Agent:
                                 incomplete_tasks_hint = (
                                     f"\n\n[!] **Note**: The coding agent has incomplete tasks. "
                                     f"To complete them, use:\n"
+                                    # No deploy_to (named boundary, CODER_ARCHITECTURE.md).
                                     f"`{_continuation_call(project_path_hint)}`"
                                 )
                         else:

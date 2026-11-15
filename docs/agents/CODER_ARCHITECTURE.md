@@ -276,10 +276,18 @@ A kept plan (a resume, or a crash-resume of the same text):
     reached a task only through stuck detection.
 *   **Keeps what a task was made with.** A task the run made itself, a code audit fix task,
     stores its findings as `Task.instructions` (section 5b), and every fresh context of a task
-    reads them (`switch_to_task_context` through `task_mgr.task_instructions`): its first
-    context, a retry's, and a resumed run's. Before, the findings lived only in the stopped
-    run's history and a resumed fix task got back only its generic title. `description` does
-    not hold them, because a retry overwrites it with the previous attempt's reason.
+    reads them: the one constructor every path uses (`create_fresh_context_for_task`, through
+    `task_mgr.task_instructions`) appends them, so the switch, the next task after a
+    `task_done`, a retry and a resumed run all get them. Before, only the switch read them,
+    and finishing the task before a fix task built the fix task's context without its
+    findings; earlier still, the findings lived only in the stopped run's history and a
+    resumed fix task got back only its generic title. `description` does not hold them,
+    because a retry overwrites it with the previous attempt's reason. Like every value in
+    `tasks.json`, they are project content the run's own shell can write (see the named
+    boundaries below), and they go into every request of the task, so they enter the context
+    cut at `_INSTRUCTIONS_MAX_CHARS` (24 000 characters) with the cut said
+    (`_bounded_instructions`); the run's own fix prompt, bounded near 20 000 characters by
+    whole findings, stays whole.
 *   **Skips the template** (the kept-plan guard above).
 
 The coder's answer with open tasks names the continuation, built once by
@@ -320,10 +328,11 @@ NAMED BOUNDARIES:
     `args_template` holds unresolved placeholders, and taking the target out of the coder's
     answer text would read text a task title can carry. A deploy task left open there stays
     open, and the answer shows the call with the target for the model to make.
-*   **Every stored text is a string at the boundary.** `ProjectState.task` and a task's
+*   **Every stored value has its type at the boundary.** `ProjectState.task` and a task's
     `title`, `description`, `result` and `instructions` are coerced to text when the state is
-    built (`coerce_task_title`), so a planted list or dict in `tasks.json` reads as text
-    instead of ending the run.
+    built (`coerce_task_title`), and `current_task_idx` to a non-negative int (its digits as
+    text read as that int, anything else 0), so a planted list, dict or null in `tasks.json`
+    no longer ends the run.
 
 Pinned by `tests/test_coder_task_resume.py`, including two seeded fuzz tests (the call reads
 back every folder and deploy target; the keep-or-replace decision against the table above,
@@ -614,6 +623,7 @@ outcome, and only a run that truly changed nothing keeps the failure message.
 *   **Who decides:** the main agent, from what the person asked. `coding_agent(deploy_to="user@host[:port]:/folder")` names the ONE SSH server and folder a run may put its result on, `deploy_to="ftps://user@host[:port]/folder"` (or `ftp://` without encryption) the ONE web space with FTP; without it the run reaches no server at all.
 *   **Checked before anything is built** (`_deploy_target`, parent and child alike): the format, a folder that is not `/` (over FTP the login folder `/` is allowed: an FTP login is usually locked into the account's own space, and on many web spaces that folder is the site), and that the server is one this account already confirmed. The coder runs unattended and nobody could be asked about a new fingerprint or certificate, so a new server is refused at once with the call that confirms it in the chat (`ssh(server=..., command="true")` or `ftp(server=..., action="list")`).
 *   **Crossing the process boundary:** the argument `--deploy-to`, like `--environment`, never an environment variable.
+*   **The text form reads back as itself.** The child and a continuation check `str(target)` again, so the check must be idempotent: only the server side is stripped, and a folder that starts or ends with whitespace (any `str.isspace()` character: a space, a line break, U+2028, a no-break space), as written or after `normpath`, is refused (`_deploy_folder_refusal`). Before, `user@host:/var/www/site/ /` normalized to `/var/www/site/ `, whose text form the next check stripped to the parent folder, and `ftps://user@host/ /` became the login folder `/`.
 *   **Continuing:** an answer with open tasks names the target in its continuation call (`_continuation_call(base_dir, deploy_to)`), so a resumed run can still deploy; the target is checked again there, and it is never stored with the plan (see "The plan store" in section B).
 *   **In the run:** `ssh` is registered for that run only (never auto-discovered; `"ssh"` is in `MANUALLY_ADDED_TOOLS`), advertised in every context with its server in the description, and every call passes `_deploy_refusal`: pinned to that server, `run`/`upload`/`download` only (no `install_key`), uploads and downloads under the folder, and a relative `local_path` is the project's (`dist`), not the chat workspace the ssh tool reads a relative path against. `upload` takes the built folder whole (see the ssh tool). The account allowlist still decides whether the account may use `ssh` at all.
 *   **Over FTP** the same holds for the `ftp` tool (`"ftp"` in `MANUALLY_ADDED_TOOLS`, registered and advertised only for an `ftps://` or `ftp://` target): `list`/`upload`/`download`/`delete` under the folder, pinned to that web space. A run gets the one tool its target names, never both: an ssh call in an FTP run is refused with a pointer to `ftp`, and the other way round. `host_bash` refuses the FTP clients (`ftp`, `lftp`, the `ncftp` tools) and `curl`/`wget` with an `ftp://` or `ftps://` address (`ftp_transfer`), and `bash` in a sandbox environment refuses those and any `ssh`/`scp`/`sftp` login (an environment can have network), so the pin cannot be stepped around.

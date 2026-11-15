@@ -3333,6 +3333,25 @@ def _resume_requested(value) -> bool:
     return isinstance(value, str) and value.strip().lower() in _RESUME_WORDS
 
 
+# A task's stored instructions are read from tasks.json, project content the run's own shell
+# can write, into every request of that task. The run's own fix prompt is bounded near 20_000
+# characters by whole findings (`AuditReport.fix_prompt(max_chars=20_000)`, which keeps a
+# single oversized finding whole), plus its header and closing lines, so this limit leaves it
+# whole but for that one case, and a cut is said.
+_INSTRUCTIONS_MAX_CHARS = 24_000
+
+
+def _bounded_instructions(text: str) -> str:
+    """A task's stored instructions as they go into its context: cut at
+    `_INSTRUCTIONS_MAX_CHARS`, with the cut said, so a planted file cannot fill the window."""
+    text = str(text or "")
+    if len(text) <= _INSTRUCTIONS_MAX_CHARS:
+        return text
+    return (text[:_INSTRUCTIONS_MAX_CHARS]
+            + f"\n[... cut: {len(text) - _INSTRUCTIONS_MAX_CHARS} more characters of the "
+              "stored instructions]")
+
+
 # The failed-task note at a resumed start is sent with every request of the task, and the
 # plan it lists is project content: bounded like the answer's own lists.
 _FAILED_NOTE_TASKS = 10
@@ -3375,7 +3394,10 @@ def _deploy_target(raw, user_scope_id):
     built everything for nothing."""
     import posixpath
     from vaf.core import ssh
-    text = str(raw or "").strip()
+    # Only the server side is stripped: the folder is kept as written, because the target's
+    # text form is checked again (the spawned child, the continuation call), and a strip there
+    # turned `/var/www/site/ /` into the parent folder.
+    text = str(raw or "").lstrip()
     if text.lower().startswith(("ftp://", "ftps://")):
         return _ftp_deploy_target(text, user_scope_id)
     cut = text.find(":/")
@@ -3385,6 +3407,9 @@ def _deploy_target(raw, user_scope_id):
     # normpath keeps a leading "//" (POSIX leaves it implementation-defined), which would
     # pass for a folder while naming the server's root.
     root = "/" + posixpath.normpath(text[cut + 1:]).lstrip("/")
+    refusal = _deploy_folder_refusal(text[cut + 1:], root)
+    if refusal:
+        return None, refusal
     if root == "/":
         return None, "deploy_to must name a folder, not the server's root"
     try:
@@ -3396,6 +3421,19 @@ def _deploy_target(raw, user_scope_id):
                       f"with ssh(server=\"{target}\", command=\"true\") so the user confirms its "
                       "fingerprint, then start the coder again with deploy_to")
     return DeployTarget(target, root), None
+
+
+def _deploy_folder_refusal(folder: str, root: str) -> Optional[str]:
+    """Why a deploy folder is refused for whitespace at its edges, or None. Checked as written
+    and as normalized (`normpath` keeps `site/ ` from `site/ /`): such a folder does not read
+    back as itself, because any strip of the target's text (a person's, a model's) makes it
+    another folder. Every `str.isspace()` character counts, a line separator and a no-break
+    space too."""
+    for text in (folder, root):
+        if text[:1].isspace() or text[-1:].isspace():
+            return ("deploy_to: the folder must not start or end with a space or a line break; "
+                    "write the folder exactly")
+    return None
 
 
 def _ftp_deploy_target(text: str, user_scope_id):
@@ -3410,6 +3448,9 @@ def _ftp_deploy_target(text: str, user_scope_id):
                       "ftps://user@host/folder (or / for the login folder itself)")
     root = "/" + posixpath.normpath(text[slash:]).lstrip("/")
     root = "/" if root in ("/.", "//") else root
+    refusal = _deploy_folder_refusal(text[slash:], root)
+    if refusal:
+        return None, refusal
     try:
         target = ftp.parse_server(text[:slash])
     except ftp.FtpError as e:
@@ -5412,11 +5453,6 @@ Complete this task: "{task}"
                     task_cm, task_hist = create_fresh_context_for_task(
                         task_idx, task_description, completed_info
                     )
-                    # The task's stored instructions (a code audit fix task's findings) belong
-                    # to every fresh context of it: the first, a retry's, and a resumed run's.
-                    _instructions = task_mgr.task_instructions(task_idx)
-                    if _instructions:
-                        task_hist.append({"role": "system", "content": _instructions})
 
                     # Create new state
                     new_state = ContextState(
@@ -5724,7 +5760,13 @@ Task {task_idx + 1}: {current_task}
                 {"role": "system", "content": fresh_system_prompt},
                 {"role": "user", "content": fresh_user_msg}
             ]
-            
+            # The task's stored instructions (a code audit fix task's findings) belong to every
+            # fresh context of it, whichever path builds it: the switch, the next task after a
+            # task_done, a retry, a resumed run.
+            _instructions = _bounded_instructions(task_mgr.task_instructions(task_idx))
+            if _instructions:
+                task_history.append({"role": "system", "content": _instructions})
+
             # Store in task contexts (handled by switch_to_task_context now)
             # No longer needed - context_states manages this
             

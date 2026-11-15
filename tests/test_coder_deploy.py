@@ -212,3 +212,52 @@ def test_an_ftp_run_gets_ftp_pinned_and_no_ssh():
     assert "not part of a deploy" in coder._deploy_refusal("ftp", {"action": "rename"}, d)
     listed = {"action": "list"}
     assert coder._deploy_refusal("ftp", listed, d) is None and listed["remote_path"] == "/htdocs"
+
+
+# -- the target's text form is checked again and must read back as itself ----------------
+
+def _same(a, b):
+    return a.kind == b.kind and str(a.target) == str(b.target) and a.root == b.root
+
+
+@pytest.mark.parametrize("given", [
+    "deploy@example.org:/var/www/site",
+    "deploy@example.org:2222:/var/www/site/",
+    "  deploy@example.org:/var/www/my site/x",
+    "deploy@[::1]:2222:/srv/app",
+    "ftps://web@example.org/htdocs",
+    "ftps://web@example.org/",
+    "ftp://web@example.org:2121/htdocs/a b/c",
+])
+def test_a_target_reads_back_as_itself(known, ftp_known, given):
+    """The spawned child and the continuation call check `str(target)` again, so the text
+    form must parse back to the same kind, server and folder.
+    MUTATION: let DeployTarget's text form end in whitespace - red (refused on the way back,
+    where a strip used to turn it into another folder)."""
+    known.update({"deploy@example.org", "deploy@example.org:2222", "deploy@[::1]:2222"})
+    ftp_known.update({"ftps://example.org", "ftp://example.org:2121"})
+    d, err = coder._deploy_target(given, "s")
+    assert err is None, err
+    again, err = coder._deploy_target(str(d), "s")
+    assert err is None and _same(again, d), (str(d), str(again))
+
+
+@pytest.mark.parametrize("given", [
+    "deploy@example.org:/var/www/site/ /",
+    "deploy@example.org:/var/www/site ",
+    "deploy@example.org:/var/www/site\u2028",
+    "deploy@example.org:/var/www/site/\xa0/",
+    "deploy@example.org:/var/www/site/\x85",
+    "ftps://web@example.org/ /",
+    "ftps://web@example.org/htdocs\n",
+    "ftps://web@example.org/htdocs/\u2028/",
+])
+def test_a_folder_with_whitespace_at_its_edge_is_refused(known, ftp_known, given):
+    """`/var/www/site/ /` normalizes to `/var/www/site/ `, whose text form, stripped on the
+    next check, named the parent folder (and `ftps://.../ /` the login folder `/`). Such a
+    folder does not read back as itself, so it is refused instead.
+    MUTATION: drop the edge refusal - red."""
+    known.add("deploy@example.org")
+    ftp_known.add("ftps://example.org")
+    d, err = coder._deploy_target(given, "s")
+    assert d is None and "must not start or end with a space" in err, (given, err)

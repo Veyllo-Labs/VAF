@@ -88,6 +88,15 @@ class ProjectState:
         # load: a planted list there raised AttributeError out of the run.
         if not isinstance(self.task, str):
             self.task = coerce_task_title(self.task)
+        # The cursor is compared and counted with: a planted null, "" or list raised TypeError
+        # out of a resume. A non-negative int, its digits as text read as that int, else 0.
+        idx = self.current_task_idx
+        if isinstance(idx, bool) or not isinstance(idx, int):
+            try:
+                idx = int(str(idx).strip())
+            except (TypeError, ValueError):
+                idx = 0
+        self.current_task_idx = max(0, idx)
 
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -319,13 +328,17 @@ class PersistenceManager:
             return None
         
         try:
-            data = json.loads(self._read_file(self.tasks_path) or "null")
-            if not isinstance(data, dict):
-                return None
-            return ProjectState.from_dict(data)
+            return self._parse(self._read_file(self.tasks_path))
         except Exception as e:
             print(f"Error loading state: {e}")
             return None
+
+    @staticmethod
+    def _parse(text: str) -> Optional[ProjectState]:
+        """The state a tasks.json text holds, or None when it is not an object. Raises on
+        text that is not JSON; each reader answers that its own way."""
+        data = json.loads(text or "null")
+        return ProjectState.from_dict(data) if isinstance(data, dict) else None
 
     @classmethod
     def peek_state(cls, base_dir: str) -> Optional[ProjectState]:
@@ -338,8 +351,8 @@ class PersistenceManager:
         folder = os.path.join(base_dir, cls.VAF_DIR)
         try:
             with open_for_read(os.path.join(folder, cls.TASKS_FILE), expect_folder=folder) as f:
-                data = json.loads(f.read().decode("utf-8") or "null")
-            return ProjectState.from_dict(data) if isinstance(data, dict) else None
+                text = f.read().decode("utf-8")
+            return cls._parse(text)
         except Exception:
             return None
 

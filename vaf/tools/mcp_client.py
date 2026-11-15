@@ -306,7 +306,15 @@ class MCPClientTool(BaseTool):
     def _json_rpc(self, process: subprocess.Popen, method: str, params: Dict[str, Any],
                   request_id: int, max_reads: int = 20) -> Optional[Dict[str, Any]]:
         """Send a JSON-RPC request and return the response object matching request_id, skipping
-        notifications / unrelated lines. Returns None on EOF or error (never raises)."""
+        notifications / unrelated lines. Returns None on EOF or error (never raises).
+
+        A stdout line that is not JSON (log text) or is JSON but not an object (a stray
+        ``print(1)``, a status string, a batch, which VAF never sends) is skipped: a JSON-RPC
+        message is an object. A line that is JSON the decoder cannot read, nested deeper than
+        it allows or holding an integer past Python's digit limit, may be the answer itself,
+        so it ends the request with a parse error (-32700) instead: skipping it would leave
+        the reader waiting on ``readline`` for an answer that already came, with the
+        server's lock held."""
         try:
             req = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
             process.stdin.write(json.dumps(req) + "\n")
@@ -326,7 +334,14 @@ class MCPClientTool(BaseTool):
             try:
                 msg = json.loads(line)
             except json.JSONDecodeError:
-                continue
+                continue  # not JSON: log text on stdout
+            except (ValueError, RecursionError) as exc:
+                return {"jsonrpc": "2.0", "id": request_id,
+                        "error": {"code": -32700,
+                                  "message": "the MCP server sent a line that cannot be read "
+                                             f"({str(exc)[:200]})"}}
+            if not isinstance(msg, dict):
+                continue  # a JSON-RPC message is an object; a scalar or a batch is not our answer
             if msg.get("id") == request_id:
                 return msg
             # Otherwise a notification or another response — keep reading.
@@ -365,7 +380,12 @@ class MCPClientTool(BaseTool):
         """Call an MCP tool via stdio transport (JSON-RPC over stdin/stdout), starting
         `server_command` if it is not running yet. For code that chose the command itself (the
         registry runs a registered server's): a command from a model's arguments goes through
-        `run`, which starts only a registered one."""
+        `run`, which starts only a registered one.
+
+        Returns the tool's text, or an ``Error:`` / ``MCP Error:`` line, and does not raise for
+        anything the server writes. It has no timeout of its own: an answer line that is not
+        JSON at all is skipped, and the read then waits for a line that may never come, so
+        run it under a deadline, as `ToolCaller` does for the registered tools."""
         with self._lock_for(server_command):
             process = self._ensure_server(server_command, env)
             if process is None:
@@ -375,22 +395,27 @@ class MCPClientTool(BaseTool):
                                       request_id=next(self._request_ids))
         if response is None:
             return "Error: No response from MCP server"
+        # The answer's shape is the server's: anything outside the specification's shapes
+        # comes back as text rather than raising out of this call.
         if "error" in response:
             error = response["error"]
+            if not isinstance(error, dict):
+                return f"MCP Error: {str(error)[:500]} (code: unknown)"
             return f"MCP Error: {error.get('message', 'Unknown error')} (code: {error.get('code', 'unknown')})"
         if "result" not in response:
             return "Error: No result in MCP response"
 
         result = response["result"]
         # MCP tools return a content array.
-        if "content" in result:
+        if isinstance(result, dict) and "content" in result:
             content = result["content"]
             if isinstance(content, list) and len(content) > 0:
                 text_parts = []
                 for item in content:
                     if isinstance(item, dict):
                         if item.get("type") == "text":
-                            text_parts.append(item.get("text", ""))
+                            text = item.get("text", "")
+                            text_parts.append(text if isinstance(text, str) else str(text))
                         elif "text" in item:
                             text_parts.append(str(item["text"]))
                 return "\n".join(text_parts) if text_parts else str(result)

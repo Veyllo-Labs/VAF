@@ -78,6 +78,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   saved file such as `app\[...slug]\page.tsx` or `app\[[...opt]]\page.tsx` was shown without
   the backslash in front of its bracket and was not clickable. It now shows its real path and
   opens it.
+- **Deep or odd JSON no longer ends a whole workflow or cuts off an MCP server.** A workflow
+  step whose input is a JSON object nested more than 100 levels deep, or one holding a number
+  with thousands of digits, no longer ends the whole workflow: the step fails with a clear
+  reason, or the text is passed on as the step's input. A local MCP server that prints a stray
+  line on its output (a number, a status string) no longer makes all its tools unreachable,
+  and unexpected answers come back as text instead of an error.
 - **A long reply full of unfinished tool-call tags no longer stalls VAF.** VAF used to hang for
   seconds or minutes while it looked for tool calls in such a reply: 128 KB took up to 27 s,
   twice per reply, and one shape took far longer. The tool calls it finds are the same as

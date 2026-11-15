@@ -195,6 +195,28 @@ the same tool at once could each read the other's answer. The stdio loop itself 
 hand-written (it works; moving it onto the SDK is a change of its own, with the Windows process
 flags and the warm-process cache to carry).
 
+What the loop reads from a server's output:
+
+- A line that is not a JSON object is skipped: log text, a stray `print(1)`, a status string
+  such as `"server ready"`. A JSON-RPC message is an object. Before, such a line made every call
+  to that server raise, so all its tools were unreachable until VAF restarted.
+- A line that is JSON the decoder cannot read (nested deeper than it allows, or holding an
+  integer past Python's 4300-digit limit) ends the request with a parse error, code -32700,
+  instead of being skipped, because it may be the answer itself. During the handshake that
+  error drops the process, and the next call starts it again.
+- An answer in an unexpected shape (an `error` that is a string, a `result` that is not an
+  object, a text item whose `text` is not a string) comes back as text.
+- JSON-RPC batches are not read; VAF never sends one.
+
+Named boundary, measured: an answer line that is not JSON at all is skipped like log text, so
+the request then waits for a line that never comes, holding the server's lock, and the next
+call to that server waits behind it. Only the caller's tool budget bounds that wait; the loop
+has no read deadline of its own, since a Windows pipe has no `select` and a deadline needs a
+reader thread or a non-blocking read with its own design.
+
+`tests/test_mcp_stdio_odd_lines.py` guards this against stub server processes and with a
+seeded fuzz of the reader against a reference model.
+
 Naming is `mcp_<server>_<tool>` (e.g. `mcp_filesystem_read_file`): unambiguous, no dotted names in
 LLM tool schemas, and the `mcp_` prefix marks it as external at a glance.
 

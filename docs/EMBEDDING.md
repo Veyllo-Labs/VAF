@@ -3114,8 +3114,10 @@ usable from an embedded engine too, documented in their own pages:
   `mcp_call` tool reaches only a server registered there
   (`vaf.core.mcp_registry.registered_server`), never a command from the model's
   arguments; code of your own that chose a command calls
-  `vaf.tools.mcp_client.get_mcp_client().call_stdio(...)`. See
-  [MCP_INTEGRATION.md](agents/MCP_INTEGRATION.md).
+  `vaf.tools.mcp_client.get_mcp_client().call_stdio(...)`. It returns the tool's text
+  or an `Error:` / `MCP Error:` line and does not raise for anything the server writes;
+  it has no timeout of its own, so run it under one, as `ToolCaller` does for the
+  registered tools. See [MCP_INTEGRATION.md](agents/MCP_INTEGRATION.md).
 - **Update-surviving local tools** - a `custom_tools/` folder in the platform
   data dir (managed via the Web UI, admin-only), see
   [vaf/tools/README.md](../vaf/tools/README.md). The agent's file tools cannot write it

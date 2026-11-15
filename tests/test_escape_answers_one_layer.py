@@ -139,6 +139,34 @@ def test_the_delete_dialog_does_not_hand_escape_to_the_window_underneath():
         "the in-flight delete no longer swallows Escape - the press reaches the window underneath"
 
 
+def test_escape_leaves_the_agent_window_sheet_below_lg():
+    """Below `lg` the dock is a full-screen sheet (z-[70]) whose back chevron sits over the
+    header's Menu button, and nothing but the chevron closed it: after Escape the Menu
+    button stayed covered. Escape now does what the chevron does: the sheet closes, the
+    window keeps its state (the pill opens the same window again). From `lg` up there is no
+    sheet, so the layer is never registered and the desktop dock's Escape is unchanged.
+
+    MUTATION: remove the block - red; drop the lg gate from `active` - red; close the
+    window itself instead of the sheet - red."""
+    src = _src(_PAGE)
+    sheet = [b for b in _layers(src) if "subAgentSheetOpen" in b]
+    assert len(sheet) == 1, "the agent window sheet is not on the Escape ladder exactly once"
+    block = sheet[0]
+    assert "level: 70" in block, "the sheet's level is no longer its z-index (z-[70])"
+    assert "max-lg:z-[70]" in src, "the sheet's z-index moved - its ladder level must follow"
+    active = block.split("active:", 1)[1].split(",", 1)[0]
+    gates = [g.strip() for g in active.split("&&")]
+    assert "subAgentSheetOpen" in gates, f"the layer is not keyed on the sheet being open: {active.strip()}"
+    gate_vars = [g for g in gates if g != "subAgentSheetOpen"]
+    assert gate_vars, "the layer is active on desktop too - it would eat Escape over the dock"
+    assert any(f"const {g} = useIsMobile('(max-width: 1023px)');" in src for g in gate_vars), \
+        f"the sheet's layer is not gated on the lg breakpoint (max-width: 1023px): {active.strip()}"
+    escape = block.split("onEscape:", 1)[1]
+    assert "setSubAgentSheetOpen(false)" in escape, "Escape no longer closes the sheet"
+    assert "isOpen" not in escape and "setSubAgentState" not in escape and "closeSubAgentWindow" not in escape, \
+        "Escape closes the agent window itself, not just the sheet - the pill could not reopen it"
+
+
 def test_the_chat_page_hand_rolls_no_escape_listener():
     src = _src(_PAGE)
     assert "useEscapeLayer(" in src, "collector check: the page uses no layers at all, so this proves nothing"

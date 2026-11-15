@@ -20,6 +20,7 @@ import type { LucideIcon } from 'lucide-react';
 import { cn, getApiBase, getWsBase } from '@/lib/utils';
 import Skeleton, { SkeletonBar, SkeletonRows } from '@/components/ui/Skeleton';
 import { useEscapeLayer } from '@/hooks/useEscapeLayer';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import { copyText } from '@/lib/clipboard';
 import { downloadText } from '@/lib/download';
 import { type NativeDocxDocument, flattenNativeDocxText, replaceTextInNativeDocx } from '@/lib/docxNative';
@@ -27,6 +28,7 @@ import type { EditorFileInfo } from '@/lib/editorFile';
 import { cacheChat, purgeLegacySessionCache } from '@/lib/sessionCache';
 import { connectAccount, markMissingBaselineReload, MISSING_BASELINE_RELOAD_KEY } from '@/lib/socketAccount';
 import { historyMessage, entryActivity, keepCachedOrphan, ComposerDrafts, LiveHistoryHold, planReplay, closesOwnWorkflow } from '@/components/chat/liveView';
+import { anchoredScrollTop, pickAnchor, type ChatAnchor, type ChatAnchorRow } from '@/components/chat/chatAnchor';
 import SettingsModal, { type SettingsModalProps } from '@/components/SettingsModal';
 import { AgentAvatar, SPECIALIST_SKIN, SUBAGENT_ACCENT, type AvatarMode, type SubAgentKind } from '@/components/AgentAvatar';
 import { VoiceEnrollmentCall } from '@/components/VoiceEnrollmentCall';
@@ -4862,11 +4864,14 @@ function VAFDashboardContent() {
 
     const scrollRef = useRef<HTMLDivElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
-    const sessionScrollPositions = useRef<Record<string, { scrollTop: number; wasAtBottom: boolean }>>({});
+    // A chat's position when it was left: the number, and the first visible message with its
+    // offset (components/chat/chatAnchor.ts), which is what a return places when it can.
+    type SavedChatScroll = { scrollTop: number; wasAtBottom: boolean; anchor: ChatAnchor | null };
+    const sessionScrollPositions = useRef<Record<string, SavedChatScroll>>({});
     const isAtBottomRef = useRef(true);
     // `'bottom'` and a saved position restore a view that was just switched to, whatever the
     // person does; `followFrom` follows only while nobody touched the chat since that moment.
-    const pendingScrollRestore = useRef<{ scrollTop: number; wasAtBottom: boolean } | 'bottom' | { followFrom: number } | null>(null);
+    const pendingScrollRestore = useRef<SavedChatScroll | 'bottom' | { followFrom: number } | null>(null);
     // The prompt navigator's jump, parked until the widened window is on screen.
     const pendingJumpRef = useRef<number | null>(null);
 
@@ -4919,17 +4924,43 @@ function VAFDashboardContent() {
     // very container, behavior:'smooth' moves it 0px; and a smooth animation
     // would in any case be fought frame by frame by the position guard above,
     // which only ever knows the one position it was told to hold.
-    const scrollChatToMessage = useCallback((trueIdx: number) => {
+    //
+    // Without `offset` the bubble is centred (the prompt navigator); with it, the bubble's
+    // top is put `offset` px below the column's top edge (a return to a chat left scrolled
+    // up, see readChatAnchor).
+    const scrollChatToMessage = useCallback((trueIdx: number, offset?: number) => {
         const c = containerRef.current;
         if (!c) return false;
         const el = c.querySelector<HTMLElement>(`[data-msg-idx="${trueIdx}"]`);
         if (!el) return false;
         // Rectangles, not offsetTop: the bubble's offsetParent is not the
         // scroller, so its offsetTop is measured against something else entirely.
-        const delta = el.getBoundingClientRect().top - c.getBoundingClientRect().top;
-        setChatScroll(c.scrollTop + delta - Math.max(0, (c.clientHeight - el.offsetHeight) / 2));
+        const rowTop = el.getBoundingClientRect().top;
+        const viewTop = c.getBoundingClientRect().top;
+        if (offset !== undefined) {
+            setChatScroll(anchoredScrollTop(c.scrollTop, rowTop, viewTop, offset));
+            return true;
+        }
+        setChatScroll(c.scrollTop + (rowTop - viewTop) - Math.max(0, (c.clientHeight - el.offsetHeight) / 2));
         return true;
     }, [setChatScroll]);
+
+    // The first message whose bubble is still visible at the column's top edge, with its
+    // offset from that edge; null when no bubble is rendered. Saved when a chat is left,
+    // because the number alone lands on other content when the column's width differs on
+    // the return (the agent window reopens, or stays closed because its worker finished).
+    const readChatAnchor = useCallback((): ChatAnchor | null => {
+        const c = containerRef.current;
+        if (!c) return null;
+        const rows: ChatAnchorRow[] = [];
+        c.querySelectorAll<HTMLElement>('[data-msg-idx]').forEach(el => {
+            const idx = Number(el.dataset.msgIdx);
+            if (!Number.isFinite(idx)) return;
+            const r = el.getBoundingClientRect();
+            rows.push({ idx, top: r.top, bottom: r.bottom });
+        });
+        return pickAnchor(rows, c.getBoundingClientRect().top);
+    }, []);
 
     const artifactDirtyRef = useRef(false);
     const artifactLastEditRef = useRef(0);
@@ -4985,6 +5016,12 @@ function VAFDashboardContent() {
         requestAnimationFrame(() => {
             const nextContainer = containerRef.current;
             if (!nextContainer) return;
+            // A chat that just came back holds its first visible message in place (the
+            // position guard does that every frame). The height change measured here lies
+            // below the view (the server's picture is shorter at its end than the kept one),
+            // so adding it to the old number moved the view off that message: 84 px measured
+            // when a replayed agent window reopened.
+            if (heldReturnAnchor()) return;
             if (wasAtBottom) {
                 setChatScroll(nextContainer.scrollHeight);
                 return;
@@ -5112,6 +5149,23 @@ function VAFDashboardContent() {
     const stickToBottomRef = useRef<string | null>(null);
     // Until when the chat follows its bottom as it grows (see the scroll keeper below).
     const bottomPinUntilRef = useRef(0);
+    // The counterpart for a chat left scrolled up: its saved position, parked again for the
+    // server's transcript, and from the end of its replay held by its first visible message
+    // until the same deadline (`armed`). A switch overwrites it, a touch or a prompt jump
+    // ends it.
+    const returnAnchorRef = useRef<{ sid: string; saved: SavedChatScroll & { anchor: ChatAnchor }; armed: boolean } | null>(null);
+    // The server's transcript of the chat coming back is placed by its saved position too,
+    // as the bottom stick parks 'bottom' for a chat left at its bottom.
+    const parkReturnAnchor = (sid: string) => {
+        const back = returnAnchorRef.current;
+        if (back && back.sid === sid) pendingScrollRestore.current = back.saved;
+    };
+    // The return hold of the open chat while it runs, else null.
+    const heldReturnAnchor = () => {
+        const back = returnAnchorRef.current;
+        return back && back.armed && back.sid === currentSessionIdRef.current
+            && bottomPinUntilRef.current > performance.now() ? back : null;
+    };
     // A reconnect re-asks for the open chat; when the server refuses (the chat was deleted
     // meanwhile) the page takes the chat the server auto-loaded instead.
     const reaskRef = useRef<string | null>(null);
@@ -5265,6 +5319,7 @@ function VAFDashboardContent() {
                 sessionScrollPositions.current[currentSessionId] = {
                     scrollTop: container.scrollTop,
                     wasAtBottom: isAtBottomRef.current,
+                    anchor: readChatAnchor(),
                 };
             }
             sessionLoadingStates.current[currentSessionId] = {
@@ -5332,9 +5387,15 @@ function VAFDashboardContent() {
         // next turn of this session.
         setRagResults(null);
         setRealContext(null);
-        const savedScroll = sessionScrollPositions.current[id] as { scrollTop: number; wasAtBottom: boolean } | undefined;
+        const savedScroll = sessionScrollPositions.current[id] as SavedChatScroll | undefined;
         pendingScrollRestore.current = savedScroll ?? 'bottom';
         stickToBottomRef.current = (!savedScroll || savedScroll.wasAtBottom) ? id : null;
+        const savedAnchor = savedScroll && !savedScroll.wasAtBottom ? savedScroll.anchor : null;
+        returnAnchorRef.current = savedScroll && savedAnchor
+            ? { sid: id, saved: { ...savedScroll, anchor: savedAnchor }, armed: false }
+            : null;
+        // The pin of the chat being left ends here; this chat arms its own at its replay.
+        bottomPinUntilRef.current = 0;
 
         // 4. Restore animation state for target session (or default to idle)
         const targetState = sessionLoadingStates.current[id];
@@ -5603,6 +5664,14 @@ function VAFDashboardContent() {
                         bottomPinUntilRef.current = performance.now() + BOTTOM_PIN_MS;
                     }
                     stickToBottomRef.current = null;
+                    // A chat left scrolled up: from here its first visible message is held in
+                    // place until the same deadline, through the agent window this replay may
+                    // have reopened (see the position guard).
+                    const back = returnAnchorRef.current;
+                    if (back && back.sid === data.sessionId && !back.armed) {
+                        back.armed = true;
+                        bottomPinUntilRef.current = performance.now() + BOTTOM_PIN_MS;
+                    }
                     return;
                 }
 
@@ -7267,6 +7336,7 @@ function VAFDashboardContent() {
                             snapshotLenRef.current = finalServerMsgs.length;
                             setMessages(finalServerMsgs);
                             if (stickToBottomRef.current === data.sessionId) pendingScrollRestore.current = 'bottom';
+                            parkReturnAnchor(data.sessionId);
                         }
 
                         // If a chat was queued before we had a session, send it now.
@@ -7486,6 +7556,7 @@ function VAFDashboardContent() {
                         snapshotLenRef.current = finalMsgs.length;
                         setMessages(finalMsgs);
                         if (stickToBottomRef.current === data.sessionId) pendingScrollRestore.current = 'bottom';
+                        parkReturnAnchor(data.sessionId);
                     }
 
                     // If a chat was queued before we had a session, send it now.
@@ -8219,6 +8290,11 @@ function VAFDashboardContent() {
                     setChatScroll(container.scrollHeight);
                     return;
                 }
+                // A chat left scrolled up comes back at the same message and offset; the
+                // number below is the fallback when that bubble is not rendered (its turn lies
+                // outside the virtual window, which every switch resets).
+                if (restore !== 'bottom' && !restore.wasAtBottom && restore.anchor
+                    && scrollChatToMessage(restore.anchor.idx, restore.anchor.offset)) return;
                 setChatScroll(restore === 'bottom' || restore.wasAtBottom
                     ? container.scrollHeight
                     : restore.scrollTop);
@@ -8357,6 +8433,7 @@ function VAFDashboardContent() {
             // The person decides: no pin, and no bottom waiting for a replay still on its way.
             bottomPinUntilRef.current = 0;
             stickToBottomRef.current = null;
+            returnAnchorRef.current = null;
         };
         const evts: (keyof HTMLElementEventMap)[] = ['wheel', 'touchstart', 'touchmove', 'keydown', 'mousedown'];
         evts.forEach(e => el.addEventListener(e, human, { passive: true }));
@@ -8366,13 +8443,35 @@ function VAFDashboardContent() {
             // intent is the bottom as it moves, not the number it was when it was set, so
             // what still lays itself out (a card unfolding, a window narrowing the column)
             // does not push the newest content below the edge. Any touch ends it.
+            // A chat that came back scrolled up holds its first visible message at its
+            // offset instead, for the same deadline: the agent window's width transition
+            // and the transcript swap move the content under a fixed number.
+            let tolerance = 8;
             if (bottomPinUntilRef.current > performance.now() && performance.now() - lastHuman >= 300) {
-                scrollIntentRef.current = Math.max(0, el.scrollHeight - el.clientHeight);
+                const back = heldReturnAnchor();
+                if (back) {
+                    const row = el.querySelector<HTMLElement>(`[data-msg-idx="${back.saved.anchor.idx}"]`);
+                    // Not rendered: the number the restore wrote stands.
+                    if (row) {
+                        const target = anchoredScrollTop(el.scrollTop, row.getBoundingClientRect().top,
+                            el.getBoundingClientRect().top, back.saved.anchor.offset);
+                        scrollIntentRef.current = Math.min(Math.max(0, el.scrollHeight - el.clientHeight), Math.max(0, target));
+                        // To the pixel: the message is the point, and a shift of a few px
+                        // is what the hold is there to undo.
+                        tolerance = 1;
+                    }
+                } else {
+                    scrollIntentRef.current = Math.max(0, el.scrollHeight - el.clientHeight);
+                }
+            } else if (returnAnchorRef.current?.armed) {
+                // The hold is over (deadline passed): a later transcript of this chat is placed
+                // where it is, not at the position of the return.
+                returnAnchorRef.current = null;
             }
             const want = scrollIntentRef.current;
             const now = el.scrollTop;
             const recentlyHuman = performance.now() - lastHuman < 300;
-            if (want !== null && !recentlyHuman && Math.abs(now - want) > 8) {
+            if (want !== null && !recentlyHuman && Math.abs(now - want) > tolerance) {
                 el.scrollTop = want;                 // put it back, same frame
             } else if (recentlyHuman || want === null) {
                 scrollIntentRef.current = now;       // the person decides where we are
@@ -9615,6 +9714,14 @@ function VAFDashboardContent() {
     useEffect(() => {
         if (!anyDockPanelOpen && subAgentSheetOpen) setSubAgentSheetOpen(false);
     }, [anyDockPanelOpen, subAgentSheetOpen]);
+    // Below `lg` the dock is a full-screen sheet (z-[70]) whose back chevron covers the
+    // header's Menu button; Escape leaves it the same way the chevron does: only the sheet
+    // closes, the window keeps its state and the pill opens it again. It answers before the
+    // code viewer's and the window's own Escape listeners inside it, so a press never closes
+    // something the person was working in while the sheet stays. From `lg` up there is no
+    // sheet and no layer: the desktop dock's Escape behaviour is untouched.
+    const dockIsSheet = useIsMobile('(max-width: 1023px)');
+    useEscapeLayer({ active: subAgentSheetOpen && dockIsSheet, level: 70, onEscape: () => setSubAgentSheetOpen(false) });
 
     useEffect(() => {
         if (subAgentState.isOpen && !showSubAgentPanel) {
@@ -10335,6 +10442,11 @@ function VAFDashboardContent() {
                             const MAX_DASHES = 9;
                             const displayed = prompts.slice(-MAX_DASHES);
                             const jump = (turnPos: number, trueIdx: number) => {
+                                // A jump the person asked for ends a return hold: the rail sits
+                                // outside the column, so its click is no touch of the scroller,
+                                // and the hold would pull the view back to where it came back.
+                                returnAnchorRef.current = null;
+                                bottomPinUntilRef.current = 0;
                                 // Widen the virtual window first when this turn is not rendered.
                                 // The window is cut by TURNS, not by messages: visibleMessages
                                 // keeps the last MSG_TURNS + msgOffset user prompts, so what is

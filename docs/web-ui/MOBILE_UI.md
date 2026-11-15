@@ -84,6 +84,30 @@ one line. The confirmation's Yes and No stack (`max-md:flex-col`), the code fiel
 width like the token field under Account, and the two cards of the first step stack
 (`grid-cols-2 max-md:grid-cols-1`).
 
+## The agent window on a narrow screen
+
+Below `lg` (1024 px) the dock (coder, research, browser, the viewers) does not sit beside the
+chat: a pill above the composer ("Open", `lg:hidden`) opens it as a full-screen sheet
+(`max-lg:fixed max-lg:inset-0 max-lg:z-[70]`, `subAgentSheetOpen` in `page.tsx`). Its back
+chevron (`aria-label="Back to chat"`, `top-2 left-2`) sits exactly over the header's Menu
+button, so the sheet must be easy to leave. Two ways close it, and both close only the sheet:
+the window keeps its state and the pill opens the same window again.
+
+- The back chevron.
+- Escape, through the shared Escape ladder (`useEscapeLayer` at level 70, the sheet's z-index).
+  The layer is gated on `useIsMobile('(max-width: 1023px)')`, the same `lg` cut as the sheet's
+  `max-lg:` classes, so from `lg` up nothing is registered and the desktop dock's Escape
+  behaviour is untouched (the code viewer in the dock still closes on Escape there). Before,
+  nothing but the chevron closed the sheet: after Escape the chevron stayed over the Menu
+  button and took its tap (measured at 390 px, light and dark).
+
+Inside the sheet the ladder answers before the code viewer's and the agent window's own
+Escape listeners, so below `lg` Escape on a sheet showing the code viewer closes the sheet,
+not the viewer: it is the chevron's action, it closes nothing the person was working in, and
+one rule holds for the whole sheet. The same holds for the window's idle context menu, which
+closes on the next tap anywhere, and for the name field of a new folder in the coder's file
+tree, which keeps its draft and is cancelled with its own button.
+
 ## Reusable patterns (copy the class strings)
 
 ### Full-screen sheet (modals / dialogs with real content)

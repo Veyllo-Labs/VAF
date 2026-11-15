@@ -36,6 +36,7 @@ import os
 import random
 
 import pytest
+from fake_clock import only_on_thread
 
 import vaf
 from vaf.core.agent import (_history_for_first_retry, _turn_start_index,
@@ -84,7 +85,9 @@ def make_agent(monkeypatch, tmp_path):
         monkeypatch.delenv(var, raising=False)
     import vaf.core.agent as agent_mod
     from vaf.core.task_queue import TaskQueue
-    monkeypatch.setattr(agent_mod.time, "sleep", lambda s: None)
+    # The retries' waits, skipped on this test's thread only (chat_step runs here): the
+    # `time` module is shared, and another thread's loop must keep its real sleep.
+    monkeypatch.setattr(agent_mod.time, "sleep", only_on_thread(lambda s: None))
     a = agent_mod.Agent(register_signals=False, run_kind="chat",
                         config_overrides={"provider": "deepseek", "api_key_deepseek": "sk-test"})
     monkeypatch.setattr(a, "_try_workflow", lambda *x, **k: None)

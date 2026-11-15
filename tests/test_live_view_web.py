@@ -181,10 +181,13 @@ def test_the_page_follows_the_plan():
     keeper = _between(src, "const tick = () => {", "raf = requestAnimationFrame(tick);")
     assert "if (bottomPinUntilRef.current > performance.now() && performance.now() - lastHuman >= 300) {" in keeper
     assert "scrollIntentRef.current = Math.max(0, el.scrollHeight - el.clientHeight);" in keeper
+    # The touch ends a return through the one helper that ends it for a prompt jump and a send.
     human = _between(src, "const human = () => {", "};")
-    assert "bottomPinUntilRef.current = 0;" in human
+    assert "endReturnHold();" in human
+    ends = _between(src, "const endReturnHold = () => {", "};")
+    assert "bottomPinUntilRef.current = 0;" in ends
     # E2: a touch also drops the bottom a replay still on its way would pull back to.
-    assert "stickToBottomRef.current = null;" in human
+    assert "stickToBottomRef.current = null;" in ends
 
 
 def test_the_bottom_is_for_the_chat_switched_to_and_only_once():

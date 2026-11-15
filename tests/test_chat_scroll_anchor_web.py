@@ -185,6 +185,39 @@ def test_a_log_line_kept_in_both_is_found_by_its_text():
     assert out == [2, 1]
 
 
+def test_a_twin_below_the_saved_index_is_not_taken_for_the_message():
+    """Role and text alone do not tell a message from its twin: a running coder's identical
+    tool rows, empty rounds, a prompt sent twice. After a log line above it is dropped, the
+    saved index holds the twin BELOW, with the same role and text. The fast path therefore
+    also checks the place among the non-`system` rows.
+    MUTATION: drop the place check from the fast path - red."""
+    out = _run("""(() => {
+        const S = (c) => ({role: 'system', content: c}), U = (c) => ({role: 'user', content: c}),
+              A = (c) => ({role: 'assistant', content: c}), T = (c) => ({role: 'tool', content: c});
+        const tools = [U('Q'), S('L'), T('OK'), T('OK'), T('OK'), A('done')];
+        const empty = [U('Q'), S('L'), A(''), A(''), A('done')];
+        const asked = [U('Q'), A('A'), S('L1'), S('L2'), U('Q'), A('B'), U('Q'), A('C')];
+        const without = (rows) => rows.filter(r => r.role !== 'system');
+        const at = (kept, idx) => m.resolveAnchor(without(kept), {idx, offset: 0, key: m.anchorKey(kept, idx)});
+        return {second_tool: at(tools, 3), third_tool: at(tools, 4), second_empty_round: at(empty, 3),
+                second_prompt: at(asked, 4), third_prompt: at(asked, 6)};
+    })()""")
+    assert out == {"second_tool": 2, "third_tool": 3, "second_empty_round": 2,
+                   "second_prompt": 2, "third_prompt": 4}
+
+
+def test_a_neighbour_with_the_same_role_and_place_but_other_text_is_not_the_message():
+    """A browser log line keeps its text: when another log line stands at the saved index, with
+    the same place among the other rows, the line is found by its text elsewhere.
+    MUTATION: drop the text check from the fast path - red."""
+    out = _run("""(() => {
+        const kept = [{role: 'user', content: 'Q'}, {role: 'system', content: 'L1'}, {role: 'system', content: 'L2'}];
+        const now = [{role: 'user', content: 'Q'}, {role: 'system', content: 'L2'}, {role: 'system', content: 'X'}];
+        return m.resolveAnchor(now, {idx: 2, offset: 0, key: m.anchorKey(kept, 2)});
+    })()""")
+    assert out == 1
+
+
 def test_an_anchor_without_a_key_keeps_its_index():
     out = _run("""[m.resolveAnchor([{role: 'user'}, {role: 'user'}], {idx: 1, offset: 0}),
                    m.resolveAnchor([{role: 'user'}], {idx: 1, offset: 0})]""")
@@ -310,13 +343,15 @@ def test_the_transcript_of_the_chat_coming_back_is_placed_by_its_anchor():
 
 
 def test_the_guard_holds_the_message_and_a_touch_ends_it():
-    """MUTATION: delete the clear in `human()` - red; hold the bottom for a chat that came
-    back scrolled up - red."""
+    """MUTATION: drop `endReturnHold()` from `human()` - red; hand-copy a clear into it again -
+    red; hold the bottom for a chat that came back scrolled up - red."""
     src = _page()
     human = _between(src, "const human = () => {", "};")
-    stick = human.index("stickToBottomRef.current = null;")
-    assert "returnAnchorRef.current = null;" in human[stick:], \
+    assert "endReturnHold();" in human, \
         "a wheel or touch no longer ends the return hold - the view is pulled back to the anchor"
+    for copy in ("returnAnchorRef.current = null;", "stickToBottomRef.current = null;",
+                 "bottomPinUntilRef.current = 0;"):
+        assert copy not in human, f"`human()` hand-copies `{copy}` beside the one helper again"
 
     keeper = _between(src, "const tick = () => {", "raf = requestAnimationFrame(tick);")
     pin = keeper.split("if (bottomPinUntilRef.current > performance.now() && performance.now() - lastHuman >= 300) {", 1)
@@ -352,6 +387,25 @@ def test_preserve_chat_scroll_stands_down_during_the_hold():
     assert "setChatScroll(nextContainer.scrollHeight);" in cb
 
 
+def test_a_prompt_jump_before_the_replay_is_not_undone_by_the_bottom_stick():
+    """A chat left at its bottom: the switch sets the stick, and the replay parks 'bottom' and
+    arms the pin for it. A prompt jump made in between used to end only the anchor and the
+    pin, so the replay then pulled the view from the chosen prompt to the bottom.
+    MUTATION: let the helper keep the stick - red."""
+    src = _page()
+    helper = _between(src, "const endReturnHold = () => {", "};")
+    assert "stickToBottomRef.current = null;" in helper, \
+        "a prompt jump before the replay leaves the stick, and the replay parks the bottom over it"
+    jump = _between(src, "const jump = (turnPos: number, trueIdx: number) => {", "scrollChatToMessage(trueIdx);")
+    assert jump.index("endReturnHold();") < jump.index("pendingJumpRef.current = trueIdx;"), \
+        "the jump parks its target before it ends the return"
+    # What the stick does at the replay is only ever conditional on it.
+    replay = _between(src, "if (data.type === 'live_replay') {", "if (data.type === 'new_log')")
+    parks = replay.split("if (stickToBottomRef.current === data.sessionId) {", 1)
+    assert len(parks) == 2 and "pendingScrollRestore.current = 'bottom';" in parks[1].split("}", 1)[0]
+    assert "pendingScrollRestore.current = 'bottom';" not in parks[0]
+
+
 def test_the_person_asking_for_another_place_ends_the_return_hold():
     """A prompt jump and a send are the person asking for another place, and neither touches
     the scroller: the rail and the composer sit outside it. Without this the hold pulled the
@@ -363,6 +417,10 @@ def test_the_person_asking_for_another_place_ends_the_return_hold():
     helper = _between(src, "const endReturnHold = () => {", "};")
     assert "returnAnchorRef.current = null;" in helper
     assert "bottomPinUntilRef.current = 0;" in helper
+    # One clear for every way out: the helper is the only place that drops the anchor or the
+    # stick outside the switch, the replay's own end of the stick and the deadline.
+    assert src.count("returnAnchorRef.current = null;") == 2, \
+        "the return anchor is cleared by hand somewhere beside endReturnHold and the deadline"
 
     jump = _between(src, "const jump = (turnPos: number, trueIdx: number) => {", "scrollChatToMessage(trueIdx);")
     assert "endReturnHold();" in jump

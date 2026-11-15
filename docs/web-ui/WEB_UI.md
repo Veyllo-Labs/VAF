@@ -1386,7 +1386,9 @@ The Web UI runs alongside the CLI interface:
   found. A message has no id, so the anchor carries a key (`anchorKey`): its role, its place
   among the rows that are not `system` and the start of its text. The kept picture holds the
   browser's own log lines, which the server's transcript lacks, so a log line above the message
-  shifts its index after the swap; `resolveAnchor` finds it again by that place, and the index
+  shifts its index after the swap. The saved index counts only when that place matches too,
+  since role and text alone do not tell a message from its twin (identical tool rows, a prompt
+  sent twice); `resolveAnchor` otherwise finds it by its place, and the index
   the guard holds is re-resolved on every commit of the messages. A number alone lands on
   other content whenever the column's width differs between leaving and coming back, and the
   agent window decides that width: it reopens after the return, narrowing the column over
@@ -1396,7 +1398,10 @@ The Web UI runs alongside the CLI interface:
   lifetime as the stick of a chat left at its bottom; a wheel, touch, key or press on the
   scroller ends it, and so do a jump of the prompt navigator, whose rail sits outside the
   column, and a send (the chat's and the Veyllo App room's), whose box is outside it too: both
-  are the person asking for another place (`endReturnHold`). Input of the last 300 ms only
+  are the person asking for another place. One helper (`endReturnHold`, which the touch calls
+  too) ends everything a return holds: the anchor, the pin, and the stick of a chat left at
+  its bottom that still waits for its replay, so a prompt jump made before the replay is not
+  undone by the bottom the replay would park. Input of the last 300 ms only
   postpones the hold; only its deadline ends it otherwise. A chat switch ends the bottom pin of
   the chat being left, so a pin still running cannot pull the chat switched to down to its
   bottom. `preserveChatScroll` stands down while that hold runs: the replayed window reopened

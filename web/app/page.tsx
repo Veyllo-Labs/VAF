@@ -5167,8 +5167,14 @@ function VAFDashboardContent() {
     }, [messages]);
     // The person asked for another place (a prompt jump, a send that follows the answer):
     // no return hold and no bottom pin may pull the view back from it.
+    // The one clear of everything a return holds: the anchor of a chat left scrolled up, the
+    // stick of a chat left at its bottom that still waits for its replay (which would park the
+    // bottom over the person's choice), and the pin. A touch on the scroller ends it the same
+    // way. A send clears the stick too: the stick only parks the bottom, which is where a send
+    // goes anyway, and the follow keeps it there.
     const endReturnHold = () => {
         returnAnchorRef.current = null;
+        stickToBottomRef.current = null;
         bottomPinUntilRef.current = 0;
     };
     // The server's transcript of the chat coming back is placed by its saved position too,
@@ -8453,10 +8459,9 @@ function VAFDashboardContent() {
             lastHuman = performance.now();
             lastHumanRef.current = lastHuman;
             scrollIntentRef.current = el.scrollTop;
-            // The person decides: no pin, and no bottom waiting for a replay still on its way.
-            bottomPinUntilRef.current = 0;
-            stickToBottomRef.current = null;
-            returnAnchorRef.current = null;
+            // The person decides: no pin, no bottom waiting for a replay still on its way and
+            // no message held where the chat came back.
+            endReturnHold();
         };
         const evts: (keyof HTMLElementEventMap)[] = ['wheel', 'touchstart', 'touchmove', 'keydown', 'mousedown'];
         evts.forEach(e => el.addEventListener(e, human, { passive: true }));
@@ -9750,9 +9755,11 @@ function VAFDashboardContent() {
     // code viewer's and the window's own Escape listeners inside it, so a press never closes
     // something the person was working in while the sheet stays. From `lg` up there is no
     // sheet and no layer: the desktop dock's Escape behaviour is untouched.
-    // 1023.98, not 1023: Tailwind's `max-lg` is "not min-width 1024px", and a zoomed viewport
-    // between 1023 and 1024 px shows the sheet too.
-    const dockIsSheet = useIsMobile('(max-width: 1023.98px)');
+    // Word for word the query Tailwind 3 writes for the sheet's `max-lg:` classes, so the
+    // layer exists exactly where the sheet does, at any fractional (zoomed) width; a
+    // `max-width` cut below 1024 leaves a sliver, and the `width <` range form needs a newer
+    // WebKit than the tray window may have.
+    const dockIsSheet = useIsMobile('not all and (min-width: 1024px)');
     useEscapeLayer({ active: subAgentSheetOpen && dockIsSheet, level: 70, onEscape: () => setSubAgentSheetOpen(false) });
 
     useEffect(() => {

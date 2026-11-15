@@ -95,10 +95,11 @@ the window keeps its state and the pill opens the same window again.
 
 - The back chevron.
 - Escape, through the shared Escape ladder (`useEscapeLayer` at level 70, the sheet's z-index).
-  The layer is gated on `useIsMobile('(max-width: 1023.98px)')`, the same `lg` cut as the
-  sheet's `max-lg:` classes (Tailwind writes those as "not min-width 1024px", so a zoomed
-  viewport between 1023 and 1024 px counts as narrow too), so from `lg` up nothing is
-  registered and the desktop dock's Escape
+  The layer is gated on `useIsMobile('not all and (min-width: 1024px)')`, word for word the
+  query Tailwind 3 writes for the sheet's `max-lg:` classes, so the two agree at every width,
+  a fractional zoomed one included (a `max-width` cut below 1024 px would leave a sliver with
+  the sheet and no layer, and the `width < 1024px` range form needs Safari 16.4 or newer).
+  From `lg` up nothing is registered and the desktop dock's Escape
   behaviour is untouched (the code viewer in the dock still closes on Escape there). Before,
   nothing but the chevron closed the sheet: after Escape the chevron stayed over the Menu
   button and took its tap (measured at 390 px, light and dark).

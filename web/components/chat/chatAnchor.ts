@@ -32,28 +32,38 @@ function headOf(m: AnchorMessage): string {
     return String(m.content ?? '').slice(0, HEAD_CHARS);
 }
 
+/** How many rows before `idx` are not `system` rows: a message's place among them. */
+function ordinalBefore(messages: AnchorMessage[], idx: number): number {
+    let ordinal = 0;
+    for (let i = 0; i < idx; i++) if (messages[i].role !== 'system') ordinal++;
+    return ordinal;
+}
+
 /** The key of `messages[idx]`, or null when there is no such message. */
 export function anchorKey(messages: AnchorMessage[], idx: number): ChatAnchorKey | null {
     const m = messages[idx];
     if (!m) return null;
-    let ordinal = 0;
-    for (let i = 0; i < idx; i++) if (messages[i].role !== 'system') ordinal++;
-    return { role: m.role, ordinal, head: headOf(m) };
+    return { role: m.role, ordinal: ordinalBefore(messages, idx), head: headOf(m) };
 }
 
 /**
  * Where the anchor's message is in `messages` now, or null when it is not there (the caller
- * then falls back to the saved number). The saved index wins when it still holds the same
- * message; otherwise the message is found by its place among the non-`system` rows, which a
- * transcript without the browser's log lines keeps. A `system` row exists only in the kept
- * picture: it is found by its text, nearest to where it was, or not at all. Without a key
- * (an anchor read where no messages were at hand) the index is taken as it is.
+ * then falls back to the saved number). The saved index wins only when it still holds the
+ * same message: the same role and text AND the same place among the non-`system` rows.
+ * Role and text alone do not tell a message from its twin (a coder's identical tool rows,
+ * empty rounds, a prompt sent twice), and after a log line above it is dropped the saved
+ * index holds the twin below. Otherwise the message is found by its place among the
+ * non-`system` rows, which a transcript without the browser's log lines keeps. A `system` row
+ * exists only in the kept picture: it is found by its text, nearest to where it was, or not
+ * at all. Without a key (an anchor read where no messages were at hand) the index is taken as
+ * it is.
  */
 export function resolveAnchor(messages: AnchorMessage[], anchor: ChatAnchor): number | null {
     const key = anchor.key;
     if (!key) return anchor.idx >= 0 && anchor.idx < messages.length ? anchor.idx : null;
     const at = messages[anchor.idx];
-    if (at && at.role === key.role && headOf(at) === key.head) return anchor.idx;
+    if (at && at.role === key.role && headOf(at) === key.head
+        && ordinalBefore(messages, anchor.idx) === key.ordinal) return anchor.idx;
     if (key.role === 'system') {
         let best = -1;
         for (let i = 0; i < messages.length; i++) {

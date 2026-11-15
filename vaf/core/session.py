@@ -328,7 +328,10 @@ def is_failed_turn(msg) -> bool:
                                      strip_think_blocks)
     from vaf.markers import SYSTEM_LOG_ONLY
     text = strip_think_blocks(str(get("content") or ""))
+    # The cleaned text is stripped, so the engine's marker with no detail after it ("[Error] ")
+    # comes back without its trailing blank.
     return (text.startswith((_ENGINE_ERROR, _ERROR_SENTINEL, SYSTEM_LOG_ONLY))
+            or text == _ENGINE_ERROR.rstrip()
             or is_stop_note(text))
 
 

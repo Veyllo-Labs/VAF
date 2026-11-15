@@ -169,10 +169,13 @@ def strip_think_blocks(text: str, *, greedy: bool = False) -> str:
     redacted block pairing with one outside it
     (``<redacted_reasoning><think></redacted_reasoning>Q</think>``), have no right
     reading; the redacted block goes first and Q is kept as text (about 2 in 1,000
-    adversarial fuzz draws, all of this class). Text after
-    ``<redacted_reasoning>...</think>`` is kept, as the chat shows it: a think closer
-    quoted inside a redacted block the model never closed cannot be told from that shape.
-    A stray ``</redacted_reasoning>`` that the second think pass itself joins stays as
+    adversarial fuzz draws, all of this class). A redacted block the model never closed
+    cuts the text to its end even when a think closer follows it
+    (``<redacted_reasoning>plan</think>Answer.`` is empty): a think closer quoted inside
+    such a block cannot be told from one that ends it, so the reasoning side wins. Only a
+    ``<think>`` opener BEFORE the redacted one pairs with that closer, which the greedy
+    reading does (``<think>a</think><redacted_reasoning>b</think>Answer`` is ``Answer``
+    greedy, as the chat shows it, and empty plain). A stray ``</redacted_reasoning>`` that the second think pass itself joins stays as
     text: a closer opens nothing, so no reasoning follows it out.
 
     Linear in the text: a fixed number of passes, none of which rescans what it already

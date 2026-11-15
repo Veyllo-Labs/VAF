@@ -452,11 +452,13 @@ def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=N
     failed or loop protection stopped it), or one whose outgoing text is a failure
     (`completion.is_error_reply`, which also covers the runner's own "[Error] No response
     ...") or a stop note (`completion.is_stop_note`). A turn that had answered before such a
-    failure ended it (`turn.failure`) is sent its answer, without that text. The text is
-    judged as the contact would receive it, after
-    `_prepare_channel_outbound`: the model's reasoning never leaves, so reasoning that quotes
-    an "[Error] ..." tool result does not decide the turn. The owner's own chats get the text
-    as it is, and so does the web UI, which the runner fed before this. `contact` is the
+    failure ended it (`turn.failure`) is sent its answer, without that text. The failure is
+    judged on one text, visible or not (`_reply_failure`): the outbound chain with only the
+    CLOSED reasoning removed, so reasoning that quotes an "[Error] ..." tool result in a
+    closed block does not decide the turn, while a failure the provider left after a block
+    the model never closed does, though the sent text's cut removes it. The owner's own
+    chats get the outbound text and such a failure after it (`_channel_reply_text`), and the
+    web UI gets the text as it is, which the runner fed before this. `contact` is the
     record pinned for THIS turn. `session_mgr` serves the WhatsApp fallback that reads the
     chat's JID off the session. `parked` is what the turn's last round parked, as
     (`Agent._parked_this_round`, `Agent._held_this_round`): a request of the Veyllo App's agent
@@ -487,20 +489,13 @@ def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=N
                     return
                 final_text = answer
             visible = _prepare_channel_outbound(final_text)
-            # A provider that failed mid-reasoning leaves its failure after a block the model
-            # never closed, and the cut removes both: nothing would go out. With nothing
-            # visible, the failure is judged on the text with only its CLOSED blocks removed,
-            # so such a turn still gets the fixed sentence, while reasoning that merely quotes
-            # an "[Error] ..." inside a closed block still decides nothing.
-            failed_mid_reasoning = (not visible and is_error_reply(
-                split_think_blocks(own_links_as_labels(final_text))[0]))
-            if (turn.failed or failed_mid_reasoning or is_error_reply(visible)
+            if (turn.failed or _reply_failure(final_text) or is_error_reply(visible)
                     or is_stop_note(visible)):
                 _send_turn_error_reply(task, final_text, contact=contact)
                 return
         if task_source == "telegram" and chat_id:
             from vaf.core.telegram_reply import send_telegram_reply
-            out = _prepare_channel_outbound(final_text)
+            out = _channel_reply_text(final_text)
             if not out:
                 try:
                     log_telegram_reply(
@@ -522,7 +517,7 @@ def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=N
                     )
                 except Exception:
                     pass
-                out = _prepare_channel_outbound(final_text)
+                out = _channel_reply_text(final_text)
                 if out:
                     send_discord_reply(str(discord_channel_id), out)
         elif task_source == "email":
@@ -559,12 +554,12 @@ def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=N
                 # A turn a Yes woke has answered: the next message of the same round gets its
                 # card now, and this answer waits for the request's final `done`.
                 from vaf.core.app_link import confirmations
-                answer = confirmations.open_followup(meta, _prepare_channel_outbound(final_text))
+                answer = confirmations.open_followup(meta, _channel_reply_text(final_text))
                 if answer is None:
                     return
                 app_bridge.finish_reply(meta, answer)
                 return
-            app_bridge.finish_reply(meta, _prepare_channel_outbound(final_text))
+            app_bridge.finish_reply(meta, _channel_reply_text(final_text))
         elif task_source == "whatsapp":
             chat_jid = meta.get("whatsapp_chat_jid")
             username = meta.get("username") or "admin"
@@ -586,7 +581,7 @@ def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=N
                     )
                 except Exception:
                     pass
-                out = _prepare_channel_outbound(final_text)
+                out = _channel_reply_text(final_text)
                 if out:
                     send_whatsapp_reply(username, str(chat_jid), out, user_scope_id=meta.get("user_scope_id") and str(meta["user_scope_id"]) or None)
                 else:
@@ -1023,7 +1018,7 @@ def _strip_untagged_cot_prefix(text: str) -> str:
     return "\n\n".join(paras[last_delib + 1:]).strip()
 
 
-def _prepare_channel_outbound(text: str) -> str:
+def _prepare_channel_outbound(text: str, *, closed_reasoning_only: bool = False) -> str:
     """THE outbound sanitizer chain for messenger sends (Telegram/WhatsApp/Discord),
     shared by the normal headless reply path AND the sub-agent result drain. The
     drain previously hand-copied a shorter chain and drifted (skipped the
@@ -1033,14 +1028,53 @@ def _prepare_channel_outbound(text: str) -> str:
     Never used for the WebUI/session lane (the browser already streamed the
     original text - invariant 4.2). Its first step shows VAF's own file link as the path
     it opens (`own_links_as_labels`): a messenger or the Veyllo App cannot open a host
-    path, and the markup around it is noise there; any other link stays as written."""
-    out = strip_think_blocks(own_links_as_labels(text))
+    path, and the markup around it is noise there; any other link stays as written.
+
+    `closed_reasoning_only` removes only the CLOSED reasoning blocks, for the one question
+    whether the turn failed (`_reply_failure`); what is sent never takes it."""
+    out = own_links_as_labels(text)
+    if closed_reasoning_only:
+        out = split_think_blocks(drop_redacted_blocks(out, cut_unclosed=False))[0]
+    else:
+        out = strip_think_blocks(out)
     out = _strip_tool_calls_json(out)
     out = re.sub(r"\n{3,}", "\n\n", out).strip()
     out = _strip_workflow_async_from_message(out)
     out = sanitize_outgoing_message(out)
     out = _strip_untagged_cot_prefix(out)
     return (out or "").strip()
+
+
+def _reply_failure(text: str) -> str:
+    """The failure a reply's text carries outside its CLOSED reasoning, from its marker
+    (`[Error] ` or `[API Error from`) to the end, or "".
+
+    One text decides, visible or not: the outbound chain with only the closed blocks of all
+    three marks removed. A provider that failed mid-reasoning leaves its failure after a
+    block the model never closed, and the outbound cut removes both, so judging the sent
+    text alone loses it; reasoning that merely quotes an "[Error] ..." inside a closed block
+    decides nothing, and neither does leaked tool-call JSON quoting one (the chain strips
+    it). An unclosed block that only QUOTES an error reads as a failure here, the safe side
+    for a contact, who then gets the fixed sentence instead of a partial answer."""
+    from vaf.core.completion import _ENGINE_ERROR, _ERROR_SENTINEL, is_error_reply
+    judged = _prepare_channel_outbound(text, closed_reasoning_only=True)
+    if not is_error_reply(judged):
+        return ""
+    return judged[min(i for i in (judged.find(_ENGINE_ERROR), judged.find(_ERROR_SENTINEL))
+                      if i >= 0):].strip()
+
+
+def _channel_reply_text(text: str) -> str:
+    """What a messenger lane sends of a turn's text: the outbound text, and when the cut of
+    an unclosed block took a failure with it, that failure after it (`_reply_failure`), so the
+    owner's own chat still learns that the turn failed. A contact never gets here with one:
+    `_deliver_channel_reply` answers such a turn with the fixed sentence first."""
+    from vaf.core.completion import is_error_reply
+    visible = _prepare_channel_outbound(text)
+    failure = _reply_failure(text)
+    if failure and not is_error_reply(visible):
+        return f"{visible}\n\n{failure}".strip()
+    return visible
 
 
 def _drain_fallback_head(user_lang) -> str:

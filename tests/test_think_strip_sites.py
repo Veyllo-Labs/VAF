@@ -26,6 +26,15 @@ MUTATIONS, each turns the named test red:
 - the angle-tag walk dropping a `<` that has no `>` -> (oracle 5);
 - pattern 1 without the optional bracket -> (oracle 6);
 - restore one site's lazy regex -> its rows of test_sites_strip_marked_reasoning;
+- drop the empty-detail branch in `is_failed_turn` -> its [empty-detail*] rows;
+- the old `"?\\s*$` in the sanitizer's "name" fragment pattern -> its linear row and
+  test_pattern7_is_the_one_in_the_sanitizer; `"?$` without the blanks -> the fuzz (oracle 8);
+- the old filler regex in `speech._drop_standalone_filler` -> its three speech rows (11 s at
+  4 KB already); ignore the dot before a blank run, or drop the start-of-text branch -> the
+  fuzz (oracles 9, 10); the old leading-filler loop -> [speech-leading-fillers]; try the
+  phrases by the first character unlowered -> the fuzz (oracle 9);
+- only `*?` as a repetition in `_is_hand_copy` -> test_the_hand_copy_shapes; no folding of
+  concatenations -> test_concatenated_and_f_string_patterns_are_seen;
 - re-add a lazy think regex in send_telegram.py, a `.split("<think>")` in rag.py, or remove
   the call in vision_infer -> test_no_hand_copy_of_the_rule / test_converted_functions_call_the_rule.
 """
@@ -134,7 +143,21 @@ def _shapes():
         "failed-turn-think-openers": (
             lambda t: session.is_failed_turn({"role": "assistant", "content": t}),
             _fill("<think>a ")),
+        "sanitize-name-fragment-blanks": (_agent()._sanitize_response,
+                                          ', "name": "' + " " * N + 'x"y'),
+        "speech-blank-run": (_speak, "x" + " " * N + "x"),
+        "speech-newline-run": (_speak, "x" + "\n" * N + "x"),
+        "speech-filler-then-blanks": (_speak, "Moment" + " " * N + "x"),
+        "speech-leading-fillers": (_speak, _fill("\u7b49\u4e00\u4e0b ")),
+        "speech-leading-fillers-then-dotted-i": (
+            _speak, "\u7b49\u4e00\u4e0b " * 12 + "\u0130" + " " * N + "x"),
+        "delivery-judgement-think-openers": (_reply_failure, _fill("<think>a ", "Answer. ")),
     }
+
+
+def _reply_failure(text):
+    from vaf.core.headless_runner import _reply_failure as judge
+    return judge(text)
 
 
 @pytest.mark.parametrize("name", list(_shapes()))
@@ -168,8 +191,10 @@ def test_sites_strip_marked_reasoning(text):
     assert runtime._extract_json(text.replace("Answer.", '{"a": 1}')) == {"a": 1}
 
 
-@pytest.mark.parametrize("content", ["<THINK>p</THINK>[Error] x", "<thinking>p</thinking>[Error] x"],
-                         ids=["upper-block", "thinking-block"])
+@pytest.mark.parametrize("content", ["<THINK>p</THINK>[Error] x", "<thinking>p</thinking>[Error] x",
+                                     "[Error] ", "[Error] <tHiNk>"],
+                         ids=["upper-block", "thinking-block", "empty-detail",
+                              "empty-detail-then-opener"])
 def test_a_legacy_failure_after_marked_reasoning_is_recognised(content):
     """Text before a stray closer is kept by the rule, so "plan</think>[Error] x" begins
     with "plan" and is not recognised, as before."""
@@ -261,15 +286,92 @@ def _docstring_ids(tree) -> set:
     return ids
 
 
+def _repeat_after(low: str, start: int) -> int:
+    """Index of the first regex repetition at or after `start`, or -1: a `*` or `+` (lazy or
+    not) right behind something a regex repeats, `.`, a class `]`, a group `)` or an escape
+    like `\\s`. A markdown bullet's `*` in prose stands behind a blank and is not one."""
+    for i in range(start, len(low)):
+        if low[i] in "*+" and i > 0 and (low[i - 1] in ".])" or (i > 1 and low[i - 2] == "\\")):
+            return i
+    return -1
+
+
 def _is_hand_copy(s: str) -> bool:
+    """A regex that removes a whole reasoning block: an opener with the `<think` prefix (so
+    also `<think\\b`, `<think(?:ing)?>`, `<think[^>]*>`), any repetition after it, then a
+    `</think` closer; or a `<redacted_reasoning` opener with any repetition after it."""
     low = s.lower()
-    start = low.find("<think>")
+    start = low.find("<think")
     if start >= 0:
-        lazy = low.find("*?", start)
-        if lazy >= 0 and low.find("</think>", lazy) >= 0:
+        rep = _repeat_after(low, start)
+        if rep >= 0 and low.find("</think", rep) >= 0:
             return True
-    start = low.find("<redacted_reasoning>")
-    return start >= 0 and low.find("*?", start) >= 0
+    start = low.find("<redacted_reasoning")
+    return start >= 0 and _repeat_after(low, start) >= 0
+
+
+def _folded(node) -> str:
+    """The text of a string expression, with `{}` for each part that is not a literal: a
+    constant, a concatenation of strings, or an f-string."""
+    if isinstance(node, ast.Constant):
+        return node.value if isinstance(node.value, str) else "{}"
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _folded(node.left) + _folded(node.right)
+    if isinstance(node, ast.JoinedStr):
+        return "".join(v.value if isinstance(v, ast.Constant) else "{}" for v in node.values)
+    return "{}"
+
+
+def _string_expressions(tree, docs):
+    """Every outermost string expression that is not a docstring: a concatenation or an
+    f-string once as a whole, never its parts again."""
+    inner = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.JoinedStr):
+            inner.update(id(v) for v in node.values)
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            inner.update((id(node.left), id(node.right)))
+    for node in ast.walk(tree):
+        if id(node) in inner or id(node) in docs:
+            continue
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            yield node.value
+        elif isinstance(node, ast.JoinedStr) or (
+                isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add)):
+            text = _folded(node)
+            if text.strip("{}"):
+                yield text
+
+
+@pytest.mark.parametrize("pattern, expected", [
+    (r"<think>.*?</think>", True),
+    (r"<think>.*</think>", True),
+    (r"<think>[\s\S]*?</think>", True),
+    (r"<think>.+?</think>", True),
+    (r"<think>[^<]*</think>", True),
+    (r"<think(?:ing)?>.*?</think(?:ing)?>", True),
+    (r"<think[^>]*>[\s\S]*?</think>", True),
+    (r"(?s)<think\b.*?</think\b", True),
+    (r"<THINK>(.*?)</THINK>", True),
+    (r"<redacted_reasoning>.*?</redacted_reasoning>", True),
+    (r"<redacted_reasoning>.*</redacted_reasoning>", True),
+    (r"<redacted_reasoning>[\s\S]+", True),
+    (r"</?think>", False),
+    (r"<think>", False),
+    (r"<(/?)think(?:ing)?>", False),
+    (r"</?redacted_reasoning>", False),
+    ("Wrap your reasoning in <think>...</think> tags.", False),
+    ("Use `<think>` tags:\n- *The* block ends at `</think>`\n- +1 more", False),
+], ids=lambda v: v if isinstance(v, str) else None)
+def test_the_hand_copy_shapes(pattern, expected):
+    assert _is_hand_copy(pattern) is expected
+
+
+def test_concatenated_and_f_string_patterns_are_seen():
+    tree = ast.parse('A = "<think>" + ".*?" + "</think>"\nB = f"<think>{x}.*?</think>"\n'
+                     'C = "</?think>" + y\n')
+    found = [s for s in _string_expressions(tree, set()) if _is_hand_copy(s)]
+    assert len(found) == 2, found
 
 
 def _scan():
@@ -278,15 +380,13 @@ def _scan():
         rel = path.relative_to(ROOT).as_posix()
         tree = ast.parse(path.read_bytes())
         docs = _docstring_ids(tree)
-        for node in ast.walk(tree):
-            if (isinstance(node, ast.Constant) and isinstance(node.value, str)
-                    and id(node) not in docs and _is_hand_copy(node.value)):
+        for text in _string_expressions(tree, docs):
+            if _is_hand_copy(text):
                 copies[rel] = copies.get(rel, 0) + 1
+        for node in ast.walk(tree):
             if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                     and node.func.attr == "split" and node.args
-                    and isinstance(node.args[0], ast.Constant)
-                    and isinstance(node.args[0].value, str)
-                    and "<think>" in node.args[0].value.lower()):
+                    and "<think" in _folded(node.args[0]).lower()):
                 splits[rel] = splits.get(rel, 0) + 1
     return copies, splits
 
@@ -405,7 +505,8 @@ def _old_sanitize(text):
 TOKENS = ["<think>", "</think>", "<THINK>", "</Think>", "<thinking>", "</THINKING>", OPEN, CLOSE,
           "<thi", "nk>", "ing>", "<redacted_", "reasoning>", "</", "<", ">", "<a ",
           "<|tool_call>", "<tool_call|>", '{"tool_calls": ', "{", "[", "]", "}", '"name": "x"',
-          "```", " ", "   ", "\n", "a", "Answer.", "x y", "İ", "ı", "K", "ok"]
+          "```", " ", "   ", "\n", "a", "Answer.", "x y", "İ", "ı", "K", "ok", ",", '"',
+          ', "name": "', '"name": ']
 # Block contents for the sentinel draws: no tag and no tag fragment, so the block is a natural one.
 SAFE = [" ", "\n", "a", "Answer.", "x y", "ok", "{", "]", "İ", "K"]
 MARKS = [("<think>", "</think>"), ("<THINK>", "</Think>"), ("<thinking>", "</THINKING>"),
@@ -456,7 +557,8 @@ def fuzz_mismatches(rng: random.Random, draws: int) -> dict:
     """Mismatches per oracle (shared with the larger run outside the suite)."""
     from vaf.core.agent import Agent, _drop_angle_tags, _reply_is_reasoning_echo
     agent = Agent.__new__(Agent)
-    bad = {k: [] for k in range(1, 8)}
+    from vaf.core.speech import _drop_standalone_filler
+    bad = {k: [] for k in range(1, 11)}
     for _ in range(draws):
         t = _draw(rng)
         for greedy in (False, True):
@@ -484,7 +586,86 @@ def fuzz_mismatches(rng: random.Random, draws: int) -> dict:
         if drop_redacted_blocks(t, cut_unclosed=False) != re.sub(
                 re.escape(OPEN) + ".*?" + re.escape(CLOSE), "", t, flags=re.DOTALL):
             bad[7].append(t)
+        if (re.sub(_PATTERN7, "", t, flags=re.DOTALL | re.MULTILINE)
+                != re.sub(_OLD_PATTERN7, "", t, flags=re.DOTALL | re.MULTILINE)):
+            bad[8].append(t)
+        s = _speech_draw(rng)
+        if _speak(s) != _old_speak(s):
+            bad[9].append(s)
+        # The standalone step alone, also where the leading strip leaves nothing for it.
+        phrase = rng.choice(STANDALONE_PHRASES)
+        if _drop_standalone_filler(s, phrase) != _old_standalone(s, phrase):
+            bad[10].append((s, phrase))
     return {k: v for k, v in bad.items() if v}
+
+
+_OLD_PATTERN7 = r',\s*"name":\s*"[^"]*"?\s*$'
+_PATTERN7 = r',\s*"name":\s*"[^"]*(?:"\s*)?$'
+
+
+def test_pattern7_is_the_one_in_the_sanitizer():
+    """The oracle's pattern is the sanitizer's own (the fuzz compares this text)."""
+    import inspect
+    from vaf.core.agent import Agent
+    assert "r'" + _PATTERN7 + "'" in inspect.getsource(Agent._sanitize_response)
+
+
+# Speech: filler phrases among blanks, dots and the punctuation the leading strip eats,
+# in mixed case, with the characters whose lowercase is not one for one.
+SPEECH_TOKENS = ["Moment", "moment", "MOMENT", "Einen Moment bitte.", "Einen Moment",
+                 "\u7b49\u4e00\u4e0b", "Let me check", "let me check", "Okay, Moment.",
+                 "Anlad\u0131m, hemen bak\u0131yorum", " ", "  ", "\n", "\n\n", "\t", ".", ",",
+                 ";", ":", "x", "Answer", "\u0130", "\u03a3", "\u03a3\u0391", "\u212a",
+                 "\u0131", "- ", "**"]
+
+
+STANDALONE_PHRASES = ["Moment", "Einen Moment bitte.", "等一下", "Let me check",
+                      "Okay, Moment."]
+
+
+def _speech_draw(rng):
+    return "".join(rng.choice(SPEECH_TOKENS) for _ in range(rng.randint(0, 24)))
+
+
+def _old_leading(t, all_fillers):
+    changed = True
+    while changed and t.strip():
+        changed = False
+        t_stripped = t.strip()
+        for phrase in all_fillers:
+            if not phrase:
+                continue
+            if t_stripped.lower().startswith(phrase.lower()):
+                rest = t_stripped[len(phrase):].lstrip(".,;: ")
+                t = rest
+                changed = True
+                break
+    return t
+
+
+def _old_standalone(t, phrase):
+    esc = re.escape(phrase)
+    return re.sub(r'(?:^|[\s.])\s*' + esc + r'\s*(?=[\s.]|$)', ' ', t, flags=re.IGNORECASE)
+
+
+def _old_speak(text):
+    """`_clean_markdown` with its two filler steps as they were (literal copies above)."""
+    from unittest import mock
+    from vaf.core import speech
+    with mock.patch.object(speech, "_strip_leading_fillers", _old_leading), \
+            mock.patch.object(speech, "_drop_standalone_filler", _old_standalone):
+        return _speak(text)
+
+
+def test_no_filler_phrase_lowers_out_of_step():
+    """`speech._strip_leading_fillers` compares a slice of the phrase's length: exact while no
+    phrase holds a character whose lowercase is not one for one (U+0130, a capital sigma)
+    or lowers to a sigma or a combining dot."""
+    from vaf.core.speech_fillers import THINKING_FILLERS
+    phrases = {f for v in THINKING_FILLERS.values() for f in v if isinstance(f, str) and f}
+    odd = [p for p in phrases if len(p.lower()) != len(p)
+           or any(c in p.lower() for c in "\u03c3\u03c2\u0307") or "\u03a3" in p]
+    assert odd == []
 
 
 @pytest.mark.parametrize("seed", [1, 2, 3])

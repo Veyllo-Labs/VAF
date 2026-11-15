@@ -66,6 +66,83 @@ def stt_failure_message() -> str:
             "container did not answer - `vaf repair` starts the speech stack.")
 
 
+def _strip_leading_fillers(text: str, fillers) -> str:
+    """Every filler phrase at the start of `text` off, one after the other, with the
+    punctuation after each: what the loop that stripped, lowered and sliced the whole rest
+    once per phrase per round returned (2.7 s on 4 KB of fillers), by an index that only
+    moves forward. `fillers` in the order they are tried (the longest first).
+
+    A phrase is compared with a slice of its own length, lowered, instead of the whole rest
+    lowered: the same answer for every phrase whose lowercase is one character for one and
+    holds no sigma and no combining dot (all of them, pinned by
+    tests/test_think_strip_sites.py). A slice holding U+0130 or a capital sigma lowers to a
+    combining dot or a sigma, which no phrase has, so it matches neither way; any other
+    character lowers one for one, whatever follows it. For the same reason only the phrases
+    whose lowercase begins with the first character lowered are tried, in the same order."""
+    end = len(text.rstrip())
+    pos, matched = 0, False
+    by_first = {}
+    for phrase in fillers:
+        if phrase:
+            low = phrase.lower()
+            by_first.setdefault(low[0], []).append((phrase, low))
+    while True:
+        start = pos
+        while start < end and text[start].isspace():
+            start += 1
+        if start >= end:
+            break
+        for phrase, low in by_first.get(text[start].lower(), ()):
+            if text[start:min(end, start + len(phrase))].lower() == low:
+                pos = start + len(phrase)
+                while pos < end and text[pos] in ".,;: ":
+                    pos += 1
+                matched = True
+                break
+        else:
+            break
+    return text[pos:end] if matched else text
+
+
+def _drop_standalone_filler(text: str, phrase: str) -> str:
+    """`re.sub(r'(?:^|[\\s.])\\s*' + phrase + r'\\s*(?=[\\s.]|$)', ' ', text, flags=re.I)`,
+    the filler wherever it stands alone, matched only where it can start.
+
+    The regex tried every blank of a long run as the separator and scanned the rest of the
+    run from each (20 s on 4 KB of blanks, once per phrase). Here each occurrence of the
+    phrase gets the one start the regex would have found first: the dot right before the
+    blank run in front of it, else the run's first blank, else the start of the text, never
+    before the end of the previous match. The regex itself then decides at that start."""
+    import re
+    lit = re.compile(re.escape(phrase), re.IGNORECASE)
+    rx = re.compile(r'(?:^|[\s.])\s*' + re.escape(phrase) + r'\s*(?=[\s.]|$)', re.IGNORECASE)
+    out, pos = [], 0
+    occurrence = lit.search(text, 0)
+    while occurrence:
+        q = occurrence.start()
+        run = q
+        while run > pos and text[run - 1].isspace():
+            run -= 1
+        if run == 0:
+            start = 0
+        elif run > pos and text[run - 1] == ".":
+            start = run - 1
+        elif run < q:
+            start = run
+        else:
+            start = None
+        m = rx.match(text, start) if start is not None else None
+        if m:
+            out.append(text[pos:m.start()])
+            out.append(" ")
+            pos = m.end()
+            occurrence = lit.search(text, pos)
+        else:
+            occurrence = lit.search(text, q + 1)
+    out.append(text[pos:])
+    return "".join(out)
+
+
 class SpeechManager:
     _instance = None
     _lock = threading.Lock()
@@ -1154,24 +1231,11 @@ $player.Close()
                 all_fillers.extend(f for f in lang_fillers if f and isinstance(f, str))
             all_fillers = sorted(set(all_fillers), key=len, reverse=True)
             # Strip leading fillers
-            changed = True
-            while changed and t.strip():
-                changed = False
-                t_stripped = t.strip()
-                for phrase in all_fillers:
-                    if not phrase:
-                        continue
-                    if t_stripped.lower().startswith(phrase.lower()):
-                        rest = t_stripped[len(phrase):].lstrip(".,;: ")
-                        t = rest
-                        changed = True
-                        break
+            t = _strip_leading_fillers(t, all_fillers)
             # Remove filler phrases anywhere (standalone)
             for phrase in all_fillers:
-                if not phrase:
-                    continue
-                esc = re.escape(phrase)
-                t = re.sub(r'(?:^|[\s.])\s*' + esc + r'\s*(?=[\s.]|$)', ' ', t, flags=re.IGNORECASE)
+                if phrase:
+                    t = _drop_standalone_filler(t, phrase)
             t = re.sub(r' +', ' ', t).strip()
         except Exception:
             pass

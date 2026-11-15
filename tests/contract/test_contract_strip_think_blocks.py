@@ -39,6 +39,18 @@ def test_a_block_closes_at_its_first_closer_unless_greedy():
     assert vaf.strip_think_blocks(text, greedy=True) == "C"
 
 
+def test_the_named_boundaries():
+    """A redacted block the model never closed cuts to the end, a think closer after it
+    included; only a think opener before it pairs with that closer, greedy. Crossing blocks
+    keep the text between them."""
+    assert vaf.strip_think_blocks("<redacted_reasoning>plan</think>Answer.") == ""
+    assert vaf.strip_think_blocks("<redacted_reasoning>plan</think>Answer.", greedy=True) == ""
+    text = "<think>a</think><redacted_reasoning>b</think>Answer"
+    assert vaf.strip_think_blocks(text, greedy=True) == "Answer"
+    assert vaf.strip_think_blocks(text) == ""
+    assert vaf.strip_think_blocks("<redacted_reasoning><think></redacted_reasoning>Q</think>") == "Q"
+
+
 def test_reasoning_only_becomes_empty():
     assert vaf.strip_think_blocks("<think>only reasoning</think>") == ""
     assert vaf.strip_think_blocks("<think>only reasoning, never closed") == ""

@@ -3406,8 +3406,11 @@ Stable public surface (safe to build on):
   unclosed cuts the text to the end; stray tags are dropped; the result is stripped; a falsy
   input comes back as it is; it never raises on a string. Two named boundaries: blocks of the
   two kinds that cross each other (`<redacted_reasoning><think></redacted_reasoning>Q</think>`)
-  keep Q as text, and text after `<redacted_reasoning>...</think>` is kept, as the chat shows
-  it. Plain text is never guessed away.
+  keep Q as text; and a redacted block the model never closed cuts to the end even when a
+  think closer follows it (`<redacted_reasoning>plan</think>Answer.` gives `""`), unless a
+  `<think>` opener before it pairs with that closer in the greedy reading
+  (`<think>a</think><redacted_reasoning>b</think>Answer` gives `Answer` greedy). Plain text
+  is never guessed away.
 - `vaf.terminal_text(value) -> str` - text as a terminal may show it. The promise is the
   removed set (every complete escape sequence as a whole; then every C0 character but tab
   and newline, DEL, every C1 character, the twelve bidirectional controls and lone

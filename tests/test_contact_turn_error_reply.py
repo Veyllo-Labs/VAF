@@ -290,22 +290,82 @@ def test_reasoning_that_quotes_an_error_does_not_swallow_the_answer(delivered):
 def test_a_failure_inside_unclosed_reasoning_is_still_caught(delivered):
     """The provider failed mid-reasoning: the "</think>" never came, and the sentinel
     follows the open block. The outbound text cuts both away, so the failure is judged on the
-    text with only its closed blocks removed, and the contact gets the sentence.
-    MUTATION: drop `failed_mid_reasoning` - red (nothing is sent)."""
+    text with only its closed blocks removed (`_reply_failure`), and the contact gets the
+    sentence. MUTATION: drop `_reply_failure(final_text)` from the judgement - red (nothing
+    is sent)."""
     hr._deliver_channel_reply(_delivery_task("telegram", from_contact=True),
                               "<think>Ich prüfe den Kalender " + _KEY_ERROR,
                               contact={"preferred_language": "de"})
     assert delivered == [("telegram", _FIXED_DE)]
 
 
-def test_reasoning_alone_that_quotes_an_error_sends_nothing(delivered):
-    """A reply of closed reasoning only, quoting an "[Error] ..." tool result: nothing is
-    visible and nothing failed, so nothing goes out, as for any reply that is reasoning only.
-    MUTATION: judge the failure on `final_text` instead of its closed blocks removed - red."""
-    hr._deliver_channel_reply(_delivery_task("telegram", from_contact=True),
-                              "<think>contact_history gave [Error] API backend failure: x</think>",
+def test_a_failure_inside_unclosed_reasoning_after_an_answer_is_caught(delivered):
+    """Visible text first, then reasoning the model never closed, then the provider's failure:
+    one text decides, visible or not, so the contact gets the sentence and not the half answer.
+    MUTATION: judge `_reply_failure` only when nothing is visible - red."""
+    hr._deliver_channel_reply(_delivery_task("whatsapp", from_contact=True),
+                              "Teilantwort. <think>noch mehr " + _KEY_ERROR,
+                              contact={"preferred_language": "de"})
+    assert delivered == [("whatsapp", _FIXED_DE)]
+
+
+@pytest.mark.parametrize("text", [
+    "<think>contact_history gave [Error] API backend failure: x</think>",
+    "<redacted_reasoning>contact_history gave [Error] API backend failure: x</redacted_reasoning>",
+    '{"tool_calls": [{"name": "contact_history", "arguments": "[Error] API backend failure: x"}]}',
+], ids=["closed-think", "closed-redacted", "tool-call-json"])
+def test_reasoning_alone_that_quotes_an_error_sends_nothing(delivered, text):
+    """A reply of closed reasoning only, or of leaked tool-call JSON only, quoting an
+    "[Error] ..." tool result: nothing is visible and nothing failed, so nothing goes out, as
+    for any reply that is reasoning only. MUTATIONS: judge the failure on `final_text`
+    instead of the chain with its closed blocks removed - red on all three; skip
+    `drop_redacted_blocks` in `_reply_failure` - red on closed-redacted."""
+    hr._deliver_channel_reply(_delivery_task("telegram", from_contact=True), text,
                               contact={"preferred_language": "de"})
     assert delivered == []
+
+
+@pytest.mark.parametrize("channel", ["telegram", "whatsapp", "discord"])
+def test_the_owner_learns_of_a_failure_the_reasoning_cut_took(delivered, channel):
+    """The owner's own chat: the provider failed after reasoning the model never closed. The
+    cut removes the block and the failure; the owner is still sent the failure, without the
+    reasoning. MUTATION: send `_prepare_channel_outbound` again in the owner lanes - red (the
+    owner gets nothing)."""
+    hr._deliver_channel_reply(_delivery_task(channel, from_contact=False),
+                              "<think>Ich prüfe den Kalender " + _KEY_ERROR)
+    assert delivered == [(channel, _KEY_ERROR.strip())]
+
+
+def test_the_owner_gets_the_answer_and_the_failure_after_it(delivered):
+    hr._deliver_channel_reply(_delivery_task("telegram", from_contact=False),
+                              "Teilantwort. <think>noch mehr " + _KEY_ERROR)
+    assert delivered == [("telegram", "Teilantwort.\n\n" + _KEY_ERROR.strip())]
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("<think>Checking [Error] API backend failure: x", "[Error] API backend failure: x"),
+    ("Answer. <think>more [API Error from openai: boom]", "[API Error from openai: boom]"),
+    ("<think>plan</think>[Error] shown failure", "[Error] shown failure"),
+    ("<THINK>quoting [Error] x</THINK>Answer.", ""),
+    ("<redacted_reasoning>[Error] x</redacted_reasoning>Answer.", ""),
+    ('Answer. {"tool_calls": [{"name": "x", "arguments": "[Error] y"}]}', ""),
+    ("Plain answer.", ""),
+], ids=["unclosed", "after-answer", "visible", "closed-think", "closed-redacted",
+        "tool-call-json", "plain"])
+def test_reply_failure_reads_outside_closed_reasoning(text, expected):
+    """The shared judgement: the failure outside the closed reasoning, from its marker on."""
+    assert hr._reply_failure(text) == expected
+
+
+def test_the_drain_stores_a_marked_failure_and_falls_back_on_an_unmarked_one():
+    """The sub-agent drain's summary turn with the same shape: a failure the engine marked is
+    its stored copy's tail (cleaned apart from the reasoning), and an unmarked one leaves an
+    empty copy, for which the drain sends its deterministic fallback, never nothing."""
+    err = "[API Error from openai: boom]"
+    copy, meta = hr._drain_turn_copy(["<think>plan ", err],
+                                     turn=TurnStatus(failed=True, failure=err))
+    assert copy == err and meta
+    assert hr._drain_turn_copy(["<think>plan ", err], turn=TurnStatus())[0] == ""
 
 
 def test_a_failed_turn_after_a_telegram_voice_note_is_not_read_out(delivered):

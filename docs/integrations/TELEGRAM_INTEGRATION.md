@@ -138,7 +138,7 @@ Proactive delivery now works in both the main VAF process and in background/subp
 
 ### Replies
 
-- **Internal Filtering**: You receive only the agent’s final reply. Internal reasoning blocks (`<think>` and `<thinking>` in any case, `<redacted_reasoning>`, also a block the model never closed, which cuts the reply there) and raw tool-call JSON are automatically removed from replies, by the same rule as the web chat's answer (`strip_think_blocks`).
+- **Internal Filtering**: You receive only the agent’s final reply. Internal reasoning blocks (`<think>` and `<thinking>` in any case, `<redacted_reasoning>`, also a block the model never closed, which cuts the reply there) and raw tool-call JSON are automatically removed from replies. The marks are the same as for the web chat's answer (`strip_think_blocks`), read block by block: a block ends at its first closer, because a messenger reply can join several rounds of one turn, and reading from the first opener to the last closer, as the web answer does, would remove the answers between them. Named boundary: text before a closer that has no opener (`plan</think>Answer`) is sent, without the closer, because nothing marks it as reasoning.
 - **System Log Suppression**: Pure internal system logs (e.g. "API returned empty responses") are never sent to Telegram.
 - **Formatting rendering**: Outgoing text replies are sent with Telegram HTML parse mode when formatting markers are present, so common markdown-like output renders correctly in chat (for example `**bold**`, `` `inline code` ``, code fences, and links). If Telegram rejects parsed entities, VAF automatically falls back to plain text delivery.
 

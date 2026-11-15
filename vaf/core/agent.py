@@ -6810,7 +6810,11 @@ class Agent:
             r'",\s*"name":\s*"[^"]*",\s*"type":\s*"function".*$',
             r'"\}\s*,\s*"type":\s*"function".*$',  # leaked tail: "}, "type": "function", "index": 0}]}
             r'",\s*"name":\s*"[^"]*"\}\s*,\s*"type":\s*"function".*$',  # full: , "name": "x"}, "type": "function"...
-            r',\s*"name":\s*"[^"]*"?\s*$',  # trailing fragment: , "name": "update_working_memory" or without closing quote
+            # trailing fragment: , "name": "update_working_memory" or without closing quote.
+            # The blanks before the end go with the closing quote only: `[^"]*` already takes
+            # them when the quote is missing, and a `\s*` behind an optional quote rescanned
+            # the rest of a blank run from every blank (39 s on 64 KB).
+            r',\s*"name":\s*"[^"]*(?:"\s*)?$',
             r'\}\s*,\s*\{\s*"index":\s*\d+.*$',
             r'\}\s*,\s*\{\s*"name":\s*"[^"]*".*$',
             r'\]\s*\}\s*$', # Closing brackets at the very end
@@ -6853,11 +6857,11 @@ class Agent:
         blocks in any case (first opener to last closer; an unclosed opener cuts to the end;
         stray tags dropped) and `<redacted_reasoning>` blocks. Its docstring holds the order
         of the passes and the two named boundaries; the second one (text after
-        `<redacted_reasoning>...</think>` is kept) is also what the empty-answer probe must
-        count as an answer so a guard keeps the bubble. Plain text is the answer, in any
-        language: a phrase list cannot tell a model's reasoning from an answer that starts
-        "I will" or quotes what "the user wants", and deleting by such a guess emptied whole
-        replies.
+        `<think>...<redacted_reasoning>...</think>` is kept greedy) is also what the
+        empty-answer probe must count as an answer so a guard keeps the bubble. Plain text
+        is the answer, in any language: a phrase list cannot tell a model's reasoning from an
+        answer that starts "I will" or quotes what "the user wants", and deleting by such a
+        guess emptied whole replies.
         """
         # 1. The marked reasoning (strip_think_blocks: redacted blocks, then <think> and
         # <thinking> in any case). Greedy, first opener .. LAST closer: weak models sometimes

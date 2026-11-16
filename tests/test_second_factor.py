@@ -7,6 +7,8 @@
 code read over a shoulder or relayed by a phishing page worked again for up to 90 seconds
 (measured: the same code accepted twice, 200 and 200).
 """
+import ast
+
 import pytest
 
 import auth_harness
@@ -109,3 +111,56 @@ def test_a_refused_new_password_does_not_spend_the_code(h):
                json={"current_password": "alice-password-1", "new_password": "alice-password-2",
                      "code": code})
     assert r.status_code == 200, r.text
+
+
+# A TOTP secret literal in a test must be as long as the one the product makes:
+# pyotp.random_base32() gives 32 characters (160 bits), and pyotp 2.12 refuses a secret under
+# 112 bits. A 16-character fixture passed on the locked pyotp and failed only on a CI runner
+# that resolved the newer one, so the length is pinned here rather than on the runner.
+_MIN_TOTP_CHARS = 32
+_TOTP_CALLEES = {"TOTP", "HOTP", "code_at"}
+
+
+def _base32(node) -> bool:
+    import re
+    return (isinstance(node, ast.Constant) and isinstance(node.value, str)
+            and re.fullmatch(r"[A-Z2-7]+=*", node.value) is not None)
+
+
+def _short_totp_literals(source: str) -> list:
+    """Line numbers of base32 literals under 32 characters handed to a TOTP call, or bound to a
+    name or keyword that says it holds a TOTP secret."""
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        values = []
+        if isinstance(node, ast.Call):
+            f = node.func
+            name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "")
+            if name in _TOTP_CALLEES or "totp" in name.lower():
+                values += node.args
+            values += [k.value for k in node.keywords if k.arg and "totp" in k.arg.lower()]
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if any("totp" in getattr(t, "id", getattr(t, "attr", "")).lower() for t in targets):
+                values.append(node.value)
+        found += [v.lineno for v in values
+                  if _base32(v) and len(v.value.rstrip("=")) < _MIN_TOTP_CHARS]
+    return found
+
+
+def test_no_test_hands_totp_a_short_secret():
+    """MUTATION: put the 16-character secret back into test_users_cli.py - red."""
+    from pathlib import Path
+    tests = Path(__file__).resolve().parent
+    offenders = [f"{p.name}:{line}" for p in sorted(tests.rglob("*.py"))
+                 for line in _short_totp_literals(p.read_text(encoding="utf-8"))]
+    assert not offenders, offenders
+
+
+def test_the_short_secret_detector_actually_detects():
+    short, full = "JBSWY3DPEHPK3PXP", "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
+    for shape in ('pyotp.TOTP("{s}").now()', 'encrypt_totp_secret("{s}")', 'code_at("{s}", 1)',
+                  '_TOTP_SECRET = "{s}"', 'make(totp_secret="{s}")'):
+        assert _short_totp_literals(shape.format(s=short)) == [1], shape
+        assert _short_totp_literals(shape.format(s=full)) == [], shape
+    assert _short_totp_literals('print("JBSWY3DPEHPK3PXP")') == []

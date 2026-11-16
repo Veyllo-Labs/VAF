@@ -17,6 +17,10 @@ from typer.testing import CliRunner
 
 import vaf.cli.cmd.users as users_cmd
 
+# 32 base32 characters (160 bits), the length pyotp.random_base32() hands the product: pyotp
+# 2.12 refuses a secret under 112 bits, so a 16-character fixture only worked on older pins.
+_TOTP_SECRET = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
+
 
 @pytest.fixture
 def world(monkeypatch):
@@ -212,7 +216,7 @@ def _account(password="old-password-123", totp=False):
     from vaf.auth.crypto import encrypt_totp_secret, hash_password
     secret = nonce = None
     if totp:
-        secret, nonce = encrypt_totp_secret("JBSWY3DPEHPK3PXP")
+        secret, nonce = encrypt_totp_secret(_TOTP_SECRET)
     return SimpleNamespace(id=uuid.uuid4(), username="bob", password_hash=hash_password(password),
                            role="user", totp_secret=secret, totp_nonce=nonce,
                            requires_2fa_setup=not totp, is_active=True, user_scope_id=uuid.uuid4(),
@@ -245,7 +249,7 @@ def test_with_2fa_on_the_code_is_needed_too(monkeypatch):
     # A 400 the limiter does not see on its own: the route counts it. MUTATION: drop that - red.
     assert not user.committed and len(failures) == 1
     ok = c.post("/api/auth/change-password",
-                json=dict(body, code=pyotp.TOTP("JBSWY3DPEHPK3PXP").now()))
+                json=dict(body, code=pyotp.TOTP(_TOTP_SECRET).now()))
     assert ok.status_code == 200 and user.committed
     from vaf.auth.crypto import verify_password
     assert verify_password(user.password_hash, "brand-new-password")

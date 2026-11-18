@@ -8,6 +8,7 @@ code read over a shoulder or relayed by a phishing page worked again for up to 9
 (measured: the same code accepted twice, 200 and 200).
 """
 import ast
+import re
 
 import pytest
 
@@ -122,18 +123,16 @@ _TOTP_CALLEES = {"TOTP", "HOTP", "code_at"}
 
 
 def _base32(node) -> bool:
-    import re
     return (isinstance(node, ast.Constant) and isinstance(node.value, str)
             and re.fullmatch(r"[A-Z2-7]+=*", node.value) is not None)
 
 
 def _names_a_totp_secret(name: str) -> bool:
-    """A name that says it holds a TOTP secret. One that says `code` as a word holds a
-    verification code (`totp_code = "234567"`): six digits are valid base32, but they are no
-    secret. `totp_encoded_secret` still names a secret."""
-    import re
+    """A name that says it holds a TOTP secret. One that says `code` or `passcode` as a word
+    holds a verification code (`totp_code = "234567"`): six digits are valid base32, but they
+    are no secret. `totp_encoded_secret` still names a secret."""
     name = name.lower()
-    return "totp" in name and re.search(r"(^|_)codes?($|_)", name) is None
+    return "totp" in name and re.search(r"(^|_)(pass)?codes?($|_)", name) is None
 
 
 def _short_totp_literals(source: str) -> list:
@@ -186,5 +185,6 @@ def test_the_short_secret_detector_actually_detects():
     assert _short_totp_literals('print("JBSWY3DPEHPK3PXP")') == []
     # A verification code is six digits, which base32 allows, and it is no secret.
     for code in ('totp_code = "234567"', 'make(totp_code="234567")',
-                 'verify_totp(secret, "234567")', 'make(totp_codes="234567")'):
+                 'verify_totp(secret, "234567")', 'make(totp_codes="234567")',
+                 'totp_passcode = "234567"'):
         assert _short_totp_literals(code) == [], code

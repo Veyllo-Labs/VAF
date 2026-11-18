@@ -8,6 +8,7 @@ The engine executes a sequence of tool calls, automatically passing
 outputs from one step as inputs to the next.
 """
 
+import logging
 import os
 import re
 import time
@@ -20,6 +21,8 @@ from enum import Enum
 
 from vaf.cli.ui import UI
 from vaf.core.channels import ALL_SEND_TOOLS
+
+_log = logging.getLogger(__name__)
 
 
 # Steps whose output is a content deliverable that can meaningfully be re-generated with a
@@ -139,6 +142,12 @@ def template_may_substitute(template: str) -> bool:
     lookup), which the resolver acts on. Any other match may name a variable or a step's
     output. A planner checking a step before it runs leaves such input to the engine, which
     sees it resolved.
+
+    Named boundary: the resolver also replaces a quoted match whose whole text is the name
+    of a variable or a step's output, which only a name holding a double quote can be.
+    Such a template is called literal here, so a planner refuses a step the engine might
+    run: the error is on the strict side, and the engine is never handed less than it
+    would check itself.
     """
     for match in _PLACEHOLDER_RE.finditer(template or ""):
         key = match.group(1)
@@ -181,10 +190,10 @@ def build_step_args(tool_name: str, input_template: str, args_template: Optional
     decoder at all included, raises `StepArgsRefused` with the funnel's depth refusal; text
     that is not valid JSON, an integer past Python's active digit limit included, is the
     single argument. The depth is measured only once the text decodes, so an over-deep object
-    that also holds such an integer is text. The input usually arrives through a `{placeholder}` holding a fetched page or
-    an API answer, and such text used to raise `RecursionError` or `ValueError` out of
-    `WorkflowEngine.execute`, which ended the whole run with no result and no
-    `optional`/`on_failure` handling.
+    that also holds such an integer is text. The input usually arrives through a
+    `{placeholder}` holding a fetched page or an API answer, and such text used to raise
+    `RecursionError` or `ValueError` out of `WorkflowEngine.execute`, which ended the whole
+    run with no result and no `optional`/`on_failure` handling.
     """
     if args_template is not None:
         args: Dict[str, Any] = {}
@@ -1255,7 +1264,13 @@ class WorkflowEngine:
                 step.duration = time.time() - step_start
                 error = step.error
                 UI.error(f"  → {step.error}")
-                self.callback("error", step, i, len(steps))
+                # An observer that fails on this event must not take the recovery below
+                # (optional, on_failure) with it.
+                try:
+                    self.callback("error", step, i, len(steps))
+                except Exception as cb_exc:
+                    _log.warning("workflow progress callback failed on a refused step: %s",
+                                 cb_exc)
                 if stop_on_error and not step.optional and not step.on_failure:
                     break
                 _step_idx = self._branch_step(_step_idx, step, steps, outputs, error)

@@ -17,6 +17,7 @@ with the funnel's depth refusal, and text that is not valid JSON is the step's s
 A `variables` string is decoded the same way, and every reader of `variables` sees the
 coerced mapping (a string used to fail every step at the variable anchoring).
 """
+import contextlib
 import os
 import random
 import sys
@@ -48,20 +49,45 @@ def long_int(digits: int) -> str:
     return "7" * digits
 
 
+# Python 3.10.7 and later have an integer digit limit; before it, a long integer decodes.
+_NEEDS_DIGIT_LIMIT = pytest.mark.skipif(not hasattr(sys, "set_int_max_str_digits"),
+                                        reason="this Python has no integer digit limit")
+
+
 @pytest.fixture
 def int_digit_limit():
-    """Python's integer digit limit at its default, 4300, for the length of a test.
+    with _digit_limit():
+        yield
+
+
+def test_the_digit_limit_fixture_works_on_a_python_without_the_limit(monkeypatch):
+    monkeypatch.delattr(sys, "get_int_max_str_digits", raising=False)
+    monkeypatch.delattr(sys, "set_int_max_str_digits", raising=False)
+    with _digit_limit():
+        pass
+
+
+@contextlib.contextmanager
+def _digit_limit():
+    """Python's integer digit limit at its default, 4300, for the length of the block.
 
     The limit is configurable (`PYTHONINTMAXSTRDIGITS`, `-X int_max_str_digits`, 0 turns it
     off), so a test that expects a long integer to fail decoding sets it rather than
-    inheriting whatever the test process was started with.
+    inheriting whatever the test process was started with. On a Python without the limit
+    this does nothing, and the digit cases are skipped (`_NEEDS_DIGIT_LIMIT`); the fuzz's
+    reference decodes in the same process, so it agrees either way.
     """
-    previous = sys.get_int_max_str_digits()
-    sys.set_int_max_str_digits(4300)
+    get = getattr(sys, "get_int_max_str_digits", None)
+    put = getattr(sys, "set_int_max_str_digits", None)
+    if get is None or put is None:
+        yield
+        return
+    previous = get()
+    put(4300)
     try:
         yield
     finally:
-        sys.set_int_max_str_digits(previous)
+        put(previous)
 
 
 # ── build_step_args: the decision per input text ────────────────────────────────────────────
@@ -71,8 +97,11 @@ def int_digit_limit():
     ('{"command": "ls"}', {"command": "ls"}),
     ("{}", {}),
     ("{not json}", {"command": "{not json}"}),
-    ('{"a": ' + long_int(4301) + "}", {"command": '{"a": ' + long_int(4301) + "}"}),
-    ('{"a": -' + long_int(5000) + "}", {"command": '{"a": -' + long_int(5000) + "}"}),
+    pytest.param('{"a": ' + long_int(4301) + "}", {"command": '{"a": ' + long_int(4301) + "}"},
+                 id="digits-4301", marks=_NEEDS_DIGIT_LIMIT),
+    pytest.param('{"a": -' + long_int(5000) + "}",
+                 {"command": '{"a": -' + long_int(5000) + "}"},
+                 id="digits-minus-5000", marks=_NEEDS_DIGIT_LIMIT),
 ], ids=["object", "empty", "not-json", "digits-4301", "digits-minus-5000"])
 def test_step_input_json_decides_args_text_or_refusal(text, expected):
     assert build_step_args("bash", text, None, SAME) == expected
@@ -186,6 +215,25 @@ def test_a_refused_step_reports_its_own_attempt(optional):
         assert events.index(("error", 2)) < events.index(("start", 3)), events
 
 
+def test_an_observer_that_fails_on_the_refusal_does_not_stop_the_recovery():
+    """A progress callback that raises on "error" must not take optional/on_failure with it."""
+    events = []
+
+    def observer(event, step, i, total):
+        events.append((event, i))
+        if event == "error":
+            raise RuntimeError("observer broke")
+
+    engine, steps, search, bash, listing = _chain(deep_object(10000), optional=True,
+                                                  callback=observer)
+    engine.execute(steps, variables={})
+
+    assert steps[1].status == StepStatus.FAILED
+    assert len(listing.calls) == 1, "the optional step's recovery did not run"
+    assert ("error", 2) in events and ("start", 3) in events
+
+
+@_NEEDS_DIGIT_LIMIT
 @pytest.mark.usefixtures("int_digit_limit")
 def test_an_integer_past_the_digit_limit_is_passed_on_as_text(lane):
     # 4400 digits: past the decoder's 4300-digit limit, and the whole text stays below the

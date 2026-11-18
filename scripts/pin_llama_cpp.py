@@ -18,7 +18,9 @@ Where the digests come from, and what is checked before they are written down:
    and a publish workflow, the statement names ``.github/workflows/release-publish.yml``
    (a ``workflow_run`` job that attests the artifacts of the build run); older builds
    name ``.github/workflows/release.yml``. Exactly these two paths of ``ggml-org/llama.cpp``
-   (repository id ``LLAMA_REPO_ID``) are accepted as the builder.
+   (repository id ``LLAMA_REPO_ID``), run from ``refs/heads/master``, are accepted as the
+   builder: ``release.yml`` can also be started by hand (``workflow_dispatch``) from any
+   branch, and a statement from such a run is not a release.
    The statements are looked up by the digest of a ``llama-<tag>-`` asset, which is unique
    to the build; the ``cudart-llama-bin-*`` archives are byte-identical across builds, so
    their digest returns the statements of many builds. Of the statements returned, the
@@ -54,8 +56,10 @@ from vaf.core.backend import LLAMA_ASSET_PATTERN, LLAMA_REPO, LLAMA_REPO_ID, PIN
 
 API = "https://api.github.com"
 HEADERS = {"Accept": "application/vnd.github+json", "User-Agent": "vaf-pin-llama-cpp"}
-# The workflows of ggml-org/llama.cpp that may attest a release, compared exactly.
+# The workflows of ggml-org/llama.cpp that may attest a release, compared exactly, and
+# the branch they must have run from.
 ALLOWED_BUILDERS = (".github/workflows/release.yml", ".github/workflows/release-publish.yml")
+RELEASE_REF = "refs/heads/master"
 
 
 def _get(url: str):
@@ -105,6 +109,9 @@ def _attesting_builder(tag: str, digests: dict) -> str:
         builder = f"{wf.get('repository')} {wf.get('path')}"
         if wf.get("repository") != f"https://github.com/{LLAMA_REPO}" or wf.get("path") not in ALLOWED_BUILDERS:
             reasons.append(f"a statement by an unexpected builder: {builder}")
+            continue
+        if wf.get("ref") != RELEASE_REF:
+            reasons.append(f"a statement of {builder} run from {wf.get('ref')!r}, not {RELEASE_REF}")
             continue
         subjects = {s.get("name"): str((s.get("digest") or {}).get("sha256", "")).lower()
                     for s in statement.get("subject") or []}

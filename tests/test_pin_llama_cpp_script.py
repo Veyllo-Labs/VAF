@@ -62,13 +62,14 @@ def _release() -> dict:
         for i, (n, d) in enumerate(assets.items())]}
 
 
-def _attestation(subjects: dict, *, path: str = PUBLISH, repo: str = REPO_URL, repo_id: int = 612354784) -> dict:
+def _attestation(subjects: dict, *, path: str = PUBLISH, repo: str = REPO_URL, repo_id: int = 612354784,
+                 ref: str = "refs/heads/master") -> dict:
     statement = {
         "_type": "https://in-toto.io/Statement/v1",
         "subject": [{"name": n, "digest": {"sha256": d}} for n, d in subjects.items()],
         "predicateType": "https://slsa.dev/provenance/v1",
         "predicate": {"buildDefinition": {"externalParameters": {
-            "workflow": {"ref": "refs/heads/master", "repository": repo, "path": path}}}},
+            "workflow": {"ref": ref, "repository": repo, "path": path}}}},
     }
     payload = base64.b64encode(json.dumps(statement).encode()).decode()
     return {"repository_id": repo_id,
@@ -147,6 +148,17 @@ def test_any_other_builder_is_refused(script, kwargs):
     with pytest.raises(SystemExit) as exc:
         script.main(["pin_llama_cpp.py", TAG])
     assert exc.value.code not in (0, None)
+    assert not script.PIN_PATH.exists()
+
+
+@pytest.mark.parametrize("ref", ["refs/heads/feature", "refs/tags/b12359", "", None])
+def test_a_statement_from_another_branch_is_refused(script, ref):
+    """release.yml can be started by hand from any branch; such a run is not a release.
+    MUTATION: drop the ref check and this goes red."""
+    script.attestations = [_attestation(SELECTED, path=".github/workflows/release.yml", ref=ref)]
+    with pytest.raises(SystemExit) as exc:
+        script.main(["pin_llama_cpp.py", TAG])
+    assert "refs/heads/master" in str(exc.value.code)
     assert not script.PIN_PATH.exists()
 
 

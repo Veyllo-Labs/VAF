@@ -4813,10 +4813,9 @@ class _ScriptName:
                 self.any_name = _sets_any_name(text) or bool(_BRACE_WORD_RE.search(text))
                 text = text.replace("\\\n", "").replace("$''", "").replace('$""', "")
                 self.plain_text = text.replace("'", "").replace('"', "").replace("\\", "")
-            # Each spelling of the word holds the name once, and an expansion of it gives it
-            # no value; any other occurrence may.
+            # An expansion of the name gives it no value; any other occurrence may.
             text = self.plain_text
-            self.seen[name] = self.any_name or self.text.count(name) > self.text.count(raw) \
+            self.seen[name] = self.any_name \
                 or text.count(name) > text.count("$" + name) + text.count("${" + name + "}")
         return self.seen[name]
 

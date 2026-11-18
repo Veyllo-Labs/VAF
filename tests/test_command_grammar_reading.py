@@ -1889,7 +1889,7 @@ def test_a_quoted_word_counts_as_present_only_when_it_is_one_word():
     `"$@"`, `"${a[@]}"` may be none, and `"${a[*]}"`, `"${!x}"`, `""$S` or `"$S"-s` may be
     `--`: the input is read as the script too. A literal `$` (`'$@'`) is a file name.
     MUTATION: take every quoted word for present - red; take every one for absent - red;
-    MUTATION: search the name only outside other words - red (`printf -vS`);
+    MUTATION: search the name only outside other words - red (`printf -vS`, `S''S`);
     MUTATION: no cap on the names looked up - red (the second name);
     MUTATION: look in the text as written only - red (`S''S`, `S\\` NL `S`);
     MUTATION: no brace expansion as a setter - red (`{S,Z}S`)."""

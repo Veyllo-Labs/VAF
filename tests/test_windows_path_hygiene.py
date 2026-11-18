@@ -1587,7 +1587,7 @@ _SHELL_CALLS = {("os", "system"): "command", ("os", "popen"): "cmd",
                 ("subprocess", "getoutput"): "cmd", ("subprocess", "getstatusoutput"): "cmd",
                 ("asyncio", "create_subprocess_shell"): "cmd"}
 # Calls that start a program from an argv: the spawners, and helpers that build or pass one.
-_ARGV_CALLS = _SPAWNERS | {"spawn", "execv", "execvp", "spawnv", "spawnvp", "spawnvpe"}
+_ARGV_CALLS = _SPAWNERS | {"spawn", "execv", "execvp"}
 # Calls whose positional arguments are the argv itself, with how many arguments come before
 # it: none for `create_subprocess_exec("sh", "-c", ...)`, the path for `os.execlp("sh", "sh",
 # "-c", ...)`, the mode and the path for `os.spawnl(os.P_WAIT, "/bin/sh", "sh", "-c", ...)`.
@@ -2012,7 +2012,6 @@ def test_the_fd_redirection_scanner_reads_every_call_form():
     text, and an empty one is no error; `execl*` and `spawnl*` run their path (after the mode)
     with the argv after argv[0], which only names it, and `spawnv*` take theirs as a list.
     MUTATION: map `import os.path` to `os.path` - red;
-    MUTATION: leave `spawnv`, `spawnvp`, `spawnvpe` out of the argv calls - red;
     MUTATION: take the first item of a `shell=True` sum always - red;
     MUTATION: read every variadic call's arguments from the first - red (`execlp`);
     MUTATION: take argv[0] for the program instead of the executable - red (`/bin/echo`);

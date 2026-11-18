@@ -90,7 +90,8 @@ nightly full matrix, the release gate and `scripts/ci_check.sh` install the lock
 local checks passed. `scripts/ci_check.sh` builds a venv of its own from the lock, one per
 checkout (cached under `~/.cache/vaf-ci/`, about 1.6 GB and a minute or two the first time;
 the venv of a removed checkout or an older lock is cleaned up by the next run) and never
-installs into your `venv/`.
+installs into your `venv/`. Its small pip cache in `~/.cache/vaf-ci/pip` (the wheels of pip,
+setuptools and uv) is not pruned.
 
 **When you change a requirements file**, regenerate the lock in the same commit, from the
 repository root, with the committed lock present (uv then keeps every pin that still fits),
@@ -100,8 +101,11 @@ in a throwaway venv with the uv the `lock-sync` job installs:
 pip install --require-hashes -r .github/requirements/pip.lock
 pip install --require-hashes -r .github/requirements/uv.lock
 uv pip compile requirements.txt --config-file requirements-lock.toml --universal --generate-hashes --python-version 3.10 -o requirements.lock
-python scripts/check_requirements_lock.py   # every CI target must report 0 problems
+venv/bin/python scripts/check_requirements_lock.py   # every CI target must report 0 problems
 ```
+
+The checker needs the `packaging` library, which the throwaway venv does not have; the
+repository's `venv/` (or any Python with `packaging`) runs it.
 
 The `lock-sync` job runs the same command and fails when the result differs from the
 committed lock. A diff cannot see a hand-edited hash (uv keeps the hashes a committed lock
@@ -111,14 +115,19 @@ whose wheels declare their requirements inconsistently (the comment there explai
 
 Every lane installs the lock through `scripts/install_lock.sh`, which also says why each of
 its steps is there: pip comes by hash, the one release without a wheel is built with the
-locked setuptools instead of one fetched unpinned, and pip's cache of wheels it built is
-emptied first (pip trusts those past `--require-hashes`).
+locked setuptools instead of one fetched unpinned, every step reinstalls even a version that
+is already there (pip checks no hash for a requirement it calls satisfied), and the lock is
+installed without pip's cache (pip trusts a wheel it built and cached past
+`--require-hashes`).
 
 The CI tools have small locks of their own in `.github/requirements/`: `pip.lock` (installed
 first everywhere), `uv.lock` (regenerating the locks) and `publish.lock` (building and
 checking the release artefacts). Each is generated from the `.in` file next to it with the
-command in its header, and `lock-sync` checks them like `requirements.lock`. To raise pip or
-uv, edit the `.in` file and regenerate.
+command in its header, and `lock-sync` checks them like `requirements.lock`. To raise pip,
+edit `pip.in`; uv, `uv.in`; a build or upload tool, `publish.in`; then regenerate that lock.
+Dependabot does not raise these: its pip support covers `.txt` files, and these are uv's
+`.in`/`.lock` pairs, so they are refreshed by hand when a release is cut
+(docs/setup/RELEASING.md).
 
 **Moving a pin on purpose** (a security fix, a feature you need): add
 `--upgrade-package <name>` to the command above, or `--upgrade` for everything, and review

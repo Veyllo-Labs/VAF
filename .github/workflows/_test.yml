@@ -43,12 +43,10 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-        # Only the locked lanes share pip's cache. The cache key holds neither the workflow
-        # nor the install mode, so an entry saved by the newest-versions run (unpinned
-        # releases) would be restored by a push or the release gate. scripts/install_lock.sh
-        # also empties the built-wheel part before every locked install, which holds even
-        # against a cache entry written some other way.
-        cache: ${{ inputs.deps == 'lock' && 'pip' || '' }}
+        # No pip cache, deliberately. The cache key holds neither the workflow nor the install
+        # mode, so an entry the newest-versions run saved (unpinned releases) would be restored
+        # by a push or the release gate, and pip trusts a wheel it built and cached past
+        # --require-hashes. scripts/install_lock.sh also installs the lock with --no-cache-dir.
 
     # The portaudio steps (Linux portaudio19-dev, macOS brew portaudio + LDFLAGS/CFLAGS)
     # were removed together with pyaudio: it is no longer a core requirement (optional
@@ -87,7 +85,7 @@ jobs:
       if: inputs.deps == 'latest'
       shell: bash
       run: |
-        python -m pip install --require-hashes -r .github/requirements/pip.lock
+        python -m pip install --require-hashes --force-reinstall -r .github/requirements/pip.lock
         python -m pip install -r requirements.txt
         python -m pip install -e .
         python scripts/check_requirements_lock.py --drift --report >> "$GITHUB_STEP_SUMMARY"

@@ -212,18 +212,22 @@ _RUNNERS = {
                        "platform_machine": "AMD64", "platform_release": "10"},
 }
 _GLIBC = (2, 39)
-# The macOS whose wheel tags count. macOS 26 reports itself as 16.0 to a program built
-# against an older SDK, and pip's tag code maps only the older 10.16 compatibility value back
-# to the real version, so pip under such a Python accepts wheels up to macosx_16_0 and under a
-# Python built against the new SDK up to macosx_26_0. Which build setup-python serves for each
-# Python is not measured from here, so only the tags both accept count: a release whose only
-# macOS wheels are for 17 to 26 is reported, never passed on a guess.
-_MACOS = (16, 0)
+# The two macOS versions pip can see on macos-latest. macOS 26 reports itself as 16.0 to a
+# program built against an older SDK, and pip's tag code maps only the older 10.16
+# compatibility value back to the real version, so pip under such a Python accepts wheels up
+# to macosx_16_0 and under a Python built against the new SDK up to macosx_26_0. Which build
+# setup-python serves for each Python is not measured from here, so the checker takes both
+# views: a release must have a wheel under each (one for 17 to 26 only is reported), and the
+# requirements of the wheel each view picks are checked (a macosx_26_0 wheel that pip prefers
+# over a pure one cannot bring an unlocked requirement past the check).
+_MACOS_VIEWS = ((16, 0), (26, 0))
 # PEP 600: the legacy manylinux names and the glibc each one stands for.
 _LEGACY_MANYLINUX = {(2, 17): "manylinux2014", (2, 12): "manylinux2010", (2, 5): "manylinux1"}
 
 
-def _platforms(runner: str) -> list:
+def _platforms(runner: str, view: int = 0) -> list:
+    """The platform tags pip accepts on ``runner``, under the ``view``-th way it can see the
+    machine (only macOS has two, _MACOS_VIEWS)."""
     if runner == "ubuntu-latest":
         out = []
         for minor in range(_GLIBC[1], 4, -1):
@@ -232,7 +236,7 @@ def _platforms(runner: str) -> list:
                 out.append(f"{_LEGACY_MANYLINUX[(2, minor)]}_x86_64")
         return out + ["linux_x86_64"]
     if runner == "macos-latest":
-        return list(tags.mac_platforms(_MACOS, "arm64"))
+        return list(tags.mac_platforms(_MACOS_VIEWS[view], "arm64"))
     if runner == "windows-latest":
         return ["win_amd64"]
     raise ValueError(f"no platform model for runner {runner!r}: add it to _RUNNERS")
@@ -258,16 +262,22 @@ class Target:
             "python_version": f"{self.python[0]}.{self.python[1]}", "python_full_version": full,
         }
 
-    def tag_priority(self) -> dict:
-        """{wheel tag: rank} in pip's order of preference for this target (0 is best)."""
+    def tag_priority(self, view: int = 0) -> dict:
+        """{wheel tag: rank} in pip's order of preference for this target (0 is best), under
+        one of the ways pip can see the machine."""
         interp = f"cp{self.python[0]}{self.python[1]}"
-        plats = _platforms(self.runner)
+        plats = _platforms(self.runner, view)
         order = list(tags.cpython_tags(self.python, [interp], plats))
         order += list(tags.compatible_tags(self.python, interp, plats))
         rank: dict = {}
         for i, tag in enumerate(order):
             rank.setdefault(tag, i)
         return rank
+
+    def tag_views(self) -> list:
+        """One tag_priority per way pip can see the machine: two on macOS, one elsewhere."""
+        count = len(_MACOS_VIEWS) if self.runner == "macos-latest" else 1
+        return [self.tag_priority(view) for view in range(count)]
 
 
 def matrix_targets(workflows=WORKFLOWS) -> list:
@@ -399,10 +409,10 @@ def _python_ok(requires_python, target: Target) -> bool:
         return True
 
 
-def pick(files: list, target: Target):
+def pick(files: list, target: Target, rank: dict | None = None):
     """(the file pip installs on ``target``, None) or (None, why). An sdist is picked only when
-    no wheel fits."""
-    rank = target.tag_priority()
+    no wheel fits. ``rank``: one of target.tag_views() (default: the first)."""
+    rank = target.tag_priority() if rank is None else rank
     best = None
     excluded_by_python = []
     for f in files:
@@ -459,10 +469,11 @@ def check(entries: list, requirements: list, targets: list, source, workers: int
             problems.add(f"{e} (line {e.line}): {len(foreign)} hash(es) in the lock that PyPI does "
                          f"not publish for this release ({foreign[0][:12]}...)")
 
-    plans = []  # (target, {name: entry}, {name: file or None})
+    plans = []  # (target, {name: entry}, {name: [the file each view picks]})
     wanted_files = {}
     for target in targets:
         env = target.env()
+        views = target.tag_views()
         chosen: dict = {}
         for e in entries:
             if not e.applies(env):
@@ -474,15 +485,19 @@ def check(entries: list, requirements: list, targets: list, source, workers: int
             chosen[e.name] = e
         picked = {}
         for name, e in chosen.items():
-            f, why = pick(files[(e.name, e.version)], target)
-            if f is None:
+            # Installable under every view, and each view's wheel is checked below.
+            results = [pick(files[(e.name, e.version)], target, rank) for rank in views]
+            why = next((w for f, w in results if f is None), None)
+            if why is not None:
                 problems.add(f"[{target.label}] {e}: {why}")
                 continue
-            picked[name] = f
-            if _is_sdist(f["filename"]):
-                sdist_targets[str(e)].append(target.label)
-            else:
-                wanted_files[f["url"]] = f
+            picked[name] = list({f["filename"]: f for f, _ in results}.values())
+            for f in picked[name]:
+                if _is_sdist(f["filename"]):
+                    if target.label not in sdist_targets[str(e)]:
+                        sdist_targets[str(e)].append(target.label)
+                else:
+                    wanted_files[f["url"]] = f
         plans.append((target, chosen, picked))
 
     with concurrent.futures.ThreadPoolExecutor(workers) as pool:
@@ -491,16 +506,17 @@ def check(entries: list, requirements: list, targets: list, source, workers: int
     for target, chosen, picked in plans:
         env = target.env()
         deps_of = {}
-        for name, f in picked.items():
-            if _is_sdist(f["filename"]):
-                lines = source.sdist_requires(chosen[name].name, chosen[name].version)
-            else:
-                lines = meta[f["url"]]
-                if lines is None:
+        for name, picked_files in picked.items():
+            lines = []
+            for f in picked_files:
+                if _is_sdist(f["filename"]):
+                    lines += source.sdist_requires(chosen[name].name, chosen[name].version)
+                elif meta[f["url"]] is None:
                     problems.add(f"[{target.label}] {chosen[name]}: {f['filename']} has no PEP 658 "
                                  "metadata to check")
-                    continue
-            deps_of[name] = [Requirement(line) for line in lines]
+                else:
+                    lines += meta[f["url"]]
+            deps_of[name] = [Requirement(line) for line in dict.fromkeys(lines)]
         for who, req in _needed(chosen, deps_of, requirements, env):
             dep = canonicalize_name(req.name)
             have = chosen.get(dep)
@@ -616,7 +632,7 @@ def main(argv=None) -> int:
     requirements = REQUIREMENTS
     if "--requirements" in argv:
         i = argv.index("--requirements")
-        if i + 1 >= len(argv):
+        if i + 1 >= len(argv) or argv[i + 1].startswith("-"):
             print(_USAGE, file=sys.stderr)
             return 2
         requirements = Path(argv[i + 1])

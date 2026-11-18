@@ -102,8 +102,8 @@ jobs:
       # scripts/ci_check.sh installs the same two files.
       - name: Install pip and uv (by hash)
         run: |
-          python -m pip install --require-hashes -r .github/requirements/pip.lock
-          python -m pip install --require-hashes -r .github/requirements/uv.lock
+          python -m pip install --require-hashes --force-reinstall -r .github/requirements/pip.lock
+          python -m pip install --require-hashes --force-reinstall -r .github/requirements/uv.lock
       # Run from the repository root WITH the committed locks present: uv keeps their pins as
       # preferences, so nothing moves unless an input asks for it, and it writes each exact
       # command (relative paths included) into its lock's header. The three small locks under
@@ -114,8 +114,13 @@ jobs:
           uv pip compile .github/requirements/pip.in --universal --generate-hashes --python-version 3.10 -o .github/requirements/pip.lock
           uv pip compile .github/requirements/uv.in --universal --generate-hashes --python-version 3.10 -o .github/requirements/uv.lock
           uv pip compile .github/requirements/publish.in --universal --generate-hashes --python-version 3.10 -o .github/requirements/publish.lock
-          if ! git diff --exit-code requirements.lock .github/requirements/; then
-            echo "::error::a lock is out of sync with its input."
+          # git status, not git diff: a lock that was never committed is generated here as an
+          # untracked file, which a diff does not show.
+          OUT_OF_SYNC="$(git status --porcelain -- requirements.lock .github/requirements/)"
+          if [ -n "$OUT_OF_SYNC" ]; then
+            echo "$OUT_OF_SYNC"
+            git diff -- requirements.lock .github/requirements/ | head -80
+            echo "::error::a lock is out of sync with its input, or was never committed."
             echo "Fix locally (uv from .github/requirements/uv.lock, from the repository root) with"
             echo "the command in the lock's header, then commit the lock (.github/CONTRIBUTING.md)."
             exit 1
@@ -127,7 +132,7 @@ jobs:
       - name: Check the locks for every OS and Python of the CI matrices
         run: |
           awk '/^packaging==/{p=1; print; next} p && /^[^ ]/{exit} p{print}' requirements.lock > "$RUNNER_TEMP/packaging.txt"
-          python -m pip install --require-hashes --no-deps -r "$RUNNER_TEMP/packaging.txt"
+          python -m pip install --require-hashes --force-reinstall --no-deps -r "$RUNNER_TEMP/packaging.txt"
           python scripts/check_requirements_lock.py
           for tool in pip uv publish; do
             python scripts/check_requirements_lock.py --requirements ".github/requirements/$tool.in" ".github/requirements/$tool.lock"
@@ -166,7 +171,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-          cache: 'pip'
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y python3-dev
       # The lock, the same way as the test matrix (_test.yml explains each line).

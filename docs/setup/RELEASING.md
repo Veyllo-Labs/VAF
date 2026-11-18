@@ -103,6 +103,13 @@ waiting for a stable `X.Y.Z`.
    allows, and that is tested by the daily "VAF CI (newest dependencies)" run
    (`.github/workflows/ci-latest-deps.yml`): its last run should be green, or its red
    understood (its job summary lists the versions that moved), before you tag.
+   The CI tool locks in `.github/requirements/` (pip, uv, and the build and upload tools
+   of the publish jobs) are refreshed here, by whoever cuts the release: Dependabot's pip
+   support covers `.txt` files and does not read uv's `.in`/`.lock` pairs, so nothing else
+   proposes their security releases. Regenerate `publish.lock` with `--upgrade` added to
+   the command in its header, raise the `==` pins of `pip.in` and `uv.in` when a newer
+   release is out (uv's only together with a regenerated `requirements.lock`), and review
+   the diff; `lock-sync` checks the result.
 2. Bump `vaf/version.py` (the single source of truth) to the new version, and bump
    `web/package.json` to the npm/semver spelling of the same version
    (e.g. `0.1.0a0` -> `0.1.0-alpha.0`, `0.1.0` -> `0.1.0`). The release workflow fails
@@ -211,11 +218,14 @@ waiting for a stable `X.Y.Z`.
   there.
 - **The build tools come by hash.** `publish-pypi` and `publish-testpypi.yml` install pip
   from `.github/requirements/pip.lock` and build, twine, setuptools and wheel from
-  `.github/requirements/publish.lock`, both with `--require-hashes`, and build with
+  `.github/requirements/publish.lock`, both with `--require-hashes --force-reinstall` (pip checks no hash for a version it finds already installed), and build with
   `python -m build --no-isolation`, so no unpinned package enters the job that holds the
   upload token (an isolated build fills its environment from PyPI with no pin and no hash).
-  Raise a tool by editing `publish.in` and regenerating with the command in the lock's
-  header; `lock-sync` checks it. Named boundary: the GitHub Actions themselves, the upload
+  Raise a build or upload tool by editing `publish.in`, pip by editing `pip.in` (the
+  publish jobs install pip from `pip.lock` first, so `publish.lock` never moves it), and
+  regenerate that lock with the command in its header; `lock-sync` checks it. Who raises
+  them and when: step 1 of "Cutting a release". Named boundary: the GitHub Actions
+  themselves, the upload
   action included (`pypa/gh-action-pypi-publish@release/v1`), are referenced by moving
   version tags, as everywhere in `.github/workflows/`; Dependabot's github-actions entry
   proposes their updates.

@@ -193,28 +193,6 @@ def _assert_lock_install(text: str, where: str) -> None:
         assert banned not in text, f"{where}: {banned!r} installs past the lock"
 
 
-def test_the_install_script_checks_every_file_it_installs():
-    """scripts/install_lock.sh, in this order: pip by hash, the locked setuptools by hash, pip's
-    built-wheel cache emptied, then the lock by hash and built WITHOUT isolation (an isolated
-    build of the one sdist fetched an unpinned setuptools, measured 84.2.1 against the locked
-    81.0.0; a cached built wheel is trusted past --require-hashes, measured). MUTATION: drop
-    --no-build-isolation from the lock install; drop the setuptools step; drop the cache
-    cleanup - red."""
-    sh = _install_script()
-    steps = [
-        '-m pip install --disable-pip-version-check --require-hashes -r "$ROOT/.github/requirements/pip.lock"',
-        "awk '/^setuptools==/{p=1; print; next} p && /^[^ ]/{exit} p{print}' \"$LOCK\"",
-        '-m pip install --disable-pip-version-check --require-hashes --no-deps -r "$SETUPTOOLS"',
-        'rm -rf "$CACHE/wheels"',
-        '-m pip install --disable-pip-version-check --require-hashes --no-build-isolation -r "$LOCK"',
-    ]
-    at = [sh.find(step) for step in steps]
-    assert -1 not in at, [s for s, i in zip(steps, at) if i == -1]
-    assert at == sorted(at), "the steps are out of order"
-    assert "set -euo pipefail" in sh
-    assert "requirements.txt" not in sh
-
-
 def test_push_and_tag_lanes_install_only_the_lock():
     """Every gating lane installs the lock through scripts/install_lock.sh, the project with
     --no-deps, and proves it with --drift. Only lock-sync (installs the resolver) and the
@@ -253,38 +231,69 @@ def test_push_and_tag_lanes_install_only_the_lock():
         assert "-r requirements.txt" not in _runs(_wf(name)["jobs"][job_id]), job_id
 
 
+def test_the_install_script_checks_every_file_it_installs():
+    """scripts/install_lock.sh, in this order: pip by hash, the locked setuptools by hash, then
+    the lock by hash, built WITHOUT isolation (an isolated build of the one sdist fetched an
+    unpinned setuptools, measured 84.2.1 against the locked 81.0.0) and without pip's cache (a
+    cached built wheel is trusted past --require-hashes, measured). Every step forces the
+    reinstall: pip checks no hash for a version it finds installed (measured). No step may
+    swallow a failure. MUTATION: drop --no-build-isolation, --no-cache-dir or a
+    --force-reinstall; drop the setuptools step; append `|| true` to the setuptools step - red."""
+    sh = _install_script()
+    steps = [
+        '-m pip install --disable-pip-version-check --require-hashes --force-reinstall \\\n'
+        '    -r "$ROOT/.github/requirements/pip.lock"',
+        'mktemp "${TMPDIR:-/tmp}/setuptools-lock.XXXXXX"',
+        "awk '/^setuptools==/{p=1; print; next} p && /^[^ ]/{exit} p{print}' \"$LOCK\"",
+        '-m pip install --disable-pip-version-check --require-hashes --force-reinstall --no-deps \\\n'
+        '    -r "$SETUPTOOLS"',
+        '-m pip install --disable-pip-version-check --require-hashes --force-reinstall --no-cache-dir \\\n'
+        '    --no-build-isolation -r "$LOCK"',
+    ]
+    at = [sh.find(step) for step in steps]
+    assert -1 not in at, [s for s, i in zip(steps, at) if i == -1]
+    assert at == sorted(at), "the steps are out of order"
+    assert "set -euo pipefail" in sh
+    assert "requirements.txt" not in sh
+    code = "\n".join(line.split("#", 1)[0] for line in sh.splitlines())
+    assert not re.search(r"\|\|\s*(true|:)", code), "a step swallows its failure"
+
+
+def _joined_lines(text: str) -> list:
+    """The lines of a shell text with backslash continuations joined, as bash runs them."""
+    return text.replace("\\\r\n", " ").replace("\\\n", " ").splitlines()
+
+
 def test_every_tool_install_is_hash_pinned():
     """No workflow and neither script installs a tool by version alone: pip, uv and the publish
-    tools come from .github/requirements/*.lock with --require-hashes. The only installs
-    without hashes are the newest-versions lane's (its point) and the editable project
-    (--no-deps). MUTATION: `pip install "pip==26.1.2"` back into a lane; `pip install build
-    twine` back into a publish job - red."""
+    tools come from .github/requirements/*.lock with --require-hashes and --force-reinstall.
+    The only installs without hashes are the newest-versions lane's (its point) and the
+    editable project (--no-deps). Continued commands are judged whole. MUTATION: `pip install
+    "pip==26.1.2"` back into a lane; `pip install build twine` back into a publish job, also
+    as a continued command; drop --force-reinstall from a publish install - red."""
     sources = {p.name: p.read_text(encoding="utf-8") for p in WF.glob("*.yml")}
     sources["ci_check.sh"] = _gate()
     sources["install_lock.sh"] = _install_script()
     latest = next(s["run"] for s in _wf("_test.yml")["jobs"]["build-and-test"]["steps"]
                   if s.get("if") == "inputs.deps == 'latest'")
-    unpinned = []
+    latest_unhashed = {line.strip() for line in latest.splitlines() if "--require-hashes" not in line}
+    unpinned, unforced = [], []
     for name, text in sources.items():
-        for line in text.splitlines():
+        for line in _joined_lines(text):
             if "pip install" not in line or line.lstrip().startswith(("#", "echo")):
                 continue
-            if "--require-hashes" in line or re.search(r"--no-deps .*-e ", line):
+            if "--require-hashes" in line:
+                if "--force-reinstall" not in line:
+                    unforced.append(f"{name}: {line.strip()}")
                 continue
-            if line.strip() in latest.splitlines():
-                continue
-            if line.rstrip().endswith("\\"):  # a continued command: judged with its next line
+            if re.search(r"--no-deps .*-e ", line) or line.strip() in latest_unhashed:
                 continue
             unpinned.append(f"{name}: {line.strip()}")
     assert not unpinned, unpinned
-    # The continued pip lines of the gate carry their hash option on the continuation.
-    gate = _gate().replace("\\\n", " ")
-    for line in gate.splitlines():
-        if "-m pip install" in line:
-            assert "--require-hashes" in line or "--no-deps" in line, line
+    assert not unforced, unforced
     for job in (_wf("release.yml")["jobs"]["publish-pypi"], _wf("publish-testpypi.yml")["jobs"]["publish-testpypi"]):
         text = _runs(job)
-        assert "--require-hashes -r .github/requirements/publish.lock" in text
+        assert "--require-hashes --force-reinstall -r .github/requirements/publish.lock" in text
         assert "python -m build --no-isolation" in text
 
 
@@ -296,13 +305,17 @@ def _tool_command(name: str) -> str:
 def test_the_tool_locks_are_generated_and_checked_like_the_main_lock():
     """pip.lock, uv.lock and publish.lock carry their uv command in the header; lock-sync and
     stage 5 of the local gate run exactly those commands, so a hand-edited tool lock is caught
-    like a stale requirements.lock. MUTATION: drop the publish.lock line from lock-sync - red."""
+    like a stale requirements.lock. lock-sync judges by git status, so a lock that was never
+    committed (generated there as an untracked file) fails too; stage 5 compares the three
+    tool locks one by one, not the whole directory. MUTATION: drop the publish.lock line from
+    lock-sync; go back to git diff in lock-sync - red."""
     check = _checker()
     lock_sync = _runs(_wf("ci.yml")["jobs"]["lock-sync"])
     gate = _gate()
     stage = gate[gate.index("=== 5/9"):gate.index("=== 6/9")]
     names = {"pip": {"pip"}, "uv": {"uv"}, "publish": {"build", "twine", "setuptools", "wheel"}}
     assert sorted(p.stem for p in TOOLS.glob("*.lock")) == sorted(names)
+    assert 'TOOL_NAMES="pip uv publish"' in stage
     for name, wanted in names.items():
         text = (TOOLS / f"{name}.lock").read_bytes().decode("utf-8")
         assert text.splitlines()[1] == "#    " + _tool_command(name)
@@ -311,19 +324,25 @@ def test_the_tool_locks_are_generated_and_checked_like_the_main_lock():
         pinned = {e.name for e in check.parse_lock(text)}
         assert wanted <= pinned, (name, pinned)
         assert (TOOLS / f"{name}.in").is_file()
-    assert "git diff --exit-code requirements.lock .github/requirements/" in lock_sync
+    assert 'OUT_OF_SYNC="$(git status --porcelain -- requirements.lock .github/requirements/)"' in lock_sync
+    assert "git diff --exit-code" not in lock_sync
+    assert 'diff -u "$TOOL_LOCKS/$TOOL.lock" "$LOCK_TMP/$TOOL_LOCKS/$TOOL.lock"' in stage
+    assert "diff -ru" not in stage
     # One pip version: the bootstrap's.
     pip = {e.version for e in check.parse_lock((TOOLS / "pip.lock").read_bytes().decode("utf-8"))}
     assert len(pip) == 1
 
 
-def test_only_the_locked_lanes_share_the_pip_cache():
-    """The cache key holds neither the workflow nor the install mode, so the newest-versions
-    lane must not save into the entry a push or the release gate restores. MUTATION: cache
-    'pip' unconditionally in _test.yml - red."""
-    setup = next(s for s in _wf("_test.yml")["jobs"]["build-and-test"]["steps"]
-                 if str(s.get("uses", "")).startswith("actions/setup-python"))
-    assert setup["with"]["cache"] == "${{ inputs.deps == 'lock' && 'pip' || '' }}"
+def test_no_lane_restores_a_pip_cache():
+    """The cache key holds neither the workflow nor the install mode, so an entry the
+    newest-versions lane saved would be restored by a push or the release gate, and pip trusts
+    a cached built wheel past --require-hashes. No Python lane caches pip at all. MUTATION:
+    `cache: 'pip'` back into _test.yml or the release gate - red."""
+    for path in WF.glob("*.yml"):
+        for job_id, job in (_wf(path.name).get("jobs") or {}).items():
+            for step in job.get("steps", []):
+                if str(step.get("uses", "")).startswith("actions/setup-python"):
+                    assert "cache" not in (step.get("with") or {}), f"{path.name}:{job_id}"
 
 
 def test_required_check_contexts_are_unchanged():
@@ -381,15 +400,15 @@ def test_lock_sync_regenerates_with_the_pinned_uv():
     every target, with `packaging` installed from the lock. MUTATION: uv installed by version
     again; checker step removed - red."""
     text = _runs(_wf("ci.yml")["jobs"]["lock-sync"])
-    assert "--require-hashes -r .github/requirements/pip.lock" in text
-    assert "--require-hashes -r .github/requirements/uv.lock" in text
+    assert "--require-hashes --force-reinstall -r .github/requirements/pip.lock" in text
+    assert "--require-hashes --force-reinstall -r .github/requirements/uv.lock" in text
     assert '"uv==' not in text and "pip-compile" not in text
     # Every lock's hashes against PyPI: the diff cannot see a hand-edited one.
     assert ('python scripts/check_requirements_lock.py --requirements ".github/requirements/$tool.in" '
             '".github/requirements/$tool.lock"') in text
     assert "for tool in pip uv publish; do" in text
     assert re.search(r"^\s*python scripts/check_requirements_lock\.py\s*$", text, re.M)
-    assert "--require-hashes --no-deps -r" in text and "/^packaging==/" in text
+    assert "--require-hashes --force-reinstall --no-deps -r" in text and "/^packaging==/" in text
 
 
 # ---------------------------------------------------------------------------------------------
@@ -410,14 +429,20 @@ def test_the_local_gate_runs_on_the_lock():
     scripts/install_lock.sh (with the gate's own pip cache), marks it complete only at the end,
     proves it with --drift, and runs stages 1-8 in it; it never installs into the runtime venv;
     VAF_CI_USE_RUNTIME_VENV=1 is the advisory way out; stage 5 installs pip and uv by hash and
-    needs no python3.13. MUTATION: restore `pip install --quiet ruff pytest`; key the venv
-    without the checkout; reuse a venv without the .complete marker; drop the config copy in
-    stage 5 - red."""
+    needs no python3.13. The venv key covers the lock AND pip.lock, both files the venv is
+    installed from; each build writes a log of its own; stage 5 also sees a staged change.
+    MUTATION: restore `pip install --quiet ruff pytest`; key the venv without the checkout or
+    without pip.lock; reuse a venv without the .complete marker; a shared build.log; drop the
+    config copy in stage 5; compare the working tree to the index only in stage 5 - red."""
     gate = _gate()
     block = _venv_block()
     assert 'bash scripts/install_lock.sh "$LOCK_VENV/bin/python"' in block
     assert 'PIP_CACHE_DIR="$GATE_PIP_CACHE"' in block
     assert 'LOCK_VENV="$CI_CACHE/lock-$PYVER-$LOCK_HASH-$CHECKOUT_KEY"' in block
+    key_line = next(line for line in block.splitlines() if line.strip().startswith("LOCK_HASH="))
+    assert key_line.rstrip().endswith("requirements.lock .github/requirements/pip.lock)\""), key_line
+    assert 'BUILD_LOG="$(mktemp "$CI_CACHE/build-XXXXXX.log")"' in block
+    assert 'build.log"' not in block
     assert "sha256(sys.argv[1].encode())" in block and '"$ROOT")"' in block
     assert 'if [ ! -f "$LOCK_VENV/.complete" ]; then' in block
     assert block.index('> "$LOCK_VENV/.checkout"') < block.index("bash scripts/install_lock.sh")
@@ -436,9 +461,13 @@ def test_the_local_gate_runs_on_the_lock():
     assert "python3.13" not in stage
     assert 'LOCK_CONFIG="requirements-lock.toml"' in stage
     assert 'cp $REQ_FILES $LOCK_CONFIG requirements.lock "$LOCK_TMP/"' in stage
-    assert '-m pip install -q --require-hashes -r "$TOOL_LOCKS/pip.lock"' in stage
-    assert '-m pip install -q --require-hashes -r "$TOOL_LOCKS/uv.lock"' in stage
+    assert '-m pip install -q --require-hashes --force-reinstall -r "$TOOL_LOCKS/pip.lock"' in stage
+    assert '-m pip install -q --require-hashes --force-reinstall -r "$TOOL_LOCKS/uv.lock"' in stage
     assert "python scripts/check_requirements_lock.py" in stage
+    # Against HEAD, not the index: a staged edit of an input counts as a change too.
+    assert "git diff --name-only HEAD -- $REQ_FILES $LOCK_CONFIG $TOOL_LOCKS)" in stage
+    assert "git diff --name-only HEAD -- requirements.lock)" in stage
+    assert "git diff --name-only -- " not in stage
 
 
 def _prune_loop() -> str:
@@ -635,6 +664,35 @@ def test_the_target_model_matches_the_runner_images():
     # pip prefers the most specific wheel: the cp312 build over the pure one.
     files = [{"filename": "a-1-py3-none-any.whl"}, {"filename": "a-1-cp312-cp312-win_amd64.whl"}]
     assert _checker().pick(files, win)[0]["filename"] == "a-1-cp312-cp312-win_amd64.whl"
+
+
+def test_the_macos_wheel_each_view_picks_is_checked():
+    """pip on macos-latest sees macOS 16.0 under a Python built against an older SDK and 26
+    under one built against the new SDK. Under the second it picks a macosx_26_0 wheel over a
+    pure one, so that wheel's requirements must be locked too; a release with only a
+    macosx_26_0 wheel has none under the first view. MUTATION: check the first view only - red."""
+    releases = {
+        "app==1.0": [("app-1.0-py3-none-any.whl", None, []),
+                     ("app-1.0-cp312-cp312-macosx_26_0_arm64.whl", None, ["extra-dep>=1"])],
+        "extra-dep==1.0": [("extra_dep-1.0-py3-none-any.whl", None, [])],
+        "new-only==1.0": [("new_only-1.0-cp312-cp312-macosx_26_0_arm64.whl", None, [])],
+    }
+    mac = [_t("macos-latest", "3.12")]
+    problems, _ = _run(_lock("app==1.0"), releases, mac)
+    assert problems == ["[macos-latest 3.12] app==1.0 needs extra-dep>=1: not in the lock for this target"], problems
+    assert _run(_lock("app==1.0", "extra-dep==1.0"), releases, mac)[0] == []
+    problems, _ = _run(_lock("new-only==1.0"), releases, mac)
+    assert len(problems) == 1 and "new-only==1.0: no wheel or sdist installs there" in problems[0], problems
+    assert len(_t("macos-latest", "3.12").tag_views()) == 2
+    assert len(_t("ubuntu-latest", "3.12").tag_views()) == 1
+
+
+def test_the_requirements_option_takes_a_file_not_a_flag(capsys):
+    """`--requirements --drift` must not read `--drift` as the file name."""
+    check = _checker()
+    assert check.main(["--requirements", "--drift"]) == 2
+    assert check.main(["--requirements"]) == 2
+    assert "usage:" in capsys.readouterr().err
 
 
 def test_a_pypi_hiccup_is_retried_and_a_missing_release_is_not():

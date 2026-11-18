@@ -543,15 +543,25 @@ def test_vaf_info_names_a_legacy_install(linux_install):
 
 
 def test_vaf_info_names_an_unreadable_binary_as_present(linux_install, monkeypatch):
-    """A binary in bin/llama-cpp whose version line cannot be read is there, not missing.
-    MUTATION: drop that branch and the line says "not installed" again."""
+    """A binary in bin/llama-cpp whose version line cannot be read is there, not missing,
+    and a legacy binary that is still in bin/ does not hide it. MUTATIONS: drop that
+    branch (the line says "not installed" again), or check the legacy binary first (the
+    current one is hidden): each goes red."""
     from vaf.cli.cmd.info import llama_server_line
     m, _ = linux_install
     Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 12359)
-    monkeypatch.setattr(backend.ServerManager, "_version_output",
-                        lambda self, path=None: (_ for _ in ()).throw(OSError("Exec format error")))
+
+    def version_output(self, path=None):
+        if os.path.abspath(path or self.server_path) == os.path.abspath(m.server_path):
+            raise OSError("Exec format error")
+        return Path(path).read_text(encoding="utf-8")
+
+    monkeypatch.setattr(backend.ServerManager, "_version_output", version_output)
     line = llama_server_line(m, 12359)
     assert "not installed" not in line and "version unreadable" in line and "bin/llama-cpp" in line, line
+    _stub_server(m.legacy_server_path, 10955)     # a legacy binary the cleanup could not remove
+    line = llama_server_line(m, 12359)
+    assert "version unreadable" in line and "old location" not in line, line
 
 
 # ── links after the lift, linked leftovers and tenants ───────────────────────────
@@ -570,12 +580,26 @@ def _can_symlink(tmp_path: Path) -> bool:
     dict(links=[("d", "../x")]),                        # climbs one level: staging/build/x, then bin/x
     dict(links=[("lib-dir", "..")]),                    # names bin/llama-cpp's parent after the lift
     dict(links=[("llama-server", "../../victim")], server=False),   # the binary itself leaves
-], ids=["file-link", "folder-link", "server-link"])
+    # Names a check on edited text would read as another (harmless) name: trailing and lone
+    # whitespace, a backslash, a newline, a tab, and one in a subfolder.
+    dict(links=[("d ", "../../victim")]),
+    dict(links=[(" ", "../../victim")]),
+    dict(links=[("a\\b", "../../victim")]),
+    dict(links=[("q\n", "../..")]),
+    dict(links=[("d\t", "../../victim")]),
+    dict(links=[("sub/e ", "../../../victim")]),
+    # Out and back in by the folder's temporary name: inside while it is called
+    # llama-cpp.staging, outside once it is renamed to llama-cpp.
+    dict(links=[("d", "../llama-cpp.staging/x")]),
+], ids=["file-link", "folder-link", "server-link", "trailing-space", "lone-space", "backslash",
+        "newline", "tab", "nested-trailing-space", "staging-name"])
 def test_a_link_that_leaves_the_folder_after_the_lift_is_refused(linux_install, monkeypatch, tmp_path, shape):
     """The data filter judges a link where it is unpacked (staging/build/bin), and those
     links stay inside staging there. The lift moves build/bin up two levels without
-    rewriting them, and then they point out of bin/llama-cpp. MUTATION: drop the check
-    after the lift (_refuse_escaping_links) and this goes red."""
+    rewriting them, and then they point out of bin/llama-cpp. MUTATIONS: drop the check
+    after the lift (_refuse_escaping_links), decide a link on its name passed through
+    contained_path (which strips whitespace and reads a backslash as a separator), or drop
+    the check of the target as written (the staging-name shape): each goes red."""
     m, _ = linux_install
     victim = tmp_path / "victim"
     victim.write_bytes(b"not llama")
@@ -586,6 +610,42 @@ def test_a_link_that_leaves_the_folder_after_the_lift_is_refused(linux_install, 
     assert m.ensure_server_exists() is False
     assert not os.path.lexists(m.bin_dir) and not os.path.lexists(m.bin_dir + ".staging"), "nothing is installed"
     assert (victim.stat().st_mode & 0o777) == 0o600, "chmod never followed a link out of the folder"
+
+
+def test_a_link_that_leaves_only_through_another_link_is_refused(tmp_path):
+    """deep/t -> s/.. stays inside as written, but deep/s is the folder itself, so t names
+    the folder's parent. The data filter of this Python normalizes such a target to "."
+    on extraction, so the shape is built on disk directly: the resolution step is what
+    catches it wherever a link reaches the folder unnormalized. MUTATION: drop the
+    realpath containment and this goes red."""
+    if not _can_symlink(tmp_path):
+        pytest.skip("no symlink privilege")
+    root = tmp_path / "bin" / "llama-cpp.staging"
+    (root / "deep").mkdir(parents=True)
+    os.symlink("..", root / "deep" / "s")
+    os.symlink(os.path.join("s", ".."), root / "deep" / "t")
+    with pytest.raises(RuntimeError, match="resolves outside"):
+        backend.ServerManager._refuse_escaping_links(str(root))
+    os.unlink(root / "deep" / "t")
+    backend.ServerManager._refuse_escaping_links(str(root))    # s alone stays inside
+
+
+@pytest.mark.skipif(os.name == "nt", reason="tar links are not extracted as links without the symlink privilege")
+def test_a_long_link_chain_is_refused_in_bounded_time(linux_install, monkeypatch):
+    """A chain a0 -> a1 -> ... -> a1000 -> llama-server stays inside the folder, but
+    resolving every link down the rest of the chain costs the square of its length (24 s at
+    4000 links). The kernel follows at most 40 hops; a chain it will not follow is refused,
+    and the check stays linear. MUTATION: drop the os.stat step and the chain is accepted."""
+    import time as _time
+    m, _ = linux_install
+    n = 1000
+    payload = _archive(10955, links=[(f"a{i}", f"a{i + 1}" if i + 1 < n else "llama-server") for i in range(n)])
+    _pin(monkeypatch, payload)
+    _fake_get(monkeypatch, payload)
+    started = _time.monotonic()
+    assert m.ensure_server_exists() is False
+    assert _time.monotonic() - started < 10.0
+    assert not os.path.lexists(m.bin_dir)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="tar links are not extracted as links without the symlink privilege")
@@ -650,7 +710,8 @@ def test_a_cleanup_that_could_not_finish_is_retried_on_the_next_start(linux_inst
     """A locked file (Windows) stops the legacy cleanup: the person is told which file, the
     server binary stays as the key of the retry, and the next start (already up to date,
     no download) finishes it. MUTATIONS: drop the retry on the up-to-date path, drop the
-    warning, or unlink the server binary even after a failure: each goes red."""
+    warning, unlink the server binary even after a failure, or drop the sort that puts it
+    last: each goes red."""
     m, payload = linux_install
     bin_root = _legacy_layout(m)
     events = []
@@ -664,6 +725,25 @@ def test_a_cleanup_that_could_not_finish_is_retried_on_the_next_start(linux_inst
         return real_unlink(path, *a, **k)
 
     monkeypatch.setattr(backend.os, "unlink", unlink)
+
+    # bin/ is listed with the server binary FIRST, whatever the filesystem's own order: only
+    # the cleanup's sort then keeps it for last.
+    real_scandir = os.scandir
+
+    class _Listing:
+        def __init__(self, entries): self._it = iter(entries)
+        def __iter__(self): return self
+        def __next__(self): return next(self._it)
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def close(self): pass
+
+    def scandir(path="."):
+        if os.path.abspath(path) != os.path.abspath(m.bin_root):
+            return real_scandir(path)
+        return _Listing(sorted(real_scandir(path), key=lambda e: e.name != m.server_exe))
+
+    monkeypatch.setattr(backend.os, "scandir", scandir)
     _fake_get(monkeypatch, payload)
     assert m.ensure_server_exists() is True, "the start does not fail on a leftover"
     assert any("Could not remove the old backend file bin/libllama.so.0.0.1" in e for e in events), events
@@ -730,3 +810,56 @@ def test_a_server_that_did_not_stop_is_stopped_on_the_retry(linux_install, monke
     assert m.ensure_server_exists() is True, "the retry stops the server and installs"
     assert proc["kills"] == 2 and not proc["alive"]
     assert m.installed_build() == 10955 and not Path(m.pid_file).exists()
+
+
+def test_a_leftover_that_cannot_be_removed_ends_the_install_cleanly(linux_install, monkeypatch, tmp_path):
+    """A linked bin/llama-cpp.staging that cannot be unlinked: the start gets False and a
+    message, not an exception, nothing is downloaded, and the link's target is untouched.
+    MUTATION: prepare the staging folder outside the handler again and this goes red."""
+    if not _can_symlink(tmp_path):
+        pytest.skip("no symlink privilege")
+    m, _ = linux_install
+    Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10021)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "keep").write_bytes(b"keep")
+    staging = m.bin_dir + ".staging"
+    os.symlink(elsewhere, staging)
+    real_unlink = os.unlink
+
+    def unlink(path, *a, **k):
+        if os.path.abspath(path) == os.path.abspath(staging):
+            raise PermissionError(13, "Permission denied")
+        return real_unlink(path, *a, **k)
+
+    errors = []
+    monkeypatch.setattr(backend.os, "unlink", unlink)
+    monkeypatch.setattr(backend.UI, "error", lambda *a, **k: errors.append(" ".join(map(str, a))))
+    monkeypatch.setattr("vaf.core.verified_download.requests.get",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no download")))
+    assert m.ensure_server_exists() is False
+    assert any("leftover" in e and "start VAF again" in e for e in errors), errors
+    assert os.path.islink(staging) and (elsewhere / "keep").read_bytes() == b"keep"
+    assert m.installed_build() == 10021
+
+
+def test_a_replaced_build_that_cannot_be_removed_does_not_fail_the_install(linux_install, monkeypatch):
+    """The swap went through; only removing the replaced build failed. The new build runs,
+    the person is told, the next install retries. MUTATION: let that failure reach the
+    install's handler again and the install reports False."""
+    m, payload = linux_install
+    Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10021)
+    events = []
+    monkeypatch.setattr(backend.UI, "event", lambda *a, **k: events.append(" ".join(map(str, a))))
+    real = backend.ServerManager._remove_tree_or_link
+
+    def remove(path):
+        if path.endswith(".previous") and os.path.lexists(path):
+            raise PermissionError(5, "Access is denied")
+        return real(path)
+
+    monkeypatch.setattr(backend.ServerManager, "_remove_tree_or_link", staticmethod(remove))
+    _fake_get(monkeypatch, payload)
+    assert m.ensure_server_exists() is True
+    assert m.installed_build() == 10955
+    assert any("Could not remove the replaced backend" in e for e in events), events

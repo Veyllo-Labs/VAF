@@ -595,6 +595,40 @@ def load_llama_pin() -> dict:
     return data
 
 
+def _link_leaves_folder(link: str, depth: int, real_root: str) -> str:
+    """Why the link at `link`, `depth` folders below the root whose resolved path is
+    `real_root`, can point outside it, or "" when it cannot (see
+    ServerManager._refuse_escaping_links)."""
+    from vaf.core.path_jail import is_rooted
+
+    try:
+        target = os.readlink(link)
+    except OSError as e:
+        return f"unreadable link: {e}"
+    if is_rooted(target) or os.path.isabs(target):
+        return f"absolute target {target!r}"
+    level = depth
+    seps = os.sep + (os.altsep or "")
+    for part in re.split("[" + re.escape(seps) + "]", target):
+        if part in ("", "."):
+            continue
+        level = level - 1 if part == ".." else level + 1
+        if level < 0:
+            return f"target {target!r} climbs above the folder"
+    try:
+        os.stat(link)
+    except FileNotFoundError:
+        pass                              # dangling: nothing is reached through it
+    except OSError as e:
+        return f"cannot be followed: {e.strerror or e}"
+    real = os.path.realpath(link)
+    try:
+        inside = os.path.commonpath([real, real_root]) == real_root
+    except ValueError:                    # another drive on Windows
+        inside = False
+    return "" if inside else f"resolves outside to {real!r}"
+
+
 class ServerManager:
     """
     Manages the lifecycle of the standalone llama-server executable.
@@ -1030,10 +1064,11 @@ class ServerManager:
         unfiltered fallback: the install fails instead. The filter judges a link where it
         is unpacked, though, and the lift then moves build/bin/ two levels up without
         rewriting links, so `build/bin/d -> ../x` passes the filter and points out of the
-        folder afterwards. Every link is therefore checked again after the lift
-        (_refuse_escaping_links): one that resolves outside `into` fails the install. The
-        relative library links of a release (libllama.so -> libllama.so.1 ->
-        libllama.so.1.0.0) stay inside and are kept. Zip archives cannot hold links, and
+        folder afterwards. Every link is therefore checked again after the lift, on its
+        path on disk (_refuse_escaping_links): one whose target is absolute or climbs above
+        the folder, that the kernel will not follow, or that resolves outside `into` fails
+        the install. The relative library links of a release (libllama.so ->
+        libllama.so.1 -> libllama.so.1.0.0) stay inside and are kept. Zip archives cannot hold links, and
         zipfile strips ".." and absolute names itself."""
         if archive_path.endswith(".tar.gz") or archive_path.endswith(".tgz"):
             with tarfile.open(archive_path, "r:gz") as tar_ref:
@@ -1071,23 +1106,38 @@ class ServerManager:
 
     @staticmethod
     def _refuse_escaping_links(root: str) -> None:
-        """RuntimeError when a link anywhere below `root` resolves outside it (directly or
-        through other links), or cannot be resolved at all. The folders are listed without
-        following links (path_jail.walk_without_links), and each link's target is decided
-        by path_jail.contained_path, the containment check the file tools use."""
-        from vaf.core.path_jail import PathEscape, contained_path, walk_without_links
+        """RuntimeError when a link anywhere below `root` could point outside the folder
+        once it is installed. Each link is decided on its path on disk (entry.path, its
+        name exactly as stored, odd characters included), three ways:
 
+        - by its target as written (os.readlink): an absolute or drive-anchored target
+          (path_jail.is_rooted), or one that climbs above `root` from the link's own folder,
+          is refused. This does not depend on the folder's name, so a link that leaves and
+          comes back by the temporary name (``../llama-cpp.staging/x``) is refused although
+          it resolves inside while the folder still has that name;
+        - by the kernel's own resolution (os.stat): a chain the kernel refuses to follow
+          (more than its hop limit, 40 on Linux, or a loop) is refused, which also keeps the
+          next step linear in the number of links;
+        - by where it resolves (os.path.realpath, through every other link): outside
+          `root` is refused.
+
+        A dangling link that stays inside is accepted (it cannot reach anything), and so are
+        the release's relative library links (libllama.so -> libllama.so.1). The folders are
+        listed without following links (path_jail.walk_without_links)."""
+        from vaf.core.path_jail import walk_without_links
+
+        real_root = os.path.realpath(root)
         folders = [""] + [rel for rel, is_folder in walk_without_links(root) if is_folder]
         for rel in folders:
-            with os.scandir(os.path.join(root, rel) if rel else root) as entries:
+            depth = len(rel.split("/")) if rel else 0
+            with os.scandir(os.path.join(root, *rel.split("/")) if rel else root) as entries:
                 for entry in entries:
                     if not entry.is_symlink():
                         continue
                     name = f"{rel}/{entry.name}" if rel else entry.name
-                    try:
-                        contained_path(root, name)
-                    except (PathEscape, OSError, RuntimeError) as e:
-                        raise RuntimeError(f"the archive holds a link that leaves the backend folder: {name} ({e})") from e
+                    reason = _link_leaves_folder(entry.path, depth, real_root)
+                    if reason:
+                        raise RuntimeError(f"the archive holds a link that leaves the backend folder: {name!r} ({reason})")
 
     @staticmethod
     def _remove_tree_or_link(path: str) -> None:
@@ -1152,10 +1202,16 @@ class ServerManager:
         # or removed, never bin/ itself.
         staging = self.bin_dir + ".staging"
         previous = self.bin_dir + ".previous"
-        for leftover in (staging, previous):
-            self._remove_tree_or_link(leftover)
-        os.makedirs(self.bin_root, exist_ok=True)
-        os.makedirs(staging, exist_ok=True)
+        try:
+            for leftover in (staging, previous):
+                self._remove_tree_or_link(leftover)
+            os.makedirs(self.bin_root, exist_ok=True)
+            os.makedirs(staging, exist_ok=True)
+        except OSError as e:
+            # Nothing is downloaded or swapped yet; the installed build stays as it was.
+            UI.error(f"The backend b{want} could not be installed: a leftover of an earlier install in "
+                     f"{self.bin_root} cannot be removed ({e}). Remove it and start VAF again.")
+            return False
         try:
             downloaded = []
             for part in (assets["main"], assets["dep"]):
@@ -1186,7 +1242,10 @@ class ServerManager:
             if os.path.isdir(self.bin_dir):
                 os.rename(self.bin_dir, previous)
             os.rename(staging, self.bin_dir)
-            self._remove_tree_or_link(previous)
+            try:
+                self._remove_tree_or_link(previous)
+            except OSError as e:          # the new build is in place; the next install retries
+                UI.event("System", f"Could not remove the replaced backend {previous}: {e}", style="warning")
         except DownloadIntegrityError as e:
             shutil.rmtree(staging, ignore_errors=True)
             UI.error(f"The download of the backend b{want} did not match its pinned checksum, so it was not "

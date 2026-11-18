@@ -146,9 +146,9 @@ waiting for a stable `X.Y.Z`.
    the SHA-256 of every asset the launcher may pick from the release API and
    cross-checks them against llama.cpp's provenance attestation, the statement of
    its `release.yml` or, since llama.cpp split building from publishing, of its
-   `release-publish.yml`; `--download` additionally hashes every asset locally),
-   start VAF once so the pinned build installs and runs, then commit the
-   manifest with the release.
+   `release-publish.yml`, run from `refs/heads/master`; `--download` additionally
+   hashes every asset locally), start VAF once so the pinned build installs and
+   runs, then commit the manifest with the release.
    The vLLM engine is pinned the same way, by version (`PIN` in
    `vaf/core/vllm_server.py`): bumping it is a release decision too. Edit `PIN`, run
    `vaf engine vllm` once on a supported machine (Linux, NVIDIA, compute capability

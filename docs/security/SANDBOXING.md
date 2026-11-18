@@ -1367,10 +1367,13 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   shell's error message fed into a shell); two generators of subscripts, line continuations,
   funsubs, descriptors and stdin chains, and of the pinned rows mutated, run through bash in a
   read-only sandbox with a marker `rm`: 60 000 and 40 000 draws, 2 473 and 2 350 of the 7 052
-  and 4 392 run in bash ran the marker, with no twin let through; and two more, of
+  and 4 392 run in bash ran the marker, with no twin let through; and three more, of
   substring windows, `$'...'` in arithmetic, closer targets and words at a shell's script
-  name: 30 000 draws each, 2 542 of 6 125 and 2 305 of 4 415 run in bash ran the marker,
-  with no twin let through. No refusal of the reading
+  name, and of option words (`+c`, `-$x`, `"$x"`), setters of a name or of the positional
+  parameters in every spelling and literal text beside a quoted expansion: 30 000 draws
+  each, 3 424 of 4 297, 2 509 of 5 596 and 2 305 of 4 192 run in bash ran the marker, with
+  no twin let through (on the reading before, the first of these generators found 9 627
+  twins; every class of them is now read and pinned). No refusal of the reading
   before this change was lost in
   any of them (bash 5.3; the suite runs 1 600 draws). The classes the differential found on the way are each pinned in
   `tests/test_command_grammar_reading.py`, and every probe written while the reading was

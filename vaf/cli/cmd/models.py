@@ -125,11 +125,12 @@ def _set_subagent_provider(value: str) -> None:
                  f"{', '.join(api_provider_names())}.")
         raise typer.Exit(2)
     if name == "local":
-        # The same refusal as `provider local`: under the api profile no local model runs,
-        # and switching sub-agents onto one would only fail at their start.
+        # The same refusal, word for word, as `provider local` (provider_switch): under the
+        # api profile no local model runs, and sub-agents switched onto one would only fail
+        # at their start.
         from vaf.core import inference_profile
         if not inference_profile.local_inference_allowed():
-            UI.error(inference_profile.refusal("a local model"))
+            UI.error(inference_profile.refusal("the local model"))
             raise typer.Exit(2)
     if name not in ("", "inherit", "local"):
         try:

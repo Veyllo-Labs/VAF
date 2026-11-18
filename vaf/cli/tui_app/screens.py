@@ -43,7 +43,7 @@ def first_selectable(rows) -> int:
     return next((i for i, row in enumerate(rows) if row[0] not in ("note", "sep")), 0)
 
 
-def _fit(text, limit: int) -> str:
+def fit_line(text, limit: int) -> str:
     """``text`` on one line of at most ``limit`` characters, ending in an ellipsis when cut."""
     text = str(text)
     return text if len(text) <= limit else text[:limit - 1] + "…"
@@ -512,7 +512,7 @@ class SettingsScreen(ModalScreen[None]):
             rows += [
                 ("sep", None, ""),
                 ("choice", "n_ctx", ""),
-                ("submenu", "engine", f"Engine: {'vLLM' if vllm else 'llama.cpp'}"),
+                ("submenu", "engine", f"Engine: {local_engine.label()}"),
                 ("submenu", "local_model", "Select Active Model"),
             ]
             if not vllm:
@@ -673,8 +673,10 @@ class SettingsScreen(ModalScreen[None]):
     def _load_engine_state(self) -> None:
         try:
             self._engine_state = self.app._bridge.engine_state()
-        except Exception as exc:
-            self._engine_state = f"engine state unavailable: {exc}"
+        except Exception:
+            # The detail is for the log; the row says what to do.
+            logging.getLogger(__name__).warning("engine state unavailable", exc_info=True)
+            self._engine_state = "could not read the local engine's state; try again"
 
     def _engine_line(self, engine: str, active: bool, *, serving: bool = True) -> str:
         """The engine's name (with "in use" on the active one, "selected" while the main chat
@@ -702,8 +704,8 @@ class SettingsScreen(ModalScreen[None]):
         support = state.get("support") or {}
         if state.get("profile") == "api":
             from vaf.core import inference_profile
-            return [("note", None, f"llama.cpp  {self.ENGINE_LINES['llama'][1]}"),
-                    ("note", None, f"vLLM  {self.ENGINE_LINES['vllm'][1]}"),
+            return [("note", None, "  ".join(self.ENGINE_LINES["llama"])),
+                    ("note", None, "  ".join(self.ENGINE_LINES["vllm"])),
                     ("note", None, inference_profile.refusal("a local engine")),
                     ("back", None, "Back")]
         rows = []
@@ -1483,7 +1485,7 @@ class ModelScreen(ModalScreen[tuple]):
                 label = f"local · {local_engine.label(name)}"
                 self._add(lv, ("local", name),
                           f"[$primary]{marker}[/][$vaf-muted]{label:<18}[/] "
-                          f"[$text]{_esc(_fit(shown[name], VALUE_CHARS))}[/]")
+                          f"[$text]{_esc(fit_line(shown[name], VALUE_CHARS))}[/]")
         else:
             self._add(lv, ("note", None), f"[$text-disabled]{_esc(PICKER_PROFILE_LINE)}[/]")
         self._add(lv, ("sep", None), "[$vaf-border]─────────────────[/]")
@@ -1498,7 +1500,7 @@ class ModelScreen(ModalScreen[tuple]):
                 active_index = len(self._rows)
             self._add(lv, ("provider", provider),
                       f"[$primary]{marker}[/][$vaf-muted]{_esc(provider):<18}[/] "
-                      f"[$text]{_esc(_fit(shown_model, VALUE_CHARS))}[/]")
+                      f"[$text]{_esc(fit_line(shown_model, VALUE_CHARS))}[/]")
 
         if current != "local":
             models = self._models_for(current)
@@ -1512,7 +1514,7 @@ class ModelScreen(ModalScreen[tuple]):
                         active_index = len(self._rows)
                     self._add(lv, ("model", model),
                               f"[$primary]{marker}[/][$vaf-muted]{_esc(current)}:[/] "
-                              f"[$text]{_esc(_fit(model, VALUE_CHARS))}[/]")
+                              f"[$text]{_esc(fit_line(model, VALUE_CHARS))}[/]")
 
         if active_index < 0:
             active_index = first_selectable(self._rows)
@@ -1848,7 +1850,7 @@ class SessionsPanel(Vertical):
                     head += f" [$warning]{unread}[/]"
                 meta = "connected" if state.get("connected") else "not connected"
                 last = (entry.get("last") or {}).get("text") or ""
-                tail = _fit(last, 25)
+                tail = fit_line(last, 25)
                 lv.append(ListItem(Static(
                     f"{head}\n"
                     f"  [$text-disabled]{_esc(meta)}[/]\n"
@@ -1879,7 +1881,7 @@ class SessionsPanel(Vertical):
                     f"  [$text-disabled]{_esc(tail)}[/]")))
                 continue
             meta = sid[:12] + (f" · {count} msg" if count else "")
-            tail = _fit(summary, 25)
+            tail = fit_line(summary, 25)
             if not tail:
                 tail = str(entry.get("updated_at") or "")[:16]
             lv.append(ListItem(Static(

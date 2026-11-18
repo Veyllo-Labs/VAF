@@ -642,3 +642,62 @@ def test_make_local_stored_but_not_moved_says_so(monkeypatch, tmp_path):
     bridge.apply_engine("vllm", make_local=True)
     lane[0]()
     assert any("kept its backend" in str(n) for n in notes), notes
+
+
+def test_an_unreadable_engine_state_row_shows_no_exception_text(monkeypatch):
+    """MUTATION: the exception text back in the Engine submenu row - red."""
+    s, *_ = _screen(monkeypatch, state=None)
+
+    def _boom(model=None):
+        raise RuntimeError("internal-detail-xyz")
+    s.app._bridge.engine_state = _boom
+    s._load_engine_state()
+    text = " ".join(str(r[2]) for r in s._menu_rows("engine"))
+    assert "internal-detail-xyz" not in text and "try again" in text
+
+
+@pytest.mark.parametrize("where", ["local_model", "engine", "reload_after_switch",
+                                   "make_local_reload"])
+def test_engine_and_model_failures_show_no_exception_text(monkeypatch, tmp_path, where):
+    """The three notes of the engine and model lanes say what to do; the exception goes to the
+    log. MUTATION: put `{exc}` back into any of them - its case turns red."""
+    from vaf.cli.tui_app.agent_bridge import AgentBridge
+    from vaf.core import log_helper, provider_switch
+    monkeypatch.setattr(log_helper, "get_app_log_dir", lambda: tmp_path)
+
+    def _boom(*a, **k):
+        raise RuntimeError("internal-detail-xyz")
+    notes, lane = [], []
+    agent = SimpleNamespace(provider="local", reload_local_model=_boom)
+    if where == "engine":
+        monkeypatch.setattr(le, "apply", _boom)
+    else:
+        monkeypatch.setattr(le, "apply", lambda engine, **kw: le.EngineSwitch(
+            "done", "switched_vllm", "text", "vllm"))
+    if where == "make_local_reload":
+        agent.provider = "anthropic"
+
+        def _switch(*a, **k):
+            agent.provider = "local"
+            return provider_switch.ProviderSwitch("done", "switched", "ok", "local", "", 1)
+        monkeypatch.setattr(provider_switch, "switch_provider", _switch)
+        agent.api_backend = agent.use_server = agent.llm = None
+    monkeypatch.setattr(le, "is_vllm", lambda config=None: False)
+    bridge = AgentBridge.__new__(AgentBridge)
+    bridge.agent = agent
+    bridge.events = SimpleNamespace(event_note=lambda *a: notes.append(a),
+                                    system_note=lambda *a: notes.append(a))
+    bridge._emit = lambda *a: None
+    bridge._refresh_context = lambda: None
+    bridge._busy = False
+    bridge._submit = lane.append
+    if where == "local_model":
+        import vaf.core.config as config_mod
+        monkeypatch.setattr(config_mod.Config, "set", classmethod(lambda cls, k, v: None))
+        bridge.apply_local_model("q.gguf")
+    else:
+        bridge.apply_engine("vllm", make_local=where == "make_local_reload")
+    lane[0]()
+    joined = " ".join(str(n) for n in notes)
+    assert "internal-detail-xyz" not in joined and "RuntimeError" not in joined, joined
+    assert "try again" in joined or "server log" in joined, joined

@@ -539,7 +539,8 @@ def test_the_load_note_says_when_a_default_model_is_downloaded(monkeypatch, mode
     bridge.shutdown()
     joined = " ".join(str(m) for _, m in notes)
     assert ("downloads its default model" in joined) is downloads, joined
-    assert "server_last.log" in joined, joined
+    from vaf.core.log_helper import get_app_log_dir
+    assert f"the llama.cpp server log in {get_app_log_dir()}" in joined, joined
 
 
 def test_one_engine_label():
@@ -548,7 +549,46 @@ def test_one_engine_label():
     import re
     assert le.label("llama") == "llama.cpp" and le.label("vllm") == "vLLM"
     assert screens_mod.SettingsScreen.ENGINE_LINES["vllm"][0] == le.LABELS["vllm"]
-    pattern = re.compile(r'"vLLM" if|"llama\.cpp" if|ENGINE_NAMES|\("llama\.cpp",|\("vLLM",')
+    q = "[\"']"
+    pattern = re.compile(rf"{q}vLLM{q} if|{q}llama\.cpp{q} if|ENGINE_NAMES|"
+                         rf"\({q}llama\.cpp{q},|\({q}vLLM{q},|{q}llama\.cpp  |{q}vLLM  ")
     for name in ("screens.py", "agent_bridge.py", "app.py"):
         src = (ROOT / "vaf" / "cli" / "tui_app" / name).read_text(encoding="utf-8")
         assert not pattern.search(src), name
+
+
+def test_a_long_model_chip_ends_in_an_ellipsis(monkeypatch):
+    """A long name pushed the session name out of the top bar at 80 columns, and the banner
+    cut it without a mark. MUTATION: drop the cut in `model_chip` - red."""
+    from vaf.cli.tui_app.app import MODEL_CHIP_CHARS, model_chip
+    repo = "neuralmagic/Meta-Llama-3.1-70B-Instruct-quantized.w4a16-extra-long"
+    _patch_config(monkeypatch, {"provider": "local", "local_engine": "vllm", "vllm_model": repo})
+    monkeypatch.setattr(le, "is_vllm", lambda config=None: True)
+    chip = model_chip()
+    assert len(chip) == MODEL_CHIP_CHARS and chip.endswith("…")
+    assert chip.startswith("local · vLLM · neuralmagic/")
+
+
+def test_the_banner_model_row_fits_at_80_columns(smoke_app, monkeypatch):
+    """The start banner's rows do not shrink: a long model row ran past the banner and was
+    cut at its edge without a mark. MUTATION: the banner takes the top bar's limit - red."""
+    from vaf.cli.tui_app.widgets import StartBanner
+    app, bridge = smoke_app.app, smoke_app.bridge
+    repo = "neuralmagic/Meta-Llama-3.1-70B-Instruct-quantized.w4a16-extra-long"
+    _patch_config(monkeypatch, {"provider": "local", "local_engine": "vllm", "vllm_model": repo})
+    monkeypatch.setattr(le, "is_vllm", lambda config=None: True)
+    box = {}
+
+    async def _run():
+        async with app.run_test(size=(80, 24)) as pilot:
+            for _ in range(3):
+                await pilot.pause()
+            banner = app.query_one(StartBanner)
+            row = next(r for r in banner.query(".banner-row") if "model" in str(r.content))
+            box["text"] = str(row.content)
+            box["right"] = row.region.right
+            box["edge"] = banner.query_one(".banner-row-wrap").region.right
+    asyncio.run(_run())
+    bridge.shutdown()
+    assert "…" in box["text"], box["text"]
+    assert box["right"] <= box["edge"], box

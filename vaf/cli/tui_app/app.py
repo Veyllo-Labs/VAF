@@ -42,6 +42,7 @@ from vaf.cli.tui_app.screens import (
     ToolsScreen,
     VoiceScreen,
     choose_local_engine,
+    fit_line,
     switch_engine,
 )
 from vaf.cli.tui_app.theme_bridge import (
@@ -124,11 +125,24 @@ def _agent_name() -> str:
     return "unnamed (set one in Settings)"
 
 
-def model_chip() -> str:
+# The longest model chip in the top bar: past it the bar pushed the session name and its
+# state out at 80 columns.
+MODEL_CHIP_CHARS = 40
+# The start banner's value column at 80 columns: 44 beside the mark, less the 10-column
+# label, as wide as its widest fixed row (the version). Its rows do not shrink, so a longer
+# value was cut at the edge without a mark.
+BANNER_VALUE_CHARS = 34
+
+
+def model_chip(limit: int = MODEL_CHIP_CHARS) -> str:
     """What the main chat runs on, for the top bar and the start banner: the API provider
     and its model, or ``local`` with the engine's model. Under vLLM that is the vLLM model
     (``vllm_model``, empty for the automatic choice), never the GGUF, which only
-    llama.cpp runs."""
+    llama.cpp runs. At most ``limit`` characters, ending in an ellipsis when cut."""
+    return fit_line(_model_chip(), limit)
+
+
+def _model_chip() -> str:
     from vaf.core import local_engine
     from vaf.core.config import Config
     provider = str(Config.get("provider", "local"))
@@ -642,7 +656,7 @@ class VafApp(App):
             ("session", f"{name}  ({state}"
                         + (f", {messages} messages)" if messages else ")")),
             ("id", str(session.id)),
-            ("model", model_chip()),
+            ("model", model_chip(BANNER_VALUE_CHARS)),
             ("time", _local_datetime()),
         ]
         hint = ("ctrl+s lists your sessions - arrows to walk, enter to load. "

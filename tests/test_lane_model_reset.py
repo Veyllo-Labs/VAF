@@ -704,5 +704,9 @@ def test_cli_subagent_provider_local_is_refused_under_the_api_profile(stored, _q
     before = stored.raw()
     result = _cli("subagent_provider", "local")
     assert result.exit_code == 2
-    assert 'profile "api"' in _shown(_quiet.events, "Error")
+    shown = _shown(_quiet.events, "Error")
+    assert 'profile "api"' in shown
     assert stored.raw() == before
+    # Word for word what `provider local` says there.
+    from vaf.core.provider_switch import switch_provider
+    assert switch_provider("local").text in shown

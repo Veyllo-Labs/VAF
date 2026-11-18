@@ -352,7 +352,8 @@ What it can change is decided by where a key is READ, not by how it looks:
   GGUF set the load first downloads the default model, and the note says that; a load
   that fails names the server's log. When something already serves, it says which engine
   is in use instead. The top bar and the start banner read `local · <GGUF>` under
-  llama.cpp and `local · vLLM · <model or automatic>` under vLLM.
+  llama.cpp and `local · vLLM · <model or automatic>` under vLLM; a long name ends in an
+  ellipsis, so the session name stays in the top bar at 80 columns.
   A local engine row runs the chat on that engine: the provider alone moves when the
   engine is already the one in use; another engine is switched first (asking before a
   vLLM install, refused under `api` and where vLLM cannot run), and the provider moves

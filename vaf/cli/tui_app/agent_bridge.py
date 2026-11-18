@@ -901,19 +901,26 @@ class AgentBridge:
         do, without an exception text that means nothing to the person reading it."""
         import logging
         logging.getLogger(__name__).warning("provider switch failed", exc_info=True)
-        self.events.event_note("Provider", "the provider switch stopped on an internal "
+        self.events.event_note("Provider", "the provider switch failed on an internal "
                                            "error; try again", "error")
+
+    @staticmethod
+    def _log_failure(what: str) -> None:
+        """The traceback of a failure the person gets a plain sentence for."""
+        import logging
+        logging.getLogger(__name__).warning(what, exc_info=True)
 
     @staticmethod
     def _server_log() -> str:
         """Where the local engine's server writes its output (the place to look when it did
-        not come up)."""
+        not come up). vLLM writes one file; llama.cpp writes `server_last.log`, or a dated
+        `server_*.log` with debug logs on, so its folder is named rather than a file."""
         from vaf.core import local_engine
         if local_engine.is_vllm():
             from vaf.core.vllm_server import log_path
-            return str(log_path())
+            return f"the vLLM server log {log_path()}"
         from vaf.core.log_helper import get_app_log_dir
-        return str(get_app_log_dir() / "server_last.log")
+        return f"the llama.cpp server log in {get_app_log_dir()}"
 
     def _serve_local(self, *, moved: bool) -> None:
         """The agent is on `local` now: load the local model when it serves nothing (no
@@ -954,7 +961,7 @@ class AgentBridge:
         else:
             self.events.event_note(
                 "Provider", f"the provider is local, but the local model ({engine}) did "
-                            f"not come up. The server's output is in {self._server_log()}; "
+                            f"not come up. What happened is in {self._server_log()}; "
                             f"try again once it is fixed", "warning")
 
     def list_local_models(self):
@@ -1012,8 +1019,10 @@ class AgentBridge:
             ok = False
             try:
                 ok = bool(self.agent.reload_local_model())
-            except Exception as exc:
-                self.events.event_note("Model", f"local model switch failed: {exc}",
+            except Exception:
+                self._log_failure("local model switch failed")
+                self.events.event_note("Model", "the local model switch failed on an "
+                                                "internal error; try again",
                                        "error")
             if ok:
                 self.events.system_note(f"switched to {filename}")
@@ -1074,8 +1083,10 @@ class AgentBridge:
                 result = local_engine.apply(engine, model=model, install=install,
                                             gpu_share=gpu_share, progress=progress,
                                             output=output)
-            except Exception as exc:
-                self.events.event_note("Engine", f"engine switch failed: {exc}", "error")
+            except Exception:
+                self._log_failure("engine switch failed")
+                self.events.event_note("Engine", "the engine switch failed on an internal "
+                                                 "error; try again", "error")
                 return
             if result.status == "done":
                 self.events.system_note(result.text)
@@ -1102,9 +1113,11 @@ class AgentBridge:
                         and result.code not in ("unchanged_llama",)):
                     try:
                         self.agent.reload_local_model()
-                    except Exception as exc:
-                        self.events.event_note("Engine", f"the running agent did not switch: "
-                                                         f"{exc}", "warning")
+                    except Exception:
+                        self._log_failure("the running agent did not switch")
+                        self.events.event_note(
+                            "Engine", f"the running agent did not move to the new engine; "
+                                      f"what happened is in {self._server_log()}", "warning")
             else:
                 if result.note:
                     self.events.system_note(result.note)

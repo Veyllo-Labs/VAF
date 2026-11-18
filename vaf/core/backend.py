@@ -1217,9 +1217,10 @@ class ServerManager:
         the start would keep serving the old build. A server that does not stop leaves
         everything as it was. The replaced build stays in bin/llama-cpp.previous until the
         new one reports the pinned number at its final path as well; when it does not, or
-        when the new folder cannot be put in place, the previous build is moved back. A
-        previous build that could not be moved back is recovered at the start of the next
-        attempt, before anything else."""
+        when the new folder cannot be put in place, the previous build is moved back, by
+        renames only (_put_previous_back). A previous build that could not be moved back is
+        recovered at the start of the next attempt, before anything else: when bin/llama-cpp
+        is missing, or holds a build that reports no number while .previous reports one."""
         from vaf.core.verified_download import DownloadIntegrityError, download_verified
 
         try:
@@ -1229,15 +1230,20 @@ class ServerManager:
             return False
         staging = self.bin_dir + ".staging"
         previous = self.bin_dir + ".previous"
-        if not os.path.lexists(self.bin_dir) and os.path.lexists(previous):
-            # An earlier swap moved the old build aside and could not put either back.
-            try:
-                os.rename(previous, self.bin_dir)
-                UI.event("System", "Recovered the previous backend from an interrupted update.", style="warning")
-            except OSError as e:
-                UI.error(f"The previous backend in {previous} could not be moved back ({e}). "
-                         f"Rename it to {self.bin_dir} and start VAF again.")
+        if os.path.lexists(previous) and (
+                not os.path.lexists(self.bin_dir)
+                or (self.installed_build() is None
+                    and self.installed_build(os.path.join(previous, self.server_exe)) is not None)):
+            # An earlier swap moved the old build aside and could not put it back (nothing in
+            # bin/llama-cpp), or stopped with a build there that does not start (a crash after
+            # the swap, a roll-back whose renames failed). .previous is then the only working
+            # build, so it goes back into place before the leftover step could remove it.
+            failure = self._put_previous_back(staging, previous)
+            if failure:
+                UI.error(f"The previous backend in {previous} could not be put back ({failure}). Remove "
+                         f"{self.bin_dir}, rename {previous} to it and start VAF again.")
                 return False
+            UI.event("System", "Recovered the previous backend from an interrupted update.", style="warning")
         want = self.pinned_build(pin)
         have = self.installed_build()
         if os.path.exists(self.server_path) and have == want:
@@ -1332,15 +1338,15 @@ class ServerManager:
 
         got = self.installed_build()
         if got != want:
+            restored = ""
             if moved_aside:
-                try:
-                    self._remove_tree_or_link(self.bin_dir)
-                    os.rename(previous, self.bin_dir)
+                if not self._put_previous_back(staging, previous):
                     restored = " The previous backend was put back."
-                except OSError:
+                elif not os.path.lexists(self.bin_dir) or got is None:
                     restored = " The previous backend stays in llama-cpp.previous and is put back on the next start."
-            else:
-                restored = ""
+                else:
+                    restored = (f" The previous backend stays in {previous}: remove {self.bin_dir}, rename "
+                                f"{previous} to it and start VAF again.")
             UI.error(f"Backend installed but reports build b{got or '?'} instead of the pinned b{want}.{restored}")
             return False
         try:
@@ -1353,13 +1359,39 @@ class ServerManager:
             self._remove_legacy_layout()
         return True
 
+    def _put_previous_back(self, staging: str, previous: str) -> str:
+        """Swap bin/llama-cpp.previous back into bin/llama-cpp, by renames only: whatever
+        is in bin/llama-cpp is renamed to the staging name (which every attempt clears),
+        then .previous takes its place, then the staging folder is removed as far as it
+        goes. A rename cannot stop halfway, so the previous build is either back in place
+        or still whole in .previous; removing bin/llama-cpp first could fail partway and
+        leave debris there, and the next attempt would then have treated .previous as a
+        leftover. Returns "" when the previous build is in place, else why it is not."""
+        try:
+            if os.path.lexists(self.bin_dir):
+                self._remove_tree_or_link(staging)       # the name must be free for the rename
+                os.rename(self.bin_dir, staging)
+            os.rename(previous, self.bin_dir)
+        except OSError as e:
+            return str(e)
+        try:
+            self._remove_tree_or_link(staging)
+        except OSError:
+            pass                          # a leftover the next attempt clears
+        return ""
+
     def _remove_legacy_layout(self) -> None:
         """Remove what an earlier VAF installed straight into bin/: the files and links at
         the top of bin_root whose names a llama.cpp archive uses (LEGACY_LLAMA_FILE: the
         binaries, the libraries with their version links, LICENSE). Anything else stays:
         folders, links to folders (a vLLM environment moved to another disk), a link whose
-        target is offline (is_dir() is then False, so the name decides), and a file of
-        another name. os.unlink never follows a link.
+        target is offline (is_dir() is then False, so the name decides: a link of another
+        name stays, one with a llama.cpp name goes), and a file of another name. os.unlink
+        never follows a link. The install's own names (llama-cpp and its .staging and
+        .previous) match the pattern but are never touched here: they belong to
+        ensure_server_exists, whose recovery and leftover steps decide about them. This
+        runs on the up-to-date path too, where those steps do not run, so a .previous left
+        there (a link whose disk is offline included) waits for them.
 
         A file that cannot be removed (still open on Windows) is reported and left for the
         next start, which tries again: the retry is keyed on legacy_server_path, so the

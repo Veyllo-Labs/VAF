@@ -1082,3 +1082,118 @@ def test_a_plain_file_leftover_is_removed(linux_install, monkeypatch):
     Path(m.bin_dir + ".staging").write_bytes(b"not a folder")
     _fake_get(monkeypatch, payload)
     assert m.ensure_server_exists() is True and m.installed_build() == 10955
+
+
+# ── .previous is never lost while it is the only working build ───────────────────
+
+def test_a_roll_back_whose_cleanup_fails_still_keeps_the_previous_build(linux_install, monkeypatch):
+    """The new build fails at its final place and nothing can be removed (a locked file):
+    the roll-back moves the folders by renames, so the previous build is back in
+    bin/llama-cpp at once, and a later attempt cannot mistake it for a leftover. Removing
+    bin/llama-cpp first left debris there, and the next start deleted .previous, the only
+    working build. MUTATION: roll back by removing bin/llama-cpp first and this goes red."""
+    m, payload = linux_install
+    Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10021)
+    before = _tree(Path(m.bin_dir))
+    _failing_probe(monkeypatch, lambda path: os.path.abspath(path) == os.path.abspath(m.server_path)
+                   and "10955" in Path(path).read_text(encoding="utf-8"))
+    real_remove = backend.ServerManager._remove_tree_or_link
+
+    def remove(path):
+        if os.path.abspath(path) in (os.path.abspath(m.bin_dir), os.path.abspath(m.bin_dir + ".staging")) \
+                and os.path.isdir(path):
+            raise PermissionError(13, "Permission denied")       # leaves everything in place
+        return real_remove(path)
+
+    monkeypatch.setattr(backend.ServerManager, "_remove_tree_or_link", staticmethod(remove))
+    errors = []
+    monkeypatch.setattr(backend.UI, "error", lambda *a, **k: errors.append(" ".join(map(str, a))))
+    _fake_get(monkeypatch, payload)
+    assert m.ensure_server_exists() is False
+    assert _tree(Path(m.bin_dir)) == before, "the previous build is back in bin/llama-cpp at once"
+    assert any("was put back" in e for e in errors), errors
+
+    _fake_get(monkeypatch, payload + b"tampered")
+    m.ensure_server_exists()
+    assert m.installed_build() == 10021, "a later attempt keeps the old build"
+
+
+def test_a_crash_after_the_swap_with_a_build_that_does_not_start_recovers_the_previous_one(linux_install, monkeypatch):
+    """The process died after the new folder took its place and before its probe there:
+    bin/llama-cpp holds a build that does not start, .previous the old one that does. The
+    next start puts .previous back before the leftover step could remove it. MUTATION:
+    recover only when bin/llama-cpp is missing and .previous is deleted as a leftover."""
+    m, payload = linux_install
+    Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10955)
+    Path(m.bin_dir + ".previous").mkdir(); _stub_server(Path(m.bin_dir + ".previous") / m.server_exe, 10021)
+    _failing_probe(monkeypatch, lambda path: os.path.abspath(path) == os.path.abspath(m.server_path)
+                   and "10955" in Path(path).read_text(encoding="utf-8"))
+    events = []
+    monkeypatch.setattr(backend.UI, "event", lambda *a, **k: events.append(" ".join(map(str, a))))
+    _fake_get(monkeypatch, payload + b"tampered")
+    assert m.ensure_server_exists() is False
+    assert m.installed_build() == 10021, "the working build is back"
+    assert not os.path.lexists(m.bin_dir + ".previous")
+    assert any("Recovered the previous backend" in e for e in events), events
+
+
+def test_a_previous_build_is_left_alone_while_the_current_one_works(linux_install, monkeypatch):
+    """The recovery applies only when bin/llama-cpp reports no build. A working current
+    build stays, and a .previous next to it is the leftover it looks like (here with a
+    refused download, so the current build is what remains). MUTATION: recover whenever
+    .previous reports a build and the older b9999 replaces the working b10021."""
+    m, payload = linux_install
+    Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10021)
+    Path(m.bin_dir + ".previous").mkdir(); _stub_server(Path(m.bin_dir + ".previous") / m.server_exe, 9999)
+    _fake_get(monkeypatch, payload + b"tampered")
+    assert m.ensure_server_exists() is False
+    assert m.installed_build() == 10021
+    assert not os.path.lexists(m.bin_dir + ".previous")
+
+
+def test_the_legacy_cleanup_leaves_the_installs_own_names_alone(linux_install, monkeypatch, tmp_path):
+    """On the up-to-date path the legacy cleanup runs and the install's own recovery and
+    leftover steps do not; a .previous link whose disk is offline (is_dir() False, a name
+    the llama.cpp pattern matches) waits for them. MUTATION: drop the exclusion of the
+    install's own names and this goes red."""
+    if not _can_symlink(tmp_path):
+        pytest.skip("no symlink privilege")
+    m, _ = linux_install
+    Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10955)
+    _stub_server(m.legacy_server_path, 10021)
+    os.symlink(tmp_path / "unmounted" / "llama-cpp", m.bin_dir + ".previous")
+    monkeypatch.setattr("vaf.core.verified_download.requests.get",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no download")))
+    assert m.ensure_server_exists() is True
+    assert not os.path.lexists(m.legacy_server_path)
+    assert os.path.islink(m.bin_dir + ".previous")
+
+
+def test_a_partly_removed_new_build_next_to_previous_completes_the_roll_back(linux_install, monkeypatch):
+    """The state a roll-back by removal left when the removal stopped partway: part of the
+    new build in bin/llama-cpp (its llama-server already gone, a library left), the old
+    build whole in .previous. The next start completes the roll-back before the leftover
+    step, so a refused download still leaves the old build installed. MUTATION: recover
+    only when bin/llama-cpp is missing and .previous is deleted as a leftover."""
+    m, payload = linux_install
+    Path(m.bin_dir).mkdir(parents=True)
+    (Path(m.bin_dir) / "libggml-base.so.1").write_bytes(b"part of the new build")
+    Path(m.bin_dir + ".previous").mkdir(); _stub_server(Path(m.bin_dir + ".previous") / m.server_exe, 10021)
+    _fake_get(monkeypatch, payload + b"tampered")
+    assert m.ensure_server_exists() is False
+    assert m.installed_build() == 10021
+    assert not (Path(m.bin_dir) / "libggml-base.so.1").exists(), "the debris went with the roll-back"
+
+
+def test_a_verified_pinned_install_next_to_previous_stays_unchanged(linux_install, monkeypatch):
+    """bin/llama-cpp already reports the pinned build: a .previous beside it (its removal
+    failed after a good install) is not swapped back, and nothing is downloaded. MUTATION:
+    recover whenever .previous reports a build and the pinned install is replaced."""
+    m, _ = linux_install
+    Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10955)
+    before = _tree(Path(m.bin_dir))
+    Path(m.bin_dir + ".previous").mkdir(); _stub_server(Path(m.bin_dir + ".previous") / m.server_exe, 10021)
+    monkeypatch.setattr("vaf.core.verified_download.requests.get",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no download")))
+    assert m.ensure_server_exists() is True
+    assert _tree(Path(m.bin_dir)) == before

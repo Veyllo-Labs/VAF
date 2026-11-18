@@ -170,7 +170,10 @@ def cache_usage_from_openai(usage) -> dict:
         return cache_usage()
 
 # Prices per 1M tokens, from ONE table: vaf/core/model_catalog.py, which also
-# feeds the model dropdowns, so a model a user can pick always has a price.
+# feeds the model dropdowns, so a model a user can pick always has a price. A
+# routing alias (deepseek-auto) is one of those: it has no entry of its own and
+# is priced at its dearer target, so a call booked under it is an upper bound
+# rather than the unknown-model rate.
 # These three names are views of it with the shapes their readers expect:
 # PROVIDER_PRICING for the comparison panel (current models, panel order),
 # PRICES for the estimate (every priced id, retired ones included, so a ledger
@@ -339,8 +342,9 @@ def estimate_cost(provider: str, model: str, input_tokens: int,
         price = PRICES.get(name)
         # The catalog entry behind the id, through the spellings providers put
         # around it: a vendor prefix, a snapshot date, OpenRouter's dotted Claude
-        # versions. It carries the per-model cache rate and the long tier.
-        hit = _model_catalog.find_model(name, priced=True)
+        # versions. It carries the per-model cache rate and the long tier. A
+        # routing alias answers with its dearer target.
+        hit = _model_catalog.find_model(name, priced=True, through_alias=True)
         entry = hit[1] if hit else None
         if price is None and entry is not None:
             price = (entry.input, entry.output)

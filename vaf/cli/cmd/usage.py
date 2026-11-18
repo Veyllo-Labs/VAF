@@ -41,6 +41,11 @@ def show(days: int = typer.Option(30, "--days", "-d", help="Period to report on"
         title=f"Usage, last {data.get('days', days)} days", style="highlight")
     # A price without its date is a claim about today that was checked on some other day.
     UI.console.print(f"[dim]Estimated from list prices as of {PRICES_AS_OF}.[/dim]")
+    # The same note the web tab and the export carry: a day with a call priced at
+    # the unknown-model rate makes every total that includes it an upper bound.
+    if totals.get("estimated_usd_incomplete"):
+        UI.console.print("[dim]Some calls used a model that is not in the price list. Those are "
+                         "priced at the expensive end, so the cost estimate is an upper bound.[/dim]")
 
     if totals.get("estimated_tokens"):
         UI.event("Usage", f"{totals['estimated_tokens']:,} of those tokens are estimated "

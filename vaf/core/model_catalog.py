@@ -38,6 +38,13 @@ it, ``migration_target`` moves a saved config value to ``replaced_by``.
 Replacements are models VAF can drive today, which is why the provider's own
 recommendation is not always the one carried here.
 
+A routing alias (``aliases``) has no entry and no price of its own. The backend
+books the model it resolved the alias to, so the alias reaches the estimate
+only as a fallback label (a call that reached no provider, a coder response
+without a ``model``). The estimate then prices it at its ``pro`` target, the
+dearer one (``find_model(..., through_alias=True)``): an upper bound, never the
+unknown-model rate.
+
 Refreshing: edit the entries, move ``CATALOG_AS_OF`` and the provider's
 ``checked_on``, and run ``tests/test_model_catalog.py``. Sources, fetched
 without a key:
@@ -74,7 +81,7 @@ CATALOG_AS_OF = "2026-10-29"
 @dataclass(frozen=True)
 class ModelEntry:
     id: str
-    input: Optional[float] = None    # per 1M tokens; None = not priced here (alias, OpenRouter id)
+    input: Optional[float] = None    # per 1M tokens; None = not priced here (an OpenRouter id)
     output: Optional[float] = None
     cached_input: Optional[float] = None  # absolute per 1M; None = provider multiplier
     long_context_from: Optional[int] = None  # prompt tokens above which the long tier bills
@@ -358,14 +365,29 @@ def _candidates(model_id: str) -> Iterator[str]:
         yield bare.replace(".", "-")
 
 
-def find_model(model_id: str, *, priced: bool = False) -> Optional[Tuple[str, ModelEntry]]:
+def find_model(model_id: str, *, priced: bool = False,
+               through_alias: bool = False) -> Optional[Tuple[str, ModelEntry]]:
     """``(provider, entry)`` for a model id, or ``None``. With ``priced`` an entry
     that carries no price (an OpenRouter id) is skipped so the lookup reaches
-    the vendor's entry."""
+    the vendor's entry.
+
+    With ``through_alias`` a routing alias (``deepseek-auto``, exact id) answers
+    with its ``pro`` target, the one that costs at least as much as ``fast`` on
+    input, output and cached input (pinned by the catalog tests). That makes it
+    an upper bound for any call booked under the alias. Off by default: the
+    estimate asks for it, the vision lookup does not, because an alias that may
+    send a turn to a text-only model must not be taken for one that reads images.
+    """
     for cand in _candidates(model_id):
         hit = _INDEX.get(cand)
         if hit is not None and (not priced or hit[1].priced):
             return hit
+    if through_alias:
+        name = str(model_id or "").strip().lower()
+        for prov in CATALOG.values():
+            targets = prov.aliases.get(name)
+            if targets:
+                return find_model(targets["pro"], priced=priced)
     return None
 
 

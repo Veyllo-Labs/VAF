@@ -84,6 +84,39 @@ def test_a_legacy_ledger_without_tokens_still_reports(spend_dir):
     assert out["users"][0]["tokens_recorded"] is False
 
 
+def test_amounts_recorded_before_the_alias_fix_are_reported_as_recorded(spend_dir):
+    """Calls booked under `deepseek-auto` were priced at the unknown-model rate.
+    They stay as recorded: a slot keeps total tokens and an amount, not the
+    in/out split or which model served, so a repricing would be a guess written
+    over the record the spend cap reads. They stay marked as an upper bound and
+    age out of the view. This pins that decision, so it is green before the fix
+    as well; it goes red for a reader that reprices alias rows when it reads."""
+    import datetime as dt
+
+    yesterday = (dt.date.fromisoformat(cost_mod._today()) - dt.timedelta(days=1)).isoformat()
+    spend_dir.mkdir(parents=True, exist_ok=True)
+    (spend_dir / "default.json").write_text(json.dumps({
+        "format": cost_mod.SPEND_FORMAT,
+        "days": {yesterday: {
+            "usd": 13.66, "currencies": {"USD": 13.66}, "calls": 72,
+            "unknown_model_calls": 72, "tokens": 802_815,
+            "providers": {"deepseek/deepseek-auto": {
+                "tokens": 802_815, "calls": 72, "usd": 13.66,
+                "currencies": {"USD": 13.66}}}}},
+    }), encoding="utf-8")
+    record_spend(None, estimate_cost("deepseek", "deepseek-flash", 10_000, 400,
+                                     cache=cache_usage(9_000, None)),
+                 provider="deepseek")
+
+    out = usage_totals(days=30)
+    provs = out["totals"]["providers"]
+    assert provs["deepseek/deepseek-auto"]["usd"] == 13.66
+    assert provs["deepseek/deepseek-auto"]["tokens"] == 802_815
+    assert provs["deepseek/deepseek-flash"]["usd"] == 0.000834
+    assert out["totals"]["usd"] == round(13.66 + 0.000834, 4)
+    assert out["totals"]["estimated_usd_incomplete"] is True
+
+
 def test_a_corrupt_ledger_does_not_hide_the_others(spend_dir):
     record_spend(None, estimate_cost("openai", "gpt-4o", 1000, 100))
     (spend_dir / "broken.json").write_text("{not json", encoding="utf-8")

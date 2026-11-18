@@ -128,13 +128,58 @@ def _offered():
 def test_every_offered_model_has_a_price(provider, model):
     """MUTATION: drop the price of gemini-2.5-flash-lite (it was unpriced before
     the catalog); or drop the dotted-to-dashed step of find_model (the OpenRouter
-    default goes unknown and is billed at 15/75)."""
-    aliases = mc.CATALOG[provider].aliases
-    if model in aliases:
-        for target in aliases[model].values():
-            assert estimate_cost(provider, target, 1000, 1000).cost_known, (model, target)
-        return
+    default goes unknown and is billed at 15/75); or drop the alias step of
+    find_model (deepseek-auto goes unknown). The alias is asked for directly,
+    not through its targets: the ledger books it whenever a call reaches no
+    provider, and a test that checked only the targets let the alias itself
+    stay at the unknown-model rate."""
     assert estimate_cost(provider, model, 1000, 1000).cost_known, model
+
+
+# An alias is priced at its pro target, which is only an upper bound if pro is
+# the dearer one. Pinned per alias and per rate.
+@pytest.mark.parametrize("provider,alias", [(p, a) for p, prov in mc.CATALOG.items()
+                                            for a in prov.aliases])
+def test_an_alias_pro_target_is_the_dearer_one(provider, alias):
+    """MUTATION: swap `fast` and `pro` in the deepseek-auto alias table."""
+    targets = mc.CATALOG[provider].aliases[alias]
+    fast = mc.find_model(targets["fast"], priced=True)[1]
+    pro = mc.find_model(targets["pro"], priced=True)[1]
+    assert pro.input >= fast.input, alias
+    assert pro.output >= fast.output, alias
+    assert (pro.cached_input or 0) >= (fast.cached_input or 0), alias
+
+
+def test_an_alias_is_priced_at_its_dearer_target():
+    """The tokens of a measured session: 802,815 tokens priced at the
+    unknown-model rate came to 13.66, more than ten times DeepSeek's bill.
+    Literals from the catalog's pro rates (1.32 in, 3.96 out, 0.044 cached).
+    MUTATION: drop the alias step in find_model, or the `through_alias=True`
+    in estimate_cost (back to 13.66, unknown)."""
+    est = estimate_cost("deepseek", "deepseek-auto", 775_852, 26_963)
+    assert est.cost_known is True
+    assert est.usd == 1.130898
+    assert est.usd != round((775_852 * cost.UNKNOWN_PRICE[0]
+                             + 26_963 * cost.UNKNOWN_PRICE[1]) / 1_000_000, 6)
+    cached = estimate_cost("deepseek", "deepseek-auto", 10_000, 400,
+                           cache=cache_usage(9_000, None))
+    assert cached.cost_known is True
+    assert cached.usd == 0.0033
+
+
+def test_the_alias_step_changes_nothing_but_aliases():
+    """Exhaustive over every id the catalog names: the alias step only ever
+    answers for an alias, and for an alias it answers with the pro target."""
+    aliases = {a: (p, t) for p, prov in mc.CATALOG.items() for a, t in prov.aliases.items()}
+    for mid in mc.all_model_ids():
+        via = mc.find_model(mid, priced=True, through_alias=True)
+        if mid in aliases:
+            provider, targets = aliases[mid]
+            assert via is not None and via[0] == provider, mid
+            assert via[1].id == targets["pro"], mid
+            assert mc.find_model(mid, priced=True) is None, mid
+        else:
+            assert via == mc.find_model(mid, priced=True), mid
 
 
 # ── AC5: nothing offered is going away; replacements are real ─────────────────
@@ -525,6 +570,29 @@ def test_usage_show_prints_the_price_date(monkeypatch):
     result = CliRunner().invoke(usage_cmd.app, ["show"])
     assert result.exit_code == 0, result.output
     assert f"as of {mc.CATALOG_AS_OF}" in result.output
+
+
+def test_usage_show_says_when_the_estimate_is_an_upper_bound(monkeypatch):
+    """The web tab and the export mark a period that holds a call priced at
+    the unknown-model rate; the CLI said nothing. MUTATION: delete the note
+    line from `vaf usage show`, or print it unconditionally."""
+    from typer.testing import CliRunner
+
+    from vaf.cli.cmd import usage as usage_cmd
+
+    def _show(flag):
+        monkeypatch.setattr(cost, "usage_totals", lambda days=30: {
+            "days": days, "totals": {"tokens": 10, "calls": 1, "usd": 13.66,
+                                     "currencies": {"USD": 13.66},
+                                     "estimated_usd_incomplete": flag},
+            "users": []})
+        result = CliRunner().invoke(usage_cmd.app, ["show"])
+        assert result.exit_code == 0, result.output
+        return " ".join(result.output.split())
+
+    note = "so the cost estimate is an upper bound"
+    assert note in _show(True)
+    assert note not in _show(False)
 
 
 # ── AC15: the docs name the catalog defaults ─────────────────────────────────

@@ -378,7 +378,7 @@ that reject sampling params (Opus 4.7/4.8, Fable) - otherwise the request would 
 **Models:**
 - `deepseek-flash` - General purpose, fast, supports function calling (default; served by DeepSeek-V4.1-Flash)
 - `deepseek-v4-pro` - More capable, supports function calling
-- `deepseek-auto` - VAF routing alias: `deepseek-flash` for chat, `deepseek-v4-pro` for workflows, automations and compaction
+- `deepseek-auto` - VAF routing alias: `deepseek-flash` for chat, `deepseek-v4-pro` for workflows, automations and compaction. Usage and cost are recorded under the model that answered, not under the alias
 
 Retired names move to `deepseek-flash` when the config loads: `deepseek-v4-flash`
 (retired by DeepSeek on 2026-09-10), `deepseek-chat`, `deepseek-coder`,

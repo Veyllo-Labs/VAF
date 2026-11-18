@@ -1664,6 +1664,8 @@ class APIBackendManager:
                     # Merged over the blank shape, so a link that reports only
                     # the two token counts still leaves this manager holding a
                     # complete record rather than the previous call's remains.
+                    # The link's served-model stamp (set in its own
+                    # `_chat_single`) replaces the primary's with it.
                     self.last_request_usage.update({**blank_request_usage(), **lr})
                     self.session_usage["input_tokens"] += lr.get("input_tokens", 0)
                     self.session_usage["output_tokens"] += lr.get("output_tokens", 0)
@@ -1679,7 +1681,9 @@ class APIBackendManager:
         llm_end pair wraps the whole call: llm_end carries duration_ms, ok
         (False = errored OR abandoned before completion) and a best-effort
         usage snapshot (the serving provider's last request; may lag one call
-        behind when a failover link served the response)."""
+        behind when a failover link served the response). The snapshot's `model`
+        and `provider` name the model and provider that served the call, which
+        the event's own `model` (the requested one, often None) does not."""
         import time as _time
 
         _sink = callable(getattr(self, "event_sink", None))
@@ -1700,6 +1704,14 @@ class APIBackendManager:
         # to size a fallback, and holding a whole response in memory to do it
         # would cost more than the number is worth.
         _out_units = 0
+        # The served-model stamp is per call. A call that never reaches a provider
+        # (a refused local link, an empty chain) must book the model it asked for,
+        # not the one the previous call was served by.
+        try:
+            self.last_request_usage.pop("model", None)
+            self.last_request_usage.pop("provider", None)
+        except Exception:
+            pass
         try:
             for _chunk in self._chat_completion_impl(
                 messages, temperature, max_tokens, stream, model, tools, tool_choice
@@ -1761,7 +1773,15 @@ class APIBackendManager:
             # response stopped, and reading one out of the other hides both.
             _finish = _cache.get("finish_reason")
 
-            _model = str(model or self.config.get(f"api_model_{self.provider_name}", "") or "")
+            # The model and provider that SERVED the call, stamped in `_chat_single`
+            # (the alias resolved, a foreign id dropped, a failover link under its own
+            # provider). Booking the requested name priced every deepseek-auto call at
+            # the unknown-model rate and put failover tokens on the primary's row. The
+            # requested or configured name is the fallback for a call that reached no
+            # provider and so carries no stamp.
+            _model = str(_cache.get("model") or model
+                         or self.config.get(f"api_model_{self.provider_name}", "") or "")
+            _provider = str(_cache.get("provider") or self.provider_name)
             if not (_in or _out):
                 # The call happened - we know the lane, the provider and the
                 # model, because those are decided before it goes out. What is
@@ -1784,14 +1804,14 @@ class APIBackendManager:
                     except Exception:
                         continue
                 if _in_est or out_units:
-                    record_call(self.provider_name, _model, _in_est, int(out_units),
+                    record_call(_provider, _model, _in_est, int(out_units),
                                 reported=False, estimated=True, cache=_cache,
                                 finish_reason=_finish)
                 else:
-                    record_call(self.provider_name, _model, 0, 0, reported=False,
+                    record_call(_provider, _model, 0, 0, reported=False,
                                 cache=_cache, finish_reason=_finish)
                 return
-            record_call(self.provider_name, _model, _in, _out, cache=_cache,
+            record_call(_provider, _model, _in, _out, cache=_cache,
                         finish_reason=_finish)
         except Exception:
             pass  # accounting must never break a call
@@ -1944,6 +1964,13 @@ class APIBackendManager:
         # provider classes are built nowhere but the factory above.
         self.provider.last_request_usage = blank_request_usage()
         self.last_request_usage = blank_request_usage()
+        # What is actually SENT, stamped on the per-call record: the alias resolved,
+        # a foreign id dropped, this manager's own provider. The ledger books these
+        # rather than the name the caller passed (usually None, so the config value,
+        # which may be the deepseek-auto alias no price list knows). Providers never
+        # write these two keys, so the sync below cannot overwrite them, and a
+        # failover link carries its own stamp across in `_stream_link`.
+        self.last_request_usage.update({"model": model, "provider": self.provider_name})
 
         # Execute via provider
         try:

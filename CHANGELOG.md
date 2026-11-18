@@ -74,6 +74,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **DeepSeek Auto costs are estimated at the model that answered.** Calls made with
+  `deepseek-auto` were recorded under the alias, which the price list did not know, so each
+  one was priced at the unknown-model rate ($15 / $75 per million tokens, no cache discount):
+  more than ten times DeepSeek's real price. Every call now records the model and provider
+  that actually served it (`deepseek-flash` or `deepseek-v4-pro`, a failover backup under its
+  own name, the provider's own model when a request named another provider's), and the alias
+  itself is priced at its dearer model. Amounts recorded before stay as they were and are
+  still marked as an upper bound, now also in `vaf usage show`; they leave the 30-day view as
+  the days pass.
 - **The inbox no longer lists the Veyllo App chat.** The exchange between your VAF agent and
   the agent in your Veyllo App showed up as a conversation with a bare id, counted your own
   app messages as unread, and left the inbox window without a channel name. The Veyllo App

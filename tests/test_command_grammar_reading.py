@@ -1628,6 +1628,8 @@ def test_a_quoted_script_name_the_text_can_make_an_option_reads_the_input():
                 "BASH_ARGV0=-s; " + feed + '"$0"', "BASH_ARGV0=-s; " + feed + '"${0}"',
                 "declare S''S=-s; " + feed + '"$SS"', "declare {S,Z}S=-s; " + feed + '"$SS"',
                 "o=-v; n=$(printf '" + B + "121'); printf \"$o\" \"$n\" %s --; " + feed + '"$Q"',
+                "shopt -s expand_aliases" + NL + "alias d=declare" + NL + "n=$(printf '" + B
+                + "121')" + NL + "d \"$n=-s\"" + NL + feed + '"$Q"',
                 "de''clare \"$(printf '" + B + "121')=--\"; " + feed + '"$Q"',
                 "export Q=--; bash -c 'echo \"rm -rf /\" | bash \"$Q\"'"):
         assert classify_command(cmd, profile="host").blocked, cmd
@@ -1664,7 +1666,8 @@ def test_an_option_cluster_takes_a_value_per_o():
     MUTATION: a cluster takes no value - red (`-eo pipefail`);
     MUTATION: step over an expansion after a `c` - red (`bash -c -e "$x"`);
     MUTATION: no brace word in the option scan - red; no tilde word - red;
-    MUTATION: an option word with an expansion is no `-s` - red (`-$x pipefail`)."""
+    MUTATION: an option word with an expansion is no `-s` - red (`-$x pipefail`);
+    MUTATION: cluster values for interpreters too - red (`python3 -OO process.py`)."""
     feed = "echo 'rm -rf /' | bash "
     for cmd in (feed + "-eo pipefail", "bash -eo pipefail <<< 'rm -rf /'",
                 "printf '%s" + B + "n' 'rm -rf /' | bash -euo pipefail",
@@ -1681,9 +1684,100 @@ def test_an_option_cluster_takes_a_value_per_o():
     for cmd in ("set -euo pipefail; echo hi", "bash -eo pipefail script.sh",
                 "bash -euo pipefail -c 'echo hi'", "echo {a,b}.txt", "ls ~"):
         assert not classify_command(cmd, profile="host").blocked, cmd
-    assert cp._shell_c_script(["-ceo", "pipefail", "x"]) == "x"
-    assert cp._shell_c_script(["-c", "-e", "$x"]) == "$x"
-    assert cp._shell_c_script(["{-c,x}"]) == cp._UNKNOWN_SCRIPT
+    assert cp._shell_c_script(["-ceo", "pipefail", "x"]) == ["x"]
+    assert cp._shell_c_script(["-c", "-e", "$x"]) == ["$x"]
+    assert cp._shell_c_script(["{-c,x}"]) == [cp._UNKNOWN_SCRIPT]
+    # an interpreter's cluster takes no values: `python3 -OO process.py` runs the file
+    assert cp._script_input("python3", ["-OO", "process.py"], [])[2] is False
+
+
+def test_bash_reads_its_long_options_first():
+    """bash takes `-name` like `--name` for its long options at the head of its arguments
+    (parse_long_options), `-rcfile` and `-init-file` with a value, before any cluster: `-norc`
+    holds no `c` and `-noprofile` no `o`. `sh` may be bash or dash: both readings count. A
+    long option with an expansion in it may be any of them (fail closed).
+    MUTATION: no long options - red (`-noprofile -c -- ...`, `bash -norc`);
+    MUTATION: no value for `-rcfile` - red (`-init-file /dev/null +c ...`);
+    MUTATION: `sh` read as bash only - red (`sh -login vi`, also with `+c`: dash's `o`
+    takes `vi`);
+    MUTATION: an expansion in a long option read as nothing - red."""
+    feed = "echo 'rm -rf /' | bash "
+    for cmd in ("sh -noediting -O failglob -- <<< 'rm -rf /'", "bash -noprofile -c -- 'rm -rf /'",
+                "bash -noprofile -c - 'rm -rf /'", "bash -verbose -c -e 'rm -rf /'",
+                "bash -posix +c 'rm -rf /'", "x=c; bash -posix -$x 'rm -rf /'", feed + "-norc",
+                "bash -rcfile /dev/null -c 'rm -rf /'", "bash -init-file /dev/null +c 'rm -rf /'",
+                "u=; bash --rcfile${u} /dev/null -s <<< 'rm -rf /'", feed + "-restricted",
+                feed + "-rcfile /dev/null", feed + "-init-file /dev/null",
+                # dash reads `-login` as a cluster whose `o` takes `vi`: no script, the input
+                "echo 'rm -rf /' | sh -login vi", "sh -login vi +c 'rm -rf /'"):
+        assert classify_command(cmd, profile="host").blocked, cmd
+    assert cp._long_options_end(["-norc", "-rcfile", "f", "-c", "x"]) == 3
+    assert cp._long_options_end(["--rcfile$u", "f"]) == -1
+    assert cp._shell_c_script(["-norc", "-c", "x"], long_options=True) == ["x"]
+    assert cp._shell_c_script(["-norc", "x"]) != []      # dash's reading: `-n -o r -c`
+
+
+def test_an_option_word_with_an_expansion_may_take_any_values():
+    """An option word given by an expansion or a tilde may hold `o` letters, each taking a
+    word: every later word may be the script (union).
+    MUTATION: the later words not read - red (`-c$x pipefail '...'`)."""
+    for cmd in ("x=o; bash -c$x pipefail 'rm -rf /'", "x=o; bash -c -$x pipefail 'rm -rf /'",
+                "x=oo; bash -c$x pipefail errexit 'rm -rf /'", "x=co; bash -$x pipefail 'rm -rf /'",
+                "x=-oc; bash \"$x\" pipefail 'rm -rf /'", "v1='+Cofc'; sh \"$v1\" posix 'rm -rf /'",
+                "bash \"$(echo -co)\" errexit 'rm -rf /'", "HOME=-o; bash ~ errexit +c 'rm -rf /'"):
+        assert classify_command(cmd, profile="host").blocked, cmd
+    assert cp._shell_c_script(["-c$x", "pipefail", "y"]) == ["pipefail", "y"]
+    assert not classify_command('bash "$SCRIPT" <<< "$INPUT"', profile="host").blocked
+
+
+def test_a_tilde_script_runs_what_the_text_may_set():
+    """`bash -c ~/...` runs HOME's value as code, `~+`/`~-` PWD's and OLDPWD's: refused when
+    the text may set them (HOME named, a `cd` for the other two, always for those), also after
+    `-` or `--`; a tilde path in a text that sets nothing passes.
+    MUTATION: a tilde prefix as a plain script - red; only the exact `~` - red (`~/`);
+    MUTATION: HOME never settable - red."""
+    for cmd in ("HOME='rm -rf / #'; bash -c ~/", "PWD='rm -rf / #'; sh -c ~+/",
+                "HOME='rm -rf / #'; bash +c ~/x", "HOME='rm -rf / #'; bash -c -- ~",
+                "PWD='rm -rf /'; bash -c -- ~+", "HOME='rm -rf /'; bash -c ~"):
+        assert classify_command(cmd, profile="host").blocked, cmd
+    for cmd in ("bash -c ~/bin/tool.sh", "bash ~/bin/tool.sh", "bash -c 'ls ~/x'"):
+        assert not classify_command(cmd, profile="host").blocked, cmd
+
+
+def test_a_brace_word_is_read_where_bash_expands_it():
+    """Brace expansion needs its braces unquoted: a quoted `-c` script keeps its braces as
+    text, a brace word in the option scan (nested too, `{-s,{x}}`) or an unquoted one as the
+    script makes the script unknown. The test is one pass over the word.
+    MUTATION: the brace test on the token (quotes gone) - red (the quoted scripts);
+    MUTATION: braces at the outer level only - red (`{-s,{x}}`)."""
+    for cmd in ("bash {-c,{" + B + " rm" + B + " -rf" + B + " /" + B + ";}}",
+                "echo 'rm -rf /' | bash {-s,{x}}", "bash {-s,{x}} <<< 'rm -rf /'",
+                "bash -c {'rm -rf /',x}"):
+        assert classify_command(cmd, profile="host").blocked, cmd
+    assert cp._brace_word("{-c,x}") and cp._brace_word("a{b,{c}}")
+    assert not cp._brace_word("'{a,b}'") and not cp._brace_word("${a,b}")
+    assert not cp._brace_word("{" + "," * 10)
+
+
+def test_the_input_redirected_from_itself_is_the_pipe():
+    """`<&0`, `</dev/stdin`, `</dev/fd/0`, `</proc/self/fd/0` reopen the input it already has:
+    the pipe still feeds the shell. Another file or descriptor does not.
+    MUTATION: take them for a redirection - red."""
+    feed = "echo 'rm -rf /' | bash "
+    for redir in ("<&0", "0<&0", "</dev/stdin", "0</dev/stdin", "</dev/fd/0", "</proc/self/fd/0",
+                  "-s </dev/stdin", "-eo pipefail </dev/stdin", "< /dev/stdin"):
+        assert classify_command(feed + redir, profile="host").blocked, redir
+    for cmd in ("echo x | bash setup.sh </dev/null", "bash < setup.sh"):
+        assert not classify_command(cmd, profile="host").blocked, cmd
+    assert not cp._self_stdin("<", "/proc/1/fd/0") and not cp._self_stdin("<&", "0-")
+
+
+def test_the_name_lookup_cap_is_64():
+    """64 distinct quoted script names are looked up; the 65th reads the input.
+    MUTATION: another cap - red."""
+    assert cp._SCRIPT_NAME_SEARCHES == 64
+    names = cp._ScriptName(" ".join('"$a%d"' % i for i in range(65)), False)
+    assert [names.reads_input('"$a%d"' % i) for i in range(65)] == [False] * 64 + [True]
 
 
 def test_a_long_command_with_quoted_script_names_is_read_as_before():
@@ -1968,7 +2062,7 @@ def test_a_text_nested_past_the_grammar_depth_is_refused_as_too_deep():
 
 # Every row that ran the marker and stays refused, and the named boundaries the rest belong to
 # (docs/security/SANDBOXING.md, "what it does not read").
-_NEVER_AGAIN_SIZE = 2573
+_NEVER_AGAIN_SIZE = 2852
 _NAMED_BOUNDARIES = {
     "a substitution's output inside [[ ]] that a redirection of the compound command sends "
     "into the pipe",
@@ -1999,3 +2093,163 @@ def test_no_input_that_ran_the_marker_passes_again(profile):
     passed = [cmd for cmd in data["refused"]
               if not classify_command(cmd, profile=profile).blocked]
     assert passed == []
+
+
+# -- gate: everyday shell invocations pass --------------------------------------------------
+
+# Real-world `bash -c` / `sh -c` scripts with brace expansion, tilde paths, loops, globs and
+# options, long options in both spellings, and the benign invocations found in this repo's
+# scripts, docs and tests. Each passes at the base of the grammar reading.
+_EVERYDAY_SHELL = [
+    "bash -c 'for i in {1..3}; do echo $i; done'",
+    "sh -c 'for f in {a,b}.txt; do echo \"$f\"; done'",
+    "bash -c 'echo {1..5}'",
+    "bash -c '{ echo a, b; }'",
+    "bash -c 'mkdir -p out/{bin,lib}'",
+    "bash -lc 'echo {a,b}'",
+    "bash -ec 'cp file.{txt,bak}'",
+    "bash -c \"echo {1..3}\"",
+    "bash script.sh '{\"a\": 1, \"b\": 2}'",
+    "echo hi | bash -c 'read x; echo {$x,y}'",
+    "docker exec box bash -c 'ls /etc/{passwd,group}'",
+    "timeout 5 bash -c 'seq 1 3 | xargs -I{} echo {}, done'",
+    "bash -c 'printf \"%s,%s\\n\" {a,b}'",
+    "bash -c 'touch src/{main,util}.c && ls src'",
+    "sh -c 'cp config.yml{,.bak}'",
+    "bash -euo pipefail -c 'for d in {app,lib}; do (cd $d && make); done'",
+    "bash -c ~/bin/tool.sh",
+    "bash ~/bin/tool.sh",
+    "bash -c 'ls ~/projects'",
+    "sh -c 'cd ~ && ls'",
+    "bash -c 'cp ~/.bashrc ~/.bashrc.bak'",
+    "bash -lc '~/bin/deploy --dry-run'",
+    "sh -c 'for f in *.txt; do wc -l \"$f\"; done'",
+    "bash -O extglob -c 'ls +(a|b).txt'",
+    "bash -O globstar -c 'ls **/*.py'",
+    "bash -euo pipefail -c 'make && make test'",
+    "bash -eo pipefail -c 'cat log | grep -c error'",
+    "bash -c 'set -o pipefail; cat file | sort'",
+    "bash -xc 'echo debug'",
+    "bash -lc 'nvm use 18 && npm ci'",
+    "bash -c 'while read -r line; do echo \"$line\"; done < input.txt'",
+    "sh -c 'test -f Makefile && make'",
+    "bash -c 'case $1 in a) echo A;; *) echo other;; esac' _ a",
+    "bash --noprofile --norc -c 'echo hi'",
+    "bash -noprofile script.sh",
+    "bash --norc script.sh",
+    "bash --login -c 'echo hi'",
+    "bash -login script.sh",
+    "bash --posix -c 'echo hi'",
+    "bash --rcfile ~/.bashrc -c 'echo hi'",
+    "bash --init-file setup.sh -c 'echo hi'",
+    "bash --noediting -c 'echo hi'",
+    "bash --verbose script.sh",
+    "bash -norc -c 'echo hi'",
+    "sh -e script.sh",
+    "bash -x script.sh",
+    "bash -eo pipefail script.sh",
+    "bash -O extglob script.sh",
+    "bash -c '2>/dev/null echo checked'",
+    "bash -c 'arr=($(ls)); echo ${arr[0]}'",
+    "bash -c 'curl https://example.org/x -o f'",
+    "bash -c 'echo hi'",
+    "bash -c 'echo {i}'",
+    "bash -c 'ssh-add && git pull'",
+    "sh -c 'black \"$1\"'",
+    "sh -c 'echo {i}'",
+    "sh -c 'python3 -u main.py'",
+    "sh -c 'redis-cli ${REDIS_PASSWORD:+-a \"$REDIS_PASSWORD\"} ping'",
+    "sh -c 'wc -l {}'",
+    "xargs -I{} sh -c 'wc -l \"$1\"' _ {}",
+    "find . -name '*.log' -exec sh -c 'gzip \"$1\"' _ {} \\;",
+    "cat setup.sh | bash -eo pipefail",
+    "printf '%s\\n' \"$ans\" | bash \"$S\"",
+    "echo x | python -O script.py",
+    "echo x | python -OO script.py",
+    "echo x | python3 -W ignore script.py",
+    "bash < setup.sh",
+    "bash 0< setup.sh",
+]
+
+
+@pytest.mark.parametrize("profile", ["host", "jailed", "remote"])
+def test_everyday_shell_invocations_pass(profile):
+    """Gate against over-refusal: every row passes on every lane, as it did before the grammar
+    reading. A rule that reads a shell's options or script more strictly must keep them.
+    MUTATION: a brace word anywhere in the option scan, the script included - red."""
+    refused = [cmd for cmd in _EVERYDAY_SHELL
+               if classify_command(cmd, profile=profile).blocked]
+    assert refused == []
+
+
+# -- gate: the scans of the shell readings stay linear --------------------------------------
+
+def _plain_word(n):
+    return "echo " + "a" * n
+
+
+# One adversarial shape for every pattern or scan the shell readings added: unclosed
+# delimiters, glued repeats, long runs of the pattern's own characters. A shape that is one
+# long word grows no faster than 1.25 times a plain word of the same length (shlex builds a
+# long token one character at a time, so its own cost grows faster than linear, a named
+# exception), every other one as it stands.
+_COST_SHAPES = [
+    ("brace, no closer", True, lambda n: "bash {" + "," * n),
+    ("brace dots, no closer", True, lambda n: "bash {" + "." * n),
+    ("brace in the option scan", True, lambda n: "echo x | bash -e {" + ",,," * (n // 3)),
+    ("nested braces", True, lambda n: "bash {-c," + "{" * (n // 2) + "x" + "}" * (n // 2)),
+    ("brace words before a name", False,
+     lambda n: "echo {" + ", " * (n // 2) + "; echo x | bash \"$S\""),
+    ("glued printf", True,
+     lambda n: "printf " + "printf/" * (n // 7) + " x $y; echo x | bash \"$S\""),
+    ("setters with no expansion", False, lambda n: "read " * (n // 5) + "| bash \"$s\""),
+    ("indirections", True, lambda n: "${!" * (n // 3) + " | bash \"$s\""),
+    ("a name in pieces", False,
+     lambda n: "declare " + "S''" * (n // 3) + "S=1; echo x | bash \"$SS\""),
+    ("empty quotes before a name", True, lambda n: "echo x | bash " + "''" * (n // 2) + "\"$S\""),
+    ("a long plain name", True, lambda n: "echo x | bash \"$" + "a" * n + "\""),
+    ("distinct names", False,
+     lambda n: "".join("echo x | bash \"$a%d\"; " % i for i in range(n // 22))),
+    ("one cluster of values", True, lambda n: "bash -" + "o" * n + " x"),
+    ("clusters repeated", False, lambda n: "bash -ooooo a b c d e; " * (n // 23)),
+    ("long options repeated", False, lambda n: "bash " + "-norc " * (n // 6) + "-c x"),
+    ("rcfile values repeated", False, lambda n: "bash " + "-rcfile f " * (n // 10) + "-c x"),
+    ("tilde words", False, lambda n: "bash ~ " * (n // 7)),
+    ("tilde paths after -c", False, lambda n: "bash -c ~/x; " * (n // 13)),
+    ("expansion option words", False, lambda n: "bash -c$x pipefail " * (n // 19)),
+    ("stdin from itself", False, lambda n: "echo x | bash <&0; " * (n // 18)),
+    ("digit substring starts", False, lambda n: ("echo ${" + "0" * 1100 + "1:1}; ") * (n // 1112)),
+    ("ansi-c in arithmetic", True, lambda n: "(( $'" + B + "x41" * (n // 4) + "' ))"),
+    ("ansi-c in a default word", True, lambda n: "echo \"${y:-$'" + B + "x41" * (n // 4) + "'}\""),
+    ("dot-dot targets", True, lambda n: "( x ) >/a" + "/.." * (n // 3) + " | cat"),
+    ("closers with descriptor 3", False,
+     lambda n: "{ ( x >&3 ) >/dev/null; } 3>&1 | bash; " * (n // 41)),
+    ("dollar continuations", True, lambda n: "x=$" + (B + NL) * (n // 2) + "'a'"),
+]
+
+
+@pytest.mark.parametrize("name, one_word, build", _COST_SHAPES, ids=[s[0] for s in _COST_SHAPES])
+def test_the_shell_readings_scale_linearly(name, one_word, build):
+    """Gate against superlinear scans: from 16 K to 128 K characters each doubling costs at most
+    2.3 times as much (plus 0.03 s of noise), for a one-word shape at most 1.25 times what a
+    plain word's doubling costs, and 128 K stays under 3 s.
+    MUTATION: the brace test as a backtracking pattern - red (the brace rows);
+    MUTATION: read printf's first word from each match to the word's end - red (glued printf);
+    MUTATION: read the text for HOME at every tilde script - red (tilde paths after -c)."""
+    def took(text):
+        best = None
+        for _ in range(2):
+            start = time.perf_counter()
+            classify_command(text, profile="host_unattended")
+            spent = time.perf_counter() - start
+            best = spent if best is None else min(best, spent)
+        return best
+    sizes = (16000, 32000, 64000, 128000)
+    times = [took(build(n)) for n in sizes]
+    bounds = [2.3] * 3
+    if one_word:
+        plain = [took(_plain_word(len(build(n)))) for n in sizes]
+        bounds = [max(2.3, 1.25 * large / small) for small, large in zip(plain, plain[1:])]
+    for small, large, bound in zip(times, times[1:], bounds):
+        assert large <= bound * small + 0.03, (name, times, bounds)
+    assert times[-1] < 3.0, (name, times)

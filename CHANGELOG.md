@@ -690,6 +690,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   - `rm -rf ~/.cache/$X`, `rm -rf "$HOME/$X"`, `/var/tmp/$USER` and the like (a variable after
     a protected folder; an empty variable deletes that folder): write the path out.
   - `./build/*/tool`: write the path out.
+  - An extglob group with a `!` or a glob in it (`ls !(*.tmp)`, `ls @(*.py|*.txt)` with
+    extglob on): list the globs (`ls *.py *.txt`).
+  - A word a shell brace-expands where its options stand (`bash {a,b}.sh`): write the words
+    out.
   - `... | base64 -d | sh`, `xxd -r -p | sh`, `... | rev | sh`: decode into a file, read it,
     then run it.
   - `powershell -EncodedCommand ...` (also `-enc`, `-e`, `-ec`): `-Command` with the text.

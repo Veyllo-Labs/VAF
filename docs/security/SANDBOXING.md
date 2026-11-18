@@ -1178,18 +1178,30 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   shell its decoded text and expands nothing (`bash <<< $'set -e\nmake'` passes). Assignment
   words before a program are
   stepped over in every form bash takes (`a+=1 cmd`, `a[0]=1 cmd`, `a[${#a[@]}]=x`), and a
-  shell reads its options after `-c` too and runs the first word that is none (`bash -c -e '...'`,
+  shell reads its long options first, with one dash or two (`-norc` and `--norc`, `-rcfile F`
+  and `-init-file F` with their value; `sh`, which may be dash, is read both ways, and a long
+  option with an expansion in it may be any of them, refused or its input read), then its
+  options after `-c` too, and runs the first word that is none (`bash -c -e '...'`,
   `sh -c - '...'`), `+c` being `-c` as well (`bash +c '...'` runs it), and so does an option
   word with an expansion in it, a word that starts with one or a tilde word (`~`, `~+`,
   `~-`, a variable's value), which may be either (`x=c; bash -$x -e '...'`,
-  `x=-c; bash "$x" '...'`, `HOME=-c; bash ~ '...'`); a cluster takes one following word
-  as a value for each `o` or `O` in it (`bash -ceo pipefail '...'`, and `bash -eo pipefail`
-  has no script, so it reads its input), an option word with an expansion in it may be
-  `-s` as well, after a `c` a word that starts with an expansion is the script itself
-  (`bash -c -e "$x"`, refused as opaque), and a brace word there (`bash {-c,'...'}`) makes
-  the script unknown, refused; a quoted script that starts like a redirection is read as
-  well (`bash -c -e '>x;cmd'`). A tilde word or a brace word at the script name reads the
-  input too (`HOME=-s; ... | bash ~`). An unquoted expansion as a shell's
+  `x=-c; bash "$x" '...'`, `HOME=-c; bash ~ '...'`), and such a word may also hold `o`
+  letters taking any number of values, so every later word is read as the script as well
+  (`x=o; bash -c$x pipefail '...'`); a cluster takes one following word as a value for each
+  `o` or `O` in it (`bash -ceo pipefail '...'`, and `bash -eo pipefail` has no script, so it
+  reads its input), an option word with an expansion in it may be `-s` as well, after a `c`
+  a word that starts with an expansion is the script itself (`bash -c -e "$x"`, refused as
+  opaque), and one that starts with a tilde runs a directory variable's value, refused when
+  the text may set it (`HOME='...'; bash -c ~/`; `~+` and `~-`, PWD and OLDPWD, which a `cd`
+  sets, always), while `bash -c ~/bin/tool.sh` in a text that sets nothing passes; a word bash
+  brace-expands, its braces unquoted, nested too (`bash {-c,'...'}`, `{-s,{x}}`), makes the
+  script unknown, refused, also as the script itself, while a quoted script keeps its braces
+  as text (`bash -c 'for i in {1..3}; do ...; done'` passes; a brace word as a script file,
+  `bash {a,b}.sh`, is refused too, a known over-refusal that fails closed); a quoted script
+  that starts like a redirection is read as well (`bash -c -e '>x;cmd'`). A tilde word at the
+  script name reads the input too (`HOME=-s; ... | bash ~`), and so does a shell whose input
+  is redirected from itself (`<&0`, `</dev/stdin`, `</dev/fd/0`, `</proc/self/fd/0`: the pipe
+  still feeds it). An unquoted expansion as a shell's
   script name may vanish, so the shell's input is read too (`bash $! <<< '...'`). A quoted
   one is one word, never an option, only when it is exactly `"$NAME"` or `"${NAME}"` (empty
   quotes add nothing, `''"$x"`) and the text can give NAME no value: NAME appears nowhere
@@ -1197,9 +1209,11 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   `read -ax`, `for a in`), also with line continuations, `$''`, quotes and backslashes
   taken out (`declare S''S=-s` assigns `SS`), bash does not assign it itself (`REPLY`,
   `OPTARG`, `MAPFILE`, `_`, `BASH_...`), and the text assigns no name it does not spell
-  (`eval`, `source`, `.`, `${!...}`, a brace expansion, `declare {S,Z}S=-s`, a name given by
+  (`eval`, `source`, `.`, `alias`, `${!...}`, a brace expansion, `declare {S,Z}S=-s`, a name
+  given by
   an expansion to `declare`, `read` or `printf -v`, also spelled with quotes, `de''clare`,
-  and a `printf` whose first word is an expansion that may be `-v`). So `bash "$S"`, `bash "$SCRIPT" <<< "$INPUT"` and
+  and a `printf` whose first word is an expansion that may be `-v`). So `bash "$S"`,
+  `bash "$SCRIPT" <<< "$INPUT"` and
   `printf '%s\n' "$ans" | bash "$S"` pass, and everything else reads the input as well: an
   operator (`"${x:---}"`), a substitution (`"$(echo -)"`), `$@`, literal text beside the
   expansion (`"$x"-s`), every positional parameter (`"$1"`, `"$*"`, also `"$0"`, which
@@ -1389,7 +1403,7 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   before this change was lost in
   any of them (bash 5.3; the suite runs 1 600 draws). The classes the differential found on the way are each pinned in
   `tests/test_command_grammar_reading.py`, and every probe written while the reading was
-  built and checked, every pinned row and every corpus row that ran the marker in bash, 2 573
+  built and checked, every pinned row and every corpus row that ran the marker in bash, 2 852
   of them, is in `tests/fixtures/command_policy/never_again.json` and refused on every lane
   (16 more belong to the named boundaries below and are kept apart under their names).
 - **Named boundary: what it does not read.** cmd.exe's and PowerShell's own grammar (`%VAR%`
@@ -1410,7 +1424,11 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   for its input (`f() { bash; }; echo ... | f`) or as what prints into one
   (`f() { echo ...; }; f | bash`); a glob as a shell's script name, which `nullglob` can turn
   into nothing (`bash *.q <<< ...`); extglob groups `!(...)`, `*(...)` and `?(...)` in an
-  array, refused as a syntax error or an expansion though bash runs them with extglob on; an
+  array, refused as a syntax error or an expansion though bash runs them with extglob on,
+  and a command's extglob group with a `!` or a glob among its alternatives
+  (`ls !(*.tmp)`, `ls @(*.py|*.txt)` with extglob on), read as a negation or with its `|` as
+  a pipe, so a glob in it stands as a program name: refused, a known over-refusal (list the
+  globs: `ls *.py *.txt`); an
   empty substitution or expansion glued to an option (`rm $()-rf /`, `rm $@-rf /`); a variable
   or an empty substitution
   before a `/` with no folder written in front of it (also `rm -rf ${ }/`): `rm -rf $X/`

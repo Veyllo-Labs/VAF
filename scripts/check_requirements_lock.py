@@ -17,7 +17,9 @@ Default mode (network, metadata only): for every target of the matrices it selec
 whose markers apply, and reports
   - two entries of one package that apply at once;
   - an entry with no wheel pip would install there, or one whose Requires-Python excludes the
-    target (a release with only an sdist is listed as built on install, not as a problem);
+    target (a release with only an sdist is listed as built on install, not as a problem; its
+    requirements are read from that sdist's own PKG-INFO when they are static there, and
+    listed as not checked when they are not);
   - a requirement of the wheel pip would pick there (its PEP 658 metadata, read per wheel, since
     two wheels of one release can declare different requirements) that no applying entry
     satisfies, with the extras the tree asks for;
@@ -33,7 +35,8 @@ not counted unless the lock names them). Exit 1 on a difference; with ``--report
 Markdown table for a CI step summary and exits 0.
 
 The PyPI reads follow scripts/check_vllm_lock.py and use its ``_get_json`` and ``_get_text``,
-each retried on a network error or a 5xx answer. Its target model is
+plus a byte download for the few sdists a target builds (checked against PyPI's sha256), each
+retried on a network error or a 5xx answer. Its target model is
 not shared: those targets are Linux glibc floors, this lock also needs macOS and Windows tags,
 and its parser keeps one entry per name, which cannot hold a forked entry.
 
@@ -49,14 +52,19 @@ from __future__ import annotations
 
 import concurrent.futures
 import email.parser
+import hashlib
 import http.client
+import io
 import importlib.metadata
 import json
 import re
 import shlex
 import sys
+import tarfile
 import time
 import urllib.error
+import urllib.request
+import zipfile
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -329,6 +337,7 @@ class PyPI:
         from check_vllm_lock import _get_json, _get_text
         self._get_json = lambda *args: with_retries(_get_json, *args)
         self._get_text = lambda url: with_retries(_get_text, url)
+        self._get_bytes = lambda url: with_retries(_read_bytes, url)
         self._simple: dict = {}
         self._release: dict = {}
         self._meta: dict = {}
@@ -360,7 +369,8 @@ class PyPI:
             except Exception:
                 continue
             out.append({"filename": fn, "url": f["url"], "requires-python": f.get("requires-python"),
-                        "core-metadata": bool(f.get("core-metadata") or f.get("data-dist-info-metadata"))})
+                        "core-metadata": bool(f.get("core-metadata") or f.get("data-dist-info-metadata")),
+                        "sha256": (f.get("hashes") or {}).get("sha256"), "size": f.get("size")})
         return out
 
     def hashes(self, name: str, version: str) -> dict:
@@ -377,8 +387,52 @@ class PyPI:
             self._meta[url] = list(msg.get_all("Requires-Dist") or [])
         return self._meta[url]
 
-    def sdist_requires(self, name: str, version: str) -> list:
-        return list(self._release_json(name, version)["info"].get("requires_dist") or [])
+    def sdist_requires(self, file: dict):
+        """The Requires-Dist lines of this sdist's own PKG-INFO, or None when they are not static
+        there. Not the release's JSON ``info``: PyPI fills that from the first file uploaded,
+        which can be a wheel with other requirements than the sdist a target builds."""
+        if (file.get("size") or 0) > _SDIST_READ_MAX:
+            return None
+        data = self._get_bytes(file["url"])
+        if hashlib.sha256(data).hexdigest() != file.get("sha256"):
+            raise ValueError(f"{file['filename']}: the download does not match PyPI's sha256")
+        return sdist_requires_dist(data, file["filename"])
+
+
+# An sdist is downloaded to read its PKG-INFO; one larger than this is listed as not checked.
+_SDIST_READ_MAX = 20_000_000
+
+
+def _read_bytes(url: str) -> bytes:
+    with urllib.request.urlopen(url, timeout=60) as r:
+        return r.read()
+
+
+def sdist_requires_dist(data: bytes, filename: str):
+    """The Requires-Dist of an sdist's top-level PKG-INFO when Metadata-Version is 2.2 or later and
+    Requires-Dist is not Dynamic (core metadata 2.2: only then do they bind the built wheel),
+    else None. Read from memory, nothing is extracted."""
+    raw = None
+    if filename.endswith(".zip"):
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            names = [n for n in zf.namelist() if n.count("/") == 1 and n.endswith("/PKG-INFO")]
+            raw = zf.read(names[0]) if names else None
+    else:
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tf:
+            members = [m for m in tf.getmembers()
+                       if m.isfile() and m.name.count("/") == 1 and m.name.endswith("/PKG-INFO")]
+            raw = tf.extractfile(members[0]).read() if members else None
+    if raw is None:
+        return None
+    msg = email.parser.Parser().parsestr(raw.decode("utf-8", "replace"))
+    try:
+        if Version(msg.get("Metadata-Version", "0")) < Version("2.2"):
+            return None
+    except Exception:
+        return None
+    if "requires-dist" in {d.strip().lower() for d in msg.get_all("Dynamic") or []}:
+        return None
+    return list(msg.get_all("Requires-Dist") or [])
 
 
 def _sdist_version_matches(filename: str, name: str, version: Version) -> bool:
@@ -451,6 +505,7 @@ def check(entries: list, requirements: list, targets: list, source, workers: int
     requires_dist and sdist_requires (PyPI, or a test's stand-in)."""
     problems: set = set()
     sdist_targets: dict = defaultdict(list)
+    unread_sdists: set = set()
     releases = sorted({(e.name, e.version) for e in entries})
 
     with concurrent.futures.ThreadPoolExecutor(workers) as pool:
@@ -514,7 +569,12 @@ def check(entries: list, requirements: list, targets: list, source, workers: int
             for name, picked_files in picked.items():
                 f = picked_files[view]
                 if _is_sdist(f["filename"]):
-                    lines = source.sdist_requires(chosen[name].name, chosen[name].version)
+                    lines = source.sdist_requires(f)
+                    if lines is None:
+                        # Not a problem: pip in hash mode refuses a requirement of the built
+                        # sdist that the lock does not pin (measured), so it fails on install.
+                        unread_sdists.add(str(chosen[name]))
+                        lines = []
                 elif meta[f["url"]] is None:
                     problems.add(f"[{target.label}] {chosen[name]}: {f['filename']} has no PEP 658 "
                                  "metadata to check")
@@ -531,6 +591,9 @@ def check(entries: list, requirements: list, targets: list, source, workers: int
                     problems.add(f"[{target.label}] {who} needs {req}, the lock has {have.version}")
     notes = [f"{release}: no wheel, built from its sdist on install "
              f"({len(labels)} of {len(targets)} targets)" for release, labels in sorted(sdist_targets.items())]
+    notes += [f"{release}: its sdist states no static Requires-Dist (core metadata before 2.2, or "
+              "dynamic), so its requirements are not checked here; pip's hash mode still refuses "
+              "any it does not find pinned" for release in sorted(unread_sdists)]
     return sorted(problems), notes
 
 

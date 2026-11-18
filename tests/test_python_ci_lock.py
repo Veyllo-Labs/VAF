@@ -21,6 +21,7 @@ import json
 import os
 import random
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -264,52 +265,130 @@ def _joined_lines(text: str) -> list:
     return text.replace("\\\r\n", " ").replace("\\\n", " ").splitlines()
 
 
-_LATEST_STEP = ("_test.yml", "jobs", "build-and-test", "steps")
+def _latest_install_step():
+    """(index, step) of the newest-versions lane's install step, found by its id (another step
+    may share its `if`), its condition asserted on its own."""
+    steps = _wf("_test.yml")["jobs"]["build-and-test"]["steps"]
+    found = [(i, s) for i, s in enumerate(steps) if s.get("id") == "install-latest"]
+    assert len(found) == 1, found
+    assert found[0][1]["if"] == "inputs.deps == 'latest'"
+    return found[0]
 
 
-def _shell_texts(node, where: tuple):
-    """(where, text) of every string in a parsed workflow, ``where`` being its key path."""
-    if isinstance(node, dict):
-        for key, value in node.items():
-            yield from _shell_texts(value, where + (str(key),))
-    elif isinstance(node, list):
-        for index, value in enumerate(node):
-            yield from _shell_texts(value, where + (index,))
-    elif isinstance(node, str):
-        yield where, node
+def _run_blocks(name: str):
+    """(where, script) of every `run` of a workflow, ``where`` being its key path: the shell
+    a runner executes, not a step's display name."""
+    for job_id, job in _wf(name)["jobs"].items():
+        for index, step in enumerate(job.get("steps") or []):
+            if "run" in step:
+                yield (name, "jobs", job_id, "steps", index, "run"), step["run"]
+
+
+def _shell_commands(text: str):
+    """Each simple command of a shell text as bash splits it: continuations joined, comments
+    dropped, cut at ; && || | & and parentheses, quotes removed, redirections dropped with
+    their target. A quote left open takes the next lines, as in bash; text that never
+    closes comes back as None, to be refused."""
+    lines = _joined_lines(text)
+    while lines:
+        line = lines.pop(0)
+        while True:
+            lex = shlex.shlex(line, posix=True, punctuation_chars=True)
+            lex.whitespace_split = True
+            try:
+                tokens = list(lex)
+                break
+            except ValueError:
+                if not lines:
+                    tokens = None
+                    break
+                line += "\n" + lines.pop(0)
+        if tokens is None:
+            yield None
+            continue
+        command, skip_target = [], False
+        for token in tokens:
+            if skip_target:
+                skip_target = False
+            elif set(token) <= set("<>&") and set(token) & set("<>"):
+                if command and command[-1].isdigit():
+                    command.pop()  # the 2 of 2>&1
+                skip_target = not token.endswith("&")
+            elif set(token) <= set(";&|()"):
+                if command:
+                    yield command
+                command = []
+            else:
+                command.append(token)
+        if command:
+            yield command
+
+
+_PIP = re.compile(r"(^|[/\\])pip(3(\.\d+)?)?(\.exe)?$")
+# Flags that change nothing about WHAT an unhashed install of the editable project fetches.
+_QUIET_FLAGS = {"-q", "--quiet", "--disable-pip-version-check", "--no-deps", "--no-build-isolation",
+                "--no-cache-dir"}
+
+
+def _install_args(command: list):
+    """The arguments of a `pip install` in one command (pip, pip3, python -m pip, uv pip),
+    or None. An echo or printf only prints its words."""
+    words = [w for w in command if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", w)]
+    if not words or words[0] in ("echo", "printf"):
+        return None
+    for i, word in enumerate(words[:-1]):
+        if _PIP.search(word) and words[i + 1] == "install":
+            return words[i + 2:]
+    return None
 
 
 def test_every_tool_install_is_hash_pinned():
     """No workflow and neither script installs a tool by version alone: pip, uv and the publish
     tools come from .github/requirements/*.lock with --require-hashes and --force-reinstall.
-    The only installs without hashes are the editable project (--no-deps) and, in the one step
-    of the newest-versions lane and nowhere else, requirements.txt and the project with its
-    dependencies (that lane's point). Continued commands are judged whole. MUTATION: `pip
-    install "pip==26.1.2"` back into a lane; `pip install build twine` back into a publish job,
-    also as a continued command; drop --force-reinstall from a publish install; the latest
-    lane's `pip install -r requirements.txt` in a locked step - red."""
-    steps = _wf("_test.yml")["jobs"]["build-and-test"]["steps"]
-    latest_index = next(i for i, s in enumerate(steps) if s.get("if") == "inputs.deps == 'latest'")
-    latest_where = _LATEST_STEP + (latest_index, "run")
-    sources = [((p.name,) + where, text) for p in sorted(WF.glob("*.yml"))
-               for where, text in _shell_texts(_wf(p.name), ())]
+    The only installs without hashes are the editable project (--no-deps, nothing else) and,
+    in the one step of the newest-versions lane (id install-latest) and nowhere else,
+    requirements.txt and the project with its dependencies (that lane's point). Commands are
+    judged as bash runs them: continued lines whole, chained commands one by one, comments
+    not at all. uvx and pipx install nothing by hash. MUTATION: `pip install "pip==26.1.2"`
+    back into a lane; `pip install build twine` back into a publish job, also as a continued
+    command; drop --force-reinstall from a publish install; the latest lane's `pip install -r
+    requirements.txt` in a locked step; `--no-deps -e . twine`; --require-hashes only in a
+    comment; `echo go && pip install twine`; `pip3 install`; `uvx twine` - red."""
+    latest_where = ("_test.yml", "jobs", "build-and-test", "steps", _latest_install_step()[0], "run")
+    sources = [blk for p in sorted(WF.glob("*.yml")) for blk in _run_blocks(p.name)]
     sources += [(("ci_check.sh",), _gate()), (("install_lock.sh",), _install_script())]
-    unpinned, unforced, latest_seen = [], [], []
+    unpinned, unforced, latest_seen, hashed_files = [], [], [], set()
     for where, text in sources:
-        for line in _joined_lines(text):
-            if "pip install" not in line or line.lstrip().startswith(("#", "echo")):
+        for command in _shell_commands(text):
+            if command is None:
+                unpinned.append(f"{where}: a line shlex cannot read")
                 continue
-            if "--require-hashes" in line:
-                if "--force-reinstall" not in line:
-                    unforced.append(f"{where}: {line.strip()}")
+            words = [w for w in command if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", w)]
+            if words and os.path.basename(words[0]) in ("uvx", "pipx"):
+                unpinned.append(f"{where}: {' '.join(command)}")
                 continue
-            if re.search(r"--no-deps .*-e ", line):
+            args = _install_args(command)
+            if args is None:
+                continue
+            if "--require-hashes" in args:
+                if "--force-reinstall" not in args:
+                    unforced.append(f"{where}: {' '.join(command)}")
+                hashed_files |= {args[i + 1] for i, a in enumerate(args[:-1]) if a == "-r"}
                 continue
             if where == latest_where:
-                latest_seen.append(line.split("pip install", 1)[1].split())
+                latest_seen.append(args)
                 continue
-            unpinned.append(f"{where}: {line.strip()}")
+            rest = [a for a in args if a not in _QUIET_FLAGS]
+            if "--no-deps" in args and rest in (["-e", "."], ["-e", "$ROOT"]):
+                continue
+            unpinned.append(f"{where}: {' '.join(command)}")
     assert latest_seen == [["-r", "requirements.txt"], ["-e", "."]], latest_seen
+    # The tokenizer reaches every known install: continued (install_lock.sh), chained with
+    # && (stage 5 of ci_check.sh) and plain (the workflows).
+    assert {".github/requirements/pip.lock", ".github/requirements/uv.lock",
+            ".github/requirements/publish.lock", "$ROOT/.github/requirements/pip.lock",
+            "$SETUPTOOLS", "$LOCK", "$TOOL_LOCKS/pip.lock", "$TOOL_LOCKS/uv.lock",
+            "$RUNNER_TEMP/packaging.txt"} <= hashed_files, hashed_files
     assert not unpinned, unpinned
     assert not unforced, unforced
     for job in (_wf("release.yml")["jobs"]["publish-pypi"], _wf("publish-testpypi.yml")["jobs"]["publish-testpypi"]):
@@ -398,8 +477,7 @@ def test_latest_deps_runs_on_a_schedule_and_cannot_block():
         assert job["uses"] == "./.github/workflows/_test.yml"
         assert job["with"]["deps"] == "latest"
         assert _pairs(job["with"]["matrix"]) == sorted(PUSH_PAIRS)
-    latest_step = next(s for s in _wf("_test.yml")["jobs"]["build-and-test"]["steps"]
-                       if s.get("if") == "inputs.deps == 'latest'")
+    latest_step = _latest_install_step()[1]
     assert 'check_requirements_lock.py --drift --report >> "$GITHUB_STEP_SUMMARY"' in latest_step["run"]
     assert "-r requirements.txt" in latest_step["run"]
     for text in ((WF / name).read_text(encoding="utf-8"), (WF / "_test.yml").read_text(encoding="utf-8")):
@@ -435,15 +513,18 @@ def test_lock_sync_regenerates_with_the_pinned_uv():
 def test_the_contributing_lock_commands_are_the_ones_lock_sync_runs():
     """A contributor regenerates the lock with the commands in CONTRIBUTING.md; they install
     pip and uv exactly as lock-sync does and compile with lock-sync's command, so a lock made
-    by hand passes the job. MUTATION: drop --force-reinstall from a CONTRIBUTING line - red."""
+    by hand passes the job. Whole lines are compared, so an option added on one side only
+    differs. MUTATION: drop --force-reinstall from a CONTRIBUTING line; append an option to
+    its compile command; add an install line to its block - red."""
     doc = (ROOT / ".github" / "CONTRIBUTING.md").read_text(encoding="utf-8")
     section = doc[doc.index("## Dependencies and the lock"):]
-    job = _runs(_wf("ci.yml")["jobs"]["lock-sync"])
-    installs = [line.strip() for line in job.splitlines() if "-r .github/requirements/" in line
-                and "pip install" in line]
+    block = section.split("```bash\n", 1)[1].split("```", 1)[0]
+    commands = [line.split("  #", 1)[0].strip() for line in block.splitlines() if line.strip()]
+    job_lines = [line.strip() for line in _runs(_wf("ci.yml")["jobs"]["lock-sync"]).splitlines()]
+    installs = [line for line in job_lines if "-r .github/requirements/" in line and "pip install" in line]
     assert len(installs) == 2, installs
-    for line in installs + [_lock_command()]:
-        assert line in job and line in section, line
+    assert _lock_command() in job_lines
+    assert commands == installs + [_lock_command(), "venv/bin/python scripts/check_requirements_lock.py"], commands
 
 
 # ---------------------------------------------------------------------------------------------
@@ -601,8 +682,9 @@ class _Source:
                     return reqs
         raise AssertionError(file)
 
-    def sdist_requires(self, name, version):
-        return []
+    def sdist_requires(self, file):
+        # The selected sdist's own requirements; None stands for "not static in its PKG-INFO".
+        return self.requires_dist(file)
 
 
 def _run(lock_text: str, releases: dict, targets, requirements=()):
@@ -756,6 +838,81 @@ def test_extras_are_resolved_per_macos_view():
     problems, _ = _run(_lock("app==1.0", "core==1.0"), releases, mac)
     assert problems == ['[macos-latest 3.12] core==1.0 needs legacy-ui>=1; extra == "gui": '
                         "not in the lock for this target"], problems
+
+
+def test_an_sdist_is_checked_by_its_own_requirements():
+    """A view that builds the sdist is checked against that sdist's requirements, not another
+    file of the release (PyPI's release-level metadata comes from the first upload, here a
+    Windows wheel without core[gui]). An sdist whose requirements cannot be read is named in a
+    note, not passed silently. MUTATION: hand the checker the release's first file instead of
+    the selected sdist; drop the note - red."""
+    releases = {
+        "app==1.0": [("app-1.0-cp312-cp312-win_amd64.whl", None, ["core>=1"]),
+                     ("app-1.0.tar.gz", None, ["core[gui]>=1"]),
+                     ("app-1.0-cp312-cp312-macosx_26_0_arm64.whl", None, ["core>=1"])],
+        "core==1.0": [("core-1.0-py3-none-any.whl", None, ['legacy-ui>=1 ; extra == "gui"'])],
+    }
+    mac = [_t("macos-latest", "3.12")]
+    problems, notes = _run(_lock("app==1.0", "core==1.0"), releases, mac)
+    assert problems == ['[macos-latest 3.12] core==1.0 needs legacy-ui>=1; extra == "gui": '
+                        "not in the lock for this target"], problems
+    releases["app==1.0"][1] = ("app-1.0.tar.gz", None, None)
+    problems, notes = _run(_lock("app==1.0", "core==1.0"), releases, mac)
+    assert problems == [], problems
+    assert any(n.startswith("app==1.0: its sdist states no static Requires-Dist") for n in notes), notes
+
+
+def _sdist(pkg_info: str, fmt: str = "tar.gz", nested: bool = False) -> bytes:
+    import io
+    import tarfile
+    import zipfile
+    name = "app-1.0/app.egg-info/PKG-INFO" if nested else "app-1.0/PKG-INFO"
+    data = pkg_info.encode()
+    buf = io.BytesIO()
+    if fmt == "zip":
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr(name, data)
+    else:
+        with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
+
+
+def test_sdist_requirements_are_read_only_where_they_are_static():
+    """Core metadata 2.2 lets an sdist state its requirements as binding; before 2.2, or with
+    Requires-Dist under Dynamic, the build decides, so there is nothing to read. Only the
+    top-level PKG-INFO counts. MUTATION: accept any Metadata-Version; ignore Dynamic - red."""
+    read = _checker().sdist_requires_dist
+    static = "Metadata-Version: 2.2\nName: app\nVersion: 1.0\nRequires-Dist: core[gui]>=1\n"
+    assert read(_sdist(static), "app-1.0.tar.gz") == ["core[gui]>=1"]
+    assert read(_sdist(static, "zip"), "app-1.0.zip") == ["core[gui]>=1"]
+    assert read(_sdist(static.replace("2.2", "2.4")), "app-1.0.tar.gz") == ["core[gui]>=1"]
+    assert read(_sdist(static.replace("2.2", "1.1")), "app-1.0.tar.gz") is None
+    assert read(_sdist(static + "Dynamic: Requires-Dist\n"), "app-1.0.tar.gz") is None
+    assert read(_sdist(static, nested=True), "app-1.0.tar.gz") is None
+
+
+def test_pypi_reads_the_sdist_itself_and_checks_its_digest():
+    """PyPI.sdist_requires downloads the selected sdist, compares it with the sha256 PyPI
+    publishes, and reads its PKG-INFO; the release's JSON is not consulted. MUTATION: return
+    the release-level info.requires_dist again; skip the digest check - red."""
+    check = _checker()
+    data = _sdist("Metadata-Version: 2.2\nName: app\nVersion: 1.0\nRequires-Dist: core[gui]>=1\n")
+    pypi = check.PyPI()
+    pypi._get_bytes = lambda url: data
+
+    def no_release_json(*args):
+        raise AssertionError("release-level metadata is another file's")
+
+    pypi._release_json = no_release_json
+    file = {"filename": "app-1.0.tar.gz", "url": "https://files.invalid/app-1.0.tar.gz",
+            "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+    assert pypi.sdist_requires(file) == ["core[gui]>=1"]
+    with pytest.raises(ValueError):
+        pypi.sdist_requires({**file, "sha256": "0" * 64})
+    assert pypi.sdist_requires({**file, "size": check._SDIST_READ_MAX + 1}) is None
 
 
 def test_the_requirements_option_takes_a_file_not_a_flag(capsys):

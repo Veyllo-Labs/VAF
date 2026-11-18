@@ -82,6 +82,7 @@ jobs:
         python scripts/check_requirements_lock.py --drift
 
     - name: Install dependencies (newest versions)
+      id: install-latest
       if: inputs.deps == 'latest'
       shell: bash
       run: |

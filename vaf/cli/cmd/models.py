@@ -72,6 +72,19 @@ def set_config(key: str, value: str):
         val = int(value)
     except ValueError:
         val = value
-    
+
+    # A lane model its lane's provider would drop is reset by Config.save, so storing
+    # it would print "set" for a value that is not kept: refused instead. A provider
+    # change that resets one names it.
+    from vaf.core.config import foreign_lane_models
+    from vaf.core.provider_registry import provider_label
+    resets = foreign_lane_models({**Config.load(), key: val})
+    if key in resets:
+        UI.error(f"{key} '{val}' is not a {provider_label(resets[key][1])} model, the provider "
+                 "this lane runs on: choose one of its models or leave it empty.")
+        raise typer.Exit(2)
     Config.set(key, val)
     UI.success(f"Config '{key}' set to '{val}'")
+    for reset_key, (old, lane) in resets.items():
+        UI.warning(f"{reset_key} '{old}' is not a {provider_label(lane)} model and was reset "
+                   "to empty (the provider's own model).")

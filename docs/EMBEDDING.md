@@ -446,10 +446,13 @@ Two consequences worth knowing before you rely on it:
 
 **A model id is only ever sent to its own provider.** An explicit model that is not
 one of the configured provider's models (a local name such as `auto`, or another
-provider's id, for example a lane model saved before you switched `provider`) is
-never sent to it: the request uses `api_model_<provider>` (else the catalog default)
-and one warning is printed per process. You call nothing for this; the backend does
-it on every request. For your own settings screen,
+provider's id, for example a lane model in your `config=` dict that names another
+provider) is never sent to it: the request uses `api_model_<provider>` (else the
+catalog default) and one warning is printed per process. You call nothing for this;
+the backend does it on every request. The machine configuration never keeps one:
+`Config.save` and `Config.load` reset such a lane model (`subagent_model`,
+`browser_agent_model`) to empty (`vaf.core.config.foreign_lane_models` answers which
+ones). For your own settings screen,
 `vaf.core.provider_registry.model_fits_provider(provider, model, config)` answers the
 same question: an id the model catalog lists or whose family it lists belongs to that
 provider, the provider's own `api_model_<provider>` in `config` always fits it, and an

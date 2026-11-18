@@ -7,7 +7,7 @@ import tempfile
 import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
 from vaf.core import model_catalog as _model_catalog
 from vaf.core.channels import CHAT_CHANNELS as _CHAT_CHANNELS
@@ -62,6 +62,17 @@ MODEL_PROVIDER_KEYS = {
     "voice_agent_model": "voice_agent_provider",
     "failover_backup_model": "failover_backup_provider",
 }
+# The lane models read whenever they are set, on the provider their lane runs on, which
+# is the main `provider` unless the lane has its own (`foreign_lane_models`). A switch of
+# that provider leaves a model of the old one behind, which every read then drops with a
+# warning, so the stored config is repaired instead. Named boundary, not in this list:
+# `vision_model`, `voice_agent_model` and `failover_backup_model` are read as API models
+# only with their own provider key set (and the local `voice_agent_model` is read with
+# none, so a fit check against the main provider would reset a valid pick);
+# `thinking_model` is read for the local model only, and a GGUF pick must survive a trip
+# to an API provider and back. When their own provider changes, the Settings selects
+# reset them.
+LANE_MODEL_KEYS = ("subagent_model", "browser_agent_model")
 
 
 class Config:
@@ -1008,6 +1019,14 @@ class Config:
                 cls._migrate_retired_models(result)
             except Exception:
                 pass
+            # A lane model of another provider than its lane's (left behind by a switch)
+            # is reset to empty and written back. After the migration, so it decides on
+            # the id that is stored after it. Isolated for the same reason as the
+            # migration.
+            try:
+                cls._repair_foreign_lane_models(result)
+            except Exception:
+                pass
             # Hard lock for hosting mode (server appliance deployments):
             # when enabled, Local Network Hosting cannot be disabled via UI/API saves.
             if bool(result.get("local_network_force_enabled", False)):
@@ -1057,6 +1076,24 @@ class Config:
                 moved[key] = (saved, target)
         if not moved:
             return
+        cls._write_back_repair(
+            moved, lambda key, old, disk: _model_catalog.migration_target(
+                old, provider=cls._model_key_provider(key, disk)) or None)
+        try:
+            from vaf.core.log_helper import append_domain_log
+            for key, (old, new) in moved.items():
+                if (key, old, new) in cls._migration_logged:
+                    continue
+                cls._migration_logged.add((key, old, new))
+                append_domain_log("backend", f"[MODEL_MIGRATION] {key}: {old} -> {new} (retired by the provider)")
+        except Exception:
+            pass
+
+    @classmethod
+    def _write_back_repair(cls, changes: dict, decide: Callable[[str, Any, dict], Any]) -> None:
+        """Persist a repair ``load`` made in memory. ``changes`` maps each key to
+        ``(old, new)``; a key is written only where the raw file still holds ``old``,
+        with ``decide(key, old, disk)`` (None = leave it). Best effort."""
         try:
             # The same lock every other read-modify-write of the file takes
             # (reentrant, so a load() inside save()/set() nests): without it a
@@ -1068,27 +1105,67 @@ class Config:
                 # changed the value or the lane's provider since the first read.
                 _disk = {**cls.DEFAULTS, **_raw}
                 changed = False
-                for key, (old, _new) in moved.items():
+                for key, (old, _new) in changes.items():
                     if _raw.get(key) != old:
                         continue
-                    target = _model_catalog.migration_target(
-                        old, provider=cls._model_key_provider(key, _disk))
-                    if target and target != old:
+                    target = decide(key, old, _disk)
+                    if target is not None and target != old:
                         _raw[key] = target
                         changed = True
                 if changed:
                     cls._write_config_file(_raw)
         except Exception:
             pass
+
+    # (key, value, provider) resets already logged by this process: an unwritable
+    # config is repaired again on every load, and the log should say so once.
+    _lane_reset_logged: set = set()
+
+    @classmethod
+    def reset_foreign_lane_models(cls, config: dict) -> Dict[str, Tuple[Any, str]]:
+        """Reset each lane model in ``config`` (IN PLACE) that is not one of its
+        lane's provider's models (``foreign_lane_models``) to empty, the provider's
+        own model. Returns what it reset, ``{key: (value, lane provider)}``.
+
+        The runtime already ignores such a value on every read, with a warning
+        once per process, and a sub-agent is a new process, so the warning came
+        back on every run while the stored value stayed. ``save`` calls this on
+        the dict it writes and ``load`` on the dict it returns, so no write path
+        (web, REST, CLI, terminal app, setup) can keep one. Best effort: never
+        blocks a save or a load."""
+        try:
+            resets = foreign_lane_models(config)
+        except Exception:
+            return {}
+        for key in resets:
+            config[key] = cls.DEFAULTS.get(key, "")
         try:
             from vaf.core.log_helper import append_domain_log
-            for key, (old, new) in moved.items():
-                if (key, old, new) in cls._migration_logged:
+            from vaf.core.provider_registry import provider_label
+            for key, (value, lane) in resets.items():
+                if (key, value, lane) in cls._lane_reset_logged:
                     continue
-                cls._migration_logged.add((key, old, new))
-                append_domain_log("backend", f"[MODEL_MIGRATION] {key}: {old} -> {new} (retired by the provider)")
+                # Recorded before the write: the log may read the config, and that
+                # load must not log the same reset again. The value is quoted with
+                # repr, so a line break in a hand-edited one cannot forge a log line.
+                cls._lane_reset_logged.add((key, value, lane))
+                append_domain_log(
+                    "backend",
+                    f"[LANE_MODEL_RESET] {key}: {str(value)!r} is not a {provider_label(lane)} model, "
+                    f"the provider this lane runs on; reset to empty (the provider's own model)")
         except Exception:
             pass
+        return resets
+
+    @classmethod
+    def _repair_foreign_lane_models(cls, result: dict) -> None:
+        """``reset_foreign_lane_models`` on a loaded config, written back where
+        the raw file still holds the reset value and its lane still refuses it."""
+        resets = cls.reset_foreign_lane_models(result)
+        if resets:
+            cls._write_back_repair(
+                {key: (value, "") for key, (value, _lane) in resets.items()},
+                lambda key, old, disk: "" if key in foreign_lane_models(disk) else None)
 
     # Keys that should never be overwritten when saving from frontend
     # These are auto-generated secrets that would break auth if lost
@@ -1862,6 +1939,11 @@ class Config:
             # absent->present transition without seeding.
             cls.apply_veyllo_stt_default(existing_config, config)
 
+            # A lane model the new state's provider would drop (after a switch of
+            # `provider` or of the sub-agent provider) is reset in the dict being
+            # written, IN PLACE, so a caller answering from it shows the stored value.
+            cls.reset_foreign_lane_models(config)
+
             # Hosting lock: keep Local Network Hosting enabled if lock is active.
             force_network = bool(
                 config.get("local_network_force_enabled", existing_config.get("local_network_force_enabled", False))
@@ -2219,6 +2301,51 @@ def subagent_model_for(provider: Optional[str] = None,
     if target == lane.strip().lower():
         note_foreign_model(target, value, "subagent_model")
     return None
+
+
+def lane_model_provider(key: str, config: Mapping) -> str:
+    """The provider the lane of ``key`` (one of ``LANE_MODEL_KEYS``) runs on, read
+    from ``config``: ``subagent_model`` on ``subagent_provider_override``, else the
+    main ``provider``; ``browser_agent_model`` on ``browser_agent_provider`` unless
+    it is empty or "inherit", else the main ``provider``. A missing ``provider`` is
+    read as ``Config.load`` reads it."""
+    _get = config_reader(config)
+    if key == "subagent_model":
+        lane = subagent_provider_override(config) or ""
+    elif key == "browser_agent_model":
+        lane = str(_get("browser_agent_provider", "") or "").strip()
+        if lane.lower() == "inherit":
+            lane = ""
+    else:
+        raise KeyError(key)
+    return str(lane or _get("provider", "local") or "local").strip().lower()
+
+
+def foreign_lane_models(config: Mapping) -> Dict[str, Tuple[Any, str]]:
+    """The lane models in ``config`` that their lane's provider would drop:
+    ``{key: (stored value, lane provider)}`` for each key of ``LANE_MODEL_KEYS``
+    whose value is set and is not one of ``lane_model_provider``'s models
+    (``provider_registry.model_fits_provider``, the predicate every reader asks).
+
+    ``config`` is read as ``Config.load`` would return it (over ``DEFAULTS``). A
+    settings screen with its own store can ask this for a draft; ``Config.save``
+    and ``Config.load`` apply it to the machine configuration
+    (``Config.reset_foreign_lane_models``).
+    """
+    from vaf.core.provider_registry import model_fits_provider
+
+    # A dict, never the Config class: model_fits_provider reads `config.get`, and
+    # Config.get loads, which repairs, which would ask this again.
+    view = {**Config.DEFAULTS, **dict(config)}
+    out: Dict[str, Tuple[Any, str]] = {}
+    for key in LANE_MODEL_KEYS:
+        value = view.get(key)
+        if not str(value or "").strip():
+            continue
+        lane = lane_model_provider(key, view)
+        if not model_fits_provider(lane, str(value), config=view):
+            out[key] = (value, lane)
+    return out
 
 
 def tool_model_for(provider: str) -> Optional[str]:

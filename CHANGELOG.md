@@ -79,6 +79,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   app messages as unread, and left the inbox window without a channel name. The Veyllo App
   conversation lives in its room at the top of the chat list; the inbox lists WhatsApp,
   Telegram, Discord, mail and agent rooms.
+- **Switching the AI provider no longer leaves the old provider's tool / workflow model
+  behind.** A tool / workflow model or browser agent model that does not belong to the new
+  provider is reset to the provider's own model when the setting is saved, and an existing
+  configuration is repaired when VAF starts. So sub-agents no longer warn on every run that
+  the model belongs to another provider while the right provider is already selected.
+  `vaf models config` refuses such a model and names any model a provider change resets.
 - **Links to Next.js catch-all routes are clickable on Windows.** In the terminal, a
   saved file such as `app\[...slug]\page.tsx` or `app\[[...opt]]\page.tsx` was shown without
   the backslash in front of its bracket and was not clickable. It now shows its real path and

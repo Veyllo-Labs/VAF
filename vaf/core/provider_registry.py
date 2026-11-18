@@ -461,6 +461,16 @@ _FOREIGN_FIX = {
 }
 
 
+def provider_label(provider: str) -> str:
+    """The provider's display name ("DeepSeek"), or ``provider`` itself when
+    neither the model catalog nor the registry knows it."""
+    spec = get_spec(provider)
+    from vaf.core.model_catalog import provider_catalog
+
+    cat = provider_catalog(provider)
+    return cat.label if cat else (spec.label if spec else str(provider))
+
+
 def note_foreign_model(provider: str, model: str, source: str) -> bool:
     """Report once per process that ``model`` (read from ``source``) is not a
     ``provider`` model and is ignored. Returns True on the first sighting only.
@@ -472,11 +482,7 @@ def note_foreign_model(provider: str, model: str, source: str) -> bool:
         if key in _foreign_noted:
             return False
         _foreign_noted.add(key)
-    spec = get_spec(provider)
-    from vaf.core.model_catalog import provider_catalog
-
-    cat = provider_catalog(provider)
-    label = cat.label if cat else (spec.label if spec else str(provider))
+    label = provider_label(provider)
     msg = (f"{source} '{model}' is not a {label} model and is ignored; "
            f"{label}'s own model is used instead.")
     if source in _FOREIGN_FIX:

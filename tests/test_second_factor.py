@@ -128,10 +128,12 @@ def _base32(node) -> bool:
 
 
 def _names_a_totp_secret(name: str) -> bool:
-    """A name that says it holds a TOTP secret. One that says `code` holds a verification code
-    (`totp_code = "234567"`): six digits are valid base32, but they are no secret."""
+    """A name that says it holds a TOTP secret. One that says `code` as a word holds a
+    verification code (`totp_code = "234567"`): six digits are valid base32, but they are no
+    secret. `totp_encoded_secret` still names a secret."""
+    import re
     name = name.lower()
-    return "totp" in name and "code" not in name
+    return "totp" in name and re.search(r"(^|_)codes?($|_)", name) is None
 
 
 def _short_totp_literals(source: str) -> list:
@@ -173,14 +175,16 @@ def test_no_test_hands_totp_a_short_secret():
 
 def test_the_short_secret_detector_actually_detects():
     """MUTATION: drop the keyword-`s` branch (the TOTP(s=...) shape passes) or the `code` and
-    digits-only exclusions (the verification-code shapes are flagged) - red."""
+    digits-only exclusions (the verification-code shapes are flagged), or match `code` as a
+    substring again (totp_encoded_secret passes) - red."""
     short, full = "JBSWY3DPEHPK3PXP", "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
     for shape in ('pyotp.TOTP("{s}").now()', 'encrypt_totp_secret("{s}")', 'code_at("{s}", 1)',
-                  '_TOTP_SECRET = "{s}"', 'make(totp_secret="{s}")', 'pyotp.TOTP(s="{s}").now()'):
+                  '_TOTP_SECRET = "{s}"', 'make(totp_secret="{s}")', 'pyotp.TOTP(s="{s}").now()',
+                  'make(totp_encoded_secret="{s}")'):
         assert _short_totp_literals(shape.format(s=short)) == [1], shape
         assert _short_totp_literals(shape.format(s=full)) == [], shape
     assert _short_totp_literals('print("JBSWY3DPEHPK3PXP")') == []
     # A verification code is six digits, which base32 allows, and it is no secret.
     for code in ('totp_code = "234567"', 'make(totp_code="234567")',
-                 'verify_totp(secret, "234567")'):
+                 'verify_totp(secret, "234567")', 'make(totp_codes="234567")'):
         assert _short_totp_literals(code) == [], code

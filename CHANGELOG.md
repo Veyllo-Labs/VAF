@@ -445,6 +445,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **API, llama.cpp and vLLM in one picker in the terminal app.** `c` and Settings > AI Provider
   list `local · llama.cpp` and `local · vLLM` above the API providers; picking an engine there or
   under Settings > Engine moves the main chat to this machine, and asks before installing vLLM.
+  While vLLM runs, the top bar names the vLLM model instead of the llama.cpp file.
 - **`vaf models config provider` refuses a provider without an API key** (exit 2), like
   Settings, and `vaf models config subagent_provider` now switches the sub-agent provider on
   instead of storing a name that did nothing. `vaf engine` says when the main chat still runs

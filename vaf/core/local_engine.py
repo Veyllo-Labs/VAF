@@ -234,6 +234,15 @@ def is_vllm(config: Optional[Dict] = None) -> bool:
     return current(config) == VLLM
 
 
+# What a person reads for each engine (the TUI's picker, its Engine menu, the top bar).
+LABELS = {LLAMA: "llama.cpp", VLLM: "vLLM"}
+
+
+def label(engine: Optional[str] = None, config: Optional[Dict] = None) -> str:
+    """The display name of ``engine``, or of the installation's engine when None."""
+    return LABELS.get(engine or (VLLM if is_vllm(config) else LLAMA), str(engine))
+
+
 def restarts_running_engine(key: str, config: Optional[Dict] = None) -> bool:
     """True when a change of ``key`` must restart the local engine that runs now. A GGUF
     choice means nothing to vLLM and a vLLM setting nothing to llama.cpp; restarting for

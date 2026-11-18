@@ -330,8 +330,10 @@ What it can change is decided by where a key is READ, not by how it looks:
   engine, from ONE picker: `c` (or `/model`) and the Settings rows "AI Provider" and
   "API Model" open it. Its rows are `local · llama.cpp` and `local · vLLM` (the GGUF
   and the vLLM model in use), then the API providers, then the current API provider's
-  models; the marker sits on the local engine in use or on the API provider. Under the
-  `api` inference profile the two local rows are one line with the profile's sentence.
+  models; the marker sits on the local engine in use or on the API provider, and a name
+  longer than the value column ends in an ellipsis. Opened from "API Model", the cursor
+  starts on the model in use. Under the `api` inference profile the two local rows are one
+  line that says so and how to get a local model back (`vaf profile local`).
   Opening it probes nothing; the vLLM verdict is read when vLLM is picked. The Settings
   rows schedule the picker on the app (`call_later`) instead of pushing it from the
   settings screen they close: Textual hands a pushed screen's answer to the screen that
@@ -346,8 +348,11 @@ What it can change is decided by where a key is READ, not by how it looks:
   while a turn is running, and if the running agent kept its backend anyway the app says
   so instead of claiming success. A switch to `local` from an API provider leaves the
   agent with no backend, so the bridge then loads the local model on its lane
-  (`reload_local_model`, which keeps the conversation) and says so; when something
-  already serves, it says which engine is in use instead.
+  (`reload_local_model`, which keeps the conversation) and says so: with llama.cpp and no
+  GGUF set the load first downloads the default model, and the note says that; a load
+  that fails names the server's log. When something already serves, it says which engine
+  is in use instead. The top bar and the start banner read `local · <GGUF>` under
+  llama.cpp and `local · vLLM · <model or automatic>` under vLLM.
   A local engine row runs the chat on that engine: the provider alone moves when the
   engine is already the one in use; another engine is switched first (asking before a
   vLLM install, refused under `api` and where vLLM cannot run), and the provider moves
@@ -365,8 +370,11 @@ What it can change is decided by where a key is READ, not by how it looks:
   note, an event or the transcript. The Settings main row reads "AI Provider: LOCAL ·
   llama.cpp" (or "· vLLM") on the local provider.
   The "Engine" row opens both engines; with an API provider it starts with the note
-  "The main chat runs on <provider>. Picking an engine moves it to this machine.", and an
-  engine pick there follows the same rule as the picker's local rows. With the local
+  "The main chat runs on <provider>. Picking an engine moves it to this machine.", the
+  stored engine reads "selected" rather than "in use", and an engine pick there follows
+  the same rule as the picker's local rows. Every settings menu opens with the cursor on
+  its first row that can be picked, not on a leading note. The vLLM install question says
+  that the main chat then runs on this machine when it moves the chat. With the local
   provider, picking the engine in use again is the switch itself, the re-pick that
   clears a remembered start failure. The vLLM model and GPU memory rows switch the
   engine and leave the chat where it is.

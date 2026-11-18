@@ -289,3 +289,11 @@ def test_settings_menu_switches_through_core(monkeypatch):
     answers[:] = [{"model": "claude-b"}]
     settings.select_api_model_menu()
     assert calls[-1] == ("anthropic", "claude-b", "")
+
+
+def test_refusal_texts_say_what_to_do(stored, keys):
+    """MUTATION: drop the next step from either text - red."""
+    assert "vaf settings" in provider_switch.switch_provider("anthropic").text
+    text = provider_switch.switch_provider("anthropic", new_key="sk-typed-key-value",
+                                           verify=lambda p: False).text
+    assert text.endswith("Check the key and try again.")

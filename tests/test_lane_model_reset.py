@@ -696,3 +696,13 @@ def test_cli_subagent_provider_refuses_keyless_and_unknown(stored, _quiet, monke
     assert _cli("subagent_provider", "acme").exit_code == 2
     assert stored.raw() == before
     assert _cli("subagent_provider", "local").exit_code == 0, "local needs no key"
+
+
+def test_cli_subagent_provider_local_is_refused_under_the_api_profile(stored, _quiet):
+    """The same refusal `provider local` gives there. MUTATION: drop the check - red."""
+    stored.write({"provider": "deepseek", "inference_profile": "api"})
+    before = stored.raw()
+    result = _cli("subagent_provider", "local")
+    assert result.exit_code == 2
+    assert 'profile "api"' in _shown(_quiet.events, "Error")
+    assert stored.raw() == before

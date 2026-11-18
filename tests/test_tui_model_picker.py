@@ -15,7 +15,8 @@ MUTATIONS, each turns the named test red:
   test_no_dismiss_then_push_in_one_handler;
 - keep the old inline write block in the bridge -> test_bridge_delegates_to_core;
 - drop the local load step -> test_api_to_local_loads_the_local_model;
-- load although an API backend still serves -> test_already_serving_is_not_reloaded;
+- load although an API backend, a server or an in-process model serves ->
+  test_already_serving_is_not_reloaded[api_backend, use_server, llm];
 - remove the vLLM row / keep the stale "model chosen in" text ->
   test_picker_rows_local_engines_first;
 - show the local rows under the api profile -> test_picker_under_api_profile_shows_the_sentence;
@@ -221,11 +222,16 @@ def test_a_load_that_fails_says_so(monkeypatch):
     assert any("did not come up" in str(m) and "vLLM" in str(m) for _, m in notes), notes
 
 
-def test_already_serving_is_not_reloaded(monkeypatch):
+@pytest.mark.parametrize("serves", ["api_backend", "use_server", "llm"])
+def test_already_serving_is_not_reloaded(monkeypatch, serves):
+    """Any one of the three is something serving: a backend, the server, an in-process
+    model. MUTATION: drop one of them from the bridge's check - its row turns red."""
     from vaf.core import provider_switch
     loads = []
-    agent = _agent(provider="local", api_backend=None, use_server=True, llm=None,
-                   reload_local_model=lambda: loads.append(1) or True)
+    fields = {"api_backend": None, "use_server": False, "llm": None}
+    fields[serves] = True if serves == "use_server" else object()
+    agent = _agent(provider="local", reload_local_model=lambda: loads.append(1) or True,
+                   **fields)
     monkeypatch.setattr(provider_switch, "switch_provider",
                         lambda p, m="", **kw: provider_switch.ProviderSwitch(
                             "done", "stored", "ok", "local", "", 0))
@@ -418,3 +424,131 @@ def test_settings_main_row_names_the_engine(monkeypatch):
     assert "AI Provider: [$text]LOCAL · vLLM[/]" in s._menu_rows("main")[0][2]
     monkeypatch.setattr(le, "is_vllm", lambda config=None: False)
     assert "AI Provider: [$text]LOCAL · llama.cpp[/]" in s._menu_rows("main")[0][2]
+
+
+# ── Round of review fixes: the picker's height, the top bar, the texts ─────────────
+
+def _largest_provider():
+    catalog = getattr(Config, "PROVIDER_MODELS", {}) or {}
+    return max(sorted(catalog), key=lambda p: len(ModelScreen._models_for(p)))
+
+
+@pytest.mark.parametrize("from_api_model_row", [False, True])
+def test_the_largest_provider_fits_at_80x24(smoke_app, monkeypatch, from_api_model_row):
+    """Every row of the picker is visible in an 80x24 terminal for the provider with the
+    most models, and from the API Model row the cursor starts on the model in use.
+    MUTATION: the list cap back at 12 - red; ignore `focus_model` - red."""
+    app, bridge = smoke_app.app, smoke_app.bridge
+    provider = _largest_provider()
+    models = ModelScreen._models_for(provider)
+    _patch_config(monkeypatch, {"provider": provider, f"api_model_{provider}": models[-1]})
+    box = {}
+
+    async def _run():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause()
+            app.action_model(from_api_model_row)
+            assert await _settle(pilot, lambda: isinstance(app.screen, ModelScreen))
+            await pilot.pause()
+            lv = app.screen.query_one("#model-list")
+            box["rows"], box["height"] = len(app.screen._rows), lv.size.height
+            box["bottom"] = app.screen.query_one("#model-box").region.bottom
+            box["cursor"] = app.screen._rows[lv.index]
+    asyncio.run(_run())
+    bridge.shutdown()
+    assert box["height"] >= box["rows"], f"{box['rows'] - box['height']} rows hidden"
+    assert box["bottom"] <= 24
+    if from_api_model_row:
+        assert box["cursor"] == ("model", models[-1])
+    else:
+        assert box["cursor"] == ("provider", provider)
+
+
+@pytest.mark.parametrize("values, chip", [
+    ({"provider": "local", "local_engine": "vllm", "vllm_model": "Qwen/Qwen3-8B-AWQ",
+      "model": "q.gguf"}, "local · vLLM · Qwen/Qwen3-8B-AWQ"),
+    ({"provider": "local", "local_engine": "vllm", "vllm_model": "", "model": "q.gguf"},
+     "local · vLLM · automatic"),
+    ({"provider": "local", "local_engine": "llama", "model": "q.gguf"}, "local · q.gguf"),
+    ({"provider": "anthropic", "api_model_anthropic": "claude-x"}, "anthropic · claude-x"),
+])
+def test_the_top_bar_names_what_runs(monkeypatch, values, chip):
+    """Under vLLM the top bar named the GGUF, which only llama.cpp runs. MUTATION: drop the
+    vLLM branch of `model_chip` - red."""
+    from vaf.cli.tui_app.app import model_chip
+    _patch_config(monkeypatch, values)
+    monkeypatch.setattr(le, "is_vllm", lambda config=None: values.get("local_engine") == "vllm")
+    assert model_chip() == chip
+
+
+def test_long_local_names_end_in_an_ellipsis(monkeypatch):
+    """A long GGUF or repo name stays on its row at 80 columns. MUTATION: drop the cut."""
+    gguf = "Some-Very-Long-Model-Name-With-Many-Parts-Instruct-2026-Q4_K_M-imatrix.gguf"
+    box = _mount_picker(monkeypatch, {"provider": "local", "local_engine": "llama",
+                                      "model": gguf})
+    assert gguf not in box["text"][0] and "…" in box["text"][0]
+    assert gguf[:30] in box["text"][0]
+
+
+def test_the_api_profile_line_points_at_the_profile_not_at_settings(monkeypatch):
+    """Inside the picker "choose a provider under Settings" is circular, and backticks print
+    as they are. MUTATION: back to `inference_profile.refusal` - red."""
+    box = _mount_picker(monkeypatch, {"provider": "anthropic", "inference_profile": "api"})
+    assert "Settings" not in box["text"][0] and "`" not in box["text"][0]
+    assert "vaf profile local" in box["text"][0]
+
+
+def test_a_failing_switch_shows_no_exception_text(monkeypatch):
+    """MUTATION: put the exception's name or text back into the note - red."""
+    from vaf.core import provider_switch
+
+    def _boom(*a, **k):
+        raise RuntimeError("internal-detail-xyz")
+    monkeypatch.setattr(provider_switch, "switch_provider", _boom)
+    bridge, notes = _bridge(_agent())
+    bridge.apply_provider_change("anthropic")
+    _drain(bridge)
+    bridge.shutdown()
+    joined = " ".join(str(m) for _, m in notes)
+    assert "try again" in joined
+    assert "RuntimeError" not in joined and "internal-detail-xyz" not in joined
+
+
+def test_an_unreadable_engine_state_shows_no_exception_text(monkeypatch):
+    app, calls, pushed, notified = _rig(monkeypatch, provider="anthropic", engine="llama")
+
+    def _boom(model=None):
+        raise RuntimeError("internal-detail-xyz")
+    app._bridge.engine_state = _boom
+    screens_mod.choose_local_engine(app, "vllm")
+    assert notified and "internal-detail-xyz" not in notified[-1] and "try again" in notified[-1]
+
+
+@pytest.mark.parametrize("model, downloads", [("", True), ("q.gguf", False)])
+def test_the_load_note_says_when_a_default_model_is_downloaded(monkeypatch, model, downloads):
+    """With llama.cpp and no GGUF set, the load downloads the default model first; a load
+    that fails names the server's log. MUTATION: drop either sentence - red."""
+    agent = _agent(provider="anthropic", api_backend=object(), use_server=False, llm=None,
+                   reload_local_model=lambda: False)
+    _to_local(monkeypatch, agent)
+    monkeypatch.setattr(le, "is_vllm", lambda config=None: False)
+    _patch_config(monkeypatch, {"model": model})
+    bridge, notes = _bridge(agent)
+    bridge.apply_provider_change("local")
+    _drain(bridge)
+    bridge.shutdown()
+    joined = " ".join(str(m) for _, m in notes)
+    assert ("downloads its default model" in joined) is downloads, joined
+    assert "server_last.log" in joined, joined
+
+
+def test_one_engine_label():
+    """The engine's display name has one home, `local_engine.LABELS`. MUTATION: a literal
+    engine-name expression back in the terminal app - red."""
+    import re
+    assert le.label("llama") == "llama.cpp" and le.label("vllm") == "vLLM"
+    assert screens_mod.SettingsScreen.ENGINE_LINES["vllm"][0] == le.LABELS["vllm"]
+    pattern = re.compile(r'"vLLM" if|"llama\.cpp" if|ENGINE_NAMES|\("llama\.cpp",|\("vLLM",')
+    for name in ("screens.py", "agent_bridge.py", "app.py"):
+        src = (ROOT / "vaf" / "cli" / "tui_app" / name).read_text(encoding="utf-8")
+        assert not pattern.search(src), name

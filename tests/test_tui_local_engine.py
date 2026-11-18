@@ -542,3 +542,103 @@ def test_engine_pick_routes_through_choose_local_engine(monkeypatch):
     s._activate([r[1] for r in s._rows].index("gpu_share"))
     s._activate([r[1] for r in s._rows].index(0.7))
     assert seen == [False]
+
+
+def test_the_stored_engine_reads_selected_under_an_api_provider(monkeypatch):
+    """"in use" under "The main chat runs on Anthropic" contradicted it. MUTATION: keep
+    "in use" whatever the provider - red."""
+    s, *_ = _screen(monkeypatch, state=_state())
+    s._cfg = lambda key, default=None: {"provider": "anthropic"}.get(key, default)
+    s._load_engine_state()
+    picks = [text for kind, _, text in s._menu_rows("engine") if kind == "engine_pick"]
+    assert "selected" in picks[0] and "in use" not in picks[0]
+    s, *_ = _screen(monkeypatch, state=_state())
+    s._load_engine_state()
+    picks = [text for kind, _, text in s._menu_rows("engine") if kind == "engine_pick"]
+    assert "in use" in picks[0] and "selected" not in picks[0]
+
+
+def test_settings_menus_open_on_the_first_row_that_can_be_picked(monkeypatch):
+    """Real keys: `s`, Engine with an API provider; the list opens on llama.cpp, not on the
+    note above it, so Enter picks. MUTATION: the cursor back at row 0 - red."""
+    from tests.test_tui_app_smoke import _settle
+    from tests.test_tui_model_picker import _patch_config
+    from vaf.cli.tui_app import screens as screens_mod
+    from vaf.cli.tui_app.app import TuiEvents, VafApp
+    from vaf.cli.tui_app.agent_bridge import AgentBridge
+
+    assert screens_mod.first_selectable([("note", None, ""), ("sep", None, ""),
+                                         ("engine_pick", "llama", "")]) == 2
+    _patch_config(monkeypatch, {"provider": "anthropic"})
+    monkeypatch.setattr(le, "is_vllm", lambda config=None: False)
+    monkeypatch.setattr(AgentBridge, "tasks_snapshot", lambda self: [])
+    monkeypatch.setattr(AgentBridge, "engine_state", lambda self, model=None: _state())
+    chosen = []
+    monkeypatch.setattr(screens_mod, "choose_local_engine",
+                        lambda app, engine, **kw: chosen.append(engine))
+    events = TuiEvents()
+    bridge = AgentBridge(SimpleNamespace(set_event_sink=lambda s: None, shutdown=lambda: None,
+                                         get_token_usage=lambda: (1, 2)),
+                         SimpleNamespace(id="s", name="s", messages=[]), None, events,
+                         web_interface_getter=lambda: SimpleNamespace(
+                             resolve_gate=lambda *a: True))
+    app = VafApp(bridge, theme_key="vaf")
+    events.bind(app)
+
+    async def _run():
+        async with app.run_test(size=(110, 40)) as pilot:
+            await pilot.pause()
+            app.action_settings()
+            assert await _settle(pilot, lambda: isinstance(app.screen, SettingsScreen))
+            scr = app.screen
+            scr._activate([r[1] for r in scr._rows].index("engine"))
+            await pilot.pause()
+            assert scr._rows[0][0] == "note"
+            await pilot.press("enter")
+            await pilot.pause()
+    asyncio.run(_run())
+    bridge.shutdown()
+    assert chosen == ["llama"]
+
+
+def test_the_install_question_says_the_chat_moves(monkeypatch):
+    """When the pick moves an API provider's chat to this machine, the question says so.
+    MUTATION: drop the sentence - red."""
+    from tests.test_tui_model_picker import _patch_config
+    from vaf.cli.tui_app import screens as screens_mod
+    pushed = []
+    app = SimpleNamespace(_bridge=SimpleNamespace(busy=False, apply_engine=lambda *a, **k: None),
+                          notify=lambda *a, **k: None,
+                          push_screen=lambda s, cb=None: pushed.append(s))
+    for provider, moves in (("anthropic", True), ("local", False)):
+        _patch_config(monkeypatch, {"provider": provider})
+        screens_mod.switch_engine(app, "vllm", state=_state(needs_install=True),
+                                  make_local=True)
+        assert ("The main chat then runs on this machine." in pushed[-1]._question) is moves
+    screens_mod.switch_engine(app, "vllm", state=_state(needs_install=True))
+    assert "main chat" not in pushed[-1]._question
+
+
+def test_make_local_stored_but_not_moved_says_so(monkeypatch, tmp_path):
+    """The provider is stored as local, but this agent kept its API backend (an agent pinned
+    to its provider): a warning, as a provider switch gives. MUTATION: drop it - red."""
+    from vaf.cli.tui_app.agent_bridge import AgentBridge
+    from vaf.core import log_helper, provider_switch
+    monkeypatch.setattr(log_helper, "get_app_log_dir", lambda: tmp_path)
+    notes, lane = [], []
+    monkeypatch.setattr(le, "apply", lambda engine, **kw: le.EngineSwitch(
+        "done", "switched_vllm", "text", "vllm"))
+    monkeypatch.setattr(provider_switch, "switch_provider",
+                        lambda *a, **k: provider_switch.ProviderSwitch(
+                            "done", "stored", "ok", "local", "", 0))
+    bridge = AgentBridge.__new__(AgentBridge)
+    bridge.agent = SimpleNamespace(provider="anthropic", reload_local_model=lambda: None)
+    bridge.events = SimpleNamespace(event_note=lambda *a: notes.append(a),
+                                    system_note=lambda *a: notes.append(a))
+    bridge._emit = lambda *a: None
+    bridge._refresh_context = lambda: None
+    bridge._busy = False
+    bridge._submit = lane.append
+    bridge.apply_engine("vllm", make_local=True)
+    lane[0]()
+    assert any("kept its backend" in str(n) for n in notes), notes

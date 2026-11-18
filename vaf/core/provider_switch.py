@@ -154,11 +154,11 @@ def switch_provider(provider: str, model: str = "", *, new_key: str = "",
         if not stored:
             return _refused("no_key",
                             f"There is no API key for {label}, so the provider was not "
-                            f"changed. Add the key first.", name)
+                            f"changed. Add the key in vaf settings first.", name)
         if typed and verify is not None and not verify(name):
             return _refused("key_unverified",
                             f"The API key for {label} was saved but did not verify, so the "
-                            f"provider was not changed.", name)
+                            f"provider was not changed. Check the key and try again.", name)
 
     updates = {"provider": name}
     if chosen:

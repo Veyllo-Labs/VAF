@@ -871,9 +871,8 @@ class AgentBridge:
                 result = provider_switch.switch_provider(
                     target, model if provider else "", new_key=new_key,
                     verify=self._api_key_verifies)
-            except Exception as exc:
-                self.events.event_note("Provider", f"switch failed: {type(exc).__name__}",
-                                       "error")
+            except Exception:
+                self._switch_error()
                 return
             if result.status != "done":
                 self.events.event_note("Provider", result.text, "warning")
@@ -897,17 +896,36 @@ class AgentBridge:
             return
         self._submit(_run)
 
+    def _switch_error(self) -> None:
+        """An exception inside the switch: the detail goes to the log, the note says what to
+        do, without an exception text that means nothing to the person reading it."""
+        import logging
+        logging.getLogger(__name__).warning("provider switch failed", exc_info=True)
+        self.events.event_note("Provider", "the provider switch stopped on an internal "
+                                           "error; try again", "error")
+
     @staticmethod
-    def _engine_label() -> str:
+    def _server_log() -> str:
+        """Where the local engine's server writes its output (the place to look when it did
+        not come up)."""
         from vaf.core import local_engine
-        return "vLLM" if local_engine.is_vllm() else "llama.cpp"
+        if local_engine.is_vllm():
+            from vaf.core.vllm_server import log_path
+            return str(log_path())
+        from vaf.core.log_helper import get_app_log_dir
+        return str(get_app_log_dir() / "server_last.log")
 
     def _serve_local(self, *, moved: bool) -> None:
         """The agent is on `local` now: load the local model when it serves nothing (no
         API backend, no server, no in-process model), else say what serves. Runs on
-        the lane: the weights block while they load."""
+        the lane: the weights block while they load.
+
+        With llama.cpp and no GGUF set, the load first downloads the default model for this
+        GPU (`ensure_model_available`), so the note says so instead of only "loading"."""
+        from vaf.core import local_engine
+        from vaf.core.config import Config
         agent = self.agent
-        engine = self._engine_label()
+        engine = local_engine.label()
         serving = any(getattr(agent, attr, None)
                       for attr in ("api_backend", "use_server", "llm"))
         if serving:
@@ -916,22 +934,28 @@ class AgentBridge:
             else:
                 self.events.system_note(f"local · {engine} is already in use")
             return
-        self.events.event_note(
-            "Provider", f"loading the local model ({engine}), this can take a while",
-            "info")
+        if not local_engine.is_vllm() and not str(Config.get("model", "") or "").strip():
+            self.events.event_note(
+                "Provider", "no local model is set, so VAF first downloads its default model "
+                            "for this machine; this can take a while. Choose another under "
+                            "Settings > Select Active Model.", "info")
+        else:
+            self.events.event_note(
+                "Provider", f"loading the local model ({engine}), this can take a while",
+                "info")
         ok = False
         try:
             ok = bool(agent.reload_local_model())
-        except Exception as exc:
-            self.events.event_note("Provider", f"the local model did not load: {exc}",
-                                   "error")
-            return
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning("local model load failed", exc_info=True)
         if ok:
             self.events.system_note(f"switched to local · {engine}")
         else:
             self.events.event_note(
                 "Provider", f"the provider is local, but the local model ({engine}) did "
-                            f"not come up; see the server log and try again", "warning")
+                            f"not come up. The server's output is in {self._server_log()}; "
+                            f"try again once it is fixed", "warning")
 
     def list_local_models(self):
         """`models/*.gguf` plus the active file name, for the settings submenu.
@@ -1060,13 +1084,18 @@ class AgentBridge:
                     from vaf.core import provider_switch
                     try:
                         switched = provider_switch.switch_provider("local")
-                    except Exception as exc:
+                    except Exception:
                         switched = None
-                        self.events.event_note("Provider", f"switch failed: "
-                                                           f"{type(exc).__name__}", "error")
+                        self._switch_error()
                     if switched is not None and switched.status != "done":
                         self.events.event_note("Provider", switched.text, "warning")
                     moved = switched is not None and switched.status == "done"
+                    if moved and getattr(self.agent, "provider", "local") != "local":
+                        # Stored, but this agent kept its backend (an agent pinned to its
+                        # provider): say so, as a provider switch does.
+                        self.events.event_note(
+                            "Provider", "local stored; the running agent kept its backend "
+                                        "(restart VAF to apply)", "warning")
                 if getattr(self.agent, "provider", "local") == "local" and moved:
                     self._serve_local(moved=True)
                 elif (getattr(self.agent, "provider", "local") == "local"

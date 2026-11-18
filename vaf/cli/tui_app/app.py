@@ -124,6 +124,25 @@ def _agent_name() -> str:
     return "unnamed (set one in Settings)"
 
 
+def model_chip() -> str:
+    """What the main chat runs on, for the top bar and the start banner: the API provider
+    and its model, or ``local`` with the engine's model. Under vLLM that is the vLLM model
+    (``vllm_model``, empty for the automatic choice), never the GGUF, which only
+    llama.cpp runs."""
+    from vaf.core import local_engine
+    from vaf.core.config import Config
+    provider = str(Config.get("provider", "local"))
+    if provider != "local":
+        model = str(Config.get(f"api_model_{provider}", "") or "")
+        return f"{provider} · {model}" if model else provider
+    if local_engine.is_vllm():
+        model = str(Config.get("vllm_model", "") or "") or "automatic"
+        return f"local · {local_engine.label()} · {model}"
+    # The local model lives under `model`; there is no `model_name` key.
+    model = str(Config.get("model", "") or "")
+    return f"local · {model}" if model else "local"
+
+
 def _local_datetime() -> str:
     """The user's configured timezone and date format, never the raw server
     clock - `vaf/core/user_time.py` is the single source for user-facing time."""
@@ -434,7 +453,7 @@ class VafApp(App):
         background: $surface; height: auto; max-height: 22; margin-bottom: 1;
     }
     #model-list, #history-list {
-        background: $surface; height: auto; max-height: 12; margin-bottom: 1;
+        background: $surface; height: auto; max-height: 16; margin-bottom: 1;
     }
     PaletteScreen { align: center top; background: rgba(0, 0, 0, 0.5); }
     #palette-box {
@@ -616,10 +635,6 @@ class VafApp(App):
         name = str(getattr(session, "name", "") or "") or str(session.id)[:12]
         state = "resumed" if messages else "new"
 
-        provider = str(Config.get("provider", "local"))
-        model = str(Config.get(f"api_model_{provider}", "") if provider != "local"
-                    else Config.get("model", ""))
-
         rows = [
             ("VAF", f"Veyllo Agentic Framework {_vaf_version()}"),
             (None, None),
@@ -627,7 +642,7 @@ class VafApp(App):
             ("session", f"{name}  ({state}"
                         + (f", {messages} messages)" if messages else ")")),
             ("id", str(session.id)),
-            ("model", f"{provider} · {model}" if model else provider),
+            ("model", model_chip()),
             ("time", _local_datetime()),
         ]
         hint = ("ctrl+s lists your sessions - arrows to walk, enter to load. "
@@ -639,11 +654,7 @@ class VafApp(App):
         top = self.query_one("#topbar", TopBar)
         session = self._bridge.session
         top.session_name = (getattr(session, "name", "") or str(session.id)[:12])
-        provider = str(Config.get("provider", "local"))
-        # The local model lives under `model`; there is no `model_name` key.
-        model = str(Config.get(f"api_model_{provider}", "") if provider != "local"
-                    else Config.get("model", ""))
-        top.model_chip = f"{provider} · {model}" if model else provider
+        top.model_chip = model_chip()
         # The same OR the runtime asks (vaf/core/speech.py is_stt_enabled).
         top.mic_on = bool(Config.get("speech_stt_enabled", False)
                           or Config.get("stt_enabled", False))
@@ -810,8 +821,8 @@ class VafApp(App):
     def action_settings(self) -> None:
         self.push_screen(SettingsScreen())
 
-    def action_model(self) -> None:
-        self.push_screen(ModelScreen(), self._model_chosen)
+    def action_model(self, focus_model: bool = False) -> None:
+        self.push_screen(ModelScreen(focus_model), self._model_chosen)
 
     def _model_chosen(self, choice) -> None:
         """The picker's answer. Asks for the key when asked (`k`) or missing: the

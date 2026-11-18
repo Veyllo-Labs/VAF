@@ -16,6 +16,7 @@ Rows that still need a genuinely new agent (the local GGUF, the model download)
 display live values but route to `vaf settings`; each says so instead of
 pretending.
 """
+import logging
 import os
 import re
 from contextlib import contextmanager
@@ -28,11 +29,24 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, ListItem, ListView, Static
 
 from vaf.cli.themes import THEMES
+from vaf.core.local_engine import LABELS as ENGINE_LABELS
 from vaf.cli.tui_app.theme_bridge import THEME_ORDER, persist_theme
 
 
 def _esc(text) -> str:
     return str(text).replace("[", r"\[")
+
+
+def first_selectable(rows) -> int:
+    """The index of the first row a person can act on: notes and separators are text, and a
+    list that opens on one does nothing on Enter."""
+    return next((i for i, row in enumerate(rows) if row[0] not in ("note", "sep")), 0)
+
+
+def _fit(text, limit: int) -> str:
+    """``text`` on one line of at most ``limit`` characters, ending in an ellipsis when cut."""
+    text = str(text)
+    return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
 class GateScreen(ModalScreen[str]):
@@ -172,9 +186,6 @@ class ConfirmScreen(ModalScreen[bool]):
         self.dismiss(bool(yes))
 
 
-ENGINE_NAMES = {"llama": "llama.cpp", "vllm": "vLLM"}
-
-
 def switch_engine(app, engine: str, model=None, gpu_share=None, *, make_local: bool = False,
                   state=None, after=None) -> None:
     """Hand an engine switch to the bridge's lane; ask first when vLLM is to be installed.
@@ -211,6 +222,10 @@ def switch_engine(app, engine: str, model=None, gpu_share=None, *, make_local: b
         question = (f"{replaces}Install vLLM {vllm.get('pin')}: at least "
                     f"{float(vllm.get('download_gb_at_least') or 0):.1f} GB to download, "
                     f"more on disk, plus {repo}{size}?")
+        if make_local:
+            from vaf.core.config import Config
+            if str(Config.get("provider", "local") or "local").strip().lower() != "local":
+                question += " The main chat then runs on this machine."
 
         def _answered(yes) -> None:
             if yes:
@@ -239,7 +254,7 @@ def choose_local_engine(app, engine: str, *, from_settings: bool = False, state=
     bridge = app._bridge
     current = local_engine.VLLM if local_engine.is_vllm() else local_engine.LLAMA
     provider = str(Config.get("provider", "local") or "local").strip().lower()
-    name = ENGINE_NAMES.get(engine, engine)
+    name = local_engine.label(engine)
 
     def _provider_only() -> None:
         if getattr(bridge, "busy", False):
@@ -262,8 +277,11 @@ def choose_local_engine(app, engine: str, *, from_settings: bool = False, state=
     if not isinstance(state, dict):
         try:
             state = bridge.engine_state()
-        except Exception as exc:
-            app.notify(f"engine state unavailable: {exc}", severity="warning", timeout=3.0)
+        except Exception:
+            # The detail is for the log; the person gets what to do.
+            logging.getLogger(__name__).warning("engine state unavailable", exc_info=True)
+            app.notify("could not read the local engine's state; try again", severity="warning",
+                       timeout=3.0)
             return
     if state.get("profile") == "api":
         from vaf.core import inference_profile
@@ -481,7 +499,7 @@ class SettingsScreen(ModalScreen[None]):
             shown = provider.upper()
             if provider == "local":
                 from vaf.core import local_engine
-                shown += " · " + ("vLLM" if local_engine.is_vllm() else "llama.cpp")
+                shown += " · " + local_engine.label()
             rows = [
                 ("provider", None,
                  f"AI Provider: [$text]{_esc(shown)}[/]"),
@@ -635,12 +653,14 @@ class SettingsScreen(ModalScreen[None]):
     # The web cards' English lines (en.json localEngine llamaFor + llamaLine, vllmFor +
     # vllmLine; tests/test_tui_local_engine.py keeps them equal).
     ENGINE_LINES = {
-        "llama": ("llama.cpp", "For everyday tasks on personal PCs, laptops and edge devices. "
-                               "Runs GGUF models on almost any GPU or on the CPU alone, takes "
-                               "only the memory it needs and starts in seconds"),
-        "vllm": ("vLLM", "For servers and high-end PCs that answer many requests at once. Runs "
-                         "Hugging Face models on a supported NVIDIA or AMD GPU, reserves its "
-                         "share of GPU memory up front and starts in one to two minutes"),
+        "llama": (ENGINE_LABELS["llama"],
+                  "For everyday tasks on personal PCs, laptops and edge devices. "
+                  "Runs GGUF models on almost any GPU or on the CPU alone, takes "
+                  "only the memory it needs and starts in seconds"),
+        "vllm": (ENGINE_LABELS["vllm"],
+                 "For servers and high-end PCs that answer many requests at once. Runs "
+                 "Hugging Face models on a supported NVIDIA or AMD GPU, reserves its "
+                 "share of GPU memory up front and starts in one to two minutes"),
     }
 
     def _engine_is_vllm(self) -> bool:
@@ -656,13 +676,15 @@ class SettingsScreen(ModalScreen[None]):
         except Exception as exc:
             self._engine_state = f"engine state unavailable: {exc}"
 
-    def _engine_line(self, engine: str, active: bool) -> str:
-        """The engine's name (with "in use" on the active one) and its description below it,
-        wrapped with a hanging indent, so a wrapped line never starts under the marker."""
+    def _engine_line(self, engine: str, active: bool, *, serving: bool = True) -> str:
+        """The engine's name (with "in use" on the active one, "selected" while the main chat
+        runs on an API provider and nothing uses it) and its description below it, wrapped
+        with a hanging indent, so a wrapped line never starts under the marker."""
         import textwrap
         name, line = self.ENGINE_LINES[engine]
         marker = "▍" if active else " "
-        in_use = "  [$success]in use[/]" if active else ""
+        in_use = ("" if not active else "  [$success]in use[/]" if serving
+                  else "  [$vaf-muted]selected[/]")
         wrapped = textwrap.fill(line, width=50, initial_indent="   ", subsequent_indent="   ")
         return (f"[$primary]{marker}[/][$text]{name}[/]{in_use}\n"
                 f"[$vaf-muted]{_esc(wrapped)}[/]")
@@ -690,9 +712,12 @@ class SettingsScreen(ModalScreen[None]):
             from vaf.core.provider_registry import provider_label
             rows.append(("note", None, f"The main chat runs on {provider_label(provider)}. "
                                        "Picking an engine moves it to this machine."))
-        rows.append(("engine_pick", "llama", self._engine_line("llama", engine == "llama")))
+        serving = provider == "local"
+        rows.append(("engine_pick", "llama",
+                     self._engine_line("llama", engine == "llama", serving=serving)))
         if support.get("level") == "supported":
-            rows.append(("engine_pick", "vllm", self._engine_line("vllm", engine == "vllm")))
+            rows.append(("engine_pick", "vllm",
+                         self._engine_line("vllm", engine == "vllm", serving=serving)))
             rows.append(("note", None, str(support.get("reason") or "")))
             memory = (state.get("vllm") or {}).get("memory")
             if engine == "vllm" and isinstance(memory, dict) and memory.get("total_mb"):
@@ -875,7 +900,7 @@ class SettingsScreen(ModalScreen[None]):
             self._row_statics.append(static)
             lv.append(ListItem(static))
         lv.focus()
-        lv.index = 0
+        lv.index = first_selectable(self._rows)
 
     def _refresh_labels(self) -> None:
         rows = self._menu_rows(self._stack[-1])
@@ -1069,7 +1094,7 @@ class SettingsScreen(ModalScreen[None]):
             # screen is being dismissed, so the pick would be delivered to a closed
             # pump and dropped without a word.
             self.dismiss(None)
-            self.app.call_later(self.app.action_model)
+            self.app.call_later(self.app.action_model, kind == "api_model")
             return
         if kind == "later":
             self.app.notify("This flow needs a full restart - use `vaf settings` "
@@ -1385,6 +1410,16 @@ class NumberScreen(ModalScreen["int | None"]):
         self.dismiss(None)
 
 
+# The picker's value column: the box is 64 columns (58 inside its border and padding), the
+# marker and label take 20, a scrollbar up to 2; a longer value would wrap under the label.
+VALUE_CHARS = 36
+
+# Under the `api` profile, in place of the two local rows. Not `inference_profile.refusal`:
+# that sentence points at Settings, and this list IS where the provider is chosen.
+PICKER_PROFILE_LINE = ('This installation runs without local models (profile "api"). Pick an '
+                       "API provider below; for a local model, run: vaf profile local")
+
+
 class ModelScreen(ModalScreen[tuple]):
     """Pick where the main chat runs: this machine's engine (llama.cpp or vLLM), an API
     provider, or a model of the current API provider.
@@ -1407,9 +1442,12 @@ class ModelScreen(ModalScreen[tuple]):
         Binding("k", "set_key", "set this provider's API key", show=False),
     ]
 
-    def __init__(self) -> None:
+    def __init__(self, focus_model: bool = False) -> None:
         super().__init__()
         self._rows: list = []
+        # Opened from the Settings "API Model" row: the cursor starts on the model in use,
+        # which is what that row is about.
+        self._focus_model = focus_model
 
     def compose(self) -> ComposeResult:
         with Vertical(id="model-box", classes="modal-box"):
@@ -1442,13 +1480,12 @@ class ModelScreen(ModalScreen[tuple]):
                 if active:
                     active_index = len(self._rows)
                 marker = "▍" if active else " "
-                label = f"local · {ENGINE_NAMES[name]}"
+                label = f"local · {local_engine.label(name)}"
                 self._add(lv, ("local", name),
                           f"[$primary]{marker}[/][$vaf-muted]{label:<18}[/] "
-                          f"[$text]{_esc(shown[name])}[/]")
+                          f"[$text]{_esc(_fit(shown[name], VALUE_CHARS))}[/]")
         else:
-            self._add(lv, ("note", None),
-                      f"[$text-disabled]{_esc(inference_profile.refusal('a local model'))}[/]")
+            self._add(lv, ("note", None), f"[$text-disabled]{_esc(PICKER_PROFILE_LINE)}[/]")
         self._add(lv, ("sep", None), "[$vaf-border]─────────────────[/]")
 
         for provider in sorted(catalog):
@@ -1461,7 +1498,7 @@ class ModelScreen(ModalScreen[tuple]):
                 active_index = len(self._rows)
             self._add(lv, ("provider", provider),
                       f"[$primary]{marker}[/][$vaf-muted]{_esc(provider):<18}[/] "
-                      f"[$text]{_esc(shown_model)}[/]")
+                      f"[$text]{_esc(_fit(shown_model, VALUE_CHARS))}[/]")
 
         if current != "local":
             models = self._models_for(current)
@@ -1470,13 +1507,15 @@ class ModelScreen(ModalScreen[tuple]):
                 configured = str(Config.get(f"api_model_{current}", "") or "")
                 for model in models:
                     marker = "▍" if model == configured else " "
+                    if self._focus_model and (model == configured or (
+                            not configured and model == models[0])):
+                        active_index = len(self._rows)
                     self._add(lv, ("model", model),
                               f"[$primary]{marker}[/][$vaf-muted]{_esc(current)}:[/] "
-                              f"[$text]{_esc(model)}[/]")
+                              f"[$text]{_esc(_fit(model, VALUE_CHARS))}[/]")
 
         if active_index < 0:
-            active_index = next((i for i, (kind, _) in enumerate(self._rows)
-                                 if kind not in ("note", "sep")), 0)
+            active_index = first_selectable(self._rows)
         lv.index = active_index
         lv.focus()
 
@@ -1809,7 +1848,7 @@ class SessionsPanel(Vertical):
                     head += f" [$warning]{unread}[/]"
                 meta = "connected" if state.get("connected") else "not connected"
                 last = (entry.get("last") or {}).get("text") or ""
-                tail = (last[:24] + "…") if len(last) > 25 else last
+                tail = _fit(last, 25)
                 lv.append(ListItem(Static(
                     f"{head}\n"
                     f"  [$text-disabled]{_esc(meta)}[/]\n"
@@ -1840,7 +1879,7 @@ class SessionsPanel(Vertical):
                     f"  [$text-disabled]{_esc(tail)}[/]")))
                 continue
             meta = sid[:12] + (f" · {count} msg" if count else "")
-            tail = (summary[:24] + "…") if len(summary) > 25 else summary
+            tail = _fit(summary, 25)
             if not tail:
                 tail = str(entry.get("updated_at") or "")[:16]
             lv.append(ListItem(Static(

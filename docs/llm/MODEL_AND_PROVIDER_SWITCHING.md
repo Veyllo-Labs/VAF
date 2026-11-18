@@ -46,13 +46,16 @@ provider`. In this order it:
 3. writes `provider` and `api_model_<provider>` under one hold of the config lock;
 4. calls `reload_all_api_backends(force=True)` for the live agents of the process.
 
-A refusal writes nothing, and no result text carries the key. The switch never resets a
+A refusal writes no config key (a typed key that failed its check stays in the key store),
+and no result text carries the key. The switch never resets a
 lane model itself: `Config.save` does (see "Lane models" above), and the result only names
 what it reset, which `vaf models config provider` prints.
 
 **API to local in the terminal app.** The backend reload leaves an agent moved to `local`
 with nothing to serve, and the terminal app's turn path loads no model, so the app loads it
-right after the switch (`reload_local_model`, the conversation stays) and says so. The
+right after the switch (`reload_local_model`, the conversation stays) and says so; with
+llama.cpp and no GGUF set, that load first downloads the default model for this machine,
+and the note says that instead, and a load that fails names the server's log. The
 picker lists `local · llama.cpp` and `local · vLLM` above the API providers; picking an
 engine that is not the one in use switches the engine first (`local_engine.apply`, asking
 before a vLLM install) and moves the provider only once that switch is done.
@@ -64,7 +67,8 @@ does, before any agent exists), and the rebuild of the prompt-toolkit and classi
 lanes after their settings menu (their writes go through the switch, the rebuild is theirs).
 `vaf engine` prepares an engine and leaves the provider alone; with an API provider it says
 so. `vaf models config subagent_provider <name>` writes the name and its switch together
-(`set_subagent_provider`), refusing an unknown name or a provider without a key.
+(`set_subagent_provider`), refusing an unknown name, a provider without a key, and `local`
+under the `api` profile.
 
 ## Related documentation
 

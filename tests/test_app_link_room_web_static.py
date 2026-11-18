@@ -239,15 +239,26 @@ def test_the_follow_signature_moves_on_every_pass():
     assert effect.count("_chatGrew()") == 1
 
 
-def test_the_inbox_opens_the_room_by_the_registry_name():
-    """MUTATION: send a Veyllo App row of the inbox to Settings again, or spell the channel by
-    hand - red."""
+def test_the_inbox_has_no_veyllo_app_branch():
+    """The Veyllo App's chat is no inbox lane (`Channel.inbox`), so no inbox row carries it and
+    the window needs no way into the Veyllo App room; the sidebar's row is that way.
+    MUTATION: leave the branch, the prop or the export in place - red."""
     from vaf.core.app_link import CHANNEL
-    from vaf.core.channels import CHAT_CHANNELS
-    module = (ROOT / "web" / "components" / "chat" / "appRoom.ts").read_text(encoding="utf-8")
-    assert f"export const VEYLLO_APP_CHANNEL: string = '{CHANNEL}';" in module and CHANNEL in CHAT_CHANNELS
-    assert "onOpenAppRoom={openAppRoom}" in PAGE
-    assert "if (r.channel === VEYLLO_APP_CHANNEL && onOpenAppRoom) { onClose(); onOpenAppRoom(); return; }" in INBOX
+    from vaf.core.inbox import CHANNELS
+    assert CHANNEL not in CHANNELS
+    assert "onOpenAppRoom" not in INBOX
+    inbox_element = PAGE[PAGE.index("<InboxWindow"):]
+    inbox_element = inbox_element[:inbox_element.index("/>")]
+    assert "onOpenAppRoom" not in inbox_element
+    # The source trees only: node_modules and the build output are not walked at all.
+    sources = [ROOT / "web" / d for d in ("app", "components", "hooks", "lib", "scripts")]
+    files = [f for d in sources for pattern in ("*.ts", "*.tsx") for f in d.rglob(pattern)]
+    files += [f for pattern in ("*.ts", "*.tsx") for f in (ROOT / "web").glob(pattern)]
+    assert any(f.name == "appRoom.ts" for f in files), "the walk reaches the room module"
+    holders = [f.relative_to(ROOT).as_posix() for f in files
+               if "VEYLLO_APP_CHANNEL" in f.read_bytes().decode("utf-8", "replace")]
+    assert holders == [], holders
+    assert "const openAppRoom = () => {" in PAGE and "openAppRoom(); }}" in PAGE, "the sidebar row still opens the room"
     assert "'veyllo_app'" not in INBOX
 
 

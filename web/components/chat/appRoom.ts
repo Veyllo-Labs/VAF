@@ -10,9 +10,6 @@
 export const APP_ROOM_ID = 'app:veyllo_app';
 /** Its visible name: the product's name, the same in every language. */
 export const APP_ROOM_TITLE = 'Veyllo App';
-/** The registry's name of the Veyllo App channel (vaf/core/channels.py, `app_link.CHANNEL`),
- *  which the inbox's rows carry. */
-export const VEYLLO_APP_CHANNEL: string = 'veyllo_app';
 
 type Row = { kind?: string; roomId?: string };
 

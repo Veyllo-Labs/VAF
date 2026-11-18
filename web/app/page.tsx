@@ -13911,7 +13911,6 @@ function VAFDashboardContent() {
                 isOpen={isInboxOpen}
                 onClose={() => setIsInboxOpen(false)}
                 version={inboxVersion}
-                onOpenAppRoom={openAppRoom}
                 onOpenInChannel={(jump) => {
                     // The channel windows live inside Settings: open it on Connections with the jump.
                     setSettingsChatJump(jump);

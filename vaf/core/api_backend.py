@@ -1778,6 +1778,14 @@ class APIBackendManager:
             # carries the blank shape, so `cache_measured` is False and it stays
             # out of the hit-rate denominator instead of entering it as a 0% hit.
             _cache = dict(self.last_request_usage or {})
+            if served is not None and not served:
+                # The call's holder stayed empty: no `_chat_single` ran for it, so
+                # nothing reset the manager's record and what it holds is an
+                # EARLIER call's. Its cache figures would price tokens this call
+                # never sent (a phantom charge on a row of a few estimated tokens)
+                # and its finish reason is not this call's either. Without a holder
+                # (a direct caller) the record is still read as before.
+                _cache = blank_request_usage()
             # Pulled out by name rather than read back out of `cache` inside the
             # recorder: `cache` answers what the prompt cost, this answers why the
             # response stopped, and reading one out of the other hides both.

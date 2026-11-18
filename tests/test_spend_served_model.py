@@ -180,6 +180,25 @@ def test_a_call_that_reached_no_provider_does_not_inherit_the_last_stamp(flash_c
     assert all("model" not in e["usage"] and "provider" not in e["usage"] for e in ends)
 
 
+def test_a_call_that_reached_no_provider_is_not_priced_with_the_last_calls_cache(
+        spend_dir, flash_context, monkeypatch):
+    """A served call leaves its cache figures (9,000 read) on the manager's record,
+    and only `_chat_single` resets it. A call that reaches no provider used to be
+    priced with them: 0.000396 on a row of one estimated token, far above what the
+    alias can cost today, so `vaf usage show` called a row written today a leftover
+    of earlier versions. Its estimate is now priced without cache: the one token
+    of "hi" at the pro rate, 1.32 per million, rounds to 0.000001. MUTATION:
+    delete the blank cache for an empty holder in `_record_call_usage`."""
+    mgr = _manager()
+    list(mgr.chat_completion(_MSGS))
+    monkeypatch.setattr(mgr, "_chat_completion_impl", lambda *a, **kw: iter(()))
+    list(mgr.chat_completion(_MSGS))
+    providers = _rows()["providers"]
+    assert providers["deepseek/deepseek-auto"]["tokens"] == 1
+    assert providers["deepseek/deepseek-auto"]["usd"] == 0.000001
+    assert cost_mod.alias_rows_priced_as_unknown(providers) == []
+
+
 def test_a_call_that_failed_at_the_provider_names_the_model_it_was_sent_to(flash_context,
                                                                           booked):
     """A call the provider refused still reached it, so the event and the

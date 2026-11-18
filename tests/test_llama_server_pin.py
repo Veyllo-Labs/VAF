@@ -423,6 +423,7 @@ class _Swap:
 
         def hand_over(self_, port=8080, wait=15.0, reason="the local engine is vLLM"):
             swap.order.append(("stop", reason))
+            swap.port = port
             if swap.stop_reason:
                 return swap.stop_reason
             swap.running = False
@@ -493,7 +494,7 @@ def test_extraction_without_the_data_filter_is_refused(linux_install, monkeypatc
     _fake_get(monkeypatch, payload)
     assert m.ensure_server_exists() is False
     assert not Path(m.bin_dir).exists() and not Path(m.bin_dir + ".staging").exists(), "nothing is installed"
-    assert any("data filter" in e for e in errors), errors
+    assert any("data filter" in e and "3.11.4" in e for e in errors), errors
 
 
 @pytest.mark.parametrize("target", ["../../../../etc/passwd", "/etc/passwd"], ids=["climbing", "absolute"])
@@ -941,3 +942,143 @@ def test_debris_a_leftover_removal_could_not_clear_stops_the_install(linux_insta
     assert m.ensure_server_exists() is False
     assert any("leftover" in e and "start VAF again" in e for e in errors), errors
     assert (staging / "stuck" / "debris").exists() and m.installed_build() == 10021
+
+
+# ── the new build proves itself before the old one goes ──────────────────────────
+
+def _failing_probe(monkeypatch, fails):
+    """`llama-server --version` read from the stub's bytes, except where `fails(path)`."""
+    def version_output(self, path=None):
+        target = path or self.server_path
+        if fails(target):
+            raise OSError("error while loading shared libraries: libvulkan.so.1")
+        return Path(target).read_text(encoding="utf-8", errors="replace")
+    monkeypatch.setattr(backend.ServerManager, "_version_output", version_output)
+
+
+def test_a_staged_build_that_does_not_start_leaves_the_old_server_and_install(linux_install, monkeypatch):
+    """The checksum proves the bytes, not that they run here. The staged binary is asked
+    for its build before the running server is stopped. MUTATIONS: drop that probe, or
+    run it after the stop: each goes red."""
+    m, payload = linux_install
+    Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10021)
+    before = _tree(Path(m.bin_dir))
+    swap = _Swap(m, monkeypatch)
+    _failing_probe(monkeypatch, lambda path: ".staging" in path)
+    errors = []
+    monkeypatch.setattr(backend.UI, "error", lambda *a, **k: errors.append(" ".join(map(str, a))))
+    _fake_get(monkeypatch, payload)
+    assert m.ensure_server_exists() is False
+    assert swap.order == [], "the running server was not stopped and nothing was renamed"
+    assert swap.running
+    assert _tree(Path(m.bin_dir)) == before and not os.path.lexists(m.bin_dir + ".staging")
+    assert any("does not start" in e and "unchanged" in e for e in errors), errors
+
+
+def test_a_build_that_fails_at_its_final_place_puts_the_previous_one_back(linux_install, monkeypatch):
+    """The replaced build stays until the new one also reports the pinned number where it
+    will run. MUTATIONS: drop the roll-back, or remove .previous before that probe: each
+    goes red."""
+    m, payload = linux_install
+    Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10021)
+    before = _tree(Path(m.bin_dir))
+    # The new build answers in staging and not once it sits in bin/llama-cpp.
+    _failing_probe(monkeypatch, lambda path: os.path.abspath(path) == os.path.abspath(m.server_path)
+                   and "10955" in Path(path).read_text(encoding="utf-8"))
+    errors = []
+    monkeypatch.setattr(backend.UI, "error", lambda *a, **k: errors.append(" ".join(map(str, a))))
+    _fake_get(monkeypatch, payload)
+    assert m.ensure_server_exists() is False
+    assert _tree(Path(m.bin_dir)) == before, "the previous build is back in bin/llama-cpp"
+    assert not os.path.lexists(m.bin_dir + ".previous")
+    assert any("put back" in e for e in errors), errors
+
+
+def _rename_fails(monkeypatch, m, *, also_restore: bool):
+    real = os.rename
+    state = {"armed": True}
+
+    def rename(src, dst):
+        if state["armed"] and os.path.abspath(dst) == os.path.abspath(m.bin_dir):
+            if os.path.abspath(src) == os.path.abspath(m.bin_dir + ".staging"):
+                raise PermissionError(5, "Access is denied")
+            if also_restore and os.path.abspath(src) == os.path.abspath(m.bin_dir + ".previous"):
+                raise PermissionError(5, "Access is denied")
+        return real(src, dst)
+
+    monkeypatch.setattr(backend.os, "rename", rename)
+    return state
+
+
+def test_a_failed_second_rename_puts_the_previous_build_back(linux_install, monkeypatch):
+    """bin/llama-cpp was moved aside and staging could not take its place: the old build
+    goes back instead of leaving no backend at all. MUTATION: drop the restore and this
+    goes red."""
+    m, payload = linux_install
+    Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10021)
+    before = _tree(Path(m.bin_dir))
+    _rename_fails(monkeypatch, m, also_restore=False)
+    _fake_get(monkeypatch, payload)
+    assert m.ensure_server_exists() is False
+    assert _tree(Path(m.bin_dir)) == before
+    assert not os.path.lexists(m.bin_dir + ".previous") and not os.path.lexists(m.bin_dir + ".staging")
+
+
+def test_a_previous_build_that_could_not_go_back_is_recovered_next_time(linux_install, monkeypatch):
+    """The restore failed too: .previous is the only copy of the old build. The next
+    attempt moves it back before anything treats it as a leftover; with a refused download
+    that attempt then leaves the old build installed. MUTATION: drop the recovery at the
+    start and .previous is deleted as a leftover, leaving no backend."""
+    m, payload = linux_install
+    Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10021)
+    state = _rename_fails(monkeypatch, m, also_restore=True)
+    _fake_get(monkeypatch, payload)
+    assert m.ensure_server_exists() is False
+    assert not os.path.lexists(m.bin_dir) and os.path.isdir(m.bin_dir + ".previous")
+
+    state["armed"] = False
+    _fake_get(monkeypatch, payload + b"tampered")
+    assert m.ensure_server_exists() is False
+    assert m.installed_build() == 10021, "the old build is back in bin/llama-cpp"
+    assert not os.path.lexists(m.bin_dir + ".previous")
+
+
+def test_the_install_stops_the_server_on_the_port_the_start_serves(linux_install, monkeypatch):
+    """MUTATION: hand over on the default port again and this goes red."""
+    m, payload = linux_install
+    Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10021)
+    swap = _Swap(m, monkeypatch)
+    _fake_get(monkeypatch, payload)
+    assert m.ensure_server_exists(port=8090) is True
+    assert swap.port == 8090
+
+
+def test_the_legacy_cleanup_removes_llama_cpp_files_only(linux_install, monkeypatch, tmp_path):
+    """A tenant link whose disk is not mounted (is_dir() is False) and a file of another
+    name stay; the llama.cpp files go. MUTATION: remove every non-folder entry again (no
+    name check) and this goes red."""
+    m, payload = linux_install
+    bin_root = _legacy_layout(m)
+    (bin_root / "notes.txt").write_bytes(b"mine")
+    offline = None
+    if _can_symlink(tmp_path):
+        shutil_target = tmp_path / "unmounted-disk" / "vllm-env"
+        os.symlink(shutil_target, bin_root / "vllm-offline")
+        offline = bin_root / "vllm-offline"
+    _fake_get(monkeypatch, payload)
+    assert m.ensure_server_exists() is True
+    assert (bin_root / "notes.txt").read_bytes() == b"mine"
+    if offline is not None:
+        assert os.path.islink(offline) and not offline.exists(), "the link to the offline disk is kept"
+    assert not (bin_root / "LICENSE").exists() and not os.path.lexists(m.legacy_server_path)
+    assert not os.path.lexists(bin_root / "libllama.so.0.0.1")
+
+
+def test_a_plain_file_leftover_is_removed(linux_install, monkeypatch):
+    """bin/llama-cpp.staging as a plain file (not a folder, not a link) is removed like
+    any leftover. MUTATION: drop the plain-file branch and the install stops on it."""
+    m, payload = linux_install
+    Path(m.bin_root).mkdir()
+    Path(m.bin_dir + ".staging").write_bytes(b"not a folder")
+    _fake_get(monkeypatch, payload)
+    assert m.ensure_server_exists() is True and m.installed_build() == 10955

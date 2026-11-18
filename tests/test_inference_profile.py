@@ -78,7 +78,7 @@ def test_the_local_server_never_starts_under_the_api_profile(config, provider, s
     config.update({"inference_profile": "api", "provider": provider,
                    "auto_start_local_server": True})
     calls = []
-    fake = types.SimpleNamespace(ensure_server_exists=lambda: calls.append(1) or False)
+    fake = types.SimpleNamespace(ensure_server_exists=lambda port=8080: calls.append(1) or False)
     assert ServerManager._start_server_locked(fake, "model.gguf",
                                               skip_provider_gate=skip_gate) is expected
     assert calls == []
@@ -849,7 +849,7 @@ def test_a_start_waiting_for_a_loading_server_ends_on_a_switch(config, monkeypat
 
     monkeypatch.setattr(backend.requests, "get", _get)
     monkeypatch.setattr(backend.time, "sleep", only_on_thread(_sleep))
-    fake = types.SimpleNamespace(ensure_server_exists=lambda: True, pid_file=str(pid_file),
+    fake = types.SimpleNamespace(ensure_server_exists=lambda port=8080: True, pid_file=str(pid_file),
                                  _is_process_running=lambda pid: True, process=None)
     try:
         result = backend.ServerManager._start_server_locked(fake, "model.gguf")

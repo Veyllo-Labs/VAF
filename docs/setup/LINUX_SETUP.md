@@ -182,7 +182,7 @@ VAF uses GPU acceleration in two places:
 
 Uses **Vulkan** - works with NVIDIA, AMD, and Intel GPUs without the CUDA toolkit (only the GPU driver is needed).
 
-On first start, VAF automatically downloads the `llama-b*-bin-ubuntu-vulkan-x64.tar.gz` binary if a compatible GPU is detected, checks its SHA-256 against the build pinned with the release before anything is unpacked, and installs it into `bin/llama-cpp/`. After an update that pins a newer build, the first start downloads it while the old server still runs, then stops a llama-server that is still running and replaces only `bin/llama-cpp/` (the vLLM environment in `bin/vllm/` and Piper in `bin/piper/` stay). An install from before `bin/llama-cpp/` existed, with the files straight in `bin/`, is moved there the same way, and the old files at the top of `bin/` are removed once the new build runs.
+On first start, VAF automatically downloads the Vulkan build for your architecture (`llama-b*-bin-ubuntu-vulkan-x64.tar.gz` or `llama-b*-bin-ubuntu-vulkan-arm64.tar.gz`) if a compatible GPU is detected, the CPU build (`llama-b*-bin-ubuntu-x64.tar.gz` or `-arm64`) otherwise, checks its SHA-256 against the build pinned with the release before anything is unpacked, and installs it into `bin/llama-cpp/`. After an update that pins a newer build, the first start downloads it while the old server still runs, then stops a llama-server that is still running and replaces only `bin/llama-cpp/` (the vLLM environment in `bin/vllm/` and Piper in `bin/piper/` stay). An install from before `bin/llama-cpp/` existed, with the files straight in `bin/`, is moved there the same way, and the old files at the top of `bin/` are removed once the new build runs.
 
 To verify GPU is active, check the server output for:
 ```

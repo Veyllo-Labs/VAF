@@ -147,8 +147,13 @@ waiting for a stable `X.Y.Z`.
    cross-checks them against llama.cpp's provenance attestation, the statement of
    its `release.yml` or, since llama.cpp split building from publishing, of its
    `release-publish.yml`, run from `refs/heads/master`; `--download` additionally
-   hashes every asset locally), start VAF once so the pinned build installs and
-   runs, then commit the manifest with the release.
+   hashes every asset locally). Then check the build on a machine that runs the
+   local model on llama.cpp (provider `local`, `vaf engine llama`, local auto-start
+   on): start VAF and send one chat, confirm that `vaf info` prints the pinned
+   build "matches the pin" and that the running server answers a local request
+   (`curl -s 127.0.0.1:8080/v1/models` names the model), and only then commit the
+   manifest with the release. A start with vLLM as the engine or with auto-start
+   off never installs llama.cpp, so it checks nothing.
    The vLLM engine is pinned the same way, by version (`PIN` in
    `vaf/core/vllm_server.py`): bumping it is a release decision too. Edit `PIN`, run
    `vaf engine vllm` once on a supported machine (Linux, NVIDIA, compute capability

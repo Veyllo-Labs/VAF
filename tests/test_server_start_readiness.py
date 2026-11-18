@@ -111,7 +111,7 @@ def mgr(tmp_path, monkeypatch):
 
     m = ServerManager(skip_cleanup=True)
     m.pid_file = str(tmp_path / "server.pid")
-    monkeypatch.setattr(m, "ensure_server_exists", lambda: True)
+    monkeypatch.setattr(m, "ensure_server_exists", lambda port=8080: True)
     monkeypatch.setattr(m, "stop_server", lambda *a, **k: None)
 
     model = tmp_path / "model.gguf"
@@ -358,7 +358,7 @@ def test_a_switch_while_the_binary_is_fetched_launches_nothing(mgr, monkeypatch)
     spawned = []
     overrides = mgr._test["overrides"]
     monkeypatch.setattr(mgr, "ensure_server_exists",
-                        lambda: overrides.update(inference_profile="api") or True)
+                        lambda port=8080: overrides.update(inference_profile="api") or True)
     _wire_http(monkeypatch, lambda n: FakeResponse(200))
     monkeypatch.setattr(backend.subprocess, "Popen",
                         _llama_popen(spawned, lambda cmd, out: FakeProc(4242, lambda: None)))

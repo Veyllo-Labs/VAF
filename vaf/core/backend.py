@@ -569,6 +569,16 @@ LLAMA_REPO_ID = 612354784          # what the provenance attestation must name
 # unpacks, and a chain stored in reverse order makes that cost grow with the square of its
 # length (26 s at 4000 links), so more than this is refused before anything is unpacked.
 MAX_ARCHIVE_LINKS = 512
+# What a llama.cpp release archive puts at the top of its folder, on every platform: its
+# programs (llama-*, rpc-server, ggml-rpc-server), the ggml, llama and mtmd libraries with
+# their version links, the runtime libraries of the Windows CUDA, ROCm and SYCL builds and
+# macOS' Metal shader (by their suffix: those names vary per backend), and its license
+# files. The legacy cleanup removes these names from the top of bin/ and nothing else.
+LEGACY_LLAMA_FILE = re.compile(
+    r"(llama[-_.].*|(lib)?(ggml|llama|mtmd)([-_.].*)?|(ggml-)?rpc-server(\.exe)?|LICENSE.*"
+    r"|.*\.(dll|so|dylib|metal|metallib)|.*\.so\.\d[\d.]*)",
+    re.IGNORECASE,
+)
 PIN_PATH = Path(__file__).with_name("llama_server_pin.json")
 # The assets the launcher can pick, per platform and GPU: macOS (arm64, x64), Linux (CPU
 # and Vulkan, x64 and arm64), Windows (Vulkan, CPU, SYCL, CUDA and ROCm with their
@@ -1099,7 +1109,7 @@ class ServerManager:
                 except TypeError as e:     # a Python without the filter argument
                     raise RuntimeError(
                         "this Python cannot unpack the backend safely (tarfile has no data filter); "
-                        "update Python to 3.10.12 or newer") from e
+                        "update Python to 3.10.12 or newer, 3.11.4 or newer, or 3.12 or newer") from e
         else:
             with zipfile.ZipFile(archive_path, "r") as zip_ref:
                 zip_ref.extractall(into)
@@ -1144,8 +1154,9 @@ class ServerManager:
           next step linear in the number of links;
         - by where it resolves (os.path.realpath, through every other link): outside
           `root` is refused. With the rules above every link of a listed folder stays
-          inside by itself, so this step cannot fire for one of them; it guards those
-          rules rather than deciding a shape of its own.
+          inside by itself, so this step cannot change the outcome (it may name the reason
+          first, for a link that runs through another one the rules refuse later in the
+          listing); it guards those rules rather than deciding a shape of its own.
 
         A dangling link that stays inside is accepted (it cannot reach anything), and so are
         the release's relative library links (libllama.so -> libllama.so.1). The folders are
@@ -1181,7 +1192,7 @@ class ServerManager:
         if os.path.lexists(path):
             raise OSError(f"{path} could not be removed completely")
 
-    def ensure_server_exists(self):
+    def ensure_server_exists(self, port: int = 8080):
         """The pinned llama-server is on disk, or it is installed now, or this is False.
 
         The binary on disk is compared with the pinned build by number: a VAF update that
@@ -1197,10 +1208,18 @@ class ServerManager:
         reports the pinned number are the legacy files at the top of bin/ removed
         (_remove_legacy_layout).
 
-        A llama server of this installation that still runs is stopped after the
-        downloads are verified and before the first rename: Windows cannot rename a
-        folder whose program runs, and elsewhere the reuse check of the start would keep
-        serving the old build. A server that does not stop leaves everything as it was."""
+        The unpacked build must report the pinned number (installed_build on the staged
+        binary) before anything else happens: a build that does not start on this host (a
+        missing runtime library) is refused while the old server still runs and the old
+        install is untouched. Only then is a llama server of this installation that still
+        runs stopped (on `port`, the port the start serves), before the first rename:
+        Windows cannot rename a folder whose program runs, and elsewhere the reuse check of
+        the start would keep serving the old build. A server that does not stop leaves
+        everything as it was. The replaced build stays in bin/llama-cpp.previous until the
+        new one reports the pinned number at its final path as well; when it does not, or
+        when the new folder cannot be put in place, the previous build is moved back. A
+        previous build that could not be moved back is recovered at the start of the next
+        attempt, before anything else."""
         from vaf.core.verified_download import DownloadIntegrityError, download_verified
 
         try:
@@ -1208,6 +1227,17 @@ class ServerManager:
         except RuntimeError as e:
             UI.error(str(e))
             return False
+        staging = self.bin_dir + ".staging"
+        previous = self.bin_dir + ".previous"
+        if not os.path.lexists(self.bin_dir) and os.path.lexists(previous):
+            # An earlier swap moved the old build aside and could not put either back.
+            try:
+                os.rename(previous, self.bin_dir)
+                UI.event("System", "Recovered the previous backend from an interrupted update.", style="warning")
+            except OSError as e:
+                UI.error(f"The previous backend in {previous} could not be moved back ({e}). "
+                         f"Rename it to {self.bin_dir} and start VAF again.")
+                return False
         want = self.pinned_build(pin)
         have = self.installed_build()
         if os.path.exists(self.server_path) and have == want:
@@ -1232,8 +1262,6 @@ class ServerManager:
         # stay next to the new ones), and a failure at any point before the swap leaves the
         # old install exactly as it was. Only bin_dir and these two paths are ever renamed
         # or removed, never bin/ itself.
-        staging = self.bin_dir + ".staging"
-        previous = self.bin_dir + ".previous"
         try:
             for leftover in (staging, previous):
                 self._remove_tree_or_link(leftover)
@@ -1263,22 +1291,34 @@ class ServerManager:
                 raise RuntimeError(f"the archive's {self.server_exe} is not a regular file")
             if self.system != "Windows":
                 os.chmod(staged_exe, 0o755)
+            # The new build must start on this host before the old server is touched.
+            staged = self.installed_build(staged_exe)
+            if staged != want:
+                shutil.rmtree(staging, ignore_errors=True)
+                UI.error(f"The downloaded backend b{want} does not start on this computer (it reports "
+                         f"build b{staged or '?'}), so it was not installed. Your current backend is unchanged.")
+                return False
             # The download ran while the old server still answered; it stops only now.
             if self._llama_pid() is not None:
-                reason = self.hand_over_from_llama(reason="the backend is being replaced by the pinned build")
+                reason = self.hand_over_from_llama(port=port, reason="the backend is being replaced by the pinned build")
                 if reason:
                     shutil.rmtree(staging, ignore_errors=True)
                     UI.error(f"{reason.rstrip('.')}, so the new backend b{want} was not installed. Your current "
                              "backend is unchanged. Stop that process and start VAF again.")
                     return False
+            moved_aside = False
             if os.path.isdir(self.bin_dir):
                 os.rename(self.bin_dir, previous)
-            os.rename(staging, self.bin_dir)
+                moved_aside = True
             try:
-                self._remove_tree_or_link(previous)
-            except OSError as e:          # the new build is in place; the next install retries
-                UI.event("System", f"The new backend runs, but the replaced one could not be removed ({e}). "
-                         f"Remove {previous} by hand.", style="warning")
+                os.rename(staging, self.bin_dir)
+            except OSError:
+                if moved_aside:
+                    try:
+                        os.rename(previous, self.bin_dir)
+                    except OSError:
+                        pass             # recovered at the start of the next attempt
+                raise
         except DownloadIntegrityError as e:
             shutil.rmtree(staging, ignore_errors=True)
             UI.error(f"The download of the backend b{want} did not match its pinned checksum, so it was not "
@@ -1292,19 +1332,34 @@ class ServerManager:
 
         got = self.installed_build()
         if got != want:
-            UI.error(f"Backend installed but reports build b{got or '?'} instead of the pinned b{want}.")
+            if moved_aside:
+                try:
+                    self._remove_tree_or_link(self.bin_dir)
+                    os.rename(previous, self.bin_dir)
+                    restored = " The previous backend was put back."
+                except OSError:
+                    restored = " The previous backend stays in llama-cpp.previous and is put back on the next start."
+            else:
+                restored = ""
+            UI.error(f"Backend installed but reports build b{got or '?'} instead of the pinned b{want}.{restored}")
             return False
+        try:
+            self._remove_tree_or_link(previous)
+        except OSError as e:          # the new build is in place; the next install retries
+            UI.event("System", f"The new backend runs, but the replaced one could not be removed ({e}). "
+                     f"Remove {previous} by hand.", style="warning")
         UI.event("System", f"Backend b{want} installed and verified.", style="success")
         if os.path.exists(self.legacy_server_path):
             self._remove_legacy_layout()
         return True
 
     def _remove_legacy_layout(self) -> None:
-        """Remove what an earlier VAF installed straight into bin/: the regular files and
-        links at the top of bin_root. Every one of them came from a llama.cpp archive (the
-        binaries, the libraries with their version links, LICENSE); the other tenants of
-        bin/ are folders, so folders, links to folders (a vLLM environment moved to another
-        disk) and everything below them stay. os.unlink never follows a link.
+        """Remove what an earlier VAF installed straight into bin/: the files and links at
+        the top of bin_root whose names a llama.cpp archive uses (LEGACY_LLAMA_FILE: the
+        binaries, the libraries with their version links, LICENSE). Anything else stays:
+        folders, links to folders (a vLLM environment moved to another disk), a link whose
+        target is offline (is_dir() is then False, so the name decides), and a file of
+        another name. os.unlink never follows a link.
 
         A file that cannot be removed (still open on Windows) is reported and left for the
         next start, which tries again: the retry is keyed on legacy_server_path, so the
@@ -1314,10 +1369,13 @@ class ServerManager:
             entries = sorted(os.scandir(self.bin_root), key=lambda e: e.name == self.server_exe)
         except OSError:
             return
+        own = {os.path.basename(self.bin_dir) + suffix for suffix in ("", ".staging", ".previous")}
         failed = False
         for entry in entries:
             if entry.name == self.server_exe and failed:
                 continue                 # stays as the key of the next start's retry
+            if not LEGACY_LLAMA_FILE.fullmatch(entry.name) or entry.name in own:
+                continue                 # not a llama.cpp file (a tenant, someone else's) or this install
             try:
                 if entry.is_dir():       # follows a link: a linked folder is a tenant too
                     continue
@@ -1403,7 +1461,7 @@ class ServerManager:
                 return False
             _wait_port_free(port)
 
-        if not self.ensure_server_exists():
+        if not self.ensure_server_exists(port=port):
             return False
 
         # If a server is already listening WITH THE WANTED MODEL, reuse it.

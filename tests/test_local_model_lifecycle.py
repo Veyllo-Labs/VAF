@@ -270,7 +270,7 @@ def test_the_pid_path_waits_for_a_loading_server_instead_of_killing_it(tmp_path,
     mgr.process = object()
 
     monkeypatch.setattr(backend.ServerManager, "_is_process_running", lambda self, pid: True)
-    monkeypatch.setattr(backend.ServerManager, "ensure_server_exists", lambda self: True)
+    monkeypatch.setattr(backend.ServerManager, "ensure_server_exists", lambda self, port=8080: True)
     monkeypatch.setattr(backend, "_server_ready_budget", lambda: 2.0)
     monkeypatch.setattr(backend.Config, "get", staticmethod(
         lambda key, default=None: {"provider": "local", "auto_start_local_server": True}.get(key, default)))

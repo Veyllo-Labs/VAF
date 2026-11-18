@@ -453,10 +453,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **The local model now runs on llama.cpp 1.0.0 (build b12359).** As before, VAF installs
   only the build it ships with, and its checksum is checked before anything is unpacked.
   llama.cpp now lives in its own folder, `bin/llama-cpp/`. Updating it no longer removes an
-  installed vLLM environment or Piper voice, and a llama server that is still running is
-  stopped before its files are replaced. The first start after the update downloads the new
-  build (about 13 to 36 MB on Linux and macOS, up to about 700 MB on Windows with an NVIDIA
-  GPU) and removes the old llama.cpp files from `bin/`.
+  installed vLLM environment or Piper voice. The first start after the update downloads the
+  new build (about 13 to 36 MB on Linux and macOS, up to about 700 MB on Windows with an
+  NVIDIA GPU) and checks that it starts on your computer before anything is replaced; if it
+  does not, the old build keeps running and stays installed. Only then is a llama server that
+  is still running stopped and the old llama.cpp files in `bin/` removed.
 - **Screenshots your agent takes to check its work no longer pile up as attachments.** They
   now show inside the step that took them, and when there are many, as one row you scroll
   sideways. Click a picture to see it large. Files you asked for stay attachments as before.

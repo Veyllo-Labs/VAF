@@ -97,7 +97,7 @@ def _llama_launch(monkeypatch, tmp_path, values, engine):
     mgr = _manager(tmp_path)
     model = tmp_path / "m.gguf"
     model.write_bytes(b"\0" * 1024)
-    monkeypatch.setattr(backend.ServerManager, "ensure_server_exists", lambda self: True)
+    monkeypatch.setattr(backend.ServerManager, "ensure_server_exists", lambda self, port=8080: True)
     monkeypatch.setattr(backend, "resolve_mmproj_for", lambda path: "")
     monkeypatch.setattr(gpu_detection, "get_primary_gpu", lambda: None)
     monkeypatch.setattr(backend, "is_debug_logging_enabled", lambda: False)
@@ -130,6 +130,18 @@ def test_llama_engine_launch_unchanged(monkeypatch, tmp_path, values, engine):
                     "--cache-ram", "4096"]
 
 
+def test_the_install_is_asked_for_the_port_of_the_start(monkeypatch, tmp_path, values):
+    """The install stops a running llama server before it replaces the files; it must look
+    on the port this start serves, not on the default one. MUTATION: call
+    ensure_server_exists without the port and this goes red."""
+    mgr = _manager(tmp_path)
+    seen = []
+    monkeypatch.setattr(backend.ServerManager, "ensure_server_exists",
+                        lambda self, port=8080: seen.append(port) or False)
+    assert mgr.start_server(str(tmp_path / "m.gguf"), port=8090) is False
+    assert seen == [8090]
+
+
 def test_no_engine_row_under_llama(values):
     from vaf.core.health import collect_health
     out = collect_health(status_probe=lambda: {}, worker_probe=lambda: None,
@@ -145,7 +157,7 @@ def _vllm_branch(monkeypatch, values, events, *, installed=True, llama_pid=None)
     monkeypatch.setattr(vs, "is_installed", lambda: installed)
     monkeypatch.setattr(backend.ServerManager, "_llama_pid", lambda self: llama_pid)
 
-    def no_llama(self):
+    def no_llama(self, port=8080):
         events.append("ensure-llama-binary")
         raise AssertionError("the llama binary was touched under vLLM")
     monkeypatch.setattr(backend.ServerManager, "ensure_server_exists", no_llama)
@@ -212,7 +224,7 @@ def test_handover_vllm_to_llama_order(monkeypatch, tmp_path, values):
         events.append("vllm-exit")
         return ""
     monkeypatch.setattr(vs, "stop", stop)
-    monkeypatch.setattr(backend.ServerManager, "ensure_server_exists", lambda self: True)
+    monkeypatch.setattr(backend.ServerManager, "ensure_server_exists", lambda self, port=8080: True)
     monkeypatch.setattr(backend, "resolve_mmproj_for", lambda path: "")
     monkeypatch.setattr(gpu_detection, "get_primary_gpu", lambda: None)
     monkeypatch.setattr(backend, "is_debug_logging_enabled", lambda: False)

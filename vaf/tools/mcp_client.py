@@ -177,6 +177,10 @@ class MCPClientTool(BaseTool):
         # Guards every write to the process cache and the identity check before an eviction.
         # Held only for those few lines, never across a read, a start or a stop.
         self._state_lock = threading.Lock()
+        # Processes whose stop runs on a daemon thread right now (`_retire`), out of the cache
+        # but not yet gone: `stop_all_servers` finishes them, since the interpreter does not
+        # wait for a daemon thread at exit.
+        self._stopping: set = set()
         # One request at a time per server process, each with its own id (module docstring).
         self._locks: Dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
@@ -330,6 +334,11 @@ class MCPClientTool(BaseTool):
             if on_process is not None:
                 on_process(proc)
             return proc
+        if proc is not None:
+            # The cached server has exited, but what it started may still run in its group (a
+            # launcher that left its child behind). Retired by identity before the entry is
+            # replaced, so its recorded group is stopped instead of being forgotten.
+            self._retire(proc)
         # (Re)spawn the server process.
         try:
             cmd_parts = server_command.split() if isinstance(server_command, str) else server_command
@@ -354,7 +363,19 @@ class MCPClientTool(BaseTool):
         except Exception:
             return None
         if on_process is not None:
-            on_process(process)
+            try:
+                on_process(process)
+            except BaseException:
+                # Not left cached without its handshake: the next call would skip it.
+                self._retire(process)
+                raise
+        # A caller that gave up while the server started (its deadline ran out before this
+        # call reported the process) gets no handshake: the fresh process is retired before
+        # any I/O, so nothing waits on a server nobody asked for any more.
+        from vaf.core.bounded_run import cancel_requested
+        if cancel_requested():
+            self._retire(process)
+            return None
         # Initialize handshake.
         init = self._json_rpc(process, "initialize", {
             "protocolVersion": "2024-11-05",
@@ -389,7 +410,9 @@ class MCPClientTool(BaseTool):
         one. Returns at once, with or without the server's lock held: the stop (SIGTERM to
         the process group, a grace of `_STOP_GRACE` seconds, then SIGKILL, and the reaping)
         runs on a daemon thread, because a server that ignores SIGTERM held its caller for
-        the grace (measured: a 1 s connection test took 6 s). Never raises."""
+        the grace (measured: a 1 s connection test took 6 s). The process stays in
+        `_stopping` until that thread is done, so `stop_all_servers` can finish it at exit,
+        where the thread is frozen before its SIGKILL. Never raises."""
         self._evict(process)
         if not _is_os_process(process):
             try:
@@ -397,11 +420,20 @@ class MCPClientTool(BaseTool):
             except Exception:
                 pass
             return
+        with self._state_lock:
+            self._stopping.add(process)
+
+        def _stop() -> None:
+            try:
+                _stop_process_tree(process)
+            finally:
+                with self._state_lock:
+                    self._stopping.discard(process)
+
         try:
-            threading.Thread(target=_stop_process_tree, args=(process,), daemon=True,
-                             name="mcp-server-stop").start()
+            threading.Thread(target=_stop, daemon=True, name="mcp-server-stop").start()
         except Exception:
-            _stop_process_tree(process)
+            _stop()
 
     def stop_server(self, server_command: str, process=None) -> bool:
         """Stop the local server process cached for `server_command`; True when one was.
@@ -428,14 +460,26 @@ class MCPClientTool(BaseTool):
         return True
 
     def stop_all_servers(self) -> None:
-        """Stop every cached local server (at exit). The servers lead their own process
-        group, so a terminal's Ctrl+C no longer reaches them with VAF's; this does."""
+        """Stop every local server this client started that may still run (at exit): the
+        cached ones and the ones whose stop is still in flight (`_stopping`). The servers
+        lead their own process group, so a terminal's Ctrl+C no longer reaches them with
+        VAF's; this does, with a short grace before SIGKILL.
+
+        A cached server that has already exited is skipped: polling it reaped it, so only its
+        group id is left, and once that group is empty the id may lead an unrelated group by
+        now. A stop in flight is finished, group included: its leader was polled a moment
+        ago."""
         with self._state_lock:
-            processes = list(self._server_processes.values())
-        for process in processes:
+            cached = list(self._server_processes.values())
+            in_flight = list(self._stopping)
+        for process in cached:
             self._evict(process)
-            if _is_os_process(process):
+            if _is_os_process(process) and process.poll() is None:
                 _stop_process_tree(process, grace=0.5)
+        for process in in_flight:
+            _stop_process_tree(process, grace=0.5)
+            with self._state_lock:
+                self._stopping.discard(process)
 
     def _json_rpc(self, process: subprocess.Popen, method: str, params: Dict[str, Any],
                   request_id: int, max_reads: int = 20) -> Optional[Dict[str, Any]]:
@@ -518,6 +562,10 @@ class MCPClientTool(BaseTool):
                     process = self._ensure_server(server_command, env, on_process)
                     if process is None:
                         return []
+                    # Asked again once the server is up: the handshake can outlast the
+                    # caller's deadline, and then the listing is not sent.
+                    if cancel_requested():
+                        return []
                     resp = self._json_rpc(process, "tools/list", {},
                                           request_id=next(self._request_ids))
                 finally:
@@ -579,32 +627,40 @@ class MCPClientTool(BaseTool):
             return "Error: No result in MCP response"
 
         result = response["result"]
-        text = self._result_text(result)
         # A tool that failed says so in `isError`, whatever its content looks like; the
         # prefix is the one the remote lane uses (`mcp_remote.render_result`) and the shared
         # result classifier reads as a failure (`context.tool_result_is_error`), with the
-        # remote lane's text when the result carries none.
+        # remote lane's text when the content carries no message (an empty array, empty
+        # text), not the result's own dump.
         if isinstance(result, dict) and "isError" in result and _reports_error(result["isError"]):
-            return f"MCP Error: {text or 'the tool reported an error'}"
-        return text
+            if isinstance(result.get("content"), list):
+                message = self._content_text(result["content"])
+            else:
+                message = self._result_text(result)
+            return f"MCP Error: {message or 'the tool reported an error'}"
+        return self._result_text(result)
 
     @staticmethod
-    def _result_text(result: Any) -> str:
+    def _content_text(content: List[Any]) -> Optional[str]:
+        """The text items of a content array joined, or None when it has none."""
+        text_parts = []
+        for item in content:
+            if isinstance(item, dict):
+                if item.get("type") == "text":
+                    text = item.get("text", "")
+                    text_parts.append(text if isinstance(text, str) else str(text))
+                elif "text" in item:
+                    text_parts.append(str(item["text"]))
+        return "\n".join(text_parts) if text_parts else None
+
+    @classmethod
+    def _result_text(cls, result: Any) -> str:
         """The text of a `tools/call` result: the text items joined, else the result as text."""
         # MCP tools return a content array.
-        if isinstance(result, dict) and "content" in result:
-            content = result["content"]
-            if isinstance(content, list) and len(content) > 0:
-                text_parts = []
-                for item in content:
-                    if isinstance(item, dict):
-                        if item.get("type") == "text":
-                            text = item.get("text", "")
-                            text_parts.append(text if isinstance(text, str) else str(text))
-                        elif "text" in item:
-                            text_parts.append(str(item["text"]))
-                return "\n".join(text_parts) if text_parts else str(result)
-            return str(result)
+        if isinstance(result, dict) and isinstance(result.get("content"), list):
+            text = cls._content_text(result["content"])
+            if text is not None:
+                return text
         return str(result)
     
     def __del__(self):
@@ -637,4 +693,16 @@ def get_mcp_client() -> MCPClientTool:
         import atexit
         atexit.register(_shared_client.stop_all_servers)
     return _shared_client
+
+
+def stop_shared_servers() -> None:
+    """Stop the shared client's local servers, if a shared client exists; never creates one.
+    For an exit path that skips `atexit` (`os._exit` after a signal). Never raises."""
+    client = _shared_client
+    if client is None:
+        return
+    try:
+        client.stop_all_servers()
+    except Exception:
+        pass
 

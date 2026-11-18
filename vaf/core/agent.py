@@ -4927,6 +4927,13 @@ class Agent:
                 # But don't use sys.exit() as it causes SystemExit in atexit
                 if signum:
                     import os
+                    # os._exit skips atexit, where the local MCP servers are stopped; they lead
+                    # their own process group, so the signal that reached VAF missed them.
+                    try:
+                        from vaf.tools.mcp_client import stop_shared_servers
+                        stop_shared_servers()
+                    except Exception:
+                        pass
                     os._exit(0)  # Force exit without calling atexit handlers
             else:
                 if signum:

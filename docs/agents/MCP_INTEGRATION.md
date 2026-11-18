@@ -219,10 +219,13 @@ What the loop reads from a server's output:
   shape (an `error` that is a string, a `result` that is not an object, a text item whose
   `text` is not a string) come back as text.
 - A call that waited for the server's lock, or for its server to start, after its caller gave
-  up on it (the tool budget ran out, or the user pressed Stop) returns without writing to the
-  server, so a write is not sent after its caller was told it did not finish. A call that got
-  past the last check before its caller gave up still writes. A listing (discovery, the
-  connection test) whose caller gave up while it waited for the lock starts and asks nothing.
+  up on it (the tool budget ran out, or the user pressed Stop) does not send its `tools/call`,
+  so the tool does not run after its caller was told it did not finish. A server started for
+  it whose handshake had not begun is stopped before any I/O; one already in its handshake
+  may finish it (`initialize`, `notifications/initialized`). A call that got past the last
+  check before its caller gave up still sends its request. A listing (discovery, the
+  connection test) whose caller gave up does not send `tools/list`, whether it was waiting
+  for the lock or for its server to start.
 - JSON-RPC batches are not read; VAF never sends one.
 
 Named boundaries, measured: three ways a call can wait on `readline` forever, holding the
@@ -252,10 +255,24 @@ returns at once; the stop runs on a background thread: SIGTERM to the process gr
 2 s later, then the reaping (measured before this: a 1 s connection test took 6 s against a
 server that ignores SIGTERM). Every local server leads its own process group (POSIX
 `start_new_session`, a new process group on Windows), so on POSIX a launcher's child that
-inherited the output pipe is stopped with it, and the blocked call then returns. On Windows
-the process and its child tree are stopped (psutil, else `taskkill /T`); a grandchild that
-detached from that tree keeps the pipe open and the call waiting. Being in their own group,
-the servers are out of reach of a terminal's Ctrl+C, so VAF stops them at exit.
+inherited the output pipe and stayed in the group is stopped with it, and the blocked call
+then returns; a descendant that left the group (`setsid`, a double fork into a session of its
+own) keeps the pipe open and the call waiting. On Windows the process and its child tree are
+stopped (psutil, else `taskkill /T`); a grandchild that detached from that tree keeps the
+pipe open and the call waiting. A server whose cached process has exited is retired, group
+included, before a fresh one replaces it, so a child its launcher left behind is stopped
+then too. While a listing gives up, it holds its own lock until the stop is issued, and the
+listing reports that it is done with the process only while it still holds the server's lock,
+so no other call can start on that process first.
+
+Being in their own group, the servers are out of reach of a terminal's Ctrl+C and hangup, so
+VAF stops them when it exits: at a normal exit (`atexit`), on the agent's signal shutdown,
+which leaves through `os._exit` (`Agent.shutdown` calls `mcp_client.stop_shared_servers`),
+and on the tray's quit, which stops its children's process trees. That includes servers whose
+stop was still in flight, which a daemon thread cannot finish once the interpreter exits. A
+server that ignores the end of its stdin outlives a VAF that is killed (SIGKILL, an unhandled
+SIGHUP) or crashes, since nothing of VAF runs then; one that follows the stdio transport exits
+on that end of input.
 
 The loop has no read deadline of its own: a Windows pipe has no `select`, and a deadline needs
 a reader thread or a non-blocking read with its own design, which would also be the place to

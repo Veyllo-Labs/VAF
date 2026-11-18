@@ -3120,23 +3120,32 @@ usable from an embedded engine too, documented in their own pages:
   registered tools. A timeout on your side only stops your wait: the read inside keeps
   the server's lock until the server answers or its process is stopped, so later calls
   to that server wait too. To recover, pass `on_process=` to `call_stdio` (it is told
-  the process the call uses, and None once the call is done with it) and hand that
-  process to `get_mcp_client().stop_server(command, process=...)`. That stops only
-  this process, and only while it is still the one cached for the command, because
-  every caller in the application shares it; without `process=` it stops whatever is
-  cached. It takes no lock and returns at once, and the stop runs in the background:
-  SIGTERM to the server's process group, SIGKILL 2 s later. On POSIX the server leads
-  its own process group, so a launcher's child that kept the output pipe goes with it,
-  the blocked call returns an error, and the next call starts a fresh process. On
+  the process the call uses, and None once the call is done with it), keep the last
+  process it was told per call, and hand that process to
+  `get_mcp_client().stop_server(command, process=...)`. That stops only this process,
+  and only while it is still the one cached for the command, because every caller in
+  the application shares it. A call that timed out before it got the lock reports no
+  process: then do not call `stop_server` at all, since `process=None` means "whatever
+  is cached", which may be another call's healthy server. It takes no lock and returns
+  at once, and the stop runs in the background: SIGTERM to the server's process group,
+  SIGKILL 2 s later. On POSIX the server leads its own process group, so a launcher's
+  child that kept the output pipe goes with it, the blocked call returns an error, and
+  the next call starts a fresh process; a descendant that left the group (`setsid`, a
+  double fork into a session of its own) keeps the pipe and the call waiting. On
   Windows the process and its child tree are stopped; a grandchild that detached from
   the tree keeps the pipe open and the blocked call waiting. Do not retry a call that
   writes after a timeout on your own: the server may already have acted. A call that
   was still waiting for the lock, or for its server to start, when `run_bounded` gave
-  up on it returns without writing to the server. Named boundary: the facade exports no
-  MCP client yet. These are reached by importing `vaf.tools.mcp_client`; measured, the
-  application has one caller of `call_stdio` (`mcp_registry.call_registered_tool`) and
-  two of `stop_server` (discovery and the connection test). See
-  [MCP_INTEGRATION.md](agents/MCP_INTEGRATION.md).
+  up on it does not send its `tools/call`; a cold start that was already in its
+  handshake when the caller gave up may still finish it (`initialize` and
+  `notifications/initialized` reach the server), and one that had not begun the
+  handshake is stopped. At exit the client stops its servers, the ones whose stop was
+  still in flight included; a server that ignores the end of its stdin outlives a
+  process that is killed or crashes. Named boundary: the facade exports no MCP client
+  yet. These are reached by importing `vaf.tools.mcp_client`; measured, the
+  application has one caller of `call_stdio` (`mcp_registry.call_registered_tool`), and
+  `stop_server` serves two lanes (discovery and the connection test, through one call
+  site). See [MCP_INTEGRATION.md](agents/MCP_INTEGRATION.md).
 - **Update-surviving local tools** - a `custom_tools/` folder in the platform
   data dir (managed via the Web UI, admin-only), see
   [vaf/tools/README.md](../vaf/tools/README.md). The agent's file tools cannot write it

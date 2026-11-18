@@ -42,7 +42,9 @@ agent has tools of its own that know whose turn it is. NAMED BOUNDARY: a command
 deliberately clears its environment is not stopped by this; what an account with
 ``host_bash`` can do on this computer is an account permission (docs/security/SANDBOXING.md).
 Not on the facade: its callers are VAF's own host tools (host_bash, python_exec, ``start``),
-and the door it serves is VAF's own terminal.
+and the door it serves is VAF's own terminal. ``own_process_group()`` (the Popen arguments
+that make a child lead its own process group) also serves the local MCP servers
+(vaf/tools/mcp_client.py); it is three Popen arguments, not a primitive of its own.
 """
 from __future__ import annotations
 

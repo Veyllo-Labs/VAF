@@ -208,9 +208,15 @@ def test_is_error_is_read_as_the_remote_lane_reads_it(flag, failed):
                                                      else "conflict")
 
 
-def test_an_error_without_text_gets_the_remote_lanes_wording():
-    result = {"content": [{"type": "text", "text": ""}], "isError": True}
-    assert _call_with_answer({"result": result}) == "MCP Error: the tool reported an error"
+@pytest.mark.parametrize("content,text", [
+    ([{"type": "text", "text": ""}], "MCP Error: the tool reported an error"),
+    ([], "MCP Error: the tool reported an error"),
+    ([{"type": "image", "data": "x"}], "MCP Error: the tool reported an error"),
+    ([{"type": "text", "text": 409}], "MCP Error: 409"),
+], ids=["empty-text", "empty-array", "no-text-item", "number"])
+def test_an_error_without_text_gets_the_remote_lanes_wording(content, text):
+    """The fallback follows the message the content carries, not the result's own dump."""
+    assert _call_with_answer({"result": {"content": content, "isError": True}}) == text
 
 
 def test_the_shared_client_stops_its_servers_at_exit(monkeypatch):
@@ -274,7 +280,8 @@ _STUB = (
     "HERE = os.path.dirname(os.path.abspath(__file__))\n"
     "MARK = os.path.join(HERE, 'dirty_once.mark')\n"
     "DEEP = '[' * 10000 + ']' * 10000\n"
-    "if MODE == 'stubborn': signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+    "DEAF = 'deaf' in sys.argv[2:]\n"
+    "if MODE == 'stubborn' or DEAF: signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
     "SILENT = MODE in ('silent', 'stubborn')\n"
     "def out(s):\n"
     "    sys.stdout.write(s + '\\n'); sys.stdout.flush()\n"
@@ -307,6 +314,7 @@ _STUB = (
     "        open(os.path.join(HERE, 'silent.mark'), 'w').close()\n"
     "        continue\n"
     "    out(json.dumps(r))\n"
+    "while DEAF: time.sleep(3600)\n"
 )
 
 # A launcher that runs the stub as its child instead of replacing itself, as a shell script
@@ -315,8 +323,10 @@ _STUB = (
 _LAUNCHER = (
     "import os, subprocess, sys\n"
     "how, stub, mode = sys.argv[1], sys.argv[2], sys.argv[3]\n"
-    "child = subprocess.Popen([sys.executable, stub, mode])\n"
-    "with open(os.path.join(os.path.dirname(stub), 'child.pid'), 'w') as f: f.write(str(child.pid))\n"
+    "child = subprocess.Popen([sys.executable, stub, mode, *sys.argv[4:]])\n"
+    "target = os.path.join(os.path.dirname(stub), 'child.pid')\n"
+    "with open(target + '.tmp', 'w') as f: f.write(str(child.pid))\n"
+    "os.replace(target + '.tmp', target)\n"
     "if how == 'wait': child.wait()\n"
 )
 
@@ -360,33 +370,48 @@ def stub(tmp_path, monkeypatch):
 
     monkeypatch.setattr(subprocess, "Popen", _RecordingPopen)
 
-    def make(mode, how=None):
+    def make(mode, how=None, deaf=False):
+        """`deaf`: the stub ignores SIGTERM and the end of its stdin."""
         client = MCPClientTool()
         clients.append(client)
+        extra = " deaf" if deaf else ""
         if how is None:
-            return client, f"{sys.executable} {path} {mode}"
-        return client, f"{sys.executable} {launcher} {how} {path} {mode}"
+            return client, f"{sys.executable} {path} {mode}{extra}"
+        return client, f"{sys.executable} {launcher} {how} {path} {mode}{extra}"
 
+    children = []  # launcher children a test saw, stopped by PID at the end
     make.started = started
+    make.children = children
     make.dir = tmp_path
+    make.child_pid = lambda: int((tmp_path / "child.pid").read_text(encoding="utf-8"))
     make.requests = lambda: ((tmp_path / "requests.log").read_text(encoding="utf-8").split()
                              if (tmp_path / "requests.log").exists() else [])
     yield make
-    for client in clients:
-        client._server_processes.clear()
-    # A launcher's child, stopped by its PID.
-    child = tmp_path / "child.pid"
-    if child.exists():
-        pid = int(child.read_text(encoding="utf-8"))
-        if _pid_alive(pid):
-            os.kill(pid, 9)
-    for proc in started:
-        if proc.poll() is None:
-            proc.kill()
-        proc.wait(timeout=5)
-        for stream in (proc.stdin, proc.stdout, proc.stderr):
-            if stream is not None:
-                stream.close()
+    try:
+        for client in clients:
+            client._server_processes.clear()
+        # A launcher's children, stopped by their PID.
+        try:
+            children.append(make.child_pid())
+        except (OSError, ValueError):
+            pass
+        for pid in children:
+            if _pid_alive(pid):
+                os.kill(pid, 9)
+    finally:
+        for proc in started:
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait(timeout=5)
+            pgid = getattr(proc, "_vaf_pgid", None)
+            if pgid and os.name != "nt":
+                try:
+                    os.killpg(pgid, 9)  # what is left of its group (a deaf child)
+                except (ProcessLookupError, PermissionError):
+                    pass
+            for stream in (proc.stdin, proc.stdout, proc.stderr):
+                if stream is not None:
+                    stream.close()
 
 
 def _bounded(fn, seconds=10.0):
@@ -665,6 +690,271 @@ def test_the_connection_test_runs_off_the_event_loop():
         encoding="utf-8")
     assert re.search(r"await asyncio\.to_thread\(\s*probe_mcp_server,", source)
     assert "probe_mcp_server(" not in source, "the connection test is called on the loop"
+
+
+# ── round three: exit, the listing's lock, cold starts, the settings snapshot ──────────────
+
+def test_a_stop_still_in_flight_is_finished_at_exit(stub):
+    """A server that ignores SIGTERM and the end of its stdin, stopped just before exit: its
+    stop runs on a daemon thread, which the interpreter freezes at exit before the SIGKILL.
+    `stop_all_servers` finishes it."""
+    if os.name == "nt":
+        pytest.skip("SIGTERM is a POSIX signal")
+    client, command = stub("stray", deaf=True)
+    assert _bounded(lambda: client.call_stdio(command, "echo", {"text": "a"})) == "echoed: a"
+    process = client._server_processes[command]
+
+    assert client.stop_server(command, process=process) is True
+    assert command not in client._server_processes
+    _bounded(client.stop_all_servers)
+    assert process.poll() is not None, "the stop in flight was left to the frozen thread"
+    assert client._stopping == set()
+
+
+def test_at_exit_a_cached_server_that_exited_is_not_signalled(monkeypatch):
+    """Its group id is all that is left once polling reaped it, and that id may lead an
+    unrelated group by now."""
+    import vaf.tools.mcp_client as mcp_client
+    stopped = []
+    monkeypatch.setattr(mcp_client, "_stop_process_tree",
+                        lambda process, grace=0: stopped.append(process))
+
+    class _Exited:
+        pid = 424242
+        _vaf_pgid = 424242
+
+        def poll(self):
+            return 0
+
+    class _Running(_Exited):
+        def poll(self):
+            return None
+
+    client = MCPClientTool()
+    exited, running = _Exited(), _Running()
+    client._server_processes.update({"gone": exited, "up": running})
+    client.stop_all_servers()
+    assert stopped == [running]
+    assert client._server_processes == {}
+
+
+def test_the_shared_servers_are_stopped_without_creating_a_client(monkeypatch):
+    import vaf.tools.mcp_client as mcp_client
+    monkeypatch.setattr(mcp_client, "_shared_client", None)
+    mcp_client.stop_shared_servers()
+    assert mcp_client._shared_client is None
+
+    calls = []
+    fake = type("C", (), {"stop_all_servers": lambda self: calls.append(1)})()
+    monkeypatch.setattr(mcp_client, "_shared_client", fake)
+    mcp_client.stop_shared_servers()
+    assert calls == [1]
+
+
+def test_the_agents_signal_shutdown_stops_the_servers_before_os_exit():
+    """`Agent.shutdown` leaves through `os._exit` after a signal, which skips `atexit`."""
+    import ast
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[1] / "vaf" / "core" / "agent.py").read_text(
+        encoding="utf-8")
+    shutdown = next(n for n in ast.walk(ast.parse(source))
+                    if isinstance(n, ast.FunctionDef) and n.name == "shutdown")
+    body = ast.unparse(shutdown)
+    assert "stop_shared_servers()" in body, "the signal shutdown never stops the servers"
+    assert body.index("stop_shared_servers()") < body.index("os._exit(0)")
+
+
+def test_abandon_holds_the_listing_until_the_stop_is_issued():
+    """The listing reports that it is done with its process under the server's lock; that
+    report must wait while `abandon` stops the process, so no other call starts on it."""
+    import vaf.core.mcp_registry as reg
+    listing = reg._Listing()
+    process = object()
+    listing.on_process(process)
+    stopping, release = threading.Event(), threading.Event()
+    seen = []
+
+    class _Client:
+        def stop_server(self, command, process=None):
+            seen.append(process)
+            stopping.set()
+            release.wait(10)
+            return True
+
+    giving_up = threading.Thread(target=listing.abandon, args=(_Client(), {"command": "x"}),
+                                 daemon=True)
+    giving_up.start()
+    assert stopping.wait(10)
+    done = threading.Thread(target=listing.on_process, args=(None,), daemon=True)
+    done.start()
+    done.join(0.3)
+    assert done.is_alive(), "the listing let go of its process before the stop was issued"
+    release.set()
+    giving_up.join(10)
+    done.join(10)
+    assert not done.is_alive() and seen == [process]
+
+
+def test_a_cold_start_whose_caller_gave_up_gets_no_handshake(stub):
+    """The caller gave up before the fresh process was reported: no handshake I/O, and the
+    process is not left running."""
+    from vaf.core.bounded_run import cancel_when
+    client, command = stub("stray")
+    with cancel_when(lambda: True):
+        assert client._ensure_server(command) is None
+    assert stub.requests() == [], "the handshake was sent for a caller that gave up"
+    assert command not in client._server_processes
+    assert _wait_until(lambda: stub.started[0].poll() is not None)
+
+
+def test_a_listing_whose_caller_gave_up_during_the_handshake_sends_no_listing(stub):
+    from vaf.core.bounded_run import cancel_when
+    client, command = stub("slow_init")
+    # The cancel flag is per thread, so the listing runs on this one (the stub answers the
+    # handshake after 2.5 s, so it returns).
+    with cancel_when(lambda: "initialize" in stub.requests()):
+        assert client.list_server_tools(command) == []
+    assert stub.requests() == ["initialize"], stub.requests()
+
+
+def test_a_failing_on_process_leaves_no_uninitialized_server_cached(stub):
+    client, command = stub("stray")
+
+    def broken(process):
+        if process is not None:
+            raise RuntimeError("observer broke")
+
+    assert _bounded(lambda: client.list_server_tools(command, on_process=broken)) == []
+    assert command not in client._server_processes, "a server without its handshake stayed"
+    assert _wait_until(lambda: stub.started[0].poll() is not None)
+    tools = _bounded(lambda: client.list_server_tools(command))
+    assert [t["name"] for t in tools] == ["echo"]
+
+
+def test_an_exited_server_is_retired_with_its_group_before_it_is_replaced(stub):
+    """A launcher that leaves its child behind has exited by the next call: the cache entry
+    is replaced by a fresh server, and the child the old one left in its group is stopped
+    (it ignores SIGTERM and the end of its stdin, so only the group's SIGKILL ends it)."""
+    if os.name == "nt":
+        pytest.skip("POSIX process groups")
+    client, command = stub("stray", how="leave", deaf=True)
+    assert _bounded(lambda: client.call_stdio(command, "echo", {"text": "a"})) == "echoed: a"
+    first_child = stub.child_pid()
+    stub.children.append(first_child)
+    assert _wait_until(lambda: stub.started[0].poll() is not None), "the launcher did not exit"
+
+    assert _bounded(lambda: client.call_stdio(command, "echo", {"text": "b"})) == "echoed: b"
+    assert _wait_until(lambda: not _pid_alive(first_child)), "the old group's child was kept"
+
+
+def _remote_entry(tmp_path, monkeypatch, url):
+    import vaf.core.mcp_registry as reg
+    path = tmp_path / "mcp_servers.json"
+    monkeypatch.setattr(reg, "get_mcp_manifest_path", lambda: path)
+    path.write_text(json.dumps({"servers": {"svc": {"transport": "http", "url": url}}}),
+                    encoding="utf-8")
+    return reg, path
+
+
+def test_the_connection_test_sends_the_token_of_the_origin_it_checked(tmp_path, monkeypatch):
+    """A save that moves the entry to another host with a new token, landing while the test
+    checks the saved origin, must not hand that new token to the tested address."""
+    import vaf.core.mcp_remote as mcp_remote
+    import vaf.core.mcp_secrets as mcp_secrets
+    url_a, url_b = "https://a.example.invalid/mcp", "https://b.example.invalid/mcp"
+    reg, path = _remote_entry(tmp_path, monkeypatch, url_a)
+    box = {"token": "TOKEN-A"}
+    asked = []
+    monkeypatch.setattr(mcp_secrets, "server_token",
+                        lambda name: asked.append(name) or box["token"])
+    monkeypatch.setattr(mcp_secrets, "server_env", lambda name: {})
+    sent = []
+
+    class _Pool:
+        def list_tools(self, transport, url, headers=None, auth=None, egress=None):
+            sent.append((url, dict(headers or {})))
+            return [{"name": "t"}]
+
+    monkeypatch.setattr(mcp_remote, "get_remote_pool", lambda: _Pool())
+
+    def save_elsewhere():
+        with reg._manifest_lock:  # the lock every Settings save takes
+            path.write_text(json.dumps({"servers": {"svc": {"transport": "http", "url": url_b}}}),
+                            encoding="utf-8")
+            box["token"] = "TOKEN-B"
+
+    real_same_origin = reg.same_origin
+
+    def checking(a, b):
+        saver = threading.Thread(target=save_elsewhere, daemon=True)
+        box["saver"] = saver
+        saver.start()
+        saver.join(0.3)  # the save lands now, if nothing holds it off
+        return real_same_origin(a, b)
+
+    import vaf.core.mcp_oauth as mcp_oauth
+    real_uses_sign_in = mcp_oauth.uses_sign_in
+
+    def uses_sign_in(cfg):
+        # Asked again once the test is past its check: from here on the save has landed, so a
+        # token read by name now would be the moved entry's.
+        saver = box.get("saver")
+        if saver is not None and not reg._manifest_lock._is_owned():
+            saver.join(5)
+        return real_uses_sign_in(cfg)
+
+    monkeypatch.setattr(reg, "same_origin", checking)
+    monkeypatch.setattr(mcp_oauth, "uses_sign_in", uses_sign_in)
+    status = reg.probe_mcp_server({"transport": "http", "url": url_a}, timeout_seconds=5,
+                                  name="svc")
+    assert status["connected"] is True, status
+    assert sent == [(url_a, {"Authorization": "Bearer TOKEN-A"})], sent
+    assert asked == ["svc"], "the token was read again, or for a server without a name"
+
+
+@pytest.mark.parametrize("save", ["remove", "upsert"])
+def test_a_manifest_load_waits_for_a_save_in_progress(tmp_path, monkeypatch, save):
+    """A load that moves a secret out of the file writes the manifest back; it must not do so
+    in the middle of a Settings save, or it writes an older snapshot over the save."""
+    import vaf.core.mcp_oauth as mcp_oauth
+    import vaf.core.mcp_remote as mcp_remote
+    import vaf.core.mcp_secrets as mcp_secrets
+    reg, path = _remote_entry(tmp_path, monkeypatch, "https://a.example.invalid/mcp")
+    monkeypatch.setattr(mcp_oauth, "forget_server", lambda *a, **k: 0)
+    for name in ("clear_server_secrets", "set_server_env", "clear_server_token",
+                 "set_server_token", "set_oauth_client_secret", "clear_oauth_client_secret"):
+        monkeypatch.setattr(mcp_secrets, name, lambda *a, **k: None)
+    monkeypatch.setattr(mcp_secrets, "server_env", lambda name: {})
+    monkeypatch.setattr(mcp_secrets, "oauth_client_secret", lambda name: "")
+    monkeypatch.setattr(mcp_remote, "get_remote_pool",
+                        lambda: type("P", (), {"close": lambda self, *a, **k: None})())
+    saving, order = threading.Event(), []
+    real_save = reg.save_mcp_manifest
+
+    def slow_save(data):
+        saving.set()
+        threading.Event().wait(0.3)
+        order.append("saved")
+        return real_save(data)
+
+    monkeypatch.setattr(reg, "save_mcp_manifest", slow_save)
+    if save == "remove":
+        saver = threading.Thread(target=reg.remove_server, args=("svc",), daemon=True)
+    else:
+        saver = threading.Thread(target=lambda: reg.upsert_server("svc", command="srv",
+                                                                  transport="stdio"),
+                                 daemon=True)
+    saver.start()
+    assert saving.wait(10)
+    loaded = reg.load_mcp_manifest()
+    order.append("loaded")
+    saver.join(10)
+    assert order == ["saved", "loaded"], "the load ran in the middle of the save"
+    if save == "remove":
+        assert loaded.get("servers") == {}
+    else:
+        assert loaded["servers"]["svc"]["command"] == "srv"
+
 
 def test_stub_server_with_a_deep_line_before_the_handshake_answer_is_dropped(stub):
     client, command = stub("deep_all")

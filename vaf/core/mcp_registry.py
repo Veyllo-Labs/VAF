@@ -55,9 +55,35 @@ def get_mcp_manifest_path() -> Path:
     return directory / "mcp_servers.json"
 
 
+# Serialises every read-modify-write of the manifest and its secrets: the moving of a secret
+# out of the file on load, `upsert_server`, `remove_server`, and the connection test's snapshot
+# of a saved entry with its token. The connection test runs on a worker thread, so without it
+# a load that moves a secret could write back an older snapshot over a Settings save made
+# meanwhile. Reentrant, because a save loads the manifest itself. A save that changes a remote
+# server's address holds it while the old sessions close (up to 10 s each); nothing on the
+# remote pool's own thread loads the manifest, so that wait cannot turn into a stall.
+_manifest_lock = threading.RLock()
+
+
+def _under_manifest_lock(fn):
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _manifest_lock:
+            return fn(*args, **kwargs)
+    return wrapper
+
+
 def load_mcp_manifest() -> Dict[str, Any]:
     """Read mcp_servers.json. Returns {} on a missing or malformed file (fail-open, never raises).
-    A secret found in the file is moved into the key ring and the file is saved without it."""
+    A secret found in the file is moved into the key ring and the file is saved without it,
+    under `_manifest_lock`."""
+    with _manifest_lock:
+        return _load_mcp_manifest()
+
+
+def _load_mcp_manifest() -> Dict[str, Any]:
     path = get_mcp_manifest_path()
     if not path.exists():
         return {}
@@ -110,7 +136,7 @@ def server_headers(server_name: str, server_cfg: Dict[str, Any]) -> Dict[str, st
     from vaf.core.mcp_secrets import server_token
     headers = {str(k): str(v) for k, v in (server_cfg.get("headers") or {}).items()
                if str(k).lower() != "authorization"} if isinstance(server_cfg.get("headers"), dict) else {}
-    if not uses_sign_in(server_cfg):
+    if server_name and not uses_sign_in(server_cfg):
         headers.update(bearer_headers(server_token(server_name)))
     return headers
 
@@ -385,9 +411,11 @@ class _Listing:
     connection test that timed out while queued behind another account's call stopped that
     call's process.
 
-    Named boundary: between `abandon` reading the process and stopping it, the listing may
-    finish and another call may start on the same process; that call is stopped too. The
-    window is the few instructions between the read and the signal."""
+    `abandon` holds the listing's lock until the stop is issued. The listing reports that it
+    is done with the process (`on_process(None)`) while it still holds the server's lock,
+    and that report waits for this lock, so no other call can start on the process before
+    the stop is issued. Lock order: the server's lock, then this one, then the client's
+    `_state_lock`; `stop_server` takes no server lock."""
 
     def __init__(self) -> None:
         self.abandoned = threading.Event()
@@ -410,9 +438,8 @@ class _Listing:
         still carries."""
         self.abandoned.set()
         with self._lock:
-            process = self._process
-        if process is not None:
-            client.stop_server(str(cfg.get("command", "")), process=process)
+            if self._process is not None:
+                client.stop_server(str(cfg.get("command", "")), process=self._process)
 
 
 def _list_tools(name: str, cfg: Dict[str, Any], client, *, token: Optional[str] = None,
@@ -463,26 +490,41 @@ def probe_mcp_server(server_cfg: Dict[str, Any], timeout_seconds: float = 5.0, *
     client = get_mcp_client()
     result: Dict[str, Any] = {}
     env = merge_env(server_env(name) if name else {}, server_cfg.get("env") if isinstance(server_cfg.get("env"), dict) else None)
-    stored_name = name
-    if name and str(server_cfg.get("transport", "stdio")) in REMOTE_TRANSPORTS:
-        saved = ((load_mcp_manifest() or {}).get("servers") or {}).get(name)
-        if not (isinstance(saved, dict) and str(saved.get("transport", "stdio")) in REMOTE_TRANSPORTS
-                and same_origin(str(saved.get("url", "")), str(server_cfg.get("url", "")))):
-            stored_name = ""
-
     from vaf.core import mcp_oauth
+    stored_name = name
+    remote = str(server_cfg.get("transport", "stdio")) in REMOTE_TRANSPORTS
+    saved: Dict[str, Any] = {}
+    if name and remote:
+        # The saved entry's origin and its stored token are read as one snapshot, under the
+        # lock every Settings save takes: the test runs on a worker thread, and a save that
+        # moved the entry to another host with a new token between the origin check and a
+        # later read of the token by name would send that new token to the tested address.
+        from vaf.core.mcp_secrets import server_token
+        with _manifest_lock:
+            entry = ((load_mcp_manifest() or {}).get("servers") or {}).get(name)
+            if (isinstance(entry, dict) and str(entry.get("transport", "stdio")) in REMOTE_TRANSPORTS
+                    and same_origin(str(entry.get("url", "")), str(server_cfg.get("url", "")))):
+                saved = entry
+                if not token and not mcp_oauth.uses_sign_in(server_cfg):
+                    token = server_token(name) or None
+            else:
+                stored_name = ""
+
     auth = None
     if stored_name and mcp_oauth.uses_sign_in(server_cfg) and mcp_oauth.signed_in(stored_name, user_scope_id):
-        saved_cfg = ((load_mcp_manifest() or {}).get("servers") or {}).get(stored_name) or {}
+        saved_cfg = saved if remote else (
+            ((load_mcp_manifest() or {}).get("servers") or {}).get(stored_name) or {})
         if mcp_oauth.uses_sign_in(saved_cfg):
             auth = mcp_oauth.auth_for(stored_name, saved_cfg, user_scope_id)
+    # A remote test sends the token resolved above, never one read again by name.
+    list_name = "" if remote else stored_name
 
     listing = _Listing()
 
     def _run() -> None:
         try:
             result["tools"] = listing.run(
-                lambda: _list_tools(stored_name, server_cfg, client, token=token, env=env,
+                lambda: _list_tools(list_name, server_cfg, client, token=token, env=env,
                                     auth=auth, discover=False, on_process=listing.on_process))
         except Exception as exc:
             result["error"] = str(exc)
@@ -515,6 +557,7 @@ _NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
 _PERMISSIONS = ("read", "write", "dangerous")
 
 
+@_under_manifest_lock
 def upsert_server(name: str, *, command: str = "", transport: str = "stdio", url: str = "",
                   enabled: bool = True, permission_level: str = "write",
                   env: Optional[Dict[str, Any]] = None, token: Optional[str] = None,
@@ -635,6 +678,7 @@ def upsert_server(name: str, *, command: str = "", transport: str = "stdio", url
             pass
 
 
+@_under_manifest_lock
 def remove_server(name: str) -> bool:
     """Remove one server and everything the key ring holds for it. True when it existed and
     the manifest was written; a name the manifest does not have leaves the ring alone."""

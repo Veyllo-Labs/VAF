@@ -564,6 +564,11 @@ def _server_ready_budget() -> float:
 # never runs. A newer llama.cpp arrives with the VAF release that carries a new manifest.
 LLAMA_REPO = "ggml-org/llama.cpp"
 LLAMA_REPO_ID = 612354784          # what the provenance attestation must name
+# Links (symbolic or hard) one release archive may hold. A release has a few dozen (the
+# version links of its libraries). The data filter resolves every link member as it
+# unpacks, and a chain stored in reverse order makes that cost grow with the square of its
+# length (26 s at 4000 links), so more than this is refused before anything is unpacked.
+MAX_ARCHIVE_LINKS = 512
 PIN_PATH = Path(__file__).with_name("llama_server_pin.json")
 # The assets the launcher can pick, per platform and GPU: macOS (arm64, x64), Linux (CPU
 # and Vulkan, x64 and arm64), Windows (Vulkan, CPU, SYCL, CUDA and ROCm with their
@@ -607,14 +612,26 @@ def _link_leaves_folder(link: str, depth: int, real_root: str) -> str:
         return f"unreadable link: {e}"
     if is_rooted(target) or os.path.isabs(target):
         return f"absolute target {target!r}"
+    # Only leading ".." count as climbing: "d/.." goes wherever d's target goes when d is a
+    # link (d -> . makes d/.. the folder's PARENT), so a ".." after a named part is refused.
+    # Each link then stays inside on its own, whatever the folder is called, also where the
+    # extraction left its target unnormalized (tarfile before the 2025 fix: 3.10.12-3.10.17,
+    # 3.11.4-3.11.12, 3.12.0-3.12.10, 3.13.0-3.13.3).
     level = depth
+    named = False
     seps = os.sep + (os.altsep or "")
     for part in re.split("[" + re.escape(seps) + "]", target):
         if part in ("", "."):
             continue
-        level = level - 1 if part == ".." else level + 1
-        if level < 0:
-            return f"target {target!r} climbs above the folder"
+        if part == "..":
+            if named:
+                return f"target {target!r} goes back up after a named part"
+            level -= 1
+            if level < 0:
+                return f"target {target!r} climbs above the folder"
+        else:
+            named = True
+            level += 1
     try:
         os.stat(link)
     except FileNotFoundError:
@@ -1068,10 +1085,15 @@ class ServerManager:
         path on disk (_refuse_escaping_links): one whose target is absolute or climbs above
         the folder, that the kernel will not follow, or that resolves outside `into` fails
         the install. The relative library links of a release (libllama.so ->
-        libllama.so.1 -> libllama.so.1.0.0) stay inside and are kept. Zip archives cannot hold links, and
-        zipfile strips ".." and absolute names itself."""
+        libllama.so.1 -> libllama.so.1.0.0) stay inside and are kept. A tarball with more
+        than MAX_ARCHIVE_LINKS links is refused before it is unpacked. Zip archives cannot
+        hold links, and zipfile strips ".." and absolute names itself."""
         if archive_path.endswith(".tar.gz") or archive_path.endswith(".tgz"):
             with tarfile.open(archive_path, "r:gz") as tar_ref:
+                links = sum(1 for m in tar_ref.getmembers() if m.issym() or m.islnk())
+                if links > MAX_ARCHIVE_LINKS:
+                    raise RuntimeError(f"the archive holds {links} links, more than the {MAX_ARCHIVE_LINKS} "
+                                       "a release can need")
                 try:
                     tar_ref.extractall(into, filter="data")
                 except TypeError as e:     # a Python without the filter argument
@@ -1111,15 +1133,19 @@ class ServerManager:
         name exactly as stored, odd characters included), three ways:
 
         - by its target as written (os.readlink): an absolute or drive-anchored target
-          (path_jail.is_rooted), or one that climbs above `root` from the link's own folder,
-          is refused. This does not depend on the folder's name, so a link that leaves and
-          comes back by the temporary name (``../llama-cpp.staging/x``) is refused although
-          it resolves inside while the folder still has that name;
+          (path_jail.is_rooted), one whose leading ".." climb above `root` from the link's
+          own folder, and one with a ".." after a named part (``d/..`` is d's target's
+          parent when d is a link) are refused. This does not depend on the folder's name,
+          so a link that leaves and comes back by the temporary name
+          (``../llama-cpp.staging/x``, or ``d/../llama-cpp.staging/x`` with d -> .) is
+          refused although it resolves inside while the folder still has that name;
         - by the kernel's own resolution (os.stat): a chain the kernel refuses to follow
           (more than its hop limit, 40 on Linux, or a loop) is refused, which also keeps the
           next step linear in the number of links;
         - by where it resolves (os.path.realpath, through every other link): outside
-          `root` is refused.
+          `root` is refused. With the rules above every link of a listed folder stays
+          inside by itself, so this step cannot fire for one of them; it guards those
+          rules rather than deciding a shape of its own.
 
         A dangling link that stays inside is accepted (it cannot reach anything), and so are
         the release's relative library links (libllama.so -> libllama.so.1). The folders are
@@ -1142,12 +1168,18 @@ class ServerManager:
     @staticmethod
     def _remove_tree_or_link(path: str) -> None:
         """Remove `path` whatever it is: a link (to a folder or not) is unlinked, never
-        followed, and a folder is removed with everything in it. rmtree refuses a link, so a
-        linked leftover would otherwise stay and block every later swap."""
+        followed, a folder is removed with everything in it, a file is unlinked. rmtree
+        refuses a link, so a linked leftover would otherwise stay and block every later swap.
+        OSError when anything of it is still there afterwards (rmtree skips what it cannot
+        remove): the next install must not unpack on top of debris."""
         if os.path.islink(path):
             os.unlink(path)
         elif os.path.isdir(path):
             shutil.rmtree(path, ignore_errors=True)
+        elif os.path.lexists(path):
+            os.unlink(path)
+        if os.path.lexists(path):
+            raise OSError(f"{path} could not be removed completely")
 
     def ensure_server_exists(self):
         """The pinned llama-server is on disk, or it is installed now, or this is False.
@@ -1245,7 +1277,8 @@ class ServerManager:
             try:
                 self._remove_tree_or_link(previous)
             except OSError as e:          # the new build is in place; the next install retries
-                UI.event("System", f"Could not remove the replaced backend {previous}: {e}", style="warning")
+                UI.event("System", f"The new backend runs, but the replaced one could not be removed ({e}). "
+                         f"Remove {previous} by hand.", style="warning")
         except DownloadIntegrityError as e:
             shutil.rmtree(staging, ignore_errors=True)
             UI.error(f"The download of the backend b{want} did not match its pinned checksum, so it was not "

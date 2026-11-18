@@ -612,33 +612,72 @@ def test_a_link_that_leaves_the_folder_after_the_lift_is_refused(linux_install, 
     assert (victim.stat().st_mode & 0o777) == 0o600, "chmod never followed a link out of the folder"
 
 
-def test_a_link_that_leaves_only_through_another_link_is_refused(tmp_path):
-    """deep/t -> s/.. stays inside as written, but deep/s is the folder itself, so t names
-    the folder's parent. The data filter of this Python normalizes such a target to "."
-    on extraction, so the shape is built on disk directly: the resolution step is what
-    catches it wherever a link reaches the folder unnormalized. MUTATION: drop the
-    realpath containment and this goes red."""
+def test_a_link_through_a_link_and_back_up_is_refused_whatever_the_folder_is_called(tmp_path):
+    """d -> . makes d/.. the folder's PARENT, so t -> d/../llama-cpp.staging/x resolves
+    inside while the folder is called llama-cpp.staging and outside once it is renamed. A
+    patched data filter rewrites such a target while extracting; tarfile before the 2025
+    fix leaves it as written, so the shape is built on disk. The release's library links
+    and a leading ".." from a subfolder still pass, and stay inside after the rename.
+    MUTATION: allow a ".." after a named part and the shape is accepted."""
     if not _can_symlink(tmp_path):
         pytest.skip("no symlink privilege")
+    bin_root = tmp_path / "bin"
+    root = bin_root / "llama-cpp.staging"
+    (root / "sub").mkdir(parents=True)
+    os.symlink(".", root / "d")
+    os.symlink(os.path.join("d", "..", "llama-cpp.staging", "x"), root / "t")
+    with pytest.raises(RuntimeError, match="after a named part"):
+        backend.ServerManager._refuse_escaping_links(str(root))
+
+    os.unlink(root / "t"); os.unlink(root / "d")
+    (root / "libllama.so.1.0.0").write_bytes(b"lib")
+    os.symlink("libllama.so.1.0.0", root / "libllama.so.1")
+    os.symlink("libllama.so.1", root / "libllama.so")
+    os.symlink(os.path.join("..", "libllama.so"), root / "sub" / "l")
+    backend.ServerManager._refuse_escaping_links(str(root))
+    final = bin_root / "llama-cpp"
+    os.rename(root, final)
+    for link in (final / "libllama.so", final / "libllama.so.1", final / "sub" / "l"):
+        assert os.path.commonpath([os.path.realpath(link), os.path.realpath(final)]) == os.path.realpath(final)
+
+
+def test_the_resolution_step_refuses_what_resolves_outside(tmp_path):
+    """The last step decides a link on where it resolves. With the rules on the target as
+    written, a link in a folder of the walk cannot reach it any more (a ".." after a named
+    part is refused first, and deep/t -> s/.. with deep/s -> .. is now refused there); it
+    stays as the guard of those rules. Exercised on the helper directly: a link whose
+    target is harmless as written, asked about a root it does not lie in. MUTATION: drop
+    the realpath containment and this goes red."""
+    if not _can_symlink(tmp_path):
+        pytest.skip("no symlink privilege")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "x").write_bytes(b"x")
+    os.symlink("x", elsewhere / "l")
     root = tmp_path / "bin" / "llama-cpp.staging"
-    (root / "deep").mkdir(parents=True)
+    root.mkdir(parents=True)
+    reason = backend._link_leaves_folder(str(elsewhere / "l"), 0, os.path.realpath(root))
+    assert reason.startswith("resolves outside"), reason
+    assert backend._link_leaves_folder(str(elsewhere / "l"), 0, os.path.realpath(elsewhere)) == ""
+
+    (root / "deep").mkdir()
     os.symlink("..", root / "deep" / "s")
     os.symlink(os.path.join("s", ".."), root / "deep" / "t")
-    with pytest.raises(RuntimeError, match="resolves outside"):
+    with pytest.raises(RuntimeError, match="after a named part"):
         backend.ServerManager._refuse_escaping_links(str(root))
-    os.unlink(root / "deep" / "t")
-    backend.ServerManager._refuse_escaping_links(str(root))    # s alone stays inside
 
 
 @pytest.mark.skipif(os.name == "nt", reason="tar links are not extracted as links without the symlink privilege")
-def test_a_long_link_chain_is_refused_in_bounded_time(linux_install, monkeypatch):
-    """A chain a0 -> a1 -> ... -> a1000 -> llama-server stays inside the folder, but
-    resolving every link down the rest of the chain costs the square of its length (24 s at
-    4000 links). The kernel follows at most 40 hops; a chain it will not follow is refused,
-    and the check stays linear. MUTATION: drop the os.stat step and the chain is accepted."""
+def test_a_chain_past_the_kernels_hop_limit_is_refused(linux_install, monkeypatch):
+    """A chain a0 -> a1 -> ... -> a200 -> llama-server stays inside the folder (and under
+    the archive's link cap), but resolving every link down the rest of the chain costs the
+    square of its length. The kernel follows at most 40 hops; a chain it will not follow
+    is refused, and the check stays linear. MUTATION: drop the os.stat step and the chain
+    is accepted."""
     import time as _time
     m, _ = linux_install
-    n = 1000
+    n = 200
+    assert n <= backend.MAX_ARCHIVE_LINKS
     payload = _archive(10955, links=[(f"a{i}", f"a{i + 1}" if i + 1 < n else "llama-server") for i in range(n)])
     _pin(monkeypatch, payload)
     _fake_get(monkeypatch, payload)
@@ -646,6 +685,27 @@ def test_a_long_link_chain_is_refused_in_bounded_time(linux_install, monkeypatch
     assert m.ensure_server_exists() is False
     assert _time.monotonic() - started < 10.0
     assert not os.path.lexists(m.bin_dir)
+
+
+def test_an_archive_with_too_many_links_is_refused_before_unpacking(linux_install, monkeypatch):
+    """A chain of 3000 links stored in reverse order: the data filter resolves every link
+    member down the part of the chain already unpacked, the square of the length (26 s at
+    4000). The link count is read first, and the archive is refused before anything is
+    unpacked. MUTATION: drop the cap and the reason and the time bound both fail."""
+    import time as _time
+    m, _ = linux_install
+    n = 3000
+    chain = [(f"a{i}", f"a{i + 1}" if i + 1 < n else "llama-server") for i in range(n)]
+    payload = _archive(10955, links=list(reversed(chain)))
+    _pin(monkeypatch, payload)
+    _fake_get(monkeypatch, payload)
+    errors = []
+    monkeypatch.setattr(backend.UI, "error", lambda *a, **k: errors.append(" ".join(map(str, a))))
+    started = _time.monotonic()
+    assert m.ensure_server_exists() is False
+    assert _time.monotonic() - started < 3.0
+    assert any(f"{n} links" in e for e in errors), errors
+    assert not os.path.lexists(m.bin_dir) and not os.path.lexists(m.bin_dir + ".staging")
 
 
 @pytest.mark.skipif(os.name == "nt", reason="tar links are not extracted as links without the symlink privilege")
@@ -862,4 +922,22 @@ def test_a_replaced_build_that_cannot_be_removed_does_not_fail_the_install(linux
     _fake_get(monkeypatch, payload)
     assert m.ensure_server_exists() is True
     assert m.installed_build() == 10955
-    assert any("Could not remove the replaced backend" in e for e in events), events
+    assert any("could not be removed" in e and "by hand" in e for e in events), events
+
+
+def test_debris_a_leftover_removal_could_not_clear_stops_the_install(linux_install, monkeypatch):
+    """rmtree(ignore_errors=True) skips what it cannot remove; the install must not then
+    unpack on top of what is left. MUTATION: drop the check that the leftover is gone and
+    the install goes ahead on top of the debris."""
+    m, payload = linux_install
+    Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10021)
+    staging = Path(m.bin_dir + ".staging")
+    (staging / "stuck").mkdir(parents=True)
+    (staging / "stuck" / "debris").write_bytes(b"left by a refused archive")
+    monkeypatch.setattr(backend.shutil, "rmtree", lambda path, ignore_errors=False, **k: None)
+    errors = []
+    monkeypatch.setattr(backend.UI, "error", lambda *a, **k: errors.append(" ".join(map(str, a))))
+    _fake_get(monkeypatch, payload)
+    assert m.ensure_server_exists() is False
+    assert any("leftover" in e and "start VAF again" in e for e in errors), errors
+    assert (staging / "stuck" / "debris").exists() and m.installed_build() == 10021

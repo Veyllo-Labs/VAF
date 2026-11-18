@@ -1579,29 +1579,89 @@ def _keyword(call, name):
 # 12 -- a two-digit file descriptor in a shell redirection
 
 _FD_REDIRECT_LITERAL = re.compile(r"[<>]&\s*\d{2,}")
+# Programs that read their `-c` argument as a shell script.
+_SHELLS = {"sh", "bash", "dash", "zsh", "ksh", "mksh", "ash"}
+# Calls that hand their first argument to /bin/sh.
+_SHELL_CALLS = {"system", "popen", "getoutput", "getstatusoutput"}
+
+
+def _shell_scripts(tree) -> list:
+    """The expressions a test hands to a shell as script text: the word after `-c` in an
+    argv literal that names a shell before it (`["/bin/sh", "-c", f"..."]`), and the first
+    argument of `os.system`/`os.popen`/`subprocess.getoutput` or of a spawner called with
+    `shell=True`. Command strings a test only classifies or prints are no shell's text."""
+    scripts = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.List, ast.Tuple)):
+            elts = node.elts
+            shell_at = next((k for k, e in enumerate(elts)
+                             if (isinstance(e, ast.Constant) and isinstance(e.value, str)
+                                 and e.value.rsplit("/", 1)[-1] in _SHELLS)
+                             or (isinstance(e, ast.Name) and e.id in _SHELLS)), None)
+            if shell_at is None:
+                continue
+            for k in range(shell_at + 1, len(elts) - 1):
+                flag = elts[k]
+                if (isinstance(flag, ast.Constant) and isinstance(flag.value, str)
+                        and flag.value.startswith("-") and not flag.value.startswith("--")
+                        and "c" in flag.value):
+                    scripts.append(elts[k + 1])
+                    break
+        elif isinstance(node, ast.Call):
+            name = _call_name(node)
+            shell = _keyword(node, "shell")
+            if name in _SHELL_CALLS or (
+                    name in _SPAWNERS and isinstance(shell, ast.Constant) and shell.value is True):
+                first = node.args[0] if node.args else _keyword(node, "args")
+                if first is not None:
+                    scripts.append(first)
+    return scripts
 
 
 def _fd_redirections(tree) -> list:
-    """Lines of a `<&{x}`/`>&{x}` f-string, or a literal `<&12`: dash reads one digit there."""
-    hits = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.JoinedStr):
-            parts = node.values
-            for before, after in zip(parts, parts[1:]):
-                if (isinstance(before, ast.Constant) and isinstance(before.value, str)
-                        and re.search(r"[<>]&\s*$", before.value)
-                        and isinstance(after, ast.FormattedValue)):
-                    hits.append(node.lineno)
-        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-            if _FD_REDIRECT_LITERAL.search(node.value):
-                hits.append(node.lineno)
-    return hits
+    """Lines of a `<&{x}`/`>&{x}` f-string, or a literal `<&12`, in text a shell runs
+    (_shell_scripts): dash reads one digit there."""
+    hits = set()
+    for script in _shell_scripts(tree):
+        for node in ast.walk(script):
+            if isinstance(node, ast.JoinedStr):
+                parts = node.values
+                for before, after in zip(parts, parts[1:]):
+                    if (isinstance(before, ast.Constant) and isinstance(before.value, str)
+                            and re.search(r"[<>]&\s*$", before.value)
+                            and isinstance(after, ast.FormattedValue)):
+                        hits.add(node.lineno)
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                if _FD_REDIRECT_LITERAL.search(node.value):
+                    hits.add(node.lineno)
+    return sorted(hits)
 
 
 def test_the_fd_redirection_scanner_reads_both_spellings():
-    assert _fd_redirections(ast.parse('c = f"read x <&{rr}; ls"')) == [1]
-    assert _fd_redirections(ast.parse('c = "echo x >&12"')) == [1]
-    assert _fd_redirections(ast.parse('c = "echo x >&2; read y < /proc/self/fd/12"')) == []
+    assert _fd_redirections(ast.parse(
+        'subprocess.run(["/bin/sh", "-c", f"read x <&{rr}; ls"])')) == [1]
+    assert _fd_redirections(ast.parse('os.system("echo x >&12")')) == [1]
+    assert _fd_redirections(ast.parse(
+        'subprocess.run("echo x >&12", shell=True)')) == [1]
+    assert _fd_redirections(ast.parse('p = ["bash", "-ec", "cat <&10"]')) == [1]
+    assert _fd_redirections(ast.parse('p = [sh, "-c", "cat <&10"]')) == [1]
+    assert _fd_redirections(ast.parse(
+        'subprocess.run(["/bin/sh", "-c", "echo x >&2; read y < /proc/self/fd/12"])')) == []
+
+
+def test_the_fd_redirection_scanner_reads_only_text_a_shell_runs():
+    """A command string a test only classifies is no shell's text; the argv of
+    tests/test_folder_mount.py as it once was (a two-digit descriptor in the script that
+    `/bin/sh -c` runs, inside a helper call) is.
+    MUTATION: scan every string constant again - red (the first assertion)."""
+    assert _fd_redirections(ast.parse(
+        'ROWS = [("( echo x ) 3>&01 >&3 | bash", "destructive_removal")]\n'
+        'classify_command("echo x >&12", profile="host")')) == []
+    assert _fd_redirections(ast.parse(
+        'argv = (folder_mount.namespace_argv(held, a)\n'
+        '        + folder_mount.guard_argv(a, held.identity,\n'
+        '                                  ["/bin/sh", "-c", f"read x <&{rr}; ls -a {a}"],\n'
+        '                                  started_fd=ws))')) == [3]
 
 
 def test_no_shell_redirection_names_a_two_digit_fd():

@@ -1137,7 +1137,9 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   the output there, as printf stops at it), what a subshell, a
   group, a loop or a command run from text prints, every command's output in it and those
   writes joined (`( echo '...'; echo x ) | sh`, `(printf 'r'; printf 'm ...') | bash`,
-  `bash -c "echo '...'" | bash`), also with redirections after its closer that leave the
+  `bash -c "echo '...'" | bash`, a script a shell reads from its input,
+  `echo 'echo ...' | bash | bash`, unless that shell's own redirections send its output
+  elsewhere, `bash <<< '...' >/dev/null | bash`), also with redirections after its closer that leave the
   standard output where it is (`( ... ) 2>&1 | bash`, also `>/dev/stdout` in any spelling,
   `>/dev/./stdout`, `>//dev/fd/1`, and copies through another descriptor, `3>&1 >&3`,
   `2>/dev/stdout >&2`, followed in order, a descriptor's number read as a number (`3>&01`); `( ... ) >f | bash` hands on nothing), a heredoc
@@ -1176,8 +1178,10 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   runner's command is read at every option's value position, each candidate the rest of the
   command joined back into text; those candidates, and both readings of a `$((`, may add up
   to the command's own length plus 64 KB, and past that the command is refused the same
-  way. Every reading also spends its text from the characters all readings of one call share,
-  four times the command plus 64 KB, the top-level grammar reading included: a nested text
+  way. Every reading of the current and the grammar reading (both written and nested) also
+  spends its text from the characters they share in one call, four times the command plus
+  64 KB, the top-level grammar reading included (the frozen reading has its own budget, see
+  below): a nested text
   (`eval`, `bash -c`, a heredoc fed to a shell) is read as written and as its grammar text,
   each of which reads its own nested texts again, so a text nested four deep was read up to
   3 to the 4th times (117 s at the length cap); past the budget the command is refused as
@@ -1199,21 +1203,22 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   writes its text in one pass and reads it only when it differs from the command, with a
   call budget of its own at the top level and the characters shared with every other reading
   (see above); all three readings together, 33 shapes at
-  131 000 characters and 32 more that once grew faster than the text (heredocs inside
+  131 000 characters and 38 more that once grew faster than the text (heredocs inside
   `$( )`, a group of distinct `echo`s, a long backslash run, wide printf fields and a run of
   zeros in one, cmd.exe `for` options whose value is the word `for`, unclosed `a[` where a
   command starts in six spellings, ten thousand `a[0]=1`, element subscripts, a backtick
   text each, quoted spans inside one `${...}`, distinct substitutions in a heredoc, empty
   lines before a heredoc, a long word beside a substitution text, many `$'...'` parts in one
-  word), measured on a machine under load (load average 2 to 5): 3.9 s at most (`a[;`
-  repeated after a single-quoted span holding a `}` in `"${...}"`, which is read both ways,
-  3.94 s), the next ones 1.9 s (a heredoc `cat <<.` with an empty body repeated, 1.85 to
-  1.88 s; 0.59 s before, measured alongside); the same shapes nested in `eval` or `bash -c`
-  up to five deep, with a comment, such a span or a subscript as the trigger of a second
-  reading at each level, 3.6 s at most (one level; deeper ones are refused once the
-  characters all readings share are spent, 2.0 to 2.9 s; 117 s for four levels before that
-  budget). Every shape is linear: measured, 4 times the length takes 3.9 to 4.3 times the
-  time; the tests (`test_grammar_reading_is_linear`, `test_long_and_distinct_shapes_are_linear`,
+  word; line continuations in a subscript, a funsub in arithmetic, a heredoc delimiter's
+  substitution broken by one), measured on a machine under load (load average 2 to 5): about
+  4 s at most (`a[;` repeated after a single-quoted span holding a `}` in `"${...}"`, which is
+  read both ways, 3.9 to 4.3 s), the next ones about 2 s (a heredoc `cat <<.` with an empty
+  body repeated, 1.85 to 2.07 s; 0.59 s before, measured alongside); the same shapes nested
+  in `eval` or `bash -c` up to five deep, with a comment, such a span or a subscript as the
+  trigger of a second reading at each level, about 4 s at most (one level, 3.1 to 3.9 s;
+  deeper ones are refused once the characters all readings share are spent, 2.1 to 3.4 s;
+  117 s for four levels before that budget). Every shape is linear: measured, 4 times the
+  length takes 3.9 to 4.3 times the time; the tests (`test_grammar_reading_is_linear`, `test_long_and_distinct_shapes_are_linear`,
   `test_nesting_costs_a_bounded_multiple_of_the_text`) allow 8 times the length at most 20
   times the time plus 0.05 s, and four levels of nesting at most 6 times the flat text plus
   0.5 s. The one exception is shlex's own tokenizer on one long word, as before: one word of
@@ -1260,11 +1265,15 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   (`m=(` NL `[a]=1` NL `)`) and an extglob group `@(...)` or `+(...)` in a text that turns
   extglob on pass; where a command starts, `NAME[...]=` reads its subscript up to the `]`,
   blanks, operators, newlines and carriage returns included, its quoted spans, escapes and
-  plain expansions as written (`a[x;y]=1 cmd`, `a['x' ;y]=1 cmd`, `a[ $i ]=1`), also where
-  it looks like a function head (`a[()]=1 cmd` is an assignment), the search for its `]`
-  skipping substitutions and the quotes nested in a `"${...}"`, and one holding a command
-  substitution, `$'...'` or quotes nested in a `${...}` with a blank or an operator outside
-  it (`a[$(x) ;y]=1 cmd`) is refused (put the index into a variable first); the bracket scans of one command share a budget of four times its length, since
+  plain expansions as written (`a[x;y]=1 cmd`, `a['x' ;y]=1 cmd`, `a[ $i ]=1`,
+  `a[ ${i:-1 + 1} ]=v`), its line continuations joined in the name, the subscript and before
+  the `=` (`m\` NL `[;]= cmd`, `a[ $\` NL `{ cmd; } ]=1`), also where it looks like a
+  function head (`a[()]=1 cmd` is an assignment), the search for its `]` skipping
+  substitutions and the quotes nested in a `"${...}"`, and one holding a command
+  substitution (also bash 5.3's `${ cmd; }`), `$'...'` or quotes nested in a `${...}` with a
+  blank or an operator outside it (`a[$(x) ;y]=1 cmd`) is refused (put the index into a
+  variable first); inside arithmetic (`(( a[ ${ cmd; } ]=1 ))`), where a `'` quotes nothing,
+  the subscript is read like any word there; the bracket scans of one command share a budget of four times its length, since
   every unclosed `a[` scans to the end, and past it the command is refused (`open_brackets`:
   close each `[`, or quote it), while an `a[` with no `]` after it costs nothing; a blank or
   an operator character inside `${...}` stays in its word (`${x#'/' }cmd`), and inside
@@ -1306,7 +1315,13 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   the marker: 268 812, 47 261, 15 000, 85 274, 120 000, 60 000 and 150 000 draws, of which
   140 880, 30 046, 3 393, 22 831, 106 429, 54 404 and 73 338 ran the marker; 3 twins passed,
   each of a class named below (a shell's error message fed into a shell, an alias with
-  `expand_aliases`, an empty variable before a `/`). No refusal of the reading before this change was lost in
+  `expand_aliases`, an empty variable before a `/`). And on the code as it stands: the suite's
+  own two generators, 269 169 draws with 148 135 running the marker, 2 twins passed (both a
+  shell's error message fed into a shell); two generators of subscripts, line continuations,
+  funsubs, descriptors and stdin chains, and of the pinned rows mutated, run through bash in a
+  read-only sandbox with a marker `rm`: 60 000 and 40 000 draws, 2 473 and 2 350 of the 7 052
+  and 4 392 run in bash ran the marker, with no twin let through. No refusal of the reading
+  before this change was lost in
   any of them (bash 5.3; the suite runs 1 600 draws). The classes the differential found on the way are each pinned in
   `tests/test_command_grammar_reading.py`.
 - **Named boundary: what it does not read.** cmd.exe's and PowerShell's own grammar (`%VAR%`

@@ -699,6 +699,11 @@ _NEIGHBOURS = [
     "printf '%(%F)T' -1", "printf '%.0s%s' x 'ls -la'", "printf '%05d|%-8s|' 42 ok",
     # a subscript holding a plain expansion among blanks; appending to an array
     "a[ $i ]=1; echo ${a[@]}", "a[${#a[@]}]=new; echo ${a[@]}", "f() { :; }; f",
+    # a plain expansion with blanks in a subscript; arithmetic subscripts; a script whose
+    # output goes elsewhere; a descriptor past Python's digit limit
+    "unset i; a[ ${i:-1 + 1} ]=value; echo ${a[@]}", "(( a[ i + 1 ]=2 )); echo ${a[@]}",
+    "for (( i=0; i<2; i++ )); do a[i]=$i; done; echo ${a[@]}",
+    "bash <<< 'echo \"$HOME\"' >/dev/null | bash", "( echo hi ) 1>&" + "0" * 5000 + "1 | cat",
 ]
 
 
@@ -989,6 +994,35 @@ def test_harmless_neighbours_still_pass(cmd):
     ("( cat <<. )\nit's\n. ;\necho { && : $(for ((;;)) do source /dev/stdin <<< $'\\x3c\\x3c\\x3cx\\x20\\x24\\x27\\x5c162m\\x27\\x20\\x2drf\\x20\\x2f\\x20\\x3c\\x2fdev\\x2fnull'; break; done)\n\nx=$'\\''", 'destructive_removal'),
     ('echo esac && ( cat <<. )\nit\'s\n.; : ${ source /dev/stdin <<< "{fd}>o.txt \\$\'\\\\162m\' -rf / >|o.txt"; }\ncat <<-EOF\n\tit\'s\n\tEOF', 'destructive_removal'),
     ('X=\r1 Y=2 eval eval \'"rm" -rf /<<.\' && echo $"it\'s"', 'destructive_removal'),
+    # a line continuation in a subscript where a command starts: after the `$` of a
+    # substitution, in the name, before the `=`; a funsub in a subscript inside arithmetic;
+    # a substitution in a heredoc delimiter broken by one
+    ('a[ $\\\n{ rm -rf /; } ]=1', 'opaque_command'),
+    ('a[$\\\n{ rm -rf /; }]=1', 'opaque_command'),
+    ('a[ "$\\\n{ rm -rf /; }" ]=1', 'opaque_command'),
+    ('a[$\\\n(r\\\nm -rf /)]=1', 'opaque_command'),
+    ('(( a[ ${ rm -rf /; } ]=1 ))', 'destructive_removal'),
+    ('echo $(( a[ ${ rm -rf /; } ]=1 ))', 'destructive_removal'),
+    ('x=$(( a[ ${ rm -rf /; } ]=1 ))', 'destructive_removal'),
+    ('for (( a[ ${ rm -rf /; } ]=1; 0; )); do :; done', 'destructive_removal'),
+    ("bash -c '(( a[ ${ rm -rf /; } ]=1 ))'", 'destructive_removal'),
+    ("echo '(( a[ ${ rm -rf /; } ]=1 ))' | bash", 'destructive_removal'),
+    ('a[ ${ rm -rf /; } ]=1', 'opaque_command'),
+    ('m\\\n[;]= rm -rf /', 'destructive_removal'),
+    ('a\\\n[()]=1 rm -rf /', 'destructive_removal'),
+    ('a[()]\\\n=1 rm -rf /', 'destructive_removal'),
+    ('m[|]\\\n=1 rm -rf /', 'destructive_removal'),
+    ('a\\\n[x;y]=1 rm -rf /', 'destructive_removal'),
+    ('a[x;y]+\\\n=1 rm -rf /', 'destructive_removal'),
+    ("cat <<a$(b\\\n)c\nit's\na$(b)c\nrm -rf /", 'destructive_removal'),
+    ("a[\necho $\\\n'it\\'s'\n]=1 bash -c 'rm -rf /'", 'opaque_command'),
+    ('ab[\'"\'$[1]&]+=1 m\\\n[;]=\\\n1 rm -rf /', 'destructive_removal'),
+    ('a[ "$\\\n{x#\'"\'}" ]=1 rm -rf /', 'opaque_command'),
+    ('a[\n: "$\\\n{x#\'"\'}"\n]=1 rm -rf /', 'opaque_command'),
+    # echo's words as bash's quote removal leaves them, also without its redirections
+    ('echo "echo \': \\${ rm -r -f /; }\' | bash" 0<&1 1>&0 | sh', 'destructive_removal'),
+    # a script's output goes on unless its own redirections send it elsewhere
+    ("bash <<< 'echo rm -rf /' 3>&1 >/dev/null >&3 | bash", 'destructive_removal'),
 ])
 def test_what_the_differential_found_is_read(cmd, category):
     """Each row is a class the bash differential found while the grammar reading was built:
@@ -996,7 +1030,10 @@ def test_what_the_differential_found_is_read(cmd, category):
     MUTATION: drop the flow of a heredoc into carried commands - red (the first rows);
     MUTATION: read an operator without joining its line continuation - red;
     MUTATION: leave an unterminated heredoc's lines as written - red;
-    MUTATION: open heredocs inside `((...))` - red; read `${ ` as a parameter - red."""
+    MUTATION: open heredocs inside `((...))` - red; read `${ ` as a parameter - red;
+    MUTATION: keep a subscript's line continuations, match `NAME[` or `]=` as written, read
+    `$\\` NL `{` as no substitution, take no funsub for a substitution, rewrite a subscript
+    inside arithmetic, copy a heredoc delimiter's `$(...)` as written - red, each its rows."""
     for profile in ("host", "jailed", "remote"):
         v = classify_command(cmd, profile=profile)
         assert v.blocked and category in v.categories, (profile, cmd, v.categories)
@@ -1165,6 +1202,8 @@ def test_a_grammar_only_refusal_carries_its_own_reason():
     "echo $(cat <<EOF" + NL + "$(date) x" + NL + "EOF" + NL + "); ",
     # unclosed subscripts where a command starts, a backtick text each, many assignments
     "a[;", "a[1;", "a[" + NL, "a[ ;", "a['" + NL, "x[ `b;", "a[0]=1 ",
+    # line continuations in a subscript and before its `=`, a funsub in arithmetic
+    "a[ $" + B + NL + "{x} ]=1 ", "m" + B + NL + "[;]= ", "(( a[ ${ :; } ]=1 )); ",
 ])
 def test_grammar_reading_is_linear(unit):
     """8x the text takes at most 20x the time plus 0.05 s (the grammar text, which every
@@ -1335,34 +1374,53 @@ def test_nesting_costs_a_bounded_multiple_of_the_text(trigger, runner):
 
 
 def test_all_readings_of_one_call_share_one_character_budget(monkeypatch):
-    """The characters every reading of one call reads, the top-level grammar reading's
-    included, stay within _READ_FACTOR times the text plus _READ_SLACK and one more reading
-    (a reading past the budget is refused before it reads anything, and is not counted).
-    MUTATION: a fresh character budget for the top-level grammar reading - red."""
+    """Counted where a reading enters the parser (its text split into segments): the readings
+    that enter, the top-level grammar reading's included, read at most _READ_FACTOR times the
+    text plus _READ_SLACK, and the first reading the budget refuses never enters.
+    MUTATION: a fresh character budget for the top-level grammar reading - red;
+    MUTATION: spend after the parser instead of before - red."""
     text = _nested(_NEST_TRIGGERS[1], "eval", 4, 32000)
-    read = [0, 0]
-    real = cp._read
+    frames: list = []
+    done: list = []
+    real_read, real_split = cp._read, cp._split_segments
 
-    def counting(command, **kwargs):
-        size = len((command or "").strip())
-        verdict = real(command, **kwargs)
-        if verdict.segments or verdict.categories != ["nested_too_deep"]:
-            read[0] += size
-            read[1] = max(read[1], size)
-        return verdict
+    def reading(command, **kwargs):
+        budget = kwargs.get("_budget")
+        frame = {"text": (command or "").strip(), "entered": False,
+                 "left": budget[2][0] if budget else None}
+        frames.append(frame)
+        try:
+            return real_read(command, **kwargs)
+        finally:
+            frames.pop()
+            done.append(frame)
 
-    monkeypatch.setattr(cp, "_read", counting)
+    def splitting(seg_text, *args, **kwargs):
+        if frames and seg_text == frames[-1]["text"]:
+            frames[-1]["entered"] = True
+        return real_split(seg_text, *args, **kwargs)
+
+    monkeypatch.setattr(cp, "_read", reading)
+    monkeypatch.setattr(cp, "_split_segments", splitting)
     classify_command(text, profile="host")
-    assert read[0] <= cp._READ_FACTOR * len(text) + cp._READ_SLACK + read[1], read
+    entered = sum(len(f["text"]) for f in done if f["entered"])
+    assert entered <= cp._READ_FACTOR * len(text) + cp._READ_SLACK, entered
+    refused = [f for f in done if f["left"] is not None and f["left"] - len(f["text"]) < 0]
+    assert refused and not any(f["entered"] for f in refused), len(refused)
 
 
 def test_moves_stdout_reads_descriptor_numbers_as_numbers():
     """`01` is descriptor 1 on either side of a redirection.
-    MUTATION: keep the descriptor as written - red; look a copy up by its text - red."""
+    MUTATION: keep the descriptor as written - red; look a copy up by its text - red;
+    MUTATION: `int()` on the number - red (ValueError past 4300 digits)."""
     assert cp._moves_stdout(["01>/dev/null"])
     assert cp._moves_stdout(["001>&2"])
     assert not cp._moves_stdout(["3>&01", ">&3"])
     assert not cp._moves_stdout([">&001"])
+    # past Python's 4300-digit int() limit: read as text, not refused as unreadable
+    assert not cp._moves_stdout(["3>&" + "0" * 5000 + "1", ">&3"])
+    assert cp._moves_stdout(["0" * 5000 + "1>/dev/null"])
+    assert not cp._moves_stdout(["2>/dev/fd/" + "0" * 5000 + "1", ">&2"])
 
 
 def test_one_word_decodes_its_ansi_c_parts_with_one_writer():
@@ -1385,7 +1443,8 @@ def test_unclosed_subscripts_with_no_closer_after_them_cost_no_budget():
 def test_heredoc_substitutions_merge_in_linear_time():
     """An unquoted heredoc's substitutions, read twice and merged with a set beside the list:
     8x the substitutions take at most 20x the time plus 0.05 s.
-    MUTATION: test membership against the list - red."""
+    MUTATION: test membership against the list - red (the time); MUTATION: concatenate the
+    two readings' entries - red (the entries)."""
     def took(count):
         body = NL.join("$(echo %d)" % k for k in range(count))
         best = None
@@ -1394,7 +1453,8 @@ def test_heredoc_substitutions_merge_in_linear_time():
             found = cp._heredoc_substitutions(body)
             spent = time.perf_counter() - start
             best = spent if best is None else min(best, spent)
-        assert len(found) >= count
+        # each substitution once, in order: both readings find all of them
+        assert found == [("command", "echo %d" % k) for k in range(count)], found[:3]
         return best
     short, long = took(2500), took(20000)
     assert long <= 20 * short + 0.05, (short, long)

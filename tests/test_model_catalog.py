@@ -636,6 +636,32 @@ def test_usage_show_explains_the_old_alias_rows(monkeypatch):
     assert "once they are 60 days old" in _show({"deepseek/deepseek-auto": old}, "--days", "90")
 
 
+def test_the_old_alias_rows_note_is_left_to_rich_to_wrap(monkeypatch):
+    """A hard break mid-sentence re-wraps into an orphan line on a terminal
+    narrower than that line (measured at 60 columns: "versions are kept" alone).
+    The note is one paragraph rich wraps, with its only break before the last
+    sentence. MUTATION: put the break after "are kept" back."""
+    from typer.testing import CliRunner
+
+    from vaf.cli.cmd import usage as usage_cmd
+    from vaf.cli.ui import UI
+
+    printed = []
+    monkeypatch.setattr(UI.console, "print", lambda *a, **kw: printed.append(str(a[0]) if a else ""))
+    monkeypatch.setattr(cost, "usage_totals", lambda days=30: {
+        "days": days, "totals": {"tokens": 1, "calls": 1, "usd": 13.66,
+                                 "currencies": {"USD": 13.66},
+                                 "providers": {"deepseek/deepseek-auto": {
+                                     "tokens": 802_815, "calls": 72, "usd": 13.66}}},
+        "users": []})
+    result = CliRunner().invoke(usage_cmd.app, ["show"])
+    assert result.exit_code == 0, result.output
+    note = [t for t in printed if "earlier versions" in t]
+    assert len(note) == 1
+    head, tail = note[0].split("\n")
+    assert head.endswith("30 days old.") and tail.startswith("New calls")
+
+
 def test_an_alias_row_at_todays_ceiling_is_not_taken_for_an_old_one():
     """The boundary: every token billed at the dearest pro rate (output, 3.96),
     rounded per call, is still a row booked today. MUTATION: drop the per-call

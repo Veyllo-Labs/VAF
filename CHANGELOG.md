@@ -80,8 +80,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   `deepseek-v4-pro`), and a call answered by your backup provider is listed under that
   provider. Amounts already recorded are not recalculated: `vaf usage show` says which ones,
   and they leave the 30-day view as the days pass. If your daily spend limit stopped you
-  today because of the old figures, raise it for today or wait for the next day; the new
-  figures are correct.
+  today because of the old figures, raise `spend_budget_usd_per_day` for today or wait for
+  the next day; new calls are priced at the model that answered.
 - **The inbox no longer lists the Veyllo App chat.** The exchange between your VAF agent and
   the agent in your Veyllo App showed up as a conversation with a bare id, counted your own
   app messages as unread, and left the inbox window without a channel name. The Veyllo App

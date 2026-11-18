@@ -54,9 +54,12 @@ def show(days: int = typer.Option(30, "--days", "-d", help="Period to report on"
     old_rows = alias_rows_priced_as_unknown(totals.get("providers") or {})
     if old_rows:
         keep = min(int(data.get("days", days) or days), LEDGER_KEEP_DAYS)
+        # One paragraph that rich wraps to the terminal, and one break before the
+        # last sentence: a hard break mid-sentence re-wrapped into orphan lines on
+        # a terminal narrower than the line.
         UI.console.print(f"[dim]Amounts recorded under {', '.join(old_rows)} by earlier versions "
-                         f"are kept\nas they were, not repriced. They leave this view once they are "
-                         f"{keep} day{'' if keep == 1 else 's'} old.\n"
+                         f"are kept as they were, not repriced. They leave this view once they "
+                         f"are {keep} day{'' if keep == 1 else 's'} old.\n"
                          f"New calls are priced at the model that answered.[/dim]")
 
     if totals.get("estimated_tokens"):

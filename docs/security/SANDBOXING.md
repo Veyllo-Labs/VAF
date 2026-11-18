@@ -1374,7 +1374,7 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   before this change was lost in
   any of them (bash 5.3; the suite runs 1 600 draws). The classes the differential found on the way are each pinned in
   `tests/test_command_grammar_reading.py`, and every probe written while the reading was
-  built and checked, every pinned row and every corpus row that ran the marker in bash, 1 733
+  built and checked, every pinned row and every corpus row that ran the marker in bash, 1 737
   of them, is in `tests/fixtures/command_policy/never_again.json` and refused on every lane
   (16 more belong to the named boundaries below and are kept apart under their names).
 - **Named boundary: what it does not read.** cmd.exe's and PowerShell's own grammar (`%VAR%`

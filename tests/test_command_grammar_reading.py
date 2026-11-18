@@ -1585,10 +1585,12 @@ def test_ansi_c_in_quoted_arithmetic_is_decoded():
     """Inside double quotes and in an unquoted heredoc's body bash decodes `$'...'` in a
     substring's offset, in `$[...]` and in an indexed array's subscript just the same.
     MUTATION: decode only outside double quotes - red;
-    MUTATION: no arithmetic in a subscript - red (the subscript row)."""
+    MUTATION: decode in a double-quoted `${...}` only where it is arithmetic - red (the
+    subscript row)."""
     pay = "$'" + B + "x24(rm -rf /)'"
     for cmd in ('x=xyz; : "${x:' + pay + '}"', 'x=xyz; : "${x:0:' + pay + '}"',
                 'echo "$[ ' + pay + ' ]"', 'a=(1); echo "${a[' + pay + ']}"',
+                "a=(1); echo ${a[" + pay + "]}", "a=(1); x=${a[" + pay + "]}",
                 "x=xyz; cat <<E" + NL + "${x:" + pay + "}" + NL + "E"):
         assert classify_command(cmd, profile="host").blocked, cmd
     for cmd in ('x=xyz; echo "${x:$\'1\'}"', 'echo "it\'s $\'not\' arithmetic"'):
@@ -1615,6 +1617,7 @@ def test_a_quoted_script_name_the_text_can_make_an_option_reads_the_input():
                 "set --; " + feed + '"$x$@"', "set --; " + feed + '"${x:-}$@"',
                 "set --; " + feed + '"${_}"', ": -s; " + feed.replace("bash", "sh") + '"${_}"',
                 "for s in --; do " + feed + '"$s"; done', "f() { " + feed + '"$1"; }; f --',
+                "for Q in --; do " + feed + '"$Q"; done',
                 "read <<< --; " + feed + '"$REPLY"', ': "${s:=--}"; ' + feed + '"$s"',
                 'declare "$(echo cz0tLQo= | base64 -d)"; ' + feed + '"$s"',
                 "de''clare \"$(echo cz0tLQo= | base64 -d)\"; " + feed + '"$s"',
@@ -1914,7 +1917,7 @@ def test_a_text_nested_past_the_grammar_depth_is_refused_as_too_deep():
 
 # Every row that ran the marker and stays refused, and the named boundaries the rest belong to
 # (docs/security/SANDBOXING.md, "what it does not read").
-_NEVER_AGAIN_SIZE = 1733
+_NEVER_AGAIN_SIZE = 1737
 _NAMED_BOUNDARIES = {
     "a substitution's output inside [[ ]] that a redirection of the compound command sends "
     "into the pipe",

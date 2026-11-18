@@ -4461,9 +4461,6 @@ class _GrammarText:
         parens = 0
         self.i = start
         depth = 0
-        # After a `[` a `$'...'` may stand in an indexed array's subscript, which bash
-        # evaluates as arithmetic too (`"${a[$'...']}"`).
-        subscript = False
         while self.i < n:
             m = _GRAMMAR_BRACE_RE.match(s, self.i)
             if m:
@@ -4492,7 +4489,6 @@ class _GrammarText:
             if ch in "{[":
                 # `$[ a[1] ]` counts its subscripts; `${x:-a{}` ends at the first `}`.
                 depth += ch == opener == "["
-                subscript = subscript or ch == "["
                 parts.append(ch)
                 self.i += 1
             elif ch in "}]":
@@ -4527,7 +4523,7 @@ class _GrammarText:
                 parts.append(inner[1:-1] if inner.endswith('"') and len(inner) > 1 else inner[1:])
             elif ch == '"':
                 parts.append(self._dq())
-            elif ch == "$" and (arith or subscript or (in_dq and opener == "{")) \
+            elif ch == "$" and (arith or (in_dq and opener == "{")) \
                     and self._logical(self.i, 2)[0] == "$'":
                 # `${a:$'...'}`, `$[ $'...' ]`, and the word of a double-quoted `${...}`
                 # (`"${y:-$'...'}"`, extquote): bash decodes it and expands the result again

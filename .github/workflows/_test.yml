@@ -43,7 +43,12 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-        cache: 'pip'
+        # Only the locked lanes share pip's cache. The cache key holds neither the workflow
+        # nor the install mode, so an entry saved by the newest-versions run (unpinned
+        # releases) would be restored by a push or the release gate. scripts/install_lock.sh
+        # also empties the built-wheel part before every locked install, which holds even
+        # against a cache entry written some other way.
+        cache: ${{ inputs.deps == 'lock' && 'pip' || '' }}
 
     # The portaudio steps (Linux portaudio19-dev, macOS brew portaudio + LDFLAGS/CFLAGS)
     # were removed together with pyaudio: it is no longer a core requirement (optional
@@ -63,18 +68,18 @@ jobs:
     # gate (scripts/ci_check.sh) tested. Installing requirements.txt here resolved the
     # newest releases instead, so an upstream release the afternoon before turned a push
     # red that every local check had passed. The newest versions are tested on their own,
-    # daily, by ci-latest-deps.yml. pip is pinned too: an unpinned pip is the one input
-    # that changes without a commit. --no-build-isolation builds the editable install
-    # with the locked setuptools instead of whatever PyPI serves that minute. The drift
-    # check proves the runner really holds the lock and nothing else.
+    # daily, by ci-latest-deps.yml. scripts/install_lock.sh says why each of its steps is
+    # there (pip by hash, the locked setuptools for the one sdist, no cached built wheel).
+    # --no-build-isolation builds the editable install with the locked setuptools instead
+    # of whatever PyPI serves that minute. The drift check proves the runner really holds
+    # the lock and nothing else.
     # bash on every runner: pwsh judges a multi-line step by its LAST command only, so a
     # failed install followed by a working one would pass.
     - name: Install dependencies (requirements.lock)
       if: inputs.deps == 'lock'
       shell: bash
       run: |
-        python -m pip install "pip==26.1.2"
-        python -m pip install --require-hashes -r requirements.lock
+        bash scripts/install_lock.sh
         python -m pip install --no-deps --no-build-isolation -e .
         python scripts/check_requirements_lock.py --drift
 
@@ -82,7 +87,7 @@ jobs:
       if: inputs.deps == 'latest'
       shell: bash
       run: |
-        python -m pip install "pip==26.1.2"
+        python -m pip install --require-hashes -r .github/requirements/pip.lock
         python -m pip install -r requirements.txt
         python -m pip install -e .
         python scripts/check_requirements_lock.py --drift --report >> "$GITHUB_STEP_SUMMARY"

@@ -209,6 +209,16 @@ waiting for a stable `X.Y.Z`.
   https://pypi.org/simple/ "vaf==<version>"` - pin the rehearsed version:
   unpinned, pip may resolve `vaf` from real PyPI once the project exists
   there.
+- **The build tools come by hash.** `publish-pypi` and `publish-testpypi.yml` install pip
+  from `.github/requirements/pip.lock` and build, twine, setuptools and wheel from
+  `.github/requirements/publish.lock`, both with `--require-hashes`, and build with
+  `python -m build --no-isolation`, so no unpinned package enters the job that holds the
+  upload token (an isolated build fills its environment from PyPI with no pin and no hash).
+  Raise a tool by editing `publish.in` and regenerating with the command in the lock's
+  header; `lock-sync` checks it. Named boundary: the GitHub Actions themselves, the upload
+  action included (`pypa/gh-action-pypi-publish@release/v1`), are referenced by moving
+  version tags, as everywhere in `.github/workflows/`; Dependabot's github-actions entry
+  proposes their updates.
 - **Alpha releases need `--pre`**: plain `pip install vaf` resolves
   prereleases only while no stable release exists; documenting
   `pip install --pre vaf` stays correct either way until the first stable.

@@ -87,23 +87,38 @@ supports. `requirements.lock` is one hash-pinned resolution of it for every oper
 and Python version CI tests (Linux, macOS and Windows, Python 3.10 to 3.13). Every push, the
 nightly full matrix, the release gate and `scripts/ci_check.sh` install the lock with
 `pip install --require-hashes`, so a new upstream release cannot turn a push red that your
-local checks passed. `scripts/ci_check.sh` builds a venv of its own from the lock (cached
-under `~/.cache/vaf-ci/`, a few minutes the first time) and never installs into your `venv/`.
+local checks passed. `scripts/ci_check.sh` builds a venv of its own from the lock, one per
+checkout (cached under `~/.cache/vaf-ci/`, about 1.6 GB and a minute or two the first time;
+the venv of a removed checkout or an older lock is cleaned up by the next run) and never
+installs into your `venv/`.
 
 **When you change a requirements file**, regenerate the lock in the same commit, from the
 repository root, with the committed lock present (uv then keeps every pin that still fits),
-in a throwaway venv with the uv version the `lock-sync` job in `.github/workflows/ci.yml` pins:
+in a throwaway venv with the uv the `lock-sync` job installs:
 
 ```bash
-pip install "uv==0.13.6"
+pip install --require-hashes -r .github/requirements/pip.lock
+pip install --require-hashes -r .github/requirements/uv.lock
 uv pip compile requirements.txt --config-file requirements-lock.toml --universal --generate-hashes --python-version 3.10 -o requirements.lock
 python scripts/check_requirements_lock.py   # every CI target must report 0 problems
 ```
 
 The `lock-sync` job runs the same command and fails when the result differs from the
-committed lock. `requirements-lock.toml` carries uv's settings: today one override for a
-package whose wheels declare their requirements inconsistently (the comment there explains
-it).
+committed lock. A diff cannot see a hand-edited hash (uv keeps the hashes a committed lock
+already has for a pin it keeps), so the checker also compares every hash with what PyPI
+publishes. `requirements-lock.toml` carries uv's settings: today one override for a package
+whose wheels declare their requirements inconsistently (the comment there explains it).
+
+Every lane installs the lock through `scripts/install_lock.sh`, which also says why each of
+its steps is there: pip comes by hash, the one release without a wheel is built with the
+locked setuptools instead of one fetched unpinned, and pip's cache of wheels it built is
+emptied first (pip trusts those past `--require-hashes`).
+
+The CI tools have small locks of their own in `.github/requirements/`: `pip.lock` (installed
+first everywhere), `uv.lock` (regenerating the locks) and `publish.lock` (building and
+checking the release artefacts). Each is generated from the `.in` file next to it with the
+command in its header, and `lock-sync` checks them like `requirements.lock`. To raise pip or
+uv, edit the `.in` file and regenerate.
 
 **Moving a pin on purpose** (a security fix, a feature you need): add
 `--upgrade-package <name>` to the command above, or `--upgrade` for everything, and review

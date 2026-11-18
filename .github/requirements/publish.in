@@ -1,0 +1,8 @@
+# What the publish jobs (release.yml publish-pypi, publish-testpypi.yml) build and check the
+# sdist and wheel with, installed by hash (publish.lock). The build runs without isolation, so
+# setuptools and wheel come from here too, not from whatever PyPI serves that minute; the
+# floor is the one pyproject.toml's [build-system] states.
+build
+twine
+setuptools>=77
+wheel

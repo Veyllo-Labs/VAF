@@ -1,0 +1,4 @@
+# The uv that regenerates requirements.lock (the lock-sync job, stage 5 of scripts/ci_check.sh),
+# installed by hash (uv.lock). uv's output changes between releases, so raise it only together
+# with a regenerated requirements.lock, in one commit.
+uv==0.13.6

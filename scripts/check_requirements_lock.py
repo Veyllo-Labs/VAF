@@ -32,22 +32,31 @@ the lock does not name (pip, the project itself and the build tools the interpre
 not counted unless the lock names them). Exit 1 on a difference; with ``--report`` it prints a
 Markdown table for a CI step summary and exits 0.
 
-The PyPI reads follow scripts/check_vllm_lock.py and use its ``_get_json``. Its target model is
+The PyPI reads follow scripts/check_vllm_lock.py and use its ``_get_json`` and ``_get_text``,
+each retried on a network error or a 5xx answer. Its target model is
 not shared: those targets are Linux glibc floors, this lock also needs macOS and Windows tags,
 and its parser keeps one entry per name, which cannot hold a forked entry.
 
-    venv/bin/python scripts/check_requirements_lock.py [path/to/requirements.lock]
+    venv/bin/python scripts/check_requirements_lock.py [--requirements FILE] [path/to/a.lock]
     python scripts/check_requirements_lock.py --drift [--report]
+
+The lock defaults to requirements.lock and its input to requirements.txt; the small locks of
+the CI tools are checked with their own input (``--requirements .github/requirements/pip.in
+.github/requirements/pip.lock``). The hash check runs both ways: every file PyPI publishes for
+a pinned release must be in the lock, and every hash in the lock must be one of them.
 """
 from __future__ import annotations
 
 import concurrent.futures
 import email.parser
+import http.client
 import importlib.metadata
 import json
 import re
+import shlex
 import sys
-import urllib.request
+import time
+import urllib.error
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -67,8 +76,10 @@ WORKFLOWS = (ROOT / ".github" / "workflows" / "ci.yml", ROOT / ".github" / "work
 # The distribution this repository builds (pyproject.toml [project].name); CI installs it
 # editable with --no-deps, so it is never in the lock.
 PROJECT = "vaf"
-# Installed but unlocked, and still no drift: pip is pinned by the install step itself, and an
-# interpreter can ship setuptools and wheel. When the lock names one of them, it is compared.
+# Installed but unlocked, and still no drift: pip comes by hash from .github/requirements/
+# pip.lock, and an interpreter can ship setuptools and wheel. When the lock names one of
+# them, it is compared. A package a CI runner's own Python ships belongs here too (the drift
+# message names this set when it reports one).
 _UNLOCKED_TOOLS = frozenset({"pip", "setuptools", "wheel", PROJECT})
 
 # A comment starts at a '#' that begins the line or follows whitespace, as pip reads it.
@@ -96,50 +107,67 @@ class Entry:
 
 
 def logical_lines(text: str) -> list:
-    """(first line number, text) of every non-empty logical line.
+    """(first line number, text) of every non-empty logical line, read as pip 26 reads a
+    requirements file (pip/_internal/req/req_file.py: join_lines, then ignore_comments).
 
-    Comments are dropped and backslash continuations joined, the way pip reads a requirements
-    file: a line that carries a comment ends the logical line even after a backslash.
+    A line ending in a backslash is continued, its backslashes stripped and the next line
+    glued on with no separator; a line that starts with a comment ends the continuation. The
+    comments are dropped from the joined text afterwards, so a '#' inside a continued line
+    swallows the rest of it. pip's ${VAR} expansion is not done: a lock never carries one.
     """
-    out = []
+    joined = []
     buf: list = []
     start = 0
-    for no, raw in enumerate(text.splitlines(), 1):
-        has_comment = _COMMENT.search(raw) is not None
-        line = _COMMENT.sub("", raw)
-        if not buf:
-            start = no
-        if not has_comment and line.endswith("\\"):
-            buf.append(line[:-1])
-            continue
-        buf.append(line)
-        joined = " ".join(part.strip() for part in buf).strip()
-        buf = []
-        if joined:
-            out.append((start, joined))
+    for no, line in enumerate(text.splitlines(), 1):
+        if not line.endswith("\\") or _COMMENT.match(line):
+            if _COMMENT.match(line):
+                line = " " + line
+            if buf:
+                buf.append(line)
+                joined.append((start, "".join(buf)))
+                buf = []
+            else:
+                joined.append((no, line))
+        else:
+            if not buf:
+                start = no
+            buf.append(line.strip("\\"))
     if buf:
-        joined = " ".join(part.strip() for part in buf).strip()
-        if joined:
-            out.append((start, joined))
+        joined.append((start, "".join(buf)))
+    out = []
+    for no, line in joined:
+        line = _COMMENT.sub("", line).strip()
+        if line:
+            out.append((no, line))
     return out
+
+
+def _split_options(line: str):
+    """(requirement, option tokens) the way pip's break_args_options splits a line: on single
+    spaces, at the first token that starts with '-'; the options are then shell-split."""
+    tokens = line.split(" ")
+    cut = next((i for i, tok in enumerate(tokens) if tok.startswith("-")), len(tokens))
+    return " ".join(tokens[:cut]), shlex.split(" ".join(tokens[cut:]))
 
 
 def parse_lock(text: str) -> list:
     """Every entry of a hash-pinned lock, in file order. Raises ValueError on a line that is not
-    a pinned requirement with sha256 hashes (an index option, a URL, a range)."""
+    a pinned requirement with sha256 hashes (an index option, a URL, a range) and on a layout
+    pip would refuse (a requirement packaging cannot parse, a malformed hash)."""
     entries = []
     for no, line in logical_lines(text):
-        tokens = line.split()
-        cut = next((i for i, tok in enumerate(tokens) if tok.startswith("-")), len(tokens))
-        if cut == 0:
+        text_req, options = _split_options(line)
+        if not text_req.strip():
             raise ValueError(f"line {no}: an option line has no place in the lock: {line[:80]}")
         hashes = []
-        for tok in tokens[cut:]:
+        values = iter(options)
+        for tok in values:
+            if tok == "--hash":
+                tok = "--hash=" + next(values, "")
             m = _HASH.fullmatch(tok)
             if not m:
                 raise ValueError(f"line {no}: unexpected option {tok[:80]}")
             hashes.append(m.group(1))
-        text_req = " ".join(tokens[:cut])
         req = Requirement(text_req)
         specs = list(req.specifier)
         if req.url or len(specs) != 1 or specs[0].operator != "==" or "*" in specs[0].version:
@@ -172,18 +200,25 @@ def top_level(path: Path = REQUIREMENTS) -> list:
 # level (``python_full_version < '3.11.3'``) is evaluated as for a release past every such
 # boundary.
 _PATCH = 99
-# ubuntu-latest is Ubuntu 24.04 (glibc 2.39), macos-latest an arm64 macOS 15 (Darwin 24),
-# windows-latest a 64-bit Windows.
+# The runner images (actions/runner-images README, read 2026-11): ubuntu-latest is Ubuntu
+# 24.04 (glibc 2.39), macos-latest macOS 26 on arm64 (Darwin 25), windows-latest Windows
+# Server 2025 on x64. The Darwin release is what platform_release reads on macOS.
 _RUNNERS = {
     "ubuntu-latest": {"sys_platform": "linux", "platform_system": "Linux", "os_name": "posix",
                       "platform_machine": "x86_64", "platform_release": "6.8.0"},
     "macos-latest": {"sys_platform": "darwin", "platform_system": "Darwin", "os_name": "posix",
-                     "platform_machine": "arm64", "platform_release": "24.0.0"},
+                     "platform_machine": "arm64", "platform_release": "25.0.0"},
     "windows-latest": {"sys_platform": "win32", "platform_system": "Windows", "os_name": "nt",
                        "platform_machine": "AMD64", "platform_release": "10"},
 }
 _GLIBC = (2, 39)
-_MACOS = (15, 0)
+# The macOS whose wheel tags count. macOS 26 reports itself as 16.0 to a program built
+# against an older SDK, and pip's tag code maps only the older 10.16 compatibility value back
+# to the real version, so pip under such a Python accepts wheels up to macosx_16_0 and under a
+# Python built against the new SDK up to macosx_26_0. Which build setup-python serves for each
+# Python is not measured from here, so only the tags both accept count: a release whose only
+# macOS wheels are for 17 to 26 is reported, never passed on a guess.
+_MACOS = (16, 0)
 # PEP 600: the legacy manylinux names and the glibc each one stands for.
 _LEGACY_MANYLINUX = {(2, 17): "manylinux2014", (2, 12): "manylinux2010", (2, 5): "manylinux1"}
 
@@ -255,13 +290,35 @@ def matrix_targets(workflows=WORKFLOWS) -> list:
 # ---------------------------------------------------------------------------------------------
 # Metadata source. Tests hand in their own object with the same four methods.
 
+# lock-sync is a required check and reads PyPI about 1500 times: one 5xx or timeout among them
+# must not block a push. A 4xx (a release that is not there) is an answer, not a hiccup.
+_RETRIES = 3
+_BACKOFF_S = 2.0
+
+
+def with_retries(read, *args, sleep=time.sleep):
+    """``read(*args)``, tried up to _RETRIES times on a network error or a 5xx answer."""
+    for attempt in range(1, _RETRIES + 1):
+        try:
+            return read(*args)
+        except urllib.error.HTTPError as e:
+            if e.code < 500 or attempt == _RETRIES:
+                raise
+        except (OSError, http.client.HTTPException):
+            if attempt == _RETRIES:
+                raise
+        sleep(_BACKOFF_S * attempt)
+    raise AssertionError("unreachable")
+
+
 class PyPI:
     """Reads release files, digests and per-wheel core metadata from pypi.org (cached)."""
 
     def __init__(self):
         sys.path.insert(0, str(Path(__file__).resolve().parent))
-        from check_vllm_lock import _get_json
-        self._get_json = _get_json
+        from check_vllm_lock import _get_json, _get_text
+        self._get_json = lambda *args: with_retries(_get_json, *args)
+        self._get_text = lambda url: with_retries(_get_text, url)
         self._simple: dict = {}
         self._release: dict = {}
         self._meta: dict = {}
@@ -306,8 +363,7 @@ class PyPI:
             return None
         url = file["url"] + ".metadata"
         if url not in self._meta:
-            with urllib.request.urlopen(url, timeout=60) as r:
-                msg = email.parser.Parser().parsestr(r.read().decode("utf-8", "replace"))
+            msg = email.parser.Parser().parsestr(self._get_text(url))
             self._meta[url] = list(msg.get_all("Requires-Dist") or [])
         return self._meta[url]
 
@@ -395,6 +451,13 @@ def check(entries: list, requirements: list, targets: list, source, workers: int
         missing = sorted(fn for h, fn in published[(e.name, e.version)].items() if h not in e.hashes)
         if missing:
             problems.add(f"{e} (line {e.line}): no hash in the lock for {missing[:3]}")
+        # The other direction too. uv keeps the hashes the committed lock already has for a pin
+        # it keeps (measured: a version edited by hand came back with the old release's
+        # hashes), so regenerating and diffing cannot see a hand-edited hash; only this can.
+        foreign = sorted(e.hashes - set(published[(e.name, e.version)]))
+        if foreign:
+            problems.add(f"{e} (line {e.line}): {len(foreign)} hash(es) in the lock that PyPI does "
+                         f"not publish for this release ({foreign[0][:12]}...)")
 
     plans = []  # (target, {name: entry}, {name: file or None})
     wanted_files = {}
@@ -536,16 +599,32 @@ def _drift_main(lock: Path, report: bool) -> int:
     for name, locked, have in rows:
         print(f"{name}: locked {locked}, installed {have}")
     print(f"{len(rows)} difference(s) between requirements.lock and {where}.")
+    if any(locked == "-" for _name, locked, _have in rows):
+        print("A package marked 'locked -' is installed but not in the lock. If the interpreter "
+              "itself ships it (a CI runner's Python, not anything this repository installs), "
+              "add its name to _UNLOCKED_TOOLS in scripts/check_requirements_lock.py; "
+              "otherwise something installed past the lock.")
     return 1 if rows else 0
 
 
+_USAGE = ("usage: check_requirements_lock.py [--requirements FILE] [path/to/a.lock]\n"
+          "       check_requirements_lock.py --drift [--report] [path/to/requirements.lock]")
+
+
 def main(argv=None) -> int:
-    argv = sys.argv[1:] if argv is None else argv
+    argv = list(sys.argv[1:] if argv is None else argv)
+    requirements = REQUIREMENTS
+    if "--requirements" in argv:
+        i = argv.index("--requirements")
+        if i + 1 >= len(argv):
+            print(_USAGE, file=sys.stderr)
+            return 2
+        requirements = Path(argv[i + 1])
+        del argv[i:i + 2]
     flags = {a for a in argv if a.startswith("--")}
     unknown = flags - {"--drift", "--report"}
     if unknown or ("--report" in flags and "--drift" not in flags):
-        print("usage: check_requirements_lock.py [--drift [--report]] [path/to/requirements.lock]",
-              file=sys.stderr)
+        print(_USAGE, file=sys.stderr)
         return 2
     paths = [a for a in argv if not a.startswith("--")]
     lock = Path(paths[0]) if paths else LOCK
@@ -553,7 +632,7 @@ def main(argv=None) -> int:
         return _drift_main(lock, "--report" in flags)
     entries = parse_lock(lock.read_bytes().decode("utf-8"))
     targets = matrix_targets()
-    problems, notes = check(entries, top_level(), targets, PyPI())
+    problems, notes = check(entries, top_level(requirements), targets, PyPI())
     for line in notes:
         print(f"note: {line}")
     for line in problems:

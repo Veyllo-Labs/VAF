@@ -249,8 +249,8 @@ def test_the_lock_check_regenerates_from_both_requirement_files():
     stage = sh[sh.index("=== 5/9"):sh.index("=== 6/9")]
     assert f'REQ_FILES="requirements.txt {HEADLESS_REQUIREMENTS}"' in stage
     assert 'LOCK_CONFIG="requirements-lock.toml"' in stage
-    assert "git diff --name-only origin/main...HEAD -- $REQ_FILES $LOCK_CONFIG" in stage
-    assert "git diff --name-only -- $REQ_FILES $LOCK_CONFIG)" in stage
+    assert "git diff --name-only origin/main...HEAD -- $REQ_FILES $LOCK_CONFIG $TOOL_LOCKS" in stage
+    assert "git diff --name-only -- $REQ_FILES $LOCK_CONFIG $TOOL_LOCKS)" in stage
     assert 'cp $REQ_FILES $LOCK_CONFIG requirements.lock "$LOCK_TMP/"' in stage
     assert "cp requirements.txt requirements.lock" not in stage
 

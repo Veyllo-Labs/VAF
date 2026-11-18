@@ -418,9 +418,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   device the Veyllo App everywhere.
 - **CI now tests every push and release against `requirements.lock`**, one hash-pinned lock
   for Linux, macOS and Windows on Python 3.10 to 3.13, so a new upstream release can no longer
-  turn a push red that the local checks passed. A separate daily run installs the newest
-  versions and reports what broke without blocking anything. `scripts/ci_check.sh` runs in a
-  venv built from the same lock and no longer installs anything into your `venv/`.
+  turn a push red that the local checks passed. pip, the tools that build a package from
+  source and the release build tools come by hash too. A separate daily run installs the
+  newest versions and reports what broke without blocking anything. `scripts/ci_check.sh`
+  runs in a venv built from the same lock, one per checkout, and no longer installs anything
+  into your `venv/`.
 
 ### Security
 

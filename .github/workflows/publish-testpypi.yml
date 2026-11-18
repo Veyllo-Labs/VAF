@@ -36,11 +36,12 @@ jobs:
         with:
           python-version: "3.11"
 
+      # The same hash-pinned build as release.yml's publish-pypi (the comment there says why).
       - name: Build sdist and wheel
         run: |
-          python -m pip install --upgrade pip
-          pip install build twine
-          python -m build
+          python -m pip install --require-hashes -r .github/requirements/pip.lock
+          python -m pip install --require-hashes -r .github/requirements/publish.lock
+          python -m build --no-isolation
           twine check dist/*
 
       - name: Publish to TestPyPI (Trusted Publishing)

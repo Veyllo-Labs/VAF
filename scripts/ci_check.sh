@@ -61,6 +61,10 @@ echo "=== The venv the checks run in: requirements.lock ==="
 # twice over. It differed from the lock on 36 of 189 pins and carried 53 packages the
 # lock does not name (measured), so a green here said little about CI. And this script
 # used to install ruff and pytest into it, under the app that runs from it.
+CI_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/vaf-ci"
+# The gate's own pip cache, apart from the user's: install_lock.sh empties its built wheels
+# (pip trusts those past --require-hashes) and keeps the hash-checked downloads.
+GATE_PIP_CACHE="$CI_CACHE/pip"
 if [ "${VAF_CI_USE_RUNTIME_VENV:-}" = "1" ]; then
     echo "    WARNING: VAF_CI_USE_RUNTIME_VENV=1 - the checks run in $RUNTIME_VENV/, whose"
     echo "    versions are not the lock's. The verdict is advisory: push CI may disagree."
@@ -69,24 +73,24 @@ if [ "${VAF_CI_USE_RUNTIME_VENV:-}" = "1" ]; then
 else
     PYVER="$("$BASE_PY" -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
     LOCK_HASH="$("$BASE_PY" -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest()[:16])' requirements.lock)"
-    CI_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/vaf-ci"
-    LOCK_VENV="$CI_CACHE/lock-$PYVER-$LOCK_HASH"
+    CHECKOUT_KEY="$("$BASE_PY" -c 'import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:12])' "$ROOT")"
+    # One venv per lock, Python AND checkout. The editable install below points the venv at
+    # one tree, so two checkouts sharing a venv would leave it pointing at whichever ran
+    # last, and a child process of the other one that imports vaf without PYTHONPATH would
+    # load the wrong tree. Downloads stay shared through the gate's own pip cache.
+    LOCK_VENV="$CI_CACHE/lock-$PYVER-$LOCK_HASH-$CHECKOUT_KEY"
     # Built in place and marked complete last: a venv cannot be renamed after the build,
     # its scripts (pytest, pip) carry the absolute path of its interpreter. A build that
-    # died half way has no marker and is rebuilt from scratch.
+    # died half way has no marker and is rebuilt from scratch. The owner is written first,
+    # so a build in progress is never mistaken for an abandoned venv by the pruning below.
     if [ ! -f "$LOCK_VENV/.complete" ]; then
-        PIP_PIN="$(grep -o '"pip==[^"]*"' .github/workflows/ci.yml | head -1 | tr -d '"')"
-        if [ -z "$PIP_PIN" ]; then
-            echo "ERROR: the pip pin of the CI install steps was not found in ci.yml" >&2
-            exit 1
-        fi
         echo "    building $LOCK_VENV"
-        echo "    (once per lock: a few minutes, needs the network)"
+        echo "    (once per lock and checkout: a few minutes, needs the network)"
         rm -rf "$LOCK_VENV"
         mkdir -p "$CI_CACHE"
         if ! { "$BASE_PY" -m venv "$LOCK_VENV" \
-               && "$LOCK_VENV/bin/python" -m pip install -q "$PIP_PIN" \
-               && "$LOCK_VENV/bin/python" -m pip install -q --require-hashes -r requirements.lock; } \
+               && printf '%s\n' "$ROOT" > "$LOCK_VENV/.checkout" \
+               && PIP_CACHE_DIR="$GATE_PIP_CACHE" bash scripts/install_lock.sh "$LOCK_VENV/bin/python"; } \
                >"$CI_CACHE/build.log" 2>&1; then
             echo "ERROR: installing requirements.lock into the check venv failed; last lines:" >&2
             tail -5 "$CI_CACHE/build.log" >&2
@@ -96,17 +100,32 @@ else
             exit 1
         fi
         touch "$LOCK_VENV/.complete"
-        # One check venv per machine: the one of an older lock goes.
-        for OLD in "$CI_CACHE"/lock-*; do
-            [ "$OLD" = "$LOCK_VENV" ] || rm -rf "$OLD"
-        done
     else
         echo "    reusing $LOCK_VENV"
     fi
+    # Pruning never takes a venv another gate may be running in: another checkout's venv
+    # goes only once that checkout is gone, this checkout's venvs of other locks go (one
+    # gate per checkout at a time), and a venv with no owner (a build that has not written
+    # one yet) only when it is a day old.
+    for OLD in "$CI_CACHE"/lock-*; do
+        if [ ! -d "$OLD" ] || [ "$OLD" = "$LOCK_VENV" ]; then
+            continue
+        fi
+        OWNER="$(cat "$OLD/.checkout" 2>/dev/null || true)"
+        if [ -n "$OWNER" ]; then
+            if [ "$OWNER" != "$ROOT" ] && [ -d "$OWNER" ]; then
+                continue
+            fi
+        elif [ -z "$(find "$OLD" -maxdepth 0 -mmin +1440 2>/dev/null)" ]; then
+            continue
+        fi
+        echo "    removing $OLD (its checkout is gone, or it holds an older lock of this one)"
+        rm -rf "$OLD"
+    done
     # The tree under test, editable and without dependencies, built with the lock's own
-    # setuptools (offline, seconds). In a worktree this points the venv at the worktree.
-    "$LOCK_VENV/bin/python" -m pip install -q --disable-pip-version-check \
-        --no-deps --no-build-isolation -e "$ROOT"
+    # setuptools (offline, seconds); it keeps entry points and metadata current.
+    PIP_CACHE_DIR="$GATE_PIP_CACHE" "$LOCK_VENV/bin/python" -m pip install -q \
+        --disable-pip-version-check --no-deps --no-build-isolation -e "$ROOT"
     # Nothing but the lock: a package installed into the check venv by hand fails here.
     if ! "$LOCK_VENV/bin/python" scripts/check_requirements_lock.py --drift; then
         echo "ERROR: the check venv no longer holds exactly requirements.lock." >&2
@@ -142,58 +161,71 @@ echo ""
 echo "=== 5/9  Lock file freshness ==="
 # The lock-sync job in remote CI regenerates requirements.lock and fails on any
 # difference, and a dependency swap once shipped with a stale lock as the first
-# red of a 28-commit push because nothing here did the same. When an input of the
-# lock or the lock itself changed, this stage runs that job's own check: uv with
-# the job's exact pip and uv pins (read from ci.yml, never copied) in a throwaway
-# venv, with the committed lock present so no pin moves by itself, and the same
-# command as the job and the lock's header. A universal resolution does not
-# depend on the interpreter it runs on, so any Python of the runtime venv does.
-# Then the lock is checked for every OS and Python of the CI matrices.
+# red of a 28-commit push because nothing here did the same. When an input of a
+# lock or a lock itself changed, this stage runs that job's own check: pip and uv
+# installed by hash from the same files the job installs (.github/requirements/,
+# never copied) in a throwaway venv, the committed locks present so no pin moves
+# by itself, and the same commands as the job and the locks' headers. A universal
+# resolution does not depend on the interpreter it runs on, so any Python of the
+# runtime venv does. Then requirements.lock is checked for every OS and Python of
+# the CI matrices.
 # requirements.txt includes requirements-headless.txt (-r), so the included
 # file is an input of the lock like requirements.txt itself, and so are uv's
-# settings in requirements-lock.toml.
+# settings in requirements-lock.toml. The small locks of the CI tools (pip, uv,
+# the publish tools) live in .github/requirements/ with their inputs.
 REQ_FILES="requirements.txt requirements-headless.txt"
 LOCK_CONFIG="requirements-lock.toml"
+TOOL_LOCKS=".github/requirements"
 if git rev-parse --verify -q origin/main >/dev/null; then
     # shellcheck disable=SC2086  # separate path arguments
-    REQ_CHANGED=$(git diff --name-only origin/main...HEAD -- $REQ_FILES $LOCK_CONFIG; git diff --name-only -- $REQ_FILES $LOCK_CONFIG)
+    REQ_CHANGED=$(git diff --name-only origin/main...HEAD -- $REQ_FILES $LOCK_CONFIG $TOOL_LOCKS; git diff --name-only -- $REQ_FILES $LOCK_CONFIG $TOOL_LOCKS)
     LOCK_CHANGED=$(git diff --name-only origin/main...HEAD -- requirements.lock; git diff --name-only -- requirements.lock)
     if [ -z "$REQ_CHANGED" ] && [ -z "$LOCK_CHANGED" ]; then
-        echo "    OK (no input of the lock and not the lock changed)"
+        echo "    OK (no lock and no input of one changed)"
     else
-        LOCK_PINS=$(grep -o '"pip==[^"]*" "uv==[^"]*"' .github/workflows/ci.yml | head -1 | tr -d '"')
-        if [ -z "$LOCK_PINS" ]; then
-            echo "ERROR: the pip / uv pins of the lock-sync job were not found in ci.yml" >&2
-            exit 1
-        fi
         LOCK_TMP="$(mktemp -d)"
+        mkdir -p "$LOCK_TMP/$TOOL_LOCKS"
         # shellcheck disable=SC2086  # separate path arguments
         cp $REQ_FILES $LOCK_CONFIG requirements.lock "$LOCK_TMP/"
-        echo "    regenerating the lock like the lock-sync job ($LOCK_PINS)"
-        # shellcheck disable=SC2086  # the pins are two separate arguments
+        cp "$TOOL_LOCKS"/*.in "$TOOL_LOCKS"/*.lock "$LOCK_TMP/$TOOL_LOCKS/"
+        echo "    regenerating the locks like the lock-sync job (pip and uv from $TOOL_LOCKS)"
         if ! { "$BASE_PY" -m venv "$LOCK_TMP/venv" \
-               && "$LOCK_TMP/venv/bin/python" -m pip install -q $LOCK_PINS \
-               && (cd "$LOCK_TMP" && "$LOCK_TMP/venv/bin/uv" pip compile requirements.txt --config-file requirements-lock.toml --universal --generate-hashes --python-version 3.10 -o requirements.lock); } \
+               && PIP_CACHE_DIR="$GATE_PIP_CACHE" "$LOCK_TMP/venv/bin/python" -m pip install -q --require-hashes -r "$TOOL_LOCKS/pip.lock" \
+               && PIP_CACHE_DIR="$GATE_PIP_CACHE" "$LOCK_TMP/venv/bin/python" -m pip install -q --require-hashes -r "$TOOL_LOCKS/uv.lock" \
+               && (cd "$LOCK_TMP" \
+                   && "$LOCK_TMP/venv/bin/uv" pip compile requirements.txt --config-file requirements-lock.toml --universal --generate-hashes --python-version 3.10 -o requirements.lock \
+                   && "$LOCK_TMP/venv/bin/uv" pip compile .github/requirements/pip.in --universal --generate-hashes --python-version 3.10 -o .github/requirements/pip.lock \
+                   && "$LOCK_TMP/venv/bin/uv" pip compile .github/requirements/uv.in --universal --generate-hashes --python-version 3.10 -o .github/requirements/uv.lock \
+                   && "$LOCK_TMP/venv/bin/uv" pip compile .github/requirements/publish.in --universal --generate-hashes --python-version 3.10 -o .github/requirements/publish.lock); } \
                >"$LOCK_TMP/compile.log" 2>&1; then
             echo "ERROR: uv pip compile failed (a resolution conflict, or no network); last lines:" >&2
             tail -5 "$LOCK_TMP/compile.log" >&2
             rm -rf "$LOCK_TMP"
             exit 1
         fi
-        if ! diff -u requirements.lock "$LOCK_TMP/requirements.lock" >"$LOCK_TMP/lock.diff"; then
-            echo "ERROR: requirements.lock is out of sync with requirements.txt:" >&2
+        if ! { diff -u requirements.lock "$LOCK_TMP/requirements.lock" \
+               && diff -ru "$TOOL_LOCKS" "$LOCK_TMP/$TOOL_LOCKS"; } >"$LOCK_TMP/lock.diff"; then
+            echo "ERROR: a lock is out of sync with its input:" >&2
             head -40 "$LOCK_TMP/lock.diff" >&2
             echo "Regenerate it with the command in its header and commit it (.github/CONTRIBUTING.md)." >&2
             rm -rf "$LOCK_TMP"
             exit 1
         fi
         rm -rf "$LOCK_TMP"
-        echo "    OK (regenerated lock is identical)"
-        echo "    checking the lock for every OS and Python of the CI matrices (network)"
+        echo "    OK (regenerated locks are identical)"
+        # The diff cannot see a hand-edited hash (uv keeps the hashes a committed lock has
+        # for a pin it keeps, measured); the checker compares every hash with PyPI.
+        echo "    checking the locks for every OS and Python of the CI matrices (network)"
         if ! python scripts/check_requirements_lock.py; then
             echo "ERROR: requirements.lock does not install on every CI target (above)." >&2
             exit 1
         fi
+        for TOOL in pip uv publish; do
+            if ! python scripts/check_requirements_lock.py --requirements "$TOOL_LOCKS/$TOOL.in" "$TOOL_LOCKS/$TOOL.lock"; then
+                echo "ERROR: $TOOL_LOCKS/$TOOL.lock does not check out (above)." >&2
+                exit 1
+            fi
+        done
         echo "    OK"
     fi
 else

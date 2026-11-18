@@ -1,0 +1,4 @@
+# The pip every CI lane and scripts/ci_check.sh install first, by hash (pip.lock): the tool
+# that checks every other hash must not be the one unchecked download. Raise it here, then
+# regenerate pip.lock with the command in its header.
+pip==26.1.2

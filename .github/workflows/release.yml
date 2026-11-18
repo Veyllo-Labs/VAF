@@ -81,8 +81,7 @@ jobs:
       # ci-latest-deps.yml run's job (docs/setup/RELEASING.md). ruff and pytest are in it.
       - name: Install dependencies (requirements.lock)
         run: |
-          python -m pip install "pip==26.1.2"
-          python -m pip install --require-hashes -r requirements.lock
+          bash scripts/install_lock.sh
           python -m pip install --no-deps --no-build-isolation -e .
           python scripts/check_requirements_lock.py --drift
 
@@ -165,11 +164,19 @@ jobs:
         with:
           python-version: "3.11"
 
+      # This job holds the PyPI upload token and builds what users install, so its tools
+      # come by hash too: pip, then build, twine, setuptools and wheel from
+      # .github/requirements/publish.lock, and the build runs without isolation so nothing
+      # unpinned enters it (an isolated build fills its environment from PyPI with no pin
+      # and no hash). publish-testpypi.yml builds the same way.
+      # Named boundary: the upload action itself is referenced by its moving release/v1
+      # tag, as every action here is by a version tag; Dependabot's github-actions entry
+      # proposes their updates.
       - name: Build sdist and wheel
         run: |
-          python -m pip install --upgrade pip
-          pip install build twine
-          python -m build
+          python -m pip install --require-hashes -r .github/requirements/pip.lock
+          python -m pip install --require-hashes -r .github/requirements/publish.lock
+          python -m build --no-isolation
           twine check dist/*
 
       - name: Publish to PyPI (Trusted Publishing)

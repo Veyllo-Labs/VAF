@@ -97,28 +97,41 @@ jobs:
       # and pip 26.2 (2026-07-29) removed a private symbol pip-compile imported. The one
       # unpinned input defeated the pin that was supposed to guarantee determinism. uv's output
       # also changes between releases (header, marker spelling), so raise its pin only together
-      # with a regenerated lock, in one commit. scripts/ci_check.sh reads both pins from here.
-      - name: Install uv (pip pinned too)
-        run: python -m pip install "pip==26.1.2" "uv==0.13.6"
-      # Run from the repository root WITH the committed lock present: uv keeps its pins as
-      # preferences, so nothing moves unless requirements.txt asks for it, and it writes this
-      # exact command (relative paths included) into the lock's header.
-      - name: Verify requirements.lock is in sync with requirements.txt
+      # with a regenerated lock, in one commit. Both come by hash, from .github/requirements/
+      # (a version pin alone is not an artefact pin: PyPI lets a release gain files), and
+      # scripts/ci_check.sh installs the same two files.
+      - name: Install pip and uv (by hash)
+        run: |
+          python -m pip install --require-hashes -r .github/requirements/pip.lock
+          python -m pip install --require-hashes -r .github/requirements/uv.lock
+      # Run from the repository root WITH the committed locks present: uv keeps their pins as
+      # preferences, so nothing moves unless an input asks for it, and it writes each exact
+      # command (relative paths included) into its lock's header. The three small locks under
+      # .github/requirements/ (pip, uv, the publish tools) are checked the same way.
+      - name: Verify the locks are in sync with their inputs
         run: |
           uv pip compile requirements.txt --config-file requirements-lock.toml --universal --generate-hashes --python-version 3.10 -o requirements.lock
-          if ! git diff --exit-code requirements.lock; then
-            echo "::error::requirements.lock is out of sync with requirements.txt."
-            echo "Fix locally (uv==0.13.6, from the repository root), then commit requirements.lock:"
-            echo "  uv pip compile requirements.txt --config-file requirements-lock.toml --universal --generate-hashes --python-version 3.10 -o requirements.lock"
+          uv pip compile .github/requirements/pip.in --universal --generate-hashes --python-version 3.10 -o .github/requirements/pip.lock
+          uv pip compile .github/requirements/uv.in --universal --generate-hashes --python-version 3.10 -o .github/requirements/uv.lock
+          uv pip compile .github/requirements/publish.in --universal --generate-hashes --python-version 3.10 -o .github/requirements/publish.lock
+          if ! git diff --exit-code requirements.lock .github/requirements/; then
+            echo "::error::a lock is out of sync with its input."
+            echo "Fix locally (uv from .github/requirements/uv.lock, from the repository root) with"
+            echo "the command in the lock's header, then commit the lock (.github/CONTRIBUTING.md)."
             exit 1
           fi
       # The checker needs `packaging`; it is taken from the lock itself, hash-checked, so no
-      # version is written down twice.
-      - name: Check the lock for every OS and Python of the CI matrices
+      # version is written down twice. It also compares every hash with PyPI in both
+      # directions: uv keeps the hashes a committed lock already has for a pin it keeps
+      # (measured), so the diff above cannot see a hand-edited hash, in any of the four locks.
+      - name: Check the locks for every OS and Python of the CI matrices
         run: |
           awk '/^packaging==/{p=1; print; next} p && /^[^ ]/{exit} p{print}' requirements.lock > "$RUNNER_TEMP/packaging.txt"
           python -m pip install --require-hashes --no-deps -r "$RUNNER_TEMP/packaging.txt"
           python scripts/check_requirements_lock.py
+          for tool in pip uv publish; do
+            python scripts/check_requirements_lock.py --requirements ".github/requirements/$tool.in" ".github/requirements/$tool.lock"
+          done
 
   narrow-console:
     # THE WINDOWS FAILURE CLASS, CAUGHT ON A LINUX RUNNER IN A THIRD OF THE TIME.
@@ -159,8 +172,7 @@ jobs:
       # The lock, the same way as the test matrix (_test.yml explains each line).
       - name: Install dependencies (requirements.lock)
         run: |
-          python -m pip install "pip==26.1.2"
-          python -m pip install --require-hashes -r requirements.lock
+          bash scripts/install_lock.sh
           python -m pip install --no-deps --no-build-isolation -e .
           python scripts/check_requirements_lock.py --drift
       - name: Run the suite with a narrow output encoding

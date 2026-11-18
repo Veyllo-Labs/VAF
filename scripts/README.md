@@ -32,8 +32,9 @@ These run in CI and can be run locally before pushing. Each fails (exit 1) on a 
 
 | Script | Description |
 |--------|-------------|
-| `ci_check.sh` | Runs the same checks as CI locally (lint gates plus tests), in a venv of its own built from `requirements.lock` (cached under `~/.cache/vaf-ci/`; `VAF_CI_USE_RUNTIME_VENV=1` uses the runtime venv instead, with an advisory verdict) |
-| `check_requirements_lock.py` | Checks `requirements.lock` for every OS and Python of the CI matrices from PyPI metadata (network); `--drift [--report]` compares the running interpreter's packages with the lock (offline) |
+| `ci_check.sh` | Runs the same checks as CI locally (lint gates plus tests), in a venv of its own built from `requirements.lock`, one per checkout (cached under `~/.cache/vaf-ci/`; `VAF_CI_USE_RUNTIME_VENV=1` uses the runtime venv instead, with an advisory verdict) |
+| `check_requirements_lock.py` | Checks `requirements.lock` (or, with `--requirements`, a tool lock under `.github/requirements/`) for every OS and Python of the CI matrices from PyPI metadata, every hash both ways (network); `--drift [--report]` compares the running interpreter's packages with the lock (offline) |
+| `install_lock.sh` | Installs `requirements.lock` into one interpreter with every file hash-checked (pip by hash, the locked setuptools for source builds, no cached built wheels); every gating CI lane and `ci_check.sh` use it |
 | `check_doc_links.py` | Verifies that every relative link in the project's Markdown resolves |
 | `check_license_headers.py` | Ensures every first-party source file carries the AGPL SPDX header |
 | `check_soul_prompt.py` | Verifies Soul/identity loading and system-prompt building, writing to `logs/` |

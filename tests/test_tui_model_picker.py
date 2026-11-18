@@ -32,7 +32,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from tests.test_tui_app_smoke import _settle, smoke_app  # noqa: F401
+from test_tui_app_smoke import _settle, smoke_app  # noqa: F401
 from vaf.cli.tui_app import screens as screens_mod
 from vaf.cli.tui_app.screens import ConfirmScreen, ModelScreen, SettingsScreen
 from vaf.core import local_engine as le

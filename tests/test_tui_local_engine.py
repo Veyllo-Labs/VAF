@@ -561,8 +561,8 @@ def test_the_stored_engine_reads_selected_under_an_api_provider(monkeypatch):
 def test_settings_menus_open_on_the_first_row_that_can_be_picked(monkeypatch):
     """Real keys: `s`, Engine with an API provider; the list opens on llama.cpp, not on the
     note above it, so Enter picks. MUTATION: the cursor back at row 0 - red."""
-    from tests.test_tui_app_smoke import _settle
-    from tests.test_tui_model_picker import _patch_config
+    from test_tui_app_smoke import _settle
+    from test_tui_model_picker import _patch_config
     from vaf.cli.tui_app import screens as screens_mod
     from vaf.cli.tui_app.app import TuiEvents, VafApp
     from vaf.cli.tui_app.agent_bridge import AgentBridge
@@ -604,7 +604,7 @@ def test_settings_menus_open_on_the_first_row_that_can_be_picked(monkeypatch):
 def test_the_install_question_says_the_chat_moves(monkeypatch):
     """When the pick moves an API provider's chat to this machine, the question says so.
     MUTATION: drop the sentence - red."""
-    from tests.test_tui_model_picker import _patch_config
+    from test_tui_model_picker import _patch_config
     from vaf.cli.tui_app import screens as screens_mod
     pushed = []
     app = SimpleNamespace(_bridge=SimpleNamespace(busy=False, apply_engine=lambda *a, **k: None),

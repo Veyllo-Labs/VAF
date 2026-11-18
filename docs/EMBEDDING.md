@@ -3119,11 +3119,23 @@ usable from an embedded engine too, documented in their own pages:
   it has no timeout of its own, so run it under one, as `ToolCaller` does for the
   registered tools. A timeout on your side only stops your wait: the read inside keeps
   the server's lock until the server answers or its process is stopped, so later calls
-  to that server wait too. `get_mcp_client().stop_server(command)` stops that process
-  (it does not wait for the lock), which ends the blocked call with an error, and the
-  next call starts a fresh one. Do not retry a call that writes after a timeout on your own: the server may
-  already have acted. A call that was still waiting for the lock when `run_bounded`
-  gave up on it returns without reaching the server. See
+  to that server wait too. To recover, pass `on_process=` to `call_stdio` (it is told
+  the process the call uses, and None once the call is done with it) and hand that
+  process to `get_mcp_client().stop_server(command, process=...)`. That stops only
+  this process, and only while it is still the one cached for the command, because
+  every caller in the application shares it; without `process=` it stops whatever is
+  cached. It takes no lock and returns at once, and the stop runs in the background:
+  SIGTERM to the server's process group, SIGKILL 2 s later. On POSIX the server leads
+  its own process group, so a launcher's child that kept the output pipe goes with it,
+  the blocked call returns an error, and the next call starts a fresh process. On
+  Windows the process and its child tree are stopped; a grandchild that detached from
+  the tree keeps the pipe open and the blocked call waiting. Do not retry a call that
+  writes after a timeout on your own: the server may already have acted. A call that
+  was still waiting for the lock, or for its server to start, when `run_bounded` gave
+  up on it returns without writing to the server. Named boundary: the facade exports no
+  MCP client yet. These are reached by importing `vaf.tools.mcp_client`; measured, the
+  application has one caller of `call_stdio` (`mcp_registry.call_registered_tool`) and
+  two of `stop_server` (discovery and the connection test). See
   [MCP_INTEGRATION.md](agents/MCP_INTEGRATION.md).
 - **Update-surviving local tools** - a `custom_tools/` folder in the platform
   data dir (managed via the Web UI, admin-only), see

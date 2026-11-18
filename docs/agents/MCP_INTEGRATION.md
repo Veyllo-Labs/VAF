@@ -212,13 +212,17 @@ What the loop reads from a server's output:
   kept and reused.
 - `isError: true` in a result makes the call's text start with `MCP Error:`, the same prefix
   the remote lane gives such a result and the shared result classifier reads as a failure,
-  whatever the content looks like. Other answers in an unexpected shape (an `error` that is a
-  string, a `result` that is not an object, a text item whose `text` is not a string) come
-  back as text.
-- A call that waited for the server's lock after its caller gave up on it (the tool budget
-  ran out, or the user pressed Stop) returns without reaching the server, so a write is not
-  sent after its caller was told it did not finish. A call that got past that check before
-  its caller gave up still runs.
+  whatever the content looks like (with "the tool reported an error" when it carries no
+  text). `isError` is read as the remote lane's SDK reads it: `true`, `1` and words such as
+  `"yes"` or `"True"` are true; `false`, `0` and `"no"`/`"off"`/`"false"` are false; any
+  other value, which the SDK refuses, reads as an error too. Other answers in an unexpected
+  shape (an `error` that is a string, a `result` that is not an object, a text item whose
+  `text` is not a string) come back as text.
+- A call that waited for the server's lock, or for its server to start, after its caller gave
+  up on it (the tool budget ran out, or the user pressed Stop) returns without writing to the
+  server, so a write is not sent after its caller was told it did not finish. A call that got
+  past the last check before its caller gave up still writes. A listing (discovery, the
+  connection test) whose caller gave up while it waited for the lock starts and asks nothing.
 - JSON-RPC batches are not read; VAF never sends one.
 
 Named boundaries, measured: three ways a call can wait on `readline` forever, holding the
@@ -234,11 +238,28 @@ server's lock:
 
 The caller's tool budget bounds only how long the caller waits. It does not interrupt the
 blocked read or release the lock, so later calls to the same server wait behind it and can
-time out too, until the read ends or the server process is stopped
-(`MCPClientTool.stop_server(command)`, which takes no lock; discovery and the connection test
-stop a server that missed their deadline this way). The loop has no read
-deadline of its own: a Windows pipe has no `select`, and a deadline needs a reader thread or a
-non-blocking read with its own design, which would also be the place to drain stderr.
+time out too, until the read ends or the server process is stopped.
+
+Stopping a server: `MCPClientTool.stop_server(command, process=...)` stops the process a call
+used (`on_process` of `call_stdio` and `list_server_tools` reports it), and only while that
+process is still the one cached for the command. The processes are shared by every caller,
+so a caller whose deadline ran out must not stop a healthy call another caller runs on a
+replacement; measured before this, a connection test that timed out while it was queued
+behind another account's call stopped that call. Discovery and the connection test stop a
+server that missed their deadline this way, and only a local one, and a listing they gave
+up on while it waited for the lock is cancelled instead. `stop_server` takes no lock and
+returns at once; the stop runs on a background thread: SIGTERM to the process group, SIGKILL
+2 s later, then the reaping (measured before this: a 1 s connection test took 6 s against a
+server that ignores SIGTERM). Every local server leads its own process group (POSIX
+`start_new_session`, a new process group on Windows), so on POSIX a launcher's child that
+inherited the output pipe is stopped with it, and the blocked call then returns. On Windows
+the process and its child tree are stopped (psutil, else `taskkill /T`); a grandchild that
+detached from that tree keeps the pipe open and the call waiting. Being in their own group,
+the servers are out of reach of a terminal's Ctrl+C, so VAF stops them at exit.
+
+The loop has no read deadline of its own: a Windows pipe has no `select`, and a deadline needs
+a reader thread or a non-blocking read with its own design, which would also be the place to
+drain stderr.
 
 `tests/test_mcp_stdio_odd_lines.py` guards this against stub server processes and with a
 seeded fuzz of the reader against a reference model.

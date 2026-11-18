@@ -54,11 +54,66 @@ import threading
 from vaf.version import __version__
 import sys
 import os
-from typing import Dict, Any, Optional, List
+from typing import Callable, Dict, Any, Optional, List
 from pathlib import Path
 
 from vaf.tools.base import BaseTool
 from vaf.cli.ui import UI
+
+# Seconds a stopped server gets between SIGTERM and SIGKILL.
+_STOP_GRACE = 2.0
+
+# The words the MCP SDK's model (pydantic's lax bool) reads as false, in any case.
+_FALSE_WORDS = frozenset({"false", "f", "no", "n", "off", "0"})
+
+
+def _reports_error(flag: Any) -> bool:
+    """Whether a result's `isError` says the tool failed, read as the remote lane reads it.
+
+    The remote lane validates results through the SDK's `CallToolResult`, whose bool field
+    takes True or False, the numbers 1 and 0, and the words true/t/yes/y/on/1 and the
+    false words above, in any case; anything else fails the validation, and that call ends
+    as an error. Measured against the SDK: `"true"`, `1` and `"yes"` are true, `" true"`,
+    `2` and `None` are refused. A refused value reads as an error here too, so the same
+    server's failure is never booked as a success on one lane and not the other."""
+    if isinstance(flag, bool):
+        return flag
+    if isinstance(flag, (int, float)):
+        return flag != 0
+    if isinstance(flag, str):
+        return flag.lower() not in _FALSE_WORDS
+    return True
+
+
+def _is_os_process(process: Any) -> bool:
+    """A real child process (it has a pid), as opposed to a stand-in with only the methods."""
+    pid = getattr(process, "pid", None)
+    return isinstance(pid, int) and not isinstance(pid, bool)
+
+
+def _stop_process_tree(process: subprocess.Popen, grace: float = _STOP_GRACE) -> None:
+    """Stop a server process and everything it started, then reap it. Never raises.
+
+    The same stop the sub-agent children and the background host commands get
+    (`Platform.terminate_process_tree`). A leader that has already exited is past
+    signalling by pid (its pid may belong to another process by now), so only the group
+    it led is signalled then (`Platform.terminate_process_group`)."""
+    try:
+        from vaf.core.platform import Platform
+        pgid = getattr(process, "_vaf_pgid", None)
+        if process.poll() is not None:
+            Platform.terminate_process_group(pgid, grace)
+        else:
+            Platform.terminate_process_tree(process.pid, grace, pgid=pgid)
+    except Exception:
+        try:
+            process.kill()
+        except Exception:
+            pass
+    try:
+        process.wait(timeout=grace)
+    except Exception:
+        pass
 
 
 class MCPClientTool(BaseTool):
@@ -119,6 +174,9 @@ class MCPClientTool(BaseTool):
         # Cache for active MCP server processes
         self._server_processes: Dict[str, subprocess.Popen] = {}
         self._server_initialized: Dict[str, bool] = {}
+        # Guards every write to the process cache and the identity check before an eviction.
+        # Held only for those few lines, never across a read, a start or a stop.
+        self._state_lock = threading.Lock()
         # One request at a time per server process, each with its own id (module docstring).
         self._locks: Dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
@@ -254,33 +312,49 @@ class MCPClientTool(BaseTool):
             from vaf.core.mcp_remote import display_url
             return f"Error: MCP server at {display_url(server_url)}: {exc}"
     
-    def _ensure_server(self, server_command: str, env: Optional[Dict[str, str]] = None) -> Optional[subprocess.Popen]:
+    def _ensure_server(self, server_command: str, env: Optional[Dict[str, str]] = None,
+                       on_process: Optional[Callable[[Any], None]] = None) -> Optional[subprocess.Popen]:
         """Spawn (if needed) and initialize the stdio MCP server, cached by command. Returns the
         running process, or None on failure. Shared by mcp_call, discovery, and dynamic MCP tools.
-        `env` (e.g. API tokens from the manifest) is merged onto os.environ for the child process."""
+        `env` (e.g. API tokens from the manifest) is merged onto os.environ for the child process.
+        `on_process` is told the process this call uses as soon as it has one (see
+        `stop_server`). Called under the server's lock.
+
+        The server leads its own process group (`processes.own_process_group`), so stopping it
+        reaches what it started: a launcher (a shell script, a wrapper) whose child inherits
+        the output pipe keeps the read, and the server's lock, alive after the launcher alone
+        is gone. Measured: stopping only the launcher left the waiting call blocked."""
         cache_key = server_command
         proc = self._server_processes.get(cache_key)
         if proc is not None and proc.poll() is None:
+            if on_process is not None:
+                on_process(proc)
             return proc
         # (Re)spawn the server process.
         try:
             cmd_parts = server_command.split() if isinstance(server_command, str) else server_command
-            import platform
+            from vaf.core.processes import own_process_group
             popen_kwargs = {
                 "stdin": subprocess.PIPE,
                 "stdout": subprocess.PIPE,
                 "stderr": subprocess.PIPE,
                 "text": True,
                 "bufsize": 1,
+                # POSIX: start_new_session; Windows: a new process group, without a window.
+                **own_process_group(),
             }
             if env:
                 popen_kwargs["env"] = {**os.environ, **{str(k): str(v) for k, v in env.items()}}
-            if platform.system() == "Windows":
-                popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
             process = subprocess.Popen(cmd_parts, **popen_kwargs)
-            self._server_processes[cache_key] = process
+            # The group the server leads, recorded now: after the leader has exited, only the
+            # group is signalled, never its pid, which may belong to another process by then.
+            process._vaf_pgid = process.pid if os.name != "nt" else None
+            with self._state_lock:
+                self._server_processes[cache_key] = process
         except Exception:
             return None
+        if on_process is not None:
+            on_process(process)
         # Initialize handshake.
         init = self._json_rpc(process, "initialize", {
             "protocolVersion": "2024-11-05",
@@ -288,11 +362,7 @@ class MCPClientTool(BaseTool):
             "clientInfo": {"name": "VAF", "version": __version__},
         }, request_id=next(self._request_ids))
         if init is None or "error" in init:
-            try:
-                process.terminate()
-            except Exception:
-                pass
-            self._server_processes.pop(cache_key, None)
+            self._retire(process)
             return None
         # Per the MCP spec, signal initialized (fire-and-forget notification).
         try:
@@ -303,35 +373,69 @@ class MCPClientTool(BaseTool):
         self._server_initialized[cache_key] = True
         return process
 
-    def _retire(self, process) -> None:
-        """Stop a server process and drop it from the cache, so the next call starts a fresh
-        one. Called under the server's lock. Never raises."""
-        for key, cached in list(self._server_processes.items()):
-            if cached is process:
-                self._server_processes.pop(key, None)
-        try:
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
-        except Exception:
-            pass
+    def _evict(self, process) -> bool:
+        """Drop `process` from the cache wherever it is cached, by identity, atomically with
+        the check: a replacement cached under the same command in the meantime stays."""
+        found = False
+        with self._state_lock:
+            for key in list(self._server_processes):
+                if self._server_processes.get(key) is process:
+                    self._server_processes.pop(key, None)
+                    found = True
+        return found
 
-    def stop_server(self, server_command: str) -> bool:
-        """Stop the local server process started for `server_command`, if one is cached.
+    def _retire(self, process) -> None:
+        """Drop a server process from the cache and stop it, so the next call starts a fresh
+        one. Returns at once, with or without the server's lock held: the stop (SIGTERM to
+        the process group, a grace of `_STOP_GRACE` seconds, then SIGKILL, and the reaping)
+        runs on a daemon thread, because a server that ignores SIGTERM held its caller for
+        the grace (measured: a 1 s connection test took 6 s). Never raises."""
+        self._evict(process)
+        if not _is_os_process(process):
+            try:
+                process.terminate()
+            except Exception:
+                pass
+            return
+        try:
+            threading.Thread(target=_stop_process_tree, args=(process,), daemon=True,
+                             name="mcp-server-stop").start()
+        except Exception:
+            _stop_process_tree(process)
+
+    def stop_server(self, server_command: str, process=None) -> bool:
+        """Stop the local server process cached for `server_command`; True when one was.
+
+        With `process`, only that process, and only while it is still the one cached for
+        the command: the processes are shared by every caller in VAF, so a caller whose
+        deadline ran out stops the process ITS call used (`on_process` of `call_stdio` and
+        `list_server_tools` reports it) and never a healthy call that another caller started
+        on a replacement. Without `process`, whatever is cached for the command.
 
         Deliberately without the server's lock: the call to stop is the one a blocked read
-        holds it for. Stopping the process ends that read (it sees the end of the stream and
-        its call returns an error), and the next call starts a fresh process. For a caller
-        whose own deadline ran out while a call waits on a server that went silent: discovery
-        and the connection test do that here. True when a process was stopped."""
-        process = self._server_processes.get(server_command)
-        if process is None:
-            return False
-        self._retire(process)
+        holds it for. Returns at once; the process group is stopped in the background (see
+        `_retire`). On POSIX the whole group goes, so the read sees the end of its stream and
+        the blocked call returns an error, also behind a launcher whose child kept the pipe;
+        the next call starts a fresh process. On Windows the process and its child tree are
+        stopped (psutil, else `taskkill /T`); a grandchild that detached from the tree keeps
+        the pipe and the read waits on. Discovery and the connection test use this when their
+        deadline runs out."""
+        with self._state_lock:
+            cached = self._server_processes.get(server_command)
+            if cached is None or (process is not None and cached is not process):
+                return False
+        self._retire(cached)
         return True
+
+    def stop_all_servers(self) -> None:
+        """Stop every cached local server (at exit). The servers lead their own process
+        group, so a terminal's Ctrl+C no longer reaches them with VAF's; this does."""
+        with self._state_lock:
+            processes = list(self._server_processes.values())
+        for process in processes:
+            self._evict(process)
+            if _is_os_process(process):
+                _stop_process_tree(process, grace=0.5)
 
     def _json_rpc(self, process: subprocess.Popen, method: str, params: Dict[str, Any],
                   request_id: int, max_reads: int = 20) -> Optional[Dict[str, Any]]:
@@ -387,10 +491,16 @@ class MCPClientTool(BaseTool):
     def list_server_tools(self, server_command: str, transport: str = "stdio",
                           server_url: str = "", env: Optional[Dict[str, str]] = None,
                           headers: Optional[Dict[str, str]] = None, auth=None,
-                          egress=None) -> List[Dict[str, Any]]:
+                          egress=None,
+                          on_process: Optional[Callable[[Any], None]] = None) -> List[Dict[str, Any]]:
         """Discover the tools a server offers via tools/list. Returns a list of tool dicts (each
         with name / description / inputSchema), or [] when the server has none or could not be
-        asked. A remote server's reason is raised as RemoteMcpError for the caller to show."""
+        asked. A remote server's reason is raised as RemoteMcpError for the caller to show.
+
+        A local listing whose caller gave up while it waited for the server's lock (the
+        cancel flag of `bounded_run`, also armed by `cancel_when`) returns [] without
+        starting or asking a server. `on_process` is told the process the listing uses once
+        it holds the lock, and None once it no longer does (see `stop_server`)."""
         if transport in ("http", "sse"):
             if not server_url:
                 return []
@@ -399,12 +509,20 @@ class MCPClientTool(BaseTool):
                                                 egress=egress)
         if transport != "stdio":
             return []
+        from vaf.core.bounded_run import cancel_requested
         try:
             with self._lock_for(server_command):
-                process = self._ensure_server(server_command, env)
-                if process is None:
+                if cancel_requested():
                     return []
-                resp = self._json_rpc(process, "tools/list", {}, request_id=next(self._request_ids))
+                try:
+                    process = self._ensure_server(server_command, env, on_process)
+                    if process is None:
+                        return []
+                    resp = self._json_rpc(process, "tools/list", {},
+                                          request_id=next(self._request_ids))
+                finally:
+                    if on_process is not None:
+                        on_process(None)
             if not resp or "error" in resp or "result" not in resp:
                 return []
             tools = resp["result"].get("tools", [])
@@ -413,7 +531,8 @@ class MCPClientTool(BaseTool):
             return []
 
     def call_stdio(self, server_command: str, tool_name: str, arguments: Dict[str, Any],
-                   env: Optional[Dict[str, str]] = None) -> str:
+                   env: Optional[Dict[str, str]] = None,
+                   on_process: Optional[Callable[[Any], None]] = None) -> str:
         """Call an MCP tool via stdio transport (JSON-RPC over stdin/stdout), starting
         `server_command` if it is not running yet. For code that chose the command itself (the
         registry runs a registered server's): a command from a model's arguments goes through
@@ -422,21 +541,31 @@ class MCPClientTool(BaseTool):
         Returns the tool's text, or an ``Error:`` / ``MCP Error:`` line, and does not raise for
         anything the server writes. It has no timeout of its own: an answer line that is not
         JSON at all is skipped, and the read then waits for a line that may never come, so
-        run it under a deadline, as `ToolCaller` does for the registered tools."""
+        run it under a deadline, as `ToolCaller` does for the registered tools. `on_process`
+        is told the process the call uses once it holds the server's lock, and None once it no
+        longer does: what a caller whose deadline ran out hands to `stop_server`."""
+        from vaf.core.bounded_run import cancel_requested
+        cancelled = "Error: the MCP call was cancelled before it reached the server"
         with self._lock_for(server_command):
-            # A caller that gave up while this call waited for the lock (run_bounded's
-            # timeout or stop) has already been told the call did not finish, so the call
-            # must not reach the server any more. This narrows the window; a call that got
-            # past this check before its caller gave up still runs.
-            from vaf.core.bounded_run import cancel_requested
-            if cancel_requested():
-                return "Error: the MCP call was cancelled before it reached the server"
-            process = self._ensure_server(server_command, env)
-            if process is None:
-                return "Error: Failed to initialize MCP server"
-            response = self._json_rpc(process, "tools/call",
-                                      {"name": tool_name, "arguments": arguments or {}},
-                                      request_id=next(self._request_ids))
+            try:
+                # A caller that gave up while this call waited for the lock (run_bounded's
+                # timeout or stop) has already been told the call did not finish, so the call
+                # must not reach the server any more. Asked again once the server is up: a
+                # cold start (spawn and handshake) can outlast the caller's budget. A call
+                # that got past the second check before its caller gave up still writes.
+                if cancel_requested():
+                    return cancelled
+                process = self._ensure_server(server_command, env, on_process)
+                if process is None:
+                    return "Error: Failed to initialize MCP server"
+                if cancel_requested():
+                    return cancelled
+                response = self._json_rpc(process, "tools/call",
+                                          {"name": tool_name, "arguments": arguments or {}},
+                                          request_id=next(self._request_ids))
+            finally:
+                if on_process is not None:
+                    on_process(None)
         if response is None:
             return "Error: No response from MCP server"
         # The answer's shape is the server's: anything outside the specification's shapes
@@ -453,9 +582,10 @@ class MCPClientTool(BaseTool):
         text = self._result_text(result)
         # A tool that failed says so in `isError`, whatever its content looks like; the
         # prefix is the one the remote lane uses (`mcp_remote.render_result`) and the shared
-        # result classifier reads as a failure (`context.tool_result_is_error`).
-        if isinstance(result, dict) and result.get("isError") is True:
-            return f"MCP Error: {text}"
+        # result classifier reads as a failure (`context.tool_result_is_error`), with the
+        # remote lane's text when the result carries none.
+        if isinstance(result, dict) and "isError" in result and _reports_error(result["isError"]):
+            return f"MCP Error: {text or 'the tool reported an error'}"
         return text
 
     @staticmethod
@@ -478,14 +608,11 @@ class MCPClientTool(BaseTool):
         return str(result)
     
     def __del__(self):
-        """Cleanup: Close all server processes on tool destruction."""
-        for process in self._server_processes.values():
-            try:
-                if process.poll() is None:  # Process still running
-                    process.terminate()
-                    process.wait(timeout=5)
-            except Exception:
-                pass
+        """Cleanup: stop all server processes on tool destruction."""
+        try:
+            self.stop_all_servers()
+        except Exception:
+            pass
 
 
 def _in_coding_run() -> bool:
@@ -506,5 +633,8 @@ def get_mcp_client() -> MCPClientTool:
     global _shared_client
     if _shared_client is None:
         _shared_client = MCPClientTool()
+        # The servers lead their own process group, out of reach of a terminal's Ctrl+C.
+        import atexit
+        atexit.register(_shared_client.stop_all_servers)
     return _shared_client
 

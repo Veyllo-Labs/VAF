@@ -8064,8 +8064,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 "auth": (data.get("auth") or "").strip() if isinstance(data.get("auth"), str) else "",
                             }
                             _tm_timeout = float(_CfgMcp.get("mcp_discovery_timeout_seconds", 5) or 5)
-                            _tm_res = probe_mcp_server(_tm_cfg, _tm_timeout, name=(data.get("name") or "").strip(),
-                                                       token=data.get("token") or None, user_scope_id=_tm_scope)
+                            # Off the event loop: the test waits up to its timeout on the server,
+                            # and every other connection's messages would wait with it.
+                            _tm_res = await asyncio.to_thread(
+                                probe_mcp_server, _tm_cfg, _tm_timeout,
+                                name=(data.get("name") or "").strip(),
+                                token=data.get("token") or None, user_scope_id=_tm_scope)
                             await websocket.send_json({"type": "mcp_server_test_result", **_tm_res})
                     except Exception as e:
                         await websocket.send_json({"type": "mcp_server_test_result", "connected": False, "tool_count": 0, "tools": [], "error": str(e)})

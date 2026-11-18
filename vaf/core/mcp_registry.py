@@ -304,9 +304,10 @@ def discover_mcp_tools(timeout_seconds: float = 5.0):
     reasons: Dict[str, str] = {}
     sign_in: Dict[str, bool] = {}
 
-    def _discover(name: str, cfg: Dict[str, Any]) -> None:
+    def _discover(name: str, cfg: Dict[str, Any], listing: _Listing) -> None:
         try:
-            discovered[name] = _list_tools(name, cfg, client)
+            discovered[name] = listing.run(
+                lambda: _list_tools(name, cfg, client, on_process=listing.on_process))
         except Exception as exc:
             discovered[name] = []
             reasons[name] = str(exc)
@@ -316,20 +317,25 @@ def discover_mcp_tools(timeout_seconds: float = 5.0):
     threads = []
     for name, cfg in enabled:
         # Daemon threads so a hung server can never block process exit.
-        th = threading.Thread(target=_discover, args=(name, cfg), daemon=True)
+        listing = _Listing()
+        th = threading.Thread(target=_discover, args=(name, cfg, listing), daemon=True)
         th.start()
-        threads.append((name, cfg, th))
+        threads.append((name, cfg, th, listing))
 
     deadline = time.monotonic() + max(1.0, float(timeout_seconds))
-    for _name, _cfg, th in threads:
+    for _name, _cfg, th, _listing in threads:
         th.join(max(0.0, deadline - time.monotonic()))
+    # Who missed the deadline is decided once, here: a server that finishes while the late
+    # ones are being stopped is late all the same.
+    late = {name for name, _cfg, th, _listing in threads if th.is_alive()}
 
     tools: Dict[str, Any] = {}
     status: Dict[str, Any] = {}
-    for name, cfg, th in threads:
-        if th.is_alive():
-            # Timed out: stop the server process to unblock the daemon thread, then skip it.
-            client.stop_server(str(cfg.get("command", "")))
+    for name, cfg, th, listing in threads:
+        if name in late:
+            # Timed out: cancel the listing and stop the process it uses (`_Listing`), which
+            # unblocks the daemon thread, then skip it. Returns at once.
+            listing.abandon(client, cfg)
             logger.warning("MCP server '%s' timed out during discovery — skipped", name)
             status[name] = {"connected": False, "tool_count": 0, "error": "timeout"}
             continue
@@ -367,12 +373,55 @@ def discover_mcp_tools(timeout_seconds: float = 5.0):
     return tools, status
 
 
+class _Listing:
+    """One tools/list on a worker thread whose caller may give up on it at a deadline.
+
+    The local server processes are shared by every caller in VAF, so giving up must not stop
+    a healthy call somebody else runs on it. The listing records the process it uses while
+    it holds the server's lock (`on_process`), and `abandon` cancels it (it then starts and
+    asks nothing once it gets the lock) and stops only that process, and only for a local
+    server: a remote server's entry may still carry a `command` a local server is started
+    with, and stopping by command would hit that server. Measured before this: a
+    connection test that timed out while queued behind another account's call stopped that
+    call's process.
+
+    Named boundary: between `abandon` reading the process and stopping it, the listing may
+    finish and another call may start on the same process; that call is stopped too. The
+    window is the few instructions between the read and the signal."""
+
+    def __init__(self) -> None:
+        self.abandoned = threading.Event()
+        self._lock = threading.Lock()
+        self._process = None
+
+    def on_process(self, process) -> None:
+        with self._lock:
+            self._process = process
+
+    def run(self, fn):
+        from vaf.core.bounded_run import cancel_when
+        with cancel_when(self.abandoned.is_set):
+            return fn()
+
+    def abandon(self, client, cfg: Dict[str, Any]) -> None:
+        """Give up: cancel the listing, and stop the local process it is using. At once.
+        A remote listing reports no process (`_list_tools` hands `on_process` only to the
+        local branch), so a remote timeout stops nothing, whatever `command` the entry
+        still carries."""
+        self.abandoned.set()
+        with self._lock:
+            process = self._process
+        if process is not None:
+            client.stop_server(str(cfg.get("command", "")), process=process)
+
+
 def _list_tools(name: str, cfg: Dict[str, Any], client, *, token: Optional[str] = None,
-                env: Optional[Dict[str, str]] = None, auth=None, discover: bool = True) -> List[Dict[str, Any]]:
+                env: Optional[Dict[str, str]] = None, auth=None, discover: bool = True,
+                on_process=None) -> List[Dict[str, Any]]:
     """tools/list for one server entry, with its secrets from the key ring (or the ones given,
     for a server the editor is testing before it is saved). A server that signs every account
     in is asked as `auth`, or else (`discover`) as one signed-in account
-    (`mcp_oauth.discovery_auth`)."""
+    (`mcp_oauth.discovery_auth`). `on_process` is `_Listing.on_process` for a local server."""
     from vaf.core.mcp_oauth import discovery_auth, uses_sign_in
     from vaf.core.mcp_secrets import effective_env
     transport = str(cfg.get("transport", "stdio"))
@@ -388,7 +437,8 @@ def _list_tools(name: str, cfg: Dict[str, Any], client, *, token: Optional[str] 
         return client.list_server_tools("", transport, url, headers=headers, auth=auth,
                                         egress=registered_egress(url))
     return client.list_server_tools(str(cfg.get("command", "")), "stdio", "",
-                                    (env if env is not None else effective_env(name, cfg)) or None)
+                                    (env if env is not None else effective_env(name, cfg)) or None,
+                                    on_process=on_process)
 
 
 def probe_mcp_server(server_cfg: Dict[str, Any], timeout_seconds: float = 5.0, *, name: str = "",
@@ -411,7 +461,6 @@ def probe_mcp_server(server_cfg: Dict[str, Any], timeout_seconds: float = 5.0, *
     from vaf.core.mcp_secrets import merge_env, server_env
     from vaf.tools.mcp_client import get_mcp_client
     client = get_mcp_client()
-    cmd = str(server_cfg.get("command", ""))
     result: Dict[str, Any] = {}
     env = merge_env(server_env(name) if name else {}, server_cfg.get("env") if isinstance(server_cfg.get("env"), dict) else None)
     stored_name = name
@@ -428,10 +477,13 @@ def probe_mcp_server(server_cfg: Dict[str, Any], timeout_seconds: float = 5.0, *
         if mcp_oauth.uses_sign_in(saved_cfg):
             auth = mcp_oauth.auth_for(stored_name, saved_cfg, user_scope_id)
 
+    listing = _Listing()
+
     def _run() -> None:
         try:
-            result["tools"] = _list_tools(stored_name, server_cfg, client, token=token, env=env,
-                                          auth=auth, discover=False)
+            result["tools"] = listing.run(
+                lambda: _list_tools(stored_name, server_cfg, client, token=token, env=env,
+                                    auth=auth, discover=False, on_process=listing.on_process))
         except Exception as exc:
             result["error"] = str(exc)
             result["unauthorized"] = type(exc).__name__ == "RemoteMcpUnauthorized"
@@ -440,7 +492,7 @@ def probe_mcp_server(server_cfg: Dict[str, Any], timeout_seconds: float = 5.0, *
     th.start()
     th.join(max(1.0, float(timeout_seconds)))
     if th.is_alive():
-        client.stop_server(cmd)
+        listing.abandon(client, server_cfg)
         return {"connected": False, "tool_count": 0, "tools": [], "error": "timeout"}
     tools = result.get("tools") or []
     names = [t.get("name") for t in tools if isinstance(t, dict) and t.get("name")]

@@ -177,9 +177,10 @@ def _open_private(path: Path):
     return os.fdopen(fd, "wb")
 
 
-def _own_group() -> Dict[str, Any]:
+def own_process_group() -> Dict[str, Any]:
     """Popen arguments that make the child lead its own process group, so stopping it
-    reaches everything it started (``Platform.terminate_process_tree``)."""
+    reaches everything it started (``Platform.terminate_process_tree``). Shared with the
+    local MCP servers (vaf/tools/mcp_client.py)."""
     if os.name == "nt":
         return {"creationflags": (getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
                                   | getattr(subprocess, "CREATE_NO_WINDOW", 0))}
@@ -217,7 +218,7 @@ def run_foreground(command, *, timeout: float, env: Optional[Dict[str, str]] = N
     from vaf.core.platform import Platform
     popen = subprocess.Popen(command, shell=shell, cwd=cwd or None, env=env, text=True,
                              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE, **_own_group())
+                             stderr=subprocess.PIPE, **own_process_group())
     deadline = time.monotonic() + max(1.0, float(timeout))
     while True:
         try:
@@ -279,7 +280,7 @@ def start(command: str, *, session_id: str, user_scope_id: Any = None,
         "stderr": subprocess.STDOUT, "cwd": cwd or None,
         "env": agent_env(secret_env, PYTHONUNBUFFERED="1"),
     }
-    kwargs.update(_own_group())
+    kwargs.update(own_process_group())
     try:
         popen = subprocess.Popen(command, **kwargs)
     except Exception as e:

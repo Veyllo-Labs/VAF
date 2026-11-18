@@ -842,61 +842,49 @@ class AgentBridge:
                               *, new_key: str = "") -> None:
         """Move the RUNNING agent onto a different provider or API model.
 
-        Uses the engine's own `reload_all_api_backends`, which is the whole
-        job and already does the parts a hand-rolled version gets wrong: it
-        re-reads the config from disk, rebuilds the backend under a lock, and
-        RE-ATTACHES the event sink to the new backend. The classic lanes threw
-        the agent away instead and silently lost the sink, the web
-        registration and the real session id.
+        The switch is `provider_switch.switch_provider`, the one implementation the
+        terminal app, `vaf settings` and `vaf models config provider` share: the key
+        gate (a provider without a key is REFUSED and nothing is written, or the next
+        start would boot into a backend that cannot be built), the check of a typed
+        key with one real request (`_api_key_verifies`, on this lane and never on the
+        UI thread; a key that fails is kept and the provider stays), the write and
+        `reload_all_api_backends(force=True)`, which re-reads the config, rebuilds the
+        backend under a lock and RE-ATTACHES the event sink. The gate is reached from
+        here because every route converges here: the model overlay, the settings rows
+        that open it, and `/model`.
 
-        Never `init_chat()` here: that resets the history to the system message
-        and would wipe the conversation behind the transcript. The classic
-        lanes may call it only because they discarded the object first.
+        Never `init_chat()` here: that resets the history to the system message and
+        would wipe the conversation behind the transcript.
 
-        THE KEY GATE, and it lives here rather than in the overlay because this
-        is where every route converges: the model overlay, the settings row and
-        the `/model` command. Without a key the switch is REFUSED and nothing is
-        written - storing the provider would have poisoned the next start, which
-        boots straight into a provider that cannot build a backend, while the
-        only message the user got was "restart VAF to apply".
-
-        `new_key` is verified with a real request before the provider moves,
-        exactly as `vaf settings` does, and only when a key was actually typed:
-        an empty answer means "keep the stored one", and re-testing a key that
-        already works would spend a request on every switch. A key that fails to
-        verify is still STORED - the request can fail on the network as easily
-        as on the key - but the provider stays where it was.
+        A switch to `local` from an API provider leaves the agent with nothing to
+        serve (the reload drops the API backend, and nothing on this app's turn path
+        loads a model), so the local model is loaded here, on the lane, through
+        `reload_local_model`, which keeps the conversation.
 
         The key value never reaches an event, a note or the transcript.
         """
         def _run():
-            from vaf.core.agent import reload_all_api_backends
+            from vaf.core import provider_switch
             from vaf.core.config import Config
             target = provider or str(Config.get("provider", "local") or "local")
-            if target != "local":
-                if new_key:
-                    Config.set_api_key(target, new_key)
-                if not Config.get_api_key(target):
-                    self.events.event_note(
-                        "Provider", f"no API key for {target} - not switched",
-                        "warning")
-                    return
-                if new_key and not self._api_key_verifies(target):
-                    self.events.event_note(
-                        "Provider", f"{target}: the key was saved but did not "
-                                    f"verify - provider unchanged", "warning")
-                    return
-            if provider:
-                Config.set("provider", provider)
-            if model and provider:
-                Config.set(f"api_model_{provider}", model)
-            # force=True: a key or model may have moved while the provider
-            # name stayed the same, and the no-op guard would swallow that.
-            changed = reload_all_api_backends(force=True)
-            label = model or provider or "configuration"
-            if changed:
-                self.events.system_note(f"switched to {label}")
+            try:
+                result = provider_switch.switch_provider(
+                    target, model if provider else "", new_key=new_key,
+                    verify=self._api_key_verifies)
+            except Exception as exc:
+                self.events.event_note("Provider", f"switch failed: {type(exc).__name__}",
+                                       "error")
+                return
+            if result.status != "done":
+                self.events.event_note("Provider", result.text, "warning")
+                return
+            agent = self.agent
+            if result.provider == "local" and getattr(agent, "provider", None) == "local":
+                self._serve_local(moved=result.code == "switched")
+            elif result.code == "switched":
+                self.events.system_note(f"switched to {model or result.provider}")
             else:
+                label = model or provider or "configuration"
                 self.events.event_note(
                     "Provider", f"{label} stored; the running agent kept its "
                                 f"backend (restart VAF to apply)", "warning")
@@ -908,6 +896,42 @@ class AgentBridge:
                                    "warning")
             return
         self._submit(_run)
+
+    @staticmethod
+    def _engine_label() -> str:
+        from vaf.core import local_engine
+        return "vLLM" if local_engine.is_vllm() else "llama.cpp"
+
+    def _serve_local(self, *, moved: bool) -> None:
+        """The agent is on `local` now: load the local model when it serves nothing (no
+        API backend, no server, no in-process model), else say what serves. Runs on
+        the lane: the weights block while they load."""
+        agent = self.agent
+        engine = self._engine_label()
+        serving = any(getattr(agent, attr, None)
+                      for attr in ("api_backend", "use_server", "llm"))
+        if serving:
+            if moved:
+                self.events.system_note(f"switched to local · {engine}")
+            else:
+                self.events.system_note(f"local · {engine} is already in use")
+            return
+        self.events.event_note(
+            "Provider", f"loading the local model ({engine}), this can take a while",
+            "info")
+        ok = False
+        try:
+            ok = bool(agent.reload_local_model())
+        except Exception as exc:
+            self.events.event_note("Provider", f"the local model did not load: {exc}",
+                                   "error")
+            return
+        if ok:
+            self.events.system_note(f"switched to local · {engine}")
+        else:
+            self.events.event_note(
+                "Provider", f"the provider is local, but the local model ({engine}) did "
+                            f"not come up; see the server log and try again", "warning")
 
     def list_local_models(self):
         """`models/*.gguf` plus the active file name, for the settings submenu.
@@ -989,13 +1013,18 @@ class AgentBridge:
         return local_engine.state(model)
 
     def apply_engine(self, engine: str, model=None, install: bool = False,
-                     gpu_share=None) -> None:
+                     gpu_share=None, *, make_local: bool = False) -> None:
         """Switch the local engine (``local_engine.apply``) on the lane: an install and a
         model download take minutes, and a running turn refuses it like a model swap. pip's
         output goes to ``logs/vllm_install.log`` (the alternate screen has no room for it);
         each phase is a note in the transcript. A running local agent is moved onto the new
         engine's model afterwards (``reload_local_model``). ``gpu_share`` is vLLM's GPU memory
-        share (0 = automatic, None keeps the stored one)."""
+        share (0 = automatic, None keeps the stored one).
+
+        ``make_local``: the person picked the engine to RUN the chat on, so after a done
+        switch an API provider is switched to ``local`` (``provider_switch``) and the model
+        is loaded. A switch that did not finish leaves the provider where it was: the chat
+        must not move onto an engine that is not there."""
         def _run():
             from vaf.core import local_engine
             from vaf.core.log_helper import get_app_log_dir
@@ -1026,7 +1055,21 @@ class AgentBridge:
                 return
             if result.status == "done":
                 self.events.system_note(result.text)
-                if (getattr(self.agent, "provider", "local") == "local"
+                moved = False
+                if make_local and getattr(self.agent, "provider", "local") != "local":
+                    from vaf.core import provider_switch
+                    try:
+                        switched = provider_switch.switch_provider("local")
+                    except Exception as exc:
+                        switched = None
+                        self.events.event_note("Provider", f"switch failed: "
+                                                           f"{type(exc).__name__}", "error")
+                    if switched is not None and switched.status != "done":
+                        self.events.event_note("Provider", switched.text, "warning")
+                    moved = switched is not None and switched.status == "done"
+                if getattr(self.agent, "provider", "local") == "local" and moved:
+                    self._serve_local(moved=True)
+                elif (getattr(self.agent, "provider", "local") == "local"
                         and result.code not in ("unchanged_llama",)):
                     try:
                         self.agent.reload_local_model()
@@ -1058,11 +1101,8 @@ class AgentBridge:
         completion, so on the UI thread it freezes the whole app for as long as
         the provider takes to answer.
         """
-        try:
-            from vaf.core.api_backend import APIBackendManager
-            return bool(APIBackendManager.test_connection(provider))
-        except Exception:
-            return False
+        from vaf.core.provider_switch import key_verifies
+        return key_verifies(provider)
 
     def listen_voice(self) -> None:
         """`l`/`listen`: capture one utterance and send it as a turn.

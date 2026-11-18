@@ -199,9 +199,13 @@ CALLERS = {
     # and never reads the value, so it adds a place that must keep working and
     # no place a key can escape from.
     "vaf/cli/tui_app/screens.py": 1,
-    # The same refusal for the MAIN provider, on the bridge because three routes
-    # reach it. Also asks rather than reads.
-    "vaf/cli/tui_app/agent_bridge.py": 1,
+    # `vaf models config subagent_provider` refuses a provider without a key, as the
+    # menus do. Asks rather than reads.
+    "vaf/cli/cmd/models.py": 1,
+    # The same refusal for the MAIN provider, in the switch every terminal route
+    # shares (the terminal app's bridge, `vaf settings`, `vaf models config
+    # provider`). Also asks rather than reads.
+    "vaf/core/provider_switch.py": 1,
     # The one of the three that does read the VALUE: it hands the stored key to
     # the key field, which shows it through `Config.mask_api_key` and nothing
     # else. Same as the inquirer menu's "Current API Key:" line.
@@ -225,10 +229,11 @@ CALLERS = {
 # file nobody asks any more: the user changes their key, the UI says saved, and the agent
 # goes on using the old one.
 WRITE_SITES = {
-    "vaf/cli/cmd/settings.py",       # Config.set_api_key -> the store
     "vaf/api/config_routes.py",      # HTTP config update -> absorb_config_keys
     "vaf/core/web_server.py",        # WebSocket config update -> absorb_config_keys
-    "vaf/cli/tui_app/agent_bridge.py",  # the terminal app's key field -> set_api_key
+    # The key typed in `vaf settings` and in the terminal app's key field -> set_api_key,
+    # inside the provider switch both share.
+    "vaf/core/provider_switch.py",
 }
 
 

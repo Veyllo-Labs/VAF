@@ -129,6 +129,7 @@ def _finish(result) -> None:
                    "out.")
     if result.status == "done":
         UI.success(result.text)
+        _provider_hint()
         return
     if result.note:
         UI.success(result.note)
@@ -136,6 +137,18 @@ def _finish(result) -> None:
     if result.detail:
         UI.error(result.detail)
     raise typer.Exit(2 if result.status == "refused" else 1)
+
+
+def _provider_hint() -> None:
+    """The engine is the local provider's: with an API provider the main chat does not use
+    it yet, and this command (which prepares an engine) does not move the chat."""
+    from vaf.core.config import Config
+    provider = str(Config.get("provider", "local") or "local").strip().lower()
+    if provider == "local":
+        return
+    from vaf.core.provider_registry import provider_label
+    UI.info(f"The main chat runs on {provider_label(provider)}; it uses this engine once the "
+            "provider is Local (`vaf models config provider local`, or `c` in `vaf run`).")
 
 
 def _uninstall() -> None:

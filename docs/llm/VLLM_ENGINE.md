@@ -16,8 +16,8 @@ two wire-format differences, and the switch itself: `validate`, `apply`, `uninst
 `ServerManager.start_server` / `stop_server` and `Agent.load_model`, and the three callers of
 the switch: `vaf/cli/cmd/engine.py`, the routes `/api/system/local-engine`
 (`vaf/api/system_routes.py`) behind `web/components/settings/LocalEngineSection.tsx`, and the
-full-screen TUI (`vaf/cli/tui_app/agent_bridge.py` `apply_engine`, the Engine row in
-`screens.py`). The `engine` row of `vaf health` and the Local engine node of Update and Repair
+full-screen TUI (`vaf/cli/tui_app/agent_bridge.py` `apply_engine`, the Engine row and the
+picker's `local · llama.cpp` / `local · vLLM` rows in `screens.py`). The `engine` row of `vaf health` and the Local engine node of Update and Repair
 read `local_engine.status_row`.
 
 ## Why an engine of `local`, not a provider
@@ -632,7 +632,11 @@ the main page's banners while llama.cpp answers.
 
 **The full-screen TUI.** An "Engine: llama.cpp" or "Engine: vLLM" row above "Select Active
 Model" opens both engines with their lines and the verdict (vLLM a note with its reason where
-it cannot run, both notes under `api`). An install asks first with its size; under vLLM the
+it cannot run, both notes under `api`). An engine picked there, or as `local · llama.cpp` /
+`local · vLLM` in the picker of `c` and Settings > AI Provider, also runs the main chat on it:
+with an API provider the provider moves to `local` once the switch is done (never after one
+that failed or was refused), and the model loads; the Engine menu then says "The main chat
+runs on <provider>. Picking an engine moves it to this machine." first. An install asks first with its size; under vLLM the
 model submenu lists Automatic, the curated repos, a stored repo and "Other Hugging Face
 model..." instead of GGUFs, and a GGUF pick writes nothing. Under vLLM the engine menu has a
 "GPU memory: Automatic" (or "GPU memory: 68%") row: Automatic with the share now, 30% to 95%
@@ -678,7 +682,10 @@ vaf engine vllm --uninstall      # removes bin/vllm/venv (models stay in the HF 
 ```
 
 Exit codes like `vaf profile`: 0 done, 1 not complete, 2 refused. Settings > AI & Model and
-the full-screen TUI run the same switch (`local_engine.apply`). Before it writes the key, the
+the full-screen TUI run the same switch (`local_engine.apply`). `vaf engine` prepares the
+engine and leaves the provider alone: with an API provider it says that the main chat runs
+there and uses the engine once the provider is Local (`vaf models config provider local`, or
+`c` in `vaf run`). Before it writes the key, the
 switch starts vLLM once on the local port, sends it one chat completion with `top_p` and
 `top_k` (the sampler path that killed a server on its first chat) and stops it again
 (`vllm_server.first_start`, the step "first start", one to two minutes; skipped when vLLM

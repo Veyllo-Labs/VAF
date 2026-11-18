@@ -326,26 +326,50 @@ What it can change is decided by where a key is READ, not by how it looks:
   row's marker follows `config.subagent_provider_override()` rather than the
   stored name, and a provider with no API key is refused here exactly as the
   inquirer menu refuses it.
-- **Applied to the running agent** - the provider and the API model, through
-  the engine's own `reload_all_api_backends`. That is the supported way to move
-  a live agent: it re-reads the config, rebuilds the backend under a lock and
-  re-attaches the event sink. The app never calls `init_chat()` afterwards -
-  that would reset the history to the system message and wipe the conversation
-  behind the transcript. A switch is refused while a turn is running, and if
-  the running agent kept its backend anyway the app says so instead of claiming
-  success. It is also refused when the target provider has no API key, and the
-  refusal lives on the bridge rather than in the overlay because three routes
-  reach the same method (the model overlay, the settings row that dismisses
-  into it, and `/model`). The overlay asks for the key instead of only
-  refusing: picking a provider with no key opens a masked field, and `k` on a
-  provider row opens it for one that already has a key, which is the only way a
-  wrong or expired key can be replaced. The field's three answers are distinct
-  on purpose - a typed key, empty for "keep the stored one", escape for "change
-  nothing". A typed key is stored and then verified with one real request
-  before the provider moves; a key that fails to verify is kept (the request
-  can fail on the network as easily as on the key) while the provider stays
-  put. The verification runs on the agent lane, never on the UI thread, and the
-  key value never reaches a note, an event or the transcript.
+- **Applied to the running agent** - the provider, the API model and the local
+  engine, from ONE picker: `c` (or `/model`) and the Settings rows "AI Provider" and
+  "API Model" open it. Its rows are `local · llama.cpp` and `local · vLLM` (the GGUF
+  and the vLLM model in use), then the API providers, then the current API provider's
+  models; the marker sits on the local engine in use or on the API provider. Under the
+  `api` inference profile the two local rows are one line with the profile's sentence.
+  Opening it probes nothing; the vLLM verdict is read when vLLM is picked. The Settings
+  rows schedule the picker on the app (`call_later`) instead of pushing it from the
+  settings screen they close: Textual hands a pushed screen's answer to the screen that
+  was active at the push, and a closed one drops it, which is how a pick there used to
+  vanish without a word while `c` worked.
+  An API pick goes through the bridge to `vaf.core.provider_switch.switch_provider`,
+  the one switch the terminal app, `vaf settings` and `vaf models config provider`
+  share: key gate, the write, then the engine's own `reload_all_api_backends`, which
+  re-reads the config, rebuilds the backend under a lock and re-attaches the event sink.
+  The app never calls `init_chat()` afterwards - that would reset the history to the
+  system message and wipe the conversation behind the transcript. A switch is refused
+  while a turn is running, and if the running agent kept its backend anyway the app says
+  so instead of claiming success. A switch to `local` from an API provider leaves the
+  agent with no backend, so the bridge then loads the local model on its lane
+  (`reload_local_model`, which keeps the conversation) and says so; when something
+  already serves, it says which engine is in use instead.
+  A local engine row runs the chat on that engine: the provider alone moves when the
+  engine is already the one in use; another engine is switched first (asking before a
+  vLLM install, refused under `api` and where vLLM cannot run), and the provider moves
+  to `local` only once that switch is done (`apply_engine(..., make_local=True)`).
+  The switch is also refused when the target provider has no API key, and the refusal
+  lives in the switch rather than in the overlay because every route reaches it. The
+  overlay asks for the key instead of only refusing: picking a provider with no key
+  opens a masked field, and `k` on a provider row opens it for one that already has a
+  key, which is the only way a wrong or expired key can be replaced. The field's three
+  answers are distinct on purpose - a typed key, empty for "keep the stored one", escape
+  for "change nothing". A typed key is stored and then verified with one real request
+  before the provider moves; a key that fails to verify is kept (the request can fail on
+  the network as easily as on the key) while the provider stays put. The verification
+  runs on the agent lane, never on the UI thread, and the key value never reaches a
+  note, an event or the transcript. The Settings main row reads "AI Provider: LOCAL ·
+  llama.cpp" (or "· vLLM") on the local provider.
+  The "Engine" row opens both engines; with an API provider it starts with the note
+  "The main chat runs on <provider>. Picking an engine moves it to this machine.", and an
+  engine pick there follows the same rule as the picker's local rows. With the local
+  provider, picking the engine in use again is the switch itself, the re-pick that
+  clears a remembered start failure. The vLLM model and GPU memory rows switch the
+  engine and leave the chat where it is.
 - **Still pointing at `vaf settings`** - the model download (a long
   cancellable network operation mid-app needs a background-work concept the
   TUI does not have yet). The local model LEFT this list: the "Select Active

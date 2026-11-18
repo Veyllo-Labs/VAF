@@ -698,6 +698,18 @@ def show_automations_menu():
                     time.sleep(1)
 
 
+def _switch(provider: str, model: str = "", new_key: str = ""):
+    """The provider switch every terminal route shares (``provider_switch``): key gate,
+    a typed key checked with one request, the write, the reload of live agents. Prints
+    the refusal and returns None, else the result."""
+    from vaf.core.provider_switch import switch_provider
+    result = switch_provider(provider, model, new_key=new_key)
+    if result.status != "done":
+        UI.error(result.text)
+        return None
+    return result
+
+
 def _select_api_model(provider: str):
     """Helper function to select model for API provider"""
     from vaf.core.api_backend import APIBackendManager
@@ -723,14 +735,13 @@ def _select_api_model(provider: str):
             if model_ans['model'] == "Enter custom model ID":
                 # Allow manual input for new/unlisted models
                 custom = UI.console.input("[bold cyan]Enter custom model ID: [/bold cyan]")
-                if custom.strip():
-                    Config.set(f"api_model_{provider}", custom.strip())
+                if custom.strip() and _switch(provider, custom.strip()):
                     UI.success(f"Model set to: {custom.strip()}")
             elif model_ans['model'] != "Keep current":
                 # Remove "(current)" suffix if present
                 model_id = model_ans['model'].replace(" (current)", "")
-                Config.set(f"api_model_{provider}", model_id)
-                UI.success(f"Model set to: {model_id}")
+                if _switch(provider, model_id):
+                    UI.success(f"Model set to: {model_id}")
     else:
         UI.warning("Could not fetch models. Using default.")
 
@@ -760,7 +771,9 @@ def api_provider_menu():
     selected = answers['provider']
     
     if selected == "local":
-        Config.set("provider", "local")
+        if not _switch("local"):
+            UI.console.input("\n[dim]Press Enter to continue...[/dim]")
+            return
         UI.success("✓ Provider set to: Local (llama-server)")
         
         # Ask about auto-start
@@ -796,9 +809,9 @@ def api_provider_menu():
                 return
             
             if action_ans['action'] == 'model':
-                # Jump directly to model selection
-                Config.set("provider", selected)  # Ensure provider is set
-                _select_api_model(selected)
+                # Jump directly to model selection, on the provider it belongs to
+                if _switch(selected):
+                    _select_api_model(selected)
                 UI.console.input("\n[dim]Press Enter to continue...[/dim]")
                 return
             
@@ -806,7 +819,7 @@ def api_provider_menu():
         
         # Prompt for new API key
         UI.print(f"\n[bold]Current API Key:[/bold] {masked_key}")
-        UI.print(f"[dim]Keys are stored with Base64 encoding in ~/.vaf/config.json[/dim]\n")
+        UI.print("[dim]Keys are stored in VAF's encrypted key store, not in config.json.[/dim]\n")
         
         # Best Practice: Use getpass for sensitive input (better paste support)
         import getpass
@@ -830,30 +843,15 @@ def api_provider_menu():
                 UI.console.input("[dim]Press Enter to continue...[/dim]")
                 return
             
-            Config.set_api_key(selected, key_input.strip())
-            
-            # Test connection (Best Practice)
+            # Stored, then verified with one real request before the provider moves; a
+            # key that fails is kept and the provider stays.
             UI.event("Testing", "Verifying API key...", style="dim")
-            try:
-                from vaf.core.api_backend import APIBackendManager
-                if APIBackendManager.test_connection(selected):
-                    Config.set("provider", selected)
-                    UI.success(f"✓ API key verified! Provider set to: {selected.upper()}")
-                    UI.event("Important", "Please type 'r' or '/reload' to reload the agent with new provider", style="warning")
-                    
-                    # Offer to select model
-                    _select_api_model(selected)
-                else:
-                    UI.error("✗ API key verification failed. Provider not changed.")
-            except Exception as e:
-                UI.error(f"Error testing API: {e}")
-                UI.event("Settings", "API key saved, but verification failed. Check key and try again.", style="warning")
-        else:
-            if current_key:
-                Config.set("provider", selected)
-                UI.success(f"✓ Provider set to: {selected.upper()} (using existing key)")
-            else:
-                UI.error("No API key configured. Cannot switch to this provider.")
+            if _switch(selected, new_key=key_input.strip()):
+                UI.success(f"✓ API key verified! Provider set to: {selected.upper()}")
+                # Offer to select model
+                _select_api_model(selected)
+        elif _switch(selected):
+            UI.success(f"✓ Provider set to: {selected.upper()} (using existing key)")
     
     UI.console.input("\n[dim]Press Enter to continue...[/dim]")
 
@@ -914,11 +912,9 @@ def select_api_model_menu():
         
         if selected == "custom":
             custom = UI.console.input("[bold cyan]Enter custom model ID: [/bold cyan]")
-            if custom.strip():
-                Config.set(f"api_model_{current_provider}", custom.strip())
+            if custom.strip() and _switch(current_provider, custom.strip()):
                 UI.success(f"✓ Model set to: {custom.strip()}")
-        else:
-            Config.set(f"api_model_{current_provider}", selected)
+        elif _switch(current_provider, selected):
             UI.success(f"✓ Model set to: {selected}")
     
     except Exception as e:

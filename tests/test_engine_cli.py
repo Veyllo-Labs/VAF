@@ -397,3 +397,18 @@ def test_no_below_reserve_warning_for_a_switch_that_failed(config, monkeypatch):
     result = _invoke("vllm", "--gpu-share", "0.78")
     assert result.exit_code == 1
     assert "screen can freeze" not in result.output and "did not start" in result.output
+
+
+@pytest.mark.parametrize("provider, hinted", [("anthropic", True), ("local", False)])
+def test_done_switch_names_the_api_provider(config, monkeypatch, provider, hinted):
+    """The engine is the local provider's; with an API provider the main chat does not use it
+    yet, and the command says so once. MUTATION: drop the hint line - red."""
+    config["provider"] = provider
+    config["local_engine"] = "vllm"
+    monkeypatch.setattr(vs, "running_pid", lambda: None)
+    result = _invoke("llama")
+    assert result.exit_code == 0, result.output
+    text = " ".join(result.output.split())
+    assert (text.count("The main chat runs on Anthropic") == 1) is hinted, result.output
+    if hinted:
+        assert "`vaf models config provider local`" in text

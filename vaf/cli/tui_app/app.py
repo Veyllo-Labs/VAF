@@ -41,6 +41,8 @@ from vaf.cli.tui_app.screens import (
     SettingsScreen,
     ToolsScreen,
     VoiceScreen,
+    choose_local_engine,
+    switch_engine,
 )
 from vaf.cli.tui_app.theme_bridge import (
     THEME_ORDER,
@@ -809,26 +811,40 @@ class VafApp(App):
         self.push_screen(SettingsScreen())
 
     def action_model(self) -> None:
-        def _chosen(choice) -> None:
-            if not choice:
-                return
-            from vaf.core.config import Config
-            provider, model, want_key = choice
-            stored = Config.get_api_key(provider) if provider else ""
-            # Ask when the user asked (`k`), and when the provider cannot work
-            # without it. The bridge refuses a keyless switch either way; this
-            # is the difference between being refused and being helped.
-            if provider and provider != "local" and (want_key or not stored):
-                def _keyed(key) -> None:
-                    if key is None:          # cancelled: change nothing at all
-                        return
-                    self._bridge.apply_provider_change(provider, model, new_key=key)
+        self.push_screen(ModelScreen(), self._model_chosen)
 
-                self.push_screen(ApiKeyScreen(provider, stored), _keyed)
-                return
-            self._bridge.apply_provider_change(provider, model)
+    def _model_chosen(self, choice) -> None:
+        """The picker's answer. Asks for the key when asked (`k`) or missing: the
+        bridge refuses a keyless switch, and asking is the help."""
+        if not choice:
+            return
+        from vaf.core.config import Config
+        provider, model, want_key, engine = (tuple(choice) + (None,))[:4]
+        if provider == "local":
+            self.choose_local_engine(engine or "llama")
+            return
+        stored = Config.get_api_key(provider) if provider else ""
+        if provider and (want_key or not stored):
+            def _keyed(key) -> None:
+                if key is None:          # cancelled: change nothing at all
+                    return
+                self._bridge.apply_provider_change(provider, model, new_key=key)
 
-        self.push_screen(ModelScreen(), _chosen)
+            self.push_screen(ApiKeyScreen(provider, stored), _keyed)
+            return
+        self._bridge.apply_provider_change(provider, model)
+
+    def switch_engine(self, engine: str, model=None, gpu_share=None, *,
+                      make_local: bool = False, state=None, after=None) -> None:
+        """The engine switch with its install question (`screens.switch_engine`)."""
+        switch_engine(self, engine, model=model, gpu_share=gpu_share,
+                      make_local=make_local, state=state, after=after)
+
+    def choose_local_engine(self, engine: str, *, from_settings: bool = False,
+                            state=None, after=None) -> None:
+        """Run the main chat on this machine's `engine` (`screens.choose_local_engine`)."""
+        choose_local_engine(self, engine, from_settings=from_settings, state=state,
+                            after=after)
 
     def action_history(self) -> None:
         self.push_screen(HistoryScreen(self._bridge.history))

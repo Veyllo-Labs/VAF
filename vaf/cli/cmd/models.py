@@ -67,6 +67,12 @@ def set_config(key: str, value: str):
         UI.success("DeepSeek thinking effort set to "
                    + (f"'{effort}'" if effort else "DeepSeek's default (high)"))
         return
+    if key.strip().lower() == "provider":
+        _set_provider(value)
+        return
+    if key.strip().lower() == "subagent_provider":
+        _set_subagent_provider(value)
+        return
     # Try to parse number
     try:
         val = int(value)
@@ -89,6 +95,57 @@ def set_config(key: str, value: str):
     UI.success(f"Config '{key}' set to '{val}'")
     for reset_key, (old, lane) in resets.items():
         UI.warning(_reset_notice(reset_key, old, lane))
+
+
+def _set_provider(value: str) -> None:
+    """`provider` goes through the switch every terminal route shares: a provider without
+    a key is refused (exit 2) and nothing is written, since the next start would boot into
+    a backend that cannot be built."""
+    from vaf.core.provider_switch import switch_provider
+    result = switch_provider(value, verify=None)
+    if result.status != "done":
+        UI.error(result.text)
+        raise typer.Exit(2)
+    UI.success(f"Config 'provider' set to '{result.provider}'")
+    for reset_key, (old, lane) in result.resets.items():
+        UI.warning(_reset_notice(reset_key, old, lane))
+
+
+def _set_subagent_provider(value: str) -> None:
+    """`subagent_provider` names the choice and a second key gates it; written alone the
+    name does nothing. Both go through ``set_subagent_provider``, after
+    the checks the settings menus make."""
+    from vaf.core.api_keys import ApiKeyUnavailable
+    from vaf.core.config import SUBAGENT_PROVIDER_KEYS, foreign_lane_models, \
+        set_subagent_provider, subagent_provider_override
+    from vaf.core.provider_registry import api_provider_names, provider_label
+    name = value.strip().lower()
+    if name not in ("", "inherit", "local") and name not in api_provider_names():
+        UI.error(f"Unknown provider '{value.strip()}': use inherit, local or one of "
+                 f"{', '.join(api_provider_names())}.")
+        raise typer.Exit(2)
+    if name not in ("", "inherit", "local"):
+        try:
+            key = Config.get_api_key(name)
+        except ApiKeyUnavailable as exc:
+            UI.error(str(exc))
+            raise typer.Exit(2)
+        if not key:
+            UI.error(f"No API key configured for {name}. Cannot switch sub-agents to this "
+                     "provider; add the key in vaf settings first.")
+            raise typer.Exit(2)
+    name_key, gate_key = SUBAGENT_PROVIDER_KEYS
+    with Config._locked():
+        chosen = name or "inherit"
+        resets = foreign_lane_models({**Config.load(), name_key: chosen,
+                                      gate_key: chosen != "inherit"})
+        set_subagent_provider(chosen)
+    lane = subagent_provider_override()
+    main = str(Config.get("provider", "local") or "local")
+    UI.success("Sub-agents run on " + (provider_label(lane) if lane
+                                        else f"the main provider ({provider_label(main)})"))
+    for reset_key, (old, lane_name) in resets.items():
+        UI.warning(_reset_notice(reset_key, old, lane_name))
 
 
 # The job each lane model belongs to in `model_roles`, for the model now in use.
@@ -115,7 +172,8 @@ def _refusal(key: str, val, lane: str, current: dict) -> str:
     if (key == "subagent_model" and named.lower() not in ("", "inherit")
             and subagent_provider_override(current) is None):
         text += (f". The sub-agent provider '{named}' is not switched on, so sub-agents run on "
-                 f"{label}: choose it in vaf settings, which switches it on.")
+                 f"{label}: choose it in vaf settings, or switch it on with: vaf models config "
+                 f"subagent_provider {named}")
     return text
 
 

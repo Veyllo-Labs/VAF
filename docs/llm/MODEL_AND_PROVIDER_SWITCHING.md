@@ -30,6 +30,42 @@ This live load/unload is driven by the **tray activity loop** (which reads `prov
 - **Lane models:** saving a new provider resets `subagent_model` (the tool / workflow model) and `browser_agent_model` to empty when they are not the new provider's models, so Settings then shows "Same as main chat" and sub-agents stop warning that the model belongs to another provider. A lane with its own provider keeps its model. This holds on every path (web, REST, `vaf settings`, `vaf models config`, the terminal app, setup), because the rule sits in `Config.save`; `Config.load` repairs a configuration saved before it. A pick is not remembered per provider: switching back leaves the lane on the provider's own model.
 - **WebSocket:** On config save the `config_saved` response may include `requires_refresh: true` (e.g. on a provider change). In that case the Web UI shows the same overlay and reloads the page after 5 seconds.
 
+## In the terminal
+
+The terminal routes share ONE switch, `vaf.core.provider_switch.switch_provider`: the
+full-screen terminal app (its picker, opened with `c` or from Settings > AI Provider / API
+Model, through `AgentBridge.apply_provider_change`), `vaf settings` and `vaf models config
+provider`. In this order it:
+
+1. checks the name against the provider registry (`local` or an API provider) and refuses
+   `local` under the `api` inference profile with the profile's sentence;
+2. refuses an API provider without a key, or with a stored key that cannot be read; a key
+   typed in that moment is stored first and checked with one real request, and a key that
+   fails is kept while the provider stays (the request can fail on the network as easily
+   as on the key); a stored key is not re-tested;
+3. writes `provider` and `api_model_<provider>` under one hold of the config lock;
+4. calls `reload_all_api_backends(force=True)` for the live agents of the process.
+
+A refusal writes nothing, and no result text carries the key. The switch never resets a
+lane model itself: `Config.save` does (see "Lane models" above), and the result only names
+what it reset, which `vaf models config provider` prints.
+
+**API to local in the terminal app.** The backend reload leaves an agent moved to `local`
+with nothing to serve, and the terminal app's turn path loads no model, so the app loads it
+right after the switch (`reload_local_model`, the conversation stays) and says so. The
+picker lists `local · llama.cpp` and `local · vLLM` above the API providers; picking an
+engine that is not the one in use switches the engine first (`local_engine.apply`, asking
+before a vLLM install) and moves the provider only once that switch is done.
+
+**Not on this switch, by design:** the web Settings save (it saves the whole page,
+API keys from the same payload included, and answers `requires_refresh`; see above),
+`vaf setup` (it writes the key, `provider` and `vision_provider` exactly as the web wizard
+does, before any agent exists), and the rebuild of the prompt-toolkit and classic terminal
+lanes after their settings menu (their writes go through the switch, the rebuild is theirs).
+`vaf engine` prepares an engine and leaves the provider alone; with an API provider it says
+so. `vaf models config subagent_provider <name>` writes the name and its switch together
+(`set_subagent_provider`), refusing an unknown name or a provider without a key.
+
 ## Related documentation
 
 - **WEB_UI.md** - Web UI overview and status indicators

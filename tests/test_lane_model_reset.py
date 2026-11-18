@@ -286,8 +286,9 @@ def _shown(events, style: str) -> str:
     return " ".join(str(a[1]) for a in events if a and a[0] == style)
 
 
-def test_cli_setter_names_the_reset(stored, _quiet):
+def test_cli_setter_names_the_reset(stored, _quiet, monkeypatch):
     """MUTATION: drop the warning loop in `vaf models config`."""
+    monkeypatch.setattr(Config, "get_api_key", classmethod(lambda cls, p: "sk-test"))
     stored.write(_STALE)
     result = _cli("provider", "deepseek")
     assert result.exit_code == 0, result.output
@@ -653,3 +654,45 @@ def test_the_rule_holds_for_random_configs():
         if bad:
             failures.append((i, cfg, bad))
     assert failures == [], failures[:5]
+
+
+# ── `vaf models config provider` and `subagent_provider` go through the switches ───
+
+def test_cli_provider_without_key_is_refused(stored, _quiet, monkeypatch):
+    """Every other route refuses a keyless provider; the generic write stored it and the
+    next start booted into a backend that cannot be built. MUTATION: revert `provider` to
+    the generic write - red."""
+    monkeypatch.setattr(Config, "get_api_key", classmethod(lambda cls, p: ""))
+    stored.write({"provider": "local"})
+    before = stored.raw()
+    result = _cli("provider", "deepseek")
+    assert result.exit_code == 2, result.output
+    assert stored.raw() == before
+    assert "There is no API key for DeepSeek" in _shown(_quiet.events, "Error")
+    assert _cli("provider", "acme").exit_code == 2
+    assert stored.raw() == before
+
+
+def test_cli_subagent_provider_writes_the_pair(stored, _quiet, monkeypatch):
+    """The name alone is inert; the command switches it on. MUTATION: revert
+    `subagent_provider` to the generic write (the gate stays False) - red."""
+    monkeypatch.setattr(Config, "get_api_key", classmethod(lambda cls, p: "sk-test"))
+    stored.write({"provider": "deepseek"})
+    result = _cli("subagent_provider", "openai")
+    assert result.exit_code == 0, result.output
+    raw = stored.raw()
+    assert raw["subagent_provider"] == "openai" and raw["subagent_use_separate_provider"] is True
+    assert "Sub-agents run on OpenAI" in _shown(_quiet.events, "Success")
+    assert _cli("subagent_provider", "inherit").exit_code == 0
+    assert stored.raw()["subagent_use_separate_provider"] is False
+
+
+def test_cli_subagent_provider_refuses_keyless_and_unknown(stored, _quiet, monkeypatch):
+    monkeypatch.setattr(Config, "get_api_key", classmethod(lambda cls, p: ""))
+    stored.write({"provider": "deepseek"})
+    before = stored.raw()
+    assert _cli("subagent_provider", "openai").exit_code == 2
+    assert "No API key configured for openai" in _shown(_quiet.events, "Error")
+    assert _cli("subagent_provider", "acme").exit_code == 2
+    assert stored.raw() == before
+    assert _cli("subagent_provider", "local").exit_code == 0, "local needs no key"

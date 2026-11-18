@@ -82,6 +82,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   and they leave the 30-day view as the days pass. If your daily spend limit stopped you
   today because of the old figures, raise `spend_budget_usd_per_day` for today or wait for
   the next day; new calls are priced at the model that answered.
+- **The terminal app's Settings switch the AI provider and the API model again.** A pick under
+  Settings > AI Provider or API Model was dropped without a word; only `c` switched. Both now
+  open the same picker and switch the running agent.
+- **Switching the terminal app from an API provider to the local model loads it.** The next
+  message no longer fails because no model was running.
 - **The inbox no longer lists the Veyllo App chat.** The exchange between your VAF agent and
   the agent in your Veyllo App showed up as a conversation with a bare id, counted your own
   app messages as unread, and left the inbox window without a channel name. The Veyllo App
@@ -437,6 +442,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Changed
 
+- **API, llama.cpp and vLLM in one picker in the terminal app.** `c` and Settings > AI Provider
+  list `local · llama.cpp` and `local · vLLM` above the API providers; picking an engine there or
+  under Settings > Engine moves the main chat to this machine, and asks before installing vLLM.
+- **`vaf models config provider` refuses a provider without an API key** (exit 2), like
+  Settings, and `vaf models config subagent_provider` now switches the sub-agent provider on
+  instead of storing a name that did nothing. `vaf engine` says when the main chat still runs
+  on an API provider.
 - **Screenshots your agent takes to check its work no longer pile up as attachments.** They
   now show inside the step that took them, and when there are many, as one row you scroll
   sideways. Click a picture to see it large. Files you asked for stay attachments as before.

@@ -172,6 +172,112 @@ class ConfirmScreen(ModalScreen[bool]):
         self.dismiss(bool(yes))
 
 
+ENGINE_NAMES = {"llama": "llama.cpp", "vllm": "vLLM"}
+
+
+def switch_engine(app, engine: str, model=None, gpu_share=None, *, make_local: bool = False,
+                  state=None, after=None) -> None:
+    """Hand an engine switch to the bridge's lane; ask first when vLLM is to be installed.
+
+    The one copy of this flow: the Engine submenu, its vLLM model and GPU memory rows and
+    the model picker's local rows all come here. ``state`` is ``local_engine.state()`` as the
+    caller loaded it (the install question reads its sizes); ``gpu_share`` is vLLM's GPU
+    memory share (0 = automatic, None keeps it); ``make_local`` also moves an API provider's
+    chat to this machine once the switch is done; ``after`` runs once the switch is handed
+    over (the settings screen goes back to its main menu)."""
+    state = state if isinstance(state, dict) else {}
+    vllm = state.get("vllm") or {}
+
+    def _go(install: bool) -> None:
+        if getattr(app._bridge, "busy", False):
+            # The bridge would refuse it with a note; saying "switching" would be false.
+            app.notify("not while a turn is running", severity="warning", timeout=2.5)
+            return
+        app._bridge.apply_engine(engine, model=model, install=install,
+                                 gpu_share=gpu_share, make_local=make_local)
+        app.notify("switching the local engine - see the chat for progress", timeout=2.5)
+        if after is not None:
+            after()
+
+    if engine == "vllm" and vllm.get("needs_install"):
+        repo = model if model and model != "auto" else (
+            vllm.get("auto_model") if model == "auto" else vllm.get("model"))
+        gb = {c["repo"]: c["weights_gb"] for c in vllm.get("curated") or []}.get(repo)
+        size = f" ({gb:.2f} GB)" if gb else ""
+        old = vllm.get("installed_version")
+        # An environment of an earlier VAF that cannot start is replaced: say so.
+        replaces = (f"vLLM {old} was set up by an earlier VAF and cannot start; it is "
+                    "replaced. ") if old else ""
+        question = (f"{replaces}Install vLLM {vllm.get('pin')}: at least "
+                    f"{float(vllm.get('download_gb_at_least') or 0):.1f} GB to download, "
+                    f"more on disk, plus {repo}{size}?")
+
+        def _answered(yes) -> None:
+            if yes:
+                _go(True)
+        app.push_screen(ConfirmScreen(question), _answered)
+        return
+    _go(False)
+
+
+def choose_local_engine(app, engine: str, *, from_settings: bool = False, state=None,
+                        after=None) -> None:
+    """Run the main chat on this machine's ``engine``: the picker's ``local`` rows and the
+    Engine submenu's engine rows.
+
+    - a running turn: refused, nothing else;
+    - an API provider and ``engine`` is already the engine: only the provider moves;
+    - another engine: the engine switch (with its install question), then the provider;
+      refused first under the ``api`` profile and for a vLLM this machine cannot run;
+    - provider ``local`` and the same engine: from the picker the provider switch, which
+      loads the model when nothing serves; from the Engine submenu the switch itself, the
+      re-pick that clears a remembered start failure.
+    """
+    from vaf.core import local_engine
+    from vaf.core.config import Config
+
+    bridge = app._bridge
+    current = local_engine.VLLM if local_engine.is_vllm() else local_engine.LLAMA
+    provider = str(Config.get("provider", "local") or "local").strip().lower()
+    name = ENGINE_NAMES.get(engine, engine)
+
+    def _provider_only() -> None:
+        if getattr(bridge, "busy", False):
+            app.notify("not while a turn is running", severity="warning", timeout=2.5)
+            return
+        bridge.apply_provider_change("local")
+        app.notify(f"local · {name} - see the chat for progress", timeout=2.5)
+        if after is not None:
+            after()
+
+    if engine == current and (provider != "local" or not from_settings):
+        _provider_only()
+        return
+    if engine == current:
+        switch_engine(app, engine, state=state, after=after)
+        return
+    if getattr(bridge, "busy", False):
+        app.notify("not while a turn is running", severity="warning", timeout=2.5)
+        return
+    if not isinstance(state, dict):
+        try:
+            state = bridge.engine_state()
+        except Exception as exc:
+            app.notify(f"engine state unavailable: {exc}", severity="warning", timeout=3.0)
+            return
+    if state.get("profile") == "api":
+        from vaf.core import inference_profile
+        app.notify(inference_profile.refusal("a local engine"), severity="warning",
+                   timeout=4.0)
+        return
+    support = state.get("support") or {}
+    if engine == local_engine.VLLM and support.get("level") != "supported":
+        app.notify(str(support.get("reason") or "vLLM does not run on this machine"),
+                   severity="warning", timeout=4.0)
+        return
+    switch_engine(app, engine, state=state, make_local=True, after=after)
+
+
 class ToolsScreen(ModalScreen[None]):
     """Every loaded tool with its description and audience.
 
@@ -372,9 +478,13 @@ class SettingsScreen(ModalScreen[None]):
         if menu == "main":
             provider = str(self._cfg("provider", "local"))
             api_model = str(self._cfg(f"api_model_{provider}", "not set"))
+            shown = provider.upper()
+            if provider == "local":
+                from vaf.core import local_engine
+                shown += " · " + ("vLLM" if local_engine.is_vllm() else "llama.cpp")
             rows = [
                 ("provider", None,
-                 f"AI Provider: [$text]{_esc(provider.upper())}[/]"),
+                 f"AI Provider: [$text]{_esc(shown)}[/]"),
             ]
             if provider != "local":
                 rows.append(("api_model", provider,
@@ -574,7 +684,13 @@ class SettingsScreen(ModalScreen[None]):
                     ("note", None, f"vLLM  {self.ENGINE_LINES['vllm'][1]}"),
                     ("note", None, inference_profile.refusal("a local engine")),
                     ("back", None, "Back")]
-        rows = [("engine_pick", "llama", self._engine_line("llama", engine == "llama"))]
+        rows = []
+        provider = str(self._cfg("provider", "local") or "local")
+        if provider != "local":
+            from vaf.core.provider_registry import provider_label
+            rows.append(("note", None, f"The main chat runs on {provider_label(provider)}. "
+                                       "Picking an engine moves it to this machine."))
+        rows.append(("engine_pick", "llama", self._engine_line("llama", engine == "llama")))
         if support.get("level") == "supported":
             rows.append(("engine_pick", "vllm", self._engine_line("vllm", engine == "vllm")))
             rows.append(("note", None, str(support.get("reason") or "")))
@@ -665,45 +781,17 @@ class SettingsScreen(ModalScreen[None]):
         rows.append(("vllm_model_other", None, " Other Hugging Face model\u2026"))
         return rows + [("back", None, "Back")]
 
+    def _after_engine_switch(self) -> None:
+        """Back to the main menu once a switch is handed to the lane; its label follows."""
+        self._engine_state = None
+        self._stack = ["main"]
+        self._rebuild()
+        self.app.post_message(SettingsChanged())
+
     def _switch_engine(self, engine: str, model=None, gpu_share=None) -> None:
-        """Hand the switch to the bridge's lane; ask first when vLLM is to be installed.
-        ``gpu_share`` is vLLM's GPU memory share (0 = automatic, None keeps it)."""
-        state = self._engine_state if isinstance(self._engine_state, dict) else {}
-        vllm = state.get("vllm") or {}
-
-        def _go(install: bool) -> None:
-            if getattr(self.app._bridge, "busy", False):
-                # The bridge would refuse it with a note; saying "switching" would be false.
-                self.app.notify("not while a turn is running", severity="warning", timeout=2.5)
-                return
-            self.app._bridge.apply_engine(engine, model=model, install=install,
-                                          gpu_share=gpu_share)
-            self.app.notify("switching the local engine - see the chat for progress",
-                            timeout=2.5)
-            self._engine_state = None
-            self._stack = ["main"]
-            self._rebuild()
-            self.app.post_message(SettingsChanged())
-
-        if engine == "vllm" and vllm.get("needs_install"):
-            repo = model if model and model != "auto" else (
-                vllm.get("auto_model") if model == "auto" else vllm.get("model"))
-            gb = {c["repo"]: c["weights_gb"] for c in vllm.get("curated") or []}.get(repo)
-            size = f" ({gb:.2f} GB)" if gb else ""
-            old = vllm.get("installed_version")
-            # An environment of an earlier VAF that cannot start is replaced: say so.
-            replaces = (f"vLLM {old} was set up by an earlier VAF and cannot start; it is "
-                        "replaced. ") if old else ""
-            question = (f"{replaces}Install vLLM {vllm.get('pin')}: at least "
-                        f"{float(vllm.get('download_gb_at_least') or 0):.1f} GB to download, "
-                        f"more on disk, plus {repo}{size}?")
-
-            def _answered(yes) -> None:
-                if yes:
-                    _go(True)
-            self.app.push_screen(ConfirmScreen(question), _answered)
-            return
-        _go(False)
+        """The vLLM model and GPU memory picks: the engine stays where the chat is."""
+        switch_engine(self.app, engine, model=model, gpu_share=gpu_share,
+                      state=self._engine_state, after=self._after_engine_switch)
 
     def _subagent_provider_rows(self) -> list:
         """The sub-agent provider menu, marked by what sub-agents ACTUALLY run on.
@@ -905,14 +993,14 @@ class SettingsScreen(ModalScreen[None]):
                     return
                 self._write_choice(arg, value)
 
-            # Pushed ON TOP of this modal - never the dismiss-then-push of the
-            # provider rows below, which would throw the settings stack away.
+            # Pushed ON TOP of this modal, so the settings stack survives the entry.
             self.app.push_screen(
                 NumberScreen(name, current, minimum=minimum, maximum=maximum,
                              hint=hint), _entered)
             return
         if kind == "engine_pick":
-            self._switch_engine(str(arg))
+            choose_local_engine(self.app, str(arg), from_settings=True,
+                                state=self._engine_state, after=self._after_engine_switch)
             return
         if kind == "vllm_model":
             self._switch_engine("vllm", model=str(arg))
@@ -976,8 +1064,12 @@ class SettingsScreen(ModalScreen[None]):
             self.app.push_screen(AboutScreen())
             return
         if kind in ("provider", "api_model"):
+            # Scheduled on the app, never pushed from here: Textual binds a pushed
+            # screen's result callback to the pump that is active at the push, and this
+            # screen is being dismissed, so the pick would be delivered to a closed
+            # pump and dropped without a word.
             self.dismiss(None)
-            self.app.action_model()
+            self.app.call_later(self.app.action_model)
             return
         if kind == "later":
             self.app.notify("This flow needs a full restart - use `vaf settings` "
@@ -1294,78 +1386,98 @@ class NumberScreen(ModalScreen["int | None"]):
 
 
 class ModelScreen(ModalScreen[tuple]):
-    """Pick the provider, or the model within the current provider.
+    """Pick where the main chat runs: this machine's engine (llama.cpp or vLLM), an API
+    provider, or a model of the current API provider.
 
-    Dismisses with `(provider, model, want_key)`; the app hands that to the
-    bridge, which applies it to the RUNNING agent through the engine's own
-    reload. `want_key` is how a user REPLACES a key that is stored but wrong or
-    expired - without it the only route to a key is picking a provider that has
-    none, which a user with a bad key can never reach. What it
-    does NOT offer is the local GGUF: swapping that needs a real rebuild, and
-    a running llama server would keep serving the old weights - a named
-    boundary, and the row says so instead of pretending.
+    Dismisses with `(provider, model, want_key, engine)`, `engine` set on the two local
+    rows only; the app hands an API pick to the bridge, which applies it to the RUNNING
+    agent through the engine's own reload, and a local pick to `choose_local_engine`,
+    which switches the engine first when it is another one. `want_key` is how a user
+    REPLACES a key that is stored but wrong or expired - without it the only route to a
+    key is picking a provider that has none, which a user with a bad key can never
+    reach.
+
+    Opening it probes nothing: the vLLM verdict (nvidia-smi and friends) is read when
+    vLLM is picked, not to draw the list. Under the `api` profile the local rows are one
+    line with the profile's sentence, not selectable.
     """
 
     BINDINGS = [
         Binding("escape", "close_model", "close"),
-        Binding("m", "show_models", "models of this provider", show=False),
         Binding("k", "set_key", "set this provider's API key", show=False),
     ]
 
-    def __init__(self, provider_only: bool = False) -> None:
+    def __init__(self) -> None:
         super().__init__()
-        self._provider_only = provider_only
         self._rows: list = []
 
     def compose(self) -> ComposeResult:
         with Vertical(id="model-box", classes="modal-box"):
-            yield Static("[bold $text]Provider · Model[/]", classes="modal-title")
+            yield Static("[bold $text]Provider · Engine · Model[/]", classes="modal-title")
             yield ListView(id="model-list")
-            yield Static("[$text-disabled]enter selects · esc closes[/]",
-                         classes="modal-keys")
+            yield Static("[$text-disabled]enter selects · k sets a provider's key · "
+                         "esc closes[/]", classes="modal-keys")
+
+    def _add(self, lv, row: tuple, markup: str) -> None:
+        self._rows.append(row)
+        lv.append(ListItem(Static(markup)))
 
     def on_mount(self) -> None:
+        from vaf.core import inference_profile, local_engine
         from vaf.core.config import Config
 
         lv = self.query_one("#model-list", ListView)
         current = str(Config.get("provider", "local"))
         catalog = getattr(Config, "PROVIDER_MODELS", {}) or {}
+        active_index = -1
 
-        marker = "▍" if current == "local" else " "
-        active_index = 0 if current == "local" else -1
-        self._rows.append(("provider", "local"))
-        lv.append(ListItem(Static(
-            f"[$primary]{marker}[/][$vaf-muted]{'local':<12}[/] "
-            f"[$text]{_esc(str(Config.get('model', '') or 'not set'))}[/]"
-            f"  [$text-disabled](model chosen in `vaf settings`)[/]")))
+        if inference_profile.local_inference_allowed():
+            engine = local_engine.VLLM if local_engine.is_vllm() else local_engine.LLAMA
+            shown = {
+                local_engine.LLAMA: str(Config.get("model", "") or "not set"),
+                local_engine.VLLM: str(Config.get("vllm_model", "") or "automatic"),
+            }
+            for name in (local_engine.LLAMA, local_engine.VLLM):
+                active = current == "local" and name == engine
+                if active:
+                    active_index = len(self._rows)
+                marker = "▍" if active else " "
+                label = f"local · {ENGINE_NAMES[name]}"
+                self._add(lv, ("local", name),
+                          f"[$primary]{marker}[/][$vaf-muted]{label:<18}[/] "
+                          f"[$text]{_esc(shown[name])}[/]")
+        else:
+            self._add(lv, ("note", None),
+                      f"[$text-disabled]{_esc(inference_profile.refusal('a local model'))}[/]")
+        self._add(lv, ("sep", None), "[$vaf-border]─────────────────[/]")
 
-        for i, provider in enumerate(sorted(catalog), start=1):
+        for provider in sorted(catalog):
             configured = str(Config.get(f"api_model_{provider}", "") or "")
             entry = catalog.get(provider) or {}
             fallback = entry.get("default", "") if isinstance(entry, dict) else ""
-            shown = configured or fallback
+            shown_model = configured or fallback
             marker = "▍" if provider == current else " "
             if provider == current:
-                active_index = i
-            self._rows.append(("provider", provider))
-            lv.append(ListItem(Static(
-                f"[$primary]{marker}[/][$vaf-muted]{_esc(provider):<12}[/] "
-                f"[$text]{_esc(shown)}[/]")))
+                active_index = len(self._rows)
+            self._add(lv, ("provider", provider),
+                      f"[$primary]{marker}[/][$vaf-muted]{_esc(provider):<18}[/] "
+                      f"[$text]{_esc(shown_model)}[/]")
 
-        if current != "local" and not self._provider_only:
+        if current != "local":
             models = self._models_for(current)
             if models:
-                self._rows.append(("sep", None))
-                lv.append(ListItem(Static("[$vaf-border]─────────────────[/]")))
+                self._add(lv, ("sep", None), "[$vaf-border]─────────────────[/]")
                 configured = str(Config.get(f"api_model_{current}", "") or "")
                 for model in models:
                     marker = "▍" if model == configured else " "
-                    self._rows.append(("model", model))
-                    lv.append(ListItem(Static(
-                        f"[$primary]{marker}[/][$vaf-muted]{_esc(current)}:[/] "
-                        f"[$text]{_esc(model)}[/]")))
+                    self._add(lv, ("model", model),
+                              f"[$primary]{marker}[/][$vaf-muted]{_esc(current)}:[/] "
+                              f"[$text]{_esc(model)}[/]")
 
-        lv.index = max(active_index, 0)
+        if active_index < 0:
+            active_index = next((i for i, (kind, _) in enumerate(self._rows)
+                                 if kind not in ("note", "sep")), 0)
+        lv.index = active_index
         lv.focus()
 
     @staticmethod
@@ -1395,28 +1507,30 @@ class ModelScreen(ModalScreen[tuple]):
         if not (0 <= idx < len(self._rows)):
             return
         kind, value = self._rows[idx]
-        if kind == "sep":
+        if kind in ("sep", "note"):
             return
-        if kind == "provider":
-            self.dismiss((value, "", False))
+        if kind == "local":
+            self.dismiss(("local", "", False, value))
+        elif kind == "provider":
+            self.dismiss((value, "", False, None))
         else:
             from vaf.core.config import Config
-            self.dismiss((str(Config.get("provider", "local")), value, False))
+            self.dismiss((str(Config.get("provider", "local")), value, False, None))
 
     def action_set_key(self) -> None:
         """`k` on a provider row: go and set that provider's key.
 
-        Only on a provider row, and never on `local` - it has nothing to key,
-        and offering the field there would suggest otherwise.
+        Only on an API provider row, never on a local engine row - it has nothing
+        to key, and offering the field there would suggest otherwise.
         """
         lv = self.query_one("#model-list", ListView)
         idx = lv.index or 0
         if not (0 <= idx < len(self._rows)):
             return
         kind, value = self._rows[idx]
-        if kind != "provider" or value == "local":
+        if kind != "provider":
             return
-        self.dismiss((value, "", True))
+        self.dismiss((value, "", True, None))
 
     def action_close_model(self) -> None:
         self.dismiss(None)

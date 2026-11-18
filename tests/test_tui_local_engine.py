@@ -55,7 +55,7 @@ def _screen(monkeypatch, *, engine="llama", state=None):
     calls, pushed, notified = [], [], []
     bridge = SimpleNamespace(
         engine_state=lambda model=None: state,
-        apply_engine=lambda engine, model=None, install=False, gpu_share=None: calls.append(
+        apply_engine=lambda engine, model=None, install=False, gpu_share=None, **kw: calls.append(
             (engine, model, install) if gpu_share is None else (engine, model, install, gpu_share)),
         list_local_models=lambda: (["a.gguf", "b.gguf"], "a.gguf"),
     )
@@ -308,16 +308,23 @@ def test_install_failures_name_the_install_log(monkeypatch, tmp_path, code):
 
 def test_no_switch_notice_while_the_bridge_is_busy(monkeypatch):
     """A running turn makes the bridge refuse the switch; the screen must not then claim it is
-    switching (after a confirmed multi-GB install question)."""
-    s, calls, pushed, notified = _screen(monkeypatch, state=_state(needs_install=True))
+    switching (after a confirmed multi-GB install question). An engine pick, which also moves
+    the chat, is refused before the question."""
+    s, calls, pushed, notified = _screen(monkeypatch, engine="vllm",
+                                         state=_state(engine="vllm", needs_install=True))
     s.app._bridge.busy = True
-    s._stack = ["main", "engine"]
+    s._stack = ["main", "local_model"]
     s._load_engine_state()
-    s._rows = s._menu_rows("engine")
-    s._activate([r[1] for r in s._rows].index("vllm"))
+    s._rows = s._menu_rows("local_model")
+    s._activate([r[1] for r in s._rows].index("Qwen/Qwen3-8B-AWQ"))
     pushed[-1][1](True)
     assert calls == [] and notified == ["not while a turn is running"]
-    assert s._stack == ["main", "engine"], "the menu was reset for a switch that never ran"
+    assert s._stack == ["main", "local_model"], "the menu was reset for a switch that never ran"
+    s._stack = ["main", "engine"]
+    s._rows = s._menu_rows("engine")
+    s._activate([r[1] for r in s._rows].index("llama"))
+    assert calls == [] and len(pushed) == 1, "an engine pick asked or ran during a turn"
+    assert notified[-1] == "not while a turn is running"
 
 
 def test_refresh_rebuilds_when_the_menu_changes_shape(monkeypatch):
@@ -438,3 +445,100 @@ def test_the_bridge_passes_the_share(monkeypatch, tmp_path):
     bridge.apply_engine("vllm", gpu_share=0.7)
     lane[0]()
     assert seen == [("vllm", 0.7)]
+
+
+# ── An engine pick also moves the chat to this machine ───────────────────────────────
+
+@pytest.mark.parametrize("status, code", [("done", "switched_vllm"), ("failed", "start_failed"),
+                                          ("refused", "unsupported"),
+                                          ("needs_install", "needs_install")])
+def test_make_local_moves_after_done_only(monkeypatch, tmp_path, status, code):
+    """`make_local`: a done switch moves an API provider's chat to local and loads the model;
+    a switch that did not finish leaves the provider where it was. MUTATION: call the
+    provider switch before `apply`, or regardless of the status - red."""
+    from vaf.cli.tui_app.agent_bridge import AgentBridge
+    from vaf.core import log_helper, provider_switch
+    monkeypatch.setattr(log_helper, "get_app_log_dir", lambda: tmp_path)
+    order, lane = [], []
+    agent = SimpleNamespace(provider="anthropic", api_backend=object(), use_server=False,
+                            llm=None, reload_local_model=lambda: order.append("load") or True)
+
+    def apply(engine, **kw):
+        order.append("apply")
+        return le.EngineSwitch(status, code, "text", "vllm")
+
+    def switch(provider, model="", **kw):
+        order.append(("switch", provider))
+        agent.provider, agent.api_backend = "local", None
+        return provider_switch.ProviderSwitch("done", "switched", "ok", "local", "", 1)
+    monkeypatch.setattr(le, "apply", apply)
+    monkeypatch.setattr(provider_switch, "switch_provider", switch)
+    bridge = AgentBridge.__new__(AgentBridge)
+    bridge.agent = agent
+    bridge.events = SimpleNamespace(event_note=lambda *a: None, system_note=lambda *a: None)
+    bridge._emit = lambda *a: None
+    bridge._refresh_context = lambda: None
+    bridge._busy = False
+    bridge._submit = lane.append
+    bridge.apply_engine("vllm", make_local=True)
+    lane[0]()
+    if status == "done":
+        assert order == ["apply", ("switch", "local"), "load"]
+    else:
+        assert order == ["apply"] and agent.provider == "anthropic"
+
+
+def test_without_make_local_an_api_provider_stays(monkeypatch, tmp_path):
+    from vaf.cli.tui_app.agent_bridge import AgentBridge
+    from vaf.core import log_helper, provider_switch
+    monkeypatch.setattr(log_helper, "get_app_log_dir", lambda: tmp_path)
+    lane, switched = [], []
+    monkeypatch.setattr(le, "apply", lambda engine, **kw: le.EngineSwitch(
+        "done", "switched_vllm", "text", "vllm"))
+    monkeypatch.setattr(provider_switch, "switch_provider",
+                        lambda *a, **k: switched.append(a))
+    bridge = AgentBridge.__new__(AgentBridge)
+    bridge.agent = SimpleNamespace(provider="anthropic", reload_local_model=lambda: None)
+    bridge.events = SimpleNamespace(event_note=lambda *a: None, system_note=lambda *a: None)
+    bridge._emit = lambda *a: None
+    bridge._refresh_context = lambda: None
+    bridge._busy = False
+    bridge._submit = lane.append
+    bridge.apply_engine("vllm")
+    lane[0]()
+    assert switched == []
+
+
+def test_engine_menu_notes_the_api_provider(monkeypatch):
+    """With an API provider the Engine submenu says where the chat runs and what a pick does.
+    MUTATION: drop the note - red."""
+    s, *_ = _screen(monkeypatch, state=_state())
+    s._cfg = lambda key, default=None: {"provider": "anthropic"}.get(key, default)
+    s._load_engine_state()
+    rows = s._menu_rows("engine")
+    assert rows[0] == ("note", None, "The main chat runs on Anthropic. Picking an engine "
+                                     "moves it to this machine.")
+    s, *_ = _screen(monkeypatch, state=_state())
+    s._load_engine_state()
+    assert not any("main chat runs on" in str(r[2]) for r in s._menu_rows("engine"))
+
+
+def test_engine_pick_routes_through_choose_local_engine(monkeypatch):
+    """Engine rows go through `choose_local_engine` (which also moves the chat); the vLLM
+    model and GPU memory rows keep the chat where it is. MUTATION: keep `engine_pick` calling
+    the switch directly - red."""
+    from vaf.cli.tui_app import screens as screens_mod
+    chosen = []
+    monkeypatch.setattr(screens_mod, "choose_local_engine",
+                        lambda app, engine, **kw: chosen.append((engine, kw["from_settings"])))
+    s, calls, *_ = _screen(monkeypatch, engine="vllm", state=_with_memory("vllm", 0.68))
+    s._load_engine_state()
+    s._stack = ["main", "engine"]
+    s._rows = s._menu_rows("engine")
+    s._activate([r[1] for r in s._rows].index("llama"))
+    assert chosen == [("llama", True)] and calls == []
+    seen = []
+    s.app._bridge.apply_engine = lambda engine, **kw: seen.append(kw.get("make_local"))
+    s._activate([r[1] for r in s._rows].index("gpu_share"))
+    s._activate([r[1] for r in s._rows].index(0.7))
+    assert seen == [False]

@@ -58,7 +58,7 @@ class Command:
 COMMANDS: Tuple[Command, ...] = (
     Command("help", "All keys and commands", aliases=("?",)),
     Command("settings", "Settings", aliases=("s",)),
-    Command("model", "Provider and model", aliases=("c",)),
+    Command("model", "Provider, engine and model", aliases=("c",)),
     Command("theme", "Switch theme", aliases=("t",), args="<name>"),
     Command("history", "This session's messages", aliases=("h",)),
     Command("sessions", "Sessions panel"),

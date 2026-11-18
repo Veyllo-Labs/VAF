@@ -269,7 +269,7 @@ def test_the_app_asks_for_a_key_instead_of_only_refusing():
 
     src = (Path(__file__).resolve().parents[1] / "vaf" / "cli" / "tui_app"
            / "app.py").read_text(encoding="utf-8")
-    tail = src.split("def action_model", 1)[1][:900]
+    tail = src.split("def _model_chosen", 1)[1][:900]
     assert "ApiKeyScreen(provider, stored)" in tail
     assert "new_key=key" in tail
     assert "if key is None" in tail, "a cancelled field must change nothing"

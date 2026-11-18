@@ -163,7 +163,8 @@ refuses, with its categories: a union like the frozen one, so it only adds refus
   length (`${x:'$(cmd)'}` runs cmd; a start that does not settle within _SUBSTRING_SCAN, a
   name, a positional parameter's digits or a subscript running to its end or to a `\\` of a
   line continuation there, counts as a substring), and a `$'...'` there, also inside double
-  quotes, in an unquoted heredoc's body and in an indexed array's subscript, which bash
+  quotes, in an unquoted heredoc's body and in an indexed array's subscript, and in the word
+  of any double-quoted `${...}` (`"${y:-$'...'}"`, extquote), which bash
   decodes and expands again, is refused as "ansi_arithmetic" when the decoded text holds a
   `$`, a backtick, a quote or a backslash (`(( $'\\x24\\x28cmd\\x29' ))`; a decoded `'` would
   quote what follows the arithmetic), and written as its plain text otherwise; bash still finds where the arithmetic ends with such a
@@ -274,17 +275,18 @@ against its target is no script name. Assignment words before a program are step
 every form bash takes (`a+=1`, `a[0]=1`, `a[k]+=v`); one of the latter that holds a
 substitution stays the program word it was read as before, refused as opaque. A shell reads
 options after `-c` too, up
-to `-`, `--` or the first word that is none, and runs that word (`bash -c -e '...'`); its own
+to `-`, `--` or the first word that is none, and runs that word (`bash -c -e '...'`); `+c`
+is `-c` as well, and an option word with an expansion in it or a word that starts with one
+may be either (`x=c; bash -$x -e '...'`, `x=-c; bash "$x" '...'`); its own
 redirections are no script (`xargs -0 bash -c <<< '...'` leaves the script to xargs); a
 token cannot tell a quoted word from a redirection (`-c '>x;cmd'`), so both readings of the
 script are taken. An unquoted expansion where a shell's script name stands may expand to
 nothing, so the shell's input is read as its script as well (`bash $! <<< '...'`); a quoted
-one (`bash "$S"`) is a word even when empty, except where the text can make it `--`, `-`,
-`-s` or nothing (_ScriptName: a substitution, an operator or `$@` anywhere in the word,
-`"${x:---}"`, `"$(echo -)"`, `"$x$@"`; a positional parameter after `set`; a name the text or
-bash assigns; every one in a text another command runs). An option word of a shell with an
-expansion in it may be `-c` (`x=c; bash -$x '...'`): the word after it is read as the code
-too. What a shell prints from the script it reads from its input goes on
+one is a word, never an option, only when it is exactly `"$NAME"` or `"${NAME}"` of a name
+the text can give no value (_ScriptName: NAME nowhere else in the text, also not inside
+another word, not set by bash, and no eval, source or name given by an expansion in the
+text); anything else, a positional parameter included, reads the input as well. What a
+shell prints from the script it reads from its input goes on
 into the pipe whatever its own redirections (its script can write to any descriptor; so
 `bash <<< '...' >/dev/null | bash` is refused, a named over-refusal), and redirections after a
 closer keep the output when any descriptor ends on the pipe (a relative target may be it,
@@ -545,6 +547,8 @@ _SUBST_QUOTED = "\x01"
 # Where a process substitution `<(...)` or `>(...)` stood: one word, a file name.
 _SUBST_PROC = "\x02"
 _SUBST_MARKS = (_SUBST_BARE, _SUBST_QUOTED, _SUBST_PROC)
+# What starts an expansion in a token: a word holding one may become any option.
+_EXPANSION_MARKS = ("$", "`") + _SUBST_MARKS
 # The text a runner's candidates may add up to, beyond the command's own length. Each
 # candidate is the rest of the command joined back into text, so reading each of 64 value
 # positions in full made `npx --x y --x y ...` cost 64 readings of the whole command
@@ -1609,14 +1613,13 @@ def _nested_commands(exe: str, args: List[str], reparse: bool = True) -> Iterabl
         for pos, tok in enumerate(args):
             if tok in ("-o", "+o"):           # `bash -o pipefail -c ...`: -o takes a word
                 continue
-            # An option word with an expansion in it may be `-c` (`x=c; bash -$x '...'`): the
-            # word after it is read as the code as well.
-            if tok.startswith("-") and not tok.startswith("--") and (
-                    "c" in tok[1:] or any(m in tok for m in ("$", "`") + _SUBST_MARKS)):
+            if tok.startswith("-") and not tok.startswith("--") and "c" in tok[1:]:
                 found = again("local", args[pos + 1]) if pos + 1 < len(args) else []
                 break
         # bash reads options after `-c` too, up to `-`, `--` or a word that is none
-        # (`bash -c -e '...'`, `bash -c -- '...'`): that word is the script, read as well.
+        # (`bash -c -e '...'`, `bash -c -- '...'`): that word is the script, read as well;
+        # `+c` and a word with an expansion that may be either count there
+        # (_shell_c_script: `bash +c '...'`, `x=c; bash -$x -e '...'`, `bash "$x" '...'`).
         for strip in (True, False):
             script = _shell_c_script(args, strip)
             if isinstance(script, str):
@@ -2397,7 +2400,7 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[list],
             if script_name is None:
                 # The grammar text drops a function's head and a loop's name (`for s in`):
                 # the names are read from the text as written as well.
-                script_name = _ScriptName(_names_from + "\n" + text, _depth > 0)
+                script_name = _ScriptName(_names_from + "\n" + text, _depth > 0, _budget[2])
             from_where, script_literals, from_pipe = _script_input(exe, args, carried, sink_raws,
                                                                    script_name)
             for alt in alternatives if exe_at >= 0 else ():
@@ -4524,8 +4527,10 @@ class _GrammarText:
                 parts.append(inner[1:-1] if inner.endswith('"') and len(inner) > 1 else inner[1:])
             elif ch == '"':
                 parts.append(self._dq())
-            elif ch == "$" and (arith or subscript) and self._logical(self.i, 2)[0] == "$'":
-                # `${a:$'...'}`, `$[ $'...' ]`: bash decodes it and expands the result again
+            elif ch == "$" and (arith or subscript or (in_dq and opener == "{")) \
+                    and self._logical(self.i, 2)[0] == "$'":
+                # `${a:$'...'}`, `$[ $'...' ]`, and the word of a double-quoted `${...}`
+                # (`"${y:-$'...'}"`, extquote): bash decodes it and expands the result again
                 parts.append(self._ansi_c_expanded(self._logical(self.i, 2)[1][1]))
             elif ch == "$":
                 parts.append(self._dollar(in_dq))
@@ -4582,8 +4587,10 @@ class _GrammarText:
 
     def _ansi_c_expanded(self, start: int) -> str:
         """`$'...'` where bash evaluates arithmetic (`(( $'...' ))`, `$[...]`, a substring's
-        offset and length, also inside double quotes and an unquoted heredoc's body): bash
-        decodes it and expands the decoded text again, so a `$(...)` spelled in escapes runs.
+        offset and length, also inside double quotes and an unquoted heredoc's body), and in
+        the word of a double-quoted `${...}` (`"${y:-$'...'}"`; read in every `${...}` there,
+        fail closed): bash decodes it and expands the decoded text again, so a `$(...)`
+        spelled in escapes runs.
         Decoded text that holds a `$`, a backtick, a quote or a backslash is refused
         (_GrammarAnsiArithmetic: a funsub or a backtick text spelled in escapes would need
         bash's whole reading again, and a quote or a backslash written as it stands would
@@ -4694,22 +4701,17 @@ _NAMED_FD_TOKEN_RE = re.compile(r"^\{[A-Za-z_][A-Za-z0-9_]*\}(?:<<<|<<-?|<>|<&|>
 # literal arithmetic after it in the same word (`${#a[@]}-1`).
 _COUNT_WORD_RE = re.compile(
     r"\$(?:#|\{#[A-Za-z_][A-Za-z0-9_]*(?:\[[@*]\])?\})[-+*/%<>=!&|^~,0-9]*$")
-# A quoted expansion at a shell's script name (_ScriptName): empty quotes before it add
-# nothing (`''"$x"`); a substitution or arithmetic in the word, a `${...}` that is more than
-# a name or a number (an operator, a subscript, `!`, `#`: `"${x:---}"`), `$@` (no word at all
-# when there is no item) and `$_` (the last word of the command before) can each make it
-# `--`, `-`, `-s` or nothing; a positional parameter (`$1`, `${1}`, `$*`) can when the text
-# sets them, and a name when the text assigns it or bash does.
-_EMPTY_QUOTES_RE = re.compile(r"""^(?:''|""|\$''|\$"")+""")
-_WORD_SUBST_RE = re.compile(r"\$\(|\$\[|`|[" + _SUBST_BARE + _SUBST_QUOTED + _SUBST_PROC + "]")
-_WORD_BRACE_RE = re.compile(r"\$\{(?![A-Za-z_][A-Za-z0-9_]*\}|[0-9]+\})")
-_WORD_VANISH_RE = re.compile(r"\$[@_](?![A-Za-z0-9_])")
-_WORD_POSITIONAL_RE = re.compile(r"\$(?:[0-9*]|\{[0-9]+\})")
-_WORD_NAME_RE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)")
-# `set`, `shift`, a function (its call's words) and `source` or `.` (its words) set the
-# positional parameters.
-_SETS_POSITIONALS_RE = re.compile(
-    r"(?:^|[\s;&|(){}])(?:set|shift|source|\.|function)(?=[\s;&|()]|$)|\(\s*\)")
+# A quoted expansion at a shell's script name (_ScriptName) is one word, never an option, only
+# when it is exactly `"$NAME"` or `"${NAME}"` (empty quotes anywhere add nothing, `''"$x"`)
+# and the text can give NAME no value: NAME appears nowhere else in it, even inside another
+# word (`a=-s`, `read a`, `printf -va`, `for a in`), bash does not assign it itself, and
+# the text assigns no name it does not spell. Anything else may be `--`, `-`, `-s` or nothing
+# after which the shell reads its input: a positional parameter (`"$1"`, `"$*"`, `"$0"`
+# after `set`, a function call, `BASH_ARGV0=`), an operator (`"${x:---}"`), a substitution,
+# `$@`, `$_`, literal text beside it (`"$x"-s`).
+_EMPTY_QUOTES_RE = re.compile(r"""''|""|\$''|\$\"\"""")
+_PLAIN_QUOTED_NAME_RE = re.compile(
+    r'"\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})"')
 # Text that may assign a name it does not spell: eval, source, an indirection (`${!n:=--}`),
 # and a name given by an expansion to a command that assigns one (`declare "$n=--"`, `read
 # "$n"`, `printf -v "$n"`), read per simple command (_sets_any_name).
@@ -4717,12 +4719,6 @@ _SETS_ANY_NAME_RE = re.compile(r"(?:^|[\s;&|(){}])(?:eval|source|\.)(?=[\s;&|()]
 _NAME_SETTER_RE = re.compile(
     r"\b(?:declare|typeset|local|export|readonly|read|mapfile|readarray|getopts|printf)\b")
 _SIMPLE_COMMAND_SPLIT_RE = re.compile(r"[;&|\n]")
-# A name the text spells other than in an expansion (`a=--`, `read a`, `for a in`, `declare
-# -n r=a`), and one an expansion assigns (`${a:=--}`) or subscripts (`${a[...]}`, which may
-# stand in an assignment).
-_SPELLED_NAME_RE = re.compile(
-    r"(?<![A-Za-z0-9_$])(?<!\$\{)(?<!\$\{!)(?<!\$\{#)[A-Za-z_][A-Za-z0-9_]*")
-_DEFAULT_ASSIGN_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?:\[|:?=)")
 # Names bash assigns itself: `read` and `mapfile` with no name, `getopts`, `[[ =~ ]]`, and
 # `_`, the last word of the command before (`set --; ... | bash "${_}"`).
 _SHELL_SET_NAMES = frozenset({"REPLY", "OPTARG", "MAPFILE", "COPROC", "FUNCNAME", "_"})
@@ -4730,52 +4726,59 @@ _SHELL_SET_PREFIXES = ("BASH_", "READLINE_", "COMP_")
 
 
 def _sets_any_name(text: str) -> bool:
-    """Whether `text` may assign a name it does not spell (_SETS_ANY_NAME_RE): each simple
-    command is read once, a command that assigns names counting when an expansion follows it
-    in that command (`printf` with `-v`), so the text costs one pass."""
-    if _SETS_ANY_NAME_RE.search(text):
-        return True
-    for piece in _SIMPLE_COMMAND_SPLIT_RE.split(text):
-        expansion = max(piece.rfind("$"), piece.rfind("`"))
-        option = max(piece.rfind(" -v"), piece.rfind("\t-v"))
-        for setter in _NAME_SETTER_RE.finditer(piece):
-            if expansion > setter.start() and (setter.group() != "printf"
-                                               or option > setter.start()):
-                return True
+    """Whether `text` may assign a name it does not spell (_SETS_ANY_NAME_RE), as written and
+    with its quotes and backslashes taken out (`'eval'`, `de''clare`): each simple command is
+    read once, a command that assigns names counting when an expansion follows it in that
+    command (`printf` with `-v`), so the text costs two passes."""
+    unquoted = text.replace("'", "").replace('"', "").replace("\\", "")
+    for form in (text, unquoted):
+        if _SETS_ANY_NAME_RE.search(form):
+            return True
+        for piece in _SIMPLE_COMMAND_SPLIT_RE.split(form):
+            expansion = max(piece.rfind("$"), piece.rfind("`"))
+            option = max(piece.rfind(" -v"), piece.rfind("\t-v"))
+            for setter in _NAME_SETTER_RE.finditer(piece):
+                if expansion > setter.start() and (setter.group() != "printf"
+                                                   or option > setter.start()):
+                    return True
     return False
 
 
 class _ScriptName:
     """Whether a word at a shell's script name, as written, may leave the shell reading its
     input: an unquoted expansion may vanish, a quoted one may be `--`, `-`, `-s` or nothing
-    (_EMPTY_QUOTES_RE and below). A text another command runs (`bash -c`, `eval`, a heredoc
-    fed to a shell) gets its names and arguments from outside, so there every expansion
-    counts. The text is read once, at the first quoted word that needs it: linear."""
-    __slots__ = ("text", "nested", "names", "any_name", "positionals")
+    unless it is a plain name the text gives no value (_PLAIN_QUOTED_NAME_RE and above). A
+    text another command runs (`bash -c`, `eval`, a heredoc fed to a shell) gets its names
+    and arguments from outside, so there every expansion counts. The text is searched once
+    per name, each search spending its length from the call's character budget (_READ_FACTOR;
+    with none left the word counts as reading the input): linear."""
+    __slots__ = ("text", "nested", "budget", "any_name", "seen")
 
-    def __init__(self, text: str, nested: bool) -> None:
-        self.text, self.nested = text, nested
-        self.names: Optional[set] = None
-        self.any_name = self.positionals = False
+    def __init__(self, text: str, nested: bool, budget: list) -> None:
+        self.text, self.nested, self.budget = text, nested, budget
+        self.any_name: Optional[bool] = None
+        self.seen: dict = {}
 
     def reads_input(self, raw: str) -> bool:
         word = _EMPTY_QUOTES_RE.sub("", raw)
-        if not word.startswith('"'):
-            return word[:1] in ("$", _SUBST_BARE, _SUBST_QUOTED, "`")
-        if self.nested or _WORD_SUBST_RE.search(word) or _WORD_BRACE_RE.search(word) \
-                or _WORD_VANISH_RE.search(word):
+        if word[:1] in ("'", "\\"):
+            return False                    # a literal `$` starts it: a file name
+        plain = _PLAIN_QUOTED_NAME_RE.fullmatch(word)
+        if self.nested or not plain:
             return True
-        if self.names is None:
-            text = self.text
-            self.names = set(_SPELLED_NAME_RE.findall(text)) | set(
-                _DEFAULT_ASSIGN_RE.findall(text))
-            self.any_name = _sets_any_name(text)
-            self.positionals = bool(_SETS_POSITIONALS_RE.search(text))
-        if self.positionals and _WORD_POSITIONAL_RE.search(word):
+        name = plain.group(1) or plain.group(2)
+        if name in _SHELL_SET_NAMES or name.startswith(_SHELL_SET_PREFIXES):
             return True
-        return any(self.any_name or name in self.names or name in _SHELL_SET_NAMES
-                   or name.startswith(_SHELL_SET_PREFIXES)
-                   for name in _WORD_NAME_RE.findall(word))
+        if name not in self.seen:
+            if self.budget[0] < 3 * len(self.text):
+                return True                 # no characters left to search: fail closed
+            self.budget[0] -= 3 * len(self.text)
+            if self.any_name is None:
+                self.any_name = _sets_any_name(self.text)
+            # Each spelling of the word holds the name once; any other occurrence may give
+            # it a value.
+            self.seen[name] = self.any_name or self.text.count(name) > self.text.count(raw)
+        return self.seen[name]
 
 
 def _script_input(exe: str, args: List[str], carried: List[tuple],
@@ -5579,7 +5582,8 @@ _SCRIPT_MISSING = object()
 
 def _shell_c_script(args: List[str], strip_redirections: bool = True):
     """The script a shell's `-c` runs, `_SCRIPT_MISSING` when `-c` has none, None without `-c`.
-    bash reads options after `-c` as well, up to `-` or `--` (both taken) or the first word
+    `+c` is `-c` too, and a word with an expansion that may be either (`-$x`, `"$x"`) counts
+    as one. bash reads options after `-c` as well, up to `-` or `--` (both taken) or the first word
     that is no option, and runs that word (`bash -c -e '...'`, `sh -c - '...'`); its own
     redirections are no words (`xargs -0 bash -c <<< '...'` has no script, xargs supplies it).
     A token cannot tell a quoted word from a redirection (`-c '>x;cmd'`), so a reader of the
@@ -5607,8 +5611,12 @@ def _shell_c_script(args: List[str], strip_redirections: bool = True):
         if tok in _SHELL_VALUE_OPTIONS:
             k += 2
             continue
-        if tok[:1] in ("-", "+") and len(tok) > 1:
-            has_c = has_c or (tok.startswith("-") and not tok.startswith("--") and "c" in tok[1:])
+        # `c` counts after a `+` too (`bash +c '...'`), and an option word with an expansion in
+        # it, or a word that starts with one, may be `-c` or `+c` and is stepped over like an
+        # option (`x=c; bash -$x -e '...'`, `bash "$x" '...'`).
+        expands = any(m in tok for m in _EXPANSION_MARKS)
+        if (tok[:1] in ("-", "+") and len(tok) > 1) or tok[:1] in _EXPANSION_MARKS:
+            has_c = has_c or (not tok.startswith("--") and ("c" in tok[1:] or expands))
             k += 1
             continue
         break

@@ -1587,7 +1587,7 @@ _SHELL_CALLS = {("os", "system"): "command", ("os", "popen"): "cmd",
                 ("subprocess", "getoutput"): "cmd", ("subprocess", "getstatusoutput"): "cmd",
                 ("asyncio", "create_subprocess_shell"): "cmd"}
 # Calls that start a program from an argv: the spawners, and helpers that build or pass one.
-_ARGV_CALLS = _SPAWNERS | {"spawn", "execv", "execvp"}
+_ARGV_CALLS = _SPAWNERS | {"spawn", "execv", "execvp", "spawnv", "spawnvp", "spawnvpe"}
 # Calls whose positional arguments are the argv itself, with how many arguments come before
 # it: none for `create_subprocess_exec("sh", "-c", ...)`, the path for `os.execlp("sh", "sh",
 # "-c", ...)`, the mode and the path for `os.spawnl(os.P_WAIT, "/bin/sh", "sh", "-c", ...)`.
@@ -1641,19 +1641,23 @@ def _bindings(scope, outer: dict, declared: set = frozenset()) -> dict:
     to it alone (`script = "..."`). Any other binding leaves it unknown: a second one, `+=`,
     an annotation, a `for` or `with ... as` target, `:=`, unpacking, `del`, an import, a `def`
     or `class`, `except ... as`, a parameter of this scope (its value comes from the caller),
-    and a name declared `global` or `nonlocal` anywhere. A comprehension's own variable binds
-    nothing here. A name not bound here keeps the outer scope's binding."""
+    and a name declared `global` or `nonlocal` anywhere. A comprehension's own variable and
+    what a class body binds (its methods, its attributes: the class's namespace) bind nothing
+    here, the class's own name does. A name not bound here keeps the outer scope's binding."""
     count: dict = {}
     plain: dict = {}
     own = {id(target) for node in _scope_nodes(scope) if isinstance(node, ast.comprehension)
            for target in ast.walk(node.target)}
+    own |= {id(inner) for node in _scope_nodes(scope) if isinstance(node, ast.ClassDef)
+            for statement in node.body for inner in ast.walk(statement)}
 
     def bind(name):
         count[name] = count.get(name, 0) + 1
 
     for node in _scope_nodes(scope):
-        if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load) \
-                and id(node) not in own:
+        if id(node) in own:
+            continue
+        if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
             bind(node.id)
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             bind(node.name)
@@ -1791,7 +1795,10 @@ def _shell_scripts(tree) -> list:
                     scripts.append((first, names))
                 continue
             if name in _VARIADIC_CALLS:
-                script = _argv_script(list(node.args)[_VARIADIC_CALLS[name]:], names)
+                # The executable (the path) stands in for argv[0], which only names it.
+                drop, args = _VARIADIC_CALLS[name], list(node.args)
+                argv = args if not drop else args[drop - 1:drop] + args[drop + 1:]
+                script = _argv_script(argv, names)
                 if script is not None:
                     scripts.append((script, names))
                 continue
@@ -1937,7 +1944,8 @@ def test_the_fd_redirection_scanner_resolves_only_a_single_plain_assignment():
     MUTATION: count only plain assignments as bindings again - red (the loop, `with`, `:=`,
     unpacking, the annotation);
     MUTATION: ignore `global` - red;
-    MUTATION: count a comprehension's variable - red (the last assertion)."""
+    MUTATION: count a comprehension's variable - red; count a class's members - red (the
+    method)."""
     assert _fd_redirections(ast.parse(
         'cmd = "echo x"\n'
         'cmd += " >&12"\n'
@@ -1965,15 +1973,24 @@ def test_the_fd_redirection_scanner_resolves_only_a_single_plain_assignment():
         'script = "echo x >&12"\n'
         'names = [script for script in other]\n'
         'subprocess.run(["sh", "-c", script])')) == [1]
+    # a method of the same name belongs to its class, not to the module
+    assert _fd_redirections(ast.parse(
+        'script = "echo x >&12"\n'
+        'class A:\n'
+        '    def script(self):\n'
+        '        pass\n'
+        'os.system(script)')) == [1]
 
 
 def test_the_fd_redirection_scanner_reads_every_call_form():
     """`import os.path` binds `os`; a `shell=True` command put together with `+` keeps its
-    text, and an empty one is no error; `execl*` and `spawnl*` start their argv after the path
-    (and the mode).
+    text, and an empty one is no error; `execl*` and `spawnl*` run their path (after the mode)
+    with the argv after argv[0], which only names it, and `spawnv*` take theirs as a list.
     MUTATION: map `import os.path` to `os.path` - red;
+    MUTATION: leave `spawnv`, `spawnvp`, `spawnvpe` out of the argv calls - red;
     MUTATION: take the first item of a `shell=True` sum always - red;
-    MUTATION: read every variadic call's arguments from the first - red (`execlp`)."""
+    MUTATION: read every variadic call's arguments from the first - red (`execlp`);
+    MUTATION: take argv[0] for the program instead of the executable - red (`/bin/echo`)."""
     assert _fd_redirections(ast.parse(
         'import os.path\n'
         'os.system("echo x >&12")')) == [2]
@@ -1992,6 +2009,15 @@ def test_the_fd_redirection_scanner_reads_every_call_form():
         'os.spawnl(os.P_WAIT, "/bin/sh", "sh", "-c", "cat <&10")')) == [1]
     assert _fd_redirections(ast.parse(
         'os.spawnlp(os.P_WAIT, "sh", "sh", "-c", "cat <&10")')) == [1]
+    # the executable runs, argv[0] only names it: `/bin/echo` prints the text
+    assert _fd_redirections(ast.parse('os.execl("/bin/echo", "sh", "-c", "echo x >&12")')) == []
+    assert _fd_redirections(ast.parse(
+        'os.spawnl(os.P_WAIT, "/bin/echo", "sh", "-c", "echo x >&12")')) == []
+    assert _fd_redirections(ast.parse('os.execl("/bin/sh", "echo", "-c", "cat <&10")')) == [1]
+    for call in ('os.spawnv(os.P_WAIT, "/bin/sh", ["sh", "-c", "cat <&10"])',
+                 'os.spawnvp(os.P_WAIT, "sh", ["sh", "-c", "cat <&10"])',
+                 'os.spawnvpe(os.P_WAIT, "sh", ["sh", "-c", "cat <&10"], env)'):
+        assert _fd_redirections(ast.parse(call)) == [1], call
 
 
 def test_no_shell_redirection_names_a_two_digit_fd():

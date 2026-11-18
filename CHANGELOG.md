@@ -720,13 +720,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
     index into a variable first (`i="$(cmd) ;x"; a[$i]=1`).
   - Thousands of `[` opened without their `]` where a command starts (`a[` repeated): close
     each one, or quote it.
-  - `$'...'` in arithmetic that decodes to a substitution, a quote or a backslash
-    (`(( $'\x24(cmd)' ))`, `"${x:$'\x27'}"`), also inside double quotes or a heredoc: bash
-    runs the decoded text, so write the arithmetic out.
-  - A quoted variable as the script of a shell fed on its input, where the command itself can
-    make it `--`, `-s` or nothing (`a=-s; ... | sh "$a"`, `set -- --; ... | bash "$1"`,
-    `bash "${x:---}"`, `bash "$(echo -)"`): write the script's name out. A variable the
-    command does not set (`printf '%s\n' "$ans" | bash "$S"`) passes as before.
+  - `$'...'` in arithmetic or in the word of a double-quoted `${...}` that decodes to a
+    substitution, a quote or a backslash (`(( $'\x24(cmd)' ))`, `"${x:$'\x27'}"`,
+    `"${y:-$'\x24(cmd)'}"`), also inside double quotes or a heredoc: bash runs the decoded
+    text, so write it out.
+  - A quoted variable as the script of a shell fed on its input, unless it is a plain
+    `"$NAME"` the command never mentions again (`a=-s; ... | sh "$a"`, `... | bash "$1"`,
+    `bash "${x:---}"`, `bash "$(echo -)"`, `bash "$x"-s`): write the script's name out. A
+    variable the command does not set (`printf '%s\n' "$ans" | bash "$S"`) passes as before.
   - A shell fed a script on its input whose output it sends elsewhere, piped into another
     shell (`bash <<< '...' >/dev/null | bash`): the script could write to any descriptor, so
     it is read as printing into the pipe; leave out the `| bash`.

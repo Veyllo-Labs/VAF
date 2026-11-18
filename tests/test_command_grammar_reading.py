@@ -1596,17 +1596,18 @@ def test_ansi_c_in_quoted_arithmetic_is_decoded():
 
 
 def test_a_quoted_script_name_the_text_can_make_an_option_reads_the_input():
-    """A quoted expansion at a shell's script name reads the input as well where the text can
-    make it `--`, `-`, `-s` or nothing: an operator or a substitution in it, `$@` anywhere in
-    the word, a positional parameter after `set` or in a function, a name the text or bash
-    assigns, and every one in a text another command runs. A name the text never assigns is
-    one word, as before.
-    MUTATION: read a quoted word's start only - red (`"$x$@"`);
+    """A quoted expansion at a shell's script name is one word only when it is a plain
+    `"$NAME"` of a name the text never mentions again, which bash does not set and no text
+    in the command can assign unseen. Everything else reads the input as well: an operator
+    or a substitution, `$@`, `$_`, literal text beside it (`"$x"-s`), every positional
+    parameter (`"$1"` after `'set'` or `eval 'set ...'`, `"$0"` after `BASH_ARGV0=`), a name
+    spelled anywhere else in the text, also inside another word (`printf -vx`, `read -ax`),
+    and every one in a text another command runs.
+    MUTATION: a quoted word with literal text beside it is one word - red (`"$x"-s`);
     MUTATION: names from the grammar text alone - red (the loop and the function);
-    MUTATION: drop the names the text assigns - red (`a=-s`); drop the positional parameters
-    `set` sets - red; drop the names bash sets - red (`$REPLY`); drop `${s:=--}` - red;
-    drop a name given by an expansion - red (`declare "$(...)"`); keep the empty quotes - red;
-    drop the substitutions - red (`"$(echo -)"`); read a nested text's names - red."""
+    MUTATION: drop the names the text spells - red (`a=-s`); a positional is one word without
+    `set` - red; drop the names bash sets - red (`$REPLY`); drop a name given by an
+    expansion - red (`declare "$(...)"`, also `de''clare`); read a nested text's names - red."""
     feed = "echo 'rm -rf /' | bash "
     for cmd in (feed + '"${x:---}"', feed + "''" + '"${x--s}"', feed + '"$(echo -)"',
                 feed + '"`echo -`"', feed + '"$x$(echo -)"', feed + '"$x`echo -`"',
@@ -1616,7 +1617,14 @@ def test_a_quoted_script_name_the_text_can_make_an_option_reads_the_input():
                 "for s in --; do " + feed + '"$s"; done', "f() { " + feed + '"$1"; }; f --',
                 "read <<< --; " + feed + '"$REPLY"', ': "${s:=--}"; ' + feed + '"$s"',
                 'declare "$(echo cz0tLQo= | base64 -d)"; ' + feed + '"$s"',
-                "bash -c '" + feed.replace("'", '"') + '"$1"' + "' x --"):
+                "de''clare \"$(echo cz0tLQo= | base64 -d)\"; " + feed + '"$s"',
+                "bash -c '" + feed.replace("'", '"') + '"$1"' + "' x --",
+                "'set' -- --; " + feed + '"$1"', "eval 'set -- --'; " + feed + '"$1"',
+                "printf -vx -- --; " + feed + '"$x"', "read -rax <<< --; " + feed + '"$x"',
+                feed + '"$x"-s', feed + '"${x}"-s', feed + '"$x"' + B + "-s",
+                "BASH_ARGV0=-s; " + feed + '"$0"', "BASH_ARGV0=-s; " + feed + '"${0}"',
+                "de''clare \"$(printf '" + B + "121')=--\"; " + feed + '"$Q"',
+                "export Q=--; bash -c 'echo \"rm -rf /\" | bash \"$Q\"'"):
         assert classify_command(cmd, profile="host").blocked, cmd
     for cmd in ('bash "$SCRIPT" <<< "$INPUT"', "printf '%s" + B + "n' \"$ans\" | bash \"$S\"",
                 'bash "$SCRIPT" --verbose', 'echo x | bash "./$S"'):
@@ -1624,12 +1632,38 @@ def test_a_quoted_script_name_the_text_can_make_an_option_reads_the_input():
 
 
 def test_an_option_word_with_an_expansion_may_be_dash_c():
-    """`x=c; bash -$x '...'` runs its next word as code: that word is read as the code too.
-    MUTATION: read only a written `c` - red."""
+    """`x=c; bash -$x '...'` runs its next word as code, so does `bash +c '...'` (bash takes
+    `c` after `+` too) and a word that is an expansion (`x=-c; bash "$x" '...'`); bash reads
+    options after any of them up to the first word that is none, which is the code.
+    MUTATION: read only a written `c` - red; read only `-` words - red (`+c`);
+    MUTATION: no word that starts with an expansion - red (`"$x"`);
+    MUTATION: stop at the word after `-$x` - red (`-$x -e '...'`)."""
     for cmd in ("x=c; bash -$x 'rm -rf /'", "bash -$(echo c) 'rm -rf /'",
-                "x=c; sh -e\"$x\" 'rm -rf /'"):
+                "x=c; sh -e\"$x\" 'rm -rf /'", "bash +c 'rm -rf /'", "sh +ic 'rm -rf /'",
+                "bash -x +c 'rm -rf /'", "x=-c; bash $x 'rm -rf /'", "x=-c; bash \"$x\" 'rm -rf /'",
+                "bash `echo -c` 'rm -rf /'", "bash \"$y\"+c 'rm -rf /'",
+                "x=c; bash -$x -e 'rm -rf /'", "x=c; bash -$x -- 'rm -rf /'",
+                "bash +c -e 'rm -rf /'", "x=-c; bash \"$x\" -e 'rm -rf /'",
+                "x=c; bash -$x -o errexit 'rm -rf /'"):
         assert classify_command(cmd, profile="host").blocked, cmd
-    assert not classify_command("bash -$opts script.sh", profile="host").blocked
+    for cmd in ("bash -$opts script.sh", "bash +x script.sh", "bash -c 'echo hi'"):
+        assert not classify_command(cmd, profile="host").blocked, cmd
+
+
+def test_ansi_c_in_a_quoted_default_word_is_decoded():
+    """In the word of a double-quoted `${...}` (`-`, `:-`, `+`, `:+`, `=`, `:=`) bash decodes
+    `$'...'` and expands it again: read like arithmetic, refused when the decoded text holds a
+    `$`, a backtick, a quote or a backslash; a plain one passes.
+    MUTATION: decode `$'` in a double-quoted `${...}` only in arithmetic - red."""
+    pay = "$'" + B + "x24(rm -rf /)'"
+    for form in ('echo "${y:-@}"', 'echo "${y-@}"', 'x=1; echo "${x:+@}"', 'echo "${y:=@}"',
+                 'echo $(echo "${y:-@}")', 'z="${y:-@}"', 'case "${y:-@}" in *) :;; esac',
+                 'echo "${y:-${z:-@}}"'):
+        assert classify_command(form.replace("@", pay), profile="host").blocked, form
+    assert classify_command('bash -c "echo ' + B + '"' + B + "${y:-" + B + pay + "}" + B + '""',
+                            profile="host").blocked
+    for cmd in ('echo "${y:-$' + "'" + B + "n'}" + '"', 'echo "${IFS:-$' + "' " + B + "t'}" + '"'):
+        assert not classify_command(cmd, profile="host").blocked, cmd
 
 
 def test_a_quoted_span_in_a_subscript_may_expand():
@@ -1802,23 +1836,38 @@ def test_the_writers_of_one_text_look_for_extglob_once():
 
 
 def test_a_quoted_word_counts_as_present_only_when_it_is_one_word():
-    """`"$S"` and `"$*"` are one word even when empty, the script name, unless the text sets
-    S or the positional parameters. `"$@"`, `"${a[@]}"` may be none, and `"${a[*]}"`,
-    `"${!x}"` or `""$S` may be `--`: the input is read as the script too.
-    MUTATION: take every quoted word for present - red; take every one for absent - red."""
-    for text, raw, absent in (("", '"$S"', False), ("", '"$*"', False), ("", "'$@'", False),
+    """Only `"$S"` or `"${S}"` (empty quotes aside) of a name the text never mentions again is
+    one word even when empty, the script name. A positional parameter always may be `--`:
+    `"$*"` with no `set` in the text reads the input too, deliberately, since a function's
+    call, `BASH_ARGV0=` or a `set` spelled in quotes sets them where no scan sees it.
+    `"$@"`, `"${a[@]}"` may be none, and `"${a[*]}"`, `"${!x}"`, `""$S` or `"$S"-s` may be
+    `--`: the input is read as the script too. A literal `$` (`'$@'`) is a file name.
+    MUTATION: take every quoted word for present - red; take every one for absent - red;
+    MUTATION: search the name only outside other words - red (`printf -vS`);
+    MUTATION: no characters spent from the budget - red (the empty budget)."""
+    for text, raw, absent in (("", '"$S"', False), ("", '"${S}"', False), ("", "''\"$S\"", False),
+                              ("", "$''\"$S\"", False), ("", "\"\"''\"$S\"", False),
+                              ("", '"$*"', True), ("", "'$@'", False),
                               ("", '"${a[*]}"', True), ("", '""$S', True),
                               ("", '"${!x}"', True), ("", '"$@"', True), ("", '"${@:2}"', True),
                               ("", '"${a[@]}"', True), ("", '"${!a[@]}"', True),
                               ("", '"${!pre@}"', True), ("set -- --", '"$*"', True),
-                              ("S=--", '"$S"', True), ("S=--", '"$T"', False)):
+                              ("", '"$0"', True), ("", '"$S"-s', True),
+                              ("S=--", '"$S"', True), ("S=--", '"$T"', False),
+                              ("printf -vS -- --", '"$S"', True), ("echo SCRIPT", '"$S"', True),
+                              ("eval x", '"$S"', True), ("de''clare \"$n\"", '"$S"', True)):
         tok = raw.replace('"', "").replace("'", "")
         reads = cp._script_input("bash", [tok, "<<<", "rm -rf /"], [],
-                                 [raw, "<<<", "'rm -rf /'"], cp._ScriptName(text, False))
-        assert bool(reads[1]) is absent, (raw, reads)
+                                 [raw, "<<<", "'rm -rf /'"],
+                                 cp._ScriptName(text + "\n" + raw, False, [10 ** 6]))
+        assert bool(reads[1]) is absent, (text, raw, reads)
     # a text another command runs takes its names from outside: every expansion counts
     reads = cp._script_input("bash", ["$S", "<<<", "rm -rf /"], [],
-                             ['"$S"', "<<<", "'rm -rf /'"], cp._ScriptName("", True))
+                             ['"$S"', "<<<", "'rm -rf /'"], cp._ScriptName('"$S"', True, [10 ** 6]))
+    assert reads[1]
+    # with no characters left to search the text, a plain name counts too (fail closed)
+    reads = cp._script_input("bash", ["$S", "<<<", "rm -rf /"], [],
+                             ['"$S"', "<<<", "'rm -rf /'"], cp._ScriptName('"$S"', False, [0]))
     assert reads[1]
 
 
@@ -1865,7 +1914,7 @@ def test_a_text_nested_past_the_grammar_depth_is_refused_as_too_deep():
 
 # Every row that ran the marker and stays refused, and the named boundaries the rest belong to
 # (docs/security/SANDBOXING.md, "what it does not read").
-_NEVER_AGAIN_SIZE = 1456
+_NEVER_AGAIN_SIZE = 1733
 _NAMED_BOUNDARIES = {
     "a substitution's output inside [[ ]] that a redirection of the compound command sends "
     "into the pipe",

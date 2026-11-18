@@ -3,7 +3,7 @@
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Pin the llama.cpp build a VAF release ships with, digests included.
 
-    venv/bin/python scripts/pin_llama_cpp.py b10955
+    venv/bin/python scripts/pin_llama_cpp.py b12359
 
 Writes ``vaf/core/llama_server_pin.json``: the tag, and for every release asset the
 launcher can pick (``backend.LLAMA_ASSET_PATTERN``) its SHA-256 and size. The launcher
@@ -14,15 +14,22 @@ Where the digests come from, and what is checked before they are written down:
 
 1. The GitHub release API reports a ``digest`` per asset (GitHub hashes the upload).
 2. llama.cpp's release workflow attests its assets (SLSA v1 provenance, stored by GitHub
-   under /attestations/<digest>). The statement is fetched for the first asset and must
-   name the workflow ``.github/workflows/release.yml`` of ``ggml-org/llama.cpp`` as the
-   builder and list EVERY selected asset with the same digest the API reports. A digest
-   the builder did not attest is not pinned.
+   under /attestations/<digest>). Since llama.cpp split its release into a build workflow
+   and a publish workflow, the statement names ``.github/workflows/release-publish.yml``
+   (a ``workflow_run`` job that attests the artifacts of the build run); older builds
+   name ``.github/workflows/release.yml``. Exactly these two paths of ``ggml-org/llama.cpp``
+   (repository id ``LLAMA_REPO_ID``) are accepted as the builder.
+   The statements are looked up by the digest of a ``llama-<tag>-`` asset, which is unique
+   to the build; the ``cudart-llama-bin-*`` archives are byte-identical across builds, so
+   their digest returns the statements of many builds. Of the statements returned, the
+   first one that names an accepted builder and lists EVERY selected asset with the
+   digest the API reports is the one taken, wherever it sits in the list. A digest no
+   accepted builder attested is not pinned.
 
 This is a structural cross-check of the provenance statement, not a verification of its
 Sigstore signature; for that, run ``gh attestation verify --repo ggml-org/llama.cpp
 <downloaded asset>`` on a machine with the GitHub CLI. ``--download`` additionally pulls
-every selected asset and hashes it locally against the API digest (about 1.7 GB).
+every selected asset and hashes it locally against the API digest (about 2 GB for b12359).
 
 Bumping the pin is a release decision: VAF never updates llama.cpp on its own, a newer
 build arrives with the VAF release that carries the new manifest.
@@ -47,6 +54,8 @@ from vaf.core.backend import LLAMA_ASSET_PATTERN, LLAMA_REPO, LLAMA_REPO_ID, PIN
 
 API = "https://api.github.com"
 HEADERS = {"Accept": "application/vnd.github+json", "User-Agent": "vaf-pin-llama-cpp"}
+# The workflows of ggml-org/llama.cpp that may attest a release, compared exactly.
+ALLOWED_BUILDERS = (".github/workflows/release.yml", ".github/workflows/release-publish.yml")
 
 
 def _get(url: str):
@@ -62,24 +71,51 @@ def _digest(asset: dict) -> str:
     return d.split(":", 1)[1].lower()
 
 
-def _attested_digests(first_digest: str) -> tuple[dict, str]:
-    """(name -> sha256 of every subject in the provenance statement, builder workflow)."""
-    data = _get(f"{API}/repos/{LLAMA_REPO}/attestations/sha256:{first_digest}")
+def _lookup_digest(tag: str, digests: dict) -> str:
+    """The digest the attestations are looked up by: that of a ``llama-<tag>-`` asset."""
+    prefix = f"llama-{tag}-"
+    for name, digest in digests.items():
+        if name.startswith(prefix):
+            return digest
+    raise SystemExit(f"{tag}: no selected asset is named {prefix}*; the shared cudart archives cannot "
+                     "identify the build's provenance statement")
+
+
+def _attesting_builder(tag: str, digests: dict) -> str:
+    """The builder of the provenance statement that attests every selected asset with the
+    digest the API reports; SystemExit with the reason when no returned statement does."""
+    data = _get(f"{API}/repos/{LLAMA_REPO}/attestations/sha256:{_lookup_digest(tag, digests)}?per_page=100")
     atts = data.get("attestations") or []
     if not atts:
         raise SystemExit("no provenance attestation for the release assets; refusing to pin")
-    att = atts[0]
-    if int(att.get("repository_id") or 0) != LLAMA_REPO_ID:
-        raise SystemExit(f"attestation belongs to repository {att.get('repository_id')}, not {LLAMA_REPO_ID}")
-    payload = ((att.get("bundle") or {}).get("dsseEnvelope") or {}).get("payload")
-    statement = json.loads(base64.b64decode(payload))
-    build = (statement.get("predicate") or {}).get("buildDefinition") or {}
-    wf = (build.get("externalParameters") or {}).get("workflow") or {}
-    builder = f"{wf.get('repository')} {wf.get('path')}"
-    if wf.get("repository") != f"https://github.com/{LLAMA_REPO}" or not str(wf.get("path", "")).endswith("release.yml"):
-        raise SystemExit(f"provenance names an unexpected builder: {builder}")
-    subjects = {s["name"]: (s.get("digest") or {}).get("sha256", "").lower() for s in statement.get("subject") or []}
-    return subjects, builder
+    reasons: list[str] = []
+    closest: list[str] | None = None
+    for att in atts:
+        if int(att.get("repository_id") or 0) != LLAMA_REPO_ID:
+            reasons.append(f"an attestation of repository {att.get('repository_id')}, not {LLAMA_REPO_ID}")
+            continue
+        try:
+            payload = ((att.get("bundle") or {}).get("dsseEnvelope") or {}).get("payload")
+            statement = json.loads(base64.b64decode(payload))
+        except Exception as e:
+            reasons.append(f"an unreadable statement ({e})")
+            continue
+        build = (statement.get("predicate") or {}).get("buildDefinition") or {}
+        wf = (build.get("externalParameters") or {}).get("workflow") or {}
+        builder = f"{wf.get('repository')} {wf.get('path')}"
+        if wf.get("repository") != f"https://github.com/{LLAMA_REPO}" or wf.get("path") not in ALLOWED_BUILDERS:
+            reasons.append(f"a statement by an unexpected builder: {builder}")
+            continue
+        subjects = {s.get("name"): str((s.get("digest") or {}).get("sha256", "")).lower()
+                    for s in statement.get("subject") or []}
+        missing = [n for n, d in digests.items() if subjects.get(n) != d]
+        if not missing:
+            return builder
+        if closest is None or len(missing) < len(closest):
+            closest = missing
+    if closest is not None:
+        raise SystemExit(f"no provenance statement attests these assets with the API's digest: {closest}")
+    raise SystemExit("no usable provenance statement; refusing to pin: " + "; ".join(dict.fromkeys(reasons)))
 
 
 def main(argv: list[str]) -> int:
@@ -93,10 +129,7 @@ def main(argv: list[str]) -> int:
     if not selected:
         raise SystemExit(f"{tag}: no asset matches the launcher's pattern; nothing to pin")
     digests = {a["name"]: _digest(a) for a in selected}
-    subjects, builder = _attested_digests(next(iter(digests.values())))
-    missing = [n for n, d in digests.items() if subjects.get(n) != d]
-    if missing:
-        raise SystemExit(f"the provenance statement does not attest these assets with the API's digest: {missing}")
+    builder = _attesting_builder(tag, digests)
     if verify_download:
         with tempfile.TemporaryDirectory(prefix="vaf-pin-") as tmp:
             for a in selected:

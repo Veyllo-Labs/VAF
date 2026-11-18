@@ -75,12 +75,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y python3-dev
 
-      - name: Install dependencies
+      # The lock, the same way as every push (.github/workflows/_test.yml explains each
+      # line): a tag is tested on the versions its commit was tested on, so an upstream
+      # release that afternoon cannot turn it red. The newest versions are the daily
+      # ci-latest-deps.yml run's job (docs/setup/RELEASING.md). ruff and pytest are in it.
+      - name: Install dependencies (requirements.lock)
         run: |
-          python -m pip install --upgrade pip
-          pip install ruff pytest
-          pip install -r requirements.txt
-          pip install -e .
+          python -m pip install "pip==26.1.2"
+          python -m pip install --require-hashes -r requirements.lock
+          python -m pip install --no-deps --no-build-isolation -e .
+          python scripts/check_requirements_lock.py --drift
 
       - name: Lint (syntax/undefined names only)
         run: ruff check . --select=E9,F63,F7,F82 --exclude vaf/tools/coder_templates

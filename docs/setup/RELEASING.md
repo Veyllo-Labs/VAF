@@ -98,6 +98,11 @@ waiting for a stable `X.Y.Z`.
 ## Cutting a release
 
 1. Make sure `main` is green in CI and everything intended for the release is merged.
+   CI and the release gate install `requirements.lock`, so they test the locked versions.
+   What `vaf update` and the installers give users is the newest `requirements.txt`
+   allows, and that is tested by the daily "VAF CI (newest dependencies)" run
+   (`.github/workflows/ci-latest-deps.yml`): its last run should be green, or its red
+   understood (its job summary lists the versions that moved), before you tag.
 2. Bump `vaf/version.py` (the single source of truth) to the new version, and bump
    `web/package.json` to the npm/semver spelling of the same version
    (e.g. `0.1.0a0` -> `0.1.0-alpha.0`, `0.1.0` -> `0.1.0`). The release workflow fails
@@ -141,12 +146,12 @@ waiting for a stable `X.Y.Z`.
    the install command or the probe changes, so environments of the old recipe
    are rebuilt. The environment is installed from the hash-locked tree
    `vaf/core/vllm_requirements.lock`; regenerate it with the PIN, from the repository
-   root in the same throwaway venv as `requirements.lock` (pip==26.1.2,
-   pip-tools==7.5.3, Python 3.13): edit the `vllm==` line of
+   root in a throwaway venv with pip==26.1.2 and pip-tools==7.5.3 (Python 3.13;
+   pip-tools is this lock's tool only, `requirements.lock` is made with uv): edit the `vllm==` line of
    `vaf/core/vllm_requirements.in`, run `pip-compile --allow-unsafe --generate-hashes
    --output-file=vaf/core/vllm_requirements.lock vaf/core/vllm_requirements.in`
    (it resolves metadata and hashes only, nothing is installed; the lock's header then
-   shows `--no-index`, which pip-tools 7.5.3 writes itself, as in `requirements.lock`), then
+   shows `--no-index`, which pip-tools 7.5.3 writes itself), then
    `venv/bin/python scripts/check_vllm_lock.py`, which must report 0 problems for
    every supported target; a conflict it reports goes into the input as a constraint
    (the `numpy<2.4` cap is one). `tests/test_vllm_lock.py` refuses a lock whose vllm

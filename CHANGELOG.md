@@ -416,6 +416,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   connected, your agent asks it at most twice per turn and then tells you to open the app; its
   send tools say the message is kept and whether a push notice goes out. VAF calls the paired
   device the Veyllo App everywhere.
+- **CI now tests every push and release against `requirements.lock`**, one hash-pinned lock
+  for Linux, macOS and Windows on Python 3.10 to 3.13, so a new upstream release can no longer
+  turn a push red that the local checks passed. A separate daily run installs the newest
+  versions and reports what broke without blocking anything. `scripts/ci_check.sh` runs in a
+  venv built from the same lock and no longer installs anything into your `venv/`.
 
 ### Security
 

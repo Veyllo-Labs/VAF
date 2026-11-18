@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
+#
+# uv settings for regenerating requirements.lock (the command is in the lock's header and in
+# the lock-sync job of .github/workflows/ci.yml). Run it from the repository root: uv writes the
+# command into the header verbatim, so this path must stay relative.
+
+# sherpa-onnx publishes linux_armv7l wheels whose metadata has no Requires-Dist, while every
+# other wheel of the same release requires sherpa-onnx-core at the same version. A universal
+# resolution reads the empty metadata and drops sherpa-onnx-core from the lock, and then
+# `pip install --require-hashes` fails on every target. A floor on sherpa-onnx-core in the
+# manifest does not help: uv then picks the newest core, which no sherpa-onnx release accepts.
+# This entry restates what the other wheels declare. It must name the version the lock pins
+# (tests/test_python_ci_lock.py refuses a stale one), so it moves with every sherpa-onnx bump.
+[[dependency-metadata]]
+name = "sherpa-onnx"
+version = "1.13.4"
+requires-dist = ["sherpa-onnx-core==1.13.4"]

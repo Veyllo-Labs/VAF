@@ -1,8 +1,14 @@
 name: test
 
 # Reusable workflow: the actual build + lint + test steps. Called by ci.yml (lean,
-# per-push) and ci-nightly.yml (full matrix, scheduled/on-demand) with different
-# matrices, so the steps live in exactly one place.
+# per-push), ci-nightly.yml (full matrix, scheduled/on-demand) and ci-latest-deps.yml
+# (newest dependency versions, scheduled) with different matrices and installs, so the
+# steps live in exactly one place.
+#
+# The job id `build-and-test` and the caller job `test` in ci.yml form the names of the
+# required status checks ("test / build-and-test (ubuntu-latest, 3.10)"). Renaming either,
+# giving this job a `name:`, or changing a matrix pair of ci.yml strands the branch
+# ruleset (tests/test_python_ci_lock.py pins them).
 
 on:
   workflow_call:
@@ -10,6 +16,14 @@ on:
       matrix:
         description: 'JSON object of matrix combinations, e.g. {"include":[{"os":"ubuntu-latest","python-version":"3.12"}]}'
         required: true
+        type: string
+      deps:
+        # lock: requirements.lock, hash-checked (every push, the nightly matrix). latest: the
+        # newest versions requirements.txt allows, what `vaf update` and the installers give a
+        # user (the scheduled ci-latest-deps.yml only, never a push).
+        description: 'lock or latest'
+        required: false
+        default: 'lock'
         type: string
 
 jobs:
@@ -41,15 +55,37 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y python3-dev
 
-    - name: Install dependencies
+    # Full runtime deps: the `vaf` CLI smoke test imports the whole app (web server,
+    # tools, ...), so the slim editable base is not enough. The lock also provides ruff
+    # and pytest.
+    #
+    # The lock, not requirements.txt: a push is tested on exactly the versions the local
+    # gate (scripts/ci_check.sh) tested. Installing requirements.txt here resolved the
+    # newest releases instead, so an upstream release the afternoon before turned a push
+    # red that every local check had passed. The newest versions are tested on their own,
+    # daily, by ci-latest-deps.yml. pip is pinned too: an unpinned pip is the one input
+    # that changes without a commit. --no-build-isolation builds the editable install
+    # with the locked setuptools instead of whatever PyPI serves that minute. The drift
+    # check proves the runner really holds the lock and nothing else.
+    # bash on every runner: pwsh judges a multi-line step by its LAST command only, so a
+    # failed install followed by a working one would pass.
+    - name: Install dependencies (requirements.lock)
+      if: inputs.deps == 'lock'
+      shell: bash
       run: |
-        python -m pip install --upgrade pip
-        # Full runtime deps: the `vaf` CLI smoke test imports the whole app (web
-        # server, tools, ...), so installing only the slim editable base is not
-        # enough (fastapi/uvicorn/... live in requirements.txt, not setup.py's
-        # base). requirements.txt also provides ruff + pytest.
-        pip install -r requirements.txt
-        pip install -e .
+        python -m pip install "pip==26.1.2"
+        python -m pip install --require-hashes -r requirements.lock
+        python -m pip install --no-deps --no-build-isolation -e .
+        python scripts/check_requirements_lock.py --drift
+
+    - name: Install dependencies (newest versions)
+      if: inputs.deps == 'latest'
+      shell: bash
+      run: |
+        python -m pip install "pip==26.1.2"
+        python -m pip install -r requirements.txt
+        python -m pip install -e .
+        python scripts/check_requirements_lock.py --drift --report >> "$GITHUB_STEP_SUMMARY"
 
     - name: Lint with Ruff
       run: |

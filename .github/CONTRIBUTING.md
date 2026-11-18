@@ -17,9 +17,11 @@ For anything beyond a small fix, please open an issue first to discuss the chang
     ```bash
     git clone https://github.com/YOUR-USERNAME/VAF.git
     cd VAF
-    pip install -r requirements.txt   # Python runtime deps (this is what CI installs)
-    pip install -e .                  # install the vaf package + the `vaf` CLI entry point
+    pip install --require-hashes -r requirements.lock  # Python runtime deps, exactly as CI installs them
+    pip install --no-deps -e .                          # the vaf package + the `vaf` CLI entry point
     ```
+    `requirements.txt` gives you the newest versions its ranges allow instead, which is what
+    `vaf update` and the installers do (see [Dependencies and the lock](#dependencies-and-the-lock)).
     For the **full runtime** (Docker memory stack + Web UI + tray), run `./install.sh` instead - it
     provisions Python, Node, Docker and the Web UI for you.
 
@@ -77,6 +79,42 @@ For anything beyond a small fix, please open an issue first to discuss the chang
     ```bash
     git push origin feature/amazing-feature
     ```
+
+## Dependencies and the lock
+
+`requirements.txt` (which includes `requirements-headless.txt`) states the ranges VAF
+supports. `requirements.lock` is one hash-pinned resolution of it for every operating system
+and Python version CI tests (Linux, macOS and Windows, Python 3.10 to 3.13). Every push, the
+nightly full matrix, the release gate and `scripts/ci_check.sh` install the lock with
+`pip install --require-hashes`, so a new upstream release cannot turn a push red that your
+local checks passed. `scripts/ci_check.sh` builds a venv of its own from the lock (cached
+under `~/.cache/vaf-ci/`, a few minutes the first time) and never installs into your `venv/`.
+
+**When you change a requirements file**, regenerate the lock in the same commit, from the
+repository root, with the committed lock present (uv then keeps every pin that still fits),
+in a throwaway venv with the uv version the `lock-sync` job in `.github/workflows/ci.yml` pins:
+
+```bash
+pip install "uv==0.13.6"
+uv pip compile requirements.txt --config-file requirements-lock.toml --universal --generate-hashes --python-version 3.10 -o requirements.lock
+python scripts/check_requirements_lock.py   # every CI target must report 0 problems
+```
+
+The `lock-sync` job runs the same command and fails when the result differs from the
+committed lock. `requirements-lock.toml` carries uv's settings: today one override for a
+package whose wheels declare their requirements inconsistently (the comment there explains
+it).
+
+**Moving a pin on purpose** (a security fix, a feature you need): add
+`--upgrade-package <name>` to the command above, or `--upgrade` for everything, and review
+the diff.
+
+**The newest versions** are tested daily by "VAF CI (newest dependencies)"
+(`.github/workflows/ci-latest-deps.yml`): it installs `requirements.txt` the way `vaf update`
+does and runs the same suite. It never blocks a push. When it is red, its job summary lists
+the installed versions that differ from the lock: reproduce with the newer version, then fix
+the code or cap the range (in `requirements*.txt`, `pyproject.toml` and
+`docs/legal/THIRD_PARTY.md` alike), and refresh the lock as above.
 
 ## PR Guidelines
 

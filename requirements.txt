@@ -1,6 +1,8 @@
 # VAF - Veyllo Agentic Framework
 # The full list: the headless set plus what only a desktop session uses. This
-# is what CI, the release job, install.ps1 and a desktop install.sh install.
+# is what install.ps1, a desktop install.sh, `vaf update` and the daily
+# newest-dependencies CI run install. Push CI and the release gate install
+# requirements.lock, resolved from it (.github/CONTRIBUTING.md).
 -r requirements-headless.txt
 
 # Desktop only: the tray icon, the desktop window and the terminal microphone

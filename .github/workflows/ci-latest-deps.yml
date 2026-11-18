@@ -1,0 +1,35 @@
+name: VAF CI (newest dependencies)
+
+# Every push, the nightly matrix and the release gate install requirements.lock, so they
+# test exactly what the local gate tested. Users do not get the lock: `vaf update` and the
+# installers resolve requirements.txt, which means the newest release each range allows.
+# This run installs that set and runs the same suite, so a new upstream release that breaks
+# VAF shows up here, within a day, instead of on a user's machine.
+#
+# It never blocks anything: no push, pull request or tag starts it, it is not a required
+# check (the caller job is deliberately not called `test`, so its checks read
+# "latest / build-and-test (...)" and cannot match a ruleset context), and no workflow
+# `needs` it. A failed run is red and GitHub mails it to the account that last changed the
+# cron line below. Each job's summary lists the installed versions that differ from the
+# lock, so a red run names the releases to look at.
+#
+# When it is red: reproduce with the newer version, fix the code or cap the range in
+# requirements*.txt and pyproject.toml, then refresh the lock on purpose
+# (`uv pip compile ... --upgrade-package <name>`, .github/CONTRIBUTING.md). This run never
+# changes the lock itself.
+
+on:
+  schedule:
+    - cron: '30 5 * * *'   # 05:30 UTC daily, after the 04:00 nightly
+  workflow_dispatch: {}     # manual trigger from the Actions tab
+
+permissions:
+  contents: read
+
+jobs:
+  latest:
+    uses: ./.github/workflows/_test.yml
+    with:
+      deps: latest
+      # The push matrix's six pairs, so a red job maps one to one onto a push target.
+      matrix: '{"include":[{"os":"ubuntu-latest","python-version":"3.10"},{"os":"ubuntu-latest","python-version":"3.11"},{"os":"ubuntu-latest","python-version":"3.12"},{"os":"ubuntu-latest","python-version":"3.13"},{"os":"macos-latest","python-version":"3.12"},{"os":"windows-latest","python-version":"3.12"}]}'

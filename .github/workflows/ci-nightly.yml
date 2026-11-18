@@ -4,6 +4,9 @@ name: VAF CI (full matrix)
 # Runs once a day and on demand (the "Run workflow" button) rather than on every
 # push, so version-/OS-specific regressions are still caught without slowing down
 # per-commit feedback or burning Actions minutes on every commit.
+#
+# It installs requirements.lock like every push, so it is also the daily proof that the
+# one universal lock installs on the six OS/Python pairs the push matrix skips.
 
 on:
   schedule:
@@ -14,4 +17,5 @@ jobs:
   test:
     uses: ./.github/workflows/_test.yml
     with:
+      deps: lock
       matrix: '{"include":[{"os":"ubuntu-latest","python-version":"3.10"},{"os":"ubuntu-latest","python-version":"3.11"},{"os":"ubuntu-latest","python-version":"3.12"},{"os":"ubuntu-latest","python-version":"3.13"},{"os":"macos-latest","python-version":"3.10"},{"os":"macos-latest","python-version":"3.11"},{"os":"macos-latest","python-version":"3.12"},{"os":"macos-latest","python-version":"3.13"},{"os":"windows-latest","python-version":"3.10"},{"os":"windows-latest","python-version":"3.11"},{"os":"windows-latest","python-version":"3.12"},{"os":"windows-latest","python-version":"3.13"}]}'

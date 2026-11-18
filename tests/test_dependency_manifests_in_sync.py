@@ -20,12 +20,13 @@ files declare, and both are edited by hand:
 
 Neither drift was caught by anything, so both are pinned here.
 
-A third mirror is an UPPER BOUND. requirements.txt is what CI and the release job
-install, pyproject.toml is what a pip install of the package resolves, and the
-THIRD_PARTY row states the range. A cap in one and not the other hands one of the
-three a major release nobody tested: CI installed mcp 2.x from an uncapped
-requirements.txt while the lock held 1.x, and the remote MCP tests failed on a
-renamed class.
+A third mirror is an UPPER BOUND. requirements.txt is what the installers, `vaf
+update` and the scheduled newest-versions CI run install (push CI and the release
+gate install requirements.lock, resolved from it), pyproject.toml is what a pip
+install of the package resolves, and the THIRD_PARTY row states the range. A cap in
+one and not the other hands one of the three a major release nobody tested: CI once
+installed mcp 2.x from an uncapped requirements.txt while the lock held 1.x, and the
+remote MCP tests failed on a renamed class.
 
 A fourth is a FLOOR, for the packages whose floor a VAF behaviour needs. An update
 (``pip install -r`` of the installation's requirements file) keeps an installed version
@@ -241,15 +242,16 @@ def test_the_bootstrap_installs_the_requirements_file_of_this_installation(
 
 
 def test_the_lock_check_regenerates_from_both_requirement_files():
-    """pip-compile reads the include, so the local lock check must copy it and count a
-    change to it. MUTATION: drop requirements-headless.txt from REQ_FILES, or copy only
-    requirements.txt again - red."""
+    """uv reads the include and its settings file, so the local lock check must copy both
+    and count a change to either. MUTATION: drop requirements-headless.txt from REQ_FILES,
+    copy only requirements.txt again, or leave requirements-lock.toml out of the copy - red."""
     sh = (ROOT / "scripts" / "ci_check.sh").read_text(encoding="utf-8")
     stage = sh[sh.index("=== 5/9"):sh.index("=== 6/9")]
     assert f'REQ_FILES="requirements.txt {HEADLESS_REQUIREMENTS}"' in stage
-    assert "git diff --name-only origin/main...HEAD -- $REQ_FILES" in stage
-    assert "git diff --name-only -- $REQ_FILES)" in stage
-    assert 'cp $REQ_FILES requirements.lock "$LOCK_TMP/"' in stage
+    assert 'LOCK_CONFIG="requirements-lock.toml"' in stage
+    assert "git diff --name-only origin/main...HEAD -- $REQ_FILES $LOCK_CONFIG" in stage
+    assert "git diff --name-only -- $REQ_FILES $LOCK_CONFIG)" in stage
+    assert 'cp $REQ_FILES $LOCK_CONFIG requirements.lock "$LOCK_TMP/"' in stage
     assert "cp requirements.txt requirements.lock" not in stage
 
 
@@ -333,7 +335,8 @@ def test_an_upper_bound_is_the_same_in_every_manifest_that_names_the_package():
             drift[name] = seen
     assert not drift, (
         "An upper bound differs between the manifests that name the package "
-        f"(requirements.txt is what CI and releases install, pyproject.toml what pip resolves): {drift}"
+        f"(requirements.txt is what installers and `vaf update` install, pyproject.toml what pip "
+        f"resolves): {drift}"
     )
 
 
@@ -356,8 +359,8 @@ def _assert_floor(package: str, minimum: str, why: str) -> None:
     assert set(floors) == {"requirements.txt", "pyproject.toml", "THIRD_PARTY.md"}, (
         f"{package} is missing from a manifest: {floors}")
     assert len(set(floors.values())) == 1, (
-        f"{package}'s floor differs between the manifests (requirements.txt is what CI and "
-        f"releases install, pyproject.toml what pip resolves): {floors}")
+        f"{package}'s floor differs between the manifests (requirements.txt is what installers "
+        f"and `vaf update` install, pyproject.toml what pip resolves): {floors}")
     floor = floors["requirements.txt"]
     assert floor is not None and Version(floor) >= Version(minimum), (
         f"{package}'s floor {floor} is below {minimum}: {why}")
@@ -368,9 +371,9 @@ def test_the_uvicorn_floor_is_where_a_websocket_makes_its_sender_wait():
     """The door serves uvicorn's sans-I/O WebSocket protocol (vaf/network/door.py
     WS_PROTOCOL), which defines its own pause_writing, and so makes a sender wait while its
     client reads nothing, from uvicorn 0.52.1. The floor is 0.53.0, the first release the
-    door's tests ran on and the one the docs name. CI and releases install requirements.txt
-    and a pip install resolves pyproject.toml, so each of them must hold uvicorn at or above
-    it. MUTATION: the pyproject.toml floor back to >=0.27.0, requirements.txt to >=0.52.0, or
+    door's tests ran on and the one the docs name. Installers and `vaf update` install
+    requirements.txt and a pip install resolves pyproject.toml, so each of them must hold
+    uvicorn at or above it. MUTATION: the pyproject.toml floor back to >=0.27.0, requirements.txt to >=0.52.0, or
     all three at >=0.52.1 - red."""
     _assert_floor("uvicorn", "0.53.0",
                   "the door's WebSocket makes a sender wait only from 0.52.1, and 0.53.0 is the "

@@ -30,7 +30,8 @@ def _fmt(currencies: dict, legacy: float) -> str:
 @app.command("show")
 def show(days: int = typer.Option(30, "--days", "-d", help="Period to report on")) -> None:
     """Print totals, per account and per provider, for the last N days."""
-    from vaf.core.cost import PRICES_AS_OF, usage_totals
+    from vaf.core.cost import (LEDGER_KEEP_DAYS, PRICES_AS_OF, alias_rows_priced_as_unknown,
+                               usage_totals)
 
     data = usage_totals(days=days)
     totals = data.get("totals") or {}
@@ -46,6 +47,17 @@ def show(days: int = typer.Option(30, "--days", "-d", help="Period to report on"
     if totals.get("estimated_usd_incomplete"):
         UI.console.print("[dim]Some calls used a model that is not in the price list. Those are "
                          "priced at the expensive end, so the cost estimate is an upper bound.[/dim]")
+    # Why a total can still be high after the alias got a price: its old rows were
+    # booked at the unknown-model rate and are kept as recorded. Decided from the
+    # rows themselves (an amount no call under the alias can reach today), so the
+    # line goes away with the last of them.
+    old_rows = alias_rows_priced_as_unknown(totals.get("providers") or {})
+    if old_rows:
+        keep = min(int(data.get("days", days) or days), LEDGER_KEEP_DAYS)
+        UI.console.print(f"[dim]Amounts recorded under {', '.join(old_rows)} by earlier versions "
+                         f"are kept\nas they were, not repriced. They leave this view once they are "
+                         f"{keep} day{'' if keep == 1 else 's'} old.\n"
+                         f"New calls are priced at the model that answered.[/dim]")
 
     if totals.get("estimated_tokens"):
         UI.event("Usage", f"{totals['estimated_tokens']:,} of those tokens are estimated "

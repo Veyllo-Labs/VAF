@@ -207,6 +207,9 @@ UNKNOWN_PRICE = (15.00, 75.00)
 # Local models cost no API money. They still burn electricity, which this
 # module deliberately does not pretend to price.
 FREE_PROVIDERS = frozenset({"local", ""})
+# How many days a spend ledger keeps: enough to answer "who spent what", small
+# enough to stay a file. Also the longest period an old amount can stay in view.
+LEDGER_KEEP_DAYS = 60
 
 
 @dataclass
@@ -713,9 +716,7 @@ def _record_spend_locked(path: Path, estimate: CostEstimate,
         _provs[_pkey] = _pslot
         entry["providers"] = _provs
         days[day] = entry
-        # Keep the last 60 days: enough to answer "who spent what", small enough
-        # to stay a file.
-        for stale in sorted(days)[:-60]:
+        for stale in sorted(days)[:-LEDGER_KEEP_DAYS]:
             days.pop(stale, None)
         data = {"format": SPEND_FORMAT, "days": days}
         tmp = path.with_suffix(".json.tmp")
@@ -760,6 +761,42 @@ def _merge_currencies(target: dict, entry: dict) -> None:
     rest = round(total - sum(float(v or 0.0) for v in known.values()), 6)
     if rest > 0.000001:
         target["?"] = round(float(target.get("?") or 0.0) + rest, 6)
+
+
+def alias_rows_priced_as_unknown(providers: dict) -> list:
+    """The ``provider/alias`` rows of a usage breakdown whose amount is above
+    anything that alias costs at today's prices. Never raises.
+
+    Earlier versions booked a call under the routing alias (``deepseek-auto``),
+    which then had no price, so it paid the unknown-model rate. Those amounts
+    stay as recorded (a slot keeps total tokens and an amount, not the in/out
+    split or which model served, so nothing could reprice them), and a reader
+    needs to tell them from what is booked under the alias now: a call that
+    reached no provider, priced at the alias's dearer target. That target's
+    highest rate times the row's tokens is the most any such call can cost; each
+    call is rounded to six decimals, hence the allowance per call. The
+    unknown-model rate is several times above it, so the old rows clear it.
+    """
+    out = []
+    try:
+        for key, row in (providers or {}).items():
+            prov, _, model = str(key).partition("/")
+            catalog = _model_catalog.provider_catalog(prov)
+            if catalog is None or model.strip().lower() not in catalog.aliases:
+                continue
+            hit = _model_catalog.find_model(model, priced=True, through_alias=True)
+            tokens = int((row or {}).get("tokens") or 0)
+            if hit is None or tokens <= 0:
+                continue
+            entry = hit[1]
+            top = max(r or 0.0 for r in (entry.input, entry.output,
+                                         entry.long_input, entry.long_output))
+            ceiling = tokens * top / 1_000_000 + int(row.get("calls") or 0) * 1e-6
+            if float(row.get("usd") or 0.0) > ceiling:
+                out.append(str(key))
+    except Exception:
+        return out
+    return sorted(out)
 
 
 def usage_totals(days: int = 30) -> dict:

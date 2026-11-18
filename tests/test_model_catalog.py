@@ -595,6 +595,64 @@ def test_usage_show_says_when_the_estimate_is_an_upper_bound(monkeypatch):
     assert note not in _show(False)
 
 
+def test_usage_show_explains_the_old_alias_rows(monkeypatch):
+    """Rows booked under deepseek-auto before it had a price paid the
+    unknown-model rate and are kept as recorded, so the total stays high until
+    they age out. The CLI says so, but only for such rows: a call booked under
+    the alias today (it reached no provider) is priced at the pro target and
+    must not trigger the line. MUTATION: delete the line, print it for every
+    alias row (drop the ceiling in `alias_rows_priced_as_unknown`), or take the
+    ceiling from the fast target (the fallback row trips the line)."""
+    from typer.testing import CliRunner
+
+    from vaf.cli.cmd import usage as usage_cmd
+
+    # 802,815 tokens at the unknown-model rate came to 13.66 over 72 calls.
+    old = {"tokens": 802_815, "calls": 72, "usd": 13.66, "currencies": {"USD": 13.66}}
+    # 4 calls of 2,000 in / 900 out at the pro rates: 0.006204 each.
+    fallback = {"tokens": 11_600, "calls": 4, "usd": 0.024816, "currencies": {"USD": 0.024816}}
+    flash = {"tokens": 31_200, "calls": 3, "usd": 0.002502, "currencies": {"USD": 0.002502}}
+
+    def _show(providers, *args):
+        monkeypatch.setattr(cost, "usage_totals", lambda days=30: {
+            "days": days, "totals": {"tokens": 1, "calls": 1, "usd": 1.0,
+                                     "currencies": {"USD": 1.0},
+                                     "estimated_usd_incomplete": True,
+                                     "providers": providers},
+            "users": []})
+        result = CliRunner().invoke(usage_cmd.app, ["show", *args])
+        assert result.exit_code == 0, result.output
+        return " ".join(result.output.split())
+
+    line = ("Amounts recorded under deepseek/deepseek-auto by earlier versions are kept "
+            "as they were, not repriced. They leave this view once they are 30 days old. "
+            "New calls are priced at the model that answered.")
+    assert line in _show({"deepseek/deepseek-auto": old, "deepseek/deepseek-flash": flash})
+    assert "earlier versions" not in _show({"deepseek/deepseek-auto": fallback,
+                                            "deepseek/deepseek-flash": flash})
+    assert "earlier versions" not in _show({"deepseek/deepseek-flash": flash})
+    # The period shown, but never longer than the ledger keeps a day.
+    assert "once they are 7 days old" in _show({"deepseek/deepseek-auto": old}, "--days", "7")
+    assert "once they are 60 days old" in _show({"deepseek/deepseek-auto": old}, "--days", "90")
+
+
+def test_an_alias_row_at_todays_ceiling_is_not_taken_for_an_old_one():
+    """The boundary: every token billed at the dearest pro rate (output, 3.96),
+    rounded per call, is still a row booked today. MUTATION: drop the per-call
+    rounding allowance and compare with `>=`."""
+    tokens, calls = 1_000_001, 3
+    at_ceiling = {"tokens": tokens, "calls": calls,
+                  "usd": round(tokens * 3.96 / 1_000_000, 6) + calls * 5e-7}
+    assert cost.alias_rows_priced_as_unknown({"deepseek/deepseek-auto": at_ceiling}) == []
+    above = dict(at_ceiling, usd=at_ceiling["usd"] + calls * 1e-6 + 1e-6)
+    assert cost.alias_rows_priced_as_unknown({"deepseek/deepseek-auto": above}) == [
+        "deepseek/deepseek-auto"]
+    # Not an alias, or an alias of another provider's name: never.
+    assert cost.alias_rows_priced_as_unknown({
+        "deepseek/brand-new": {"tokens": 10, "calls": 1, "usd": 99.0},
+        "openai/deepseek-auto": {"tokens": 10, "calls": 1, "usd": 99.0}}) == []
+
+
 # ── AC15: the docs name the catalog defaults ─────────────────────────────────
 
 def test_config_schema_default_table_matches_the_catalog():

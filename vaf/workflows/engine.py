@@ -1265,12 +1265,16 @@ class WorkflowEngine:
                 error = step.error
                 UI.error(f"  → {step.error}")
                 # An observer that fails on this event must not take the recovery below
-                # (optional, on_failure) with it.
+                # (optional, on_failure) with it, and neither may a logging handler that fails
+                # on the warning about it.
                 try:
                     self.callback("error", step, i, len(steps))
                 except Exception as cb_exc:
-                    _log.warning("workflow progress callback failed on a refused step: %s",
-                                 cb_exc)
+                    try:
+                        _log.warning("workflow progress callback failed on a refused step: %s",
+                                     cb_exc)
+                    except Exception:
+                        pass
                 if stop_on_error and not step.optional and not step.on_failure:
                     break
                 _step_idx = self._branch_step(_step_idx, step, steps, outputs, error)

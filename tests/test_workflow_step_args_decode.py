@@ -233,6 +233,24 @@ def test_an_observer_that_fails_on_the_refusal_does_not_stop_the_recovery():
     assert ("error", 2) in events and ("start", 3) in events
 
 
+def test_a_failing_log_handler_does_not_stop_the_recovery_either(monkeypatch):
+    """The warning about the observer is best effort: a handler that raises on it must not
+    take optional/on_failure with it."""
+    def broken_warning(*args, **kwargs):
+        raise RuntimeError("log handler broke")
+
+    monkeypatch.setattr(engine_module._log, "warning", broken_warning)
+
+    def observer(event, step, i, total):
+        if event == "error":
+            raise RuntimeError("observer broke")
+
+    engine, steps, search, bash, listing = _chain(deep_object(10000), optional=True,
+                                                  callback=observer)
+    engine.execute(steps, variables={})
+    assert len(listing.calls) == 1, "a failing log handler stopped the recovery"
+
+
 @_NEEDS_DIGIT_LIMIT
 @pytest.mark.usefixtures("int_digit_limit")
 def test_an_integer_past_the_digit_limit_is_passed_on_as_text(lane):

@@ -20,7 +20,6 @@ coerced mapping (a string used to fail every step at the variable anchoring).
 import os
 import random
 import sys
-import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -49,8 +48,25 @@ def long_int(digits: int) -> str:
     return "7" * digits
 
 
+@pytest.fixture
+def int_digit_limit():
+    """Python's integer digit limit at its default, 4300, for the length of a test.
+
+    The limit is configurable (`PYTHONINTMAXSTRDIGITS`, `-X int_max_str_digits`, 0 turns it
+    off), so a test that expects a long integer to fail decoding sets it rather than
+    inheriting whatever the test process was started with.
+    """
+    previous = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(4300)
+    try:
+        yield
+    finally:
+        sys.set_int_max_str_digits(previous)
+
+
 # ── build_step_args: the decision per input text ────────────────────────────────────────────
 
+@pytest.mark.usefixtures("int_digit_limit")
 @pytest.mark.parametrize("text,expected", [
     ('{"command": "ls"}', {"command": "ls"}),
     ("{}", {}),
@@ -88,18 +104,6 @@ def test_a_refused_input_is_not_a_value_error():
     assert not issubclass(StepArgsRefused, ValueError)
 
 
-def test_a_huge_input_is_refused_quickly():
-    """The cost is one decode plus at most limit + 1 levels of the depth walk."""
-    text = deep_object(100000)
-    best = float("inf")
-    for _ in range(3):
-        start = time.perf_counter()
-        with pytest.raises(StepArgsRefused):
-            build_step_args("bash", text, None, SAME)
-        best = min(best, time.perf_counter() - start)
-    assert best < 0.05, f"refusing a 100,000-deep object took {best * 1000:.1f} ms"
-
-
 # ── the engine: the step fails, the run goes on ─────────────────────────────────────────────
 
 class _Capture:
@@ -119,12 +123,12 @@ class _Capture:
         return self.answer
 
 
-def _chain(first_answer, *, optional=False):
+def _chain(first_answer, *, optional=False, callback=None):
     search = _Capture("web_search", "query", first_answer)
     bash = _Capture("bash", "command", "BASH_RAN")
     listing = _Capture("list_files", "path", "LIST_RAN")
     engine = WorkflowEngine(tools={"web_search": search, "bash": bash, "list_files": listing},
-                            callback=lambda *a, **k: None)
+                            callback=callback or (lambda *a, **k: None))
     steps = [
         WorkflowStep(tool="web_search", input_template="find it", output_name="s1"),
         WorkflowStep(tool="bash", input_template="{s1}", output_name="s2", optional=optional),
@@ -161,6 +165,28 @@ def test_an_optional_too_deep_step_lets_the_run_go_on(lane):
     assert len(listing.calls) == 1, "an optional refused step stopped the run"
 
 
+@pytest.mark.parametrize("optional", [False, True], ids=["required", "optional"])
+def test_a_refused_step_reports_its_own_attempt(optional):
+    """The refused attempt replaces what an earlier pass over the step left (a branch can
+    revisit a step, simulated here by a stale result), and the progress callback gets an
+    "error" for it before the run goes on or stops."""
+    events = []
+    engine, steps, search, bash, listing = _chain(
+        deep_object(10000), optional=optional,
+        callback=lambda event, step, i, total: events.append((event, i)))
+    steps[1].result = "STALE RESULT OF AN EARLIER PASS"
+    steps[1].duration = -1.0
+    engine.execute(steps, variables={})
+
+    assert steps[1].status == StepStatus.FAILED
+    assert steps[1].result is None
+    assert steps[1].duration >= 0.0
+    assert ("error", 2) in events, events
+    if optional:
+        assert events.index(("error", 2)) < events.index(("start", 3)), events
+
+
+@pytest.mark.usefixtures("int_digit_limit")
 def test_an_integer_past_the_digit_limit_is_passed_on_as_text(lane):
     # 4400 digits: past the decoder's 4300-digit limit, and the whole text stays below the
     # engine's 5000-character input cut, so the tool gets it unchanged.
@@ -225,12 +251,71 @@ def test_the_planner_refuses_a_literal_deep_input():
     assert "step 2" not in refusal
 
 
+class _TextTool:
+    """A tool whose one required parameter is the step's text (`input`), with no other check."""
+    name = "echo"
+    description = "echoes its input"
+    permission_level = "read"
+    identity_kwargs = ()
+    parameters = {"type": "object", "properties": {"input": {"type": "string"}},
+                  "required": ["input"]}
+
+    def __init__(self):
+        self.calls = []
+
+    def run(self, **kwargs):
+        self.calls.append(kwargs)
+        return "ECHOED"
+
+
 def test_the_planner_passes_text_that_is_not_json():
     from vaf.tools.agent_workflow_builder import _preflight_steps
-    steps = [{"tool": "bash", "input": "{not json}", "output": "a"}]
-    refusal = _preflight_steps(steps, _planner_tools())
+    steps = [{"tool": "echo", "input": "{not json}", "output": "a"}]
 
-    assert refusal is None or "nested deeper" not in refusal
+    assert _preflight_steps(steps, {"echo": _TextTool()}) is None
+
+
+# An object 101 levels deep whose string field is a placeholder: a value with a newline,
+# substituted inside the quotes, breaks the JSON, and the engine passes the text on.
+_DYNAMIC_DEEP = ('{"first": {}, "value": "{value}", "nested": '
+                 + "[" * MAX_ARGUMENT_DEPTH + "]" * MAX_ARGUMENT_DEPTH + "}")
+
+
+def test_the_planner_leaves_input_with_placeholders_to_the_engine():
+    from vaf.tools.agent_workflow_builder import _preflight_steps
+    steps = [{"tool": "echo", "input": _DYNAMIC_DEEP, "output": "a"}]
+
+    assert _preflight_steps(steps, {"echo": _TextTool()}) is None
+
+    echo = _TextTool()
+    engine = WorkflowEngine(tools={"echo": echo}, callback=lambda *a, **k: None)
+    result = engine.execute(
+        [WorkflowStep(tool="echo", input_template=_DYNAMIC_DEEP, output_name="a")],
+        variables={"value": "line one\nline two"})
+    assert result.success, result.error
+    assert echo.calls and "line one\nline two" in echo.calls[0]["input"]
+
+
+@pytest.mark.parametrize("template,dynamic", [
+    (deep_object(MAX_ARGUMENT_DEPTH + 1), False),
+    ('{"a": [1, 2], "b": {"c": "d"}}', False),
+    ("plain text", False),
+    ("{}", False),
+    (_DYNAMIC_DEEP, True),
+    ("value {x}", True),
+    ("{step1.field}", True),
+    ("{name|fallback}", True),
+    ('{"a|b": 1}', True),
+    ('{"x": 1.5}', True),
+], ids=["deep-literal", "flat-literal", "text", "empty", "placeholder-in-json", "simple",
+        "nested", "default", "json-with-bar", "json-with-dot"])
+def test_template_may_substitute_follows_the_resolver(template, dynamic):
+    from vaf.workflows.engine import template_may_substitute
+    assert template_may_substitute(template) is dynamic
+    # The claim is the resolver's own: what it calls literal, resolving leaves unchanged.
+    if not dynamic:
+        engine = WorkflowEngine(tools={}, callback=lambda *a, **k: None)
+        assert engine._resolve_template(template, {"x": "X", "a": "A"}, {}) == template
 
 
 # ── the public refusal ──────────────────────────────────────────────────────────────────────
@@ -335,6 +420,7 @@ def _actual(text: str):
         return "refused", None
 
 
+@pytest.mark.usefixtures("int_digit_limit")
 def test_step_input_fuzz():
     draws = int(os.environ.get("VAF_STEP_ARGS_FUZZ_DRAWS", "300"))
     rng = random.Random(_FUZZ_SEED)

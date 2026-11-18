@@ -127,6 +127,26 @@ def _infer_step_args(tool_name: str, value: str) -> Dict[str, Any]:
     return args
 
 
+# A `{placeholder}` as `WorkflowEngine._resolve_template` finds it.
+_PLACEHOLDER_RE = re.compile(r"\{([^}]+)\}")
+
+
+def template_may_substitute(template: str) -> bool:
+    """Whether resolving `template` can change it, by the rules of `_resolve_template`.
+
+    A match whose text holds a double quote is the inside of a JSON object (`{"a": 1}`), which
+    the resolver passes through unchanged, unless it holds `|` (a default) or `.` (a nested
+    lookup), which the resolver acts on. Any other match may name a variable or a step's
+    output. A planner checking a step before it runs leaves such input to the engine, which
+    sees it resolved.
+    """
+    for match in _PLACEHOLDER_RE.finditer(template or ""):
+        key = match.group(1)
+        if "|" in key or "." in key or '"' not in key:
+            return True
+    return False
+
+
 class StepArgsRefused(Exception):
     """A step's resolved input is a JSON object nested too deeply to be its arguments.
 
@@ -159,8 +179,9 @@ def build_step_args(tool_name: str, input_template: str, args_template: Optional
     The resolved input is decoded with `tool_dispatch.decode_arguments`, the funnel's own
     decoder. An object nested deeper than `MAX_ARGUMENT_DEPTH` levels, text too deep for the
     decoder at all included, raises `StepArgsRefused` with the funnel's depth refusal; text
-    that is not valid JSON, an integer past Python's digit limit included, is the single
-    argument. The input usually arrives through a `{placeholder}` holding a fetched page or
+    that is not valid JSON, an integer past Python's active digit limit included, is the
+    single argument. The depth is measured only once the text decodes, so an over-deep object
+    that also holds such an integer is text. The input usually arrives through a `{placeholder}` holding a fetched page or
     an API answer, and such text used to raise `RecursionError` or `ValueError` out of
     `WorkflowEngine.execute`, which ended the whole run with no result and no
     `optional`/`on_failure` handling.
@@ -1225,10 +1246,16 @@ class WorkflowEngine:
                 )
             except (KeyError, StepArgsRefused) as e:
                 # A refused input fails this step only, so optional/on_failure still apply.
+                # The tool did not run in this attempt: a result left from an earlier pass
+                # over this step (a branch can revisit it) is not this attempt's, and the
+                # progress callback gets the terminal event its "start" is waiting for.
                 step.status = StepStatus.FAILED
                 step.error = str(e) if isinstance(e, StepArgsRefused) else f"Missing variable: {e}"
+                step.result = None
+                step.duration = time.time() - step_start
                 error = step.error
                 UI.error(f"  → {step.error}")
+                self.callback("error", step, i, len(steps))
                 if stop_on_error and not step.optional and not step.on_failure:
                     break
                 _step_idx = self._branch_step(_step_idx, step, steps, outputs, error)
@@ -2368,7 +2395,7 @@ class WorkflowEngine:
                 # unknown names. Nested {a.b} still raises above and is handled by the caller.
                 return "{" + key + "}"
         
-        return re.sub(r"\{([^}]+)\}", replacer, template)
+        return _PLACEHOLDER_RE.sub(replacer, template)
     
     # ─── Branching helpers ──────────────────────────────────────────────────────
 

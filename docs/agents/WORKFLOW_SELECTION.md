@@ -346,14 +346,22 @@ create_agent_workflow(
   untouched (their `input` stays a display label).
 - **A JSON object as the step's input:** a step without `args` whose resolved `input` is a
   JSON object takes that object as the call's arguments. `engine.build_step_args` decodes it
-  with the funnel's own decoder (`tool_dispatch.decode_arguments`). Text that is not valid
-  JSON, an integer past Python's 4300-digit limit included, is the step's single argument.
-  An object nested deeper than 100 levels (`MAX_ARGUMENT_DEPTH`), text too deep to decode at
-  all included, fails that step with the funnel's depth refusal (`too_deep_refusal`): its
-  tool does not run, and `optional`/`on_failure` apply as for any failed step. Such input
+  with the funnel's own decoder (`tool_dispatch.decode_arguments`). Two cases fail that step
+  with the funnel's depth refusal (`too_deep_refusal`): an object that decodes and is nested
+  deeper than 100 levels (`MAX_ARGUMENT_DEPTH`), and text the decoder gives up on with
+  `RecursionError` (nested too deep to decode at all). The step's tool does not run, the
+  step's result from an earlier pass is cleared, the progress callback gets its `error`
+  event, and `optional`/`on_failure` apply as for any failed step. Every other decode
+  failure makes the text the step's single argument: text that is not valid JSON, and an
+  integer longer than Python's active digit limit (4300 by default, configurable with
+  `PYTHONINTMAXSTRDIGITS`). The depth is measured only once the text has decoded, so an
+  object 101 levels deep that also holds such an integer is text, not refused. Such input
   used to raise out of the engine and end the whole run with no result, measured with a
   fetched value chained into the next step through a `{placeholder}`. `_preflight_steps`
-  refuses a literal one before anything runs. A `variables` string is decoded the same way
+  refuses a literal one before anything runs; an input a placeholder can still change
+  (`engine.template_may_substitute`, by the resolver's own rules) is left to the engine,
+  because a substituted value can break the JSON and turn the input into text that runs.
+  A `variables` string is decoded the same way
   (one that is not an object, or is too deep, is `{}`), and every later reader of
   `variables` sees the coerced mapping; a string there used to fail every step.
   `tests/test_workflow_step_args_decode.py` guards it, with a seeded fuzz against a

@@ -191,6 +191,9 @@ class MCPClientTool(BaseTool):
         # under way goes to `_stopping` instead of the cache.
         self._closing = False
         self._launching = 0
+        # Set once `stop_all_servers` took its list: a start that ends after that stops its
+        # server itself.
+        self._swept = False
         # One request at a time per server process, each with its own id (module docstring).
         self._locks: Dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
@@ -348,10 +351,20 @@ class MCPClientTool(BaseTool):
             # The cached server has exited, but what it started may still run in its group (a
             # launcher that left its child behind). Its group is stopped, and waited for, before
             # the replacement starts: two would otherwise overlap on what the old one still
-            # holds (a port, a lock file). Bounded by the stop's grace and a SIGKILL.
-            self._evict(proc)
+            # holds (a port, a lock file). Bounded by the stop's grace and a SIGKILL. For that
+            # time it is in `_stopping`, entered before it leaves the cache (see `_retire`), so
+            # an exit in the window still stops its group.
             if _is_os_process(proc):
-                _stop_process_tree(proc)
+                with self._state_lock:
+                    self._stopping.add(proc)
+                    self._evict(proc)
+                try:
+                    _stop_process_tree(proc)
+                finally:
+                    with self._state_lock:
+                        self._stopping.discard(proc)
+            else:
+                self._evict(proc)
         with self._state_lock:
             if self._closing:
                 return None  # VAF is stopping its servers: no new one
@@ -380,16 +393,26 @@ class MCPClientTool(BaseTool):
             process = None
         finally:
             with self._state_lock:
-                self._launching -= 1
-                closing = self._closing
+                closing, swept = self._closing, self._swept
+                # Registered before it stops counting as under way: a stop of all servers that
+                # no longer waits for it (a signal handler on this very thread) finds it.
                 if process is not None:
                     if closing:
-                        # Started while VAF stops its servers: handed to that stop, which
-                        # waits for the launches under way, and never handshaken.
+                        # Started while VAF stops its servers, never handshaken: handed to
+                        # that stop, which waits for the starts under way.
                         self._stopping.add(process)
                     else:
                         self._server_processes[cache_key] = process
+                self._launching -= 1
                 self._state_changed.notify_all()
+        if process is not None and swept:
+            # That stop gave up waiting (`_LAUNCH_WAIT`) and took its list before this start
+            # ended: nobody else stops this server, so this start does, before it returns.
+            try:
+                _stop_process_tree(process, grace=0.5)
+            finally:
+                with self._state_lock:
+                    self._stopping.discard(process)
         if process is None or closing:
             return None
         if on_process is not None:
@@ -442,9 +465,10 @@ class MCPClientTool(BaseTool):
         runs on a daemon thread, because a server that ignores SIGTERM held its caller for
         the grace (measured: a 1 s connection test took 6 s). The process stays in
         `_stopping` until that thread is done, so `stop_all_servers` can finish it at exit,
-        where the thread is frozen before its SIGKILL. It leaves the cache and enters
-        `_stopping` in one hold of `_state_lock`, so `stop_all_servers` never looks between
-        the two and finds it in neither. Never raises."""
+        where the thread is frozen before its SIGKILL. It enters `_stopping` and then leaves
+        the cache, in one hold of `_state_lock`: another thread never looks between the
+        two, and a signal handler on this thread, which can, finds it in both rather than in
+        neither (`stop_all_servers` stops it once). Never raises."""
         if not _is_os_process(process):
             self._evict(process)
             try:
@@ -453,8 +477,8 @@ class MCPClientTool(BaseTool):
                 pass
             return
         with self._state_lock:
-            self._evict(process)
             self._stopping.add(process)
+            self._evict(process)
 
         def _stop() -> None:
             try:
@@ -505,16 +529,27 @@ class MCPClientTool(BaseTool):
         because nothing else polls a cached process (`_ensure_server` evicts one the moment
         its poll says it exited), so the leader is an unreaped zombie until the poll in the
         stop, and its group id cannot be handed out again before that. A stop in flight is
-        finished, group included."""
+        finished, group included. A process that is in both places (`_retire` enters
+        `_stopping` before it leaves the cache) is stopped once.
+
+        A start that outlasts the wait is not in the list; it stops its own server when it
+        ends (`_swept`). Named boundary: a process that leaves before that (`os._exit`, as
+        `Agent.shutdown` does after this) never lets that start end, and a signal handler
+        that runs this on the very thread that is starting a server waits out
+        `_LAUNCH_WAIT` for a start it interrupted; such a server outlives VAF unless it
+        exits on the end of its stdin."""
         with self._state_lock:
             self._closing = True
             self._state_changed.wait_for(lambda: self._launching <= 0, timeout=_LAUNCH_WAIT)
+            self._swept = True
             cached = list(self._server_processes.values())
-            in_flight = list(self._stopping)
+            in_flight = [p for p in self._stopping if not any(p is c for c in cached)]
         for process in cached:
             self._evict(process)
             if _is_os_process(process):
                 _stop_process_tree(process, grace=0.5)
+            with self._state_lock:
+                self._stopping.discard(process)
         for process in in_flight:
             _stop_process_tree(process, grace=0.5)
             with self._state_lock:
@@ -666,20 +701,16 @@ class MCPClientTool(BaseTool):
             return "Error: No result in MCP response"
 
         result = response["result"]
-        # A tool that failed says so in `isError`, whatever its content looks like; the
-        # prefix is the one the remote lane uses (`mcp_remote.render_result`) and the shared
-        # result classifier reads as a failure (`context.tool_result_is_error`), with the
-        # remote lane's text when the content carries no message (an empty array, empty
-        # text), not the result's own dump.
+        # A tool that failed says so in `isError`, whatever its content looks like; the line
+        # is the remote lane's (`mcp_remote.error_line`), which the shared result classifier
+        # reads as a failure (`context.tool_result_is_error`), with its fallback when the
+        # content carries no message (an empty array, text that is empty or only
+        # whitespace), not the result's own dump.
         if isinstance(result, dict) and "isError" in result and _reports_error(result["isError"]):
+            from vaf.core.mcp_remote import error_line
             if isinstance(result.get("content"), list):
-                message = self._content_text(result["content"])
-            else:
-                message = self._result_text(result)
-            # Text blocks that are empty or only whitespace carry no reason either.
-            if not (message and message.strip()):
-                message = "the tool reported an error"
-            return f"MCP Error: {message}"
+                return error_line(self._content_text(result["content"]))
+            return error_line(self._result_text(result))
         return self._result_text(result)
 
     @staticmethod

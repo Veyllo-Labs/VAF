@@ -34,6 +34,7 @@ is terminated and skipped — it never blocks VAF startup (same discipline as th
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re
@@ -64,6 +65,24 @@ def get_mcp_manifest_path() -> Path:
 # before it is taken, and the closing of sessions (up to 10 s each) after it is released, so
 # a load waits for local writes only.
 _manifest_lock = threading.RLock()
+
+
+@contextlib.contextmanager
+def _saving(closes: List[Any]):
+    """`_manifest_lock` for a save, then the session closes the save queued under it
+    (`forget_server`'s `deferred`), after the lock is released. The closes run also when
+    the save raised after queueing them: the sign-in records are gone by then, and their
+    sessions must not stay usable. Each close is tried; one that fails neither stops the
+    others nor replaces the save's own error."""
+    try:
+        with _manifest_lock:
+            yield
+    finally:
+        for close in closes:
+            try:
+                close()
+            except Exception:  # noqa: BLE001 - closing is best effort
+                pass
 
 
 def load_mcp_manifest() -> Dict[str, Any]:
@@ -604,7 +623,7 @@ def upsert_server(name: str, *, command: str = "", transport: str = "stdio", url
     # test reads both as one snapshot); the checks above, the DNS lookup included, and
     # the session closes below, each up to 10 s, run without it.
     closes: List[Any] = []
-    with _manifest_lock:
+    with _saving(closes):
         manifest = load_mcp_manifest() or {}
         servers = manifest.get("servers") if isinstance(manifest.get("servers"), dict) else {}
         entry = dict(servers.get(name) or {}) if isinstance(servers.get(name), dict) else {}
@@ -663,11 +682,6 @@ def upsert_server(name: str, *, command: str = "", transport: str = "stdio", url
         servers[name] = entry
         manifest["servers"] = servers
         save_mcp_manifest(manifest)
-    for close in closes:
-        try:
-            close()
-        except Exception:  # noqa: BLE001 - closing is best effort
-            pass
     # A changed token or URL opens a fresh session; the old address's session is closed too,
     # or it stays open, token and all, for the rest of the process.
     stale = {u for u in (old_url if old_remote else "", url if transport in REMOTE_TRANSPORTS else "") if u}
@@ -688,7 +702,7 @@ def remove_server(name: str) -> bool:
     from vaf.core import mcp_secrets
     from vaf.core.mcp_oauth import forget_server
     closes: List[Any] = []
-    with _manifest_lock:
+    with _saving(closes):
         manifest = load_mcp_manifest() or {}
         servers = manifest.get("servers") if isinstance(manifest.get("servers"), dict) else {}
         cfg = servers.pop(str(name), None)
@@ -702,11 +716,6 @@ def remove_server(name: str) -> bool:
         # The service is asked to invalidate the sign-ins in the background.
         forget_server(str(name), cfg if isinstance(cfg, dict) else {}, deferred=closes)
         mcp_secrets.clear_server_secrets(str(name))
-    for close in closes:
-        try:
-            close()
-        except Exception:  # noqa: BLE001 - closing is best effort
-            pass
     if isinstance(cfg, dict) and cfg.get("url"):
         try:
             from vaf.core.mcp_remote import get_remote_pool

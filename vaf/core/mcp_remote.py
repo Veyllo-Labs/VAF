@@ -119,6 +119,14 @@ def _describe(exc: BaseException) -> str:
     return str(leaf) or type(leaf).__name__
 
 
+def error_line(message: Any) -> str:
+    """The text of a tool result that reports an error, for both lanes (this one and the
+    stdio lane in `vaf.tools.mcp_client`): `MCP Error:` and the result's message, or a
+    fallback when the message is missing, empty or only whitespace."""
+    text = "" if message is None else str(message)
+    return f"MCP Error: {text if text.strip() else 'the tool reported an error'}"
+
+
 def render_result(result: Any) -> str:
     """A CallToolResult as the text a tool returns: text parts joined, other parts named, the
     structured result when there is no text, `MCP Error:` in front of an error result."""
@@ -139,7 +147,7 @@ def render_result(result: Any) -> str:
     if not text and getattr(result, "structuredContent", None) is not None:
         text = json.dumps(result.structuredContent, ensure_ascii=False)
     if getattr(result, "isError", False):
-        return f"MCP Error: {text or 'the tool reported an error'}"
+        return error_line(text)
     return text
 
 

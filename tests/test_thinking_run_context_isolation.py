@@ -837,6 +837,8 @@ _THREAD_START_ALLOWLIST = {
     ("vaf/tools/learn_job.py", "start_background_learn", "Thread"):
         (1, "a learn started by a route, outliving the request and belonging to no turn or run; "
             "it books under its own account (usage_context in _run)"),
+    ("vaf/tools/mcp_client.py", "MCPClientTool._retire", "Thread"):
+        (1, "stops a local MCP server's process group and reaps it; no model call"),
     ("vaf/tools/research_agent.py", "ResearchAgentTool.run._run_research_loop", "Thread"):
         (1, "opens the finished report in a browser; no model call"),
     ("vaf/tools/research_agent.py", "ResearchAgentTool.run", "Thread"):

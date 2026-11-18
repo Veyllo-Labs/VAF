@@ -213,7 +213,8 @@ What the loop reads from a server's output:
 - `isError: true` in a result makes the call's text start with `MCP Error:`, the same prefix
   the remote lane gives such a result and the shared result classifier reads as a failure,
   whatever the content looks like (with "the tool reported an error" when it carries no
-  text). `isError` is read as the remote lane's SDK reads it: `true`, `1` and words such as
+  text, or only whitespace; both lanes build that line with `mcp_remote.error_line`).
+  `isError` is read as the remote lane's SDK reads it: `true`, `1` and words such as
   `"yes"` or `"True"` are true; `false`, `0` and `"no"`/`"off"`/`"false"` are false; any
   other value, which the SDK refuses, reads as an error too. Other answers in an unexpected
   shape (an `error` that is a string, a `result` that is not an object, a text item whose
@@ -264,9 +265,11 @@ stopped (psutil, else `taskkill /T`); a grandchild that detached from that tree 
 pipe open and the call waiting. A server whose cached process has exited has its group
 stopped, and waited for (bounded by the 2 s grace and a SIGKILL), before a fresh one replaces
 it: a child its launcher left behind is stopped then too, and the two never overlap on what
-the old one still holds (a port, a lock file). While a listing gives up, it holds its own lock
-until the stop is issued, and the listing reports that it is done with the process only while
-it still holds the server's lock, so no other call can start on that process first.
+the old one still holds (a port, a lock file). For the length of that stop the old process
+stays on the list the exit stops, so an exit in that window still stops its group. While a
+listing gives up, it holds its own lock until the stop is issued, and the listing reports that
+it is done with the process only while it still holds the server's lock, so no other call can
+start on that process first.
 
 Being in their own group, the servers are out of reach of a terminal's Ctrl+C and hangup, so
 VAF stops them when it exits: at a normal exit (`atexit`), on the agent's signal shutdown,
@@ -276,9 +279,14 @@ stop was still in flight, which a daemon thread cannot finish once the interpret
 the group of a cached server whose own process has already exited, so a child its launcher
 left behind goes too. From the moment the stop begins no server is started; one whose start
 was already under way is waited for (up to 1 s) and stopped with the rest, without its
-handshake. A server that ignores the end of its stdin outlives a VAF that is killed (SIGKILL,
-an unhandled SIGTERM or SIGHUP) or crashes, since nothing of VAF runs then; one that follows
-the stdio transport exits on that end of input.
+handshake, and a start that outlasts the wait stops its own server when it ends. Named
+boundary: that last stop needs the start to end, so a server whose start is still running
+when VAF leaves (the signal shutdown's `os._exit`), or whose start the signal handler
+interrupted on that same thread (the handler then waits out the 1 s for a start it cannot
+finish), outlives VAF unless it exits on the end of its stdin. A server that ignores the end
+of its stdin outlives a VAF that is killed (SIGKILL, an unhandled SIGTERM or SIGHUP) or
+crashes, since nothing of VAF runs then; one that follows the stdio transport exits on that
+end of input.
 
 The loop has no read deadline of its own: a Windows pipe has no `select`, and a deadline needs
 a reader thread or a non-blocking read with its own design, which would also be the place to

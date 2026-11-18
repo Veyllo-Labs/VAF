@@ -3116,11 +3116,17 @@ usable from an embedded engine too, documented in their own pages:
   arguments; code of your own that chose a command calls
   `vaf.tools.mcp_client.get_mcp_client().call_stdio(...)`. It returns the tool's text
   or an `Error:` / `MCP Error:` line and does not raise for anything the server writes;
-  it has no timeout of its own, so run it under one, as `ToolCaller` does for the
-  registered tools. A timeout on your side only stops your wait: the read inside keeps
-  the server's lock until the server answers or its process is stopped, so later calls
-  to that server wait too. To recover, pass `on_process=` to `call_stdio` (it is told
-  the process the call uses, and None once the call is done with it), keep the last
+  it has no timeout of its own, so run it under `vaf.core.bounded_run.run_bounded`, as
+  `ToolCaller` does for the registered tools. A timeout there also sets the worker's
+  cancel flag (`bounded_run.cancel_requested()`), and that flag is what keeps a call
+  still queued for the server's lock, or still starting its server, from sending its
+  `tools/call` once it gets there. A deadline of your own that only stops waiting (a
+  `Future.result(timeout=...)`, a `Thread.join(timeout)`) sets no flag, and such a call
+  still writes later. Either way a timeout only stops your wait for a call already
+  reading: the read inside keeps the server's lock until the server answers or its
+  process is stopped, so later calls to that server wait too. To recover, pass
+  `on_process=` to `call_stdio` (it is told the process the call uses, and None once the
+  call is done with it), keep the last
   process it was told per call, and hand that process to
   `get_mcp_client().stop_server(command, process=...)`. That stops only this process,
   and only while it is still the one cached for the command, because every caller in
@@ -3146,8 +3152,9 @@ usable from an embedded engine too, documented in their own pages:
   `notifications/initialized` reach the server), and one that had not begun the
   handshake is stopped. At exit the client stops its servers, the ones whose stop was
   still in flight and the group of one whose own process had exited included, and starts
-  none from then on; a server that ignores the end of its stdin outlives a process that
-  is killed or crashes. If your process leaves through `os._exit`, call
+  none from then on; a start still running after a 1 s wait stops its own server when it
+  ends. A server that ignores the end of its stdin outlives a process that is killed or
+  crashes, or that leaves while such a start is still running. If your process leaves through `os._exit`, call
   `vaf.tools.mcp_client.stop_shared_servers()` first. Named boundary: the facade exports no MCP client
   yet. These are reached by importing `vaf.tools.mcp_client`; measured, the
   application has one caller of `call_stdio` (`mcp_registry.call_registered_tool`), and

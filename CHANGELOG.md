@@ -84,9 +84,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   reason, or the text is passed on as the step's input. A local MCP server that prints a stray
   line on its output (a number, a status string) no longer makes its tool calls fail, and
   unexpected answers come back as text instead of an error. A tool error such a server
-  reports now reads as an error, also when its message is only a number. Testing a local MCP
-  server's connection in Settings no longer stops another account's call that is running on
-  the same server, and the test ends at its timeout even when the server does not stop.
+  reports now reads as an error, also when its message is only a number, and one whose
+  message is empty or blank says "the tool reported an error", from a local or a remote
+  server alike. Testing a local MCP server's connection in Settings no longer stops another
+  account's call that is running on the same server, and the test ends at its timeout even
+  when the server does not stop.
 - **A long reply full of unfinished tool-call tags no longer stalls VAF.** VAF used to hang for
   seconds or minutes while it looked for tool calls in such a reply: 128 KB took up to 27 s,
   twice per reply, and one shape took far longer. The tool calls it finds are the same as

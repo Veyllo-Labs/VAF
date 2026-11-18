@@ -127,21 +127,35 @@ def _base32(node) -> bool:
             and re.fullmatch(r"[A-Z2-7]+=*", node.value) is not None)
 
 
+def _names_a_totp_secret(name: str) -> bool:
+    """A name that says it holds a TOTP secret. One that says `code` holds a verification code
+    (`totp_code = "234567"`): six digits are valid base32, but they are no secret."""
+    name = name.lower()
+    return "totp" in name and "code" not in name
+
+
 def _short_totp_literals(source: str) -> list:
-    """Line numbers of base32 literals under 32 characters handed to a TOTP call, or bound to a
-    name or keyword that says it holds a TOTP secret."""
+    """Line numbers of base32 literals under 32 characters handed to a TOTP call as its secret,
+    or bound to a name or keyword that says it holds a TOTP secret."""
     found = []
     for node in ast.walk(ast.parse(source)):
         values = []
         if isinstance(node, ast.Call):
             f = node.func
             name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "")
-            if name in _TOTP_CALLEES or "totp" in name.lower():
-                values += node.args
-            values += [k.value for k in node.keywords if k.arg and "totp" in k.arg.lower()]
+            if name in _TOTP_CALLEES:
+                # The secret is the first argument, or the keyword `s` (PyOTP's parameter name).
+                values += node.args[:1]
+                values += [k.value for k in node.keywords if k.arg == "s"]
+            elif "totp" in name.lower():
+                # A helper such as verify_totp(secret, "234567") also takes a code: a literal of
+                # digits only is a code, never a base32 secret in practice.
+                values += [a for a in node.args
+                           if not (isinstance(a, ast.Constant) and str(a.value).isdigit())]
+            values += [k.value for k in node.keywords if k.arg and _names_a_totp_secret(k.arg)]
         elif isinstance(node, (ast.Assign, ast.AnnAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            if any("totp" in getattr(t, "id", getattr(t, "attr", "")).lower() for t in targets):
+            if any(_names_a_totp_secret(getattr(t, "id", getattr(t, "attr", ""))) for t in targets):
                 values.append(node.value)
         found += [v.lineno for v in values
                   if _base32(v) and len(v.value.rstrip("=")) < _MIN_TOTP_CHARS]
@@ -158,9 +172,15 @@ def test_no_test_hands_totp_a_short_secret():
 
 
 def test_the_short_secret_detector_actually_detects():
+    """MUTATION: drop the keyword-`s` branch (the TOTP(s=...) shape passes) or the `code` and
+    digits-only exclusions (the verification-code shapes are flagged) - red."""
     short, full = "JBSWY3DPEHPK3PXP", "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
     for shape in ('pyotp.TOTP("{s}").now()', 'encrypt_totp_secret("{s}")', 'code_at("{s}", 1)',
-                  '_TOTP_SECRET = "{s}"', 'make(totp_secret="{s}")'):
+                  '_TOTP_SECRET = "{s}"', 'make(totp_secret="{s}")', 'pyotp.TOTP(s="{s}").now()'):
         assert _short_totp_literals(shape.format(s=short)) == [1], shape
         assert _short_totp_literals(shape.format(s=full)) == [], shape
     assert _short_totp_literals('print("JBSWY3DPEHPK3PXP")') == []
+    # A verification code is six digits, which base32 allows, and it is no secret.
+    for code in ('totp_code = "234567"', 'make(totp_code="234567")',
+                 'verify_totp(secret, "234567")'):
+        assert _short_totp_literals(code) == [], code

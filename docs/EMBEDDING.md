@@ -3152,10 +3152,12 @@ usable from an embedded engine too, documented in their own pages:
   `notifications/initialized` reach the server), and one that had not begun the
   handshake is stopped. At exit the client stops its servers, the ones whose stop was
   still in flight and the group of one whose own process had exited included, and starts
-  none from then on; a start still running after a 1 s wait stops its own server when it
-  ends. A server that ignores the end of its stdin outlives a process that is killed or
-  crashes, or that leaves while such a start is still running. If your process leaves through `os._exit`, call
-  `vaf.tools.mcp_client.stop_shared_servers()` first. Named boundary: the facade exports no MCP client
+  none from then on; a start still running after a 1 s wait kills its own server and its
+  group at once, without a grace, when it ends. A server that ignores the end of its stdin
+  outlives a process that is killed or crashes, that leaves while such a start is still
+  running, or whose signal handler interrupted that start on the same thread. If your
+  process leaves through `os._exit`, call `vaf.tools.mcp_client.stop_shared_servers()`
+  first. Named boundary: the facade exports no MCP client
   yet. These are reached by importing `vaf.tools.mcp_client`; measured, the
   application has one caller of `call_stdio` (`mcp_registry.call_registered_tool`), and
   `stop_server` serves two lanes (discovery and the connection test, through one call

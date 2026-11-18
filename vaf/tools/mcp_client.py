@@ -408,8 +408,11 @@ class MCPClientTool(BaseTool):
         if process is not None and swept:
             # That stop gave up waiting (`_LAUNCH_WAIT`) and took its list before this start
             # ended: nobody else stops this server, so this start does, before it returns.
+            # Without a grace: the server was never handshaken and nobody uses it, and this
+            # thread, a daemon one as a rule, is frozen when the interpreter finishes, so a
+            # grace would leave a server that ignores SIGTERM without its SIGKILL.
             try:
-                _stop_process_tree(process, grace=0.5)
+                _stop_process_tree(process, grace=0)
             finally:
                 with self._state_lock:
                     self._stopping.discard(process)
@@ -532,12 +535,14 @@ class MCPClientTool(BaseTool):
         finished, group included. A process that is in both places (`_retire` enters
         `_stopping` before it leaves the cache) is stopped once.
 
-        A start that outlasts the wait is not in the list; it stops its own server when it
-        ends (`_swept`). Named boundary: a process that leaves before that (`os._exit`, as
-        `Agent.shutdown` does after this) never lets that start end, and a signal handler
-        that runs this on the very thread that is starting a server waits out
-        `_LAUNCH_WAIT` for a start it interrupted; such a server outlives VAF unless it
-        exits on the end of its stdin."""
+        A start that outlasts the wait is not in the list; it kills its own server and its
+        group when it ends (`_swept`), at once and without a grace, since its thread does
+        not outlive the interpreter. Named boundary: a process that leaves before that start
+        ends (a normal exit once its exit handlers are done, or `os._exit`, as
+        `Agent.shutdown` does after this) never lets it end, and a signal handler that runs
+        this on the very thread that is starting a server waits out `_LAUNCH_WAIT` for a
+        start it interrupted; such a server outlives VAF unless it exits on the end of its
+        stdin."""
         with self._state_lock:
             self._closing = True
             self._state_changed.wait_for(lambda: self._launching <= 0, timeout=_LAUNCH_WAIT)

@@ -1324,8 +1324,79 @@ def test_a_start_that_ends_after_the_exit_took_its_list_stops_its_own_server(stu
     launch.join(10)
 
     assert not launch.is_alive() and box["p"] is None
-    assert stub.started[0].poll() is not None, "the late start left its server running"
+    # Killed without a grace, so the stop does not wait to reap it either.
+    assert _wait_until(lambda: stub.started[0].poll() is not None, seconds=2), (
+        "the late start left its server running")
     assert client._stopping == set() and command not in client._server_processes
+
+
+# A VAF that exits normally while a start is held past the exit's own sweep: the start
+# ends on its daemon thread and stops its server there, while another exit handler (here a
+# short wait) keeps the interpreter alive only briefly. argv: the server command, a file
+# for the server's pid.
+_LATE_EXIT = (
+    "import atexit, subprocess, sys, threading, time\n"
+    "from unittest.mock import MagicMock\n"
+    "sys.modules.setdefault('llama_cpp', MagicMock())\n"
+    "import vaf.tools.mcp_client as mc\n"
+    "command, pid_file = sys.argv[1], sys.argv[2]\n"
+    "mc._LAUNCH_WAIT = 0.1\n"
+    "inside, stopping = threading.Event(), threading.Event()\n"
+    "real_stop = mc._stop_process_tree\n"
+    "def noted_stop(process, grace=mc._STOP_GRACE):\n"
+    "    stopping.set()\n"
+    "    return real_stop(process, grace)\n"
+    "mc._stop_process_tree = noted_stop\n"
+    "# Registered first, so it runs after the client's own stop of all servers.\n"
+    "atexit.register(lambda: stopping.wait(10) and time.sleep(0.15))\n"
+    "client = mc.get_mcp_client()\n"
+    "real_popen = subprocess.Popen\n"
+    "class Held(real_popen):\n"
+    "    def __init__(self, *a, **k):\n"
+    "        super().__init__(*a, **k)\n"
+    "        with open(pid_file, 'w') as f: f.write(str(self.pid))\n"
+    "        inside.set()\n"
+    "        while not client._swept: time.sleep(0.01)\n"
+    "subprocess.Popen = Held\n"
+    "threading.Thread(target=client._ensure_server, args=(command,), daemon=True).start()\n"
+    "assert inside.wait(10)\n"
+)
+
+
+def test_a_late_start_at_a_normal_exit_stops_its_server_before_the_interpreter_ends(stub):
+    """The late start's own stop runs on a daemon thread, which the interpreter freezes once
+    the exit handlers are done: a server that ignores SIGTERM and the end of its stdin must
+    get its SIGKILL at once, not after a grace the interpreter does not wait for."""
+    if os.name == "nt":
+        pytest.skip("SIGTERM is a POSIX signal")
+    import psutil
+    from pathlib import Path
+    client, command = stub("stray", deaf=True)
+    driver = stub.dir / "late_exit.py"
+    driver.write_text(_LATE_EXIT, encoding="utf-8")
+    pid_file = stub.dir / "late.pid"
+    root = str(Path(__file__).resolve().parents[1])
+    env = {**os.environ,
+           "PYTHONPATH": os.pathsep.join(p for p in (root, os.environ.get("PYTHONPATH")) if p)}
+    ran = subprocess.run([sys.executable, str(driver), command, str(pid_file)], env=env,
+                         capture_output=True, text=True, timeout=30)
+    assert ran.returncode == 0, ran.stderr[-2000:]
+    try:
+        handle = psutil.Process(int(pid_file.read_text(encoding="utf-8")))
+        # Only while it provably runs this test's stub: a pid handed out again is not it.
+        if str(stub.dir) not in " ".join(handle.cmdline()):
+            handle = None
+    except psutil.Error:
+        handle = None  # gone already, or a zombie on its way out
+    try:
+        assert handle is None or _wait_until(lambda: _gone(handle), seconds=2), (
+            "the late start's server outlived the exit")
+    finally:
+        if handle is not None:
+            try:
+                handle.kill()
+            except psutil.Error:
+                pass
 
 
 def test_an_exit_during_a_replacements_wait_stops_the_old_group(stub):

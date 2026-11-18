@@ -279,9 +279,11 @@ stop was still in flight, which a daemon thread cannot finish once the interpret
 the group of a cached server whose own process has already exited, so a child its launcher
 left behind goes too. From the moment the stop begins no server is started; one whose start
 was already under way is waited for (up to 1 s) and stopped with the rest, without its
-handshake, and a start that outlasts the wait stops its own server when it ends. Named
-boundary: that last stop needs the start to end, so a server whose start is still running
-when VAF leaves (the signal shutdown's `os._exit`), or whose start the signal handler
+handshake, and a start that outlasts the wait kills its own server and its group when it
+ends, at once and without a grace: that server was never used, and the start's thread does
+not outlive the interpreter. Named boundary: that last stop needs the start to end, so a
+server whose start is still running when VAF leaves (a normal exit once its exit handlers
+are done, or the signal shutdown's `os._exit`), or whose start the signal handler
 interrupted on that same thread (the handler then waits out the 1 s for a start it cannot
 finish), outlives VAF unless it exits on the end of its stdin. A server that ignores the end
 of its stdin outlives a VAF that is killed (SIGKILL, an unhandled SIGTERM or SIGHUP) or

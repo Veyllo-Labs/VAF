@@ -583,11 +583,23 @@ def sign_out(server: str, *, user_scope_id: Optional[str]) -> Dict[str, Any]:
     return {"revoked": _revoke(server, _server_cfg(server) or {}, record) if _has_tokens(record) else None}
 
 
-def forget_server(server: str, cfg: Optional[Dict[str, Any]] = None) -> int:
+def forget_server(server: str, cfg: Optional[Dict[str, Any]] = None, *,
+                  deferred: Optional[List[Any]] = None) -> int:
     """Drop every account's sign-in at a server (it moved to another host, stopped signing
     accounts in, changed its client, or is being removed). The records go at once; asking the
-    service to invalidate them runs in the background. Returns how many there were."""
+    service to invalidate them runs in the background. Returns how many there were.
+
+    With `deferred` (a list), the closing of the accounts' sessions is appended to it as
+    callables instead of run here: each close waits up to 10 s, and a manifest save drops the
+    records under its lock but closes the sessions after releasing it."""
     from vaf.core.mcp_remote import get_remote_pool
+
+    def _close(account: str) -> None:
+        if deferred is None:
+            get_remote_pool().close(account=account)
+        else:
+            deferred.append(lambda: get_remote_pool().close(account=account))
+
     cfg = dict(cfg if cfg is not None else (_server_cfg(server) or {}))
     with _lock:
         waiting = [p for (name, _account), p in _pending.items() if name == server]
@@ -595,12 +607,12 @@ def forget_server(server: str, cfg: Optional[Dict[str, Any]] = None) -> int:
             _last_error.pop((name, account), None)
     for pending in waiting:
         _abort(pending, "the server's sign-in changed")
-        get_remote_pool().close(account=_sign_in_pool_account(server, pending.account))
+        _close(_sign_in_pool_account(server, pending.account))
     records = []
     for account in mcp_secrets.oauth_accounts(server):
         record = mcp_secrets.oauth_record(server, account)
         mcp_secrets.clear_oauth_record(server, account)
-        get_remote_pool().close(account=_pool_account(server, account))
+        _close(_pool_account(server, account))
         if _has_tokens(record):
             records.append(record)
     if records:

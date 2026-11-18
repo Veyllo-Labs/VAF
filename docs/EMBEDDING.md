@@ -3124,9 +3124,14 @@ usable from an embedded engine too, documented in their own pages:
   process it was told per call, and hand that process to
   `get_mcp_client().stop_server(command, process=...)`. That stops only this process,
   and only while it is still the one cached for the command, because every caller in
-  the application shares it. A call that timed out before it got the lock reports no
-  process: then do not call `stop_server` at all, since `process=None` means "whatever
-  is cached", which may be another call's healthy server. It takes no lock and returns
+  the application shares it. Guard the handle with a lock of your own per call: take it
+  in your `on_process` callback, and hold it from reading the handle until
+  `stop_server` has returned. The callback reports None while the call still holds the
+  server's lock, so with that lock held no other call can start on the process before
+  your stop is issued (`mcp_registry._Listing` does exactly this). A call that timed out
+  before it got the lock reports no process, and a call that finished has reported None:
+  then do not call `stop_server` at all, since `process=None` means "whatever is cached",
+  which may be another call's healthy server. It takes no lock and returns
   at once, and the stop runs in the background: SIGTERM to the server's process group,
   SIGKILL 2 s later. On POSIX the server leads its own process group, so a launcher's
   child that kept the output pipe goes with it, the blocked call returns an error, and
@@ -3140,8 +3145,10 @@ usable from an embedded engine too, documented in their own pages:
   handshake when the caller gave up may still finish it (`initialize` and
   `notifications/initialized` reach the server), and one that had not begun the
   handshake is stopped. At exit the client stops its servers, the ones whose stop was
-  still in flight included; a server that ignores the end of its stdin outlives a
-  process that is killed or crashes. Named boundary: the facade exports no MCP client
+  still in flight and the group of one whose own process had exited included, and starts
+  none from then on; a server that ignores the end of its stdin outlives a process that
+  is killed or crashes. If your process leaves through `os._exit`, call
+  `vaf.tools.mcp_client.stop_shared_servers()` first. Named boundary: the facade exports no MCP client
   yet. These are reached by importing `vaf.tools.mcp_client`; measured, the
   application has one caller of `call_stdio` (`mcp_registry.call_registered_tool`), and
   `stop_server` serves two lanes (discovery and the connection test, through one call

@@ -62,6 +62,8 @@ from vaf.cli.ui import UI
 
 # Seconds a stopped server gets between SIGTERM and SIGKILL.
 _STOP_GRACE = 2.0
+# Seconds `stop_all_servers` waits for server starts already under way.
+_LAUNCH_WAIT = 1.0
 
 # The words the MCP SDK's model (pydantic's lax bool) reads as false, in any case.
 _FALSE_WORDS = frozenset({"false", "f", "no", "n", "off", "0"})
@@ -174,13 +176,21 @@ class MCPClientTool(BaseTool):
         # Cache for active MCP server processes
         self._server_processes: Dict[str, subprocess.Popen] = {}
         self._server_initialized: Dict[str, bool] = {}
-        # Guards every write to the process cache and the identity check before an eviction.
-        # Held only for those few lines, never across a read, a start or a stop.
-        self._state_lock = threading.Lock()
+        # Guards every write to the process cache, `_stopping`, `_closing` and `_launching`,
+        # and the identity check before an eviction. Held only for those few lines, never
+        # across a read, a start or a stop. Reentrant: `stop_all_servers` also runs inside a
+        # signal handler (`Agent.shutdown`), which interrupts the main thread between two
+        # bytecodes, possibly inside one of those lines; a plain lock would deadlock there.
+        self._state_lock = threading.RLock()
+        self._state_changed = threading.Condition(self._state_lock)
         # Processes whose stop runs on a daemon thread right now (`_retire`), out of the cache
         # but not yet gone: `stop_all_servers` finishes them, since the interpreter does not
         # wait for a daemon thread at exit.
         self._stopping: set = set()
+        # Set by `stop_all_servers`: no server is started any more, and one whose start was
+        # under way goes to `_stopping` instead of the cache.
+        self._closing = False
+        self._launching = 0
         # One request at a time per server process, each with its own id (module docstring).
         self._locks: Dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
@@ -336,10 +346,18 @@ class MCPClientTool(BaseTool):
             return proc
         if proc is not None:
             # The cached server has exited, but what it started may still run in its group (a
-            # launcher that left its child behind). Retired by identity before the entry is
-            # replaced, so its recorded group is stopped instead of being forgotten.
-            self._retire(proc)
+            # launcher that left its child behind). Its group is stopped, and waited for, before
+            # the replacement starts: two would otherwise overlap on what the old one still
+            # holds (a port, a lock file). Bounded by the stop's grace and a SIGKILL.
+            self._evict(proc)
+            if _is_os_process(proc):
+                _stop_process_tree(proc)
+        with self._state_lock:
+            if self._closing:
+                return None  # VAF is stopping its servers: no new one
+            self._launching += 1
         # (Re)spawn the server process.
+        process = None
         try:
             cmd_parts = server_command.split() if isinstance(server_command, str) else server_command
             from vaf.core.processes import own_process_group
@@ -358,9 +376,21 @@ class MCPClientTool(BaseTool):
             # The group the server leads, recorded now: after the leader has exited, only the
             # group is signalled, never its pid, which may belong to another process by then.
             process._vaf_pgid = process.pid if os.name != "nt" else None
-            with self._state_lock:
-                self._server_processes[cache_key] = process
         except Exception:
+            process = None
+        finally:
+            with self._state_lock:
+                self._launching -= 1
+                closing = self._closing
+                if process is not None:
+                    if closing:
+                        # Started while VAF stops its servers: handed to that stop, which
+                        # waits for the launches under way, and never handshaken.
+                        self._stopping.add(process)
+                    else:
+                        self._server_processes[cache_key] = process
+                self._state_changed.notify_all()
+        if process is None or closing:
             return None
         if on_process is not None:
             try:
@@ -412,15 +442,18 @@ class MCPClientTool(BaseTool):
         runs on a daemon thread, because a server that ignores SIGTERM held its caller for
         the grace (measured: a 1 s connection test took 6 s). The process stays in
         `_stopping` until that thread is done, so `stop_all_servers` can finish it at exit,
-        where the thread is frozen before its SIGKILL. Never raises."""
-        self._evict(process)
+        where the thread is frozen before its SIGKILL. It leaves the cache and enters
+        `_stopping` in one hold of `_state_lock`, so `stop_all_servers` never looks between
+        the two and finds it in neither. Never raises."""
         if not _is_os_process(process):
+            self._evict(process)
             try:
                 process.terminate()
             except Exception:
                 pass
             return
         with self._state_lock:
+            self._evict(process)
             self._stopping.add(process)
 
         def _stop() -> None:
@@ -465,16 +498,22 @@ class MCPClientTool(BaseTool):
         lead their own process group, so a terminal's Ctrl+C no longer reaches them with
         VAF's; this does, with a short grace before SIGKILL.
 
-        A cached server that has already exited is skipped: polling it reaped it, so only its
-        group id is left, and once that group is empty the id may lead an unrelated group by
-        now. A stop in flight is finished, group included: its leader was polled a moment
-        ago."""
+        No server is started from here on (`_closing`), and a start already under way is
+        waited for (at most `_LAUNCH_WAIT` seconds) and then stopped with the rest, without
+        its handshake. A cached server whose leader has already exited is stopped by its
+        group: a launcher can leave a child behind in it. That is as safe as for a live one,
+        because nothing else polls a cached process (`_ensure_server` evicts one the moment
+        its poll says it exited), so the leader is an unreaped zombie until the poll in the
+        stop, and its group id cannot be handed out again before that. A stop in flight is
+        finished, group included."""
         with self._state_lock:
+            self._closing = True
+            self._state_changed.wait_for(lambda: self._launching <= 0, timeout=_LAUNCH_WAIT)
             cached = list(self._server_processes.values())
             in_flight = list(self._stopping)
         for process in cached:
             self._evict(process)
-            if _is_os_process(process) and process.poll() is None:
+            if _is_os_process(process):
                 _stop_process_tree(process, grace=0.5)
         for process in in_flight:
             _stop_process_tree(process, grace=0.5)
@@ -637,7 +676,10 @@ class MCPClientTool(BaseTool):
                 message = self._content_text(result["content"])
             else:
                 message = self._result_text(result)
-            return f"MCP Error: {message or 'the tool reported an error'}"
+            # Text blocks that are empty or only whitespace carry no reason either.
+            if not (message and message.strip()):
+                message = "the tool reported an error"
+            return f"MCP Error: {message}"
         return self._result_text(result)
 
     @staticmethod

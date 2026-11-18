@@ -59,20 +59,11 @@ def get_mcp_manifest_path() -> Path:
 # out of the file on load, `upsert_server`, `remove_server`, and the connection test's snapshot
 # of a saved entry with its token. The connection test runs on a worker thread, so without it
 # a load that moves a secret could write back an older snapshot over a Settings save made
-# meanwhile. Reentrant, because a save loads the manifest itself. A save that changes a remote
-# server's address holds it while the old sessions close (up to 10 s each); nothing on the
-# remote pool's own thread loads the manifest, so that wait cannot turn into a stall.
+# meanwhile. Reentrant, because a save loads the manifest itself. A save holds it only for
+# the file and the key ring: its checks (the DNS lookup of a remote address included) run
+# before it is taken, and the closing of sessions (up to 10 s each) after it is released, so
+# a load waits for local writes only.
 _manifest_lock = threading.RLock()
-
-
-def _under_manifest_lock(fn):
-    import functools
-
-    @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
-        with _manifest_lock:
-            return fn(*args, **kwargs)
-    return wrapper
 
 
 def load_mcp_manifest() -> Dict[str, Any]:
@@ -557,7 +548,6 @@ _NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
 _PERMISSIONS = ("read", "write", "dangerous")
 
 
-@_under_manifest_lock
 def upsert_server(name: str, *, command: str = "", transport: str = "stdio", url: str = "",
                   enabled: bool = True, permission_level: str = "write",
                   env: Optional[Dict[str, Any]] = None, token: Optional[str] = None,
@@ -610,62 +600,74 @@ def upsert_server(name: str, *, command: str = "", transport: str = "stdio", url
     if permission not in _PERMISSIONS:
         permission = "write"
 
-    manifest = load_mcp_manifest() or {}
-    servers = manifest.get("servers") if isinstance(manifest.get("servers"), dict) else {}
-    entry = dict(servers.get(name) or {}) if isinstance(servers.get(name), dict) else {}
-    before = dict(entry)
-    old_url = str(entry.get("url") or "")
-    old_remote = str(entry.get("transport", "stdio")) in REMOTE_TRANSPORTS
-    old_auth = "oauth" if mcp_oauth.uses_sign_in(entry) else ""
-    new_auth = old_auth if auth is None else str(auth or "").strip().lower()
-    if new_auth not in ("", "oauth"):
-        raise ValueError(f"Unknown sign-in '{auth}'.")
-    if new_auth == "oauth" and transport not in REMOTE_TRANSPORTS:
-        raise ValueError("A sign-in per account needs a remote server (http or sse).")
-    old_client_id = str(entry.get("oauth_client_id") or "").strip() if old_auth else ""
-    new_client_id = (old_client_id if oauth_client_id is None else str(oauth_client_id or "").strip()) if new_auth else ""
-    new_client_secret = str(oauth_client_secret or "").strip() if new_auth else ""
-    if new_client_secret and not new_client_id:
-        raise ValueError("A client secret needs the client ID it belongs to.")
+    # The manifest and the key ring change together under the lock (the connection
+    # test reads both as one snapshot); the checks above, the DNS lookup included, and
+    # the session closes below, each up to 10 s, run without it.
+    closes: List[Any] = []
+    with _manifest_lock:
+        manifest = load_mcp_manifest() or {}
+        servers = manifest.get("servers") if isinstance(manifest.get("servers"), dict) else {}
+        entry = dict(servers.get(name) or {}) if isinstance(servers.get(name), dict) else {}
+        before = dict(entry)
+        old_url = str(entry.get("url") or "")
+        old_remote = str(entry.get("transport", "stdio")) in REMOTE_TRANSPORTS
+        old_auth = "oauth" if mcp_oauth.uses_sign_in(entry) else ""
+        new_auth = old_auth if auth is None else str(auth or "").strip().lower()
+        if new_auth not in ("", "oauth"):
+            raise ValueError(f"Unknown sign-in '{auth}'.")
+        if new_auth == "oauth" and transport not in REMOTE_TRANSPORTS:
+            raise ValueError("A sign-in per account needs a remote server (http or sse).")
+        old_client_id = str(entry.get("oauth_client_id") or "").strip() if old_auth else ""
+        new_client_id = ((old_client_id if oauth_client_id is None
+                          else str(oauth_client_id or "").strip()) if new_auth else "")
+        new_client_secret = str(oauth_client_secret or "").strip() if new_auth else ""
+        if new_client_secret and not new_client_id:
+            raise ValueError("A client secret needs the client ID it belongs to.")
 
-    stored_env = mcp_secrets.server_env(name)
-    new_env = mcp_secrets.merge_env(stored_env, env) if env is not None else stored_env
-    mcp_secrets.set_server_env(name, new_env)
-    # A stored token belongs to the server it was stored for: moved to another host without a
-    # new token, the server keeps none rather than sending the old one to the new address. A
-    # server that signs every account in has no token for everybody at all.
-    moved = old_remote and bool(old_url) and not (transport in REMOTE_TRANSPORTS and same_origin(old_url, url))
-    if clear_token or new_auth or (moved and not str(token or "").strip()):
-        mcp_secrets.clear_server_token(name)
-    elif str(token or "").strip():
-        mcp_secrets.set_server_token(name, str(token))
-    # The same for the accounts' sign-ins and the hand-registered client's secret: they belong
-    # to this host, this sign-in mode and this client.
-    if old_auth and (moved or not new_auth or new_client_id != old_client_id):
-        mcp_oauth.forget_server(name, before)
-    if new_client_secret:
-        mcp_secrets.set_oauth_client_secret(name, new_client_secret)
-    elif (clear_oauth_client_secret or not new_auth or moved or new_client_id != old_client_id) \
-            and mcp_secrets.oauth_client_secret(name):
-        mcp_secrets.clear_oauth_client_secret(name)
-    for key, value in (("auth", new_auth), ("oauth_client_id", new_client_id)):
-        if value:
-            entry[key] = value
-        else:
-            entry.pop(key, None)
-    entry.pop("oauth_client_secret", None)
-    entry.update({
-        "command": command,
-        "transport": transport,
-        "url": url,
-        "enabled": bool(enabled),
-        "permission_level": permission,
-        "env": {key: "" for key in new_env},
-    })
-    entry.pop("token", None)
-    servers[name] = entry
-    manifest["servers"] = servers
-    save_mcp_manifest(manifest)
+        stored_env = mcp_secrets.server_env(name)
+        new_env = mcp_secrets.merge_env(stored_env, env) if env is not None else stored_env
+        mcp_secrets.set_server_env(name, new_env)
+        # A stored token belongs to the server it was stored for: moved to another host without a
+        # new token, the server keeps none rather than sending the old one to the new address. A
+        # server that signs every account in has no token for everybody at all.
+        moved = old_remote and bool(old_url) and not (transport in REMOTE_TRANSPORTS
+                                                      and same_origin(old_url, url))
+        if clear_token or new_auth or (moved and not str(token or "").strip()):
+            mcp_secrets.clear_server_token(name)
+        elif str(token or "").strip():
+            mcp_secrets.set_server_token(name, str(token))
+        # The same for the accounts' sign-ins and the hand-registered client's secret: they belong
+        # to this host, this sign-in mode and this client.
+        if old_auth and (moved or not new_auth or new_client_id != old_client_id):
+            mcp_oauth.forget_server(name, before, deferred=closes)
+        if new_client_secret:
+            mcp_secrets.set_oauth_client_secret(name, new_client_secret)
+        elif (clear_oauth_client_secret or not new_auth or moved or new_client_id != old_client_id) \
+                and mcp_secrets.oauth_client_secret(name):
+            mcp_secrets.clear_oauth_client_secret(name)
+        for key, value in (("auth", new_auth), ("oauth_client_id", new_client_id)):
+            if value:
+                entry[key] = value
+            else:
+                entry.pop(key, None)
+        entry.pop("oauth_client_secret", None)
+        entry.update({
+            "command": command,
+            "transport": transport,
+            "url": url,
+            "enabled": bool(enabled),
+            "permission_level": permission,
+            "env": {key: "" for key in new_env},
+        })
+        entry.pop("token", None)
+        servers[name] = entry
+        manifest["servers"] = servers
+        save_mcp_manifest(manifest)
+    for close in closes:
+        try:
+            close()
+        except Exception:  # noqa: BLE001 - closing is best effort
+            pass
     # A changed token or URL opens a fresh session; the old address's session is closed too,
     # or it stays open, token and all, for the rest of the process.
     stale = {u for u in (old_url if old_remote else "", url if transport in REMOTE_TRANSPORTS else "") if u}
@@ -678,24 +680,33 @@ def upsert_server(name: str, *, command: str = "", transport: str = "stdio", url
             pass
 
 
-@_under_manifest_lock
 def remove_server(name: str) -> bool:
     """Remove one server and everything the key ring holds for it. True when it existed and
-    the manifest was written; a name the manifest does not have leaves the ring alone."""
+    the manifest was written; a name the manifest does not have leaves the ring alone. The
+    manifest and the key ring change under `_manifest_lock`; the session closes, each up to
+    10 s, run after it is released."""
     from vaf.core import mcp_secrets
-    manifest = load_mcp_manifest() or {}
-    servers = manifest.get("servers") if isinstance(manifest.get("servers"), dict) else {}
-    cfg = servers.pop(str(name), None)
-    if cfg is None:
-        return False
-    manifest["servers"] = servers
-    # Secrets go only once the entry is gone: a write that fails leaves the server configured,
-    # and it must keep its token and env then.
-    if not save_mcp_manifest(manifest):
-        return False
     from vaf.core.mcp_oauth import forget_server
-    forget_server(str(name), cfg if isinstance(cfg, dict) else {})     # the service is asked to invalidate them
-    mcp_secrets.clear_server_secrets(str(name))
+    closes: List[Any] = []
+    with _manifest_lock:
+        manifest = load_mcp_manifest() or {}
+        servers = manifest.get("servers") if isinstance(manifest.get("servers"), dict) else {}
+        cfg = servers.pop(str(name), None)
+        if cfg is None:
+            return False
+        manifest["servers"] = servers
+        # Secrets go only once the entry is gone: a write that fails leaves the server
+        # configured, and it must keep its token and env then.
+        if not save_mcp_manifest(manifest):
+            return False
+        # The service is asked to invalidate the sign-ins in the background.
+        forget_server(str(name), cfg if isinstance(cfg, dict) else {}, deferred=closes)
+        mcp_secrets.clear_server_secrets(str(name))
+    for close in closes:
+        try:
+            close()
+        except Exception:  # noqa: BLE001 - closing is best effort
+            pass
     if isinstance(cfg, dict) and cfg.get("url"):
         try:
             from vaf.core.mcp_remote import get_remote_pool

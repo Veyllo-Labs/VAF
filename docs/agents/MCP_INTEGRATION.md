@@ -224,8 +224,10 @@ What the loop reads from a server's output:
   it whose handshake had not begun is stopped before any I/O; one already in its handshake
   may finish it (`initialize`, `notifications/initialized`). A call that got past the last
   check before its caller gave up still sends its request. A listing (discovery, the
-  connection test) whose caller gave up does not send `tools/list`, whether it was waiting
-  for the lock or for its server to start.
+  connection test) is checked the same way, before its server starts and again before
+  `tools/list`: a caller that gave up before either check keeps the listing from being
+  sent, and one that gave up after the last check still sees it sent, until the stop of
+  its process ends it.
 - JSON-RPC batches are not read; VAF never sends one.
 
 Named boundaries, measured: three ways a call can wait on `readline` forever, holding the
@@ -259,20 +261,24 @@ inherited the output pipe and stayed in the group is stopped with it, and the bl
 then returns; a descendant that left the group (`setsid`, a double fork into a session of its
 own) keeps the pipe open and the call waiting. On Windows the process and its child tree are
 stopped (psutil, else `taskkill /T`); a grandchild that detached from that tree keeps the
-pipe open and the call waiting. A server whose cached process has exited is retired, group
-included, before a fresh one replaces it, so a child its launcher left behind is stopped
-then too. While a listing gives up, it holds its own lock until the stop is issued, and the
-listing reports that it is done with the process only while it still holds the server's lock,
-so no other call can start on that process first.
+pipe open and the call waiting. A server whose cached process has exited has its group
+stopped, and waited for (bounded by the 2 s grace and a SIGKILL), before a fresh one replaces
+it: a child its launcher left behind is stopped then too, and the two never overlap on what
+the old one still holds (a port, a lock file). While a listing gives up, it holds its own lock
+until the stop is issued, and the listing reports that it is done with the process only while
+it still holds the server's lock, so no other call can start on that process first.
 
 Being in their own group, the servers are out of reach of a terminal's Ctrl+C and hangup, so
 VAF stops them when it exits: at a normal exit (`atexit`), on the agent's signal shutdown,
 which leaves through `os._exit` (`Agent.shutdown` calls `mcp_client.stop_shared_servers`),
 and on the tray's quit, which stops its children's process trees. That includes servers whose
-stop was still in flight, which a daemon thread cannot finish once the interpreter exits. A
-server that ignores the end of its stdin outlives a VAF that is killed (SIGKILL, an unhandled
-SIGHUP) or crashes, since nothing of VAF runs then; one that follows the stdio transport exits
-on that end of input.
+stop was still in flight, which a daemon thread cannot finish once the interpreter exits, and
+the group of a cached server whose own process has already exited, so a child its launcher
+left behind goes too. From the moment the stop begins no server is started; one whose start
+was already under way is waited for (up to 1 s) and stopped with the rest, without its
+handshake. A server that ignores the end of its stdin outlives a VAF that is killed (SIGKILL,
+an unhandled SIGTERM or SIGHUP) or crashes, since nothing of VAF runs then; one that follows
+the stdio transport exits on that end of input.
 
 The loop has no read deadline of its own: a Windows pipe has no `select`, and a deadline needs
 a reader thread or a non-blocking read with its own design, which would also be the place to

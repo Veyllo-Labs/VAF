@@ -213,7 +213,10 @@ def test_is_error_is_read_as_the_remote_lane_reads_it(flag, failed):
     ([], "MCP Error: the tool reported an error"),
     ([{"type": "image", "data": "x"}], "MCP Error: the tool reported an error"),
     ([{"type": "text", "text": 409}], "MCP Error: 409"),
-], ids=["empty-text", "empty-array", "no-text-item", "number"])
+    ([{"type": "text", "text": ""}, {"type": "text", "text": " "}],
+     "MCP Error: the tool reported an error"),
+    ([{"type": "text", "text": " disk full "}], "MCP Error:  disk full "),
+], ids=["empty-text", "empty-array", "no-text-item", "number", "only-whitespace", "padded"])
 def test_an_error_without_text_gets_the_remote_lanes_wording(content, text):
     """The fallback follows the message the content carries, not the result's own dump."""
     assert _call_with_answer({"result": {"content": content, "isError": True}}) == text
@@ -331,12 +334,22 @@ _LAUNCHER = (
 )
 
 
-def _pid_alive(pid: int) -> bool:
+def _gone(handle) -> bool:
+    """A psutil handle's process has ended (exited, or a zombie waiting to be reaped)."""
     import psutil
     try:
-        return psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
+        return not handle.is_running() or handle.status() == psutil.STATUS_ZOMBIE
     except psutil.NoSuchProcess:
-        return False
+        return True
+
+
+def _identity(pid: int):
+    """A process as (pid, start time), or None when no such process exists."""
+    import psutil
+    try:
+        return (pid, psutil.Process(pid).create_time())
+    except psutil.NoSuchProcess:
+        return None
 
 
 def _wait_until(check, seconds=10.0) -> bool:
@@ -367,6 +380,7 @@ def stub(tmp_path, monkeypatch):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             started.append(self)
+            self._fixture_identity = _identity(self.pid)
 
     monkeypatch.setattr(subprocess, "Popen", _RecordingPopen)
 
@@ -379,36 +393,51 @@ def stub(tmp_path, monkeypatch):
             return client, f"{sys.executable} {path} {mode}{extra}"
         return client, f"{sys.executable} {launcher} {how} {path} {mode}{extra}"
 
-    children = []  # launcher children a test saw, stopped by PID at the end
+    # Launcher children a test saw, as psutil handles: a handle knows its process by pid and
+    # start time, so a pid handed out again later is never mistaken for it.
+    children = []
     make.started = started
     make.children = children
     make.dir = tmp_path
     make.child_pid = lambda: int((tmp_path / "child.pid").read_text(encoding="utf-8"))
+
+    def child():
+        import psutil
+        handle = psutil.Process(make.child_pid())
+        children.append(handle)
+        return handle
+
+    make.child = child
     make.requests = lambda: ((tmp_path / "requests.log").read_text(encoding="utf-8").split()
                              if (tmp_path / "requests.log").exists() else [])
     yield make
     try:
         for client in clients:
             client._server_processes.clear()
-        # A launcher's children, stopped by their PID.
         try:
-            children.append(make.child_pid())
-        except (OSError, ValueError):
+            child()
+        except Exception:  # noqa: BLE001 - no launcher child, or one already gone
             pass
-        for pid in children:
-            if _pid_alive(pid):
-                os.kill(pid, 9)
+        for handle in children:
+            try:
+                if handle.is_running():
+                    handle.kill()
+            except Exception:  # noqa: BLE001
+                pass
     finally:
         for proc in started:
+            # What is left of its group (a deaf child), signalled only while the group's id
+            # still provably belongs to it: its leader is the same process, alive or unreaped.
+            pgid = getattr(proc, "_vaf_pgid", None)
+            if (pgid and os.name != "nt" and proc.returncode is None
+                    and _identity(pgid) == proc._fixture_identity):
+                try:
+                    os.killpg(pgid, 9)
+                except (ProcessLookupError, PermissionError):
+                    pass
             if proc.poll() is None:
                 proc.kill()
             proc.wait(timeout=5)
-            pgid = getattr(proc, "_vaf_pgid", None)
-            if pgid and os.name != "nt":
-                try:
-                    os.killpg(pgid, 9)  # what is left of its group (a deaf child)
-                except (ProcessLookupError, PermissionError):
-                    pass
             for stream in (proc.stdin, proc.stdout, proc.stderr):
                 if stream is not None:
                     stream.close()
@@ -547,13 +576,13 @@ def test_stopping_a_server_behind_a_launcher_ends_the_waiting_call(stub, how):
         pytest.skip("POSIX process groups; Windows stops the child tree only")
     client, command = stub("silent", how=how)
     thread, box, used = _blocked_call(stub, client, command)
-    child = int((stub.dir / "child.pid").read_text(encoding="utf-8"))
+    child = stub.child()
 
     assert _bounded(lambda: client.stop_server(command), seconds=1.0) is True
     thread.join(10)
     assert not thread.is_alive(), "the launcher's child kept the call waiting"
     assert box["out"] == "Error: No response from MCP server"
-    assert _wait_until(lambda: not _pid_alive(child)), "the launcher's child kept running"
+    assert _wait_until(lambda: _gone(child)), "the launcher's child kept running"
 
 
 def _registry_on(client, monkeypatch, servers=None):
@@ -711,31 +740,23 @@ def test_a_stop_still_in_flight_is_finished_at_exit(stub):
     assert client._stopping == set()
 
 
-def test_at_exit_a_cached_server_that_exited_is_not_signalled(monkeypatch):
-    """Its group id is all that is left once polling reaped it, and that id may lead an
-    unrelated group by now."""
-    import vaf.tools.mcp_client as mcp_client
-    stopped = []
-    monkeypatch.setattr(mcp_client, "_stop_process_tree",
-                        lambda process, grace=0: stopped.append(process))
+def test_at_exit_the_group_of_a_server_whose_leader_exited_is_stopped(stub):
+    """A launcher left its child behind and exited: the cached leader is an unreaped zombie
+    until the exit's own poll, so its group id is still its own, and the child (it ignores
+    SIGTERM and the end of its stdin) is stopped with that group."""
+    if os.name == "nt":
+        pytest.skip("POSIX process groups")
+    import psutil
+    client, command = stub("stray", how="leave", deaf=True)
+    assert _bounded(lambda: client.call_stdio(command, "echo", {"text": "a"})) == "echoed: a"
+    child = stub.child()
+    leader = psutil.Process(stub.started[0].pid)
+    # Waited for without polling it, so the leader stays unreaped as it is in VAF.
+    assert _wait_until(lambda: leader.status() == psutil.STATUS_ZOMBIE), "the launcher stayed"
 
-    class _Exited:
-        pid = 424242
-        _vaf_pgid = 424242
-
-        def poll(self):
-            return 0
-
-    class _Running(_Exited):
-        def poll(self):
-            return None
-
-    client = MCPClientTool()
-    exited, running = _Exited(), _Running()
-    client._server_processes.update({"gone": exited, "up": running})
-    client.stop_all_servers()
-    assert stopped == [running]
+    _bounded(client.stop_all_servers)
     assert client._server_processes == {}
+    assert _wait_until(lambda: _gone(child), seconds=3), "the launcher's child outlived the exit"
 
 
 def test_the_shared_servers_are_stopped_without_creating_a_client(monkeypatch):
@@ -751,17 +772,56 @@ def test_the_shared_servers_are_stopped_without_creating_a_client(monkeypatch):
     assert calls == [1]
 
 
-def test_the_agents_signal_shutdown_stops_the_servers_before_os_exit():
-    """`Agent.shutdown` leaves through `os._exit` after a signal, which skips `atexit`."""
-    import ast
-    from pathlib import Path
-    source = (Path(__file__).resolve().parents[1] / "vaf" / "core" / "agent.py").read_text(
-        encoding="utf-8")
-    shutdown = next(n for n in ast.walk(ast.parse(source))
-                    if isinstance(n, ast.FunctionDef) and n.name == "shutdown")
-    body = ast.unparse(shutdown)
-    assert "stop_shared_servers()" in body, "the signal shutdown never stops the servers"
-    assert body.index("stop_shared_servers()") < body.index("os._exit(0)")
+def test_the_agents_signal_shutdown_stops_the_servers_before_os_exit(monkeypatch, tmp_path):
+    """`Agent.shutdown` after a signal leaves through `os._exit`, which skips `atexit`: the
+    real method, run on a stand-in agent down the branch that ends there, must stop the
+    shared client's servers first."""
+    import types
+
+    import vaf.core.agent as agent_module
+    import vaf.core.backend as backend
+    import vaf.tools.mcp_client as mcp_client
+    order = []
+
+    class _Exited(BaseException):
+        pass
+
+    def fake_exit(code):
+        order.append("os._exit")
+        raise _Exited()
+
+    monkeypatch.setattr(os, "_exit", fake_exit)
+    monkeypatch.setattr(mcp_client, "_shared_client",
+                        type("C", (), {"stop_all_servers": lambda self: order.append("stop")})())
+    speech = types.ModuleType("vaf.core.speech")
+    speech.get_speech_manager = lambda: types.SimpleNamespace(stop=lambda: None)
+    monkeypatch.setitem(sys.modules, "vaf.core.speech", speech)
+    monkeypatch.setattr(agent_module, "requests", types.SimpleNamespace(
+        get=lambda *a, **k: types.SimpleNamespace(status_code=200)))
+    pid_file = tmp_path / "server.pid"
+    pid_file.write_text(str(os.getpid()), encoding="utf-8")
+
+    class _Manager:
+        def __init__(self):
+            self.pid_file = str(pid_file)
+
+        def _is_process_running(self, pid):
+            return True
+
+        def stop_server(self):
+            pass
+
+    monkeypatch.setattr(backend, "ServerManager", _Manager)
+    sessions = iter([1, 0])  # this one before it leaves, none after
+    agent = types.SimpleNamespace(
+        server=types.SimpleNamespace(stop_server=lambda: None), use_server=True,
+        config={"persist_server": False}, context_manager=None,
+        _unregister_session=lambda: None, _check_other_vaf_processes=lambda: 0,
+        _count_active_sessions=lambda: next(sessions))
+
+    with pytest.raises(_Exited):
+        agent_module.Agent.shutdown(agent, signum=2)
+    assert order == ["stop", "os._exit"], order
 
 
 def test_abandon_holds_the_listing_until_the_stop_is_issued():
@@ -800,9 +860,16 @@ def test_a_cold_start_whose_caller_gave_up_gets_no_handshake(stub):
     process is not left running."""
     from vaf.core.bounded_run import cancel_when
     client, command = stub("stray")
+    # What the client writes, recorded on its own side: the stub's log only shows what it
+    # read before it was stopped.
+    sent = []
+    real_rpc = client._json_rpc
+    client._json_rpc = lambda process, method, *a, **k: sent.append(method) or real_rpc(
+        process, method, *a, **k)
     with cancel_when(lambda: True):
         assert client._ensure_server(command) is None
-    assert stub.requests() == [], "the handshake was sent for a caller that gave up"
+    assert sent == [], "the handshake was sent for a caller that gave up"
+    assert stub.requests() == []
     assert command not in client._server_processes
     assert _wait_until(lambda: stub.started[0].poll() is not None)
 
@@ -839,12 +906,13 @@ def test_an_exited_server_is_retired_with_its_group_before_it_is_replaced(stub):
         pytest.skip("POSIX process groups")
     client, command = stub("stray", how="leave", deaf=True)
     assert _bounded(lambda: client.call_stdio(command, "echo", {"text": "a"})) == "echoed: a"
-    first_child = stub.child_pid()
-    stub.children.append(first_child)
+    first_child = stub.child()
     assert _wait_until(lambda: stub.started[0].poll() is not None), "the launcher did not exit"
 
     assert _bounded(lambda: client.call_stdio(command, "echo", {"text": "b"})) == "echoed: b"
-    assert _wait_until(lambda: not _pid_alive(first_child)), "the old group's child was kept"
+    # Waited for before the replacement started, not left to a background stop that lets the
+    # two overlap for the grace (the old child ignores SIGTERM, so only the SIGKILL ends it).
+    assert _wait_until(lambda: _gone(first_child), seconds=0.5), "the old group's child was kept"
 
 
 def _remote_entry(tmp_path, monkeypatch, url):
@@ -974,6 +1042,192 @@ def test_stub_server_with_a_string_banner_lists_its_tools(stub):
     client, command = stub("string_banner")
     tools = _bounded(lambda: client.list_server_tools(command))
     assert [t["name"] for t in tools] == ["echo"]
+
+
+# ── round four: the move into _stopping, the signal handler, shutdown races, the save ──────
+
+def test_a_retired_process_is_never_in_neither_place(monkeypatch):
+    """It leaves the cache and enters `_stopping` in one hold of the state lock, so a stop
+    of all servers that looks in between still finds it."""
+    import vaf.tools.mcp_client as mcp_client
+    monkeypatch.setattr(mcp_client, "_stop_process_tree", lambda process, grace=0: None)
+    client = MCPClientTool()
+    process = type("P", (), {"pid": 2_000_000_000})()
+    client._server_processes["cmd"] = process
+    seen = []
+
+    class _Watching:
+        """The state lock, noting where the process is each time it is let go of."""
+
+        def __init__(self):
+            self.inner, self.depth = threading.RLock(), 0
+
+        def __enter__(self):
+            self.inner.acquire()
+            self.depth += 1
+            return self
+
+        def __exit__(self, *exc):
+            self.depth -= 1
+            if self.depth == 0:
+                seen.append((process in client._server_processes.values(),
+                             process in client._stopping))
+            self.inner.release()
+
+    client._state_lock = _Watching()
+    client._retire(process)
+    assert seen and seen[0] == (False, True), seen
+
+
+def test_stopping_all_servers_from_a_signal_handler_on_the_locks_holder():
+    """A handler runs on the main thread between two bytecodes, possibly while that thread
+    holds the state lock: stopping the servers there must not wait for itself."""
+    client = MCPClientTool()
+
+    def interrupted():
+        with client._state_lock:
+            client.stop_all_servers()
+
+    _bounded(interrupted, seconds=3)
+
+
+def test_a_server_whose_start_overlaps_the_exit_is_stopped_without_a_handshake(stub, monkeypatch):
+    """The stop of all servers waits for a start already under way and stops that server
+    with the rest; from then on no server is started."""
+    gate, inside = threading.Event(), threading.Event()
+    recorder = subprocess.Popen
+
+    class _SlowStart(recorder):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            inside.set()
+            gate.wait(10)
+
+    monkeypatch.setattr(subprocess, "Popen", _SlowStart)
+    client, command = stub("stray")
+    sent = []
+    real_rpc = client._json_rpc
+    client._json_rpc = lambda process, method, *a, **k: sent.append(method) or real_rpc(
+        process, method, *a, **k)
+    box = {}
+    launch = threading.Thread(target=lambda: box.setdefault("p", client._ensure_server(command)),
+                              daemon=True)
+    launch.start()
+    assert inside.wait(10), "the server never started"
+    stopper = threading.Thread(target=client.stop_all_servers, daemon=True)
+    stopper.start()
+    assert _wait_until(lambda: client._closing), "the stop of all servers never began"
+    gate.set()
+    stopper.join(10)
+    launch.join(10)
+
+    assert box["p"] is None and sent == [], "the overlapping start got its handshake"
+    assert command not in client._server_processes and client._stopping == set()
+    assert _wait_until(lambda: stub.started[0].poll() is not None), "it escaped the exit"
+    assert client._ensure_server(command) is None and len(stub.started) == 1
+
+
+def _stubbed_secrets(monkeypatch):
+    import vaf.core.mcp_remote as mcp_remote
+    import vaf.core.mcp_secrets as mcp_secrets
+    for name in ("clear_server_secrets", "set_server_env", "clear_server_token",
+                 "set_server_token", "set_oauth_client_secret", "clear_oauth_client_secret"):
+        monkeypatch.setattr(mcp_secrets, name, lambda *a, **k: None)
+    monkeypatch.setattr(mcp_secrets, "server_env", lambda name: {})
+    monkeypatch.setattr(mcp_secrets, "oauth_client_secret", lambda name: "")
+    monkeypatch.setattr(mcp_remote, "registered_egress", lambda url: None)
+
+
+def test_a_save_checks_the_address_before_it_takes_the_manifest_lock(tmp_path, monkeypatch):
+    """The DNS lookup of a remote address can take seconds; loads must not wait for it."""
+    import vaf.network.egress as egress
+    reg, path = _remote_entry(tmp_path, monkeypatch, "https://a.example.invalid/mcp")
+    _stubbed_secrets(monkeypatch)
+    checking, order = threading.Event(), []
+
+    def slow_check(url, policy=None):
+        checking.set()
+        threading.Event().wait(0.5)
+        order.append("checked")
+
+    monkeypatch.setattr(egress, "check_destination", slow_check)
+    saver = threading.Thread(target=lambda: reg.upsert_server(
+        "other", transport="http", url="https://c.example.invalid/mcp"), daemon=True)
+    saver.start()
+    assert checking.wait(10)
+    reg.load_mcp_manifest()
+    order.append("loaded")
+    saver.join(10)
+    assert order == ["loaded", "checked"], "a load waited for the save's DNS check"
+
+
+@pytest.mark.parametrize("save", ["upsert", "remove"])
+def test_a_save_closes_sessions_after_it_lets_go_of_the_manifest_lock(tmp_path, monkeypatch,
+                                                                      save):
+    """Each session close waits up to 10 s; loads must not wait for them. The sign-in
+    records still go under the lock, the closes after it."""
+    import vaf.core.mcp_oauth as mcp_oauth
+    import vaf.core.mcp_remote as mcp_remote
+    reg, path = _remote_entry(tmp_path, monkeypatch, "https://a.example.invalid/mcp")
+    path.write_text(json.dumps({"servers": {"svc": {
+        "transport": "http", "url": "https://a.example.invalid/mcp", "auth": "oauth"}}}),
+        encoding="utf-8")
+    _stubbed_secrets(monkeypatch)
+    import vaf.network.egress as egress
+    monkeypatch.setattr(egress, "check_destination", lambda url, policy=None: None)
+    closing, order = threading.Event(), []
+
+    def slow_close(*args, **kwargs):
+        closing.set()
+        threading.Event().wait(0.5)
+        order.append("closed")
+
+    def forget(name, cfg=None, *, deferred=None):
+        order.append("forgot")
+        if deferred is None:
+            slow_close()
+        else:
+            deferred.append(slow_close)
+        return 0
+
+    monkeypatch.setattr(mcp_oauth, "forget_server", forget)
+    monkeypatch.setattr(mcp_remote, "get_remote_pool",
+                        lambda: type("P", (), {"close": lambda self, *a, **k: None})())
+    if save == "upsert":
+        saver = threading.Thread(target=lambda: reg.upsert_server(
+            "svc", transport="http", url="https://b.example.invalid/mcp", auth="oauth"),
+            daemon=True)
+    else:
+        saver = threading.Thread(target=reg.remove_server, args=("svc",), daemon=True)
+    saver.start()
+    assert closing.wait(10)
+    reg.load_mcp_manifest()
+    order.append("loaded")
+    saver.join(10)
+    assert order == ["forgot", "loaded", "closed"], order
+
+
+def test_forgetting_a_server_can_hand_its_session_closes_back(monkeypatch):
+    import vaf.core.mcp_oauth as mcp_oauth
+    import vaf.core.mcp_remote as mcp_remote
+    import vaf.core.mcp_secrets as mcp_secrets
+    closed = []
+    monkeypatch.setattr(mcp_remote, "get_remote_pool", lambda: type(
+        "P", (), {"close": lambda self, url=None, account=None: closed.append(account)})())
+    monkeypatch.setattr(mcp_secrets, "oauth_accounts", lambda server: ["acc"])
+    monkeypatch.setattr(mcp_secrets, "oauth_record", lambda server, account: {})
+    monkeypatch.setattr(mcp_secrets, "clear_oauth_record", lambda server, account: None)
+
+    # A name of its own: sign-ins another test left pending are kept per server name.
+    server = "forget-closes-test"
+    deferred = []
+    mcp_oauth.forget_server(server, {}, deferred=deferred)
+    assert closed == [] and len(deferred) == 1, "a close ran inside the forget"
+    deferred[0]()
+    assert len(closed) == 1
+
+    mcp_oauth.forget_server(server, {})
+    assert len(closed) == 2, "without a list the closes run as before"
 
 
 # ── fuzz: the reader against a reference model ──────────────────────────────────────────────

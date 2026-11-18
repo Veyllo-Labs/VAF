@@ -735,7 +735,7 @@ class SettingsScreen(ModalScreen[None]):
                              for text in (self.ENGINE_LINES["vllm"][1],
                                           str(support.get("reason") or "")) if text)
             # Laid out like the selectable rows: the name, then the indented lines below it.
-            rows.append(("note", None, f" vLLM  {word}\n{body}"))
+            rows.append(("note", None, f" {ENGINE_LABELS['vllm']}  {word}\n{body}"))
         return rows + [("sep", None, ""), ("back", None, "Back")]
 
     # The shares the GPU memory list offers, besides Automatic and a stored value off the grid.

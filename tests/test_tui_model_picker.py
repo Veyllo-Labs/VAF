@@ -551,7 +551,7 @@ def test_one_engine_label():
     assert screens_mod.SettingsScreen.ENGINE_LINES["vllm"][0] == le.LABELS["vllm"]
     q = "[\"']"
     pattern = re.compile(rf"{q}vLLM{q} if|{q}llama\.cpp{q} if|ENGINE_NAMES|"
-                         rf"\({q}llama\.cpp{q},|\({q}vLLM{q},|{q}llama\.cpp  |{q}vLLM  ")
+                         rf"\({q}llama\.cpp{q},|\({q}vLLM{q},|{q}\s*llama\.cpp\s\s|{q}\s*vLLM\s\s")
     for name in ("screens.py", "agent_bridge.py", "app.py"):
         src = (ROOT / "vaf" / "cli" / "tui_app" / name).read_text(encoding="utf-8")
         assert not pattern.search(src), name

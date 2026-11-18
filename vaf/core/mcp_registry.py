@@ -328,13 +328,8 @@ def discover_mcp_tools(timeout_seconds: float = 5.0):
     status: Dict[str, Any] = {}
     for name, cfg, th in threads:
         if th.is_alive():
-            # Timed out: terminate the server process to unblock the daemon thread, then skip it.
-            try:
-                proc = client._server_processes.get(str(cfg.get("command", "")))
-                if proc is not None and proc.poll() is None:
-                    proc.terminate()
-            except Exception:
-                pass
+            # Timed out: stop the server process to unblock the daemon thread, then skip it.
+            client.stop_server(str(cfg.get("command", "")))
             logger.warning("MCP server '%s' timed out during discovery — skipped", name)
             status[name] = {"connected": False, "tool_count": 0, "error": "timeout"}
             continue
@@ -445,12 +440,7 @@ def probe_mcp_server(server_cfg: Dict[str, Any], timeout_seconds: float = 5.0, *
     th.start()
     th.join(max(1.0, float(timeout_seconds)))
     if th.is_alive():
-        try:
-            proc = client._server_processes.get(cmd)
-            if proc is not None and proc.poll() is None:
-                proc.terminate()
-        except Exception:
-            pass
+        client.stop_server(cmd)
         return {"connected": False, "tool_count": 0, "tools": [], "error": "timeout"}
     tools = result.get("tools") or []
     names = [t.get("name") for t in tools if isinstance(t, dict) and t.get("name")]

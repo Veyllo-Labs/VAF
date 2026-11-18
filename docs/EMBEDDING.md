@@ -3117,7 +3117,14 @@ usable from an embedded engine too, documented in their own pages:
   `vaf.tools.mcp_client.get_mcp_client().call_stdio(...)`. It returns the tool's text
   or an `Error:` / `MCP Error:` line and does not raise for anything the server writes;
   it has no timeout of its own, so run it under one, as `ToolCaller` does for the
-  registered tools. See [MCP_INTEGRATION.md](agents/MCP_INTEGRATION.md).
+  registered tools. A timeout on your side only stops your wait: the read inside keeps
+  the server's lock until the server answers or its process is stopped, so later calls
+  to that server wait too. `get_mcp_client().stop_server(command)` stops that process
+  (it does not wait for the lock), which ends the blocked call with an error, and the
+  next call starts a fresh one. Do not retry a call that writes after a timeout on your own: the server may
+  already have acted. A call that was still waiting for the lock when `run_bounded`
+  gave up on it returns without reaching the server. See
+  [MCP_INTEGRATION.md](agents/MCP_INTEGRATION.md).
 - **Update-surviving local tools** - a `custom_tools/` folder in the platform
   data dir (managed via the Web UI, admin-only), see
   [vaf/tools/README.md](../vaf/tools/README.md). The agent's file tools cannot write it

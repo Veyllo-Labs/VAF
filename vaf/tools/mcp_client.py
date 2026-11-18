@@ -303,6 +303,36 @@ class MCPClientTool(BaseTool):
         self._server_initialized[cache_key] = True
         return process
 
+    def _retire(self, process) -> None:
+        """Stop a server process and drop it from the cache, so the next call starts a fresh
+        one. Called under the server's lock. Never raises."""
+        for key, cached in list(self._server_processes.items()):
+            if cached is process:
+                self._server_processes.pop(key, None)
+        try:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+        except Exception:
+            pass
+
+    def stop_server(self, server_command: str) -> bool:
+        """Stop the local server process started for `server_command`, if one is cached.
+
+        Deliberately without the server's lock: the call to stop is the one a blocked read
+        holds it for. Stopping the process ends that read (it sees the end of the stream and
+        its call returns an error), and the next call starts a fresh process. For a caller
+        whose own deadline ran out while a call waits on a server that went silent: discovery
+        and the connection test do that here. True when a process was stopped."""
+        process = self._server_processes.get(server_command)
+        if process is None:
+            return False
+        self._retire(process)
+        return True
+
     def _json_rpc(self, process: subprocess.Popen, method: str, params: Dict[str, Any],
                   request_id: int, max_reads: int = 20) -> Optional[Dict[str, Any]]:
         """Send a JSON-RPC request and return the response object matching request_id, skipping
@@ -314,7 +344,8 @@ class MCPClientTool(BaseTool):
         it allows or holding an integer past Python's digit limit, may be the answer itself,
         so it ends the request with a parse error (-32700) instead: skipping it would leave
         the reader waiting on ``readline`` for an answer that already came, with the
-        server's lock held."""
+        server's lock held. Such a line also retires the process (`_retire`), because the
+        stream may still hold output nobody can attribute. Callers hold the server's lock."""
         try:
             req = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
             process.stdin.write(json.dumps(req) + "\n")
@@ -336,6 +367,12 @@ class MCPClientTool(BaseTool):
             except json.JSONDecodeError:
                 continue  # not JSON: log text on stdout
             except (ValueError, RecursionError) as exc:
+                # The line has no id anybody can read, so it may be this answer or the
+                # leftover of an earlier request, and what follows it on the stream belongs
+                # to nobody now: the next request would read it first. The process is
+                # retired here, under the server's lock, so the next request starts a
+                # fresh one on a clean stream.
+                self._retire(process)
                 return {"jsonrpc": "2.0", "id": request_id,
                         "error": {"code": -32700,
                                   "message": "the MCP server sent a line that cannot be read "
@@ -387,6 +424,13 @@ class MCPClientTool(BaseTool):
         JSON at all is skipped, and the read then waits for a line that may never come, so
         run it under a deadline, as `ToolCaller` does for the registered tools."""
         with self._lock_for(server_command):
+            # A caller that gave up while this call waited for the lock (run_bounded's
+            # timeout or stop) has already been told the call did not finish, so the call
+            # must not reach the server any more. This narrows the window; a call that got
+            # past this check before its caller gave up still runs.
+            from vaf.core.bounded_run import cancel_requested
+            if cancel_requested():
+                return "Error: the MCP call was cancelled before it reached the server"
             process = self._ensure_server(server_command, env)
             if process is None:
                 return "Error: Failed to initialize MCP server"
@@ -406,6 +450,17 @@ class MCPClientTool(BaseTool):
             return "Error: No result in MCP response"
 
         result = response["result"]
+        text = self._result_text(result)
+        # A tool that failed says so in `isError`, whatever its content looks like; the
+        # prefix is the one the remote lane uses (`mcp_remote.render_result`) and the shared
+        # result classifier reads as a failure (`context.tool_result_is_error`).
+        if isinstance(result, dict) and result.get("isError") is True:
+            return f"MCP Error: {text}"
+        return text
+
+    @staticmethod
+    def _result_text(result: Any) -> str:
+        """The text of a `tools/call` result: the text items joined, else the result as text."""
         # MCP tools return a content array.
         if isinstance(result, dict) and "content" in result:
             content = result["content"]

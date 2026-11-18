@@ -197,22 +197,48 @@ flags and the warm-process cache to carry).
 
 What the loop reads from a server's output:
 
-- A line that is not a JSON object is skipped: log text, a stray `print(1)`, a status string
-  such as `"server ready"`. A JSON-RPC message is an object. Before, such a line made every call
-  to that server raise, so all its tools were unreachable until VAF restarted.
+- A line that is not JSON (log text) is skipped, as it always was. A line that is JSON but
+  not an object (a stray `print(1)`, `null`, a status string such as `"server ready"`) is
+  skipped too: a JSON-RPC message is an object. Before, such a value failed the call it was
+  read in with a Python exception; a server that wrote one before every answer failed every
+  call, and one written at startup failed the handshake and left the process cached without
+  it.
 - A line that is JSON the decoder cannot read (nested deeper than it allows, or holding an
-  integer past Python's 4300-digit limit) ends the request with a parse error, code -32700,
-  instead of being skipped, because it may be the answer itself. During the handshake that
-  error drops the process, and the next call starts it again.
-- An answer in an unexpected shape (an `error` that is a string, a `result` that is not an
-  object, a text item whose `text` is not a string) comes back as text.
+  integer past Python's active digit limit, 4300 by default) ends the request with a parse
+  error, code -32700, instead of being skipped, because it may be the answer itself. Such a
+  line carries no id anybody can read, so whatever follows it on the stream (this request's
+  real answer, say) belongs to nobody: the process is stopped and dropped from the cache, and
+  the next call starts a fresh one on a clean stream. A process that answers normally is
+  kept and reused.
+- `isError: true` in a result makes the call's text start with `MCP Error:`, the same prefix
+  the remote lane gives such a result and the shared result classifier reads as a failure,
+  whatever the content looks like. Other answers in an unexpected shape (an `error` that is a
+  string, a `result` that is not an object, a text item whose `text` is not a string) come
+  back as text.
+- A call that waited for the server's lock after its caller gave up on it (the tool budget
+  ran out, or the user pressed Stop) returns without reaching the server, so a write is not
+  sent after its caller was told it did not finish. A call that got past that check before
+  its caller gave up still runs.
 - JSON-RPC batches are not read; VAF never sends one.
 
-Named boundary, measured: an answer line that is not JSON at all is skipped like log text, so
-the request then waits for a line that never comes, holding the server's lock, and the next
-call to that server waits behind it. Only the caller's tool budget bounds that wait; the loop
-has no read deadline of its own, since a Windows pipe has no `select` and a deadline needs a
-reader thread or a non-blocking read with its own design.
+Named boundaries, measured: three ways a call can wait on `readline` forever, holding the
+server's lock:
+
+- an answer line that is not JSON at all is skipped like log text, and the request then waits
+  for a line that never comes;
+- the server's stderr is a pipe nothing reads: once 64 KB of its log output has piled up over
+  the process's life, the server blocks on its next log write and never answers;
+- the pipe is read in text mode, which ends a line at a raw `\r`; JSON allows that character
+  as whitespace, so an answer holding one is split into two lines that are not JSON, both
+  skipped.
+
+The caller's tool budget bounds only how long the caller waits. It does not interrupt the
+blocked read or release the lock, so later calls to the same server wait behind it and can
+time out too, until the read ends or the server process is stopped
+(`MCPClientTool.stop_server(command)`, which takes no lock; discovery and the connection test
+stop a server that missed their deadline this way). The loop has no read
+deadline of its own: a Windows pipe has no `select`, and a deadline needs a reader thread or a
+non-blocking read with its own design, which would also be the place to drain stderr.
 
 `tests/test_mcp_stdio_odd_lines.py` guards this against stub server processes and with a
 seeded fuzz of the reader against a reference model.

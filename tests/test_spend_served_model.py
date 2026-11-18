@@ -102,8 +102,8 @@ def _rows():
 
 
 def test_deepseek_auto_chat_books_the_flash_model_at_flash_price(spend_dir, flash_context):
-    """MUTATION: ignore `_cache.get("model")` in `_record_call_usage` (the row
-    becomes `deepseek/deepseek-auto`), or delete the stamp in `_chat_single`."""
+    """MUTATION: ignore the served model in `_record_call_usage` (the row becomes
+    `deepseek/deepseek-auto`), or delete the write into `served` in `_chat_single`."""
     mgr = _manager()
     for _ in range(3):
         assert list(mgr.chat_completion(_MSGS)) == ["answer"]
@@ -158,18 +158,71 @@ def test_a_failover_link_books_under_its_own_provider(flash_context, booked, mon
 def test_a_call_that_reached_no_provider_does_not_inherit_the_last_stamp(flash_context,
                                                                          booked,
                                                                          monkeypatch):
-    """MUTATION: delete the two `pop`s at the top of `chat_completion`; the second
-    call then books `deepseek-flash`, which it never reached."""
-    mgr = _manager()
+    """The first call is served by a failover link, so a leftover would carry
+    another provider AND another model. The calls after it reach no provider and
+    book what they asked for: the configured alias, then an explicit model.
+    MUTATION: keep the holder on the manager instead of creating it per call
+    (the later calls book `anthropic/claude-sonnet-4-6`), or drop `model` from
+    the fallback in `_record_call_usage` (the explicit `x` is lost)."""
+    mgr = _manager(provider=_FakeProvider(fail=ConnectionError("connection refused")))
+    link = _manager("anthropic", config={"api_model_anthropic": "claude-sonnet-4-6"})
+    monkeypatch.setattr(mgr, "_build_failover_chain",
+                        lambda model: [(mgr, model), (link, None)])
     list(mgr.chat_completion(_MSGS))
+    events = []
+    mgr.event_sink = events.append
     monkeypatch.setattr(mgr, "_chat_completion_impl", lambda *a, **kw: iter(()))
     list(mgr.chat_completion(_MSGS))
-    assert booked == [("deepseek", "deepseek-flash"), ("deepseek", "deepseek-auto")]
+    list(mgr.chat_completion(_MSGS, model="x"))
+    assert booked == [("anthropic", "claude-sonnet-4-6"), ("deepseek", "deepseek-auto"),
+                      ("deepseek", "x")]
+    ends = [e for e in events if e["type"] == "llm_end"]
+    assert all("model" not in e["usage"] and "provider" not in e["usage"] for e in ends)
+
+
+def test_a_call_that_failed_at_the_provider_names_the_model_it_was_sent_to(flash_context,
+                                                                          booked):
+    """A call the provider refused still reached it, so the event and the
+    ledger name the model it was sent to. MUTATION: delete the write into
+    `served` in `_chat_single`."""
+    mgr = _manager(provider=_FakeProvider(fail=ConnectionError("connection refused")))
+    events = []
+    mgr.event_sink = events.append
+    with pytest.raises(ConnectionError):
+        list(mgr.chat_completion(_MSGS))
+    end = [e for e in events if e["type"] == "llm_end"][-1]
+    assert end["ok"] is False
+    assert (end["usage"]["provider"], end["usage"]["model"]) == ("deepseek", "deepseek-flash")
+    assert booked == [("deepseek", "deepseek-flash")]
+
+
+def test_overlapping_calls_each_book_the_model_that_served_them(flash_context, booked,
+                                                                monkeypatch):
+    """Two calls on one manager overlap: A is resolved to pro and still streaming
+    when B runs on flash from start to finish (a `call_with_deadline` worker keeps
+    its call going after the timeout while the turn makes the next one). With
+    the stamp on the manager, A was booked at B's flash price, about 3.3x too
+    low, and a spend cap reading it trips late. MUTATION: keep the holder on the
+    manager instead of creating it per call."""
+    mgr = _manager()
+    events = []
+    mgr.event_sink = events.append
+    monkeypatch.setenv("VAF_IN_AUTOMATION", "1")
+    call_a = mgr.chat_completion(_MSGS)
+    assert next(call_a) == "answer"
+    monkeypatch.delenv("VAF_IN_AUTOMATION")
+    assert list(mgr.chat_completion(_MSGS)) == ["answer"]
+    assert list(call_a) == []
+    assert mgr.provider.sent == ["deepseek-v4-pro", "deepseek-flash"]
+    assert booked == [("deepseek", "deepseek-flash"), ("deepseek", "deepseek-v4-pro")]
+    ends = [e["usage"]["model"] for e in events if e["type"] == "llm_end"]
+    assert ends == ["deepseek-flash", "deepseek-v4-pro"]
 
 
 def test_llm_end_names_the_model_that_served(flash_context, booked):
     """The event's own `model` is what was asked for (None here); the usage
-    snapshot says what answered. MUTATION: delete the stamp in `_chat_single`."""
+    snapshot says what answered. MUTATION: delete the write into `served` in
+    `_chat_single`, or leave `_served` out of the event's usage."""
     mgr = _manager()
     events = []
     mgr.event_sink = events.append

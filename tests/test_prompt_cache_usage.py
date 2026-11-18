@@ -224,7 +224,7 @@ def test_the_llm_end_event_carries_the_cache_numbers():
 
     from vaf.core import api_backend
     src = inspect.getsource(api_backend.APIBackendManager.chat_completion)
-    assert '"usage": dict(self.last_request_usage or {})' in src, (
+    assert '"usage": {**dict(self.last_request_usage or {}), **_served}' in src, (
         "llm_end no longer copies the whole usage dict, so a new field would be "
         "dropped on the way to Agent.on_event")
 

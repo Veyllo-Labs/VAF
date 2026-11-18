@@ -1664,8 +1664,6 @@ class APIBackendManager:
                     # Merged over the blank shape, so a link that reports only
                     # the two token counts still leaves this manager holding a
                     # complete record rather than the previous call's remains.
-                    # The link's served-model stamp (set in its own
-                    # `_chat_single`) replaces the primary's with it.
                     self.last_request_usage.update({**blank_request_usage(), **lr})
                     self.session_usage["input_tokens"] += lr.get("input_tokens", 0)
                     self.session_usage["output_tokens"] += lr.get("output_tokens", 0)
@@ -1682,8 +1680,9 @@ class APIBackendManager:
         (False = errored OR abandoned before completion) and a best-effort
         usage snapshot (the serving provider's last request; may lag one call
         behind when a failover link served the response). The snapshot's `model`
-        and `provider` name the model and provider that served the call, which
-        the event's own `model` (the requested one, often None) does not."""
+        and `provider` name the model and provider that served THIS call (from
+        the call's own holder, see below), which the event's own `model` (the
+        requested one, often None) does not."""
         import time as _time
 
         _sink = callable(getattr(self, "event_sink", None))
@@ -1704,24 +1703,28 @@ class APIBackendManager:
         # to size a fallback, and holding a whole response in memory to do it
         # would cost more than the number is worth.
         _out_units = 0
-        # The served-model stamp is per call. A call that never reaches a provider
-        # (a refused local link, an empty chain) must book the model it asked for,
-        # not the one the previous call was served by.
-        try:
-            self.last_request_usage.pop("model", None)
-            self.last_request_usage.pop("provider", None)
-        except Exception:
-            pass
+        # The model and provider that served THIS call, filled by whichever
+        # `_chat_single` runs for it (a failover link's last). Held by the call,
+        # not by the manager: `last_request_usage` belongs to the manager and the
+        # next call on it replaces it, and calls do overlap (a `call_with_deadline`
+        # worker keeps its call running after the timeout while the turn makes the
+        # next one), so a stamp there booked one call under another's model. Not a
+        # ContextVar either: `_first_chunk` runs the first step in a copied context,
+        # whose writes would never reach this frame. Empty when the call reached
+        # no provider, which then books the requested or configured model.
+        _served: dict = {}
         try:
             for _chunk in self._chat_completion_impl(
-                messages, temperature, max_tokens, stream, model, tools, tool_choice
+                messages, temperature, max_tokens, stream, model, tools, tool_choice,
+                served=_served,
             ):
                 if isinstance(_chunk, str) and _chunk:
                     _out_units += _chunk.count(" ") + 1
                 yield _chunk
             _ok = True
         finally:
-            self._record_call_usage(_before, model, messages=messages, out_units=_out_units)
+            self._record_call_usage(_before, model, messages=messages, out_units=_out_units,
+                                    served=_served)
             if _sink:
                 self._emit_event(
                     {
@@ -1730,12 +1733,13 @@ class APIBackendManager:
                         "model": model,
                         "duration_ms": int((_time.monotonic() - _t0) * 1000),
                         "ok": _ok,
-                        "usage": dict(self.last_request_usage or {}),
+                        "usage": {**dict(self.last_request_usage or {}), **_served},
                     }
                 )
 
     def _record_call_usage(self, before: dict, model: Optional[str],
-                           *, messages=None, out_units: int = 0) -> None:
+                           *, messages=None, out_units: int = 0,
+                           served: Optional[dict] = None) -> None:
         """Book what THIS call added, once, into the spend ledger.
 
         Measured as the DELTA of the running session total, not by comparing
@@ -1748,6 +1752,12 @@ class APIBackendManager:
         The running total only ever grows, so an identical repeat still moves it,
         while a call that reported nothing (an error, an abandoned generator)
         moves it by zero and is correctly not billed.
+
+        NAMED BOUNDARY: the running total belongs to the manager, so a call that
+        overlaps another one on the same manager (a `call_with_deadline` worker
+        still running after its timeout) also books the tokens the other call
+        reported in between. The model and provider do not leak that way: they
+        come from the call's own `served` holder.
         """
         try:
             after = dict(self.session_usage or {})
@@ -1773,15 +1783,16 @@ class APIBackendManager:
             # response stopped, and reading one out of the other hides both.
             _finish = _cache.get("finish_reason")
 
-            # The model and provider that SERVED the call, stamped in `_chat_single`
-            # (the alias resolved, a foreign id dropped, a failover link under its own
-            # provider). Booking the requested name priced every deepseek-auto call at
-            # the unknown-model rate and put failover tokens on the primary's row. The
-            # requested or configured name is the fallback for a call that reached no
-            # provider and so carries no stamp.
-            _model = str(_cache.get("model") or model
+            # The model and provider that SERVED the call, from the call's own holder
+            # (`served`, filled in `_chat_single`: the alias resolved, a foreign id
+            # dropped, a failover link under its own provider). Booking the requested
+            # name priced every deepseek-auto call at the unknown-model rate and put
+            # failover tokens on the primary's row. The requested or configured name
+            # is the fallback for a call that reached no provider.
+            _served = served or {}
+            _model = str(_served.get("model") or model
                          or self.config.get(f"api_model_{self.provider_name}", "") or "")
-            _provider = str(_cache.get("provider") or self.provider_name)
+            _provider = str(_served.get("provider") or self.provider_name)
             if not (_in or _out):
                 # The call happened - we know the lane, the provider and the
                 # model, because those are decided before it goes out. What is
@@ -1816,10 +1827,12 @@ class APIBackendManager:
         except Exception:
             pass  # accounting must never break a call
 
-    def _chat_completion_impl(self, messages, temperature=0.7, max_tokens=4096, stream=True, model=None, tools=None, tool_choice=None):
+    def _chat_completion_impl(self, messages, temperature=0.7, max_tokens=4096, stream=True, model=None, tools=None, tool_choice=None,
+                              served: Optional[dict] = None):
         chain = self._build_failover_chain(model)
         if len(chain) <= 1:
-            yield from self._chat_single(messages, temperature, max_tokens, stream, model, tools, tool_choice)
+            yield from self._chat_single(messages, temperature, max_tokens, stream, model, tools, tool_choice,
+                                         served=served)
             return
 
         return_primary = bool(self._failover_cfg("failover_return_to_primary", True))
@@ -1846,7 +1859,8 @@ class APIBackendManager:
                     # primary cooling down): the refusal, not an empty reply.
                     last_failure = last_failure or refusal("the local failover link")
                     continue
-            gen = link_mgr._chat_single(messages, temperature, max_tokens, stream, link_model, tools, tool_choice)
+            gen = link_mgr._chat_single(messages, temperature, max_tokens, stream, link_model, tools, tool_choice,
+                                        served=served)
             deadline = timeout_s if (timeout_s > 0 and not is_last) else None
             first, failure = self._first_chunk(gen, deadline)
             if failure is not None:
@@ -1886,10 +1900,14 @@ class APIBackendManager:
             text = str(last_failure)
             yield text if text.startswith("[API Error from ") else f"[API Error from {self.provider_name}: {text}]"
 
-    def _chat_single(self, messages, temperature=0.7, max_tokens=4096, stream=True, model=None, tools=None, tool_choice=None):
+    def _chat_single(self, messages, temperature=0.7, max_tokens=4096, stream=True, model=None, tools=None, tool_choice=None,
+                     served: Optional[dict] = None):
         """Execute one chat completion against THIS manager's single provider (no failover).
 
         Args:
+            served: the calling `chat_completion`'s per-call holder; receives the
+                    model and provider this attempt sends to, so the call is booked
+                    under what served it.
             tool_choice: Control tool usage - 'auto' (default), 'none', 'required',
                         or {'type': 'function', 'function': {'name': '...'}} for specific tool
         """
@@ -1964,13 +1982,13 @@ class APIBackendManager:
         # provider classes are built nowhere but the factory above.
         self.provider.last_request_usage = blank_request_usage()
         self.last_request_usage = blank_request_usage()
-        # What is actually SENT, stamped on the per-call record: the alias resolved,
-        # a foreign id dropped, this manager's own provider. The ledger books these
-        # rather than the name the caller passed (usually None, so the config value,
-        # which may be the deepseek-auto alias no price list knows). Providers never
-        # write these two keys, so the sync below cannot overwrite them, and a
-        # failover link carries its own stamp across in `_stream_link`.
-        self.last_request_usage.update({"model": model, "provider": self.provider_name})
+        # What is actually SENT, written into the call's own holder: the alias
+        # resolved, a foreign id dropped, this manager's own provider. The ledger
+        # books these rather than the name the caller passed (usually None, so the
+        # config value, which may be the deepseek-auto alias no price list knows).
+        # A failover link writes the same holder, after the primary that failed.
+        if served is not None:
+            served.update({"model": model, "provider": self.provider_name})
 
         # Execute via provider
         try:

@@ -78,7 +78,8 @@ Settings asks in a confirmation that names the size, the TUI in its confirm scre
 that finds `local_engine = vllm` and nothing installed refuses with a message that names the
 command.
 
-- **Where:** `bin/vllm/venv/`, next to the llama-server binary (`bin/` is gitignored). A
+- **Where:** `bin/vllm/venv/`, next to llama.cpp's `bin/llama-cpp/` (`bin/` is gitignored); a
+  llama.cpp update replaces only `bin/llama-cpp/` and never touches it. A
   fresh environment made with VAF's own Python (vLLM 0.32.0 accepts 3.11 to 3.14); on an
   AMD GPU with a Python 3.12 (see "The ROCm build" below).
 - **Which build:** `vllm_server.backend()` is `rocm` when the primary GPU is an AMD one and

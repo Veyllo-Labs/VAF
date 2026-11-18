@@ -602,8 +602,6 @@ class ServerManager:
     
     
     def __init__(self, skip_cleanup: bool = False):
-        self.base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        self.bin_dir = os.path.join(self.base_dir, "bin")
         self.process = None
         self._log_file = None  # Server log file handle
         self._job_handle = None  # Windows Job Object for process group management
@@ -625,9 +623,8 @@ class ServerManager:
         self.server_exe = "llama-server"
         if self.system == "Windows":
              self.server_exe += ".exe"
-             
-        self.server_path = os.path.join(self.bin_dir, self.server_exe)
-        
+        self._set_install_paths(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
         # Cleanup any orphaned server from previous crash (unless skipped)
         if not skip_cleanup:
             self._cleanup_orphan_server()
@@ -635,6 +632,20 @@ class ServerManager:
         # Windows: Create Job Object to ensure child process terminates with parent
         if self.system == "Windows":
             self._create_job_object()
+
+    def _set_install_paths(self, base_dir: str) -> None:
+        """Where llama.cpp lives under the installation's `base_dir`.
+
+        bin/ holds one folder per tenant: llama.cpp in bin/llama-cpp (bin_dir), the vLLM
+        environment in bin/vllm (vllm_server.venv_dir), Piper in bin/piper (speech.py). An
+        install of llama.cpp replaces only its own folder. legacy_server_path is where an
+        earlier VAF put the binary, straight into bin/; it never counts as installed, and
+        the next install moves llama.cpp into bin_dir (ensure_server_exists)."""
+        self.base_dir = base_dir
+        self.bin_root = os.path.join(base_dir, "bin")
+        self.bin_dir = os.path.join(self.bin_root, "llama-cpp")
+        self.server_path = os.path.join(self.bin_dir, self.server_exe)
+        self.legacy_server_path = os.path.join(self.bin_root, self.server_exe)
 
     def get_model_path(self, model_name: str | None = None) -> str:
         """
@@ -909,19 +920,22 @@ class ServerManager:
         except Exception:
             pass
 
-    def installed_build(self):
+    def installed_build(self, path: str | None = None):
         """The build number of the llama-server on disk, or None when there is no server
         or it does not say. `llama-server --version` prints "version: 10021 (33a75f41c)"
-        up to the b10xxx builds and "version: 0.4.0-dev (build 10955, commit 2f539596c)"
-        since llama.cpp took semver names; the build number is the part VAF pins."""
-        if not os.path.exists(self.server_path):
+        up to the b10xxx builds, "version: 0.4.0-dev (build 10955, commit 2f539596c)"
+        since llama.cpp took semver names and "version: 1.0.0 (build 12359, ...)" since
+        v1.0.0; the build number is the part VAF pins. `path` reads another binary than
+        server_path (`vaf info` names the build of a legacy install with it)."""
+        target = path or self.server_path
+        if not os.path.exists(target):
             return None
         try:
-            return self.parse_build_number(self._version_output())
+            return self.parse_build_number(self._version_output(target))
         except Exception:
             return None
 
-    def _version_output(self) -> str:
+    def _version_output(self, path: str | None = None) -> str:
         """What `llama-server --version` writes, both streams together.
 
         The one step of installed_build that starts a program, and the only reason its
@@ -930,12 +944,12 @@ class ServerManager:
         decisions the build number drives have to hold on every host. Standing in for
         this method keeps those tests host-independent.
         """
-        out = subprocess.run([self.server_path, "--version"], capture_output=True, text=True, timeout=20)
+        out = subprocess.run([path or self.server_path, "--version"], capture_output=True, text=True, timeout=20)
         return (out.stdout or "") + (out.stderr or "")
 
     @staticmethod
     def parse_build_number(version_output: str):
-        """10955 from either shape of the version line, None from anything else."""
+        """The build number from any of those shapes of the version line, None from anything else."""
         text = version_output or ""
         m = re.search(r"\(build\s+(\d+)", text)
         if m:
@@ -990,8 +1004,10 @@ class ServerManager:
         elif self.system == "Darwin":
             main = pick([f"bin-macos-{arch}.tar.gz"])
         elif self.system == "Linux":
-            # Vulkan for any GPU vendor (no CUDA toolkit needed, and llama.cpp ships no
-            # Linux CUDA binary at all), the CPU build otherwise.
+            # Vulkan for any GPU vendor, the CPU build otherwise. llama.cpp ships Linux CUDA
+            # archives since after b10955 (CUDA 12.8 and 13.5, about 180-200 MB plus a
+            # 444-594 MB runtime archive); VAF stays on Vulkan for every Linux GPU, which
+            # needs no CUDA runtime, until a measured comparison decides a switch.
             if gpu_type in ("nvidia", "amd", "intel"):
                 main = pick(["bin-ubuntu-vulkan", f"{arch}.tar.gz"])
             if not main:
@@ -1006,13 +1022,22 @@ class ServerManager:
         return {"tag": tag, "main": entry(main), "dep": entry(dep) if dep else None}
 
     def _extract_archive(self, archive_path: str, into: str) -> None:
-        """Unpack a release archive into `into` and lift a nested folder's files to its top."""
+        """Unpack a release archive into `into` and lift a nested folder's files to its top.
+
+        Tarballs go through tarfile's "data" filter: a link that points outside `into`
+        (absolute, or climbing out with "..") is refused, the relative library links of a
+        release (libllama.so -> libllama.so.1 -> libllama.so.1.0.0) are kept. A Python
+        without that filter (3.10.0 to 3.10.11) gets no unfiltered fallback: the install
+        fails instead. Zip archives cannot hold links, and zipfile strips ".." and
+        absolute names itself."""
         if archive_path.endswith(".tar.gz") or archive_path.endswith(".tgz"):
             with tarfile.open(archive_path, "r:gz") as tar_ref:
                 try:
                     tar_ref.extractall(into, filter="data")
-                except TypeError:          # a Python without the filter argument
-                    tar_ref.extractall(into)
+                except TypeError as e:     # a Python without the filter argument
+                    raise RuntimeError(
+                        "this Python cannot unpack the backend safely (tarfile has no data filter); "
+                        "update Python to 3.10.12 or newer") from e
         else:
             with zipfile.ZipFile(archive_path, "r") as zip_ref:
                 zip_ref.extractall(into)
@@ -1045,7 +1070,19 @@ class ServerManager:
         carries a new manifest replaces the old build on the next start, an install that
         already runs the pinned build downloads nothing. Every download is verified
         against the pinned digest before it is unpacked; a mismatch leaves whatever was
-        installed untouched and reports, it never runs unverified bytes."""
+        installed untouched and reports, it never runs unverified bytes.
+
+        llama.cpp lives in its own folder, bin/llama-cpp (bin_dir), and an install swaps
+        only that folder: the other tenants of bin/ (bin/vllm, bin/piper) are never
+        touched. A build an earlier VAF put straight into bin/ (legacy_server_path) does
+        not count as installed; the pinned build goes into bin_dir, and only once it
+        reports the pinned number are the legacy files at the top of bin/ removed
+        (_remove_legacy_layout).
+
+        A llama server of this installation that still runs is stopped after the
+        downloads are verified and before the first rename: Windows cannot rename a
+        folder whose program runs, and elsewhere the reuse check of the start would keep
+        serving the old build. A server that does not stop leaves everything as it was."""
         from vaf.core.verified_download import DownloadIntegrityError, download_verified
 
         try:
@@ -1056,9 +1093,14 @@ class ServerManager:
         want = self.pinned_build(pin)
         have = self.installed_build()
         if os.path.exists(self.server_path) and have == want:
+            if os.path.exists(self.legacy_server_path):
+                self._remove_legacy_layout()     # an earlier cleanup could not finish
             return True
         if os.path.exists(self.server_path):
             UI.event("System", f"Backend build b{have or '?'} differs from the pinned b{want}: installing the pinned build",
+                     style="warning")
+        elif os.path.exists(self.legacy_server_path):
+            UI.event("System", f"Moving the backend into bin/llama-cpp and installing the pinned b{want}",
                      style="warning")
 
         assets = self.pinned_assets(pin)
@@ -1067,15 +1109,17 @@ class ServerManager:
                      "the backend stays uninstalled rather than downloading an unverified one.")
             return False
 
-        # Downloaded and unpacked next to bin_dir, then swapped in whole: a re-install
-        # leaves nothing of the old build behind (its libraries would otherwise stay next
-        # to the new ones), and a failure at any point before the swap leaves the old
-        # install exactly as it was.
+        # Downloaded and unpacked next to bin_dir, then bin_dir is swapped in whole: a
+        # re-install leaves nothing of the old build behind (its libraries would otherwise
+        # stay next to the new ones), and a failure at any point before the swap leaves the
+        # old install exactly as it was. Only bin_dir and these two paths are ever renamed
+        # or removed, never bin/ itself.
         staging = self.bin_dir + ".staging"
         previous = self.bin_dir + ".previous"
         for leftover in (staging, previous):
             if os.path.isdir(leftover):
                 shutil.rmtree(leftover, ignore_errors=True)
+        os.makedirs(self.bin_root, exist_ok=True)
         os.makedirs(staging, exist_ok=True)
         try:
             downloaded = []
@@ -1092,6 +1136,13 @@ class ServerManager:
                 raise RuntimeError(f"the archive holds no {self.server_exe}")
             if self.system != "Windows":
                 os.chmod(staged_exe, 0o755)
+            # The download ran while the old server still answered; it stops only now.
+            if self._llama_pid() is not None:
+                reason = self.hand_over_from_llama(reason="the backend is being replaced by the pinned build")
+                if reason:
+                    shutil.rmtree(staging, ignore_errors=True)
+                    UI.error(f"{reason} The pinned backend b{want} is not installed.")
+                    return False
             if os.path.isdir(self.bin_dir):
                 os.rename(self.bin_dir, previous)
             os.rename(staging, self.bin_dir)
@@ -1110,7 +1161,28 @@ class ServerManager:
             UI.error(f"Backend installed but reports build b{got or '?'} instead of the pinned b{want}.")
             return False
         UI.event("System", f"Backend b{want} installed and verified.", style="success")
+        if os.path.exists(self.legacy_server_path):
+            self._remove_legacy_layout()
         return True
+
+    def _remove_legacy_layout(self) -> None:
+        """Remove what an earlier VAF installed straight into bin/: the regular files and
+        links at the top of bin_root. Every one of them came from a llama.cpp archive (the
+        binaries, the libraries with their version links, LICENSE); the other tenants of
+        bin/ are folders, so folders and everything below them stay. os.unlink never
+        follows a link. A file that cannot be removed (still open on Windows) is reported
+        and left for the next start, which tries again; the start does not fail on it."""
+        try:
+            entries = list(os.scandir(self.bin_root))
+        except OSError:
+            return
+        for entry in entries:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    continue
+                os.unlink(entry.path)
+            except OSError as e:
+                UI.event("System", f"Could not remove the old backend file bin/{entry.name}: {e}", style="warning")
 
     def start_server(self, model_path, n_gpu_layers=99, n_ctx=32768, port=8080,
                      skip_provider_gate=False):
@@ -1444,7 +1516,8 @@ class ServerManager:
         
         # llama.cpp server (official README): -np/--parallel N (env: LLAMA_ARG_N_PARALLEL), -c/--ctx-size N.
         # CLI takes precedence over env. We pass both so the value is respected either way.
-        # -kvu (disable kv_unified) is build-specific; some builds force n_parallel=4 unless -kvu.
+        # -kvu is --kv-unified: it ENABLES one KV buffer shared by all slots (common/arg.cpp
+        # at b10955 and b12359), so a slot can use more than its 1/N share of -c.
         cmd = [
             self.server_path,
             "-m", model_path,
@@ -1458,7 +1531,7 @@ class ServerManager:
             "--host", "127.0.0.1",
             "--parallel", str(final_parallel),
             "-np", str(final_parallel),  # number of parallel slots (env: LLAMA_ARG_N_PARALLEL)
-            "-kvu",  # disable kv_unified on builds that support it (avoids forced n_parallel=4)
+            "-kvu",  # --kv-unified: one KV buffer shared by the slots (see above)
             # Disable integrated web UI to save resources and keep port 8080 clean
             "--no-webui",
             # KV-Cache Quantization: q8_0 keys (precision matters more) + q4_0 values.
@@ -1794,15 +1867,17 @@ class ServerManager:
             return None
         return pid if self._looks_like_llama_server(pid) else None
 
-    def hand_over_from_llama(self, port=8080, wait: float = 15.0) -> str:
+    def hand_over_from_llama(self, port=8080, wait: float = 15.0,
+                             reason: str = "the local engine is vLLM") -> str:
         """Stop the llama server this installation runs (its pid file, its identity checked)
         and wait until it is gone, the port is free and its GPU memory is released. Returns
-        "" (also when none ran) or why it is still there. The vLLM start and `vaf engine
-        vllm` (before its fit check reads the free memory) both use it."""
+        "" (also when none ran) or why it is still there. The vLLM start, `vaf engine vllm`
+        (before its fit check reads the free memory) and the backend install (before it
+        replaces the files of the running build) use it; `reason` is the event's text."""
         llama_pid = self._llama_pid()
         if llama_pid is None:
             return ""
-        UI.event("Server", "Stopping llama-server: the local engine is vLLM", style="dim")
+        UI.event("Server", f"Stopping llama-server: {reason}", style="dim")
         self._stop_llama(force_external=True)
         deadline = time.monotonic() + wait
         while self._looks_like_llama_server(llama_pid):

@@ -457,7 +457,9 @@ _foreign_lock = threading.Lock()
 
 # Where a person changes the value a source names, for the warning line.
 _FOREIGN_FIX = {
-    "subagent_model": "Change it in Settings > AI & Model > Sub-Agents > Tool / Workflow model.",
+    "subagent_model": ("Change it in Settings > AI & Model > Sub-Agents > Tool / Workflow model "
+                       "(if it already shows \"Same as main chat\", restart VAF: this process "
+                       "read the setting before it was reset)."),
 }
 
 
@@ -483,7 +485,7 @@ def note_foreign_model(provider: str, model: str, source: str) -> bool:
             return False
         _foreign_noted.add(key)
     label = provider_label(provider)
-    msg = (f"{source} '{model}' is not a {label} model and is ignored; "
+    msg = (f"{source} '{model}' is not one of {label}'s models and is ignored; "
            f"{label}'s own model is used instead.")
     if source in _FOREIGN_FIX:
         msg += " " + _FOREIGN_FIX[source]

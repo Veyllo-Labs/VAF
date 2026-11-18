@@ -267,9 +267,13 @@ def _ocr(r: _Reader, explain: bool) -> RoleAssignment:
 
 def browser_lane(config: Optional[Mapping] = None) -> Tuple[str, Optional[str]]:
     """(lane provider, lane model) as stored for browser runs: "" provider = ride the
-    main provider, None model = the provider's own config chain."""
+    main provider, None model = the provider's own config chain. ``inherit`` is read
+    as "", as for every other lane (the module docstring); read literally it named a
+    provider that does not exist."""
     get = _config.config_reader(config)
     lane_provider = str(get("browser_agent_provider", "") or "").strip()
+    if lane_provider.lower() == "inherit":
+        lane_provider = ""
     lane_model = str(get("browser_agent_model", "") or "").strip()
     return lane_provider, (lane_model or None)
 

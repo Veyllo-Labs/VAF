@@ -75,16 +75,59 @@ def set_config(key: str, value: str):
 
     # A lane model its lane's provider would drop is reset by Config.save, so storing
     # it would print "set" for a value that is not kept: refused instead. A provider
-    # change that resets one names it.
+    # change that resets one names it. Checked and written under one hold of the
+    # config lock (reentrant, so Config.set nests), so another process cannot move
+    # the provider between the check and the write.
     from vaf.core.config import foreign_lane_models
-    from vaf.core.provider_registry import provider_label
-    resets = foreign_lane_models({**Config.load(), key: val})
-    if key in resets:
-        UI.error(f"{key} '{val}' is not a {provider_label(resets[key][1])} model, the provider "
-                 "this lane runs on: choose one of its models or leave it empty.")
-        raise typer.Exit(2)
-    Config.set(key, val)
+    with Config._locked():
+        current = Config.load()
+        resets = foreign_lane_models({**current, key: val})
+        if key in resets:
+            UI.error(_refusal(key, val, resets[key][1], current))
+            raise typer.Exit(2)
+        Config.set(key, val)
     UI.success(f"Config '{key}' set to '{val}'")
     for reset_key, (old, lane) in resets.items():
-        UI.warning(f"{reset_key} '{old}' is not a {provider_label(lane)} model and was reset "
-                   "to empty (the provider's own model).")
+        UI.warning(_reset_notice(reset_key, old, lane))
+
+
+# The job each lane model belongs to in `model_roles`, for the model now in use.
+_LANE_ROLES = {"subagent_model": "subagents", "browser_agent_model": "browser_agent"}
+_SHOWN_CHARS = 200
+
+
+def _shown(value) -> str:
+    from vaf.core.tool_dispatch import clip_middle
+    return clip_middle(str(value), _SHOWN_CHARS, marker="... ({left_out} chars left out) ...")
+
+
+def _refusal(key: str, val, lane: str, current: dict) -> str:
+    """Why ``val`` is not stored for ``key``, and what can be stored instead."""
+    from vaf.core.config import subagent_provider_override
+    from vaf.core.provider_registry import provider_label
+    label = provider_label(lane)
+    example = Config.get_default_model(lane)
+    text = (f"{key} '{_shown(val)}' is not one of {label}'s models, the provider this lane "
+            f"runs on. Use one of them"
+            + (f" (for example {example})" if example else "")
+            + f", or leave it empty for {label}'s own model: vaf models config {key} \"\"")
+    named = str(current.get("subagent_provider") or "").strip()
+    if (key == "subagent_model" and named.lower() not in ("", "inherit")
+            and subagent_provider_override(current) is None):
+        text += (f". The sub-agent provider '{named}' is not switched on, so sub-agents run on "
+                 f"{label}: choose it in vaf settings, which switches it on.")
+    return text
+
+
+def _reset_notice(key: str, old, lane: str) -> str:
+    """What a provider change reset, what is used now, and how to choose another."""
+    from vaf.core.model_roles import resolve_role
+    from vaf.core.provider_registry import provider_label
+    label = provider_label(lane)
+    try:
+        now = resolve_role(_LANE_ROLES[key], warn=False, explain=False, probe_local=False).model
+    except Exception:
+        now = None
+    used = f"{label}'s own model ({now})" if now else f"{label}'s own model"
+    return (f"{key} '{_shown(old)}' is not one of {label}'s models and was reset; {used} is "
+            f"used now. Choose another with: vaf models config {key} <model>")

@@ -292,8 +292,10 @@ def test_cli_setter_names_the_reset(stored, _quiet):
     result = _cli("provider", "deepseek")
     assert result.exit_code == 0, result.output
     shown = _shown(_quiet.events, "Warning")
-    assert "subagent_model 'veyllo-chat' is not a DeepSeek model and was reset" in shown
-    assert "browser_agent_model 'veyllo-chat' is not a DeepSeek model and was reset" in shown
+    for key in ("subagent_model", "browser_agent_model"):
+        assert (f"{key} 'veyllo-chat' is not one of DeepSeek's models and was reset; DeepSeek's "
+                f"own model (deepseek-flash) is used now. Choose another with: vaf models "
+                f"config {key} <model>") in shown
     assert stored.raw()["subagent_model"] == ""
 
 
@@ -320,11 +322,38 @@ def test_load_repairs_and_writes_back(stored, _quiet):
     assert raw["temperature"] == 0.3
     assert "api_model_deepseek" not in raw, "a sparse file stays sparse"
     assert _resets(_quiet.log) == [
-        "[LANE_MODEL_RESET] subagent_model: 'veyllo-chat' is not a DeepSeek model, the provider "
-        "this lane runs on; reset to empty (the provider's own model)",
-        "[LANE_MODEL_RESET] browser_agent_model: 'veyllo-chat' is not a DeepSeek model, the "
-        "provider this lane runs on; reset to empty (the provider's own model)",
+        "[LANE_MODEL_RESET] subagent_model: 'veyllo-chat' is not one of DeepSeek's models, the "
+        "provider this lane runs on; reset to empty (DeepSeek's own model)",
+        "[LANE_MODEL_RESET] browser_agent_model: 'veyllo-chat' is not one of DeepSeek's models, "
+        "the provider this lane runs on; reset to empty (DeepSeek's own model)",
     ]
+
+
+def test_the_once_set_keeps_a_digest_and_the_log_a_clipped_value(stored, _quiet):
+    """`browser_agent_model` is writable by any signed-in user: neither the set that
+    keeps the log to one line nor the line may hold a value of their chosen size.
+    MUTATIONS: key the set on the value; log the value unclipped."""
+    for i in range(3):
+        stored.write({"provider": "deepseek", "browser_agent_model": f"gpt-{i}-" + "x" * 100_000})
+        Config.load()
+    held = sum(len(str(part)) for entry in Config._lane_reset_logged for part in entry)
+    assert len(Config._lane_reset_logged) == 3 and held < 1_000
+    lines = _resets(_quiet.log)
+    assert len(lines) == 3 and all(len(line) < 500 for line in lines)
+    assert "chars left out" in lines[0]
+
+
+def test_the_default_config_builds_no_copy():
+    """Config.load asks the rule on every call; with both lane keys empty it must
+    not copy DEFAULTS. MUTATION: drop the early return."""
+    class _NoIteration(dict):
+        def __iter__(self):
+            raise AssertionError("copied")
+
+        def keys(self):
+            raise AssertionError("copied")
+
+    assert foreign_lane_models(_NoIteration({"provider": "deepseek", "subagent_model": " "})) == {}
 
 
 def test_a_line_break_in_the_value_logs_one_line(stored, _quiet):
@@ -421,6 +450,29 @@ def test_a_retired_id_migrates_before_the_repair(stored):
     assert stored.raw()["subagent_model"] == "deepseek-flash"
 
 
+def test_inherit_rides_the_main_provider_for_the_browser_lane():
+    """`inherit` follows the main provider for every lane; the browser lane read it as
+    a provider name, so the rule and the runtime disagreed. MUTATION: drop the
+    `inherit` branch in model_roles.browser_lane."""
+    from vaf.core.model_roles import browser_lane, resolve_role
+
+    cfg = {"provider": "deepseek", "browser_agent_provider": "Inherit",
+           "browser_agent_model": "deepseek-flash"}
+    assert browser_lane(cfg) == ("", "deepseek-flash")
+    row = resolve_role("browser_agent", config=cfg, warn=False, explain=False, probe_local=False)
+    assert (row.provider, row.model) == ("deepseek", "deepseek-flash")
+    assert foreign_lane_models(cfg) == {}
+
+
+def test_the_foreign_model_warning_reads_for_every_provider(_quiet):
+    """No "a OpenRouter model"; and a process that read the setting before the reset
+    is told to restart. MUTATION: restore the article or drop the restart hint."""
+    pr.note_foreign_model("openrouter", "veyllo-chat", "subagent_model")
+    text = str(_quiet.events[-1][1])
+    assert "is not one of OpenRouter's models and is ignored" in text
+    assert "restart VAF" in text
+
+
 # ── AC5: the incident is silent after the repair ─────────────────────────────────
 
 def test_the_incident_config_is_silent_after_load(stored, _quiet):
@@ -442,9 +494,65 @@ def test_cli_refuses_a_foreign_lane_model(stored, _quiet):
     result = _cli("subagent_model", "veyllo-chat")
     assert result.exit_code == 2
     shown = _shown(_quiet.events, "Error")
-    assert "subagent_model 'veyllo-chat' is not a DeepSeek model" in shown
-    assert "leave it empty" in shown
+    assert "subagent_model 'veyllo-chat' is not one of DeepSeek's models" in shown
+    assert "(for example deepseek-flash)" in shown
+    assert 'leave it empty for DeepSeek\'s own model: vaf models config subagent_model ""' in shown
+    assert "not switched on" not in shown
     assert stored.raw() == before
+
+
+def test_cli_explains_a_sub_agent_provider_that_is_not_switched_on(stored, _quiet):
+    """The generic setter writes `subagent_provider` without its gate, so the lane
+    still runs on the main provider; the refusal says why. MUTATION: drop the hint."""
+    stored.write({"provider": "deepseek", "subagent_provider": "openai",
+                  "subagent_use_separate_provider": False})
+    result = _cli("subagent_model", "gpt-5.6-sol")
+    assert result.exit_code == 2
+    shown = _shown(_quiet.events, "Error")
+    assert "The sub-agent provider 'openai' is not switched on, so sub-agents run on DeepSeek" in shown
+    assert "vaf settings" in shown
+    stored.write({"provider": "deepseek", "subagent_provider": "openai",
+                  "subagent_use_separate_provider": True})
+    assert _cli("subagent_model", "gpt-5.6-sol").exit_code == 0
+    assert stored.raw()["subagent_model"] == "gpt-5.6-sol"
+
+
+def test_cli_checks_and_writes_under_one_hold_of_the_lock(stored, monkeypatch):
+    """Another process must not move the provider between the check and the write.
+    MUTATION: check before taking the lock."""
+    import vaf.core.config as config_mod
+
+    state = {"depth": 0, "holds": 0, "checked_in": None, "written_in": None}
+
+    @contextlib.contextmanager
+    def _fake_lock():
+        if state["depth"] == 0:
+            state["holds"] += 1
+        state["depth"] += 1
+        try:
+            yield
+        finally:
+            state["depth"] -= 1
+
+    real_check = config_mod.foreign_lane_models
+
+    def _check(cfg):
+        if state["checked_in"] is None:
+            state["checked_in"] = state["holds"] if state["depth"] else 0
+        return real_check(cfg)
+
+    real_write = Config._write_config_file.__func__
+
+    def _write(cls, data):
+        state["written_in"] = state["holds"] if state["depth"] else 0
+        return real_write(cls, data)
+
+    stored.write({"provider": "deepseek"})
+    monkeypatch.setattr(Config, "_locked", classmethod(lambda cls: _fake_lock()))
+    monkeypatch.setattr(config_mod, "foreign_lane_models", _check)
+    monkeypatch.setattr(Config, "_write_config_file", classmethod(_write))
+    assert _cli("subagent_model", "deepseek-v4-pro").exit_code == 0
+    assert state["checked_in"] and state["checked_in"] == state["written_in"]
 
 
 def test_cli_stores_a_fitting_lane_model(stored, _quiet):
@@ -523,9 +631,9 @@ def _check_draw(cfg: dict) -> list:
             and used != kept):                                                # (f)
         bad.append("kept a sub-agent model the runtime drops")
     lane = str(original.get("browser_agent_provider") or "").strip()
+    lane = "" if lane.lower() == "inherit" else lane
     main = str(original.get("provider") or "local").strip()
-    if ("browser_agent_model" in resets and lane.lower() != "inherit"
-            and (lane or main) not in ("", "local")):
+    if "browser_agent_model" in resets and (lane or main) not in ("", "local"):
         browser = resolve_role("browser_agent", config=original, warn=False,
                                explain=False, probe_local=False).model
         if str(browser).strip() == str(cfg["browser_agent_model"]).strip():      # (d)

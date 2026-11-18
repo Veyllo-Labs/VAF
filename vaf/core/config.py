@@ -1117,9 +1117,13 @@ class Config:
         except Exception:
             pass
 
-    # (key, value, provider) resets already logged by this process: an unwritable
-    # config is repaired again on every load, and the log should say so once.
+    # (key, value digest, provider) resets already logged by this process: an
+    # unwritable config is repaired again on every load, and the log should say so
+    # once. A digest, not the value: `browser_agent_model` is writable by any signed-in
+    # user, and a set of whole values grows by whatever size they choose to save.
     _lane_reset_logged: set = set()
+    # Longest value the log line quotes; the rest is left out of its middle.
+    _LANE_RESET_LOG_CHARS = 200
 
     @classmethod
     def reset_foreign_lane_models(cls, config: dict) -> Dict[str, Tuple[Any, str]]:
@@ -1137,22 +1141,33 @@ class Config:
             resets = foreign_lane_models(config)
         except Exception:
             return {}
+        if not resets:
+            # The common case on every load: the log block's imports cost more than
+            # the check itself.
+            return resets
         for key in resets:
             config[key] = cls.DEFAULTS.get(key, "")
         try:
+            import hashlib
+
             from vaf.core.log_helper import append_domain_log
             from vaf.core.provider_registry import provider_label
+            from vaf.core.tool_dispatch import clip_middle
             for key, (value, lane) in resets.items():
-                if (key, value, lane) in cls._lane_reset_logged:
+                seen = (key, hashlib.sha256(str(value).encode("utf-8", "replace")).hexdigest(), lane)
+                if seen in cls._lane_reset_logged:
                     continue
                 # Recorded before the write: the log may read the config, and that
                 # load must not log the same reset again. The value is quoted with
                 # repr, so a line break in a hand-edited one cannot forge a log line.
-                cls._lane_reset_logged.add((key, value, lane))
+                cls._lane_reset_logged.add(seen)
+                shown = clip_middle(str(value), cls._LANE_RESET_LOG_CHARS,
+                                    marker="... ({left_out} chars left out) ...")
+                label = provider_label(lane)
                 append_domain_log(
                     "backend",
-                    f"[LANE_MODEL_RESET] {key}: {str(value)!r} is not a {provider_label(lane)} model, "
-                    f"the provider this lane runs on; reset to empty (the provider's own model)")
+                    f"[LANE_MODEL_RESET] {key}: {shown!r} is not one of {label}'s models, "
+                    f"the provider this lane runs on; reset to empty ({label}'s own model)")
         except Exception:
             pass
         return resets
@@ -2306,16 +2321,16 @@ def subagent_model_for(provider: Optional[str] = None,
 def lane_model_provider(key: str, config: Mapping) -> str:
     """The provider the lane of ``key`` (one of ``LANE_MODEL_KEYS``) runs on, read
     from ``config``: ``subagent_model`` on ``subagent_provider_override``, else the
-    main ``provider``; ``browser_agent_model`` on ``browser_agent_provider`` unless
-    it is empty or "inherit", else the main ``provider``. A missing ``provider`` is
-    read as ``Config.load`` reads it."""
+    main ``provider``; ``browser_agent_model`` on ``model_roles.browser_lane``'s
+    provider, else the main ``provider``. The same readers the lanes ask, so the
+    rule cannot place a lane elsewhere than the runtime does. A missing ``provider``
+    is read as ``Config.load`` reads it."""
     _get = config_reader(config)
     if key == "subagent_model":
         lane = subagent_provider_override(config) or ""
     elif key == "browser_agent_model":
-        lane = str(_get("browser_agent_provider", "") or "").strip()
-        if lane.lower() == "inherit":
-            lane = ""
+        from vaf.core.model_roles import browser_lane
+        lane = browser_lane(config)[0]
     else:
         raise KeyError(key)
     return str(lane or _get("provider", "local") or "local").strip().lower()
@@ -2332,6 +2347,10 @@ def foreign_lane_models(config: Mapping) -> Dict[str, Tuple[Any, str]]:
     and ``Config.load`` apply it to the machine configuration
     (``Config.reset_foreign_lane_models``).
     """
+    # Config.load asks this on every call: with both keys empty (the default, and
+    # DEFAULTS holds "" for both) nothing can be foreign, so no copy is built.
+    if not any(str(config.get(key) or "").strip() for key in LANE_MODEL_KEYS):
+        return {}
     from vaf.core.provider_registry import model_fits_provider
 
     # A dict, never the Config class: model_fits_provider reads `config.get`, and

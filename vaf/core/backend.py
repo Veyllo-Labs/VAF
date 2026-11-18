@@ -8,6 +8,7 @@ import sys
 import platform
 import re
 import shutil
+import stat
 import subprocess
 import zipfile
 import tarfile
@@ -1024,12 +1025,16 @@ class ServerManager:
     def _extract_archive(self, archive_path: str, into: str) -> None:
         """Unpack a release archive into `into` and lift a nested folder's files to its top.
 
-        Tarballs go through tarfile's "data" filter: a link that points outside `into`
-        (absolute, or climbing out with "..") is refused, the relative library links of a
-        release (libllama.so -> libllama.so.1 -> libllama.so.1.0.0) are kept. A Python
-        without that filter (3.10.0 to 3.10.11) gets no unfiltered fallback: the install
-        fails instead. Zip archives cannot hold links, and zipfile strips ".." and
-        absolute names itself."""
+        Tarballs go through tarfile's "data" filter, which refuses an absolute link and one
+        that climbs out of `into`. A Python without that filter (3.10.0 to 3.10.11) gets no
+        unfiltered fallback: the install fails instead. The filter judges a link where it
+        is unpacked, though, and the lift then moves build/bin/ two levels up without
+        rewriting links, so `build/bin/d -> ../x` passes the filter and points out of the
+        folder afterwards. Every link is therefore checked again after the lift
+        (_refuse_escaping_links): one that resolves outside `into` fails the install. The
+        relative library links of a release (libllama.so -> libllama.so.1 ->
+        libllama.so.1.0.0) stay inside and are kept. Zip archives cannot hold links, and
+        zipfile strips ".." and absolute names itself."""
         if archive_path.endswith(".tar.gz") or archive_path.endswith(".tgz"):
             with tarfile.open(archive_path, "r:gz") as tar_ref:
                 try:
@@ -1062,6 +1067,37 @@ class ServerManager:
                 os.rmdir(parent_dir)
             except OSError:
                 pass
+        self._refuse_escaping_links(into)
+
+    @staticmethod
+    def _refuse_escaping_links(root: str) -> None:
+        """RuntimeError when a link anywhere below `root` resolves outside it (directly or
+        through other links), or cannot be resolved at all. The folders are listed without
+        following links (path_jail.walk_without_links), and each link's target is decided
+        by path_jail.contained_path, the containment check the file tools use."""
+        from vaf.core.path_jail import PathEscape, contained_path, walk_without_links
+
+        folders = [""] + [rel for rel, is_folder in walk_without_links(root) if is_folder]
+        for rel in folders:
+            with os.scandir(os.path.join(root, rel) if rel else root) as entries:
+                for entry in entries:
+                    if not entry.is_symlink():
+                        continue
+                    name = f"{rel}/{entry.name}" if rel else entry.name
+                    try:
+                        contained_path(root, name)
+                    except (PathEscape, OSError, RuntimeError) as e:
+                        raise RuntimeError(f"the archive holds a link that leaves the backend folder: {name} ({e})") from e
+
+    @staticmethod
+    def _remove_tree_or_link(path: str) -> None:
+        """Remove `path` whatever it is: a link (to a folder or not) is unlinked, never
+        followed, and a folder is removed with everything in it. rmtree refuses a link, so a
+        linked leftover would otherwise stay and block every later swap."""
+        if os.path.islink(path):
+            os.unlink(path)
+        elif os.path.isdir(path):
+            shutil.rmtree(path, ignore_errors=True)
 
     def ensure_server_exists(self):
         """The pinned llama-server is on disk, or it is installed now, or this is False.
@@ -1117,8 +1153,7 @@ class ServerManager:
         staging = self.bin_dir + ".staging"
         previous = self.bin_dir + ".previous"
         for leftover in (staging, previous):
-            if os.path.isdir(leftover):
-                shutil.rmtree(leftover, ignore_errors=True)
+            self._remove_tree_or_link(leftover)
         os.makedirs(self.bin_root, exist_ok=True)
         os.makedirs(staging, exist_ok=True)
         try:
@@ -1132,8 +1167,12 @@ class ServerManager:
             for archive in downloaded:
                 self._extract_archive(archive, staging)
             staged_exe = os.path.join(staging, self.server_exe)
-            if not os.path.exists(staged_exe):
+            try:
+                exe_is_file = stat.S_ISREG(os.lstat(staged_exe).st_mode)
+            except OSError:
                 raise RuntimeError(f"the archive holds no {self.server_exe}")
+            if not exe_is_file:          # a link or anything else: chmod would follow it
+                raise RuntimeError(f"the archive's {self.server_exe} is not a regular file")
             if self.system != "Windows":
                 os.chmod(staged_exe, 0o755)
             # The download ran while the old server still answered; it stops only now.
@@ -1141,15 +1180,18 @@ class ServerManager:
                 reason = self.hand_over_from_llama(reason="the backend is being replaced by the pinned build")
                 if reason:
                     shutil.rmtree(staging, ignore_errors=True)
-                    UI.error(f"{reason} The pinned backend b{want} is not installed.")
+                    UI.error(f"{reason.rstrip('.')}, so the new backend b{want} was not installed. Your current "
+                             "backend is unchanged. Stop that process and start VAF again.")
                     return False
             if os.path.isdir(self.bin_dir):
                 os.rename(self.bin_dir, previous)
             os.rename(staging, self.bin_dir)
-            shutil.rmtree(previous, ignore_errors=True)
+            self._remove_tree_or_link(previous)
         except DownloadIntegrityError as e:
             shutil.rmtree(staging, ignore_errors=True)
-            UI.error(f"Backend download refused: {e}")
+            UI.error(f"The download of the backend b{want} did not match its pinned checksum, so it was not "
+                     "used and nothing was changed. Try again later; if it keeps happening, report it.")
+            UI.event("System", f"Checksum details: {e}", style="dim")
             return False
         except Exception as e:
             shutil.rmtree(staging, ignore_errors=True)
@@ -1169,19 +1211,27 @@ class ServerManager:
         """Remove what an earlier VAF installed straight into bin/: the regular files and
         links at the top of bin_root. Every one of them came from a llama.cpp archive (the
         binaries, the libraries with their version links, LICENSE); the other tenants of
-        bin/ are folders, so folders and everything below them stay. os.unlink never
-        follows a link. A file that cannot be removed (still open on Windows) is reported
-        and left for the next start, which tries again; the start does not fail on it."""
+        bin/ are folders, so folders, links to folders (a vLLM environment moved to another
+        disk) and everything below them stay. os.unlink never follows a link.
+
+        A file that cannot be removed (still open on Windows) is reported and left for the
+        next start, which tries again: the retry is keyed on legacy_server_path, so the
+        server binary goes last, and only when everything else went. The start does not
+        fail on it."""
         try:
-            entries = list(os.scandir(self.bin_root))
+            entries = sorted(os.scandir(self.bin_root), key=lambda e: e.name == self.server_exe)
         except OSError:
             return
+        failed = False
         for entry in entries:
+            if entry.name == self.server_exe and failed:
+                continue                 # stays as the key of the next start's retry
             try:
-                if entry.is_dir(follow_symlinks=False):
+                if entry.is_dir():       # follows a link: a linked folder is a tenant too
                     continue
                 os.unlink(entry.path)
             except OSError as e:
+                failed = True
                 UI.event("System", f"Could not remove the old backend file bin/{entry.name}: {e}", style="warning")
 
     def start_server(self, model_path, n_gpu_layers=99, n_ctx=32768, port=8080,
@@ -1878,14 +1928,25 @@ class ServerManager:
         if llama_pid is None:
             return ""
         UI.event("Server", f"Stopping llama-server: {reason}", style="dim")
+        vision = self._running_vision_state()
         self._stop_llama(force_external=True)
         deadline = time.monotonic() + wait
         while self._looks_like_llama_server(llama_pid):
             if time.monotonic() >= deadline:
+                self._keep_tracking(llama_pid, vision)
                 return f"llama-server (PID {llama_pid}) did not stop."
             time.sleep(0.1)
         _settle_after_stop(port)
         return ""
+
+    def _keep_tracking(self, pid: int, vision: str) -> None:
+        """A stop that did not end the server: stop_server already removed the pid file and
+        the vision record, so the server would be lost to every later stop and to the
+        install's handover (on Windows it would keep its folder locked with no one left to
+        stop it). Both records are written back; they go only once the process is gone."""
+        self._save_pid(pid)
+        if vision:
+            self._save_vision_state(vision)
 
     def _start_vllm_locked(self, n_ctx=32768, port=8080):
         """The vLLM branch of a start (local_engine = vllm), under the start lock.

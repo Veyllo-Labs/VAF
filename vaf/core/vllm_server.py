@@ -9,7 +9,7 @@ WHEN (handover, reuse, waiting for a server that is loading); this module does t
 
 - **Install** (``install``): only on request (`vaf engine vllm`, Settings, the TUI, all
   through ``local_engine.apply``), never on a start. A fresh environment under
-  ``bin/vllm/venv`` (gitignored, next to the llama-server binary) made with VAF's own
+  ``bin/vllm/venv`` (gitignored, next to llama.cpp's ``bin/llama-cpp``) made with VAF's own
   Python, the pinned ``vllm==PIN`` installed from PyPI, its CUDA 13.0 build and the CUDA
   13.0 PyTorch it requires, from the hash-locked tree ``vllm_requirements.lock``
   (``--require-hashes --no-deps --only-binary=:all:``: pip refuses any file whose hash the

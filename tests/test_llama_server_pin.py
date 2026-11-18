@@ -267,10 +267,17 @@ def test_both_shapes_of_the_version_line_yield_the_build_number():
 
 
 def test_bytes_that_do_not_hash_to_the_pin_leave_the_old_build_alone(linux_install, monkeypatch):
+    """The person reads that nothing changed and what to do, not two 64-digit hashes
+    (those follow as a detail line). MUTATION: put the exception text back as the error
+    and this goes red."""
     m, payload = linux_install
     Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10021)
+    errors = []
+    monkeypatch.setattr(backend.UI, "error", lambda *a, **k: errors.append(" ".join(map(str, a))))
     _fake_get(monkeypatch, payload + b"tampered")
     assert m.ensure_server_exists() is False
+    assert len(errors) == 1 and "nothing was changed" in errors[0] and "Try again later" in errors[0], errors
+    assert not re.search(r"[0-9a-f]{64}", errors[0]), "no raw hash in the line a person reads"
     assert m.installed_build() == 10021 and not list(Path(m.bin_dir).glob("*.part")) and not list(Path(m.bin_dir).glob("*.tar.gz"))
     assert not Path(m.bin_dir + ".staging").exists(), "a refused download leaves no staging directory behind"
 
@@ -283,12 +290,13 @@ def test_the_launcher_never_asks_github_which_build_is_latest():
 
 # ── bin/llama-cpp: the install's own folder ──────────────────────────────────────
 
-def _archive(build: int, files=(), links=()) -> bytes:
-    """A release-shaped tar.gz: build/bin/llama-server (a stand-in, see _stub_server),
-    plus extra files and symbolic links in the same folder."""
+def _archive(build: int, files=(), links=(), server: bool = True) -> bytes:
+    """A release-shaped tar.gz: build/bin/llama-server (a stand-in, see _stub_server;
+    left out with server=False), plus extra files and symbolic links in the same folder."""
     buf = io.BytesIO()
+    head = (("llama-server", _VERSION_LINE.format(build=build).encode()),) if server else ()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-        for name, data in ((("llama-server", _VERSION_LINE.format(build=build).encode()),) + tuple(files)):
+        for name, data in head + tuple(files):
             info = tarfile.TarInfo(name=f"build/bin/{name}")
             info.size = len(data)
             tar.addfile(info, io.BytesIO(data))
@@ -452,7 +460,8 @@ def test_a_server_that_will_not_stop_aborts_the_swap(linux_install, monkeypatch)
     assert [s for s, _ in swap.order] == ["stop"], "nothing is renamed"
     assert _tree(Path(m.bin_dir)) == before, "the old install stays exactly as it was"
     assert not Path(m.bin_dir + ".staging").exists()
-    assert any("did not stop" in e for e in errors), errors
+    assert any("did not stop" in e and "was not installed" in e and "unchanged" in e and "start VAF again" in e
+               for e in errors), errors
 
 
 def test_an_up_to_date_build_stops_nothing(linux_install, monkeypatch):
@@ -531,3 +540,193 @@ def test_vaf_info_names_a_legacy_install(linux_install):
     assert "b10955 in the old location" in line and "bin/llama-cpp" in line and "b12359" in line, line
     Path(m.bin_dir).mkdir(); _stub_server(m.server_path, 12359)
     assert "b12359 (release pins b12359, matches the pin)" in llama_server_line(m, 12359)
+
+
+def test_vaf_info_names_an_unreadable_binary_as_present(linux_install, monkeypatch):
+    """A binary in bin/llama-cpp whose version line cannot be read is there, not missing.
+    MUTATION: drop that branch and the line says "not installed" again."""
+    from vaf.cli.cmd.info import llama_server_line
+    m, _ = linux_install
+    Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 12359)
+    monkeypatch.setattr(backend.ServerManager, "_version_output",
+                        lambda self, path=None: (_ for _ in ()).throw(OSError("Exec format error")))
+    line = llama_server_line(m, 12359)
+    assert "not installed" not in line and "version unreadable" in line and "bin/llama-cpp" in line, line
+
+
+# ── links after the lift, linked leftovers and tenants ───────────────────────────
+
+def _can_symlink(tmp_path: Path) -> bool:
+    try:
+        os.symlink("x", tmp_path / ".probe-link")
+    except (OSError, NotImplementedError):
+        return False
+    os.unlink(tmp_path / ".probe-link")
+    return True
+
+
+@pytest.mark.skipif(os.name == "nt", reason="tar links are not extracted as links without the symlink privilege")
+@pytest.mark.parametrize("shape", [
+    dict(links=[("d", "../x")]),                        # climbs one level: staging/build/x, then bin/x
+    dict(links=[("lib-dir", "..")]),                    # names bin/llama-cpp's parent after the lift
+    dict(links=[("llama-server", "../../victim")], server=False),   # the binary itself leaves
+], ids=["file-link", "folder-link", "server-link"])
+def test_a_link_that_leaves_the_folder_after_the_lift_is_refused(linux_install, monkeypatch, tmp_path, shape):
+    """The data filter judges a link where it is unpacked (staging/build/bin), and those
+    links stay inside staging there. The lift moves build/bin up two levels without
+    rewriting them, and then they point out of bin/llama-cpp. MUTATION: drop the check
+    after the lift (_refuse_escaping_links) and this goes red."""
+    m, _ = linux_install
+    victim = tmp_path / "victim"
+    victim.write_bytes(b"not llama")
+    victim.chmod(0o600)
+    payload = _archive(10955, **shape)
+    _pin(monkeypatch, payload)
+    _fake_get(monkeypatch, payload)
+    assert m.ensure_server_exists() is False
+    assert not os.path.lexists(m.bin_dir) and not os.path.lexists(m.bin_dir + ".staging"), "nothing is installed"
+    assert (victim.stat().st_mode & 0o777) == 0o600, "chmod never followed a link out of the folder"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="tar links are not extracted as links without the symlink privilege")
+def test_a_server_binary_that_is_a_link_is_refused(linux_install, monkeypatch):
+    """Even a link that stays inside: chmod and the start would follow it, and a release's
+    llama-server is a regular file. MUTATION: drop the lstat check and this goes red."""
+    m, _ = linux_install
+    payload = _archive(10955, server=False, files=[("llama-server-real", _VERSION_LINE.format(build=10955).encode())],
+                       links=[("llama-server", "llama-server-real")])
+    _pin(monkeypatch, payload)
+    _fake_get(monkeypatch, payload)
+    assert m.ensure_server_exists() is False
+    assert not os.path.lexists(m.bin_dir)
+
+
+def test_a_linked_install_folder_and_leftover_are_unlinked_not_followed(linux_install, monkeypatch, tmp_path):
+    """bin/llama-cpp as a link (to a folder elsewhere) is swapped out as the link; rmtree
+    refuses a link, so the old code left bin/llama-cpp.previous behind, and every later
+    re-install died on it ("Not a directory"). MUTATION: remove leftovers with isdir +
+    rmtree again and this goes red."""
+    if not _can_symlink(tmp_path):
+        pytest.skip("no symlink privilege")
+    m, payload = linux_install
+    elsewhere = tmp_path / "elsewhere" / "llama-cpp"
+    elsewhere.mkdir(parents=True)
+    _stub_server(elsewhere / "llama-server", 10021)
+    Path(m.bin_root).mkdir()
+    os.symlink(elsewhere, m.bin_dir)
+    _fake_get(monkeypatch, payload)
+    assert m.ensure_server_exists() is True
+    assert not os.path.islink(m.bin_dir) and m.installed_build() == 10955
+    assert not os.path.lexists(m.bin_dir + ".previous"), "the swapped-out link is gone"
+    assert (elsewhere / "llama-server").read_text(encoding="utf-8") == _VERSION_LINE.format(build=10021), \
+        "what the link pointed at is untouched"
+    # A linked leftover from an earlier crash does not block the next install either.
+    os.symlink(elsewhere, m.bin_dir + ".previous")
+    _stub_server(m.server_path, 10021)
+    assert m.ensure_server_exists() is True and m.installed_build() == 10955
+    assert not os.path.lexists(m.bin_dir + ".previous") and (elsewhere / "llama-server").exists()
+
+
+def test_a_linked_tenant_folder_survives_the_legacy_cleanup(linux_install, monkeypatch, tmp_path):
+    """bin/vllm as a link to an environment on another disk is a tenant, not an archive
+    file. MUTATION: decide with is_dir(follow_symlinks=False) again and this goes red."""
+    if not _can_symlink(tmp_path):
+        pytest.skip("no symlink privilege")
+    m, payload = linux_install
+    bin_root = Path(m.bin_root)
+    bin_root.mkdir()
+    other_disk = tmp_path / "other-disk" / "vllm"
+    (other_disk / "venv").mkdir(parents=True)
+    (other_disk / "venv" / "marker").write_bytes(b"vLLM")
+    os.symlink(other_disk, bin_root / "vllm")
+    _stub_server(m.legacy_server_path, 10021)
+    _fake_get(monkeypatch, payload)
+    assert m.ensure_server_exists() is True
+    assert os.path.islink(bin_root / "vllm") and (bin_root / "vllm" / "venv" / "marker").read_bytes() == b"vLLM"
+    assert sorted(p.name for p in bin_root.iterdir()) == ["llama-cpp", "vllm"]
+
+
+def test_a_cleanup_that_could_not_finish_is_retried_on_the_next_start(linux_install, monkeypatch):
+    """A locked file (Windows) stops the legacy cleanup: the person is told which file, the
+    server binary stays as the key of the retry, and the next start (already up to date,
+    no download) finishes it. MUTATIONS: drop the retry on the up-to-date path, drop the
+    warning, or unlink the server binary even after a failure: each goes red."""
+    m, payload = linux_install
+    bin_root = _legacy_layout(m)
+    events = []
+    monkeypatch.setattr(backend.UI, "event", lambda *a, **k: events.append(" ".join(map(str, a))))
+    locked = {"name": "libllama.so.0.0.1"}
+    real_unlink = os.unlink
+
+    def unlink(path, *a, **k):
+        if locked["name"] and os.path.basename(path) == locked["name"]:
+            raise PermissionError(32, "The process cannot access the file because it is being used by another process")
+        return real_unlink(path, *a, **k)
+
+    monkeypatch.setattr(backend.os, "unlink", unlink)
+    _fake_get(monkeypatch, payload)
+    assert m.ensure_server_exists() is True, "the start does not fail on a leftover"
+    assert any("Could not remove the old backend file bin/libllama.so.0.0.1" in e for e in events), events
+    assert os.path.exists(m.legacy_server_path), "the server binary stays as the key of the retry"
+    assert not (bin_root / "LICENSE").exists()
+
+    locked["name"] = None
+    monkeypatch.setattr("vaf.core.verified_download.requests.get",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no download")))
+    assert m.ensure_server_exists() is True
+    assert sorted(p.name for p in bin_root.iterdir()) == ["llama-cpp", "piper", "vllm"]
+
+
+# ── a server that does not stop stays tracked ────────────────────────────────────
+
+_REAL_LLAMA_PID = backend.ServerManager._llama_pid
+
+
+def test_a_server_that_did_not_stop_is_stopped_on_the_retry(linux_install, monkeypatch):
+    """Through the real hand_over_from_llama and stop_server, with the process faked:
+    stop_server removes the pid file and the vision record before it knows whether the
+    server died. When it did not, both were lost, the retry saw no server to stop, and on
+    Windows the live server kept its folder locked for good. MUTATION: drop
+    _keep_tracking and the retry goes red."""
+    m, payload = linux_install
+    m.process, m._log_file, m._vllm_started = None, None, False
+    Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10021)
+    Path(m.pid_file).write_text("4242", encoding="utf-8")
+    Path(m._vision_state_file).write_text("/models/proj.gguf", encoding="utf-8")
+    proc = {"alive": True, "wedged": True, "kills": 0}
+
+    def kill(pid, sig):
+        assert pid == 4242, "only the fake server is ever signalled"
+        proc["kills"] += 1
+        if not proc["wedged"]:
+            proc["alive"] = False
+
+    real_rename = os.rename
+
+    def rename(src, dst):
+        if proc["alive"] and os.path.abspath(src) == os.path.abspath(m.bin_dir):
+            raise PermissionError(32, "The process cannot access the file because it is being used by another process")
+        return real_rename(src, dst)
+
+    clock = {"t": 0.0}
+    monkeypatch.setattr(backend, "time", SimpleNamespace(
+        monotonic=lambda: clock["t"], time=lambda: clock["t"],
+        sleep=lambda s: clock.__setitem__("t", clock["t"] + s)))
+    monkeypatch.setattr(backend.ServerManager, "_llama_pid", _REAL_LLAMA_PID)
+    monkeypatch.setattr(backend.ServerManager, "_looks_like_llama_server", lambda self, pid: pid == 4242 and proc["alive"])
+    monkeypatch.setattr(backend.ServerManager, "_is_process_running", lambda self, pid: pid == 4242 and proc["alive"])
+    monkeypatch.setattr(backend, "_settle_after_stop", lambda port: None)
+    monkeypatch.setattr(backend.os, "kill", kill)
+    monkeypatch.setattr(backend.os, "rename", rename)
+    _fake_get(monkeypatch, payload)
+
+    assert m.ensure_server_exists() is False
+    assert proc["kills"] == 1 and proc["alive"]
+    assert Path(m.pid_file).read_text(encoding="utf-8").strip() == "4242", "the live server stays tracked"
+    assert m._running_vision_state() == "/models/proj.gguf"
+    assert m._llama_pid() == 4242
+
+    proc["wedged"] = False
+    assert m.ensure_server_exists() is True, "the retry stops the server and installs"
+    assert proc["kills"] == 2 and not proc["alive"]
+    assert m.installed_build() == 10955 and not Path(m.pid_file).exists()

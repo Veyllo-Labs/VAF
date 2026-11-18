@@ -182,7 +182,7 @@ VAF uses GPU acceleration in two places:
 
 Uses **Vulkan** - works with NVIDIA, AMD, and Intel GPUs without the CUDA toolkit (only the GPU driver is needed).
 
-On first start, VAF automatically downloads the `llama-b*-bin-ubuntu-vulkan-x64.tar.gz` binary if a compatible GPU is detected.
+On first start, VAF automatically downloads the `llama-b*-bin-ubuntu-vulkan-x64.tar.gz` binary if a compatible GPU is detected, checks its SHA-256 against the build pinned with the release before anything is unpacked, and installs it into `bin/llama-cpp/`. After an update that pins a newer build, the first start downloads it while the old server still runs, then stops a llama-server that is still running and replaces only `bin/llama-cpp/` (the vLLM environment in `bin/vllm/` and Piper in `bin/piper/` stay). An install from before `bin/llama-cpp/` existed, with the files straight in `bin/`, is moved there the same way, and the old files at the top of `bin/` are removed once the new build runs.
 
 To verify GPU is active, check the server output for:
 ```
@@ -212,7 +212,7 @@ No manual configuration needed - these are applied automatically.
 
 **Cause:** llama-server build `b4320` crashed in `common_chat_templates_support_enable_thinking` when processing the model's embedded Jinja chat template with `--jinja` enabled. Jinja was enabled by default in that build even without the flag.
 
-**Status:** Fixed - VAF installs the llama.cpp build pinned with its release (`vaf/core/llama_server_pin.json`, the Vulkan build on Linux), which handles the native template correctly, and replaces an older build in `bin/llama-cpp/` on the next start after an update. The `--jinja` flag is kept (required for tool calling); `--chat-template chatml` is NOT used so the model's native tool-call format is preserved.
+**Status:** Fixed - VAF installs the llama.cpp build pinned with its release (`vaf/core/llama_server_pin.json`, the Vulkan build on Linux), which handles the native template correctly, and on the next start after an update replaces an older build in `bin/llama-cpp/` (or, for an install that kept its files straight in `bin/`, moves llama.cpp into `bin/llama-cpp/`). The `--jinja` flag is kept (required for tool calling); `--chat-template chatml` is NOT used so the model's native tool-call format is preserved.
 
 ### Docker permission error
 

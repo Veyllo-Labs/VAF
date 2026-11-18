@@ -26,6 +26,11 @@ def llama_server_line(mgr, want: int) -> str:
         old = f"b{legacy}" if legacy else "a build"
         return (f"[bold]llama-server:[/bold] {old} in the old location bin/, moves to bin/llama-cpp "
                 f"and installs the pinned b{want} on the next start")
+    if not have and os.path.exists(mgr.server_path):
+        # On disk but its version line cannot be read (a truncated binary, a missing runtime
+        # library): present, and the next start installs the pinned build over it.
+        return (f"[bold]llama-server:[/bold] [yellow]present in bin/llama-cpp, version unreadable[/yellow] "
+                f"(release pins b{want}, installs the pinned build on the next start)")
     state = "matches the pin" if have == want else "installs the pinned build on the next start"
     return (f"[bold]llama-server:[/bold] {'b%d' % have if have else '[red]not installed[/red]'} "
             f"(release pins b{want}, {state})")

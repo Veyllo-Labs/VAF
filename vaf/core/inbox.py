@@ -27,11 +27,15 @@ import time
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from vaf.core.channel_message_store import OWNER_SENDER
-from vaf.core.channels import CHANNEL_LABELS, CHAT_CHANNELS
+from vaf.core.channels import CHANNEL_LABELS, INBOX_CHANNELS
 
-# The messenger lanes are the chat channels of the registry; mail and the agent rooms are
-# lanes of their own that no bridge serves.
-MESSENGERS: Tuple[str, ...] = CHAT_CHANNELS
+# The messenger lanes are the registry's inbox channels (`Channel.inbox`); mail and the agent
+# rooms are lanes of their own that no bridge serves. The Veyllo App is a chat channel but no
+# lane: its inbound side is only the account holder, so nothing there waits for them, its
+# outbound side also holds VAF's answers to the app's own agent, and its conversation is the
+# Veyllo App room, pinned in the chat list with its own count. Its messages stay in the
+# channel store (the app's replay reads them) and are only not listed.
+MESSENGERS: Tuple[str, ...] = INBOX_CHANNELS
 CHANNELS: Tuple[str, ...] = MESSENGERS + ("mail", "room")
 VIEWS: Tuple[str, ...] = ("all", "waits", "unread", "agent")
 

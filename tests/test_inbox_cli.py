@@ -87,6 +87,23 @@ def test_an_unknown_channel_or_view_is_refused_instead_of_silently_widened(world
     assert CliRunner().invoke(inbox_cmd.app, ["list", "--json", "--channel", "whatsapp", "--view", "waits"]).exit_code == 0
 
 
+def test_the_veyllo_app_is_not_a_channel_of_the_list(world, monkeypatch):
+    """The Veyllo App's chat lives in the Veyllo App room, not in the inbox: the terminal
+    refuses the name with the valid ones and lists nothing.
+    MUTATION: `MESSENGERS = CHAT_CHANNELS` in vaf/core/inbox.py - red."""
+    from vaf.core import inbox as inbox_mod
+    store.append_message("alice", "a1b2c3d4e5f6", "Spiel Musik", ts=time.time() - 60, user_scope_id=SCOPE,
+                         channel="veyllo_app")
+    called = []
+    monkeypatch.setattr(inbox_mod, "list_conversations", lambda *a, **kw: called.append(kw) or {"rows": [], "counts": {}})
+    monkeypatch.setenv("COLUMNS", "200")
+    result = CliRunner().invoke(inbox_cmd.app, ["list", "--json", "--channel", "veyllo_app"])
+    assert result.exit_code == 1, result.output
+    assert "Unknown channel 'veyllo_app'" in result.output
+    assert "whatsapp, telegram, discord, mail, room" in result.output
+    assert called == [], "nothing was listed"
+
+
 def test_a_reply_that_did_not_go_out_is_named_in_the_table(world, monkeypatch):
     """The terminal prints the reason word as the inbox gives it, `reply_failed` included.
     MUTATION: map an unknown reason to "" in the CLI's row printer."""

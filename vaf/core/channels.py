@@ -7,8 +7,8 @@ Every place that has to know "which channels are there" reads the table below: w
 sources are chat channels (the tool policy, the system prompt, the workflow and sandbox
 gates), which tools send on a channel (the thinking-mode strip set, the automation
 dedup, the Front Office allow-list, the workflow engine's scope injection), which values
-the owner may pick as their main messenger, what a channel is called on screen, and
-which read tool the inbox points at. Those places used to carry their own copy of the
+the owner may pick as their main messenger, what a channel is called on screen, which
+chat channels are inbox lanes, and which read tool the inbox points at. Those places used to carry their own copy of the
 list, about forty-five of them; a new channel meant editing each one, and a missed one
 failed OPEN (a tool blocked "on telegram, whatsapp and discord" was allowed on the
 fourth channel). `tests/test_channel_registry_sync.py` fails when a hand-written channel
@@ -82,23 +82,31 @@ class Channel:
     section 1h). False for every messenger: Telegram, WhatsApp and Discord bots reach
     strangers too (the Front Office), and nothing can be shown there. False is the default,
     so a channel added later fails closed."""
+    inbox: bool = False
+    """The channel's chats are inbox conversations (vaf/core/inbox.py): the far end can be
+    somebody other than the account holder, so somebody can wait for them. False for the
+    Veyllo App, whose far end is the account holder's own device and the agent in it; its
+    conversation is the Veyllo App room, which has its own row and count. A channel added
+    later stays out of the inbox until the inbox window has its lane (rail entry, colour,
+    type and on-screen name), which `tests/test_inbox_lanes_sync.py` holds together."""
 
 
 CHANNELS: Tuple[Channel, ...] = (
     Channel("whatsapp", "WhatsApp", bridge=True, send_tool="send_whatsapp",
-            read_tool="read_whatsapp_chat", front_office=True),
+            read_tool="read_whatsapp_chat", front_office=True, inbox=True),
     Channel("telegram", "Telegram", bridge=True, send_tool="send_telegram",
             read_tool="read_telegram_chat", front_office=True, secrets=("bot_token",),
-            accounts="shared"),
+            accounts="shared", inbox=True),
     Channel("discord", "Discord", bridge=True, send_tool="send_discord",
             read_tool="read_discord_chat", front_office=True, secrets=("bot_token",),
-            accounts="owner"),
+            accounts="owner", inbox=True),
     # The Veyllo App: the bridge is the link manager (vaf/core/app_link/bridge.py), there is
     # no read tool (the account's one chat is its own history), and one relay instance serves
     # every account, which pairs its own devices on it. A chat channel like Telegram, but its
     # far end is the account holder's own paired device, which shows a confirmation card for
     # one call: a tool kept off chats by the "channel" sentinel runs from it only after the
-    # holder's tap on that card (`holder_device`).
+    # holder's tap on that card (`holder_device`). Not an inbox lane (`inbox`): its
+    # conversation is the Veyllo App room.
     Channel("veyllo_app", "Veyllo App", bridge=True, send_tool="send_veyllo_app",
             secrets=("relay_secret",), accounts="shared", holder_device=True),
     # Known, not built: `send_slack` exists and answers that it cannot send yet.
@@ -121,6 +129,9 @@ CHAT_SESSION_PREFIXES: Tuple[str, ...] = tuple(f"{c}_" for c in CHAT_CHANNELS)
 HOLDER_DEVICE_CHANNELS: Tuple[str, ...] = tuple(c.name for c in CHANNELS
                                                 if c.bridge and c.holder_device)
 HOLDER_DEVICE_SESSION_PREFIXES: Tuple[str, ...] = tuple(f"{c}_" for c in HOLDER_DEVICE_CHANNELS)
+# The chat channels whose chats are inbox conversations (`Channel.inbox`): the inbox's
+# messenger lanes, in this order (mail and the agent rooms are added by vaf/core/inbox.py).
+INBOX_CHANNELS: Tuple[str, ...] = tuple(c.name for c in CHANNELS if c.bridge and c.inbox)
 # What the owner may pick as main messenger: a channel VAF can deliver to. A known channel
 # without a bridge is not one, or a proactive message would land in the web UI instead
 # while the setting said otherwise.

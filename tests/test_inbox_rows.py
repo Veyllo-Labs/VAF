@@ -99,7 +99,63 @@ def test_rows_come_from_every_lane_newest_first(world):
                   "last_ts": NOW - 100, "last": {"sender": "atlas", "text": "Entwurf 3", "mine": False}})
     keys = [r["key"] for r in _rows()["rows"]]
     assert keys == ["room:r1", f"mail:{thread}", "telegram:7", "whatsapp:+491700000042"]
-    assert _rows()["counts"]["per_channel"] == {"whatsapp": 1, "telegram": 1, "discord": 0, "veyllo_app": 0, "mail": 1, "room": 1}
+    assert _rows()["counts"]["per_channel"] == {"whatsapp": 1, "telegram": 1, "discord": 0, "mail": 1, "room": 1}
+
+
+APP_CHAT = "a1b2c3d4e5f6"   # the Veyllo App's one chat per account (`devices.chat_key`)
+
+
+def _app_chat():
+    """What the Veyllo App lane stores: the person's own line from the app, and VAF's answer
+    to the app's agent under the ask's id (bridge.finish_reply)."""
+    _msg(APP_CHAT, "Spiel bitte Musik", ts=NOW - 700, channel="veyllo_app", message_id="m-in")
+    _msg(APP_CHAT, "Gern. Spotify laeuft", direction="out", ts=NOW - 650, channel="veyllo_app",
+         message_id="ask-1")
+
+
+def test_the_veyllo_app_chat_is_not_an_inbox_conversation(world):
+    """The Veyllo App's far end is the account holder's own device and the agent in it; its
+    conversation is the pinned Veyllo App room. Listed here, it showed as a row with a bare id
+    whose "unread" was the person's own message.
+    MUTATION: `MESSENGERS = CHAT_CHANNELS` in vaf/core/inbox.py, or `inbox=True` on the
+    veyllo_app row of the registry - red."""
+    _app_chat()
+    _msg("+491700000042", "passt Donnerstag?", ts=NOW - 900)
+    out = _rows(include_done=True)
+    assert [r["key"] for r in out["rows"]] == ["whatsapp:+491700000042"]
+    assert not [r for r in out["rows"] if r["channel"] == "veyllo_app"]
+    counts = out["counts"]
+    assert counts["all"] == 1 and counts["unread"] == 1 and counts["waits"] == 1 and counts["agent"] == 0
+    for key in ("per_channel", "waits_per_channel", "unread_per_channel", "agent_per_channel",
+                "stored_per_channel"):
+        assert "veyllo_app" not in counts[key], key
+        assert sum(counts[key].values()) == (1 if key != "agent_per_channel" else 0), key
+    assert inbox.CHANNELS == ("whatsapp", "telegram", "discord", "mail", "room")
+    assert [r["key"] for r in _rows(channels=["veyllo_app"])["rows"]] == ["whatsapp:+491700000042"], \
+        "an unknown lane widens to every lane, it never lists the app's chat"
+
+
+def test_the_inbox_functions_treat_the_veyllo_app_as_unknown(world):
+    """Marks, "mark all as read", the history and the search are inbox functions too: none of
+    them reaches the app's chat, whose rows and marks stay in the store for the app's replay.
+    MUTATION: `MESSENGERS = CHAT_CHANNELS` in vaf/core/inbox.py - red."""
+    _app_chat()
+    _msg("+491700000042", "Spotify?", ts=NOW - 900)
+    with pytest.raises(ValueError):
+        inbox.mark_conversation("alice", SCOPE, "veyllo_app", APP_CHAT, seen=True)
+    with pytest.raises(ValueError):
+        inbox.mark_conversation("alice", SCOPE, "veyllo_app", APP_CHAT, done=True)
+    before = store.chat_marks("alice", SCOPE, channel="veyllo_app")
+    moved = inbox.mark_all_seen("alice", SCOPE)
+    assert "veyllo_app" not in moved and moved["whatsapp"] == 1
+    assert inbox.mark_all_seen("alice", SCOPE, channels=["veyllo_app"]) == {}
+    assert store.chat_marks("alice", SCOPE, channel="veyllo_app") == before, "the app chat's marks are untouched"
+    assert inbox.conversation_history("alice", SCOPE, "veyllo_app", APP_CHAT) == []
+    lanes = ("whatsapp", "telegram", "discord", "veyllo_app", "mail", "room")
+    hits = inbox.search_hits("alice", SCOPE, "Spotify", lanes)
+    assert hits == {"whatsapp:+491700000042"}, hits
+    # The app's own readers still find what it stored.
+    assert len(store.get_chat_messages("alice", APP_CHAT, user_scope_id=SCOPE, channel="veyllo_app")) == 2
 
 
 def test_waits_is_the_unanswered_inbound_or_the_agents_question_and_the_agents_reply_lifts_it(world):
@@ -269,12 +325,12 @@ def test_views_groups_and_the_done_toggle(world):
     counts = all_rows["counts"]
     pinned = ("all", "waits", "unread", "agent", "per_channel", "waits_per_channel", "stored_per_channel")
     assert {k: counts[k] for k in pinned} == {"all": 3, "waits": 2, "unread": 2, "agent": 1,
-                                             "per_channel": {"whatsapp": 2, "telegram": 1, "discord": 0, "veyllo_app": 0, "mail": 0, "room": 0},
-                                             "waits_per_channel": {"whatsapp": 1, "telegram": 1, "discord": 0, "veyllo_app": 0, "mail": 0, "room": 0},
-                                             "stored_per_channel": {"whatsapp": 3, "telegram": 1, "discord": 0, "veyllo_app": 0, "mail": 0, "room": 0}}
+                                             "per_channel": {"whatsapp": 2, "telegram": 1, "discord": 0, "mail": 0, "room": 0},
+                                             "waits_per_channel": {"whatsapp": 1, "telegram": 1, "discord": 0, "mail": 0, "room": 0},
+                                             "stored_per_channel": {"whatsapp": 3, "telegram": 1, "discord": 0, "mail": 0, "room": 0}}
     assert sum(counts["unread_per_channel"].values()) == counts["unread"] and counts["invitations"] == 0
     # Every view has its number per channel: the inbox rail nests the views under the open channel.
-    assert counts["agent_per_channel"] == {"whatsapp": 1, "telegram": 0, "discord": 0, "veyllo_app": 0, "mail": 0, "room": 0}
+    assert counts["agent_per_channel"] == {"whatsapp": 1, "telegram": 0, "discord": 0, "mail": 0, "room": 0}
     assert sum(counts["agent_per_channel"].values()) == counts["agent"]
     assert set(counts) == set(pinned) | {"unread_per_channel", "agent_per_channel", "invitations", "bulk_hidden"}, "a new count is a doc and a test, not a surprise"
     assert [r["key"] for r in _rows(include_groups=False)["rows"]] == ["whatsapp:+491700000043", "whatsapp:+491700000042"]
@@ -421,7 +477,7 @@ def test_mark_all_seen_reads_every_lane_at_once_and_respects_the_selection(world
     after = _rows()["counts"]
     assert after["unread"] == 0 and after["waits"] == 0
     assert all(not r["done"] for r in _rows()["rows"]), "read, not done"
-    assert inbox.mark_all_seen("alice", SCOPE) == {"whatsapp": 0, "telegram": 0, "veyllo_app": 0, "mail": 0, "room": 0}, "a marker never moves backwards, nothing to move twice"
+    assert inbox.mark_all_seen("alice", SCOPE) == {"whatsapp": 0, "telegram": 0, "mail": 0, "room": 0}, "a marker never moves backwards, nothing to move twice"
     assert inbox.mark_all_seen("alice", SCOPE, channels=["fax"]) == {}
     # Rooms follow the group toggle, and an invitation is a decision, not a message.
     world.append({"room_id": "r-inv", "name": "Door", "unread": 0, "members": 2, "message_count": 0, "last_ts": 0.0, "last": None, "invited": True})

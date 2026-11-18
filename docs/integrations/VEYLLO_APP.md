@@ -487,7 +487,8 @@ line with "unknown type" is treated as an older app until it announces the room 
 already exist, your app chat (`veyllo_app_<key>`) and the app agent's requests
 (`veyllo_app_<key>_agent`); new room lines are added to the app chat, and the room is a
 read-only projection over both (`vaf/core/app_link/room.py`). Drafts waiting in either session
-show at the end of the room. The inbox opens a Veyllo App conversation here. In the terminal,
+show at the end of the room. It is not listed in the inbox: the room is its one place, with
+its own count ([INBOX.md](INBOX.md#the-lanes)). In the terminal,
 the session panel shows the room as a read-only replay, and `vaf devices say "<text>"` writes
 into it through the running VAF.
 

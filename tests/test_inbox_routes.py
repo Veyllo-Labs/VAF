@@ -95,8 +95,7 @@ def test_the_summary_counts_waits_and_unread_for_the_badge(world):
     _msg("+491700000050", "moin", ts=NOW - 3, message_id="b3")
     out = asyncio.run(ir.inbox_summary(_request()))
     assert (out["waits"], out["unread"], out["all"], out["agent"]) == (1, 2, 2, 1)
-    assert out["waits_per_channel"] == {"whatsapp": 1, "telegram": 0, "discord": 0, "veyllo_app": 0,
-                                        "mail": 0, "room": 0}
+    assert out["waits_per_channel"] == {"whatsapp": 1, "telegram": 0, "discord": 0, "mail": 0, "room": 0}
     assert out["per_channel"]["whatsapp"] == 2 and out["stored_per_channel"]["whatsapp"] == 2
     # The rail's toggles reach the summary: with done rows shown, the person's own reply counts too.
     _msg("+491700000060", "bye", direction="out", ts=NOW - 2, sender=store.OWNER_SENDER, message_id="b4")
@@ -117,6 +116,29 @@ def test_the_bulk_toggle_reaches_the_list_the_summary_and_the_bulk_read(world, m
     asyncio.run(ir.inbox_marks_all(_request(), {"bulk": True})); asyncio.run(ir.inbox_marks_all(_request(), {}))
     asyncio.run(ir.inbox_marks_all(_request(), {"bulk": "false"}))
     assert marks == [True, False, False]
+
+
+def test_the_veyllo_app_is_no_channel_of_the_routes(world):
+    """The Veyllo App's chat is not an inbox conversation (its conversation is the Veyllo App
+    room): the list, the marks and "mark all as read" refuse the name with a 400 that names
+    the lanes, and the summary has no count for it.
+    MUTATION: `MESSENGERS = CHAT_CHANNELS` in vaf/core/inbox.py - red."""
+    _msg("a1b2c3d4e5f6", "Spiel Musik", ts=NOW - 20, message_id="c1", channel="veyllo_app")
+    _msg("a1b2c3d4e5f6", "Gern", direction="out", ts=NOW - 10, message_id="ask-1", channel="veyllo_app")
+    with pytest.raises(HTTPException) as e:
+        _list(channel="veyllo_app")
+    assert e.value.status_code == 400
+    assert e.value.detail == "unknown channel: veyllo_app (one of: all, whatsapp, telegram, discord, mail, room)"
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(ir.inbox_marks(_request(), {"channel": "veyllo_app", "id": "a1b2c3d4e5f6", "seen": True}))
+    assert e.value.status_code == 400
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(ir.inbox_marks_all(_request(), {"channels": ["veyllo_app"]}))
+    assert e.value.status_code == 400 and "whatsapp" in e.value.detail
+    out = asyncio.run(ir.inbox_summary(_request()))
+    assert (out["all"], out["unread"], out["waits"], out["agent"]) == (0, 0, 0, 0), "the person's own app line is nobody's unread"
+    assert "veyllo_app" not in out["per_channel"] and "veyllo_app" not in out["waits_per_channel"]
+    assert _list()["rows"] == []
 
 
 def test_marks_all_reads_the_selection_and_refuses_an_unknown_channel(world):

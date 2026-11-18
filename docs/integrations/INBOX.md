@@ -9,6 +9,23 @@ routes behind the Posteingang window, and the per-channel windows' own lists. Th
 "unread", "waits for you" and "done" live here, not in a browser: a window only clears the
 pill and the chip of the row it just opened until the next fetch confirms it.
 
+## The lanes
+
+The messenger lanes are the registry's chat channels whose row says `inbox=True`
+(`vaf/core/channels.py`, `INBOX_CHANNELS`): WhatsApp, Telegram and Discord, where the far end
+can be somebody other than the account holder. Mail and the agent rooms are lanes of their
+own. The Veyllo App is a chat channel but deliberately no lane: its inbound side is only the
+account holder, so nothing there can wait for them; its outbound side also holds VAF's answers
+to the app's own agent; and its conversation is the Veyllo App room, pinned at the top of the
+chat list with its own count ([VEYLLO_APP.md](VEYLLO_APP.md#the-veyllo-app-room)). Its
+messages stay in the channel store, where the app's replay reads them, and are only not
+listed: every inbox function (the listing and its counts, the search, the marks, "mark all as
+read", the history) answers `veyllo_app` as an unknown channel. A channel added later stays out
+of the inbox until its row says `inbox=True`, and that flip needs the window's half in the same
+change: the rail entry, the colour square, the `InboxChannel` type and the lane's on-screen
+name, `inbox.channel.<lane>`, in every catalogue. `tests/test_inbox_lanes_sync.py` holds the
+four against `inbox.CHANNELS`.
+
 ## The row
 
 One shape for five sources:
@@ -196,8 +213,8 @@ stands unanswered. The tool is not in the Front Office allow-list.
 
 `vaf inbox list` prints the same rows as a table (When, Channel, Name, Unread, Waits, Mode,
 Preview) with the counts above it; `--channel`, `--view`, `--limit`, `--no-groups`, `--done`,
-`--bulk`, `--query` narrow it and `--json` prints one object per line; an unknown `--channel` or
-`--view` is refused with the valid names, never widened to every channel. It runs as the machine owner
+`--bulk`, `--query` narrow it and `--json` prints one object per line; an unknown `--channel` (the Veyllo App's
+included) or `--view` is refused with the valid names, never widened to every channel. It runs as the machine owner
 (no `--scope`: the CLI has no authentication) behind the same terminal door as `vaf session`,
 because it prints chats. Read-only by design: the terminal prints, it does not read for the
 person. The seen mark is written where the person reads (opening a conversation in a window)

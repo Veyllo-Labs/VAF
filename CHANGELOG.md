@@ -74,6 +74,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **The inbox no longer lists the Veyllo App chat.** The exchange between your VAF agent and
+  the agent in your Veyllo App showed up as a conversation with a bare id, counted your own
+  app messages as unread, and left the inbox window without a channel name. The Veyllo App
+  conversation lives in its room at the top of the chat list; the inbox lists WhatsApp,
+  Telegram, Discord, mail and agent rooms.
 - **Links to Next.js catch-all routes are clickable on Windows.** In the terminal, a
   saved file such as `app\[...slug]\page.tsx` or `app\[[...opt]]\page.tsx` was shown without
   the backslash in front of its bracket and was not clickable. It now shows its real path and

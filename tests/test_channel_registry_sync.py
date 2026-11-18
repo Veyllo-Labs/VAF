@@ -69,6 +69,26 @@ def test_holder_device_channels_are_pinned():
     assert not set(reg.HOLDER_DEVICE_CHANNELS) & set(FRONT_OFFICE_MESSENGERS)
 
 
+def test_inbox_channels_are_pinned():
+    """The inbox lists the chats of a channel only when its row says `inbox=True`: the far end
+    can be somebody other than the account holder. The Veyllo App's far end is the holder's
+    own device (its conversation is the Veyllo App room), so it is no lane, and a channel added
+    later stays out until the inbox window has its lane (tests/test_inbox_lanes_sync.py).
+    MUTATION: default the field to True, or set `inbox=True` on veyllo_app or slack - red."""
+    import dataclasses
+    from vaf.core import inbox
+    assert reg.INBOX_CHANNELS == ("whatsapp", "telegram", "discord")
+    assert inbox.MESSENGERS == reg.INBOX_CHANNELS
+    assert inbox.CHANNELS == ("whatsapp", "telegram", "discord", "mail", "room")
+    assert {c.name for c in reg.CHANNELS if c.inbox} == {"whatsapp", "telegram", "discord"}
+    for c in reg.CHANNELS:
+        assert not c.inbox or c.bridge, f"{c.name}: an inbox lane needs a bridge"
+        assert not (c.inbox and c.holder_device), f"{c.name}: the holder's own device is no inbox lane"
+    default = {f.name: f.default for f in dataclasses.fields(reg.Channel)}["inbox"]
+    assert default is False
+    assert reg.Channel("x", "X", bridge=True, send_tool="send_x").inbox is False
+
+
 def test_the_registry_imports_nothing_from_vaf():
     """Tool classes read it at class-definition time and the dependency-free ingress policy
     reads it too; one VAF import here and the first import cycle is a matter of time."""

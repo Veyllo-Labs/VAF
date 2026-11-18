@@ -79,7 +79,7 @@ def test_every_lane_renders_and_names_its_read_tool(listing):
     assert "  3: account_id=a@x message_id='<q@x>' provider_message_id=18f2 folder=INBOX" in out
     assert "[Room] Phoenix | room_id=r1" in out and "WAITS FOR YOU (invitation)" in out
     assert "Discord: no stored chats yet" in out, "an empty lane says so instead of vanishing"
-    assert listing["kw"]["channels"] == ["whatsapp", "telegram", "discord", "veyllo_app", "mail", "room"]
+    assert listing["kw"]["channels"] == ["whatsapp", "telegram", "discord", "mail", "room"]
 
 
 def test_channel_view_and_toggles_pass_through_and_mail_narrows_by_account_and_folder(listing):
@@ -101,6 +101,22 @@ def test_channel_view_and_toggles_pass_through_and_mail_narrows_by_account_and_f
     assert "name-2" in out and "name-1" not in out
     assert listing["kw"]["mail_folder"] == "Sent" and listing["kw"]["mail_account_id"] is None
     assert "Unknown channel" in InboxTool().run(channel="fax")
+
+
+def test_the_channel_enum_and_the_refusal_are_the_inbox_lanes(listing, monkeypatch):
+    """The model is offered exactly the lanes the inbox lists; the Veyllo App, a chat channel
+    whose conversation is the Veyllo App room, is refused with the names of the real lanes.
+    MUTATION: put `*CHAT_CHANNELS` back into the enum, or hand-write the names in the refusal
+    (the monkeypatched lane below stays unnamed) - red."""
+    from vaf.core import inbox
+    assert InboxTool.parameters["properties"]["channel"]["enum"] == ["all", *inbox.CHANNELS]
+    assert "veyllo_app" not in InboxTool.parameters["properties"]["channel"]["enum"]
+    out = InboxTool().run(username="alice", user_scope_id="s", channel="veyllo_app")
+    assert out == "Unknown channel 'veyllo_app'. Use one of: all, whatsapp, telegram, discord, mail, room."
+    assert "kw" not in listing, "nothing was listed"
+    monkeypatch.setattr(inbox, "CHANNELS", inbox.CHANNELS + ("signal",))
+    assert "signal" in InboxTool().run(username="alice", user_scope_id="s", channel="fax"), \
+        "the refusal names the lanes the inbox has, not a hand-written copy"
 
 
 def test_a_lane_hidden_by_a_view_or_the_cut_is_not_called_empty(listing):

@@ -28,6 +28,13 @@ _LIMIT_MAX = 500
 _HISTORY_MAX = 200   # conversation_history's own cap
 
 
+def _unknown_channels(unknown: List[str]) -> str:
+    """The 400's text names the lanes that exist, so a caller holding a chat channel that is
+    no inbox lane (the Veyllo App) learns the valid ones from the refusal."""
+    from vaf.core.inbox import CHANNELS
+    return f"unknown channel: {', '.join(unknown)} (one of: all, {', '.join(CHANNELS)})"
+
+
 def _channels(channel: Optional[str]) -> Optional[List[str]]:
     """`channel` is one name, a comma list, `all` or empty; an unknown name is a 400."""
     from vaf.core.inbox import CHANNELS
@@ -36,7 +43,7 @@ def _channels(channel: Optional[str]) -> Optional[List[str]]:
         return None
     unknown = [c for c in wanted if c not in CHANNELS]
     if unknown:
-        raise HTTPException(status_code=400, detail=f"unknown channel: {', '.join(unknown)}")
+        raise HTTPException(status_code=400, detail=_unknown_channels(unknown))
     return wanted
 
 
@@ -156,7 +163,7 @@ async def inbox_marks_all(request: Request, body: Dict[str, Any] = Body(default=
         raise HTTPException(status_code=400, detail="no channel")
     unknown = [c for c in wanted if c not in CHANNELS]
     if unknown:
-        raise HTTPException(status_code=400, detail=f"unknown channel: {', '.join(unknown)}")
+        raise HTTPException(status_code=400, detail=_unknown_channels(unknown))
     def flag(name: str, default: bool) -> bool:
         value = body.get(name) if isinstance(body, dict) else None
         if isinstance(value, str):

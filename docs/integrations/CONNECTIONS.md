@@ -692,7 +692,7 @@ the main messengers an owner can pick
 (`MAIN_MESSENGERS`, the channels with a bridge), the send-tool sets of thinking mode, the
 automation dedup, the Front Office allow-list and the workflow engine's scope injection
 (`ALL_SEND_TOOLS`), the owner back-channel (`CHAT_SEND_TOOLS`), the labels, the inbox lanes
-and read tools, and the Front Office prompt's table of which tool reaches the owner.
+(`INBOX_CHANNELS`, the chat channels whose row says `inbox=True`) and read tools, and the Front Office prompt's table of which tool reaches the owner.
 `KNOWN_CHANNELS`, `ROUTABLE_CHANNELS` and `CHANNEL_SEND_TOOLS` stay importable from
 `messaging_connections` and are the registry's own objects.
 
@@ -751,6 +751,11 @@ What a new channel still needs, because it differs per channel:
    (`tests/test_front_office_settings.py` holds the Front Office list against the bridges).
 6. Its window in the web UI, and its entry in the web's `MAIN_MESSENGERS` picker list
    (the test holds that list against the registry).
+7. `inbox=True` in its row once the inbox window has its lane: the rail entry, the colour
+   square, `InboxChannel` and `inbox.channel.<name>` in every catalogue
+   (`tests/test_inbox_lanes_sync.py` refuses one without the other; see
+   [INBOX.md](INBOX.md#the-lanes)). A channel whose far end is only the account holder stays
+   out, as the Veyllo App does.
 
 ## Veyllo App
 
@@ -772,8 +777,8 @@ whole picture):
 - **The conversation is the Veyllo App room**, pinned at the top of the chat list while a
   device is paired: you, your agent and the agent in the Veyllo App in one view, where a line
   you write goes to the app's agent and `@` with your agent's name asks your agent
-  ([VEYLLO_APP.md](VEYLLO_APP.md#the-veyllo-app-room)). The inbox opens a Veyllo App
-  conversation there.
+  ([VEYLLO_APP.md](VEYLLO_APP.md#the-veyllo-app-room)). It is not an inbox conversation
+  (`inbox` stays False, [INBOX.md](INBOX.md#the-lanes)): the room is where it is read.
 - **`accounts="shared"`**: one relay instance serves every account; `veyllo_app_config.enabled`
   is the channel's switch, admins ride it, every other account has its own switch, which a
   confirmed pairing turns on.

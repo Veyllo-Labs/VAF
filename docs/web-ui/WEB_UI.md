@@ -527,7 +527,6 @@ agent in their Veyllo App and the VAF agent; its rules are in
 - **Drafts.** The drafts waiting in either of the room's two sessions (the app chat and the
   app agent's requests) show at the end of the room, as the unplaced drafts of a chat do.
 - **Signals.** `app_room_changed` refetches the list (the row's count) and an open room view.
-- **The inbox** opens a Veyllo App conversation in this room instead of Settings.
 
 ### 2c. The Inbox Window
 

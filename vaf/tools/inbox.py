@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any, Dict, List
 
 from vaf.tools.base import BaseTool
-from vaf.core.channels import CHANNEL_READ_TOOLS, CHAT_CHANNELS
+from vaf.core.channels import CHANNEL_READ_TOOLS, INBOX_CHANNELS
 
 _MODE_WORDS = {
     "owner": "your own chat", "contact": "Front Office", "conversation": "reply window open",
@@ -105,7 +105,9 @@ class InboxTool(BaseTool):
         "properties": {
             "channel": {
                 "type": "string",
-                "enum": ["all", *CHAT_CHANNELS, "mail", "room"],
+                # The inbox's own lanes (vaf.core.inbox.CHANNELS), spelled from the registry
+                # so the schema stays a literal a static reader can evaluate.
+                "enum": ["all", *INBOX_CHANNELS, "mail", "room"],
                 "description": "One channel, or all (default).",
             },
             "view": {
@@ -138,7 +140,7 @@ class InboxTool(BaseTool):
         channel = (kwargs.get("channel") or "all").strip().lower()
         channels = list(CHANNELS) if channel in ("", "all") else [channel]
         if channel not in ("", "all") and channel not in CHANNELS:
-            return f"Unknown channel '{channel}'. Use one of: all, whatsapp, telegram, discord, mail, room."
+            return f"Unknown channel '{channel}'. Use one of: all, {', '.join(CHANNELS)}."
         view = (kwargs.get("view") or "all").strip().lower()
         try:
             max_chats = min(max(int(kwargs.get("max_chats") or 30), 1), 200)

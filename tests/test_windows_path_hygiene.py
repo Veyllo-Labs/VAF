@@ -1597,7 +1597,13 @@ _VARIADIC_CALLS = {"create_subprocess_exec": 0, "execl": 1, "execlp": 1, "execle
 _WRAPPERS = {"env", "sudo", "nice", "timeout", "setsid", "taskset", "stdbuf", "nohup", "bwrap",
              "unshare", "nsenter", "firejail", "docker", "podman", "flatpak-spawn", "chroot",
              "ionice", "xvfb-run"}
-_SCOPES = (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+# Calls that take the executable and the argv apart, with the executable's position: the
+# argv's first item only names the program (`os.spawnv(os.P_WAIT, "/bin/sh", ["sh", ...])`).
+_VECTOR_CALLS = {"execv": 0, "execvp": 0, "execve": 0, "execvpe": 0,
+                 "spawnv": 1, "spawnvp": 1, "spawnve": 1, "spawnvpe": 1}
+# A class body is a namespace of its own: its names are not the enclosing scope's, and the
+# functions in it see the enclosing scope, not the class's names.
+_SCOPES = (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
 
 
 def _imports(tree) -> dict:
@@ -1641,15 +1647,14 @@ def _bindings(scope, outer: dict, declared: set = frozenset()) -> dict:
     to it alone (`script = "..."`). Any other binding leaves it unknown: a second one, `+=`,
     an annotation, a `for` or `with ... as` target, `:=`, unpacking, `del`, an import, a `def`
     or `class`, `except ... as`, a parameter of this scope (its value comes from the caller),
-    and a name declared `global` or `nonlocal` anywhere. A comprehension's own variable and
-    what a class body binds (its methods, its attributes: the class's namespace) bind nothing
-    here, the class's own name does. A name not bound here keeps the outer scope's binding."""
+    and a name declared `global` or `nonlocal` anywhere. A comprehension's own variable binds
+    nothing here; a class body is a scope of its own (_SCOPES), so what it binds stays there,
+    and only the class's own name binds here. A name not bound here keeps the outer scope's
+    binding."""
     count: dict = {}
     plain: dict = {}
     own = {id(target) for node in _scope_nodes(scope) if isinstance(node, ast.comprehension)
            for target in ast.walk(node.target)}
-    own |= {id(inner) for node in _scope_nodes(scope) if isinstance(node, ast.ClassDef)
-            for statement in node.body for inner in ast.walk(statement)}
 
     def bind(name):
         count[name] = count.get(name, 0) + 1
@@ -1774,7 +1779,8 @@ def _shell_scripts(tree) -> list:
         names = _bindings(scope, outer, declared)
         for node in _scope_nodes(scope):
             if isinstance(node, _SCOPES):
-                pending.append((node, names))
+                # a function in a class body sees the scope around the class
+                pending.append((node, outer if isinstance(scope, ast.ClassDef) else names))
             if not isinstance(node, ast.Call):
                 continue
             module, name = _call_target(node, imports)
@@ -1799,6 +1805,14 @@ def _shell_scripts(tree) -> list:
                 drop, args = _VARIADIC_CALLS[name], list(node.args)
                 argv = args if not drop else args[drop - 1:drop] + args[drop + 1:]
                 script = _argv_script(argv, names)
+                if script is not None:
+                    scripts.append((script, names))
+                continue
+            at = _VECTOR_CALLS.get(name)
+            if at is not None and len(node.args) > at + 1:
+                # the executable runs, the argv's first item only names it
+                argv = _argv_elements(node.args[at + 1], names)
+                script = _argv_script([node.args[at]] + argv[1:], names)
                 if script is not None:
                     scripts.append((script, names))
                 continue
@@ -1944,8 +1958,9 @@ def test_the_fd_redirection_scanner_resolves_only_a_single_plain_assignment():
     MUTATION: count only plain assignments as bindings again - red (the loop, `with`, `:=`,
     unpacking, the annotation);
     MUTATION: ignore `global` - red;
-    MUTATION: count a comprehension's variable - red; count a class's members - red (the
-    method)."""
+    MUTATION: count a comprehension's variable - red;
+    MUTATION: read a class body as part of the module - red (the method of the same name);
+    MUTATION: give a method the class's names - red (the last row)."""
     assert _fd_redirections(ast.parse(
         'cmd = "echo x"\n'
         'cmd += " >&12"\n'
@@ -1980,6 +1995,16 @@ def test_the_fd_redirection_scanner_resolves_only_a_single_plain_assignment():
         '    def script(self):\n'
         '        pass\n'
         'os.system(script)')) == [1]
+    # a class body resolves its own names; a method in it does not see them
+    assert _fd_redirections(ast.parse(
+        'class A:\n'
+        '    script = "echo x >&12"\n'
+        '    os.system(script)')) == [2]
+    assert _fd_redirections(ast.parse(
+        'class A:\n'
+        '    script = "echo x >&12"\n'
+        '    def f(self):\n'
+        '        os.system(script)')) == []
 
 
 def test_the_fd_redirection_scanner_reads_every_call_form():
@@ -1990,7 +2015,8 @@ def test_the_fd_redirection_scanner_reads_every_call_form():
     MUTATION: leave `spawnv`, `spawnvp`, `spawnvpe` out of the argv calls - red;
     MUTATION: take the first item of a `shell=True` sum always - red;
     MUTATION: read every variadic call's arguments from the first - red (`execlp`);
-    MUTATION: take argv[0] for the program instead of the executable - red (`/bin/echo`)."""
+    MUTATION: take argv[0] for the program instead of the executable - red (`/bin/echo`);
+    MUTATION: read a vector call's argv as it stands - red (`spawnv`, `execv` both ways)."""
     assert _fd_redirections(ast.parse(
         'import os.path\n'
         'os.system("echo x >&12")')) == [2]
@@ -2009,6 +2035,15 @@ def test_the_fd_redirection_scanner_reads_every_call_form():
         'os.spawnl(os.P_WAIT, "/bin/sh", "sh", "-c", "cat <&10")')) == [1]
     assert _fd_redirections(ast.parse(
         'os.spawnlp(os.P_WAIT, "sh", "sh", "-c", "cat <&10")')) == [1]
+    # the executable runs, argv[0] only names it, also for the vector calls
+    for call in ('os.spawnv(os.P_WAIT, "/bin/echo", ["sh", "-c", "echo x >&12"])',
+                 'os.execv("/bin/echo", ["sh", "-c", "echo x >&12"])',
+                 'os.execve("/bin/echo", ["sh", "-c", "echo x >&12"], env)'):
+        assert _fd_redirections(ast.parse(call)) == [], call
+    for call in ('os.spawnv(os.P_WAIT, "/bin/sh", ["echo", "-c", "cat <&10"])',
+                 'os.execv("/bin/sh", ["echo", "-c", "cat <&10"])',
+                 'os.spawnvpe(os.P_WAIT, "sh", ["echo", "-c", "cat <&10"], env)'):
+        assert _fd_redirections(ast.parse(call)) == [1], call
     # the executable runs, argv[0] only names it: `/bin/echo` prints the text
     assert _fd_redirections(ast.parse('os.execl("/bin/echo", "sh", "-c", "echo x >&12")')) == []
     assert _fd_redirections(ast.parse(

@@ -276,16 +276,21 @@ every form bash takes (`a+=1`, `a[0]=1`, `a[k]+=v`); one of the latter that hold
 substitution stays the program word it was read as before, refused as opaque. A shell reads
 options after `-c` too, up
 to `-`, `--` or the first word that is none, and runs that word (`bash -c -e '...'`); `+c`
-is `-c` as well, and an option word with an expansion in it or a word that starts with one
-may be either (`x=c; bash -$x -e '...'`, `x=-c; bash "$x" '...'`); its own
+is `-c` as well, and an option word with an expansion in it, a word that starts with one or
+a tilde word may be either (`x=c; bash -$x -e '...'`, `x=-c; bash "$x" '...'`, `bash ~`); a
+cluster takes one value per `o` or `O` in it (`bash -eo pipefail` reads its input), after a
+`c` a word that starts with an expansion is the script, and a brace word makes the script
+unknown (_shell_c_script); its own
 redirections are no script (`xargs -0 bash -c <<< '...'` leaves the script to xargs); a
 token cannot tell a quoted word from a redirection (`-c '>x;cmd'`), so both readings of the
 script are taken. An unquoted expansion where a shell's script name stands may expand to
 nothing, so the shell's input is read as its script as well (`bash $! <<< '...'`); a quoted
 one is a word, never an option, only when it is exactly `"$NAME"` or `"${NAME}"` of a name
 the text can give no value (_ScriptName: NAME nowhere else in the text, also not inside
-another word, not set by bash, and no eval, source or name given by an expansion in the
-text); anything else, a positional parameter included, reads the input as well. What a
+another word nor with quotes, `$''`, backslashes and line continuations taken out, not set by
+bash, and no eval, source, brace expansion, name given by an expansion or printf whose first
+word is an expansion in the text); anything else, a positional parameter, a tilde or a brace
+word included, reads the input as well. What a
 shell prints from the script it reads from its input goes on
 into the pipe whatever its own redirections (its script can write to any descriptor; so
 `bash <<< '...' >/dev/null | bash` is refused, a named over-refusal), and redirections after a
@@ -549,6 +554,24 @@ _SUBST_PROC = "\x02"
 _SUBST_MARKS = (_SUBST_BARE, _SUBST_QUOTED, _SUBST_PROC)
 # What starts an expansion in a token: a word holding one may become any option.
 _EXPANSION_MARKS = ("$", "`") + _SUBST_MARKS
+# A brace expansion in a word (`{-c,x}`, `{a..z}`): it may become several words, options
+# and a script among them.
+_BRACE_WORD_RE = re.compile(r"\{[^{}]*(?:,|\.\.)[^{}]*\}")
+# Words bash expands to a directory variable's value (HOME, PWD, OLDPWD), which the text can
+# set to an option (`HOME=-c; bash ~ '...'`).
+_TILDE_WORDS = ("~", "~+", "~-")
+# What a shell's option scan returns for a script it cannot know: a brace word may be any
+# words, and read again as text it would split into a program word no check sees; as a
+# script it is an expansion, refused as opaque.
+_UNKNOWN_SCRIPT = "$_brace_word"
+
+
+def _cluster_values(tok: str) -> int:
+    """How many following words an option cluster of a shell takes as values: one per `o`
+    or `O` in it (`-eo pipefail`, `-oo pipefail errexit`, `+Oc extglob`)."""
+    if tok[:1] not in ("-", "+") or tok.startswith("--"):
+        return 0
+    return tok.count("o") + tok.count("O")
 # The text a runner's candidates may add up to, beyond the command's own length. Each
 # candidate is the rest of the command joined back into text, so reading each of 64 value
 # positions in full made `npx --x y --x y ...` cost 64 readings of the whole command
@@ -2400,7 +2423,7 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[list],
             if script_name is None:
                 # The grammar text drops a function's head and a loop's name (`for s in`):
                 # the names are read from the text as written as well.
-                script_name = _ScriptName(_names_from + "\n" + text, _depth > 0, _budget[2])
+                script_name = _ScriptName(_names_from + "\n" + text, _depth > 0)
             from_where, script_literals, from_pipe = _script_input(exe, args, carried, sink_raws,
                                                                    script_name)
             for alt in alternatives if exe_at >= 0 else ():
@@ -4719,13 +4742,20 @@ _SIMPLE_COMMAND_SPLIT_RE = re.compile(r"[;&|\n]")
 # `_`, the last word of the command before (`set --; ... | bash "${_}"`).
 _SHELL_SET_NAMES = frozenset({"REPLY", "OPTARG", "MAPFILE", "COPROC", "FUNCNAME", "_"})
 _SHELL_SET_PREFIXES = ("BASH_", "READLINE_", "COMP_")
+# How many distinct names one text's script names are looked up for (_ScriptName): each
+# lookup reads the text a few times, so the cap keeps that linear; past it a quoted name
+# reads the input.
+_SCRIPT_NAME_SEARCHES = 64
+# The first word after a command name: printf's option slot.
+_FIRST_WORD_RE = re.compile(r"[ \t]*(\S*)")
 
 
 def _sets_any_name(text: str) -> bool:
     """Whether `text` may assign a name it does not spell (_SETS_ANY_NAME_RE), as written and
     with its quotes and backslashes taken out (`'eval'`, `de''clare`): each simple command is
     read once, a command that assigns names counting when an expansion follows it in that
-    command (`printf` with `-v`), so the text costs two passes."""
+    command (`printf` with `-v` or an expansion as its first word), so the text costs two
+    passes."""
     unquoted = text.replace("'", "").replace('"', "").replace("\\", "")
     for form in (text, unquoted):
         if _SETS_ANY_NAME_RE.search(form):
@@ -4734,8 +4764,14 @@ def _sets_any_name(text: str) -> bool:
             expansion = max(piece.rfind("$"), piece.rfind("`"))
             option = max(piece.rfind(" -v"), piece.rfind("\t-v"))
             for setter in _NAME_SETTER_RE.finditer(piece):
-                if expansion > setter.start() and (setter.group() != "printf"
-                                                   or option > setter.start()):
+                if expansion <= setter.start():
+                    continue
+                if setter.group() != "printf" or option > setter.start():
+                    return True
+                # printf assigns a name with `-v`, also when its first word is an expansion
+                # that may be `-v` (`printf "$opt" "$n" %s --`)
+                first = _FIRST_WORD_RE.match(piece, setter.end()).group(1)
+                if any(m in first for m in ("$", "`")):
                     return True
     return False
 
@@ -4745,14 +4781,18 @@ class _ScriptName:
     input: an unquoted expansion may vanish, a quoted one may be `--`, `-`, `-s` or nothing
     unless it is a plain name the text gives no value (_PLAIN_QUOTED_NAME_RE and above). A
     text another command runs (`bash -c`, `eval`, a heredoc fed to a shell) gets its names
-    and arguments from outside, so there every expansion counts. The text is searched once
-    per name, each search spending its length from the call's character budget (_READ_FACTOR;
-    with none left the word counts as reading the input): linear."""
-    __slots__ = ("text", "nested", "budget", "any_name", "seen")
+    and arguments from outside, so there every expansion counts. The name is looked for in
+    the text as written and with line continuations, `$''`, quotes and backslashes taken out
+    (`declare S''S=-s` assigns `SS`), and a brace expansion anywhere may assign any name
+    (`declare {S,Z}S=-s`). At most _SCRIPT_NAME_SEARCHES names are looked for in one text,
+    each in a few passes; past that a word reads the input (fail closed): linear."""
+    __slots__ = ("text", "nested", "limit", "any_name", "plain_text", "seen")
 
-    def __init__(self, text: str, nested: bool, budget: list) -> None:
-        self.text, self.nested, self.budget = text, nested, budget
+    def __init__(self, text: str, nested: bool, limit: int = 0) -> None:
+        self.text, self.nested = text, nested
+        self.limit = limit or _SCRIPT_NAME_SEARCHES
         self.any_name: Optional[bool] = None
+        self.plain_text = ""
         self.seen: dict = {}
 
     def reads_input(self, raw: str) -> bool:
@@ -4766,14 +4806,18 @@ class _ScriptName:
         if name in _SHELL_SET_NAMES or name.startswith(_SHELL_SET_PREFIXES):
             return True
         if name not in self.seen:
-            if self.budget[0] < 3 * len(self.text):
-                return True                 # no characters left to search: fail closed
-            self.budget[0] -= 3 * len(self.text)
+            if len(self.seen) >= self.limit:
+                return True                 # more names than are looked for: fail closed
             if self.any_name is None:
-                self.any_name = _sets_any_name(self.text)
-            # Each spelling of the word holds the name once; any other occurrence may give
-            # it a value.
-            self.seen[name] = self.any_name or self.text.count(name) > self.text.count(raw)
+                text = self.text
+                self.any_name = _sets_any_name(text) or bool(_BRACE_WORD_RE.search(text))
+                text = text.replace("\\\n", "").replace("$''", "").replace('$""', "")
+                self.plain_text = text.replace("'", "").replace('"', "").replace("\\", "")
+            # Each spelling of the word holds the name once, and an expansion of it gives it
+            # no value; any other occurrence may.
+            text = self.plain_text
+            self.seen[name] = self.any_name or self.text.count(name) > self.text.count(raw) \
+                or text.count(name) > text.count("$" + name) + text.count("${" + name + "}")
         return self.seen[name]
 
 
@@ -4859,11 +4903,24 @@ def _script_input(exe: str, args: List[str], carried: List[tuple],
             letters = tok[1:] if not tok.startswith("--") else ""
             if any(c in inline for c in letters):
                 return "", [], False        # code given inline: read elsewhere (`bash -c`)
-            from_stdin = from_stdin or (shell and "s" in letters)
-            # A value option never takes a redirection or a here-string as its value.
-            takes_value = (tok in _SHELL_VALUE_OPTIONS and not _HERE_OPERATOR_RE.match(nxt)
-                           and not _REDIRECT_RE.match(nxt) and nxt[:1] not in ("<", ">"))
-            pos += 2 if takes_value else 1
+            # `-s` reads the input, and so may an option word with an expansion in it
+            # (`x=s; ... | bash -$x`).
+            from_stdin = from_stdin or (shell and (
+                "s" in letters or any(m in letters for m in _EXPANSION_MARKS)))
+            # A value option takes one word, a cluster one per `o` or `O` in it (`bash -eo
+            # pipefail` reads its input); never a redirection or a here-string.
+            values = 1 if tok in _SHELL_VALUE_OPTIONS else (_cluster_values(tok) if shell else 0)
+            pos += 1
+            while values and pos < len(args) and not _HERE_OPERATOR_RE.match(args[pos]) \
+                    and not _REDIRECT_RE.match(args[pos]) and args[pos][:1] not in ("<", ">"):
+                pos += 1
+                values -= 1
+            continue
+        # A tilde word or a brace word where the script name stands may be an option or
+        # nothing (`HOME=-s; ... | bash ~`, `... | bash {-s,}`): the input is read as well.
+        if script is None and shell and (tok in _TILDE_WORDS or _BRACE_WORD_RE.search(tok)):
+            from_stdin = True
+            pos += 1
             continue
         if script is None and shell and tok[:1] in ("$", _SUBST_BARE, _SUBST_QUOTED) and (
                 raws is None or name is None or name.reads_input(raws[pos])):
@@ -5578,8 +5635,10 @@ _SCRIPT_MISSING = object()
 
 def _shell_c_script(args: List[str], strip_redirections: bool = True):
     """The script a shell's `-c` runs, `_SCRIPT_MISSING` when `-c` has none, None without `-c`.
-    `+c` is `-c` too, and a word with an expansion that may be either (`-$x`, `"$x"`) counts
-    as one. bash reads options after `-c` as well, up to `-` or `--` (both taken) or the first word
+    `+c` is `-c` too, and a word with an expansion that may be either (`-$x`, `"$x"`, `~`)
+    counts as one; a cluster takes one value per `o` or `O` (`-ceo pipefail`); a brace word
+    makes the script unknown (_UNKNOWN_SCRIPT), and after a `c` a word that starts with an
+    expansion is the script. bash reads options after `-c` as well, up to `-` or `--` (both taken) or the first word
     that is no option, and runs that word (`bash -c -e '...'`, `sh -c - '...'`); its own
     redirections are no words (`xargs -0 bash -c <<< '...'` has no script, xargs supplies it).
     A token cannot tell a quoted word from a redirection (`-c '>x;cmd'`), so a reader of the
@@ -5607,13 +5666,26 @@ def _shell_c_script(args: List[str], strip_redirections: bool = True):
         if tok in _SHELL_VALUE_OPTIONS:
             k += 2
             continue
+        # A brace word may be any words, options and the script among them: unknown.
+        if _BRACE_WORD_RE.search(tok):
+            return _UNKNOWN_SCRIPT
+        # After a `c` a word that starts with an expansion may be the script itself: it is
+        # returned, so an opaque script is refused (`bash -c -e "$x"`), and a tilde word
+        # there is a variable's value as the script (`HOME='...'; bash -c ~`).
+        if has_c and tok in _TILDE_WORDS:
+            return _UNKNOWN_SCRIPT
+        if has_c and tok[:1] in _EXPANSION_MARKS:
+            return tok
         # `c` counts after a `+` too (`bash +c '...'`), and an option word with an expansion in
-        # it, or a word that starts with one, may be `-c` or `+c` and is stepped over like an
-        # option (`x=c; bash -$x -e '...'`, `bash "$x" '...'`).
+        # it, a word that starts with one or a tilde word may be `-c` or `+c` and is stepped
+        # over like an option (`x=c; bash -$x -e '...'`, `bash "$x" '...'`, `bash ~ '...'`).
+        # A cluster takes one value per `o` or `O` in it (`bash -ceo pipefail '...'`).
         expands = any(m in tok for m in _EXPANSION_MARKS)
-        if (tok[:1] in ("-", "+") and len(tok) > 1) or tok[:1] in _EXPANSION_MARKS:
-            has_c = has_c or (not tok.startswith("--") and ("c" in tok[1:] or expands))
-            k += 1
+        if (tok[:1] in ("-", "+") and len(tok) > 1) or tok[:1] in _EXPANSION_MARKS \
+                or tok in _TILDE_WORDS:
+            has_c = has_c or (not tok.startswith("--") and (
+                "c" in tok[1:] or expands or tok in _TILDE_WORDS))
+            k += 1 + _cluster_values(tok)
             continue
         break
     if not has_c:

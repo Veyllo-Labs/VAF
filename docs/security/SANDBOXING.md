@@ -1180,24 +1180,33 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   stepped over in every form bash takes (`a+=1 cmd`, `a[0]=1 cmd`, `a[${#a[@]}]=x`), and a
   shell reads its options after `-c` too and runs the first word that is none (`bash -c -e '...'`,
   `sh -c - '...'`), `+c` being `-c` as well (`bash +c '...'` runs it), and so does an option
-  word with an expansion in it or a word that starts with one, which may be either
-  (`x=c; bash -$x -e '...'`, `x=-c; bash "$x" '...'`); a quoted script that starts like a
-  redirection is read as well (`bash -c -e '>x;cmd'`). An unquoted expansion as a shell's
+  word with an expansion in it, a word that starts with one or a tilde word (`~`, `~+`,
+  `~-`, a variable's value), which may be either (`x=c; bash -$x -e '...'`,
+  `x=-c; bash "$x" '...'`, `HOME=-c; bash ~ '...'`); a cluster takes one following word
+  as a value for each `o` or `O` in it (`bash -ceo pipefail '...'`, and `bash -eo pipefail`
+  has no script, so it reads its input), an option word with an expansion in it may be
+  `-s` as well, after a `c` a word that starts with an expansion is the script itself
+  (`bash -c -e "$x"`, refused as opaque), and a brace word there (`bash {-c,'...'}`) makes
+  the script unknown, refused; a quoted script that starts like a redirection is read as
+  well (`bash -c -e '>x;cmd'`). A tilde word or a brace word at the script name reads the
+  input too (`HOME=-s; ... | bash ~`). An unquoted expansion as a shell's
   script name may vanish, so the shell's input is read too (`bash $! <<< '...'`). A quoted
   one is one word, never an option, only when it is exactly `"$NAME"` or `"${NAME}"` (empty
   quotes add nothing, `''"$x"`) and the text can give NAME no value: NAME appears nowhere
   else in the text, not even inside another word (`a=-s`, `read a`, `printf -va`,
-  `read -ax`, `for a in`), bash does not assign it itself (`REPLY`, `OPTARG`, `MAPFILE`, `_`,
-  `BASH_...`), and the text assigns no name it does not spell (`eval`, `source`, `.`,
-  `${!...}`, a name given by an expansion to `declare`, `read` or `printf -v`, also spelled
-  with quotes, `de''clare`). So `bash "$S"`, `bash "$SCRIPT" <<< "$INPUT"` and
+  `read -ax`, `for a in`), also with line continuations, `$''`, quotes and backslashes
+  taken out (`declare S''S=-s` assigns `SS`), bash does not assign it itself (`REPLY`,
+  `OPTARG`, `MAPFILE`, `_`, `BASH_...`), and the text assigns no name it does not spell
+  (`eval`, `source`, `.`, `${!...}`, a brace expansion, `declare {S,Z}S=-s`, a name given by
+  an expansion to `declare`, `read` or `printf -v`, also spelled with quotes, `de''clare`,
+  and a `printf` whose first word is an expansion that may be `-v`). So `bash "$S"`, `bash "$SCRIPT" <<< "$INPUT"` and
   `printf '%s\n' "$ans" | bash "$S"` pass, and everything else reads the input as well: an
   operator (`"${x:---}"`), a substitution (`"$(echo -)"`), `$@`, literal text beside the
   expansion (`"$x"-s`), every positional parameter (`"$1"`, `"$*"`, also `"$0"`, which
   `BASH_ARGV0=` sets), and every quoted expansion in a text another command runs (`bash -c`,
-  `eval`, a heredoc), whose names and arguments come from outside it. The search for a name
-  spends the text's length from the command's reading budget; with none left the word reads
-  the input (fail closed). A
+  `eval`, a heredoc), whose names and arguments come from outside it. At most 64 distinct
+  names are looked up in one text, each in a few passes over it; past that a quoted name
+  reads the input (fail closed). A
   newline right after a `|`
   continues the pipeline, as bash reads it.
 - **Bounds.** Every reading, the command itself included, spends one of
@@ -1293,8 +1302,8 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   one whose first 1 024 characters end on the `\` of a line continuation), and a `$'...'`
   there, also inside double quotes, in an unquoted heredoc's body and in an indexed array's
   subscript (`"${x:$'...'}"`, `"${a[$'...']}"`), and in the word of any double-quoted
-  `${...}` (`"${y:-$'...'}"`, `"${x:+...}"`, `"${y:=...}"`, where bash's extquote decodes
-  it and expands the result again; read so in every operator, fail closed), which bash decodes and expands again
+  `${...}` (`"${y:-$'...'}"`, `"${x:+...}"`, `"${y:=...}"`, bash's extquote; read so in
+  every operator, fail closed), which bash decodes and expands again
   (`(( $'\x24\x28cmd\x29' ))` runs cmd), is refused when the decoded text holds a `$`, a
   backtick, a quote or a backslash (`ansi_arithmetic`: write the arithmetic out; a decoded
   `'` would quote what follows the arithmetic, `(( $'\x27' )); r\` NL `m ...` runs rm), and
@@ -1377,7 +1386,7 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   before this change was lost in
   any of them (bash 5.3; the suite runs 1 600 draws). The classes the differential found on the way are each pinned in
   `tests/test_command_grammar_reading.py`, and every probe written while the reading was
-  built and checked, every pinned row and every corpus row that ran the marker in bash, 1 737
+  built and checked, every pinned row and every corpus row that ran the marker in bash, 2 573
   of them, is in `tests/fixtures/command_policy/never_again.json` and refused on every lane
   (16 more belong to the named boundaries below and are kept apart under their names).
 - **Named boundary: what it does not read.** cmd.exe's and PowerShell's own grammar (`%VAR%`

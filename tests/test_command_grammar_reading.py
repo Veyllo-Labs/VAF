@@ -1626,6 +1626,8 @@ def test_a_quoted_script_name_the_text_can_make_an_option_reads_the_input():
                 "printf -vx -- --; " + feed + '"$x"', "read -rax <<< --; " + feed + '"$x"',
                 feed + '"$x"-s', feed + '"${x}"-s', feed + '"$x"' + B + "-s",
                 "BASH_ARGV0=-s; " + feed + '"$0"', "BASH_ARGV0=-s; " + feed + '"${0}"',
+                "declare S''S=-s; " + feed + '"$SS"', "declare {S,Z}S=-s; " + feed + '"$SS"',
+                "o=-v; n=$(printf '" + B + "121'); printf \"$o\" \"$n\" %s --; " + feed + '"$Q"',
                 "de''clare \"$(printf '" + B + "121')=--\"; " + feed + '"$Q"',
                 "export Q=--; bash -c 'echo \"rm -rf /\" | bash \"$Q\"'"):
         assert classify_command(cmd, profile="host").blocked, cmd
@@ -1651,6 +1653,47 @@ def test_an_option_word_with_an_expansion_may_be_dash_c():
         assert classify_command(cmd, profile="host").blocked, cmd
     for cmd in ("bash -$opts script.sh", "bash +x script.sh", "bash -c 'echo hi'"):
         assert not classify_command(cmd, profile="host").blocked, cmd
+
+
+def test_an_option_cluster_takes_a_value_per_o():
+    """bash takes one following word as a value for every `o` or `O` in an option cluster,
+    so `bash -eo pipefail` has no script and reads its input, and `-ceo pipefail '...'` runs
+    the word after the value. After a `c` a word that starts with an expansion is the script
+    itself (refused as opaque); a brace word makes the script unknown, and a tilde word may
+    be any option (`HOME=-c; bash ~ '...'`).
+    MUTATION: a cluster takes no value - red (`-eo pipefail`);
+    MUTATION: step over an expansion after a `c` - red (`bash -c -e "$x"`);
+    MUTATION: no brace word in the option scan - red; no tilde word - red;
+    MUTATION: an option word with an expansion is no `-s` - red (`-$x pipefail`)."""
+    feed = "echo 'rm -rf /' | bash "
+    for cmd in (feed + "-eo pipefail", "bash -eo pipefail <<< 'rm -rf /'",
+                "printf '%s" + B + "n' 'rm -rf /' | bash -euo pipefail",
+                "bash -co pipefail 'rm -rf /'", "bash -ceo pipefail -- 'rm -rf /'",
+                "bash -Oc extglob 'rm -rf /'", "bash +oc posix 'rm -rf /'",
+                "bash -oo pipefail errexit <<< 'rm -rf /'", "x=eo; " + feed + "-$x pipefail",
+                "x=ec; bash -eo pipefail -${x} 'rm -rf /'",
+                "x='rm -rf /'; bash -c -e \"$x\"", "bash -c -e \"$(echo rm -rf /)\"",
+                "x='rm -rf /'; bash +c \"$x\"", "HOME='rm -rf /'; bash -c ~",
+                "bash {-c,'rm -rf /'}", "bash {-c,} 'rm -rf /'", "sh {-,+}c 'rm -rf /'",
+                feed + "{-s,}", "HOME=-c; bash ~ 'rm -rf /'", "PWD=-c; bash ~+ 'rm -rf /'",
+                "HOME=-s; " + feed + "~"):
+        assert classify_command(cmd, profile="host").blocked, cmd
+    for cmd in ("set -euo pipefail; echo hi", "bash -eo pipefail script.sh",
+                "bash -euo pipefail -c 'echo hi'", "echo {a,b}.txt", "ls ~"):
+        assert not classify_command(cmd, profile="host").blocked, cmd
+    assert cp._shell_c_script(["-ceo", "pipefail", "x"]) == "x"
+    assert cp._shell_c_script(["-c", "-e", "$x"]) == "$x"
+    assert cp._shell_c_script(["{-c,x}"]) == cp._UNKNOWN_SCRIPT
+
+
+def test_a_long_command_with_quoted_script_names_is_read_as_before():
+    """Two quoted script names in a 30 000-character benign command pass: the names are
+    looked up under a cap of their own, never from the reading budget.
+    MUTATION: charge the reading budget for each name - red."""
+    pipe = "printf \"%s" + B + "n\" \"$ans\" | bash \"$script@\"; "
+    cmd = "echo hello world; " * 1700 + pipe.replace("@", "1") + pipe.replace("@", "2")
+    assert len(cmd) > 30000
+    assert not classify_command(cmd, profile="host").blocked
 
 
 def test_ansi_c_in_a_quoted_default_word_is_decoded():
@@ -1847,7 +1890,9 @@ def test_a_quoted_word_counts_as_present_only_when_it_is_one_word():
     `--`: the input is read as the script too. A literal `$` (`'$@'`) is a file name.
     MUTATION: take every quoted word for present - red; take every one for absent - red;
     MUTATION: search the name only outside other words - red (`printf -vS`);
-    MUTATION: no characters spent from the budget - red (the empty budget)."""
+    MUTATION: no cap on the names looked up - red (the second name);
+    MUTATION: look in the text as written only - red (`S''S`, `S\\` NL `S`);
+    MUTATION: no brace expansion as a setter - red (`{S,Z}S`)."""
     for text, raw, absent in (("", '"$S"', False), ("", '"${S}"', False), ("", "''\"$S\"", False),
                               ("", "$''\"$S\"", False), ("", "\"\"''\"$S\"", False),
                               ("", '"$*"', True), ("", "'$@'", False),
@@ -1862,16 +1907,22 @@ def test_a_quoted_word_counts_as_present_only_when_it_is_one_word():
         tok = raw.replace('"', "").replace("'", "")
         reads = cp._script_input("bash", [tok, "<<<", "rm -rf /"], [],
                                  [raw, "<<<", "'rm -rf /'"],
-                                 cp._ScriptName(text + "\n" + raw, False, [10 ** 6]))
+                                 cp._ScriptName(text + "\n" + raw, False))
         assert bool(reads[1]) is absent, (text, raw, reads)
     # a text another command runs takes its names from outside: every expansion counts
     reads = cp._script_input("bash", ["$S", "<<<", "rm -rf /"], [],
-                             ['"$S"', "<<<", "'rm -rf /'"], cp._ScriptName('"$S"', True, [10 ** 6]))
+                             ['"$S"', "<<<", "'rm -rf /'"], cp._ScriptName('"$S"', True))
     assert reads[1]
-    # with no characters left to search the text, a plain name counts too (fail closed)
-    reads = cp._script_input("bash", ["$S", "<<<", "rm -rf /"], [],
-                             ['"$S"', "<<<", "'rm -rf /'"], cp._ScriptName('"$S"', False, [0]))
-    assert reads[1]
+    # past the names it looks up, a plain name counts too (fail closed): with room for one,
+    # the first is looked up, the second reads the input, the first again is known
+    capped = cp._ScriptName('"$S" "$T"', False, limit=1)
+    assert capped.reads_input('"$S"') is False
+    assert capped.reads_input('"$T"') is True
+    assert capped.reads_input('"$S"') is False
+    # a name assigned in pieces, or by a brace expansion, is assigned all the same
+    for text in ("declare S''S=-s", "declare S\\\nS=-s", "declare {S,Z}S=-s", "read S''S",
+                 "printf -v S''S -- -s"):
+        assert cp._ScriptName(text + '\n"$SS"', False).reads_input('"$SS"'), text
 
 
 def test_unchanged_text_costs_no_second_reading(monkeypatch):
@@ -1917,7 +1968,7 @@ def test_a_text_nested_past_the_grammar_depth_is_refused_as_too_deep():
 
 # Every row that ran the marker and stays refused, and the named boundaries the rest belong to
 # (docs/security/SANDBOXING.md, "what it does not read").
-_NEVER_AGAIN_SIZE = 1737
+_NEVER_AGAIN_SIZE = 2573
 _NAMED_BOUNDARIES = {
     "a substitution's output inside [[ ]] that a redirection of the compound command sends "
     "into the pipe",

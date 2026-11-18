@@ -160,7 +160,10 @@ refuses, with its categories: a union like the frozen one, so it only adds refus
   outside them a `<(...)` in its word is a process substitution (`${x:=<(cmd)}` runs it).
   Arithmetic reads its text as if in double quotes, so a `'` there quotes nothing and is
   left out: in `$((...))`, `((...))`, `for ((...))`, `$[...]` and a substring's offset and
-  length (`${x:'$(cmd)'}` runs cmd); bash still finds where the arithmetic ends with such a
+  length (`${x:'$(cmd)'}` runs cmd; a start that does not settle within _SUBSTRING_SCAN
+  counts as a substring), and a `$'...'` there, which bash decodes and expands again, is
+  refused as "ansi_arithmetic" when the decoded text holds a `$` or a backtick
+  (`(( $'\\x24\\x28cmd\\x29' ))`), and written as its plain text otherwise; bash still finds where the arithmetic ends with such a
   span skipped whole, so a `))` inside one ends nothing. An operator, a redirection or a `(`
   inside an array
   assignment's parentheses (`x=(a;` NL `cmd`) is a syntax error after which bash drops the
@@ -245,7 +248,9 @@ so no existing reason changes.
 - Output (B2): what a text writes is what every pipeline in it ends with, in order, and
   those writes joined (`(printf 'r'; printf 'm ...') | bash`): a sequential list, a group or a
   subshell hands on every command's output, also when redirections after its closer leave
-  the standard output where it is (`( echo ... ) 2>&1 | bash`; `>/tmp/f` hands on nothing).
+  the standard output where it is (`( echo ... ) 2>&1 | bash`; `>/dev/null` hands on
+  nothing, every other target may be the pipe; in a text another command runs or one that
+  opens a descriptor of 3 or more, the output always goes on).
   printf's precision (none for `%c`, which bash hands to the C printf), `%c` and a `*`
   width or precision are followed (a negative `*` precision is none), `\\c` in a `%b`
   argument ends all of its output, the size bound is kept per directive, before any
@@ -630,6 +635,9 @@ _OPAQUE_REASONS = {
     "open_brackets": "opens so many `[` or `(` groups without closing them (`a[` where a "
                      "command starts) that this check cannot find where they end; close each "
                      "one, or quote the bracket (`'a['`)",
+    "ansi_arithmetic": "has `$'...'` where bash evaluates arithmetic, which decodes it and "
+                       "expands the result again, so the text being approved is not what runs; "
+                       "write the arithmetic out (`(( i + 1 ))`)",
     "subscript": "has an assignment whose subscript holds a substitution and a blank or an "
                  "operator outside it, which this check cannot read; put the whole index into "
                  "a variable first (`i=\"$(cmd) ;x\"; a[$i]=1`)",
@@ -2625,11 +2633,16 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[list],
               and _only_redirections(toks)):
             # The redirections after a subshell's or a group's closer stand in a segment of
             # their own: what it writes goes on unless they move the standard output away
-            # (`( echo ... ) 2>&1 | bash`, `{ ...; } >&1 | sh`; `( ... ) >/tmp/f | bash` hands on
-            # nothing). In a text run by another command, or with a `|&` in the text, the
-            # standard error may reach the pipe as well.
-            out_input = ("", []) if _moves_stdout(
-                toks, stderr_reaches=_depth > 0 or "|&" in text) else closer_output
+            # (`( echo ... ) 2>&1 | bash`, `{ ...; } >&1 | sh`; `( ... ) >/dev/null | bash` hands on
+            # nothing). In a text run by another command, or one that opens a descriptor of 3
+            # or more (`3>&1`, `{fd}>&1`), a descriptor the closer does not name may be the
+            # pipe, so the output goes on; with a `|&` in the text the standard error may
+            # reach the pipe as well.
+            if _depth > 0 or _HIGH_DESCRIPTOR_RE.search(text):
+                out_input = closer_output
+            else:
+                out_input = ("", []) if _moves_stdout(
+                    toks, stderr_reaches="|&" in text) else closer_output
         closer_output = (out_input[0], list(out_input[1])) if not toks and (
             subshell_output is not None) else None
         pipeline_opaque, pipeline_texts = out_input
@@ -3019,12 +3032,15 @@ _GRAMMAR_BREAKS = frozenset(" \t\n;&|()<>")
 # A word that `NAME ()` makes a function's name.
 _GRAMMAR_FUNCTION_RE = re.compile(r"^[^\s;&|()<>'\"\\$`=]+$")
 _GRAMMAR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# How far the check for a substring reads the start of a `${...}` (its name and subscript): a
+# start that does not settle the question within it is read as a substring (fail closed).
+_SUBSTRING_SCAN = 1024
 # `${NAME:` and no `-`, `=`, `?` or `+` after the colon: a substring, whose offset and length
 # bash evaluates as arithmetic.
-# How far the check for a substring reads the start of a `${...}` (its name and subscript).
-_SUBSTRING_SCAN = 256
 _SUBSTRING_RE = re.compile(
     r"!?(?:[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?|[0-9]+|[@*#?$!-]):(?![-=?+])")
+# The start of a `${...}` that is still a name or a subscript where the window ends.
+_SUBSTRING_NAME_RE = re.compile(r"!?[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*)?")
 # The left side of an array assignment that a `(` right after it opens (`arr=(`, `a[1]+=(`).
 _GRAMMAR_ARRAY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=$")
 # A heredoc delimiter the current reading takes exactly as bash does; any other is renamed.
@@ -3101,6 +3117,12 @@ class _GrammarBrokenArray(_GrammarOpaque):
     """An array assignment holding an operator, a redirection or a `(`, since bash resumes at
     a line the reading cannot place."""
     shape = "broken_array"
+
+
+class _GrammarAnsiArithmetic(_GrammarOpaque):
+    """`$'...'` where bash evaluates arithmetic, decoded to text that expands
+    (`(( $'\\x24\\x28cmd\\x29' ))`)."""
+    shape = "ansi_arithmetic"
 
 
 class _GrammarSubscript(_GrammarOpaque):
@@ -3188,6 +3210,15 @@ def _grammar_names(text: str, bash_spans: bool = False) -> list:
 _FUNSUB_RE = re.compile(r"\$\{[ \t\n|]")
 
 
+def _continued_quote(text: str, k: int) -> int:
+    """For the `$` at `k`: where the `'` of a `$'` stands when only line continuations (none
+    or more) come between them, else 0."""
+    j = k + 1
+    while text.startswith("\\\n", j):
+        j += 2
+    return j if text.startswith("'", j) else 0
+
+
 def _join_continuations(text: str) -> str:
     """`text` with its line continuations taken out, as bash's lexer does, except inside single
     quotes and `$'...'`, where a backslash and a newline are text."""
@@ -3206,10 +3237,17 @@ def _join_continuations(text: str) -> str:
         elif text.startswith("$$", k):
             out.append("$$")                # the process id: a `'` after it is a plain quote
             k += 2
-        elif c == "'" or text.startswith("$'", k):
-            j = k + (2 if c == "$" else 1)
+        elif c == "$" and _continued_quote(text, k):
+            # `$\` NL `'...'`: bash joins the continuation first, so this is `$'...'`
+            j = _continued_quote(text, k) + 1
             while j < n and text[j] != "'":
-                j += 2 if c == "$" and text[j] == "\\" else 1
+                j += 2 if text[j] == "\\" else 1
+            out.append("$'" + text[_continued_quote(text, k) + 1:j + 1])
+            k = j + 1
+        elif c == "'":
+            j = k + 1
+            while j < n and text[j] != "'":
+                j += 1
             out.append(text[k:j + 1])
             k = j + 1
         elif c == '"':
@@ -3261,11 +3299,14 @@ def _assignment_subscript(sub: str) -> Optional[str]:
             # `${...}`); `$'...'` is decoded elsewhere, and quotes nested in a `${...}`
             # (`"${x#'"'}"`) are read apart by the word reading. A plain expansion (`$i`,
             # `${#a[@]}`) is kept as written, like a quoted span.
-            # A single-quoted span is text (`a[ '${ :; }' ]=v` names that key).
+            # A single-quoted span counts too: for an indexed array bash expands the subscript
+            # as if in double quotes (`b['$(cmd)']=1` runs cmd); only an associative array keeps
+            # it as text, and the text does not say which kind the array is (fail closed: so
+            # `declare -A a; a[ '${ :; }' ]=v` is refused).
             inner = span[1:-1] if c == '"' else span
-            if c != "'" and (c == "`" or span.startswith(("$(", "$'")) or "$(" in span
-                             or "`" in span or ("${" in inner and any(q in inner for q in "'\"\\"))
-                             or _FUNSUB_RE.search(span)):
+            if (c == "`" or span.startswith(("$(", "$'")) or "$(" in span or "`" in span
+                    or ("${" in inner and any(q in inner for q in "'\"\\"))
+                    or _FUNSUB_RE.search(span)):
                 expands = True
             else:
                 special = True
@@ -4072,6 +4113,22 @@ class _GrammarText:
         self.names[5] = True
         return self.names[6]
 
+    def _starts_substring(self, start: int) -> bool:
+        """Whether the `${` text at `start` is a substring (`${NAME:off:len}`), read with its
+        line continuations joined (`${x:\\` NL `-'}'}` is the default `'}'`). Read within
+        _SUBSTRING_SCAN characters; a start that does not settle the question there (a name or
+        a subscript running past it) counts as a substring, so its offset is read as
+        arithmetic, where a `'` quotes nothing (fail closed). One slice per `${`: linear."""
+        window = self.s[start:start + _SUBSTRING_SCAN]
+        if "\\\n" in window:
+            window = window.replace("\\\n", "")
+        if _SUBSTRING_RE.match(window):
+            return True
+        if start + _SUBSTRING_SCAN >= self.n:
+            return False                    # the whole rest was read: settled
+        name = _SUBSTRING_NAME_RE.match(window)
+        return bool(name) and name.end() == len(window)
+
     def _find(self, ch: str, at: int) -> int:
         """`self.s.find(ch, at)`, answered from the last search for `ch` where that still holds:
         many quoted spans inside one `${...}` each look for the same `}`, which would read the
@@ -4126,7 +4183,9 @@ class _GrammarText:
             # the reading above takes it for no command.
             end = self._group_end(self.i, "[", "]")
             element = _join_continuations(s[self.i:end])
-            if _FUNSUB_RE.search(element):
+            if _FUNSUB_RE.search(element) or "$'" in element.replace("$$", ""):
+                # a funsub, or `$'...'`, which an indexed array's subscript decodes and
+                # expands again (`x=( [$'\\x24(cmd)']=1 )` runs cmd)
                 raise _GrammarSubscript()
             parts.append(element)
             self.i = end
@@ -4344,6 +4403,8 @@ class _GrammarText:
         if nxt in ("{", "["):
             return self._enclosed(in_dq, nxt, ends[1])
         if not in_dq and nxt == "'":
+            if self.arith:
+                return self._ansi_c_expanded(ends[1])
             return self._ansi_c(ends[1])
         if not in_dq and nxt == '"':
             self.i = ends[1] - 1
@@ -4360,9 +4421,7 @@ class _GrammarText:
         parts = ["$" + opener]
         # Text bash evaluates as arithmetic, where a `'` quotes nothing: `$[...]`, a substring's
         # offset and length (`${x:'$(cmd)'}`), and anything inside arithmetic.
-        # Read with its line continuations joined (`${x:\\` NL `-'}'}` is the default `'}'`).
-        arith = bool(self.arith) or opener == "[" or bool(
-            _SUBSTRING_RE.match(self._logical(start, _SUBSTRING_SCAN)[0]))
+        arith = bool(self.arith) or opener == "[" or self._starts_substring(start)
         # Inside `((...))` or `$((...))` bash ends the arithmetic text by its parentheses before
         # it reads what is inside: an unclosed `$[` or `${` there ends at that text's `)`
         # (`for((;;$[))do cmd;done` runs cmd).
@@ -4431,6 +4490,9 @@ class _GrammarText:
                 parts.append(inner[1:-1] if inner.endswith('"') and len(inner) > 1 else inner[1:])
             elif ch == '"':
                 parts.append(self._dq())
+            elif ch == "$" and arith and not in_dq and self._logical(self.i, 2)[0] == "$'":
+                # `${a:$'...'}`, `$[ $'...' ]`: bash decodes it and expands the result again
+                parts.append(self._ansi_c_expanded(self._logical(self.i, 2)[1][1]))
             elif ch == "$":
                 parts.append(self._dollar(in_dq))
             elif ch in "<>" and s.startswith("(", self.i + 1) and not in_dq and opener == "{":
@@ -4483,6 +4545,18 @@ class _GrammarText:
         text += "".join(")" if c == "(" else c for c in reversed(still_open))
         return "$(" + (" " if text.startswith("(") else "") + text + (
             "\n)" if "\n" in text else ")")
+
+    def _ansi_c_expanded(self, start: int) -> str:
+        """`$'...'` where bash evaluates arithmetic (`(( $'...' ))`, `$[...]`, a substring's
+        offset and length): bash decodes it and expands the decoded text again, so a
+        `$(...)` spelled in escapes runs. Decoded text that holds a `$` or a backtick is
+        refused (_GrammarAnsiArithmetic: a funsub, a backtick text with a line continuation,
+        each spelled in escapes, would need bash's whole reading again); any other is written
+        as it stands, a number or an operator."""
+        decoded = self._ansi_c(start)[1:-1].replace("'\\''", "'")
+        if "$" in decoded or "`" in decoded:
+            raise _GrammarAnsiArithmetic()
+        return decoded
 
     def _ansi_c(self, start: int) -> str:
         """`$'...'` decoded with bash's escapes (its text from `start`), as one single-quoted
@@ -4585,9 +4659,13 @@ _NAMED_FD_TOKEN_RE = re.compile(r"^\{[A-Za-z_][A-Za-z0-9_]*\}(?:<<<|<<-?|<>|<&|>
 _COUNT_WORD_RE = re.compile(
     r"\$(?:#|\{#[A-Za-z_][A-Za-z0-9_]*(?:\[[@*]\])?\})[-+*/%<>=!&|^~,0-9]*$")
 # A double-quoted word that expands to one word per item, and to none when there is no item:
-# `"$@"`, `"${@...}"`, `"${NAME[@]...}"`, `"${!NAME[@]}"`, `"${!PREFIX@}"`.
+# `"$@"`, `"${@...}"`, `"${NAME[@]...}"`, `"${!NAME[@]}"`, `"${!PREFIX@}"` (any text as the
+# prefix: bash does not check that it is a name, `"${!a.@}"`). Also `"$_"` and `"${_...}"`:
+# the last word of the command before, which the text sets (`set --; ... | bash "$_"`), so it
+# can be `--` or an option after which the shell reads its input.
 _VANISHING_QUOTED_RE = re.compile(
-    r'"\$(?:@|\{(?:@|!?[A-Za-z_][A-Za-z0-9_]*\[@\]|![A-Za-z_][A-Za-z0-9_]*\s*@))')
+    r'"\$(?:@|_(?![A-Za-z0-9_])|\{(?:@|_(?![A-Za-z0-9_])|!?[A-Za-z_][A-Za-z0-9_]*\[@\]'
+    r'|![^}]*@\}))')
 
 
 def _script_input(exe: str, args: List[str], carried: List[tuple],
@@ -5503,12 +5581,15 @@ _FD_REDIRECT_RE = re.compile(r"^([0-9]*|&)(>&|<&|>\||>>|<>|>|<)(.*)$")
 # Paths that name a descriptor of the process itself, by the descriptor (a `/dev/fd/N` or
 # `/proc/self/fd/N` path is read by _fd_path).
 _STD_PATHS = {"/dev/stdin": "0", "/dev/stdout": "1", "/dev/stderr": "2"}
+# A redirection that opens a descriptor of 3 or more, by number or by name (`3>&1`, `4<f`,
+# `{fd}>&1`).
+_HIGH_DESCRIPTOR_RE = re.compile(
+    r"(?:^|[^0-9])(?:[3-9]|[1-9][0-9]+)(?:>|<)|\{[A-Za-z_][A-Za-z0-9_]*\}[<>]")
 # A descriptor copy's operand: its number (`01` is descriptor 1); a `-` after it moves it.
 _FD_NUMBER_RE = re.compile(r"([0-9]+)-?")
 
 
-def _moves_stdout(toks: List[str], raws: Optional[List[str]] = None,
-                  stderr_reaches: bool = False) -> bool:
+def _moves_stdout(toks: List[str], stderr_reaches: bool = False) -> bool:
     """Whether these redirections send the standard output elsewhere (`( echo x ) >f | bash`
     hands the pipe nothing; `2>&1`, `>&1` keep it). Followed in order as bash applies them,
     with what each descriptor points at: a copy takes its source's place (`3>&1 >&3` keeps the
@@ -5522,14 +5603,17 @@ def _moves_stdout(toks: List[str], raws: Optional[List[str]] = None,
             return "pipe"
         if not target.startswith("/"):
             return "pipe"                   # relative: after a `cd /dev`, `>stdout` is the pipe
-        fd = _STD_PATHS.get(_normal_path(target)) or _fd_path(target)
+        path = _normal_path(target)
+        fd = _STD_PATHS.get(path) or _fd_path(target)
         if fd:
             return fds.get(fd.lstrip("0") or "0", "other")
-        return "file"
+        # Only `/dev/null` is surely no pipe: any other path may lead to one
+        # (`/proc/self/root/dev/stdout`, a link made earlier in the command).
+        return "file" if path == "/dev/null" else "pipe"
 
     k = 0
     while k < len(toks):
-        width = _redirection_width(toks, k, raws)
+        width = _redirection_width(toks, k)
         if not width:
             k += 1                              # a word of the command: no redirection
             continue

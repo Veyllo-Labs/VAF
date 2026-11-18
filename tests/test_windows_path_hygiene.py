@@ -1587,18 +1587,63 @@ _SHELL_CALLS = {("os", "system"): "command", ("os", "popen"): "cmd",
                 ("subprocess", "getoutput"): "cmd", ("subprocess", "getstatusoutput"): "cmd",
                 ("asyncio", "create_subprocess_shell"): "cmd"}
 # Calls that start a program from an argv: the spawners, and helpers that build or pass one.
-_ARGV_CALLS = _SPAWNERS | {"create_subprocess_exec", "spawn", "execv", "execvp"}
+_ARGV_CALLS = _SPAWNERS | {"spawn", "execv", "execvp"}
+# Calls whose positional arguments are the argv itself (`create_subprocess_exec("sh", "-c",
+# ...)`, `os.execlp(...)`).
+_VARIADIC_CALLS = {"create_subprocess_exec", "execl", "execlp", "execle", "execlpe", "spawnl",
+                   "spawnlp"}
+# Programs that run the rest of their argv as a command, so a shell may follow them.
+_WRAPPERS = {"env", "sudo", "nice", "timeout", "setsid", "taskset", "stdbuf", "nohup", "bwrap",
+             "unshare", "nsenter", "firejail", "docker", "podman", "flatpak-spawn", "chroot",
+             "ionice", "xvfb-run"}
+_SCOPES = (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
 
 
-def _assignments(tree) -> dict:
-    """Name -> its value, for every name assigned exactly once in the module (a script or a
-    shell held in a variable is followed to where it is used)."""
-    seen: dict = {}
+def _imports(tree) -> dict:
+    """Local name -> (module, attribute) for what the module imports: `import os as _os` maps
+    `_os` to ("os", None), `from os import system` maps `system` to ("os", "system")."""
+    names: dict = {}
     for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                names[alias.asname or alias.name.split(".")[0]] = (alias.name, None)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            for alias in node.names:
+                names[alias.asname or alias.name] = (node.module, alias.name)
+    return names
+
+
+def _scope_nodes(scope):
+    """The nodes of one scope, without those of a function or lambda nested in it."""
+    stack = list(ast.iter_child_nodes(scope))
+    while stack:
+        node = stack.pop()
+        yield node
+        if not isinstance(node, _SCOPES):
+            stack.extend(ast.iter_child_nodes(node))
+
+
+def _bindings(scope, outer: dict) -> dict:
+    """Name -> its value in this scope: a name assigned exactly once here; a parameter of
+    this scope is no binding (its value comes from the caller); a name not bound here keeps
+    the outer scope's binding."""
+    seen: dict = {}
+    for node in _scope_nodes(scope):
         if isinstance(node, ast.Assign) and len(node.targets) == 1 \
                 and isinstance(node.targets[0], ast.Name):
             seen.setdefault(node.targets[0].id, []).append(node.value)
-    return {name: values[0] for name, values in seen.items() if len(values) == 1}
+    names = dict(outer)
+    if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        args = scope.args
+        for arg in args.posonlyargs + args.args + args.kwonlyargs + [args.vararg, args.kwarg]:
+            if arg is not None:
+                names.pop(arg.arg, None)
+    for name, values in seen.items():
+        if len(values) == 1:
+            names[name] = values[0]
+        else:
+            names.pop(name, None)
+    return names
 
 
 def _resolved(node, names: dict, depth: int = 0):
@@ -1617,9 +1662,17 @@ def _names_a_shell(node, names: dict) -> bool:
 
 
 def _argv_script(elts, names: dict):
-    """The script of an argv literal: the word after `-c` (or a combined flag such as `-ec`)
-    once a shell is named; None at the option terminator (`--`, `-`), where the next word is
-    a script file."""
+    """The script of an argv: the word after `-c` (or a combined flag such as `-ec`) when the
+    program is a shell, or a wrapper that runs one (`env -i bash -c ...`); None at the option
+    terminator (`--`, `-`), where the next word is a script file, and when the program is no
+    shell (`["echo", "bash", "-c", ...]` only prints)."""
+    if not elts:
+        return None
+    first = _resolved(elts[0], names)
+    if not _names_a_shell(first, names):
+        if not (isinstance(first, ast.Constant) and isinstance(first.value, str)
+                and first.value.rsplit("/", 1)[-1] in _WRAPPERS):
+            return None
     shell_at = next((k for k, e in enumerate(elts) if _names_a_shell(e, names)), None)
     if shell_at is None:
         return None
@@ -1647,78 +1700,108 @@ def _argv_elements(arg, names: dict, depth: int = 0) -> list:
     return [ast.Name(id="?")]
 
 
+def _call_target(node, imports: dict):
+    """(module, function) a call names: `os.system`, `_os.system` after `import os as _os`,
+    `system` after `from os import system`; (None, name) for anything else."""
+    func = node.func
+    if isinstance(func, ast.Attribute):
+        if isinstance(func.value, ast.Name):
+            module = imports.get(func.value.id, (func.value.id, None))
+            return (module[0] if module[1] is None else None), func.attr
+        return None, func.attr
+    if isinstance(func, ast.Name):
+        bound = imports.get(func.id)
+        if bound and bound[1] is not None:
+            return bound[0], bound[1]
+        return None, func.id
+    return None, ""
+
+
 def _shell_scripts(tree) -> list:
-    """The expressions a test hands to a shell as script text:
-    - the word after `-c` in an argv literal that names a shell before it (by a literal or a
-      variable assigned one) and is handed to a spawner or an argv helper (`guard_argv(...,
-      ["/bin/sh", "-c", f"..."])`); a list that is only printed or compared is no argv;
+    """(script expression, the bindings of its scope) for each text a test hands to a shell:
+    - the word after `-c` in an argv whose program is a shell (or a wrapper that runs one), by
+      a literal or a variable assigned one in the same scope, handed to a spawner, an argv
+      helper (`guard_argv(..., ["/bin/sh", "-c", f"..."])`) or, as separate arguments, to
+      `create_subprocess_exec`; a list that is only printed or compared is no argv;
     - the command of `os.system`, `os.popen`, `subprocess.getoutput`/`getstatusoutput` and
-      `asyncio.create_subprocess_shell`, and of a spawner called with `shell=True` (of a
-      sequence there, only its first item, which is what the shell runs).
+      `asyncio.create_subprocess_shell`, also imported under another name, and of a spawner
+      called with `shell=True` (of a sequence there, only its first item, which is what the
+      shell runs).
     Command strings a test only classifies or prints are no shell's text."""
-    names = _assignments(tree)
+    imports = _imports(tree)
     scripts = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        name = _call_name(node)
-        func = node.func
-        module = func.value.id if isinstance(func, ast.Attribute) and isinstance(
-            func.value, ast.Name) else None
-        if (module, name) in _SHELL_CALLS:
-            first = node.args[0] if node.args else _keyword(node, _SHELL_CALLS[(module, name)])
-            if first is not None:
-                scripts.append(first)
-            continue
-        shell = _keyword(node, "shell")
-        if name in _SPAWNERS and isinstance(shell, ast.Constant) and shell.value is True:
-            first = node.args[0] if node.args else _keyword(node, "args")
-            first = _resolved(first, names) if first is not None else None
-            if isinstance(first, (ast.List, ast.Tuple)):
-                first = first.elts[0] if first.elts else None
-            if first is not None:
-                scripts.append(first)
-            continue
-        if name in _ARGV_CALLS or name.endswith("argv"):
-            for arg in list(node.args) + [k.value for k in node.keywords]:
-                script = _argv_script(_argv_elements(arg, names), names)
+    pending = [(tree, {})]
+    while pending:
+        scope, outer = pending.pop()
+        names = _bindings(scope, outer)
+        for node in _scope_nodes(scope):
+            if isinstance(node, _SCOPES):
+                pending.append((node, names))
+            if not isinstance(node, ast.Call):
+                continue
+            module, name = _call_target(node, imports)
+            if (module, name) in _SHELL_CALLS:
+                first = node.args[0] if node.args else _keyword(node, _SHELL_CALLS[(module, name)])
+                if first is not None:
+                    scripts.append((first, names))
+                continue
+            shell = _keyword(node, "shell")
+            if name in _SPAWNERS and isinstance(shell, ast.Constant) and shell.value is True:
+                first = node.args[0] if node.args else _keyword(node, "args")
+                if first is not None:
+                    items = _argv_elements(first, names)
+                    if not (len(items) == 1 and isinstance(items[0], ast.Name)
+                            and items[0].id == "?"):
+                        first = items[0]
+                    scripts.append((first, names))
+                continue
+            if name in _VARIADIC_CALLS:
+                script = _argv_script(list(node.args), names)
                 if script is not None:
-                    scripts.append(script)
+                    scripts.append((script, names))
+                continue
+            if name in _ARGV_CALLS or name.endswith("argv"):
+                for arg in list(node.args) + [k.value for k in node.keywords]:
+                    script = _argv_script(_argv_elements(arg, names), names)
+                    if script is not None:
+                        scripts.append((script, names))
     return scripts
 
 
-def _script_parts(node, names: dict, depth: int = 0):
-    """The string pieces that make up the script text: literals and f-string parts, through
-    `+` and a variable assigned once; an interpolated value contributes no literal of its own
-    (`f"echo {len('x >&12')}"` runs `echo 7`)."""
+def _script_pieces(node, names: dict, depth: int = 0) -> list:
+    """The script text in order, as ("text", str, line) and ("value", None, line) pieces:
+    literals and f-string parts, through `+` and a variable bound in the scope; an
+    interpolated value is a value piece with no literal of its own (`f"echo {len('x >&12')}"`
+    runs `echo 7`), and anything else is a value too."""
     node = _resolved(node, names)
-    if isinstance(node, (ast.Constant, ast.JoinedStr)):
-        yield node
-    elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add) and depth < 8:
-        yield from _script_parts(node.left, names, depth + 1)
-        yield from _script_parts(node.right, names, depth + 1)
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return [("text", node.value, node.lineno)]
+    if isinstance(node, ast.JoinedStr):
+        return [("text", v.value, node.lineno) if isinstance(v, ast.Constant)
+                else ("value", None, node.lineno) for v in node.values]
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add) and depth < 8:
+        return (_script_pieces(node.left, names, depth + 1)
+                + _script_pieces(node.right, names, depth + 1))
+    return [("value", None, getattr(node, "lineno", 0))]
 
 
 def _fd_redirections(tree) -> list:
     """Lines of a `<&{x}`/`>&{x}` f-string, or a literal `<&12`, in text a shell runs
-    (_shell_scripts): dash reads one digit there."""
-    names = _assignments(tree)
+    (_shell_scripts): dash reads one digit there. Adjacent literal pieces are read together
+    (`"echo x >&" + "12"`)."""
     hits = set()
-    for script in _shell_scripts(tree):
-        for part in _script_parts(script, names):
-            if isinstance(part, ast.JoinedStr):
-                pieces = part.values
-                for before, after in zip(pieces, pieces[1:]):
-                    if (isinstance(before, ast.Constant) and isinstance(before.value, str)
-                            and re.search(r"[<>]&\s*$", before.value)
-                            and isinstance(after, ast.FormattedValue)):
-                        hits.add(part.lineno)
-                for piece in pieces:
-                    if isinstance(piece, ast.Constant) and isinstance(piece.value, str) \
-                            and _FD_REDIRECT_LITERAL.search(piece.value):
-                        hits.add(part.lineno)
-            elif isinstance(part.value, str) and _FD_REDIRECT_LITERAL.search(part.value):
-                hits.add(part.lineno)
+    for script, names in _shell_scripts(tree):
+        pieces = _script_pieces(script, names)
+        text, line = "", 0
+        for kind, value, lineno in pieces + [("value", None, 0)]:
+            if kind == "text":
+                text, line = text + value, line or lineno
+                continue
+            if _FD_REDIRECT_LITERAL.search(text):
+                hits.add(line)
+            if lineno and re.search(r"[<>]&\s*$", text):
+                hits.add(line or lineno)        # a descriptor given by a value right after it
+            text, line = "", 0
     return sorted(hits)
 
 
@@ -1768,6 +1851,48 @@ def test_the_fd_redirection_scanner_reads_only_text_a_shell_runs():
         'asyncio.create_subprocess_shell("echo x >&12")')) == [1]
     assert _fd_redirections(ast.parse(
         'subprocess.run(["echo x >&12", "arg0"], shell=True)')) == [1]
+
+
+def test_the_fd_redirection_scanner_follows_names_and_scopes():
+    """Imports under another name, separate argv arguments, a `shell=True` sequence put
+    together with `+`, literal pieces joined with `+`, only the program's own `-c`, and a
+    name bound in its own scope.
+    MUTATION: read calls by their bare name again - red (`import os as _os`);
+    MUTATION: read each argument of `create_subprocess_exec` alone - red;
+    MUTATION: check each literal piece alone - red (`"echo x >&" + "12"`);
+    MUTATION: take any shell word in an argv for the program - red (`["echo", "bash", ...]`);
+    MUTATION: one binding table for the whole module - red (the parameter case)."""
+    assert _fd_redirections(ast.parse(
+        'import os as _os\n'
+        '_os.system("echo x >&12")')) == [2]
+    assert _fd_redirections(ast.parse(
+        'from os import system\n'
+        'system("echo x >&12")')) == [2]
+    assert _fd_redirections(ast.parse(
+        'asyncio.create_subprocess_exec("sh", "-c", "cat <&10")')) == [1]
+    assert _fd_redirections(ast.parse(
+        'subprocess.run(["echo x >&12"] + ["arg0"], shell=True)')) == [1]
+    assert _fd_redirections(ast.parse('os.system("echo x >&" + "12")')) == [1]
+    assert _fd_redirections(ast.parse(
+        'subprocess.run(["env", "-i", "bash", "-c", "cat <&10"])')) == [1]
+    assert _fd_redirections(ast.parse(
+        'os.system("echo x >&" + "2")\n'
+        'subprocess.run(["echo", "bash", "-c", "echo x >&12"])\n'
+        'def a():\n'
+        '    script = "echo x >&12"\n'
+        '    return script\n'
+        'def b(script):\n'
+        '    subprocess.run(["sh", "-c", script])\n'
+        'b("true")')) == []
+    assert _fd_redirections(ast.parse(
+        'script = "echo x >&12"\n'
+        'def b(script):\n'
+        '    subprocess.run(["sh", "-c", script])')) == []
+    assert _fd_redirections(ast.parse(
+        'def a():\n'
+        '    script = "echo x >&12"\n'
+        'def c():\n'
+        '    subprocess.run(["sh", "-c", script])')) == []
 
 
 def test_no_shell_redirection_names_a_two_digit_fd():

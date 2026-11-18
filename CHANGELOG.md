@@ -715,10 +715,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   - `printf` piped into a shell with a directive other than `%s`, `%b`, `%c` or `%q`
     (`printf '%d ...' 3 | bash`, `%(...)T`): print the script with `%s`, or write it out.
   - An assignment whose subscript holds a command substitution, `$'...'` or quotes nested
-    in a `${...}`, together with a blank or `;` outside them (`a[$(cmd) ;x]=1`): put the
-    whole index into a variable first (`i="$(cmd) ;x"; a[$i]=1`).
+    in a `${...}`, also inside single quotes, which an indexed array still expands, together
+    with a blank or `;` outside them (`a[$(cmd) ;x]=1`, `a[ '${ x; }' ]=1`): put the whole
+    index into a variable first (`i="$(cmd) ;x"; a[$i]=1`).
   - Thousands of `[` opened without their `]` where a command starts (`a[` repeated): close
     each one, or quote it.
+  - `$'...'` in arithmetic that decodes to a substitution (`(( $'\x24(cmd)' ))`): bash runs
+    the decoded text, so write the arithmetic out.
   - A shell fed a script on its input whose output it sends elsewhere, piped into another
     shell (`bash <<< '...' >/dev/null | bash`): the script could write to any descriptor, so
     it is read as printing into the pipe; leave out the `| bash`.

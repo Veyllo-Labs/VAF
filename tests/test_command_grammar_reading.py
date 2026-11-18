@@ -718,7 +718,11 @@ _NEIGHBOURS = [
     'bash -c \'echo hello\' 1">"log | cat',
     'bash -c \'echo hi\' 1>"log" | cat',
     'a[ $i ]=1; echo ${a[@]}',
-    "declare -A a; a[ '${ :; }' ]=value; echo ${!a[@]}",
+    'echo ${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:-x}',
+    'echo $(( 1 + 2 ))',
+    'a=xyz; echo ${a:1:2}',
+    'i="$(date +%s) ;x"; a[$i]=1',
+    "declare -a arr; arr[0]=x; arr['1']=y; echo ${arr[@]}",
     '( echo hi ) >/dev/null | bash',
     'declare -a b=([1+2]=x [a[0]]=y); echo ${b[@]}',
 ]
@@ -933,7 +937,7 @@ def test_harmless_neighbours_still_pass(cmd):
     ("x=(a 'b c' x=(a 'b \"d\")\nrm -rf /", "opaque_command"),
     ("eval 'rm -rf /<()'", "destructive_removal"),
     ("echo ! ;\nfind . -maxdepth 0 -exec env X=1 $exec rm -rf / \\; | cat || : <<E\nit's\nE", "opaque_command"),
-    # round 3: scripts a heredoc feeds a shell inside `( )`, `$( )` or backticks (the body's
+    # scripts a heredoc feeds a shell inside `( )`, `$( )` or backticks (the body's
     # own last line kept, its closers on a comment line), `$((` with `$'...'`, subscripts
     # where a command starts, a single-quoted span in `${...}` within double quotes, the
     # standard output by its path, a quoted `-c` script that starts like a redirection,
@@ -977,7 +981,7 @@ def test_harmless_neighbours_still_pass(cmd):
     ("printf '%ls' 'rm -rf /' | bash", 'opaque_command'),
     ("printf '%(r)Tm -rf /' | bash", 'opaque_command'),
     ("printf '%.0drm -rf /' 0 | bash", 'opaque_command'),
-    # round 3, the fuzz runs: a lone `'` in `${x:-...}` within double quotes for a POSIX
+    # a lone `'` in `${x:-...}` within double quotes for a POSIX
     # sh, `<\` NL `(`, and a `$((` read as a substitution with backticks inside
     ('{fd}>/dev/null : \nsh -c \': "${x:-\'\\\'\'}"\n\n{ echo \'\\\'\'rm -rf /\'\\\'\'; } | bash\'', 'destructive_removal'),
     (': $[ 1 + 1 ]\nsh -c \': "${x:-\'\\\'\'}"\n\ncase x in x) eval \'\\\'\'rm -rf /\'\\\'\'\n;; esac\'', 'destructive_removal'),
@@ -1081,6 +1085,48 @@ def test_harmless_neighbours_still_pass(cmd):
     # an array element's subscript with a line continuation or a funsub; a script writing to
     # the standard error that a redirection around it or a `|&` sends into the pipe; a
     # relative target
+    # a substring's name past any window, a quoted span in an indexed array's subscript,
+    # `${!PREFIX@}` with any prefix, `$'...'` where bash evaluates arithmetic, an
+    # inherited descriptor, a target other than /dev/null, `$` NL `'`
+    ("A=xyz; aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=xyz; echo ${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:'$(rm -rf /)'}", 'destructive_removal'),
+    ("echo ${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:1:'$(rm -rf /)'}", 'destructive_removal'),
+    ('bash -c "echo \\${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:\'\\$(rm -rf /)\'}"', 'destructive_removal'),
+    ("A=xyz; aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=xyz; echo ${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:'$(rm -rf /)'}", 'destructive_removal'),
+    ("echo ${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:1:'$(rm -rf /)'}", 'destructive_removal'),
+    ('bash -c "echo \\${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:\'\\$(rm -rf /)\'}"', 'destructive_removal'),
+    ("A=xyz; aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=xyz; echo ${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:'$(rm -rf /)'}", 'destructive_removal'),
+    ("echo ${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:1:'$(rm -rf /)'}", 'destructive_removal'),
+    ('bash -c "echo \\${aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:\'\\$(rm -rf /)\'}"', 'destructive_removal'),
+    ("b['''$(echo 'echo '''rm -r /'\\'''|bash|bash)]=", 'opaque_command'),
+    ("ab[\n'$\\\n{ :; }]=''\\\na[$(echo 'echo '\\''rm -rf /'\\''' | bash | bash)]=1", 'opaque_command'),
+    ("b['$(rm -rf /)']=1", 'destructive_removal'),
+    ('echo \'rm -rf /\' | bash "${!a.@}"', 'destructive_removal'),
+    ('echo \'rm -rf /\' | bash "${!a\\@}"', 'destructive_removal'),
+    ('echo \'rm -rf /\' | bash "${!pre\\\\@}"', 'destructive_removal'),
+    ('echo \'rm -rf /\' | bash "${!p\\\\re@}"', 'destructive_removal'),
+    ('echo \'rm -rf /\' | bash "${!x*@}"', 'destructive_removal'),
+    ('echo \'rm -rf /\' | bash "${!z\nx\t@}"', 'destructive_removal'),
+    ("(( $'\\x24\\x28rm -rf /\\x29' ))", 'opaque_command'),
+    (": $(( $'\\x24\\x28\\x72\\x6d -rf /\\x29' ))", 'opaque_command'),
+    ("a=xyz; : ${a:$'$(rm -rf /)'}", 'opaque_command'),
+    ("a=xyz; : ${a:1:$'$(rm -rf /)'}", 'opaque_command'),
+    ("a=xyz; : ${a:$'\\x60rm -rf /\\x60'}", 'opaque_command'),
+    (": $[ $'$(rm -rf /)' ]", 'opaque_command'),
+    ("for (( i=$'$(rm -rf /)'; 0; )); do :; done", 'opaque_command'),
+    ("x=( [$'\\x24(rm -rf /)']=1 )", 'opaque_command'),
+    ("{ ( echo 'rm -rf /' >&3 ) >/dev/null 2>&-; } 3>&1 | bash", 'destructive_removal'),
+    ('bash -c "( echo \'rm -rf /\' >&3 ) >/dev/null 2>&-" 3>&1 | bash', 'destructive_removal'),
+    ("( echo 'rm -rf /' >&$fd ) {fd}>&1 >/dev/null | bash", 'opaque_command'),
+    ("( echo 'rm -rf /' ) >/proc/self/root/dev/stdout | bash", 'destructive_removal'),
+    ("( echo 'rm -rf /' ) >/proc/self/cwd/../../dev/stdout | bash", 'destructive_removal'),
+    ("( echo 'rm -rf /' ) 1<>/proc/self/root/dev/stdout | sh", 'destructive_removal'),
+    ("b=([$\\\n'\\'x'$(echo cm0gLXJmIC8K | base64 -d | bash)'y']=1)", 'opaque_command'),
+    ("{ echo 'rm -rf /'; } >&2 |& bash", 'destructive_removal'),
+    ("a=xyz; : ${a:$'${ rm -rf /; }'}", 'opaque_command'),
+    ("_=xyz; echo ${_:$'`r\\\nm -rf /`'}", 'opaque_command'),
+    ("(( $'${ rm -rf /; }' ))", 'opaque_command'),
+    ('set -- ; echo \'rm -rf /\' | bash "$_"', 'destructive_removal'),
+    ('set -- ; bash -c \'echo rm -rf /\' | bash "${_%@}"', 'destructive_removal'),
     # output written into the input, which `/dev/stdout` then opens for writing
     ("echo '{ :; echo '\\''rm -rf /'\\''; } 1>&0 &>>/dev/./stdout |& bash' | bash", 'destructive_removal'),
     ("echo '{ :; echo '\\''rm -rf /'\\''; } 1>&0 &>>/dev/stdout | bash' | bash", 'destructive_removal'),
@@ -1327,6 +1373,7 @@ def _distinct_echoes(length):
     lambda n: "$X; " + "for /d " * (n // 7),               # cmd.exe options, value `for`
     lambda n: "echo x" + ("$'" + B + "a'") * (n // 5),        # many `$'...'` parts in a word
     lambda n: "eval " + ("$'" + B + "a'") * (n // 5),         # ... in a text eval runs
+    lambda n: ("${" + B + NL + "}") * (n // 4),             # `${` and a line continuation
 ])
 def test_long_and_distinct_shapes_are_linear(build):
     """Texts whose parts all differ, or one long run, cost the same per character as short
@@ -1494,6 +1541,26 @@ def test_all_readings_of_one_call_share_one_character_budget(monkeypatch):
     assert refused and not any(f["entered"] for f in refused), len(refused)
 
 
+def test_a_substring_start_past_the_window_counts_as_one():
+    """A `${NAME:` whose name runs past _SUBSTRING_SCAN does not settle whether it is a
+    substring, so it is read as one and its offset as arithmetic, where a `'` quotes nothing
+    (fail closed); a default after such a name still passes.
+    MUTATION: read an unsettled start as no substring - red."""
+    name = "a" * (cp._SUBSTRING_SCAN + 76)
+    assert classify_command("echo ${" + name + ":'$(rm -rf /)'}", profile="host").blocked
+    assert not classify_command("echo ${" + name + ":-x}", profile="host").blocked
+
+
+def test_a_quoted_span_in_a_subscript_may_expand():
+    """An indexed array's subscript expands a `$(...)` even in single quotes, and the text
+    does not say which kind the array is, so a key that only an associative array keeps as
+    text is refused too (a known over-refusal, fail-closed, named in SANDBOXING).
+    MUTATION: take a single-quoted span for text - red."""
+    for cmd in ("b['''$(echo 'echo '''rm -r /'" + B + "'''|bash|bash)]=",
+                "declare -A a; a[ '${ :; }' ]=value"):
+        assert classify_command(cmd, profile="host").blocked, cmd
+
+
 def test_a_redirection_needs_its_operator_unquoted():
     """`1">"log` and `1\\>log` are words for bash, `1>"log"` is a redirection.
     MUTATION: read only the raw word's first character - red."""
@@ -1518,8 +1585,12 @@ def test_a_script_fed_by_its_input_keeps_its_output_whatever_its_redirections():
 def test_the_process_id_before_a_quote_is_no_ansi_c_string():
     """`$$'...'` is the process id and a plain single-quoted span, so a line continuation after
     that span is joined; read as `$'...'` the `\\'` inside would escape the quote.
-    MUTATION: test for `$'` before `$$` - red."""
+    MUTATION: test for `$'` before `$$` - red; read `$` NL `'` as `$` and a quote - red."""
     assert cp._join_continuations("$$'" + B + "'" + B + NL + "y'") == "$$'" + B + "'y'"
+    # `$` NL `'` is `$'`: bash joins the continuation first, so the `\\'` escapes the quote
+    # and the next continuation stands inside the ANSI-C string
+    word = "$" + B + NL + "'" + B + "'" + B + NL + "t'"
+    assert cp._join_continuations(word) == "$'" + B + "'" + B + NL + "t'"
 
 
 def test_a_count_is_an_operand_only_in_arithmetic():

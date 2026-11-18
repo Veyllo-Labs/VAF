@@ -1150,10 +1150,13 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   (`( ... ) 2>&1 | bash`, `( ... >&2 ) 2>&1- | bash`, also `>/dev/stdout` in any spelling,
   `>/dev/./stdout`, `>//dev/fd/1`, and copies through another descriptor, `3>&1 >&3`,
   `2>/dev/stdout >&2`, followed in order, a descriptor's number read as a number (`3>&01`), a
-  word whose operator is quoted or escaped being no redirection (`1">"f`, `1\>f`), a relative
-  target possibly the pipe (after `cd /dev`, `>stdout` is), and the standard error kept too in
-  a text another command runs or with a `|&` in the text (`bash -c '{ ...; } >&2' 2>&1 |
-  bash`); `( ... ) >/tmp/f | bash` hands on nothing), a heredoc
+  word whose operator is quoted or escaped being no redirection (`1">"f`, `1\>f`), every
+  target but `/dev/null` possibly the pipe (after `cd /dev`, `>stdout` is; so is
+  `/proc/self/root/dev/stdout`, or a link made earlier), the standard error kept too with a
+  `|&` in the text, and in a text another command runs, or one that opens a descriptor of 3
+  or more (`3>&1`, `{fd}>&1`), the output always kept, since a descriptor the closer does not
+  name may be the pipe (`{ ( echo ... >&3 ) >/dev/null 2>&-; } 3>&1 | bash`);
+  `( ... ) >/dev/null | bash` hands on nothing), a heredoc
   or a here-string, also passed on through a filter (`cat <<'EOF' | sort | bash`) or a
   command that runs another one (`eval`, `sh -c`, `env -S`, a runner), and into a carried
   command or a subshell. Text from double quotes is read the way bash hands it over:
@@ -1178,7 +1181,9 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   shell's input is read too (`bash $! <<< '...'`); a quoted one (`bash "$S"`, `"$*"`,
   `"${a[*]}"`) does not, except one that expands to a word per item and to none without
   items, which may vanish too (`bash "$@"`, `"${@:2}"`, `"${a[@]}"`, `"${!a[@]}"`,
-  `"${!pre` NL `@}"`). A
+  `"${!pre` NL `@}"`, and `"${!` with any text up to `@}"`, which bash takes as a prefix
+  without checking it is a name: `"${!a.@}"`; and `"$_"`, `"${_...}"`, the last word of the
+  command before, which the text can set to `--` or an option: `set --; ... | bash "$_"`). A
   newline right after a `|`
   continues the pipeline, as bash reads it.
 - **Bounds.** Every reading, the command itself included, spends one of
@@ -1269,8 +1274,12 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   heredoc ends with that text); a heredoc in a subshell keeps a renamed delimiter whose body
   comes after the subshell (`( cat <<. )` NL ...); arithmetic reads its text as if in double
   quotes, so a `'` quotes nothing in `$((...))`, `((...))`, `for ((...))`, `$[...]` and a
-  substring's offset and length (`${x:'$(cmd)'}` runs cmd), though a `))` inside such a span
-  ends nothing, and an unclosed `$[` there ends
+  substring's offset and length (`${x:'$(cmd)'}` runs cmd; a `${NAME:` whose name or
+  subscript runs past 1 024 characters counts as a substring), and a `$'...'` there, which
+  bash decodes and expands again (`(( $'\x24\x28cmd\x29' ))` runs cmd), is refused when the
+  decoded text holds a `$` or a backtick (`ansi_arithmetic`: write the arithmetic out), and
+  read as the plain text it is otherwise (`(( $'1' + 2 ))` passes);
+  a `))` inside such a span ends nothing, and an unclosed `$[` there ends
   at the arithmetic's own `)`; an operator, a redirection or a `(` inside an array
   assignment's parentheses (`x=(a;` NL `cmd`) is a syntax error after which bash drops that
   line and runs the next one, so such a command is refused (quote the element:
@@ -1285,7 +1294,12 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   substitutions and the quotes nested in a `"${...}"`, and one holding a command
   substitution (also bash 5.3's `${ cmd; }`), `$'...'` or quotes nested in a `${...}` with a
   blank or an operator outside it (`a[$(x) ;y]=1 cmd`) is refused (put the whole index into a
-  variable first); inside arithmetic (`(( a[ ${ cmd; } ]=1 ))`), where a `'` quotes nothing,
+  variable first: `i="$(x) ;y"; a[$i]=1 cmd`), a single-quoted span counting as a
+  substitution too, since an indexed array expands its subscript as if in double quotes
+  (`b['$(cmd)']=1` runs cmd) and the text does not show the array's kind (so
+  `declare -A a; a[ '${ :; }' ]=v` is refused, a known over-refusal that fails closed); an
+  array element's subscript holding `$'...'` or a funsub is refused the same way; inside
+  arithmetic (`(( a[ ${ cmd; } ]=1 ))`), where a `'` quotes nothing,
   the subscript is read like any word there; the bracket scans of one command share a budget of four times its length, since
   every unclosed `a[` scans to the end, and past it the command is refused (`open_brackets`:
   close each `[`, or quote it), while an `a[` with no `]` after it costs nothing; a blank or
@@ -1364,7 +1378,11 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   `$HOME/.cache/$X`); and a glob
   a file name turns into an option (`rm *` beside a file named `-rf`), both the state of the
   machine rather than the text; a shell's own error messages fed into a shell (`cmd 2>&1 |
-  bash` hands on `command not found` lines that quote the command word). A
+  bash` hands on `command not found` lines that quote the command word), also what a
+  substitution writes to the standard error inside a compound command whose error a
+  redirection sends into the pipe (`[[ -n $( ( ... >&2 ) >/dev/null ) ]] 2>&1 | bash`); a
+  shell's input moved to another descriptor and back (`... | bash 1>&0- 0<&1`), read as
+  coming from a descriptor this text does not open. A
   `case` statement inside a substitution stays refused as unreadable (see
   `case` above).
 - **Comments and heredocs in the other two readings.** Neither takes a `#` as a comment, so

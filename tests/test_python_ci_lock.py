@@ -264,31 +264,52 @@ def _joined_lines(text: str) -> list:
     return text.replace("\\\r\n", " ").replace("\\\n", " ").splitlines()
 
 
+_LATEST_STEP = ("_test.yml", "jobs", "build-and-test", "steps")
+
+
+def _shell_texts(node, where: tuple):
+    """(where, text) of every string in a parsed workflow, ``where`` being its key path."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield from _shell_texts(value, where + (str(key),))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            yield from _shell_texts(value, where + (index,))
+    elif isinstance(node, str):
+        yield where, node
+
+
 def test_every_tool_install_is_hash_pinned():
     """No workflow and neither script installs a tool by version alone: pip, uv and the publish
     tools come from .github/requirements/*.lock with --require-hashes and --force-reinstall.
-    The only installs without hashes are the newest-versions lane's (its point) and the
-    editable project (--no-deps). Continued commands are judged whole. MUTATION: `pip install
-    "pip==26.1.2"` back into a lane; `pip install build twine` back into a publish job, also
-    as a continued command; drop --force-reinstall from a publish install - red."""
-    sources = {p.name: p.read_text(encoding="utf-8") for p in WF.glob("*.yml")}
-    sources["ci_check.sh"] = _gate()
-    sources["install_lock.sh"] = _install_script()
-    latest = next(s["run"] for s in _wf("_test.yml")["jobs"]["build-and-test"]["steps"]
-                  if s.get("if") == "inputs.deps == 'latest'")
-    latest_unhashed = {line.strip() for line in latest.splitlines() if "--require-hashes" not in line}
-    unpinned, unforced = [], []
-    for name, text in sources.items():
+    The only installs without hashes are the editable project (--no-deps) and, in the one step
+    of the newest-versions lane and nowhere else, requirements.txt and the project with its
+    dependencies (that lane's point). Continued commands are judged whole. MUTATION: `pip
+    install "pip==26.1.2"` back into a lane; `pip install build twine` back into a publish job,
+    also as a continued command; drop --force-reinstall from a publish install; the latest
+    lane's `pip install -r requirements.txt` in a locked step - red."""
+    steps = _wf("_test.yml")["jobs"]["build-and-test"]["steps"]
+    latest_index = next(i for i, s in enumerate(steps) if s.get("if") == "inputs.deps == 'latest'")
+    latest_where = _LATEST_STEP + (latest_index, "run")
+    sources = [((p.name,) + where, text) for p in sorted(WF.glob("*.yml"))
+               for where, text in _shell_texts(_wf(p.name), ())]
+    sources += [(("ci_check.sh",), _gate()), (("install_lock.sh",), _install_script())]
+    unpinned, unforced, latest_seen = [], [], []
+    for where, text in sources:
         for line in _joined_lines(text):
             if "pip install" not in line or line.lstrip().startswith(("#", "echo")):
                 continue
             if "--require-hashes" in line:
                 if "--force-reinstall" not in line:
-                    unforced.append(f"{name}: {line.strip()}")
+                    unforced.append(f"{where}: {line.strip()}")
                 continue
-            if re.search(r"--no-deps .*-e ", line) or line.strip() in latest_unhashed:
+            if re.search(r"--no-deps .*-e ", line):
                 continue
-            unpinned.append(f"{name}: {line.strip()}")
+            if where == latest_where:
+                latest_seen.append(line.split("pip install", 1)[1].split())
+                continue
+            unpinned.append(f"{where}: {line.strip()}")
+    assert latest_seen == [["-r", "requirements.txt"], ["-e", "."]], latest_seen
     assert not unpinned, unpinned
     assert not unforced, unforced
     for job in (_wf("release.yml")["jobs"]["publish-pypi"], _wf("publish-testpypi.yml")["jobs"]["publish-testpypi"]):
@@ -411,6 +432,20 @@ def test_lock_sync_regenerates_with_the_pinned_uv():
     assert "--require-hashes --force-reinstall --no-deps -r" in text and "/^packaging==/" in text
 
 
+def test_the_contributing_lock_commands_are_the_ones_lock_sync_runs():
+    """A contributor regenerates the lock with the commands in CONTRIBUTING.md; they install
+    pip and uv exactly as lock-sync does and compile with lock-sync's command, so a lock made
+    by hand passes the job. MUTATION: drop --force-reinstall from a CONTRIBUTING line - red."""
+    doc = (ROOT / ".github" / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    section = doc[doc.index("## Dependencies and the lock"):]
+    job = _runs(_wf("ci.yml")["jobs"]["lock-sync"])
+    installs = [line.strip() for line in job.splitlines() if "-r .github/requirements/" in line
+                and "pip install" in line]
+    assert len(installs) == 2, installs
+    for line in installs + [_lock_command()]:
+        assert line in job and line in section, line
+
+
 # ---------------------------------------------------------------------------------------------
 # AC 8: the local gate
 
@@ -432,7 +467,8 @@ def test_the_local_gate_runs_on_the_lock():
     needs no python3.13. The venv key covers the lock AND pip.lock, both files the venv is
     installed from; each build writes a log of its own; stage 5 also sees a staged change.
     MUTATION: restore `pip install --quiet ruff pytest`; key the venv without the checkout or
-    without pip.lock; reuse a venv without the .complete marker; a shared build.log; drop the
+    without pip.lock; reuse a venv without the .complete marker; a shared build.log; a
+    suffix after the mktemp X's; drop the
     config copy in stage 5; compare the working tree to the index only in stage 5 - red."""
     gate = _gate()
     block = _venv_block()
@@ -441,7 +477,10 @@ def test_the_local_gate_runs_on_the_lock():
     assert 'LOCK_VENV="$CI_CACHE/lock-$PYVER-$LOCK_HASH-$CHECKOUT_KEY"' in block
     key_line = next(line for line in block.splitlines() if line.strip().startswith("LOCK_HASH="))
     assert key_line.rstrip().endswith("requirements.lock .github/requirements/pip.lock)\""), key_line
-    assert 'BUILD_LOG="$(mktemp "$CI_CACHE/build-XXXXXX.log")"' in block
+    # BSD mktemp (macOS) replaces only trailing X's: a suffix after them names one fixed file.
+    assert 'BUILD_LOG="$(mktemp "$CI_CACHE/build-log.XXXXXX")"' in block
+    for text in (_gate(), _install_script()):
+        assert not re.search(r"mktemp[^\n]*X{3,}[^X\s\"]", text), "a mktemp template must end in X's"
     assert 'build.log"' not in block
     assert "sha256(sys.argv[1].encode())" in block and '"$ROOT")"' in block
     assert 'if [ ! -f "$LOCK_VENV/.complete" ]; then' in block
@@ -473,7 +512,8 @@ def test_the_local_gate_runs_on_the_lock():
 def _prune_loop() -> str:
     block = _venv_block()
     start = block.index('    for OLD in "$CI_CACHE"/lock-*; do')
-    return block[start:block.index("\n    done\n", start) + len("\n    done\n")]
+    end = block.index("-exec rm -f {} +", start)
+    return block[start:block.index("\n", end) + 1]
 
 
 @pytest.mark.skipif(os.name == "nt" or not shutil.which("bash"), reason="runs the gate's bash")
@@ -481,7 +521,9 @@ def test_the_gate_prunes_only_venvs_no_gate_can_be_using(tmp_path):
     """The gate's own pruning loop, run: another checkout's venv stays while that checkout
     exists (its gate may be running right now), and goes once the checkout is gone; this
     checkout's venv of an older lock goes; a venv with no owner stays for a day (a build that
-    has not written its owner yet). MUTATION: prune every other venv, as before - red."""
+    has not written its owner yet). A build log a day old goes (its build was killed), a
+    fresh one stays (its build may be running). MUTATION: prune every other venv, as before;
+    drop the log pruning or its age test - red."""
     cache = tmp_path / "vaf-ci"
     root = tmp_path / "checkout-a"
     other = tmp_path / "checkout-b"
@@ -504,13 +546,21 @@ def test_the_gate_prunes_only_venvs_no_gate_can_be_using(tmp_path):
     older_lock = venv("lock-3.13-bbbb-root", root)
     ownerless_new = venv("lock-3.13-cccc")
     ownerless_old = venv("lock-3.13-dddd", age_s=2 * 86400)
+    logs = {}
+    for name, age_s in (("build-log.Ab12Cd", 0), ("build-log.Ef34Gh", 2 * 86400),
+                        ("build.log", 2 * 86400), ("build-XXXXXX.log", 2 * 86400)):
+        logs[name] = cache / name
+        logs[name].write_text("log\n", encoding="utf-8")
+        if age_s:
+            past = time.time() - age_s
+            os.utime(logs[name], (past, past))
     script = tmp_path / "prune.sh"
     script.write_text(_prune_loop(), encoding="utf-8")
     env = {**os.environ, "CI_CACHE": str(cache), "LOCK_VENV": str(current), "ROOT": str(root)}
     out = subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True, timeout=30)
     assert out.returncode == 0, out.stderr
     left = {p.name for p in cache.iterdir()}
-    assert left == {current.name, keep_other.name, ownerless_new.name}, (left, out.stdout)
+    assert left == {current.name, keep_other.name, ownerless_new.name, "build-log.Ab12Cd"}, (left, out.stdout)
     assert not gone.exists() and not older_lock.exists() and not ownerless_old.exists()
 
 
@@ -685,6 +735,27 @@ def test_the_macos_wheel_each_view_picks_is_checked():
     assert len(problems) == 1 and "new-only==1.0: no wheel or sdist installs there" in problems[0], problems
     assert len(_t("macos-latest", "3.12").tag_views()) == 2
     assert len(_t("ubuntu-latest", "3.12").tag_views()) == 1
+
+
+def test_extras_are_resolved_per_macos_view():
+    """Each macOS view is its own install, so an extra one view's wheel asks for does not
+    reach a wheel only the other view picks. Here the macosx_26_0 wheel of app asks for
+    core[gui], while the pure core wheel (picked only under the 16.0 view) is the only one
+    that turns gui into legacy-ui; neither real install needs legacy-ui. MUTATION: resolve
+    the views on one merged graph - red."""
+    releases = {
+        "app==1.0": [("app-1.0-py3-none-any.whl", None, ["core>=1"]),
+                     ("app-1.0-cp312-cp312-macosx_26_0_arm64.whl", None, ["core[gui]>=1"])],
+        "core==1.0": [("core-1.0-py3-none-any.whl", None, ['legacy-ui>=1 ; extra == "gui"']),
+                      ("core-1.0-cp312-cp312-macosx_26_0_arm64.whl", None, [])],
+    }
+    mac = [_t("macos-latest", "3.12")]
+    assert _run(_lock("app==1.0", "core==1.0"), releases, mac)[0] == []
+    # Within one view the extra still counts: the 16.0 view's app asking for core[gui] does.
+    releases["app==1.0"][0] = ("app-1.0-py3-none-any.whl", None, ["core[gui]>=1"])
+    problems, _ = _run(_lock("app==1.0", "core==1.0"), releases, mac)
+    assert problems == ['[macos-latest 3.12] core==1.0 needs legacy-ui>=1; extra == "gui": '
+                        "not in the lock for this target"], problems
 
 
 def test_the_requirements_option_takes_a_file_not_a_flag(capsys):

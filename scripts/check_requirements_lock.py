@@ -469,7 +469,7 @@ def check(entries: list, requirements: list, targets: list, source, workers: int
             problems.add(f"{e} (line {e.line}): {len(foreign)} hash(es) in the lock that PyPI does "
                          f"not publish for this release ({foreign[0][:12]}...)")
 
-    plans = []  # (target, {name: entry}, {name: [the file each view picks]})
+    plans = []  # (target, {name: entry}, {name: [the file each view picks, in view order]})
     wanted_files = {}
     for target in targets:
         env = target.env()
@@ -491,8 +491,8 @@ def check(entries: list, requirements: list, targets: list, source, workers: int
             if why is not None:
                 problems.add(f"[{target.label}] {e}: {why}")
                 continue
-            picked[name] = list({f["filename"]: f for f, _ in results}.values())
-            for f in picked[name]:
+            picked[name] = [f for f, _ in results]
+            for f in {f["filename"]: f for f in picked[name]}.values():
                 if _is_sdist(f["filename"]):
                     if target.label not in sdist_targets[str(e)]:
                         sdist_targets[str(e)].append(target.label)
@@ -505,25 +505,30 @@ def check(entries: list, requirements: list, targets: list, source, workers: int
 
     for target, chosen, picked in plans:
         env = target.env()
-        deps_of = {}
-        for name, picked_files in picked.items():
-            lines = []
-            for f in picked_files:
+        # Each view is an install of its own, resolved on its own: an extra that one view's
+        # wheel asks for must not reach a wheel only the other view picks (a merged graph
+        # demands requirements neither real install has). Downloads are shared above, and the
+        # problems set folds what both views report alike.
+        for view in range(len(target.tag_views())):
+            deps_of = {}
+            for name, picked_files in picked.items():
+                f = picked_files[view]
                 if _is_sdist(f["filename"]):
-                    lines += source.sdist_requires(chosen[name].name, chosen[name].version)
+                    lines = source.sdist_requires(chosen[name].name, chosen[name].version)
                 elif meta[f["url"]] is None:
                     problems.add(f"[{target.label}] {chosen[name]}: {f['filename']} has no PEP 658 "
                                  "metadata to check")
+                    lines = []
                 else:
-                    lines += meta[f["url"]]
-            deps_of[name] = [Requirement(line) for line in dict.fromkeys(lines)]
-        for who, req in _needed(chosen, deps_of, requirements, env):
-            dep = canonicalize_name(req.name)
-            have = chosen.get(dep)
-            if have is None:
-                problems.add(f"[{target.label}] {who} needs {req}: not in the lock for this target")
-            elif not req.specifier.contains(have.version, prereleases=True):
-                problems.add(f"[{target.label}] {who} needs {req}, the lock has {have.version}")
+                    lines = meta[f["url"]]
+                deps_of[name] = [Requirement(line) for line in dict.fromkeys(lines)]
+            for who, req in _needed(chosen, deps_of, requirements, env):
+                dep = canonicalize_name(req.name)
+                have = chosen.get(dep)
+                if have is None:
+                    problems.add(f"[{target.label}] {who} needs {req}: not in the lock for this target")
+                elif not req.specifier.contains(have.version, prereleases=True):
+                    problems.add(f"[{target.label}] {who} needs {req}, the lock has {have.version}")
     notes = [f"{release}: no wheel, built from its sdist on install "
              f"({len(labels)} of {len(targets)} targets)" for release, labels in sorted(sdist_targets.items())]
     return sorted(problems), notes

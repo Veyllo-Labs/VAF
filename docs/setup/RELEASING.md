@@ -106,10 +106,19 @@ waiting for a stable `X.Y.Z`.
    The CI tool locks in `.github/requirements/` (pip, uv, and the build and upload tools
    of the publish jobs) are refreshed here, by whoever cuts the release: Dependabot's pip
    support covers `.txt` files and does not read uv's `.in`/`.lock` pairs, so nothing else
-   proposes their security releases. Regenerate `publish.lock` with `--upgrade` added to
-   the command in its header, raise the `==` pins of `pip.in` and `uv.in` when a newer
-   release is out (uv's only together with a regenerated `requirements.lock`), and review
-   the diff; `lock-sync` checks the result.
+   proposes their security releases. `lock-sync` installs uv from `uv.lock` before it
+   compiles anything, and uv's output changes between releases, so the order matters. In a
+   throwaway venv, from the repository root:
+   - Raise the `==` pins of `pip.in` and `uv.in` when a newer release is out, and
+     regenerate `pip.lock` and `uv.lock` with the command in each header.
+   - Install pip and uv from the new locks with the two `pip install` lines of
+     [CONTRIBUTING.md](../../.github/CONTRIBUTING.md#dependencies-and-the-lock).
+   - With that uv, regenerate all four locks: `requirements.lock` with the command from
+     CONTRIBUTING, `pip.lock` and `uv.lock` again (the new uv may write them differently),
+     and `publish.lock` with `--upgrade` added to the command in its header. Run the
+     checker, review the diff and commit it.
+   - Tag only once `lock-sync` is green on that commit. The green check at the start of
+     this step speaks for the commit before it.
 2. Bump `vaf/version.py` (the single source of truth) to the new version, and bump
    `web/package.json` to the npm/semver spelling of the same version
    (e.g. `0.1.0a0` -> `0.1.0-alpha.0`, `0.1.0` -> `0.1.0`). The release workflow fails
@@ -218,17 +227,17 @@ waiting for a stable `X.Y.Z`.
   there.
 - **The build tools come by hash.** `publish-pypi` and `publish-testpypi.yml` install pip
   from `.github/requirements/pip.lock` and build, twine, setuptools and wheel from
-  `.github/requirements/publish.lock`, both with `--require-hashes --force-reinstall` (pip checks no hash for a version it finds already installed), and build with
+  `.github/requirements/publish.lock`, both with `--require-hashes --force-reinstall`
+  (pip checks no hash for a version it finds already installed), and build with
   `python -m build --no-isolation`, so no unpinned package enters the job that holds the
   upload token (an isolated build fills its environment from PyPI with no pin and no hash).
   Raise a build or upload tool by editing `publish.in`, pip by editing `pip.in` (the
   publish jobs install pip from `pip.lock` first, so `publish.lock` never moves it), and
   regenerate that lock with the command in its header; `lock-sync` checks it. Who raises
   them and when: step 1 of "Cutting a release". Named boundary: the GitHub Actions
-  themselves, the upload
-  action included (`pypa/gh-action-pypi-publish@release/v1`), are referenced by moving
-  version tags, as everywhere in `.github/workflows/`; Dependabot's github-actions entry
-  proposes their updates.
+  themselves, the upload action included (`pypa/gh-action-pypi-publish@release/v1`), are
+  referenced by moving version tags, as everywhere in `.github/workflows/`; Dependabot's
+  github-actions entry proposes their updates.
 - **Alpha releases need `--pre`**: plain `pip install vaf` resolves
   prereleases only while no stable release exists; documenting
   `pip install --pre vaf` stays correct either way until the first stable.

@@ -90,22 +90,24 @@ nightly full matrix, the release gate and `scripts/ci_check.sh` install the lock
 local checks passed. `scripts/ci_check.sh` builds a venv of its own from the lock, one per
 checkout (cached under `~/.cache/vaf-ci/`, about 1.6 GB and a minute or two the first time;
 the venv of a removed checkout or an older lock is cleaned up by the next run) and never
-installs into your `venv/`. Its small pip cache in `~/.cache/vaf-ci/pip` (the wheels of pip,
-setuptools and uv) is not pruned.
+installs into your `venv/`. Each new checkout or worktree downloads the whole lock again,
+about 0.5 GB on Linux: the lock is installed without pip's cache (see below). Its small pip
+cache in `~/.cache/vaf-ci/pip` (the wheels of pip, setuptools and uv) is not pruned.
 
 **When you change a requirements file**, regenerate the lock in the same commit, from the
 repository root, with the committed lock present (uv then keeps every pin that still fits),
 in a throwaway venv with the uv the `lock-sync` job installs:
 
 ```bash
-pip install --require-hashes -r .github/requirements/pip.lock
-pip install --require-hashes -r .github/requirements/uv.lock
+python -m pip install --require-hashes --force-reinstall -r .github/requirements/pip.lock
+python -m pip install --require-hashes --force-reinstall -r .github/requirements/uv.lock
 uv pip compile requirements.txt --config-file requirements-lock.toml --universal --generate-hashes --python-version 3.10 -o requirements.lock
 venv/bin/python scripts/check_requirements_lock.py   # every CI target must report 0 problems
 ```
 
 The checker needs the `packaging` library, which the throwaway venv does not have; the
-repository's `venv/` (or any Python with `packaging`) runs it.
+repository's `venv/` (or any Python with `packaging`) runs it. On Windows that venv's Python
+is `venv\Scripts\python.exe` (`venv/Scripts/python.exe` in Git Bash).
 
 The `lock-sync` job runs the same command and fails when the result differs from the
 committed lock. A diff cannot see a hand-edited hash (uv keeps the hashes a committed lock

@@ -89,11 +89,12 @@ else
     # so a build in progress is never mistaken for an abandoned venv by the pruning below.
     if [ ! -f "$LOCK_VENV/.complete" ]; then
         echo "    building $LOCK_VENV"
-        echo "    (once per lock and checkout: a few minutes, needs the network)"
+        echo "    (once per lock and checkout: a few minutes, about 0.5 GB from the network)"
         rm -rf "$LOCK_VENV"
         mkdir -p "$CI_CACHE"
-        # A log of this run's own: two checkouts may build at the same time.
-        BUILD_LOG="$(mktemp "$CI_CACHE/build-XXXXXX.log")"
+        # A log of this run's own: two checkouts may build at the same time. The X's end the
+        # template, because BSD mktemp (macOS) replaces only trailing X's.
+        BUILD_LOG="$(mktemp "$CI_CACHE/build-log.XXXXXX")"
         if ! { "$BASE_PY" -m venv "$LOCK_VENV" \
                && printf '%s\n' "$ROOT" > "$LOCK_VENV/.checkout" \
                && PIP_CACHE_DIR="$GATE_PIP_CACHE" bash scripts/install_lock.sh "$LOCK_VENV/bin/python"; } \
@@ -129,6 +130,10 @@ else
         echo "    removing $OLD (its checkout is gone, or it holds an older lock of this one)"
         rm -rf "$OLD"
     done
+    # A killed build leaves its log behind; one a day old belongs to no build still running.
+    # build.log and build-*.log are the names earlier versions of this script used.
+    find "$CI_CACHE" -maxdepth 1 -type f \( -name 'build-log.*' -o -name 'build.log' \
+        -o -name 'build-*.log' \) -mmin +1440 -exec rm -f {} + 2>/dev/null || true
     # The tree under test, editable and without dependencies, built with the lock's own
     # setuptools (offline, seconds); it keeps entry points and metadata current.
     PIP_CACHE_DIR="$GATE_PIP_CACHE" "$LOCK_VENV/bin/python" -m pip install -q \

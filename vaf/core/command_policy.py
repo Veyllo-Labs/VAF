@@ -160,10 +160,13 @@ refuses, with its categories: a union like the frozen one, so it only adds refus
   outside them a `<(...)` in its word is a process substitution (`${x:=<(cmd)}` runs it).
   Arithmetic reads its text as if in double quotes, so a `'` there quotes nothing and is
   left out: in `$((...))`, `((...))`, `for ((...))`, `$[...]` and a substring's offset and
-  length (`${x:'$(cmd)'}` runs cmd; a start that does not settle within _SUBSTRING_SCAN
-  counts as a substring), and a `$'...'` there, which bash decodes and expands again, is
-  refused as "ansi_arithmetic" when the decoded text holds a `$` or a backtick
-  (`(( $'\\x24\\x28cmd\\x29' ))`), and written as its plain text otherwise; bash still finds where the arithmetic ends with such a
+  length (`${x:'$(cmd)'}` runs cmd; a start that does not settle within _SUBSTRING_SCAN, a
+  name, a positional parameter's digits or a subscript running to its end or to a `\\` of a
+  line continuation there, counts as a substring), and a `$'...'` there, also inside double
+  quotes, in an unquoted heredoc's body and in an indexed array's subscript, which bash
+  decodes and expands again, is refused as "ansi_arithmetic" when the decoded text holds a
+  `$`, a backtick, a quote or a backslash (`(( $'\\x24\\x28cmd\\x29' ))`; a decoded `'` would
+  quote what follows the arithmetic), and written as its plain text otherwise; bash still finds where the arithmetic ends with such a
   span skipped whole, so a `))` inside one ends nothing. An operator, a redirection or a `(`
   inside an array
   assignment's parentheses (`x=(a;` NL `cmd`) is a syntax error after which bash drops the
@@ -249,7 +252,8 @@ so no existing reason changes.
   those writes joined (`(printf 'r'; printf 'm ...') | bash`): a sequential list, a group or a
   subshell hands on every command's output, also when redirections after its closer leave
   the standard output where it is (`( echo ... ) 2>&1 | bash`; `>/dev/null` hands on
-  nothing, every other target may be the pipe; in a text another command runs or one that
+  nothing, `//` and `/./` collapsed but no `..` in it, every other target may be the pipe;
+  in a text another command runs or one that
   opens a descriptor of 3 or more, the output always goes on).
   printf's precision (none for `%c`, which bash hands to the C printf), `%c` and a `*`
   width or precision are followed (a negative `*` precision is none), `\\c` in a `%b`
@@ -275,9 +279,12 @@ redirections are no script (`xargs -0 bash -c <<< '...'` leaves the script to xa
 token cannot tell a quoted word from a redirection (`-c '>x;cmd'`), so both readings of the
 script are taken. An unquoted expansion where a shell's script name stands may expand to
 nothing, so the shell's input is read as its script as well (`bash $! <<< '...'`); a quoted
-one (`bash "$S"`, `"$*"`, `"${a[*]}"`) is a word even when empty, except one that expands to a
-word per item and to none without items (`"$@"`, `"${@:2}"`, `"${a[@]}"`, `"${!a[@]}"`, also
-`"${!pre` NL `@}"`). What a shell prints from the script it reads from its input goes on
+one (`bash "$S"`) is a word even when empty, except where the text can make it `--`, `-`,
+`-s` or nothing (_ScriptName: a substitution, an operator or `$@` anywhere in the word,
+`"${x:---}"`, `"$(echo -)"`, `"$x$@"`; a positional parameter after `set`; a name the text or
+bash assigns; every one in a text another command runs). An option word of a shell with an
+expansion in it may be `-c` (`x=c; bash -$x '...'`): the word after it is read as the code
+too. What a shell prints from the script it reads from its input goes on
 into the pipe whatever its own redirections (its script can write to any descriptor; so
 `bash <<< '...' >/dev/null | bash` is refused, a named over-refusal), and redirections after a
 closer keep the output when any descriptor ends on the pipe (a relative target may be it,
@@ -319,7 +326,11 @@ variable after a written protected folder, `~/.cache/$X`, is refused, and one af
 variable, `$HOME/.cache/$X`, passes too) and a
 glob a file name turns into an option (`rm *` beside a file named `-rf`), both the state of the
 machine, not the text; a shell's own error messages fed into a shell (`cmd 2>&1 | bash`
-hands on `command not found` lines that quote the command word). On
+hands on `command not found` lines that quote the command word), also what a substitution
+writes to the standard error or to a descriptor of 3 or more inside `[[ ]]` whose descriptor
+a redirection of that command sends into the pipe (`[[ -n $( ( ... >&3 ) >/dev/null
+2>/dev/null ) ]] 3>&1 | bash`); a shell's input moved to another descriptor and back (`... |
+bash 1>&0- 0<&1`). On
 Windows, cmd.exe's `for %i in (*.txt) do ...` reads as bash and is refused, its reason naming
 PowerShell (a bash `for` there takes `(*.txt)` for a subshell running a glob). The reserved
 word `case` where a command starts inside a substitution refuses the command in the reading
@@ -1598,7 +1609,10 @@ def _nested_commands(exe: str, args: List[str], reparse: bool = True) -> Iterabl
         for pos, tok in enumerate(args):
             if tok in ("-o", "+o"):           # `bash -o pipefail -c ...`: -o takes a word
                 continue
-            if tok.startswith("-") and not tok.startswith("--") and "c" in tok[1:]:
+            # An option word with an expansion in it may be `-c` (`x=c; bash -$x '...'`): the
+            # word after it is read as the code as well.
+            if tok.startswith("-") and not tok.startswith("--") and (
+                    "c" in tok[1:] or any(m in tok for m in ("$", "`") + _SUBST_MARKS)):
                 found = again("local", args[pos + 1]) if pos + 1 < len(args) else []
                 break
         # bash reads options after `-c` too, up to `-`, `--` or a word that is none
@@ -2213,9 +2227,11 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[list],
           _stdin_fetch: bool, _arithmetic: bool, _stdin_opaque: str = "",
           _stdin_texts: tuple = (), _normalized: Optional[bool] = None, _in_arith: bool = False,
           _count_word: bool = False,
-          _grammar: bool = False) -> CommandVerdict:
+          _grammar: bool = False, _names_from: str = "") -> CommandVerdict:
     """classify_command's reading; nested readings go through classify_command. `_grammar`:
-    this is the grammar reading of a text (_join_the_grammar_reading), joined to nothing."""
+    this is the grammar reading of a text (_join_the_grammar_reading), joined to nothing;
+    `_names_from`: that text as written, whose names a shell's script name may hold
+    (_ScriptName)."""
     verdict = CommandVerdict()
     text = (command or "").strip()
     if not text:
@@ -2234,6 +2250,7 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[list],
     # spends its text from the characters all readings share (_READ_FACTOR).
     _budget[0] -= 1
     _budget[2][0] -= len(text)
+    script_name: Optional[_ScriptName] = None
     if _depth > MAX_NESTING or _budget[0] < 0 or _budget[2][0] < 0:
         verdict.blocked = True
         verdict.categories = ["nested_too_deep"]
@@ -2377,7 +2394,12 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[list],
                 written = _raw_words(seg)
                 if len(written) == len(toks):
                     sink_raws = written[exe_at + 1:]
-            from_where, script_literals, from_pipe = _script_input(exe, args, carried, sink_raws)
+            if script_name is None:
+                # The grammar text drops a function's head and a loop's name (`for s in`):
+                # the names are read from the text as written as well.
+                script_name = _ScriptName(_names_from + "\n" + text, _depth > 0)
+            from_where, script_literals, from_pipe = _script_input(exe, args, carried, sink_raws,
+                                                                   script_name)
             for alt in alternatives if exe_at >= 0 else ():
                 extra_literals = _script_input(exe, alt[exe_at + 1:], carried)[1]
                 script_literals = script_literals + [
@@ -2748,7 +2770,8 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[list],
             _join_the_grammar_reading(verdict, g, profile=profile, depth=_depth, budget=_budget,
                                       stdin_fetch=_stdin_fetch, arithmetic=_arithmetic,
                                       stdin_opaque=_stdin_opaque, stdin_texts=_stdin_texts,
-                                      in_arith=_in_arith, count_word=_count_word)
+                                      in_arith=_in_arith, count_word=_count_word,
+                                      names_from=text)
     if _depth == 0 and not _grammar:
         _join_the_frozen_reading(verdict, text, profile)
     return verdict
@@ -2956,7 +2979,7 @@ def _join_the_frozen_reading(verdict: CommandVerdict, text: str, profile: str) -
 def _join_the_grammar_reading(verdict: CommandVerdict, g_text: str, *, profile: str, depth: int,
                               budget: list, stdin_fetch: bool, arithmetic: bool,
                               stdin_opaque: str, stdin_texts: tuple, in_arith: bool,
-                              count_word: bool = False) -> None:
+                              count_word: bool = False, names_from: str = "") -> None:
     """Refuse whenever the grammar reading of the same command (_grammar_text) refuses, with its
     categories and segments. Like the frozen reading it may only ADD refusals: the reading of
     the text as written stays as it is. At the top level the grammar reading has a call budget
@@ -2968,7 +2991,8 @@ def _join_the_grammar_reading(verdict: CommandVerdict, g_text: str, *, profile: 
     grammar = _read(g_text, profile=profile, _depth=depth, _budget=own, _stdin_fetch=stdin_fetch,
                     _arithmetic=arithmetic, _stdin_opaque=stdin_opaque,
                     _stdin_texts=stdin_texts, _normalized=True,
-                    _in_arith=in_arith, _count_word=count_word, _grammar=True)
+                    _in_arith=in_arith, _count_word=count_word, _grammar=True,
+                    _names_from=names_from)
     verdict.categories.extend(c for c in grammar.categories if c not in verdict.categories)
     seen = set(verdict.segments)
     for seg in grammar.segments:
@@ -3039,8 +3063,10 @@ _SUBSTRING_SCAN = 1024
 # bash evaluates as arithmetic.
 _SUBSTRING_RE = re.compile(
     r"!?(?:[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?|[0-9]+|[@*#?$!-]):(?![-=?+])")
-# The start of a `${...}` that is still a name or a subscript where the window ends.
-_SUBSTRING_NAME_RE = re.compile(r"!?[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*)?")
+# The start of a `${...}` that may still be a name, a positional parameter's digits or a
+# subscript where the window ends: every start _SUBSTRING_RE reads with more than one
+# character.
+_SUBSTRING_NAME_RE = re.compile(r"!?[A-Za-z0-9_]*(?:\[[^\]]*)?")
 # The left side of an array assignment that a `(` right after it opens (`arr=(`, `a[1]+=(`).
 _GRAMMAR_ARRAY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=$")
 # A heredoc delimiter the current reading takes exactly as bash does; any other is renamed.
@@ -4116,16 +4142,20 @@ class _GrammarText:
     def _starts_substring(self, start: int) -> bool:
         """Whether the `${` text at `start` is a substring (`${NAME:off:len}`), read with its
         line continuations joined (`${x:\\` NL `-'}'}` is the default `'}'`). Read within
-        _SUBSTRING_SCAN characters; a start that does not settle the question there (a name or
-        a subscript running past it) counts as a substring, so its offset is read as
-        arithmetic, where a `'` quotes nothing (fail closed). One slice per `${`: linear."""
+        _SUBSTRING_SCAN characters; a start that does not settle the question there (a name,
+        a positional parameter's digits or a subscript running to the window's end, also to a
+        `\\` there that may start a line continuation) counts as a substring, so its offset is
+        read as arithmetic, where a `'` quotes nothing (fail closed). One slice per `${`:
+        linear."""
         window = self.s[start:start + _SUBSTRING_SCAN]
         if "\\\n" in window:
             window = window.replace("\\\n", "")
         if _SUBSTRING_RE.match(window):
             return True
-        if start + _SUBSTRING_SCAN >= self.n:
-            return False                    # the whole rest was read: settled
+        # A `\` at the window's end may be the first half of a line continuation the window
+        # cuts: it leaves the name open.
+        if window.endswith("\\"):
+            window = window[:-1]
         name = _SUBSTRING_NAME_RE.match(window)
         return bool(name) and name.end() == len(window)
 
@@ -4428,6 +4458,9 @@ class _GrammarText:
         parens = 0
         self.i = start
         depth = 0
+        # After a `[` a `$'...'` may stand in an indexed array's subscript, which bash
+        # evaluates as arithmetic too (`"${a[$'...']}"`).
+        subscript = False
         while self.i < n:
             m = _GRAMMAR_BRACE_RE.match(s, self.i)
             if m:
@@ -4456,6 +4489,7 @@ class _GrammarText:
             if ch in "{[":
                 # `$[ a[1] ]` counts its subscripts; `${x:-a{}` ends at the first `}`.
                 depth += ch == opener == "["
+                subscript = subscript or ch == "["
                 parts.append(ch)
                 self.i += 1
             elif ch in "}]":
@@ -4490,7 +4524,7 @@ class _GrammarText:
                 parts.append(inner[1:-1] if inner.endswith('"') and len(inner) > 1 else inner[1:])
             elif ch == '"':
                 parts.append(self._dq())
-            elif ch == "$" and arith and not in_dq and self._logical(self.i, 2)[0] == "$'":
+            elif ch == "$" and (arith or subscript) and self._logical(self.i, 2)[0] == "$'":
                 # `${a:$'...'}`, `$[ $'...' ]`: bash decodes it and expands the result again
                 parts.append(self._ansi_c_expanded(self._logical(self.i, 2)[1][1]))
             elif ch == "$":
@@ -4548,13 +4582,15 @@ class _GrammarText:
 
     def _ansi_c_expanded(self, start: int) -> str:
         """`$'...'` where bash evaluates arithmetic (`(( $'...' ))`, `$[...]`, a substring's
-        offset and length): bash decodes it and expands the decoded text again, so a
-        `$(...)` spelled in escapes runs. Decoded text that holds a `$` or a backtick is
-        refused (_GrammarAnsiArithmetic: a funsub, a backtick text with a line continuation,
-        each spelled in escapes, would need bash's whole reading again); any other is written
-        as it stands, a number or an operator."""
+        offset and length, also inside double quotes and an unquoted heredoc's body): bash
+        decodes it and expands the decoded text again, so a `$(...)` spelled in escapes runs.
+        Decoded text that holds a `$`, a backtick, a quote or a backslash is refused
+        (_GrammarAnsiArithmetic: a funsub or a backtick text spelled in escapes would need
+        bash's whole reading again, and a quote or a backslash written as it stands would
+        quote or join what follows the arithmetic, `(( $'\\x27' )); r\\` NL `m ...`); any other
+        is written as it stands, a number or an operator."""
         decoded = self._ansi_c(start)[1:-1].replace("'\\''", "'")
-        if "$" in decoded or "`" in decoded:
+        if any(q in decoded for q in "$`'\"\\"):
             raise _GrammarAnsiArithmetic()
         return decoded
 
@@ -4658,18 +4694,92 @@ _NAMED_FD_TOKEN_RE = re.compile(r"^\{[A-Za-z_][A-Za-z0-9_]*\}(?:<<<|<<-?|<>|<&|>
 # literal arithmetic after it in the same word (`${#a[@]}-1`).
 _COUNT_WORD_RE = re.compile(
     r"\$(?:#|\{#[A-Za-z_][A-Za-z0-9_]*(?:\[[@*]\])?\})[-+*/%<>=!&|^~,0-9]*$")
-# A double-quoted word that expands to one word per item, and to none when there is no item:
-# `"$@"`, `"${@...}"`, `"${NAME[@]...}"`, `"${!NAME[@]}"`, `"${!PREFIX@}"` (any text as the
-# prefix: bash does not check that it is a name, `"${!a.@}"`). Also `"$_"` and `"${_...}"`:
-# the last word of the command before, which the text sets (`set --; ... | bash "$_"`), so it
-# can be `--` or an option after which the shell reads its input.
-_VANISHING_QUOTED_RE = re.compile(
-    r'"\$(?:@|_(?![A-Za-z0-9_])|\{(?:@|_(?![A-Za-z0-9_])|!?[A-Za-z_][A-Za-z0-9_]*\[@\]'
-    r'|![^}]*@\}))')
+# A quoted expansion at a shell's script name (_ScriptName): empty quotes before it add
+# nothing (`''"$x"`); a substitution or arithmetic in the word, a `${...}` that is more than
+# a name or a number (an operator, a subscript, `!`, `#`: `"${x:---}"`), `$@` (no word at all
+# when there is no item) and `$_` (the last word of the command before) can each make it
+# `--`, `-`, `-s` or nothing; a positional parameter (`$1`, `${1}`, `$*`) can when the text
+# sets them, and a name when the text assigns it or bash does.
+_EMPTY_QUOTES_RE = re.compile(r"""^(?:''|""|\$''|\$"")+""")
+_WORD_SUBST_RE = re.compile(r"\$\(|\$\[|`|[" + _SUBST_BARE + _SUBST_QUOTED + _SUBST_PROC + "]")
+_WORD_BRACE_RE = re.compile(r"\$\{(?![A-Za-z_][A-Za-z0-9_]*\}|[0-9]+\})")
+_WORD_VANISH_RE = re.compile(r"\$[@_](?![A-Za-z0-9_])")
+_WORD_POSITIONAL_RE = re.compile(r"\$(?:[0-9*]|\{[0-9]+\})")
+_WORD_NAME_RE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)")
+# `set`, `shift`, a function (its call's words) and `source` or `.` (its words) set the
+# positional parameters.
+_SETS_POSITIONALS_RE = re.compile(
+    r"(?:^|[\s;&|(){}])(?:set|shift|source|\.|function)(?=[\s;&|()]|$)|\(\s*\)")
+# Text that may assign a name it does not spell: eval, source, an indirection (`${!n:=--}`),
+# and a name given by an expansion to a command that assigns one (`declare "$n=--"`, `read
+# "$n"`, `printf -v "$n"`), read per simple command (_sets_any_name).
+_SETS_ANY_NAME_RE = re.compile(r"(?:^|[\s;&|(){}])(?:eval|source|\.)(?=[\s;&|()]|$)|\$\{!")
+_NAME_SETTER_RE = re.compile(
+    r"\b(?:declare|typeset|local|export|readonly|read|mapfile|readarray|getopts|printf)\b")
+_SIMPLE_COMMAND_SPLIT_RE = re.compile(r"[;&|\n]")
+# A name the text spells other than in an expansion (`a=--`, `read a`, `for a in`, `declare
+# -n r=a`), and one an expansion assigns (`${a:=--}`) or subscripts (`${a[...]}`, which may
+# stand in an assignment).
+_SPELLED_NAME_RE = re.compile(
+    r"(?<![A-Za-z0-9_$])(?<!\$\{)(?<!\$\{!)(?<!\$\{#)[A-Za-z_][A-Za-z0-9_]*")
+_DEFAULT_ASSIGN_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?:\[|:?=)")
+# Names bash assigns itself: `read` and `mapfile` with no name, `getopts`, `[[ =~ ]]`.
+_SHELL_SET_NAMES = frozenset({"REPLY", "OPTARG", "MAPFILE", "COPROC", "FUNCNAME"})
+_SHELL_SET_PREFIXES = ("BASH_", "READLINE_", "COMP_")
+
+
+def _sets_any_name(text: str) -> bool:
+    """Whether `text` may assign a name it does not spell (_SETS_ANY_NAME_RE): each simple
+    command is read once, a command that assigns names counting when an expansion follows it
+    in that command (`printf` with `-v`), so the text costs one pass."""
+    if _SETS_ANY_NAME_RE.search(text):
+        return True
+    for piece in _SIMPLE_COMMAND_SPLIT_RE.split(text):
+        expansion = max(piece.rfind("$"), piece.rfind("`"))
+        option = max(piece.rfind(" -v"), piece.rfind("\t-v"))
+        for setter in _NAME_SETTER_RE.finditer(piece):
+            if expansion > setter.start() and (setter.group() != "printf"
+                                               or option > setter.start()):
+                return True
+    return False
+
+
+class _ScriptName:
+    """Whether a word at a shell's script name, as written, may leave the shell reading its
+    input: an unquoted expansion may vanish, a quoted one may be `--`, `-`, `-s` or nothing
+    (_EMPTY_QUOTES_RE and below). A text another command runs (`bash -c`, `eval`, a heredoc
+    fed to a shell) gets its names and arguments from outside, so there every expansion
+    counts. The text is read once, at the first quoted word that needs it: linear."""
+    __slots__ = ("text", "nested", "names", "any_name", "positionals")
+
+    def __init__(self, text: str, nested: bool) -> None:
+        self.text, self.nested = text, nested
+        self.names: Optional[set] = None
+        self.any_name = self.positionals = False
+
+    def reads_input(self, raw: str) -> bool:
+        word = _EMPTY_QUOTES_RE.sub("", raw)
+        if not word.startswith('"'):
+            return word[:1] in ("$", _SUBST_BARE, _SUBST_QUOTED, "`")
+        if self.nested or _WORD_SUBST_RE.search(word) or _WORD_BRACE_RE.search(word) \
+                or _WORD_VANISH_RE.search(word):
+            return True
+        if self.names is None:
+            text = self.text
+            self.names = set(_SPELLED_NAME_RE.findall(text)) | set(
+                _DEFAULT_ASSIGN_RE.findall(text))
+            self.any_name = _sets_any_name(text)
+            self.positionals = bool(_SETS_POSITIONALS_RE.search(text))
+        if self.positionals and _WORD_POSITIONAL_RE.search(word):
+            return True
+        return any(self.any_name or name in self.names or name in _SHELL_SET_NAMES
+                   or name.startswith(_SHELL_SET_PREFIXES)
+                   for name in _WORD_NAME_RE.findall(word))
 
 
 def _script_input(exe: str, args: List[str], carried: List[tuple],
-                  raws: Optional[List[str]] = None) -> tuple:
+                  raws: Optional[List[str]] = None,
+                  name: Optional["_ScriptName"] = None) -> tuple:
     """(where its script comes from, literal script texts) for a shell or an interpreter:
     "output" when another command's output, "descriptor" when a descriptor this command
     does not open, "" otherwise.
@@ -4755,14 +4865,13 @@ def _script_input(exe: str, args: List[str], carried: List[tuple],
                            and not _REDIRECT_RE.match(nxt) and nxt[:1] not in ("<", ">"))
             pos += 2 if takes_value else 1
             continue
-        if script is None and shell and (tok.startswith("$") or tok.startswith(_SUBST_BARE)) and (
-                raws is None or raws[pos][:1] in ("$", _SUBST_BARE, "`")
-                or bool(_VANISHING_QUOTED_RE.match(raws[pos]))):
+        if script is None and shell and tok[:1] in ("$", _SUBST_BARE, _SUBST_QUOTED) and (
+                raws is None or name is None or name.reads_input(raws[pos])):
             # An unquoted expansion where the script name stands may expand to nothing (`bash
             # $! <<< ...` with no background job reads its input): the input is read as well. A
-            # quoted one is a word even when empty (`bash "$S"`, `"$*"`, `"${a[*]}"` run no
-            # input), except the ones that expand to one word per item, and to no word at all
-            # when there is none: `"$@"`, `"${@:2}"`, `"${a[@]}"`, `"${!a[@]}"`.
+            # quoted one is a word even when empty (`bash "$S"` runs no input), except where
+            # the text can make it `--`, `-`, `-s` or nothing (_ScriptName: `"$@"`,
+            # `"${x:---}"`, `"$(echo -)"`, `set -- --; ... "$1"`, `a=-s; ... "$a"`).
             from_stdin = True
             pos += 1
             continue
@@ -5603,12 +5712,17 @@ def _moves_stdout(toks: List[str], stderr_reaches: bool = False) -> bool:
             return "pipe"
         if not target.startswith("/"):
             return "pipe"                   # relative: after a `cd /dev`, `>stdout` is the pipe
+        if ".." in target.split("/"):
+            # Linux resolves `..` after the link before it: `/tmp/L/../../dev/null` is no
+            # `/dev/null` when L is a link made earlier in the command.
+            return "pipe"
         path = _normal_path(target)
         fd = _STD_PATHS.get(path) or _fd_path(target)
         if fd:
             return fds.get(fd.lstrip("0") or "0", "other")
-        # Only `/dev/null` is surely no pipe: any other path may lead to one
-        # (`/proc/self/root/dev/stdout`, a link made earlier in the command).
+        # Only `/dev/null` (`//` and `/./` collapsed, no `..`) is surely no pipe: any other
+        # path may lead to one (`/proc/self/root/dev/stdout`, a link made earlier in the
+        # command).
         return "file" if path == "/dev/null" else "pipe"
 
     k = 0

@@ -1152,10 +1152,13 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   `2>/dev/stdout >&2`, followed in order, a descriptor's number read as a number (`3>&01`), a
   word whose operator is quoted or escaped being no redirection (`1">"f`, `1\>f`), every
   target but `/dev/null` possibly the pipe (after `cd /dev`, `>stdout` is; so is
-  `/proc/self/root/dev/stdout`, or a link made earlier), the standard error kept too with a
+  `/proc/self/root/dev/stdout`, or a link made earlier), and `/dev/null` only as itself,
+  `//` and `/./` collapsed but no `..` in it (Linux resolves `..` after a link made
+  earlier: `>/tmp/L/../../dev/null` may be the pipe), the standard error kept too with a
   `|&` in the text, and in a text another command runs, or one that opens a descriptor of 3
   or more (`3>&1`, `{fd}>&1`), the output always kept, since a descriptor the closer does not
-  name may be the pipe (`{ ( echo ... >&3 ) >/dev/null 2>&-; } 3>&1 | bash`);
+  name may be the pipe (`{ ( echo ... >&3 ) >/dev/null 2>&-; } 3>&1 | bash`; the named
+  boundaries below keep a substitution inside `[[ ]]` and a function apart);
   `( ... ) >/dev/null | bash` hands on nothing), a heredoc
   or a here-string, also passed on through a filter (`cat <<'EOF' | sort | bash`) or a
   command that runs another one (`eval`, `sh -c`, `env -S`, a runner), and into a carried
@@ -1178,12 +1181,22 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   shell reads its options after `-c` too and runs the first word that is none (`bash -c -e '...'`,
   `sh -c - '...'`); a quoted script that starts like a redirection is read as well
   (`bash -c -e '>x;cmd'`). An unquoted expansion as a shell's script name may vanish, so the
-  shell's input is read too (`bash $! <<< '...'`); a quoted one (`bash "$S"`, `"$*"`,
-  `"${a[*]}"`) does not, except one that expands to a word per item and to none without
-  items, which may vanish too (`bash "$@"`, `"${@:2}"`, `"${a[@]}"`, `"${!a[@]}"`,
-  `"${!pre` NL `@}"`, and `"${!` with any text up to `@}"`, which bash takes as a prefix
-  without checking it is a name: `"${!a.@}"`; and `"$_"`, `"${_...}"`, the last word of the
-  command before, which the text can set to `--` or an option: `set --; ... | bash "$_"`). A
+  shell's input is read too (`bash $! <<< '...'`). A quoted one is one word even when empty
+  (`bash "$S"`, `bash "$SCRIPT" <<< "$INPUT"`, `printf '%s\n' "$ans" | bash "$S"` pass), unless
+  the text can make it `--`, `-`, `-s` or nothing, and then the input is read as well:
+  anywhere in the word (empty quotes before it, `''"$x"`, add nothing) a command
+  substitution or arithmetic (`"$(echo -)"`, a backtick pair), a `${...}` that is more than a
+  name or a number (`"${x:---}"`, `"${x--s}"`, `"${x:=--}"`, `"${a[*]}"`, `"${!x}"`, every
+  `"${!PREFIX@}"`), `$@` (no word at all without items: `"$@"`, `"$x$@"`, `"${x:-}$@"`) or
+  `$_` (the last word of the command before); a positional parameter (`"$1"`, `"$*"`) when
+  the text runs `set`, `shift`, `source` or `.`, or defines a function; a name the text
+  spells outside an expansion (`a=-s`, `read a`, `for a in`, `declare -n r=a`), one a
+  `${a:=...}` assigns, one bash assigns itself (`REPLY`, `OPTARG`, `MAPFILE`, `BASH_...`),
+  and every name when the text may assign one it does not spell (`eval`, `source`, a name
+  given by an expansion to `declare`, `read` or `printf -v`); and every quoted expansion in a
+  text another command runs (`bash -c`, `eval`, a heredoc), whose names and arguments come
+  from outside it. An option word of a shell with an expansion in it may be `-c`
+  (`x=c; bash -$x '...'`): the word after it is read as the code as well. A
   newline right after a `|`
   continues the pipeline, as bash reads it.
 - **Bounds.** Every reading, the command itself included, spends one of
@@ -1274,10 +1287,14 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   heredoc ends with that text); a heredoc in a subshell keeps a renamed delimiter whose body
   comes after the subshell (`( cat <<. )` NL ...); arithmetic reads its text as if in double
   quotes, so a `'` quotes nothing in `$((...))`, `((...))`, `for ((...))`, `$[...]` and a
-  substring's offset and length (`${x:'$(cmd)'}` runs cmd; a `${NAME:` whose name or
-  subscript runs past 1 024 characters counts as a substring), and a `$'...'` there, which
-  bash decodes and expands again (`(( $'\x24\x28cmd\x29' ))` runs cmd), is refused when the
-  decoded text holds a `$` or a backtick (`ansi_arithmetic`: write the arithmetic out), and
+  substring's offset and length (`${x:'$(cmd)'}` runs cmd; a `${NAME:` whose name, digits
+  (`${000...1:`) or subscript run past 1 024 characters counts as a substring, and so does
+  one whose first 1 024 characters end on the `\` of a line continuation), and a `$'...'`
+  there, also inside double quotes, in an unquoted heredoc's body and in an indexed array's
+  subscript (`"${x:$'...'}"`, `"${a[$'...']}"`), which bash decodes and expands again
+  (`(( $'\x24\x28cmd\x29' ))` runs cmd), is refused when the decoded text holds a `$`, a
+  backtick, a quote or a backslash (`ansi_arithmetic`: write the arithmetic out; a decoded
+  `'` would quote what follows the arithmetic, `(( $'\x27' )); r\` NL `m ...` runs rm), and
   read as the plain text it is otherwise (`(( $'1' + 2 ))` passes);
   a `))` inside such a span ends nothing, and an unclosed `$[` there ends
   at the arithmetic's own `)`; an operator, a redirection or a `(` inside an array
@@ -1350,7 +1367,10 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   and 4 392 run in bash ran the marker, with no twin let through. No refusal of the reading
   before this change was lost in
   any of them (bash 5.3; the suite runs 1 600 draws). The classes the differential found on the way are each pinned in
-  `tests/test_command_grammar_reading.py`.
+  `tests/test_command_grammar_reading.py`, and every probe written while the reading was
+  built and checked, every pinned row and every corpus row that ran the marker in bash, 1 451
+  of them, is in `tests/fixtures/command_policy/never_again.json` and refused on every lane
+  (16 more belong to the named boundaries below and are kept apart under their names).
 - **Named boundary: what it does not read.** cmd.exe's and PowerShell's own grammar (`%VAR%`
   as the program, the text `pwsh -Command` runs); dash's differences from bash, read as bash,
   the larger grammar; decompressors and other programs that write new text piped into a
@@ -1379,8 +1399,10 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   a file name turns into an option (`rm *` beside a file named `-rf`), both the state of the
   machine rather than the text; a shell's own error messages fed into a shell (`cmd 2>&1 |
   bash` hands on `command not found` lines that quote the command word), also what a
-  substitution writes to the standard error inside a compound command whose error a
-  redirection sends into the pipe (`[[ -n $( ( ... >&2 ) >/dev/null ) ]] 2>&1 | bash`); a
+  substitution writes to the standard error or to a descriptor of 3 or more inside `[[ ]]`
+  whose descriptor a redirection of that command sends into the pipe
+  (`[[ -n $( ( ... >&2 ) >/dev/null ) ]] 2>&1 | bash`,
+  `[[ -n $( ( ... >&3 ) >/dev/null 2>/dev/null ) ]] 3>&1 | bash`); a
   shell's input moved to another descriptor and back (`... | bash 1>&0- 0<&1`), read as
   coming from a descriptor this text does not open. A
   `case` statement inside a substitution stays refused as unreadable (see

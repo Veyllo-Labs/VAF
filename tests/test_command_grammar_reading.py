@@ -1551,6 +1551,86 @@ def test_a_substring_start_past_the_window_counts_as_one():
     assert not classify_command("echo ${" + name + ":-x}", profile="host").blocked
 
 
+def test_a_substring_start_of_digits_or_cut_at_a_continuation_counts_as_one():
+    """A positional parameter spelled with leading zeros runs past the window as well
+    (`${000...1:`), and a window that ends on the `\\` of a line continuation leaves the name
+    open; both are read as substrings. A default after them still passes.
+    MUTATION: unsettled only for a letter name - red (the digits);
+    MUTATION: take a trailing `\\` as settled - red (the continuation)."""
+    for start in ("0" * 1100 + "1", "0" * (cp._SUBSTRING_SCAN - 1) + B + NL + "1",
+                  "a" * (cp._SUBSTRING_SCAN - 1) + B + NL):
+        assert classify_command("set -- xyz; echo ${" + start + ":'$(rm -rf /)'}",
+                                profile="host").blocked, start[-3:]
+        assert not classify_command("echo ${" + start + ":-x}", profile="host").blocked
+    unit = "f() { echo ${" + "0" * 1100 + "1:'$(rm -rf /)'}; }; f xyz"
+    assert classify_command(unit, profile="host").blocked
+    assert classify_command('bash -c "' + unit.replace("$", B + "$") + '"',
+                            profile="host").blocked
+
+
+def test_a_decoded_quote_in_arithmetic_is_refused():
+    """`$'...'` in arithmetic decodes to text written into the arithmetic as it stands: a
+    quote or a backslash there would quote or join what follows (`(( $'\\x27' )); r\\` NL `m
+    ...` runs rm). Refused like a `$`; a number still passes.
+    MUTATION: refuse only `$` and a backtick - red."""
+    for code in ("x27", "x22", "047", "x5c"):
+        for cmd in ("(( $'" + B + code + "' )); r" + B + NL + "m -rf /",
+                    "(( $'" + B + code + "' )) || r" + B + NL + "m -rf /",
+                    "( (( $'" + B + code + "' ))" + NL + "r" + B + NL + "m -rf / )"):
+            assert classify_command(cmd, profile="host").blocked, cmd
+    assert not classify_command("(( i = $'1' + 2 ))", profile="host").blocked
+
+
+def test_ansi_c_in_quoted_arithmetic_is_decoded():
+    """Inside double quotes and in an unquoted heredoc's body bash decodes `$'...'` in a
+    substring's offset, in `$[...]` and in an indexed array's subscript just the same.
+    MUTATION: decode only outside double quotes - red;
+    MUTATION: no arithmetic in a subscript - red (the subscript row)."""
+    pay = "$'" + B + "x24(rm -rf /)'"
+    for cmd in ('x=xyz; : "${x:' + pay + '}"', 'x=xyz; : "${x:0:' + pay + '}"',
+                'echo "$[ ' + pay + ' ]"', 'a=(1); echo "${a[' + pay + ']}"',
+                "x=xyz; cat <<E" + NL + "${x:" + pay + "}" + NL + "E"):
+        assert classify_command(cmd, profile="host").blocked, cmd
+    for cmd in ('x=xyz; echo "${x:$\'1\'}"', 'echo "it\'s $\'not\' arithmetic"'):
+        assert not classify_command(cmd, profile="host").blocked, cmd
+
+
+def test_a_quoted_script_name_the_text_can_make_an_option_reads_the_input():
+    """A quoted expansion at a shell's script name reads the input as well where the text can
+    make it `--`, `-`, `-s` or nothing: an operator or a substitution in it, `$@` anywhere in
+    the word, a positional parameter after `set` or in a function, a name the text or bash
+    assigns, and every one in a text another command runs. A name the text never assigns is
+    one word, as before.
+    MUTATION: read a quoted word's start only - red (`"$x$@"`);
+    MUTATION: names from the grammar text alone - red (the loop and the function);
+    MUTATION: drop the names the text assigns - red (`a=-s`); drop the positional parameters
+    `set` sets - red; drop the names bash sets - red (`$REPLY`); drop `${s:=--}` - red;
+    drop a name given by an expansion - red (`declare "$(...)"`); keep the empty quotes - red;
+    drop the substitutions - red (`"$(echo -)"`); read a nested text's names - red."""
+    feed = "echo 'rm -rf /' | bash "
+    for cmd in (feed + '"${x:---}"', feed + "''" + '"${x--s}"', feed + '"$(echo -)"',
+                feed + '"`echo -`"', feed + '"$x$(echo -)"', feed + '"$x`echo -`"',
+                "set -- --; " + feed + '"$1"', "a=-s; " + feed + '"$a"',
+                "set --; " + feed + '"$x$@"', "set --; " + feed + '"${x:-}$@"',
+                "for s in --; do " + feed + '"$s"; done', "f() { " + feed + '"$1"; }; f --',
+                "read <<< --; " + feed + '"$REPLY"', ': "${s:=--}"; ' + feed + '"$s"',
+                'declare "$(echo cz0tLQo= | base64 -d)"; ' + feed + '"$s"',
+                "bash -c '" + feed.replace("'", '"') + '"$1"' + "' x --"):
+        assert classify_command(cmd, profile="host").blocked, cmd
+    for cmd in ('bash "$SCRIPT" <<< "$INPUT"', "printf '%s" + B + "n' \"$ans\" | bash \"$S\"",
+                'bash "$SCRIPT" --verbose', 'echo x | bash "./$S"'):
+        assert not classify_command(cmd, profile="host").blocked, cmd
+
+
+def test_an_option_word_with_an_expansion_may_be_dash_c():
+    """`x=c; bash -$x '...'` runs its next word as code: that word is read as the code too.
+    MUTATION: read only a written `c` - red."""
+    for cmd in ("x=c; bash -$x 'rm -rf /'", "bash -$(echo c) 'rm -rf /'",
+                "x=c; sh -e\"$x\" 'rm -rf /'"):
+        assert classify_command(cmd, profile="host").blocked, cmd
+    assert not classify_command("bash -$opts script.sh", profile="host").blocked
+
+
 def test_a_quoted_span_in_a_subscript_may_expand():
     """An indexed array's subscript expands a `$(...)` even in single quotes, and the text
     does not say which kind the array is, so a key that only an associative array keeps as
@@ -1612,6 +1692,17 @@ def test_moves_stdout_takes_an_input_for_no_output():
     assert cp._moves_stdout(["bash", "<<", "EOF", ">/dev/null"])
     assert cp._moves_stdout(["<", "in.txt", ">/dev/null"])
     assert not cp._moves_stdout([">", "stdout"])
+
+
+def test_moves_stdout_takes_only_dev_null_as_a_file():
+    """`//` and `/./` collapse, a `..` does not: Linux resolves it after a link made earlier
+    in the command, so `/tmp/L/../../dev/null` may be the pipe.
+    MUTATION: normalise `..` away before the check - red."""
+    for target in ("/dev/null", "//dev/null", "/dev/./null"):
+        assert cp._moves_stdout([">" + target]), target
+    for target in ("/tmp/w/A/../../../dev/null", "/dev/../dev/null", "/dev/null/.."):
+        assert not cp._moves_stdout([">" + target]), target
+        assert not cp._moves_stdout(["1<>" + target]), target
 
 
 def test_moves_stdout_reads_descriptor_numbers_as_numbers():
@@ -1710,17 +1801,24 @@ def test_the_writers_of_one_text_look_for_extglob_once():
 
 
 def test_a_quoted_word_counts_as_present_only_when_it_is_one_word():
-    """`"$S"`, `"$*"`, `"${a[*]}"` and `""$S` are one word even when empty: the script name.
-    `"$@"`, `"${a[@]}"` may be none: the input is read as the script too.
+    """`"$S"` and `"$*"` are one word even when empty, the script name, unless the text sets
+    S or the positional parameters. `"$@"`, `"${a[@]}"` may be none, and `"${a[*]}"`,
+    `"${!x}"` or `""$S` may be `--`: the input is read as the script too.
     MUTATION: take every quoted word for present - red; take every one for absent - red."""
-    for raw, absent in (('"$S"', False), ('"$*"', False), ('"${a[*]}"', False),
-                        ('""$S', False), ("'$@'", False), ('"${!x}"', False),
-                        ('"$@"', True), ('"${@:2}"', True), ('"${a[@]}"', True),
-                        ('"${!a[@]}"', True), ('"${!pre@}"', True)):
+    for text, raw, absent in (("", '"$S"', False), ("", '"$*"', False), ("", "'$@'", False),
+                              ("", '"${a[*]}"', True), ("", '""$S', True),
+                              ("", '"${!x}"', True), ("", '"$@"', True), ("", '"${@:2}"', True),
+                              ("", '"${a[@]}"', True), ("", '"${!a[@]}"', True),
+                              ("", '"${!pre@}"', True), ("set -- --", '"$*"', True),
+                              ("S=--", '"$S"', True), ("S=--", '"$T"', False)):
         tok = raw.replace('"', "").replace("'", "")
         reads = cp._script_input("bash", [tok, "<<<", "rm -rf /"], [],
-                                 [raw, "<<<", "'rm -rf /'"])
+                                 [raw, "<<<", "'rm -rf /'"], cp._ScriptName(text, False))
         assert bool(reads[1]) is absent, (raw, reads)
+    # a text another command runs takes its names from outside: every expansion counts
+    reads = cp._script_input("bash", ["$S", "<<<", "rm -rf /"], [],
+                             ['"$S"', "<<<", "'rm -rf /'"], cp._ScriptName("", True))
+    assert reads[1]
 
 
 def test_unchanged_text_costs_no_second_reading(monkeypatch):
@@ -1760,3 +1858,40 @@ def test_a_text_nested_past_the_grammar_depth_is_refused_as_too_deep():
     cmd = "echo " + "${x:-" * 80 + "a" + "}" * 80
     v = classify_command(cmd, profile="host")
     assert v.blocked and "nested_too_deep" in v.categories, v.categories
+
+
+# -- the never-again corpus ---------------------------------------------------------------
+
+# Every row that ran the marker and stays refused, and the named boundaries the rest belong to
+# (docs/security/SANDBOXING.md, "what it does not read").
+_NEVER_AGAIN_SIZE = 1451
+_NAMED_BOUNDARIES = {
+    "a substitution's output inside [[ ]] that a redirection of the compound command sends "
+    "into the pipe",
+    "a function used as what prints into a shell",
+    "a named pipe's text",
+    "a shell's input moved to another descriptor and back",
+}
+
+
+def _never_again() -> dict:
+    import json
+    from pathlib import Path
+    path = Path(__file__).resolve().parent / "fixtures" / "command_policy" / "never_again.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("profile", ["host", "jailed", "remote"])
+def test_no_input_that_ran_the_marker_passes_again(profile):
+    """tests/fixtures/command_policy/never_again.json: every probe written while this reading
+    was built and checked, every pinned row of this file and of test_command_policy.py, and
+    every corpus row, each one that ran a marker `rm` in bash 5.3 inside a read-only sandbox
+    (env cleared, a fresh working folder each). Each stays refused on every lane; the rows of
+    a named boundary are kept apart under its name, and the set of rows is pinned by its size.
+    MUTATION: each change to the readings that closed one of them - red (its rows)."""
+    data = _never_again()
+    assert len(data["refused"]) == _NEVER_AGAIN_SIZE
+    assert {row["boundary"] for row in data["boundaries"]} <= _NAMED_BOUNDARIES
+    passed = [cmd for cmd in data["refused"]
+              if not classify_command(cmd, profile=profile).blocked]
+    assert passed == []

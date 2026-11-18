@@ -1588,10 +1588,11 @@ _SHELL_CALLS = {("os", "system"): "command", ("os", "popen"): "cmd",
                 ("asyncio", "create_subprocess_shell"): "cmd"}
 # Calls that start a program from an argv: the spawners, and helpers that build or pass one.
 _ARGV_CALLS = _SPAWNERS | {"spawn", "execv", "execvp"}
-# Calls whose positional arguments are the argv itself (`create_subprocess_exec("sh", "-c",
-# ...)`, `os.execlp(...)`).
-_VARIADIC_CALLS = {"create_subprocess_exec", "execl", "execlp", "execle", "execlpe", "spawnl",
-                   "spawnlp"}
+# Calls whose positional arguments are the argv itself, with how many arguments come before
+# it: none for `create_subprocess_exec("sh", "-c", ...)`, the path for `os.execlp("sh", "sh",
+# "-c", ...)`, the mode and the path for `os.spawnl(os.P_WAIT, "/bin/sh", "sh", "-c", ...)`.
+_VARIADIC_CALLS = {"create_subprocess_exec": 0, "execl": 1, "execlp": 1, "execle": 1,
+                   "execlpe": 1, "spawnl": 2, "spawnlp": 2, "spawnle": 2, "spawnlpe": 2}
 # Programs that run the rest of their argv as a command, so a shell may follow them.
 _WRAPPERS = {"env", "sudo", "nice", "timeout", "setsid", "taskset", "stdbuf", "nohup", "bwrap",
              "unshare", "nsenter", "firejail", "docker", "podman", "flatpak-spawn", "chroot",
@@ -1601,12 +1602,18 @@ _SCOPES = (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
 
 def _imports(tree) -> dict:
     """Local name -> (module, attribute) for what the module imports: `import os as _os` maps
-    `_os` to ("os", None), `from os import system` maps `system` to ("os", "system")."""
+    `_os` to ("os", None), `import os.path` binds `os` to ("os", None), `import os.path as p`
+    binds `p` to ("os.path", None), `from os import system` maps `system` to ("os",
+    "system")."""
     names: dict = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                names[alias.asname or alias.name.split(".")[0]] = (alias.name, None)
+                if alias.asname:
+                    names[alias.asname] = (alias.name, None)
+                else:
+                    top = alias.name.split(".")[0]
+                    names[top] = (top, None)
         elif isinstance(node, ast.ImportFrom) and node.module:
             for alias in node.names:
                 names[alias.asname or alias.name] = (node.module, alias.name)
@@ -1623,24 +1630,50 @@ def _scope_nodes(scope):
             stack.extend(ast.iter_child_nodes(node))
 
 
-def _bindings(scope, outer: dict) -> dict:
-    """Name -> its value in this scope: a name assigned exactly once here; a parameter of
-    this scope is no binding (its value comes from the caller); a name not bound here keeps
-    the outer scope's binding."""
-    seen: dict = {}
+def _declared(tree) -> set:
+    """Names some scope declares `global` or `nonlocal`: any function may rebind them."""
+    return {name for node in ast.walk(tree) if isinstance(node, (ast.Global, ast.Nonlocal))
+            for name in node.names}
+
+
+def _bindings(scope, outer: dict, declared: set = frozenset()) -> dict:
+    """Name -> its value in this scope: a name bound exactly once here, by a plain assignment
+    to it alone (`script = "..."`). Any other binding leaves it unknown: a second one, `+=`,
+    an annotation, a `for` or `with ... as` target, `:=`, unpacking, `del`, an import, a `def`
+    or `class`, `except ... as`, a parameter of this scope (its value comes from the caller),
+    and a name declared `global` or `nonlocal` anywhere. A comprehension's own variable binds
+    nothing here. A name not bound here keeps the outer scope's binding."""
+    count: dict = {}
+    plain: dict = {}
+    own = {id(target) for node in _scope_nodes(scope) if isinstance(node, ast.comprehension)
+           for target in ast.walk(node.target)}
+
+    def bind(name):
+        count[name] = count.get(name, 0) + 1
+
     for node in _scope_nodes(scope):
+        if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load) \
+                and id(node) not in own:
+            bind(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bind(node.name)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            bind(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                bind(alias.asname or alias.name.split(".")[0])
         if isinstance(node, ast.Assign) and len(node.targets) == 1 \
                 and isinstance(node.targets[0], ast.Name):
-            seen.setdefault(node.targets[0].id, []).append(node.value)
+            plain[node.targets[0].id] = node.value
     names = dict(outer)
     if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
         args = scope.args
         for arg in args.posonlyargs + args.args + args.kwonlyargs + [args.vararg, args.kwarg]:
             if arg is not None:
                 names.pop(arg.arg, None)
-    for name, values in seen.items():
-        if len(values) == 1:
-            names[name] = values[0]
+    for name, times in count.items():
+        if times == 1 and name in plain and name not in declared:
+            names[name] = plain[name]
         else:
             names.pop(name, None)
     return names
@@ -1729,11 +1762,12 @@ def _shell_scripts(tree) -> list:
       shell runs).
     Command strings a test only classifies or prints are no shell's text."""
     imports = _imports(tree)
+    declared = _declared(tree)
     scripts = []
     pending = [(tree, {})]
     while pending:
         scope, outer = pending.pop()
-        names = _bindings(scope, outer)
+        names = _bindings(scope, outer, declared)
         for node in _scope_nodes(scope):
             if isinstance(node, _SCOPES):
                 pending.append((node, names))
@@ -1749,14 +1783,15 @@ def _shell_scripts(tree) -> list:
             if name in _SPAWNERS and isinstance(shell, ast.Constant) and shell.value is True:
                 first = node.args[0] if node.args else _keyword(node, "args")
                 if first is not None:
+                    # A sequence runs its first item; a command put together with `+` stays
+                    # whole (`"echo x >&" + "12"`), and an empty list runs nothing.
                     items = _argv_elements(first, names)
-                    if not (len(items) == 1 and isinstance(items[0], ast.Name)
-                            and items[0].id == "?"):
+                    if items and not (isinstance(items[0], ast.Name) and items[0].id == "?"):
                         first = items[0]
                     scripts.append((first, names))
                 continue
             if name in _VARIADIC_CALLS:
-                script = _argv_script(list(node.args), names)
+                script = _argv_script(list(node.args)[_VARIADIC_CALLS[name]:], names)
                 if script is not None:
                     scripts.append((script, names))
                 continue
@@ -1893,6 +1928,70 @@ def test_the_fd_redirection_scanner_follows_names_and_scopes():
         '    script = "echo x >&12"\n'
         'def c():\n'
         '    subprocess.run(["sh", "-c", script])')) == []
+
+
+def test_the_fd_redirection_scanner_resolves_only_a_single_plain_assignment():
+    """A name another binding touches is unknown: `+=` adds to it, a loop or `with` rebinds
+    it, and so do `:=`, unpacking, an annotation and `global`. A comprehension's variable
+    binds nothing outside it.
+    MUTATION: count only plain assignments as bindings again - red (the loop, `with`, `:=`,
+    unpacking, the annotation);
+    MUTATION: ignore `global` - red;
+    MUTATION: count a comprehension's variable - red (the last assertion)."""
+    assert _fd_redirections(ast.parse(
+        'cmd = "echo x"\n'
+        'cmd += " >&12"\n'
+        'os.system(cmd)')) == []
+    assert _fd_redirections(ast.parse(
+        'script = "echo x >&12"\n'
+        'def f(items):\n'
+        '    for script in items:\n'
+        '        subprocess.run(["sh", "-c", script])')) == []
+    for rebind in ('    with open(p) as script:\n        pass\n',
+                   '    if (script := pick()):\n        pass\n',
+                   '    script, other = pick()\n',
+                   '    script: str = pick()\n',
+                   '    global script\n'):
+        assert _fd_redirections(ast.parse(
+            'script = "echo x >&12"\n'
+            'def f():\n' + rebind +
+            '    subprocess.run(["sh", "-c", script])')) == [], rebind
+    # the same in one scope: the plain assignment is not the only binding
+    assert _fd_redirections(ast.parse(
+        'script = "echo x >&12"\n'
+        'for script in items:\n'
+        '    subprocess.run(["sh", "-c", script])')) == []
+    assert _fd_redirections(ast.parse(
+        'script = "echo x >&12"\n'
+        'names = [script for script in other]\n'
+        'subprocess.run(["sh", "-c", script])')) == [1]
+
+
+def test_the_fd_redirection_scanner_reads_every_call_form():
+    """`import os.path` binds `os`; a `shell=True` command put together with `+` keeps its
+    text, and an empty one is no error; `execl*` and `spawnl*` start their argv after the path
+    (and the mode).
+    MUTATION: map `import os.path` to `os.path` - red;
+    MUTATION: take the first item of a `shell=True` sum always - red;
+    MUTATION: read every variadic call's arguments from the first - red (`execlp`)."""
+    assert _fd_redirections(ast.parse(
+        'import os.path\n'
+        'os.system("echo x >&12")')) == [2]
+    assert _fd_redirections(ast.parse(
+        'import os\n'
+        'import os.path\n'
+        'os.system("echo x >&12")')) == [3]
+    assert _fd_redirections(ast.parse(
+        'subprocess.run("echo x >&" + "12", shell=True)')) == [1]
+    assert _fd_redirections(ast.parse('subprocess.run([], shell=True)')) == []
+    assert _fd_redirections(ast.parse('os.execlp("sh", "sh", "-c", "cat <&10")')) == [1]
+    assert _fd_redirections(ast.parse('os.execl("/bin/sh", "sh", "-c", "cat <&10")')) == [1]
+    assert _fd_redirections(ast.parse(
+        'os.execle("/bin/sh", "sh", "-c", "cat <&10", env)')) == [1]
+    assert _fd_redirections(ast.parse(
+        'os.spawnl(os.P_WAIT, "/bin/sh", "sh", "-c", "cat <&10")')) == [1]
+    assert _fd_redirections(ast.parse(
+        'os.spawnlp(os.P_WAIT, "sh", "sh", "-c", "cat <&10")')) == [1]
 
 
 def test_no_shell_redirection_names_a_two_digit_fd():

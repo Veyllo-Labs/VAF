@@ -4723,8 +4723,9 @@ _SIMPLE_COMMAND_SPLIT_RE = re.compile(r"[;&|\n]")
 _SPELLED_NAME_RE = re.compile(
     r"(?<![A-Za-z0-9_$])(?<!\$\{)(?<!\$\{!)(?<!\$\{#)[A-Za-z_][A-Za-z0-9_]*")
 _DEFAULT_ASSIGN_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?:\[|:?=)")
-# Names bash assigns itself: `read` and `mapfile` with no name, `getopts`, `[[ =~ ]]`.
-_SHELL_SET_NAMES = frozenset({"REPLY", "OPTARG", "MAPFILE", "COPROC", "FUNCNAME"})
+# Names bash assigns itself: `read` and `mapfile` with no name, `getopts`, `[[ =~ ]]`, and
+# `_`, the last word of the command before (`set --; ... | bash "${_}"`).
+_SHELL_SET_NAMES = frozenset({"REPLY", "OPTARG", "MAPFILE", "COPROC", "FUNCNAME", "_"})
 _SHELL_SET_PREFIXES = ("BASH_", "READLINE_", "COMP_")
 
 

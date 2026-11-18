@@ -1188,7 +1188,7 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   substitution or arithmetic (`"$(echo -)"`, a backtick pair), a `${...}` that is more than a
   name or a number (`"${x:---}"`, `"${x--s}"`, `"${x:=--}"`, `"${a[*]}"`, `"${!x}"`, every
   `"${!PREFIX@}"`), `$@` (no word at all without items: `"$@"`, `"$x$@"`, `"${x:-}$@"`) or
-  `$_` (the last word of the command before); a positional parameter (`"$1"`, `"$*"`) when
+  `$_` (the last word of the command before, also as `"${_}"`); a positional parameter (`"$1"`, `"$*"`) when
   the text runs `set`, `shift`, `source` or `.`, or defines a function; a name the text
   spells outside an expansion (`a=-s`, `read a`, `for a in`, `declare -n r=a`), one a
   `${a:=...}` assigns, one bash assigns itself (`REPLY`, `OPTARG`, `MAPFILE`, `BASH_...`),
@@ -1368,7 +1368,7 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   before this change was lost in
   any of them (bash 5.3; the suite runs 1 600 draws). The classes the differential found on the way are each pinned in
   `tests/test_command_grammar_reading.py`, and every probe written while the reading was
-  built and checked, every pinned row and every corpus row that ran the marker in bash, 1 451
+  built and checked, every pinned row and every corpus row that ran the marker in bash, 1 456
   of them, is in `tests/fixtures/command_policy/never_again.json` and refused on every lane
   (16 more belong to the named boundaries below and are kept apart under their names).
 - **Named boundary: what it does not read.** cmd.exe's and PowerShell's own grammar (`%VAR%`

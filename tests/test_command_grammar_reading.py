@@ -1612,6 +1612,7 @@ def test_a_quoted_script_name_the_text_can_make_an_option_reads_the_input():
                 feed + '"`echo -`"', feed + '"$x$(echo -)"', feed + '"$x`echo -`"',
                 "set -- --; " + feed + '"$1"', "a=-s; " + feed + '"$a"',
                 "set --; " + feed + '"$x$@"', "set --; " + feed + '"${x:-}$@"',
+                "set --; " + feed + '"${_}"', ": -s; " + feed.replace("bash", "sh") + '"${_}"',
                 "for s in --; do " + feed + '"$s"; done', "f() { " + feed + '"$1"; }; f --',
                 "read <<< --; " + feed + '"$REPLY"', ': "${s:=--}"; ' + feed + '"$s"',
                 'declare "$(echo cz0tLQo= | base64 -d)"; ' + feed + '"$s"',
@@ -1864,7 +1865,7 @@ def test_a_text_nested_past_the_grammar_depth_is_refused_as_too_deep():
 
 # Every row that ran the marker and stays refused, and the named boundaries the rest belong to
 # (docs/security/SANDBOXING.md, "what it does not read").
-_NEVER_AGAIN_SIZE = 1451
+_NEVER_AGAIN_SIZE = 1456
 _NAMED_BOUNDARIES = {
     "a substitution's output inside [[ ]] that a redirection of the compound command sends "
     "into the pipe",

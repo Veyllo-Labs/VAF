@@ -1092,9 +1092,14 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   substitutions are read. Arithmetic also runs a substitution held in an array subscript
   once a string becomes an array reference (`x='a[$(...)]'; echo $((x))`, `printf -v
   'a[$(...)]' v`, `let`): a substitution left as text in a quoted `NAME[...]` is read as a
-  command, not refused (`x='a[$(date)]'; echo $((x))` passes). Such a `$(` ends where its
-  parentheses balance and where bash's parser ends it (a case pattern's `)` or one in a
-  comment closes nothing); both texts are read.
+  command, not refused (`x='a[$(date)]'; echo $((x))` passes), also bash 5.3's `${ cmd; }`
+  and `${| cmd; }`, and also in the string as bash hands it over from double quotes (an
+  escaped backtick, `\$(` with a `\\` NL continuation inside: `let "b[\`cmd\`]=1"`). Such a
+  `$(` ends where its parentheses balance and where bash's parser ends it (a case pattern's
+  `)` or one in a comment closes nothing); both texts are read. A count that starts an
+  arithmetic text (`$#`, `${#NAME}`, `${#NAME[@]}`: `echo $(( $# + 1 ))`) is a number there,
+  not a program named by an expansion, in the reading of that text as a command; its
+  substitutions are read as everywhere (`${#a[$(cmd)]}` runs cmd).
 - **`case`.** A `case` statement inside a substitution (the reserved word where a command
   starts, at the start, after `;`, `&&`, `||`, `|`, a newline, or after `if`, `while`,
   `until`, `then`, `do`, `else`, `{`, `!`, `time`, followed by exactly one shell word and
@@ -1138,11 +1143,17 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   group, a loop or a command run from text prints, every command's output in it and those
   writes joined (`( echo '...'; echo x ) | sh`, `(printf 'r'; printf 'm ...') | bash`,
   `bash -c "echo '...'" | bash`, a script a shell reads from its input,
-  `echo 'echo ...' | bash | bash`, unless that shell's own redirections send its output
-  elsewhere, `bash <<< '...' >/dev/null | bash`), also with redirections after its closer that leave the
-  standard output where it is (`( ... ) 2>&1 | bash`, also `>/dev/stdout` in any spelling,
+  `echo 'echo ...' | bash | bash`, whatever that shell's own redirections do, since its
+  script can write to any descriptor: `bash <<< 'echo "$HOME"' >/dev/null | bash` is refused
+  although it prints nothing into the pipe, a known over-refusal that fails closed), also
+  with redirections after its closer that leave any descriptor on the pipe
+  (`( ... ) 2>&1 | bash`, `( ... >&2 ) 2>&1- | bash`, also `>/dev/stdout` in any spelling,
   `>/dev/./stdout`, `>//dev/fd/1`, and copies through another descriptor, `3>&1 >&3`,
-  `2>/dev/stdout >&2`, followed in order, a descriptor's number read as a number (`3>&01`); `( ... ) >f | bash` hands on nothing), a heredoc
+  `2>/dev/stdout >&2`, followed in order, a descriptor's number read as a number (`3>&01`), a
+  word whose operator is quoted or escaped being no redirection (`1">"f`, `1\>f`), a relative
+  target possibly the pipe (after `cd /dev`, `>stdout` is), and the standard error kept too in
+  a text another command runs or with a `|&` in the text (`bash -c '{ ...; } >&2' 2>&1 |
+  bash`); `( ... ) >/tmp/f | bash` hands on nothing), a heredoc
   or a here-string, also passed on through a filter (`cat <<'EOF' | sort | bash`) or a
   command that runs another one (`eval`, `sh -c`, `env -S`, a runner), and into a carried
   command or a subshell. Text from double quotes is read the way bash hands it over:
@@ -1166,7 +1177,8 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   (`bash -c -e '>x;cmd'`). An unquoted expansion as a shell's script name may vanish, so the
   shell's input is read too (`bash $! <<< '...'`); a quoted one (`bash "$S"`, `"$*"`,
   `"${a[*]}"`) does not, except one that expands to a word per item and to none without
-  items, which may vanish too (`bash "$@"`, `"${@:2}"`, `"${a[@]}"`, `"${!a[@]}"`). A
+  items, which may vanish too (`bash "$@"`, `"${@:2}"`, `"${a[@]}"`, `"${!a[@]}"`,
+  `"${!pre` NL `@}"`). A
   newline right after a `|`
   continues the pipeline, as bash reads it.
 - **Bounds.** Every reading, the command itself included, spends one of
@@ -1213,7 +1225,8 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   substitution broken by one), measured on a machine under load (load average 2 to 5): about
   4 s at most (`a[;` repeated after a single-quoted span holding a `}` in `"${...}"`, which is
   read both ways, 3.9 to 4.3 s), the next ones about 2 s (a heredoc `cat <<.` with an empty
-  body repeated, 1.85 to 2.07 s; 0.59 s before, measured alongside); the same shapes nested
+  body repeated, 1.85 to 2.07 s; 0.59 s before, measured alongside; a long `echo "\${ x; }..."`
+  with redirections into a shell 2.3 s, each spelling of its words read once); the same shapes nested
   in `eval` or `bash -c` up to five deep, with a comment, such a span or a subscript as the
   trigger of a second reading at each level, about 4 s at most (one level, 3.1 to 3.9 s;
   deeper ones are refused once the characters all readings share are spent, 2.1 to 3.4 s;
@@ -1232,8 +1245,8 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   refused when that reading refuses, with its categories (a union again: it only adds
   refusals). In that text a comment is gone (a `#` where a word starts, to the end of its
   line; a backslash at its end joins nothing, measured with bash); every heredoc ends where
-  bash ends it, whatever its delimiter (`<<.`, `<<1`, `<<$X`, `<<$'EOF'`, `<<"E"OF`, an
-  `<<a$(b)c`; an unquoted body's lines joined at a line continuation first; one written
+  bash ends it, whatever its delimiter (`<<.`, `<<1`, `<<$X`, `<<$'EOF'`, `<<$$'x'` (the process id and a
+  quoted `x`), `<<"E"OF`, an `<<a$(b)c`; an unquoted body's lines joined at a line continuation first; one written
   inside `$( )` also at the first line that starts with its delimiter, as bash 5.3 does,
   the rest of that line read as commands (`EOF)`); without its delimiter line at the end of
   the text), with its body as data and an unquoted body's substitutions as commands, and a
@@ -1271,7 +1284,7 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   function head (`a[()]=1 cmd` is an assignment), the search for its `]` skipping
   substitutions and the quotes nested in a `"${...}"`, and one holding a command
   substitution (also bash 5.3's `${ cmd; }`), `$'...'` or quotes nested in a `${...}` with a
-  blank or an operator outside it (`a[$(x) ;y]=1 cmd`) is refused (put the index into a
+  blank or an operator outside it (`a[$(x) ;y]=1 cmd`) is refused (put the whole index into a
   variable first); inside arithmetic (`(( a[ ${ cmd; } ]=1 ))`), where a `'` quotes nothing,
   the subscript is read like any word there; the bracket scans of one command share a budget of four times its length, since
   every unclosed `a[` scans to the end, and past it the command is refused (`open_brackets`:

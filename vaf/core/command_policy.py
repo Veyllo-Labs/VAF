@@ -237,12 +237,15 @@ so no existing reason changes.
   command (`exec < <(curl x); bash`).
 - B7: a substitution left as text in a quoted `NAME[...]` is read, not refused: arithmetic
   runs it once the string is an array reference (`x='a[$(...)]'; echo $((x))`, `printf -v`,
-  `let`). A `$(` there ends where its parentheses balance and where the grammar reading ends
-  it (a case pattern's `)` closes nothing); both texts are read.
+  `let`), also bash 5.3's `${ cmd; }`/`${| cmd; }`, and also in the string as bash hands it
+  over from double quotes (`let "b[\\`cmd\\`]=1"`). A `$(` there ends where its parentheses
+  balance and where the grammar reading ends it (a case pattern's `)` closes nothing); both
+  texts are read. A count starting an arithmetic text (`$# + 1`) is a number in that text's
+  reading as a command (`_count_word`), not a program named by an expansion.
 - Output (B2): what a text writes is what every pipeline in it ends with, in order, and
   those writes joined (`(printf 'r'; printf 'm ...') | bash`): a sequential list, a group or a
   subshell hands on every command's output, also when redirections after its closer leave
-  the standard output where it is (`( echo ... ) 2>&1 | bash`; `>f` hands on nothing).
+  the standard output where it is (`( echo ... ) 2>&1 | bash`; `>/tmp/f` hands on nothing).
   printf's precision (none for `%c`, which bash hands to the C printf), `%c` and a `*`
   width or precision are followed (a negative `*` precision is none), `\\c` in a `%b`
   argument ends all of its output, the size bound is kept per directive, before any
@@ -268,7 +271,15 @@ token cannot tell a quoted word from a redirection (`-c '>x;cmd'`), so both read
 script are taken. An unquoted expansion where a shell's script name stands may expand to
 nothing, so the shell's input is read as its script as well (`bash $! <<< '...'`); a quoted
 one (`bash "$S"`, `"$*"`, `"${a[*]}"`) is a word even when empty, except one that expands to a
-word per item and to none without items (`"$@"`, `"${@:2}"`, `"${a[@]}"`, `"${!a[@]}"`). A here-string written `$'...'` hands the shell
+word per item and to none without items (`"$@"`, `"${@:2}"`, `"${a[@]}"`, `"${!a[@]}"`, also
+`"${!pre` NL `@}"`). What a shell prints from the script it reads from its input goes on
+into the pipe whatever its own redirections (its script can write to any descriptor; so
+`bash <<< '...' >/dev/null | bash` is refused, a named over-refusal), and redirections after a
+closer keep the output when any descriptor ends on the pipe (a relative target may be it,
+after a `cd /dev`; the standard error counts in a text another command runs, or with a `|&`
+in the text). A word whose operator is quoted or escaped is no redirection (`1">"f`,
+`1\\>f`). An array element's subscript has its line continuations joined, and one holding
+bash 5.3's `${ cmd; }` is refused as "subscript". A here-string written `$'...'` hands the shell
 its decoded text and expands nothing (`bash <<< $'set -e\\nmake'`); the token as the reading
 before had it is read too, its `$` escaped. Inside double quotes a single-quoted span in the
 word of `${...}` still quotes (`"${x#'"'}"`); one that holds a `}` is read both ways
@@ -620,8 +631,8 @@ _OPAQUE_REASONS = {
                      "command starts) that this check cannot find where they end; close each "
                      "one, or quote the bracket (`'a['`)",
     "subscript": "has an assignment whose subscript holds a substitution and a blank or an "
-                 "operator outside it, which this check cannot read; put the index into a "
-                 "variable first (`i=$(cmd); a[$i]=1`)",
+                 "operator outside it, which this check cannot read; put the whole index into "
+                 "a variable first (`i=\"$(cmd) ;x\"; a[$i]=1`)",
     "expansion": "takes its program name from a variable, a glob, a brace expansion or `$'...'` "
                  "quoting, so the text being approved does not show which program runs; write "
                  "the program name out (`python3 -m pytest`, not `$PYTHON -m pytest`), and for "
@@ -2129,7 +2140,7 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
                      _stdin_fetch: bool = False, _arithmetic: bool = False,
                      _stdin_opaque: str = "", _stdin_texts: tuple = (),
                      _normalized: Optional[bool] = None,
-                     _in_arith: bool = False) -> CommandVerdict:
+                     _in_arith: bool = False, _count_word: bool = False) -> CommandVerdict:
     """Classify a shell command offline. Never executes anything, never raises: a reading that
     fails (either one) refuses the command as unreadable and is logged.
 
@@ -2153,14 +2164,19 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
     nested command's input hides a script (B3, B6: "decoded", "shell_text", "descriptor");
     `_normalized` says the text is a grammar text, or one inside it (None: decide here, and
     join the grammar reading when it differs); `_in_arith` says the text is read under an
-    evaluated `$((...))`, where a variable is an operand (B1 waived).
+    evaluated `$((...))`, where a variable is an operand (B1 waived); `_count_word` says the
+    text is the `$((` read as a command (or a subshell in it), where a program word that is a
+    count (`$#`, `${#NAME}`, `${#NAME[@]}`) is the arithmetic's first operand, a number, and
+    not a program named by an expansion (B1 waived for that word only; its substitutions are
+    read as everywhere).
     """
     if _budget is None and _depth == 0:
         try:
             verdict = _read(command, profile=profile, _depth=0, _budget=None,
                             _stdin_fetch=_stdin_fetch, _arithmetic=_arithmetic,
                             _stdin_opaque=_stdin_opaque, _stdin_texts=_stdin_texts,
-                            _normalized=_normalized, _in_arith=_in_arith)
+                            _normalized=_normalized, _in_arith=_in_arith,
+                            _count_word=_count_word)
             lead = "Command contains a forbidden pattern: "
             if verdict.blocked and verdict.opaque_shape == "expansion" and \
                     verdict.reason.startswith(lead + "it ") and _cmd_for(command):
@@ -2182,12 +2198,13 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
     return _read(command, profile=profile, _depth=_depth, _budget=_budget,
                  _stdin_fetch=_stdin_fetch, _arithmetic=_arithmetic,
                  _stdin_opaque=_stdin_opaque, _stdin_texts=_stdin_texts,
-                 _normalized=_normalized, _in_arith=_in_arith)
+                 _normalized=_normalized, _in_arith=_in_arith, _count_word=_count_word)
 
 
 def _read(command: str, *, profile: str, _depth: int, _budget: Optional[list],
           _stdin_fetch: bool, _arithmetic: bool, _stdin_opaque: str = "",
           _stdin_texts: tuple = (), _normalized: Optional[bool] = None, _in_arith: bool = False,
+          _count_word: bool = False,
           _grammar: bool = False) -> CommandVerdict:
     """classify_command's reading; nested readings go through classify_command. `_grammar`:
     this is the grammar reading of a text (_join_the_grammar_reading), joined to nothing."""
@@ -2367,6 +2384,7 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[list],
         # as a local nested command below, never a cut of the text.
         extra: List[str] = []
         if exe_at >= 0 and not testing and not _arithmetic and not _in_arith \
+                and not (_count_word and _COUNT_WORD_RE.match(toks[exe_at])) \
                 and _program_named_by_expansion(seg, toks, exe_at, normalized):
             late.append("expansion")
         # The program a runner or `find -exec` starts, in its spelling as written: the text
@@ -2486,7 +2504,7 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[list],
                     body = inner[1:]
                     yield "arithmetic*", "charged", ": " + (body[:-1] if body.endswith(")")
                                                             else body)
-                    yield "command", "charged", inner
+                    yield "command", "arith_charged", inner
                 elif kind == "array":
                     # An array's elements are words, the arguments of the no-op `:`; their
                     # substitutions are read (`arr=($(ls))` runs `ls`, nothing else).
@@ -2514,15 +2532,6 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[list],
         writes_fetched = pipeline_fetch or exe in _NETWORK_FETCHERS or exe == "ssh"
         subshell_output: Optional[tuple] = None  # what a carried subshell writes
         carried_output: Optional[tuple] = None   # what a command it runs from text writes
-        moved: List[bool] = []
-
-        def _stage_moves_stdout() -> bool:
-            if not moved:
-                written = _raw_words(seg)
-                moved.append(_moves_stdout(toks, written if len(written) == len(toks)
-                                           else None))
-            return moved[0]
-
         nested = _carried() if _budget[0] >= 0 else ()
         for kind, where, inner in nested:
             if not inner.strip():
@@ -2532,7 +2541,7 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[list],
                     cats.append("opaque_command")
                 opaque_shape = opaque_shape or "unreadable"
                 continue
-            if where in ("runner", "charged"):
+            if where in ("runner", "charged", "arith_charged"):
                 # Each runner candidate is the rest of the command again: charged, so their
                 # sum stays within the command's own length plus a fixed slack.
                 _budget[1] -= len(inner)
@@ -2561,16 +2570,19 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[list],
                                    _stdin_texts=tuple(stdin_input[1]),
                                    _normalized=None if not kind else normalized,
                                    _in_arith=kind == "arithmetic" or (
-                                       _in_arith and kind == "subshell"))
+                                       _in_arith and kind == "subshell"),
+                                   _count_word=where == "arith_charged" or (
+                                       _count_word and kind == "subshell"))
             if kind:
                 verdict.segments.extend(sub.segments)
             if kind == "subshell" and sub.output != ("", ()):
                 subshell_output = sub.output
-            elif not kind and where in ("local", "runner", "script") and sub.output != ("", ()) \
-                    and not _stage_moves_stdout():
+            elif not kind and where in ("local", "runner", "script") and sub.output != ("", ()):
                 # `bash -c "echo ..." | bash`, also a script a shell reads from its input
-                # (`echo 'echo ...' | bash | bash`), unless this command's own redirections
-                # send its output elsewhere (`bash <<< '...' >/dev/null | bash`)
+                # (`echo 'echo ...' | bash | bash`), whatever this command's own redirections
+                # do: its script can write to any descriptor, so the output is kept even when
+                # they send the standard output elsewhere (`bash <<< '...' >/dev/null | bash`
+                # is refused as if it printed into the pipe; named in SANDBOXING).
                 carried_output = _output_union(carried_output, sub.output) \
                     if carried_output is not None else sub.output
             target = cats if local else remote_cats
@@ -2586,7 +2598,7 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[list],
                         opaque_shape = "option_value"   # `uv run --with $(cat r) pytest`
                     elif _after_unknown_flag(exe, args):
                         opaque_shape = "runner_args"    # `uv run --x pytest $(...)`
-                elif where == "charged" and kind == "command" and "`" in inner:
+                elif where in ("charged", "arith_charged") and kind == "command" and "`" in inner:
                     opaque_shape = "arith_backtick"  # `$(( `date +%s` - 10 ))`
             fetched = "network_fetch" in sub.categories or "remote_login" in sub.categories
             if local and fetched:
@@ -2613,9 +2625,11 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[list],
               and _only_redirections(toks)):
             # The redirections after a subshell's or a group's closer stand in a segment of
             # their own: what it writes goes on unless they move the standard output away
-            # (`( echo ... ) 2>&1 | bash`, `{ ...; } >&1 | sh`; `( ... ) >f | bash` hands on
-            # nothing).
-            out_input = ("", []) if _moves_stdout(toks) else closer_output
+            # (`( echo ... ) 2>&1 | bash`, `{ ...; } >&1 | sh`; `( ... ) >/tmp/f | bash` hands on
+            # nothing). In a text run by another command, or with a `|&` in the text, the
+            # standard error may reach the pipe as well.
+            out_input = ("", []) if _moves_stdout(
+                toks, stderr_reaches=_depth > 0 or "|&" in text) else closer_output
         closer_output = (out_input[0], list(out_input[1])) if not toks and (
             subshell_output is not None) else None
         pipeline_opaque, pipeline_texts = out_input
@@ -2721,7 +2735,7 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[list],
             _join_the_grammar_reading(verdict, g, profile=profile, depth=_depth, budget=_budget,
                                       stdin_fetch=_stdin_fetch, arithmetic=_arithmetic,
                                       stdin_opaque=_stdin_opaque, stdin_texts=_stdin_texts,
-                                      in_arith=_in_arith)
+                                      in_arith=_in_arith, count_word=_count_word)
     if _depth == 0 and not _grammar:
         _join_the_frozen_reading(verdict, text, profile)
     return verdict
@@ -2928,7 +2942,8 @@ def _join_the_frozen_reading(verdict: CommandVerdict, text: str, profile: str) -
 
 def _join_the_grammar_reading(verdict: CommandVerdict, g_text: str, *, profile: str, depth: int,
                               budget: list, stdin_fetch: bool, arithmetic: bool,
-                              stdin_opaque: str, stdin_texts: tuple, in_arith: bool) -> None:
+                              stdin_opaque: str, stdin_texts: tuple, in_arith: bool,
+                              count_word: bool = False) -> None:
     """Refuse whenever the grammar reading of the same command (_grammar_text) refuses, with its
     categories and segments. Like the frozen reading it may only ADD refusals: the reading of
     the text as written stays as it is. At the top level the grammar reading has a call budget
@@ -2940,7 +2955,7 @@ def _join_the_grammar_reading(verdict: CommandVerdict, g_text: str, *, profile: 
     grammar = _read(g_text, profile=profile, _depth=depth, _budget=own, _stdin_fetch=stdin_fetch,
                     _arithmetic=arithmetic, _stdin_opaque=stdin_opaque,
                     _stdin_texts=stdin_texts, _normalized=True,
-                    _in_arith=in_arith, _grammar=True)
+                    _in_arith=in_arith, _count_word=count_word, _grammar=True)
     verdict.categories.extend(c for c in grammar.categories if c not in verdict.categories)
     seen = set(verdict.segments)
     for seg in grammar.segments:
@@ -3006,6 +3021,8 @@ _GRAMMAR_FUNCTION_RE = re.compile(r"^[^\s;&|()<>'\"\\$`=]+$")
 _GRAMMAR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # `${NAME:` and no `-`, `=`, `?` or `+` after the colon: a substring, whose offset and length
 # bash evaluates as arithmetic.
+# How far the check for a substring reads the start of a `${...}` (its name and subscript).
+_SUBSTRING_SCAN = 256
 _SUBSTRING_RE = re.compile(
     r"!?(?:[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?|[0-9]+|[@*#?$!-]):(?![-=?+])")
 # The left side of an array assignment that a `(` right after it opens (`arr=(`, `a[1]+=(`).
@@ -3186,6 +3203,9 @@ def _join_continuations(text: str) -> str:
                 continue
             out.append(text[k:k + 2])
             k += 2
+        elif text.startswith("$$", k):
+            out.append("$$")                # the process id: a `'` after it is a plain quote
+            k += 2
         elif c == "'" or text.startswith("$'", k):
             j = k + (2 if c == "$" else 1)
             while j < n and text[j] != "'":
@@ -3241,10 +3261,11 @@ def _assignment_subscript(sub: str) -> Optional[str]:
             # `${...}`); `$'...'` is decoded elsewhere, and quotes nested in a `${...}`
             # (`"${x#'"'}"`) are read apart by the word reading. A plain expansion (`$i`,
             # `${#a[@]}`) is kept as written, like a quoted span.
+            # A single-quoted span is text (`a[ '${ :; }' ]=v` names that key).
             inner = span[1:-1] if c == '"' else span
-            if c == "`" or span.startswith(("$(", "$'")) or "$(" in span or "`" in span or (
-                    "${" in inner and any(q in inner for q in "'\"\\")) or (
-                    _FUNSUB_RE.search(span)):
+            if c != "'" and (c == "`" or span.startswith(("$(", "$'")) or "$(" in span
+                             or "`" in span or ("${" in inner and any(q in inner for q in "'\"\\"))
+                             or _FUNSUB_RE.search(span)):
                 expands = True
             else:
                 special = True
@@ -3862,6 +3883,10 @@ class _GrammarText:
                 quoted, j = True, j + 2
                 continue
             head, ends = self._logical(j, 2) if ch == "$" else ("", [])
+            if head == "$$":
+                parts.append("$$")              # the process id, also before a `'` (`<<$$'x'`)
+                j = ends[1]
+                continue
             if head[1:2] == "(" or ch == "`":
                 # `<<a$(b)c`, `<<.\`b\``: the substitution is part of the word, taken
                 # literally (a quote inside it is no quote of the word).
@@ -4096,9 +4121,14 @@ class _GrammarText:
         parts: List[str] = []
         if self.depth == self.array_level and s.startswith("[", self.i):
             # An element's subscript (`m=([a;b]=1)`): bash reads it up to its `]`, operators
-            # and blanks in it included.
+            # and blanks in it included, its line continuations joined (`[a[$(r\\` NL `m
+            # ...)]]=1` runs rm). Bash 5.3's `${ cmd; }` there is refused (_GrammarSubscript):
+            # the reading above takes it for no command.
             end = self._group_end(self.i, "[", "]")
-            parts.append(s[self.i:end])
+            element = _join_continuations(s[self.i:end])
+            if _FUNSUB_RE.search(element):
+                raise _GrammarSubscript()
+            parts.append(element)
             self.i = end
         while self.i < n:
             m = _GRAMMAR_PLAIN_RE.match(s, self.i)
@@ -4330,7 +4360,9 @@ class _GrammarText:
         parts = ["$" + opener]
         # Text bash evaluates as arithmetic, where a `'` quotes nothing: `$[...]`, a substring's
         # offset and length (`${x:'$(cmd)'}`), and anything inside arithmetic.
-        arith = bool(self.arith) or opener == "[" or bool(_SUBSTRING_RE.match(s, start))
+        # Read with its line continuations joined (`${x:\\` NL `-'}'}` is the default `'}'`).
+        arith = bool(self.arith) or opener == "[" or bool(
+            _SUBSTRING_RE.match(self._logical(start, _SUBSTRING_SCAN)[0]))
         # Inside `((...))` or `$((...))` bash ends the arithmetic text by its parentheses before
         # it reads what is inside: an unclosed `$[` or `${` there ends at that text's `)`
         # (`for((;;$[))do cmd;done` runs cmd).
@@ -4548,10 +4580,14 @@ _NAMED_FD_TOKEN_RE = re.compile(r"^\{[A-Za-z_][A-Za-z0-9_]*\}(?:<<<|<<-?|<>|<&|>
                                 re.DOTALL)
 
 
+# A count, which expands to a number: `$#`, `${#NAME}`, `${#NAME[@]}`, `${#NAME[*]}`, with
+# literal arithmetic after it in the same word (`${#a[@]}-1`).
+_COUNT_WORD_RE = re.compile(
+    r"\$(?:#|\{#[A-Za-z_][A-Za-z0-9_]*(?:\[[@*]\])?\})[-+*/%<>=!&|^~,0-9]*$")
 # A double-quoted word that expands to one word per item, and to none when there is no item:
 # `"$@"`, `"${@...}"`, `"${NAME[@]...}"`, `"${!NAME[@]}"`, `"${!PREFIX@}"`.
 _VANISHING_QUOTED_RE = re.compile(
-    r'"\$(?:@|\{(?:@|!?[A-Za-z_][A-Za-z0-9_]*\[@\]|![A-Za-z_][A-Za-z0-9_]*@))')
+    r'"\$(?:@|\{(?:@|!?[A-Za-z_][A-Za-z0-9_]*\[@\]|![A-Za-z_][A-Za-z0-9_]*\s*@))')
 
 
 def _script_input(exe: str, args: List[str], carried: List[tuple],
@@ -4990,7 +5026,11 @@ def _printed_text(seg: str, toks: List[str], exe_at: int, exe: str) -> Optional[
         variants.append(spoken)
         if len(keep) != len(args):
             variants.append([spoken[k] for k in keep])
+    tried = {tuple(args)}
     for words_variant in variants:
+        if tuple(words_variant) in tried:
+            continue                            # the same words print the same text
+        tried.add(tuple(words_variant))
         more = _printed_by(exe, words_variant, limit)
         if more is not None:
             if more[:1] == [None]:
@@ -5421,13 +5461,20 @@ def _xargs_runs_its_input(toks: List[str], exe_at: int, args: List[str]) -> bool
 _HEREDOC_OP_RE = re.compile(r"^\d*<<-?$")
 
 
+# A redirection as written: its descriptor and operator unquoted (`1>"log"` is one, `1">"log`
+# and `1\>log` are words).
+_RAW_REDIRECTION_RE = re.compile(
+    r"(?:[0-9]*|&|\{[A-Za-z_][A-Za-z0-9_]*\})(?:<<<|<<-|<<|<>|<&|>>|>&|>\||&>>|&>|<|>)")
+
+
 def _redirection_width(toks: List[str], k: int, raws: Optional[List[str]] = None) -> int:
     """How many words the redirection at `k` takes (2 for an operator and its target, 1 for
     one written against its target), 0 for no redirection. With `raws` (the words as written,
-    lined up with `toks`), a quoted word is never one (`eval '<f cmd'`)."""
+    lined up with `toks`), a word whose operator is quoted or escaped is never one
+    (`eval '<f cmd'`, `1">"log`, `1\\>log`)."""
     t = toks[k]
-    if raws is not None and raws[k][:1] in ("'", '"', "\\", "$"):
-        return 0
+    if raws is not None and not _RAW_REDIRECTION_RE.match(raws[k]):
+        return 0                            # `1">"log`, `1\>f`, `'<f'`: a word, no redirection
     named = _NAMED_FD_TOKEN_RE.match(t)
     if named:
         return 1 if named.group(1) else 2
@@ -5460,7 +5507,8 @@ _STD_PATHS = {"/dev/stdin": "0", "/dev/stdout": "1", "/dev/stderr": "2"}
 _FD_NUMBER_RE = re.compile(r"([0-9]+)-?")
 
 
-def _moves_stdout(toks: List[str], raws: Optional[List[str]] = None) -> bool:
+def _moves_stdout(toks: List[str], raws: Optional[List[str]] = None,
+                  stderr_reaches: bool = False) -> bool:
     """Whether these redirections send the standard output elsewhere (`( echo x ) >f | bash`
     hands the pipe nothing; `2>&1`, `>&1` keep it). Followed in order as bash applies them,
     with what each descriptor points at: a copy takes its source's place (`3>&1 >&3` keeps the
@@ -5472,10 +5520,11 @@ def _moves_stdout(toks: List[str], raws: Optional[List[str]] = None) -> bool:
     def where(target: str) -> str:
         if "$" in target or "`" in target:
             return "pipe"
-        if target.startswith("/"):
-            fd = _STD_PATHS.get(_normal_path(target)) or _fd_path(target)
-            if fd:
-                return fds.get(fd.lstrip("0") or "0", "other")
+        if not target.startswith("/"):
+            return "pipe"                   # relative: after a `cd /dev`, `>stdout` is the pipe
+        fd = _STD_PATHS.get(_normal_path(target)) or _fd_path(target)
+        if fd:
+            return fds.get(fd.lstrip("0") or "0", "other")
         return "file"
 
     k = 0
@@ -5498,7 +5547,9 @@ def _moves_stdout(toks: List[str], raws: Optional[List[str]] = None) -> bool:
             continue
         fd = (fd.lstrip("0") or "0") if fd else ("0" if op[0] == "<" else "1")   # `01` is 1
         if not copy:
-            fds[fd] = where(target)
+            # read from (`<f`, also `<<<` and `<<`, which read text): writing there fails;
+            # written (`>f`, `<>f`): where it points
+            fds[fd] = "file" if op == "<" else where(target)
         elif target == "-":
             fds[fd] = "closed"
         elif number:
@@ -5511,7 +5562,13 @@ def _moves_stdout(toks: List[str], raws: Optional[List[str]] = None) -> bool:
     # The input counts too: written into it (`1>&0`, `>/dev/stdin`), the text reaches whatever
     # reads that input, a shell reading its script from a pipe among them (measured: bash
     # runs `{ echo ...; } 1>&0 &>>/dev/stdout |& bash` fed through `echo '...' | bash`).
-    return fds["1"] not in ("pipe", "in")
+    # Any descriptor still on the pipe keeps the output: what runs inside can write there
+    # (`( echo ... >&2 ) 2>&1- | bash`), and so does one on the input (`1>&0`), since what is
+    # written there may reach a shell reading it, and, with `stderr_reaches`, one left on the
+    # standard error, which a redirection around this text or a `|&` can send into the pipe
+    # (`bash -c '{ ...; } >&2' 2>&1 | bash`).
+    kept = ("pipe", "in", "err") if stderr_reaches else ("pipe", "in")
+    return not any(where in kept if fd != "0" else where == "pipe" for fd, where in fds.items())
 
 
 class _Output:
@@ -5651,36 +5708,59 @@ def _subscript_text(seg: str) -> List[str]:
     $((x))`, `printf -v 'a[$(...)]' v` and `let` run it. Read, not refused. A `$(` ends where
     its parentheses balance, quotes inside skipped, and where bash's parser ends it (a case
     pattern's `)`, one in a comment or in a funsub closes nothing): one text for each."""
-    if "[" not in seg or ("$(" not in seg and "`" not in seg) or not _SUBSCRIPT_RE.search(seg):
+    if "[" not in seg or ("$(" not in seg and "`" not in seg and not _FUNSUB_RE.search(seg)) \
+            or not _SUBSCRIPT_RE.search(seg):
         return []
     texts: List[str] = []
-    names = _grammar_names(seg)
-    for ends_at in (_substitution_end,
-                    lambda text, at: _parsed_substitution_end(text, at, names)):
-        found: List[str] = []
-        i, n = 0, len(seg)
-        next_dollar = seg.find("$(")
-        next_tick = seg.find("`")
-        while True:
-            if next_dollar >= 0 and next_dollar < i:
-                next_dollar = seg.find("$(", i)
-            if next_tick >= 0 and next_tick < i:
-                next_tick = seg.find("`", i)
-            if next_dollar < 0 and next_tick < 0:
-                break
-            if next_tick < 0 or (0 <= next_dollar < next_tick):
-                end = ends_at(seg, next_dollar)
-                found.append(seg[next_dollar:end])
-                i = end
-            else:
-                close = seg.find("`", next_tick + 1)
-                close = n - 1 if close < 0 else close
-                found.append(seg[next_tick:close + 1])
-                i = close + 1
-        text = ": " + " ".join(found) if found else ""
-        if text and text not in texts:
-            texts.append(text)
+    variants = [seg]
+    if '"' in seg or "\\" in seg:
+        # The string as bash hands it over: an escaped backtick, `\$(` and a `\\` NL
+        # continuation inside double quotes lose their backslash (`let "b[\`cmd\`]=1"`).
+        spoken = " ".join(_bash_word(w) for w in _raw_words(seg))
+        if spoken != seg:
+            variants.append(spoken)
+    for text in variants:
+        names = _grammar_names(text)
+        for ends_at in (_substitution_end,
+                        lambda t, at, names=names: _parsed_substitution_end(t, at, names)):
+            found = _substitutions_in(text, ends_at)
+            joined = ": " + " ".join(found) if found else ""
+            if joined and joined not in texts:
+                texts.append(joined)
     return texts
+
+
+def _substitutions_in(seg: str, ends_at) -> List[str]:
+    """Every `$( )`, backtick pair and bash 5.3 `${ cmd; }`/`${| cmd; }` in `seg`, left to
+    right, each ending where `ends_at` (for `$(`) or its closer says. One pass."""
+    found: List[str] = []
+    i, n = 0, len(seg)
+    next_dollar = seg.find("$(")
+    next_tick = seg.find("`")
+    fun = _FUNSUB_RE.search(seg)
+    next_fun = fun.start() if fun else -1
+    while True:
+        if next_dollar >= 0 and next_dollar < i:
+            next_dollar = seg.find("$(", i)
+        if next_tick >= 0 and next_tick < i:
+            next_tick = seg.find("`", i)
+        if next_fun >= 0 and next_fun < i:
+            fun = _FUNSUB_RE.search(seg, i)
+            next_fun = fun.start() if fun else -1
+        starts = [s for s in (next_dollar, next_tick, next_fun) if s >= 0]
+        if not starts:
+            break
+        first = min(starts)
+        if first == next_dollar:
+            end = ends_at(seg, first)
+        elif first == next_tick:
+            close = seg.find("`", first + 1)
+            end = n if close < 0 else close + 1
+        else:
+            end = _brace_group_end(seg, first + 2)
+        found.append(seg[first:end])
+        i = max(end, first + 1)
+    return found
 
 
 def is_command_safe(command: str, *, profile: str = "host") -> tuple:

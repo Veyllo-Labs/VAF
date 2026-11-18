@@ -1581,59 +1581,144 @@ def _keyword(call, name):
 _FD_REDIRECT_LITERAL = re.compile(r"[<>]&\s*\d{2,}")
 # Programs that read their `-c` argument as a shell script.
 _SHELLS = {"sh", "bash", "dash", "zsh", "ksh", "mksh", "ash"}
-# Calls that hand their first argument to /bin/sh.
-_SHELL_CALLS = {"system", "popen", "getoutput", "getstatusoutput"}
+# Calls that hand their command to /bin/sh, with the module that binds them and the keyword
+# that names the command.
+_SHELL_CALLS = {("os", "system"): "command", ("os", "popen"): "cmd",
+                ("subprocess", "getoutput"): "cmd", ("subprocess", "getstatusoutput"): "cmd",
+                ("asyncio", "create_subprocess_shell"): "cmd"}
+# Calls that start a program from an argv: the spawners, and helpers that build or pass one.
+_ARGV_CALLS = _SPAWNERS | {"create_subprocess_exec", "spawn", "execv", "execvp"}
+
+
+def _assignments(tree) -> dict:
+    """Name -> its value, for every name assigned exactly once in the module (a script or a
+    shell held in a variable is followed to where it is used)."""
+    seen: dict = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                and isinstance(node.targets[0], ast.Name):
+            seen.setdefault(node.targets[0].id, []).append(node.value)
+    return {name: values[0] for name, values in seen.items() if len(values) == 1}
+
+
+def _resolved(node, names: dict, depth: int = 0):
+    """`node`, or the one value its name was assigned."""
+    while isinstance(node, ast.Name) and node.id in names and depth < 3:
+        node = names[node.id]
+        depth += 1
+    return node
+
+
+def _names_a_shell(node, names: dict) -> bool:
+    node = _resolved(node, names)
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value.rsplit("/", 1)[-1] in _SHELLS
+    return isinstance(node, ast.Name) and node.id in _SHELLS
+
+
+def _argv_script(elts, names: dict):
+    """The script of an argv literal: the word after `-c` (or a combined flag such as `-ec`)
+    once a shell is named; None at the option terminator (`--`, `-`), where the next word is
+    a script file."""
+    shell_at = next((k for k, e in enumerate(elts) if _names_a_shell(e, names)), None)
+    if shell_at is None:
+        return None
+    for k in range(shell_at + 1, len(elts)):
+        flag = _resolved(elts[k], names)
+        if not (isinstance(flag, ast.Constant) and isinstance(flag.value, str)):
+            return None
+        if flag.value in ("--", "-") or not flag.value.startswith("-"):
+            return None
+        if not flag.value.startswith("--") and "c" in flag.value:
+            return elts[k + 1] if k + 1 < len(elts) else None
+    return None
+
+
+def _argv_elements(arg, names: dict, depth: int = 0) -> list:
+    """The items of the argv an argument is built from, in order: a list or tuple literal,
+    also put together with `+` (`["sh", "-c"] + [...]`); an operand that is no literal stands
+    as an unknown item."""
+    arg = _resolved(arg, names)
+    if isinstance(arg, (ast.List, ast.Tuple)):
+        return list(arg.elts)
+    if isinstance(arg, ast.BinOp) and isinstance(arg.op, ast.Add) and depth < 8:
+        return (_argv_elements(arg.left, names, depth + 1)
+                + _argv_elements(arg.right, names, depth + 1))
+    return [ast.Name(id="?")]
 
 
 def _shell_scripts(tree) -> list:
-    """The expressions a test hands to a shell as script text: the word after `-c` in an
-    argv literal that names a shell before it (`["/bin/sh", "-c", f"..."]`), and the first
-    argument of `os.system`/`os.popen`/`subprocess.getoutput` or of a spawner called with
-    `shell=True`. Command strings a test only classifies or prints are no shell's text."""
+    """The expressions a test hands to a shell as script text:
+    - the word after `-c` in an argv literal that names a shell before it (by a literal or a
+      variable assigned one) and is handed to a spawner or an argv helper (`guard_argv(...,
+      ["/bin/sh", "-c", f"..."])`); a list that is only printed or compared is no argv;
+    - the command of `os.system`, `os.popen`, `subprocess.getoutput`/`getstatusoutput` and
+      `asyncio.create_subprocess_shell`, and of a spawner called with `shell=True` (of a
+      sequence there, only its first item, which is what the shell runs).
+    Command strings a test only classifies or prints are no shell's text."""
+    names = _assignments(tree)
     scripts = []
     for node in ast.walk(tree):
-        if isinstance(node, (ast.List, ast.Tuple)):
-            elts = node.elts
-            shell_at = next((k for k, e in enumerate(elts)
-                             if (isinstance(e, ast.Constant) and isinstance(e.value, str)
-                                 and e.value.rsplit("/", 1)[-1] in _SHELLS)
-                             or (isinstance(e, ast.Name) and e.id in _SHELLS)), None)
-            if shell_at is None:
-                continue
-            for k in range(shell_at + 1, len(elts) - 1):
-                flag = elts[k]
-                if (isinstance(flag, ast.Constant) and isinstance(flag.value, str)
-                        and flag.value.startswith("-") and not flag.value.startswith("--")
-                        and "c" in flag.value):
-                    scripts.append(elts[k + 1])
-                    break
-        elif isinstance(node, ast.Call):
-            name = _call_name(node)
-            shell = _keyword(node, "shell")
-            if name in _SHELL_CALLS or (
-                    name in _SPAWNERS and isinstance(shell, ast.Constant) and shell.value is True):
-                first = node.args[0] if node.args else _keyword(node, "args")
-                if first is not None:
-                    scripts.append(first)
+        if not isinstance(node, ast.Call):
+            continue
+        name = _call_name(node)
+        func = node.func
+        module = func.value.id if isinstance(func, ast.Attribute) and isinstance(
+            func.value, ast.Name) else None
+        if (module, name) in _SHELL_CALLS:
+            first = node.args[0] if node.args else _keyword(node, _SHELL_CALLS[(module, name)])
+            if first is not None:
+                scripts.append(first)
+            continue
+        shell = _keyword(node, "shell")
+        if name in _SPAWNERS and isinstance(shell, ast.Constant) and shell.value is True:
+            first = node.args[0] if node.args else _keyword(node, "args")
+            first = _resolved(first, names) if first is not None else None
+            if isinstance(first, (ast.List, ast.Tuple)):
+                first = first.elts[0] if first.elts else None
+            if first is not None:
+                scripts.append(first)
+            continue
+        if name in _ARGV_CALLS or name.endswith("argv"):
+            for arg in list(node.args) + [k.value for k in node.keywords]:
+                script = _argv_script(_argv_elements(arg, names), names)
+                if script is not None:
+                    scripts.append(script)
     return scripts
+
+
+def _script_parts(node, names: dict, depth: int = 0):
+    """The string pieces that make up the script text: literals and f-string parts, through
+    `+` and a variable assigned once; an interpolated value contributes no literal of its own
+    (`f"echo {len('x >&12')}"` runs `echo 7`)."""
+    node = _resolved(node, names)
+    if isinstance(node, (ast.Constant, ast.JoinedStr)):
+        yield node
+    elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add) and depth < 8:
+        yield from _script_parts(node.left, names, depth + 1)
+        yield from _script_parts(node.right, names, depth + 1)
 
 
 def _fd_redirections(tree) -> list:
     """Lines of a `<&{x}`/`>&{x}` f-string, or a literal `<&12`, in text a shell runs
     (_shell_scripts): dash reads one digit there."""
+    names = _assignments(tree)
     hits = set()
     for script in _shell_scripts(tree):
-        for node in ast.walk(script):
-            if isinstance(node, ast.JoinedStr):
-                parts = node.values
-                for before, after in zip(parts, parts[1:]):
+        for part in _script_parts(script, names):
+            if isinstance(part, ast.JoinedStr):
+                pieces = part.values
+                for before, after in zip(pieces, pieces[1:]):
                     if (isinstance(before, ast.Constant) and isinstance(before.value, str)
                             and re.search(r"[<>]&\s*$", before.value)
                             and isinstance(after, ast.FormattedValue)):
-                        hits.add(node.lineno)
-            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-                if _FD_REDIRECT_LITERAL.search(node.value):
-                    hits.add(node.lineno)
+                        hits.add(part.lineno)
+                for piece in pieces:
+                    if isinstance(piece, ast.Constant) and isinstance(piece.value, str) \
+                            and _FD_REDIRECT_LITERAL.search(piece.value):
+                        hits.add(part.lineno)
+            elif isinstance(part.value, str) and _FD_REDIRECT_LITERAL.search(part.value):
+                hits.add(part.lineno)
     return sorted(hits)
 
 
@@ -1643,25 +1728,46 @@ def test_the_fd_redirection_scanner_reads_both_spellings():
     assert _fd_redirections(ast.parse('os.system("echo x >&12")')) == [1]
     assert _fd_redirections(ast.parse(
         'subprocess.run("echo x >&12", shell=True)')) == [1]
-    assert _fd_redirections(ast.parse('p = ["bash", "-ec", "cat <&10"]')) == [1]
-    assert _fd_redirections(ast.parse('p = [sh, "-c", "cat <&10"]')) == [1]
+    assert _fd_redirections(ast.parse('subprocess.run(["bash", "-ec", "cat <&10"])')) == [1]
+    assert _fd_redirections(ast.parse('subprocess.run([sh, "-c", "cat <&10"])')) == [1]
     assert _fd_redirections(ast.parse(
         'subprocess.run(["/bin/sh", "-c", "echo x >&2; read y < /proc/self/fd/12"])')) == []
 
 
 def test_the_fd_redirection_scanner_reads_only_text_a_shell_runs():
-    """A command string a test only classifies is no shell's text; the argv of
+    """A command string a test only classifies or prints is no shell's text; the argv of
     tests/test_folder_mount.py as it once was (a two-digit descriptor in the script that
-    `/bin/sh -c` runs, inside a helper call) is.
-    MUTATION: scan every string constant again - red (the first assertion)."""
+    `/bin/sh -c` runs, inside a helper call) is, and so are a script or a shell held in a
+    variable, an argv put together with `+`, `cmd=`, and `create_subprocess_shell`.
+    MUTATION: scan every string constant again - red (the first assertion);
+    MUTATION: drop the argv branch - red (the folder mount argv)."""
     assert _fd_redirections(ast.parse(
         'ROWS = [("( echo x ) 3>&01 >&3 | bash", "destructive_removal")]\n'
-        'classify_command("echo x >&12", profile="host")')) == []
+        'classify_command("echo x >&12", profile="host")\n'
+        'print(["bash", "-c", "echo x >&12"])\n'
+        'Recorder().system("echo x >&12")\n'
+        'subprocess.run(["true", "echo x >&12"], shell=True)\n'
+        'os.system(f"echo {len(\'x >&12\')}")\n'
+        'subprocess.run(["bash", "--", "fixture.sh", "-c", "echo x >&12"])\n'
+        'subprocess.run(["bash", "--", "-c", "echo x >&12"])')) == []
     assert _fd_redirections(ast.parse(
         'argv = (folder_mount.namespace_argv(held, a)\n'
         '        + folder_mount.guard_argv(a, held.identity,\n'
         '                                  ["/bin/sh", "-c", f"read x <&{rr}; ls -a {a}"],\n'
         '                                  started_fd=ws))')) == [3]
+    assert _fd_redirections(ast.parse(
+        'script = f"cat <&{rr}"\n'
+        'subprocess.run(["sh", "-c", script])')) == [1]
+    assert _fd_redirections(ast.parse(
+        'shell = "/bin/sh"\n'
+        'subprocess.run([shell, "-c", "cat <&10"])')) == [2]
+    assert _fd_redirections(ast.parse(
+        'subprocess.run(["sh", "-c"] + ["cat <&10"])')) == [1]
+    assert _fd_redirections(ast.parse('subprocess.getoutput(cmd="echo x >&12")')) == [1]
+    assert _fd_redirections(ast.parse(
+        'asyncio.create_subprocess_shell("echo x >&12")')) == [1]
+    assert _fd_redirections(ast.parse(
+        'subprocess.run(["echo x >&12", "arg0"], shell=True)')) == [1]
 
 
 def test_no_shell_redirection_names_a_two_digit_fd():

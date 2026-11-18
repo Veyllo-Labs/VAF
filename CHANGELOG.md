@@ -716,9 +716,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
     (`printf '%d ...' 3 | bash`, `%(...)T`): print the script with `%s`, or write it out.
   - An assignment whose subscript holds a command substitution, `$'...'` or quotes nested
     in a `${...}`, together with a blank or `;` outside them (`a[$(cmd) ;x]=1`): put the
-    index into a variable first (`i=$(cmd); a[$i]=1`).
+    whole index into a variable first (`i="$(cmd) ;x"; a[$i]=1`).
   - Thousands of `[` opened without their `]` where a command starts (`a[` repeated): close
     each one, or quote it.
+  - A shell fed a script on its input whose output it sends elsewhere, piped into another
+    shell (`bash <<< '...' >/dev/null | bash`): the script could write to any descriptor, so
+    it is read as printing into the pipe; leave out the `| bash`.
   - A long script nested several levels deep (`eval '... bash -c "..."'`, tens of kilobytes
     at each level): write the inner script to a file and run the file, when it does not need
     to change the calling shell (a `cd` or a variable set by `eval` stays in that shell; one

@@ -703,7 +703,24 @@ _NEIGHBOURS = [
     # output goes elsewhere; a descriptor past Python's digit limit
     "unset i; a[ ${i:-1 + 1} ]=value; echo ${a[@]}", "(( a[ i + 1 ]=2 )); echo ${a[@]}",
     "for (( i=0; i<2; i++ )); do a[i]=$i; done; echo ${a[@]}",
-    "bash <<< 'echo \"$HOME\"' >/dev/null | bash", "( echo hi ) 1>&" + "0" * 5000 + "1 | cat",
+    "( echo hi ) 1>&" + "0" * 5000 + "1 | cat",
+    # counts in arithmetic, quoted operators that are words, a key that only looks like a
+    # funsub, output kept away from the pipe
+    'echo $(( $# + 1 ))',
+    'n=$(( ${#a[@]} + 1 ))',
+    '(( $# > 0 )) || echo none',
+    'echo $(( ${#x} * 2 ))',
+    'shift $(( $# - 1 ))',
+    'echo $((${#a[@]}-1))',
+    'echo $(( ${#a[*]} ))',
+    "bash -c 'echo hi' >/dev/null | cat",
+    '( echo hi ) 2>&1 >/dev/null | bash',
+    'bash -c \'echo hello\' 1">"log | cat',
+    'bash -c \'echo hi\' 1>"log" | cat',
+    'a[ $i ]=1; echo ${a[@]}',
+    "declare -A a; a[ '${ :; }' ]=value; echo ${!a[@]}",
+    '( echo hi ) >/dev/null | bash',
+    'declare -a b=([1+2]=x [a[0]]=y); echo ${b[@]}',
 ]
 
 
@@ -1021,6 +1038,64 @@ def test_harmless_neighbours_still_pass(cmd):
     ('a[\n: "$\\\n{x#\'"\'}"\n]=1 rm -rf /', 'opaque_command'),
     # echo's words as bash's quote removal leaves them, also without its redirections
     ('echo "echo \': \\${ rm -r -f /; }\' | bash" 0<&1 1>&0 | sh', 'destructive_removal'),
+    # a script writing to another descriptor that reaches the pipe, an operator that is quoted
+    # or escaped, a relative target; a funsub or an escaped backtick in a quoted arithmetic
+    # string; `$$` before a `'`; `${!pre` NL `@}`; a count's substitutions
+    ("eval 'echo rm -rf / >&2' 2>&1- | bash", 'destructive_removal'),
+    ("bash -c 'echo rm -rf / >&2' 2>&1 >/dev/null | bash", 'destructive_removal'),
+    ("eval 'echo rm -rf / >&3' 3>&1- | bash", 'destructive_removal'),
+    ("eval 'exec 1>&3; echo rm -rf /' 3>&1- | bash", 'destructive_removal'),
+    ("eval 'echo rm -rf / >/dev/stderr' 2>&1- | bash", 'destructive_removal'),
+    ("eval 'exec >&2; echo rm -rf /' 2>&1- | bash", 'destructive_removal'),
+    ("bash <<< 'echo rm -rf / >&2' 2>&1- | bash", 'destructive_removal'),
+    ('( echo rm -rf / >&2 ) 2>&1- | bash', 'destructive_removal'),
+    ("( eval 'echo rm -rf / >&3' ) 3>&1- | bash", 'destructive_removal'),
+    ("bash -c 'echo rm -rf /' 1\\>/dev/null | bash", 'destructive_removal'),
+    ("bash -c 'echo rm -rf /' 1'>'/dev/null | bash", 'destructive_removal'),
+    ('bash -c \'echo rm -rf /\' 1">"/dev/null | bash', 'destructive_removal'),
+    ("bash -c 'echo rm -rf /' 1\\>\\&2 | bash", 'destructive_removal'),
+    ("bash -s <<< 'echo rm -rf /' 1\\>/dev/null | bash", 'destructive_removal'),
+    ("cd /dev; bash -c 'echo rm -rf /' >stdout | bash", 'destructive_removal'),
+    ("cd / && bash -c 'echo rm -rf /' >dev/stdout | bash", 'destructive_removal'),
+    ("let 'a[${ rm -rf /; }]=1'", 'destructive_removal'),
+    ("let 'a[${| rm -rf /; }]=1'", 'destructive_removal'),
+    ("[[ 'a[${ rm -rf /; }]' -eq 0 ]]", 'destructive_removal'),
+    ("declare -i x; x='a[${ rm -rf /; }]'", 'destructive_removal'),
+    ("[[ 0 -eq 'a[${ rm -rf /; }]' ]]", 'destructive_removal'),
+    ("declare -i x='a[${ rm -rf /; }]'", 'destructive_removal'),
+    ("typeset -i x; x+='a[${ rm -rf /; }]'", 'destructive_removal'),
+    ("printf -v 'a[${ rm -rf /; }]' x", 'destructive_removal'),
+    ("read 'a[${ rm -rf /; }]' <<< x", 'destructive_removal'),
+    ("test -v 'a[${ rm -rf /; }]'", 'destructive_removal'),
+    ("[[ -v 'a[${ rm -rf /; }]' ]]", 'destructive_removal'),
+    ("declare -n r='a[${ rm -rf /; }]'; : $r", 'destructive_removal'),
+    ("x='a[${ rm -rf /; }]'; (( x ))", 'destructive_removal'),
+    ("x='a[${ rm -rf /; }]'; echo $(( x ))", 'destructive_removal'),
+    ("i='a[${ rm -rf /; }]'; : ${b[i]}", 'destructive_removal'),
+    ('let "b[\\`rm -rf /\\`]=1"', 'destructive_removal'),
+    ('let "b[\\$(r\\\\\nm -rf /)]=1"', 'destructive_removal'),
+    ("cat <<$$'\\'\nx\n$$\\\nrm -rf /", 'destructive_removal'),
+    ('echo \'rm -rf /\' | bash "${!pre\n@}"', 'destructive_removal'),
+    ('n=$(( ${#a[@]} + $(rm -rf /) ))', 'destructive_removal'),
+    ('echo $(( ${#a[$(rm -rf /)]} + 1 ))', 'destructive_removal'),
+    # an array element's subscript with a line continuation or a funsub; a script writing to
+    # the standard error that a redirection around it or a `|&` sends into the pipe; a
+    # relative target
+    # output written into the input, which `/dev/stdout` then opens for writing
+    ("echo '{ :; echo '\\''rm -rf /'\\''; } 1>&0 &>>/dev/./stdout |& bash' | bash", 'destructive_removal'),
+    ("echo '{ :; echo '\\''rm -rf /'\\''; } 1>&0 &>>/dev/stdout | bash' | bash", 'destructive_removal'),
+    ('x=([${ rm -rf /; }]=1)', 'opaque_command'),
+    # a line continuation after the `:` of a default: no substring, so its `'}'` quotes
+    ('a["q\\\n"${x:\\\n-\'}\'}]+=$\'\\\n\' r\\\nm -rf /', 'destructive_removal'),
+    ('declare -a b=([a[${|r\\\nm -rf /;}]]=1)', 'opaque_command'),
+    ('declare -a b=([a[$(rm -rf /\\\n)]]=1)', 'destructive_removal'),
+    ('declare -a b=([a[${|rm -rf /;}]]=1)', 'destructive_removal'),
+    ('declare -a b=([1+a[`rm -rf /\\\n`]]=1)', 'destructive_removal'),
+    ("bash -c '{ echo rm -rf /; } >&2' 2>&1- | bash", 'destructive_removal'),
+    ("eval '{ echo rm -rf /; } >&2' 3>&1 |& bash", 'destructive_removal'),
+    ("cd / && ( eval 'echo rm -rf /' ) >dev/stdout 2>&1 | bash", 'destructive_removal'),
+    ("exec 4>&1; ( eval '{ echo rm -rf /; } >&2' ) 9>&1 |& bash", 'destructive_removal'),
+    ("{ eval '{ echo rm -rf /; } >&2'; } 2>/dev/null |& bash", 'destructive_removal'),
     # a script's output goes on unless its own redirections send it elsewhere
     ("bash <<< 'echo rm -rf /' 3>&1 >/dev/null >&3 | bash", 'destructive_removal'),
 ])
@@ -1033,7 +1108,10 @@ def test_what_the_differential_found_is_read(cmd, category):
     MUTATION: open heredocs inside `((...))` - red; read `${ ` as a parameter - red;
     MUTATION: keep a subscript's line continuations, match `NAME[` or `]=` as written, read
     `$\\` NL `{` as no substitution, take no funsub for a substitution, rewrite a subscript
-    inside arithmetic, copy a heredoc delimiter's `$(...)` as written - red, each its rows."""
+    inside arithmetic, copy a heredoc delimiter's `$(...)` as written - red, each its rows;
+    MUTATION: drop a stage's output when only its standard output leaves the pipe, take a
+    quoted operator for a redirection, read no funsub or no quote removal in B7, read `$$'`
+    as `$'`, leave `${!pre` NL `@}` present - red, each its rows."""
     for profile in ("host", "jailed", "remote"):
         v = classify_command(cmd, profile=profile)
         assert v.blocked and category in v.categories, (profile, cmd, v.categories)
@@ -1110,8 +1188,8 @@ def test_the_new_shapes_name_their_way_out():
         ('P=foo; bash <<< "echo $P"', "is not exported is empty in that shell",
          "export P=foo; bash <<< 'echo $P'"),
         ("x=(a;b)", "quote that element", "x=('a;b')"),
-        ("a[$(date +%s) ;y]=1 ls", "put the index into a variable first",
-         "i=$(date +%s); a[$i]=1"),
+        ("a[$(date +%s) ;y]=1 ls", "put the whole index into a variable first",
+         'i="$(date +%s) ;y"; a[$i]=1'),
         ("a[;" * 3000 + "]=1", "close each one", "a[1]=1"),
     ]:
         v = classify_command(cmd, profile="host")
@@ -1374,15 +1452,16 @@ def test_nesting_costs_a_bounded_multiple_of_the_text(trigger, runner):
 
 
 def test_all_readings_of_one_call_share_one_character_budget(monkeypatch):
-    """Counted where a reading enters the parser (its text split into segments): the readings
-    that enter, the top-level grammar reading's included, read at most _READ_FACTOR times the
-    text plus _READ_SLACK, and the first reading the budget refuses never enters.
+    """Counted where a reading enters a parser (its text split into segments, or its grammar
+    text written), each reading once: the readings that enter, the top-level grammar reading's
+    included, read at most _READ_FACTOR times the text plus _READ_SLACK, and a reading the
+    budget refuses enters neither parser.
     MUTATION: a fresh character budget for the top-level grammar reading - red;
     MUTATION: spend after the parser instead of before - red."""
     text = _nested(_NEST_TRIGGERS[1], "eval", 4, 32000)
     frames: list = []
     done: list = []
-    real_read, real_split = cp._read, cp._split_segments
+    real_read, real_split, real_texts = cp._read, cp._split_segments, cp._grammar_texts
 
     def reading(command, **kwargs):
         budget = kwargs.get("_budget")
@@ -1400,13 +1479,68 @@ def test_all_readings_of_one_call_share_one_character_budget(monkeypatch):
             frames[-1]["entered"] = True
         return real_split(seg_text, *args, **kwargs)
 
+    def writing(text, *args, **kwargs):
+        if frames and text == frames[-1]["text"]:
+            frames[-1]["entered"] = True
+        return real_texts(text, *args, **kwargs)
+
     monkeypatch.setattr(cp, "_read", reading)
     monkeypatch.setattr(cp, "_split_segments", splitting)
+    monkeypatch.setattr(cp, "_grammar_texts", writing)
     classify_command(text, profile="host")
     entered = sum(len(f["text"]) for f in done if f["entered"])
     assert entered <= cp._READ_FACTOR * len(text) + cp._READ_SLACK, entered
     refused = [f for f in done if f["left"] is not None and f["left"] - len(f["text"]) < 0]
     assert refused and not any(f["entered"] for f in refused), len(refused)
+
+
+def test_a_redirection_needs_its_operator_unquoted():
+    """`1">"log` and `1\\>log` are words for bash, `1>"log"` is a redirection.
+    MUTATION: read only the raw word's first character - red."""
+    for raw, tok, width in (('1">"log', "1>log", 0), ("1\\>log", "1>log", 0),
+                            ("1'>'log", "1>log", 0), ('1>"log"', "1>log", 1),
+                            (">", ">", 2), ("2>&1", "2>&1", 1), ("'<f'", "<f", 0)):
+        toks = [tok] + (["f"] if width == 2 else [])
+        raws = [raw] + (["f"] if width == 2 else [])
+        assert cp._redirection_width(toks, 0, raws) == width, raw
+
+
+def test_a_script_fed_by_its_input_keeps_its_output_whatever_its_redirections():
+    """A shell's script can write to any descriptor, so what it prints goes on into the pipe
+    even when the shell's own standard output goes elsewhere: refused, fail-closed, also
+    where only the standard output was written (an over-refusal named in SANDBOXING).
+    MUTATION: drop the output when the standard output leaves the pipe - red."""
+    for cmd in ("bash <<< 'echo rm -rf / >&2' 2>&1- | bash",
+                "bash <<< 'echo \"$HOME\"' >/dev/null | bash"):
+        assert classify_command(cmd, profile="host").blocked, cmd
+
+
+def test_the_process_id_before_a_quote_is_no_ansi_c_string():
+    """`$$'...'` is the process id and a plain single-quoted span, so a line continuation after
+    that span is joined; read as `$'...'` the `\\'` inside would escape the quote.
+    MUTATION: test for `$'` before `$$` - red."""
+    assert cp._join_continuations("$$'" + B + "'" + B + NL + "y'") == "$$'" + B + "'y'"
+
+
+def test_a_count_is_an_operand_only_in_arithmetic():
+    """`$#` and `${#a[@]}` start the `$((` read as a command as numbers; anywhere else such a
+    word as the program is still a program named by an expansion.
+    MUTATION: waive it outside arithmetic - red."""
+    assert not classify_command("echo $(( $# + 1 ))", profile="host").blocked
+    for cmd in ("$# -rf x", "${#a[@]} -rf x", "bash -c '$# -rf x'", "eval '${#a[@]} -rf x'"):
+        verdict = classify_command(cmd, profile="host")
+        assert verdict.blocked and verdict.opaque_shape == "expansion", cmd
+
+
+def test_moves_stdout_takes_an_input_for_no_output():
+    """A here-string, a heredoc and a file read from are inputs: nothing written reaches them,
+    so `>/dev/null` after them still moves the output away; a relative output target may be
+    the pipe (after `cd /dev`).
+    MUTATION: read an input's target (`<f`, `<<<`'s text) as a written one - red."""
+    assert cp._moves_stdout(["bash", "<<<", "x", ">/dev/null"])
+    assert cp._moves_stdout(["bash", "<<", "EOF", ">/dev/null"])
+    assert cp._moves_stdout(["<", "in.txt", ">/dev/null"])
+    assert not cp._moves_stdout([">", "stdout"])
 
 
 def test_moves_stdout_reads_descriptor_numbers_as_numbers():

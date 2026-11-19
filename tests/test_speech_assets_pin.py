@@ -313,6 +313,100 @@ def test_a_verified_file_is_hashed_once_per_process(monkeypatch, tmp_path):
     assert not verified_download.has_pinned_digest(dest, digest, len(data))
 
 
+def test_two_downloads_of_one_file_at_once_cannot_mix_their_bytes(monkeypatch, tmp_path):
+    """Two processes fetch the same voice at once: A gets the pinned bytes, B other ones.
+    Both used to write the one shared <name>.part, so B's bytes ended up in the file A
+    had renamed into place. Now each call has its own partial file: the destination only
+    ever holds the pinned bytes, and B's failure does not touch A's result.
+    MUTATION: a shared partial name (target + ".part") again: red."""
+    import threading
+    good, bad = b"G" * 4096, b"B" * 4096
+    digest = _sha(good)
+    dest = tmp_path / "voice.onnx"
+    both_open = threading.Barrier(2, timeout=5)
+    a_done = threading.Event()
+    seen = []
+
+    def fake_get(url, **kwargs):
+        payload = good if url.endswith("/a") else bad
+
+        class R:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def raise_for_status(self): pass
+            def iter_content(self, chunk_size):
+                yield payload[:1024]
+                both_open.wait()
+                if payload is bad:
+                    assert a_done.wait(5)
+                    seen.append(dest.read_bytes() if dest.exists() else None)
+                yield payload[1024:]
+        return R()
+
+    monkeypatch.setattr("vaf.core.verified_download.requests.get", fake_get)
+    results = {}
+
+    def run(name):
+        try:
+            results[name] = verified_download.download_verified(f"https://example.invalid/{name}", digest, dest,
+                                                                size=len(good))
+        except Exception as e:      # noqa: BLE001 - the outcome is what is asserted
+            results[name] = e
+        finally:
+            if name == "a":
+                a_done.set()
+
+    threads = [threading.Thread(target=run, args=(n,)) for n in ("a", "b")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+    assert results["a"] == dest, results
+    assert isinstance(results["b"], verified_download.DownloadIntegrityError), results
+    assert seen == [good], "right after A returned, the destination held the pinned bytes"
+    assert dest.read_bytes() == good
+    assert [p.name for p in tmp_path.iterdir()] == ["voice.onnx"], "no partial file is left"
+
+
+def test_a_stream_longer_than_the_pinned_size_is_cut_off(monkeypatch, tmp_path):
+    """MUTATION: ignore the size and the whole stream is read."""
+    pinned = b"x" * 100
+    read = []
+
+    def fake_get(url, **kwargs):
+        class R:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def raise_for_status(self): pass
+            def iter_content(self, chunk_size):
+                for _ in range(1000):
+                    read.append(1)
+                    yield b"y" * 50
+        return R()
+
+    monkeypatch.setattr("vaf.core.verified_download.requests.get", fake_get)
+    with pytest.raises(verified_download.DownloadIntegrityError, match="more than the pinned 100 bytes"):
+        verified_download.download_verified("https://example.invalid/x", _sha(pinned), tmp_path / "x", size=100)
+    assert len(read) == 3 and list(tmp_path.iterdir()) == []
+
+
+def test_a_replaced_file_with_the_old_time_is_hashed_again(monkeypatch, tmp_path):
+    """A file replaced by other bytes of the same size, its modification time set back,
+    must not ride on the memo of the verified one: the change time and the inode differ.
+    MUTATION: key the memo on path, size and modification time only: red."""
+    monkeypatch.setattr(verified_download, "_verified_files", set())
+    good = b"a" * 64
+    dest = tmp_path / "m.onnx"
+    dest.write_bytes(good)
+    assert verified_download.has_pinned_digest(dest, _sha(good), 64)
+    st = os.stat(dest)
+    other = tmp_path / "other"
+    other.write_bytes(b"b" * 64)
+    os.replace(other, dest)
+    os.utime(dest, ns=(st.st_atime_ns, st.st_mtime_ns))
+    assert not verified_download.has_pinned_digest(dest, _sha(good), 64)
+
+
 def test_fetch_verified_replaces_a_truncated_file_and_never_a_good_one(monkeypatch, tmp_path):
     data = b"model bytes" * 100
     digest = hashlib.sha256(data).hexdigest()
@@ -450,8 +544,10 @@ def test_piper_bytes_that_miss_the_pin_change_nothing(speech, monkeypatch, tmp_p
     bin_root = speech.bin_dir.parent
     assert _snapshot(bin_root) == before
     assert not (bin_root / "piper.staging").exists() and not (bin_root / "piper.previous").exists()
-    assert any("did not match its pinned checksum" in e for e in speech.said["error"]), speech.said
+    assert any("did not match its expected checksum" in e and "github.com/Veyllo-Labs/VAF/issues" in e
+               for e in speech.said["error"]), speech.said
     assert not any(HEX64.search(e) for e in speech.said["error"]), speech.said["error"]
+    assert any(e.startswith("System Details:") for e in speech.said["event"]), "the details go to the dim event"
 
 
 @NO_LINKS
@@ -483,7 +579,7 @@ def test_too_many_links_are_refused_before_unpacking(speech, monkeypatch, tmp_pa
     _get_by_url(monkeypatch, {ASSET: archive})
     assert speech._check_piper() is False
     assert _snapshot(speech.bin_dir.parent) == before
-    assert any("links" in e for e in speech.said["error"]), speech.said["error"]
+    assert any("links" in e for e in speech.said["event"]), speech.said["event"]
 
 
 def test_no_data_filter_no_unpack(speech, monkeypatch, tmp_path):
@@ -504,7 +600,7 @@ def test_no_data_filter_no_unpack(speech, monkeypatch, tmp_path):
     _get_by_url(monkeypatch, {ASSET: archive})
     assert speech._check_piper() is False
     assert _snapshot(speech.bin_dir.parent) == before
-    assert any("data filter" in e for e in speech.said["error"]), speech.said["error"]
+    assert any("data filter" in e for e in speech.said["event"]), speech.said["event"]
 
 
 def test_a_pinned_program_downloads_nothing(speech, monkeypatch, tmp_path):
@@ -545,7 +641,7 @@ def test_another_program_is_replaced_whole_and_tenants_stay(speech, monkeypatch,
     assert not (bin_root / "piper.previous").exists() and not (bin_root / "piper.staging").exists()
     if os.name != "nt":
         assert os.stat(speech.bin_dir / exe).st_mode & 0o111
-    assert any("differs from the pinned build" in e for e in speech.said["event"]), speech.said["event"]
+    assert any("not the version this VAF release expects" in e for e in speech.said["event"]), speech.said["event"]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="symlink privilege")
@@ -570,6 +666,50 @@ def test_a_program_that_is_a_link_is_replaced_and_its_target_left_alone(speech, 
     assert elsewhere.read_bytes() == program and (elsewhere.stat().st_mode & 0o777) == 0o600
 
 
+def test_an_archive_whose_program_is_not_the_pinned_one_is_refused(speech, monkeypatch, tmp_path):
+    """The archive matches its pinned digest, but the program inside differs from the
+    pinned program digest (a manifest whose two digests disagree): nothing is installed.
+    MUTATION: drop the check of the staged program: red (it installs)."""
+    archive = _piper_archive(speech, b"another program")
+    _write_pin(monkeypatch, tmp_path, archive=archive, program=b"pinned piper")
+    before = _old_install(speech)
+    _get_by_url(monkeypatch, {ASSET: archive})
+    assert speech._check_piper() is False
+    assert _snapshot(speech.bin_dir.parent) == before
+    assert any("not the pinned program" in e for e in speech.said["event"]), speech.said["event"]
+
+
+@NO_LINKS
+def test_an_installed_piper_with_a_link_leading_out_is_installed_again(speech, monkeypatch, tmp_path):
+    """An older VAF unpacked Piper without a filter, so its folder may hold a link that
+    leads outside it. The program alone matching is not enough then: the folder is
+    replaced. MUTATION: decide on the program digest alone: red (no download)."""
+    program = b"pinned piper"
+    archive = _piper_archive(speech, program)
+    _write_pin(monkeypatch, tmp_path, archive=archive, program=program)
+    speech.bin_dir.mkdir(parents=True)
+    (speech.bin_dir / _program_name(speech)).write_bytes(program)
+    os.symlink(str(tmp_path), speech.bin_dir / "libpiper_phonemize.so.1")
+    calls = []
+    _get_by_url(monkeypatch, {ASSET: archive}, calls)
+    assert speech._check_piper() is True and len(calls) == 1
+    assert not os.path.lexists(speech.bin_dir / "libpiper_phonemize.so.1")
+
+
+def test_an_unreachable_server_is_said_in_one_line(speech, monkeypatch, tmp_path):
+    import requests
+    program = b"pinned piper"
+    _write_pin(monkeypatch, tmp_path, archive=_piper_archive(speech, program), program=program)
+
+    def down(url, **kwargs):
+        raise requests.ConnectionError("HTTPSConnectionPool(host='github.com', port=443): Max retries exceeded")
+    monkeypatch.setattr("vaf.core.verified_download.requests.get", down)
+    assert speech._check_piper() is False
+    assert any("the download server could not be reached" in e for e in speech.said["error"]), speech.said
+    assert not any("HTTPSConnectionPool" in e for e in speech.said["error"])
+    assert any("HTTPSConnectionPool" in e for e in speech.said["event"])
+
+
 def test_a_failed_swap_puts_the_old_piper_back(speech, monkeypatch, tmp_path):
     """The second rename (staging into bin/piper) fails: the old folder is renamed back.
     MUTATION: drop the rename-back and bin/piper is gone."""
@@ -589,6 +729,8 @@ def test_a_failed_swap_puts_the_old_piper_back(speech, monkeypatch, tmp_path):
     _get_by_url(monkeypatch, {ASSET: archive})
     assert speech._check_piper() is False
     assert _snapshot(speech.bin_dir.parent) == before
+    assert any("could not be replaced right now" in e for e in speech.said["error"]), speech.said["error"]
+    assert not any("Errno" in e for e in speech.said["error"]), "the raw error goes to the dim event"
 
 
 def test_no_pinned_asset_no_download(speech, monkeypatch, tmp_path):
@@ -597,7 +739,8 @@ def test_no_pinned_asset_no_download(speech, monkeypatch, tmp_path):
     _write_pin(monkeypatch, tmp_path, asset="piper_macos_x64.tar.gz")
     _no_download(monkeypatch)
     assert speech._check_piper() is False
-    assert any("No pinned Piper build for piper_linux_x86_64.tar.gz" in e for e in speech.said["error"])
+    assert any("Piper has no download for this computer" in e for e in speech.said["error"])
+    assert not any(".json" in e or ".tar.gz" in e for e in speech.said["error"]), "no internal file name"
 
 
 def test_a_held_lock_says_it_waits(speech, monkeypatch, tmp_path):
@@ -648,7 +791,7 @@ def test_voice_bytes_that_miss_the_pin_leave_nothing(speech, monkeypatch, tmp_pa
     _get_by_url(monkeypatch, {".onnx": ONNX + b"x", ".onnx.json": CONFIG})
     assert speech._ensure_voice_model("de") is None
     assert sorted(p.name for p in speech.models_dir.iterdir()) == []
-    assert any("did not match its pinned checksum" in e for e in speech.said["error"])
+    assert any("did not match its expected checksum" in e for e in speech.said["error"])
     assert not any(HEX64.search(e) for e in speech.said["error"])
 
 
@@ -671,6 +814,31 @@ def test_a_truncated_voice_is_fetched_again(speech, monkeypatch, tmp_path):
     assert speech._ensure_voice_model("de") == speech.models_dir / "de_DE-thorsten-high.onnx"
     assert (speech.models_dir / "de_DE-thorsten-high.onnx").read_bytes() == ONNX
     assert len(calls) == 1, "the matching .onnx.json is kept"
+
+
+def test_a_voice_that_failed_its_checksum_is_not_fetched_at_every_reply(speech, monkeypatch, tmp_path):
+    """A 63 to 128 MB voice whose bytes do not match is fetched once per process, not at
+    every spoken reply; a connection that could not be made is retried. MUTATION: drop the
+    memo of failed voices: red (a second download)."""
+    import requests
+    _voice_pin(monkeypatch, tmp_path)
+    calls = []
+    _get_by_url(monkeypatch, {".onnx": ONNX + b"x", ".onnx.json": CONFIG}, calls)
+    assert speech._ensure_voice_model("de") is None
+    assert speech._ensure_voice_model("de") is None
+    assert len(calls) == 1
+
+    other = SpeechManager.__new__(SpeechManager)
+    other.models_dir = speech.models_dir
+
+    def down(url, **kwargs):
+        calls.append(url)
+        raise requests.ConnectionError("no route")
+    monkeypatch.setattr("vaf.core.verified_download.requests.get", down)
+    calls.clear()
+    assert other._ensure_voice_model("de") is None
+    assert other._ensure_voice_model("de") is None
+    assert len(calls) == 2, "a connection failure is retried at the next reply"
 
 
 def test_voice_urls_name_the_pinned_revision(speech, monkeypatch, tmp_path):
@@ -791,7 +959,8 @@ def test_a_malformed_manifest_refuses_the_install(speech, monkeypatch, tmp_path)
     assert speech._check_piper() is False
     assert speech._ensure_voice_model("de") is None
     assert speaker_id._ensure_models() is False
-    assert any("speech pin manifest" in e for e in speech.said["error"]), speech.said["error"]
+    assert any("cannot be read" in e for e in speech.said["error"]), speech.said["error"]
+    assert any("speech pin manifest" in e for e in speech.said["event"]), speech.said["event"]
 
 
 def test_no_unfiltered_unpack_or_hand_rolled_download_in_the_speech_stack():

@@ -31,7 +31,9 @@ def _stub_flask(monkeypatch):
 
     flask = types.ModuleType("flask")
     flask.Flask = Flask
-    for name in ("request", "jsonify", "Response", "send_file"):
+    flask.request = types.SimpleNamespace(body={}, get_json=lambda: flask.request.body)
+    flask.jsonify = lambda payload: payload
+    for name in ("Response", "send_file"):
         setattr(flask, name, object())
     cors = types.ModuleType("flask_cors")
     cors.CORS = lambda app: None
@@ -92,7 +94,7 @@ def test_bytes_that_miss_the_pin_end_in_an_error_and_leave_nothing(container, mo
     _network(monkeypatch, container, {"onnx": MODEL + b"x", "onnx.json": CONFIG}, calls)
     assert container.download_model("de") is False
     status = container.download_progress["de"]
-    assert status["status"] == "error" and "did not match its pinned checksum" in status["error"], status
+    assert status["status"] == "error" and "did not match its expected checksum" in status["error"], status
     assert sorted(p.name for p in (container.MODELS_DIR / "de").iterdir()) == []
 
 
@@ -118,3 +120,61 @@ def test_the_table_is_read_from_models_json_and_no_url_is_written_into_the_app(m
         assert app.AVAILABLE_MODELS[lang]["model_sha256"] == row["model"]["sha256"], lang
         assert f"/resolve/{table['revision']}/" in app.AVAILABLE_MODELS[lang]["model_url"], lang
     assert "COPY verified_download.py /app/" in (CONTAINER / "Dockerfile").read_text(encoding="utf-8")
+
+
+def test_a_rejected_config_keeps_the_installed_pair(container, monkeypatch):
+    """The model verified, the config did not: the pair already installed stays as it was
+    and no staged file is left. MUTATION: download straight into the final names and
+    remove both on an error (as before): red."""
+    d = container.MODELS_DIR / "de"
+    d.mkdir(parents=True)
+    (d / "de.onnx").write_bytes(b"installed model")
+    (d / "de.onnx.json").write_bytes(b"installed config")
+    calls = []
+    _network(monkeypatch, container, {"onnx": MODEL, "onnx.json": CONFIG + b"x"}, calls)
+    assert container.download_model("de") is False
+    assert sorted(p.name for p in d.iterdir()) == ["de.onnx", "de.onnx.json"]
+    assert (d / "de.onnx").read_bytes() == b"installed model"
+    assert (d / "de.onnx.json").read_bytes() == b"installed config"
+
+
+def test_an_unreachable_server_is_said_in_one_line(container, monkeypatch):
+    import requests
+
+    def down(url, **kwargs):
+        raise requests.ConnectionError("HTTPSConnectionPool(host='x', port=443): Max retries exceeded")
+    monkeypatch.setattr(sys.modules["verified_download"].requests, "get", down)
+    assert container.download_model("de") is False
+    status = container.download_progress["de"]
+    assert status["error"] == ("The German (Deutsch) voice could not be downloaded: the download server "
+                               "could not be reached."), status
+    assert "Max retries" in status["detail"]
+
+
+def test_a_second_install_while_one_runs_starts_no_second_download(container, monkeypatch):
+    """MUTATION: drop the check and a second thread starts."""
+    started = []
+    monkeypatch.setattr(container.threading, "Thread",
+                        lambda *a, **k: types.SimpleNamespace(start=lambda: started.append(1)))
+    container.request.body = {"language": "de"}
+    first = container.install_language()
+    second = container.install_language()
+    assert first["status"] == "downloading" and second["status"] == "downloading"
+    assert "already being downloaded" in second["message"]
+    assert started == [1]
+
+
+@pytest.mark.parametrize("lang", ["../..", "/app", "xx"])
+def test_uninstall_refuses_a_language_outside_the_table(container, monkeypatch, tmp_path, lang):
+    """/uninstall removed MODELS_DIR / <language> for any value, "../.." included.
+    MUTATION: drop the table check: red (the sentinel folder is gone)."""
+    sentinel = tmp_path / "sentinel"
+    sentinel.mkdir()
+    (sentinel / "keep").write_bytes(b"keep")
+    container.MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(container, "MODELS_DIR", tmp_path / "models" / "inner")
+    container.MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    container.request.body = {"language": "../../sentinel" if lang == "../.." else lang}
+    out = container.uninstall_language()
+    assert isinstance(out, tuple) and out[1] == 400, out
+    assert (sentinel / "keep").read_bytes() == b"keep"

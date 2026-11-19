@@ -73,47 +73,61 @@ def download_verified(
     sha256: str,
     dest: str | os.PathLike,
     *,
+    size: Optional[int] = None,
     timeout: float = 30.0,
     chunk_size: int = 1 << 16,
     progress: Optional[Callable[[int], None]] = None,
 ) -> Path:
     """Stream ``url`` into ``dest`` and return its path once the SHA-256 matches.
 
-    ``sha256`` is the expected hex digest (case-insensitive). ``progress`` is called with
-    the bytes received so far. Raises ``DownloadIntegrityError`` on a mismatch (the partial
+    ``sha256`` is the expected hex digest (case-insensitive). ``size``, when given, is the
+    pinned length: the transfer stops with ``DownloadIntegrityError`` as soon as more bytes
+    arrive, so an endless stream cannot fill the disk. ``progress`` is called with the
+    bytes received so far. Raises ``DownloadIntegrityError`` on a mismatch (the partial
     file is removed), ``ValueError`` when no digest is given, and the ``requests`` errors
     for the transfer itself.
+
+    Every call writes its own partial file next to the destination, created exclusively
+    (tempfile.mkstemp: a new name, never opened through an existing file or link), and
+    only the bytes that were hashed are in it. Two calls for the same destination at once
+    (two processes fetching one voice) therefore cannot mix their bytes: the destination
+    only ever receives a file whose own content matched, by an atomic rename, and a call
+    that fails removes only its own partial file.
     """
     expected = _expected_digest(sha256)
+    limit = None if size is None else int(size)
     target = Path(dest)
     target.parent.mkdir(parents=True, exist_ok=True)
-    partial = target.with_name(target.name + ".part")
+    fd, partial_name = tempfile.mkstemp(dir=target.parent, prefix="." + target.name + ".", suffix=".part")
+    partial = Path(partial_name)
     digest = hashlib.sha256()
     received = 0
+    moved = False
     try:
-        with requests.get(url, stream=True, timeout=timeout) as r:
+        with os.fdopen(fd, "wb") as f, requests.get(url, stream=True, timeout=timeout) as r:
             r.raise_for_status()
-            with open(partial, "wb") as f:
-                for chunk in r.iter_content(chunk_size=chunk_size):
-                    if not chunk:
-                        continue
-                    f.write(chunk)
-                    digest.update(chunk)
-                    received += len(chunk)
-                    if progress:
-                        progress(received)
+            for chunk in r.iter_content(chunk_size=chunk_size):
+                if not chunk:
+                    continue
+                received += len(chunk)
+                if limit is not None and received > limit:
+                    raise DownloadIntegrityError(
+                        f"{target.name}: more than the pinned {limit} bytes from {url}")
+                f.write(chunk)
+                digest.update(chunk)
+                if progress:
+                    progress(received)
         actual = digest.hexdigest()
         if actual != expected:
             raise DownloadIntegrityError(
                 f"{target.name}: SHA-256 {actual} does not match the pinned {expected} "
                 f"({received} bytes from {url})"
             )
-        if target.exists():
-            target.unlink()
         os.replace(partial, target)
+        moved = True
         return target
     finally:
-        if partial.exists():
+        if not moved:
             try:
                 partial.unlink()
             except OSError:
@@ -121,7 +135,10 @@ def download_verified(
 
 
 def file_sha256(path: str | os.PathLike, chunk_size: int = 1 << 20) -> str:
-    """The SHA-256 of the file at ``path`` (hex), read in chunks."""
+    """The SHA-256 of the file at ``path`` (hex), read in chunks. Deliberately its own
+    helper rather than an import of the same loop elsewhere in vaf (backup, learn_ledger):
+    this file is copied into the speech container, whose build context holds no vaf
+    package, so it imports nothing from vaf at module level."""
     digest = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(chunk_size), b""):
@@ -129,8 +146,10 @@ def file_sha256(path: str | os.PathLike, chunk_size: int = 1 << 20) -> str:
     return digest.hexdigest()
 
 
-# Files this process found to carry their pinned digest, keyed by what would change if the
-# file were replaced (path, size, modification time) and the digest it was compared with.
+# Files this process found to carry their pinned digest, keyed by what changes when the
+# file is replaced or rewritten (path, device and inode, size, modification and change
+# time; the change time cannot be set back by a program) and the digest it was compared
+# with.
 _verified_files: set = set()
 _verified_lock = threading.Lock()
 
@@ -146,7 +165,7 @@ def has_pinned_digest(path: str | os.PathLike, sha256: str, size: Optional[int] 
         return False
     if not stat.S_ISREG(st.st_mode) or (size is not None and st.st_size != int(size)):
         return False
-    key = (os.path.abspath(path), st.st_size, st.st_mtime_ns, expected)
+    key = (os.path.abspath(path), st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns, expected)
     with _verified_lock:
         if key in _verified_files:
             return True
@@ -176,7 +195,7 @@ def fetch_verified(
     target = Path(dest)
     if has_pinned_digest(target, sha256, size):
         return target
-    return download_verified(url, sha256, target, timeout=timeout, progress=progress)
+    return download_verified(url, sha256, target, size=size, timeout=timeout, progress=progress)
 
 
 def link_leaves_folder(link: str, depth: int, real_root: str) -> str:

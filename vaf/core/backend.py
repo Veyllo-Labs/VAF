@@ -562,7 +562,8 @@ def _server_ready_budget() -> float:
 # build, and only bytes that hash to the recorded digest (vaf/core/verified_download.py),
 # so a release asset replaced after the pin, a truncated transfer or a poisoned mirror
 # never runs. The unpack and its link checks (extract_archive, refuse_escaping_links,
-# MAX_ARCHIVE_LINKS) live in that module too, shared with the Piper install. A newer llama.cpp arrives with the VAF release that carries a new manifest.
+# MAX_ARCHIVE_LINKS) live in that module too, shared with the Piper install. A newer
+# llama.cpp arrives with the VAF release that carries a new manifest.
 LLAMA_REPO = "ggml-org/llama.cpp"
 LLAMA_REPO_ID = 612354784          # what the provenance attestation must name
 # The errors of a probe that establish "this binary cannot run": not a program, no
@@ -1063,7 +1064,8 @@ class ServerManager:
         base = f"https://github.com/{LLAMA_REPO}/releases/download/{tag}"
 
         def entry(name):
-            return {"name": name, "url": f"{base}/{name}", "sha256": pin["assets"][name]["sha256"]}
+            return {"name": name, "url": f"{base}/{name}", "sha256": pin["assets"][name]["sha256"],
+                    "size": pin["assets"][name].get("size")}
 
         return {"tag": tag, "main": entry(main), "dep": entry(dep) if dep else None}
 
@@ -1246,7 +1248,8 @@ class ServerManager:
                 if not part:
                     continue
                 UI.event("System", f"Downloading backend {part['name']} (b{want}, verifying SHA-256)...", style="warning")
-                downloaded.append(str(download_verified(part["url"], part["sha256"], os.path.join(staging, part["name"]))))
+                downloaded.append(str(download_verified(part["url"], part["sha256"], os.path.join(staging, part["name"]),
+                                                        size=part.get("size"))))
             UI.event("System", "Extracting backend...", style="dim")
             for archive in downloaded:
                 verified_download.extract_archive(archive, staging, program=self.server_exe)

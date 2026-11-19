@@ -43,6 +43,7 @@ DEFAULT_LANG = os.environ.get("TTS_DEFAULT_LANG", "de")
 # repository from the same commit as the voices of the host. A voice is downloaded only
 # as the bytes recorded there (verified_download.py, a byte-identical copy of VAF's
 # vaf/core/verified_download.py: the build context holds no vaf package).
+# TTS_MODELS_TABLE points at another table: a seam for tests, the image uses the default.
 MODELS_TABLE = Path(os.environ.get("TTS_MODELS_TABLE", Path(__file__).with_name("models.json")))
 
 
@@ -112,11 +113,30 @@ def is_language_installed(lang: str) -> bool:
     return False
 
 
+def download_error_message(name: str, error: Exception) -> str:
+    """One short line for the person, by cause; the raw error goes to the log."""
+    import requests
+
+    if isinstance(error, DownloadIntegrityError):
+        return (f"The download of the {name} voice did not match its expected checksum, so it was not "
+                "installed. Try again later.")
+    if isinstance(error, (requests.ConnectionError, requests.Timeout)):
+        return f"The {name} voice could not be downloaded: the download server could not be reached."
+    if isinstance(error, requests.HTTPError):
+        status = getattr(error.response, "status_code", None)
+        return f"The {name} voice could not be downloaded: the download server answered with an error ({status})."
+    return f"The {name} voice could not be installed. Try again later."
+
+
 def download_model(lang: str) -> bool:
     """Download a language model, verified against its pinned SHA-256. Returns True on
-    success. Bytes that hash differently are never written under the model's name (the
-    download goes to a .part file that is renamed only once it verified); the status then
-    says the download did not match its pinned checksum."""
+    success.
+
+    Both files are fetched under staged names next to the installed pair, each only as the
+    bytes pinned for it (download_verified: its own partial file, renamed into place only
+    once its content matched), and they replace the installed pair only when both
+    verified. A failure removes the staged files and leaves an installed pair as it was;
+    the status then says why (a checksum mismatch, or the download error)."""
     if lang not in AVAILABLE_MODELS:
         return False
 
@@ -126,6 +146,8 @@ def download_model(lang: str) -> bool:
 
     model_file = model_dir / f"{lang}.onnx"
     config_file = model_dir / f"{lang}.onnx.json"
+    staged_model = model_dir / f".{lang}.onnx.incoming"
+    staged_config = model_dir / f".{lang}.onnx.json.incoming"
 
     try:
         # Update progress
@@ -138,13 +160,16 @@ def download_model(lang: str) -> bool:
             with download_lock:
                 download_progress[lang]["progress"] = int(received / total_size * 90)
 
-        download_verified(model_info["model_url"], model_info["model_sha256"], model_file,
-                          timeout=60, progress=on_progress)
+        download_verified(model_info["model_url"], model_info["model_sha256"], staged_model,
+                          size=model_info["model_size"], timeout=60, progress=on_progress)
 
         with download_lock:
             download_progress[lang]["progress"] = 95
 
-        download_verified(model_info["config_url"], model_info["config_sha256"], config_file, timeout=60)
+        download_verified(model_info["config_url"], model_info["config_sha256"], staged_config,
+                          size=model_info["config_size"], timeout=60)
+        os.replace(staged_model, model_file)
+        os.replace(staged_config, config_file)
 
         # Update config
         config = load_config()
@@ -158,18 +183,15 @@ def download_model(lang: str) -> bool:
         return True
 
     except Exception as e:
-        if isinstance(e, DownloadIntegrityError):
-            message = (f"The download of the {model_info['name']} voice did not match its pinned checksum, "
-                       "so it was not installed. Try again later.")
-        else:
-            message = str(e)
+        print(f"[TTS] Installing {lang} failed: {e}", flush=True)
         with download_lock:
-            download_progress[lang] = {"status": "error", "error": message}
-        # Cleanup partial files
-        if model_file.exists():
-            model_file.unlink()
-        if config_file.exists():
-            config_file.unlink()
+            download_progress[lang] = {"status": "error", "error": download_error_message(model_info["name"], e),
+                                       "detail": str(e)}
+        for staged in (staged_model, staged_config):
+            try:
+                staged.unlink()
+            except OSError:
+                pass
         return False
 
 
@@ -359,6 +381,17 @@ def install_language():
     if is_language_installed(lang):
         return jsonify({"status": "already_installed", "language": lang})
 
+    # One download per language at a time: a second click while one runs is answered with
+    # the running one instead of a second thread writing the same staged files.
+    with download_lock:
+        if (download_progress.get(lang) or {}).get("status") == "downloading":
+            return jsonify({
+                "status": "downloading",
+                "language": lang,
+                "message": f"{AVAILABLE_MODELS[lang]['name']} is already being downloaded"
+            })
+        download_progress[lang] = {"status": "downloading", "progress": 0}
+
     # Start download in background thread
     def do_download():
         download_model(lang)
@@ -394,6 +427,10 @@ def uninstall_language():
 
     if not lang:
         return jsonify({"error": "Missing 'language' parameter"}), 400
+
+    # Only a language of the table names a folder below MODELS_DIR ("../.." would not).
+    if lang not in AVAILABLE_MODELS:
+        return jsonify({"error": f"Unknown language: {lang}"}), 400
 
     model_dir = MODELS_DIR / lang
     if model_dir.exists():

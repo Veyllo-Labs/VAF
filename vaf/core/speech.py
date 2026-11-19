@@ -20,6 +20,33 @@ from vaf.core import verified_download
 from vaf.core.config import Config
 from vaf.cli.ui import UI
 
+# Where a person reports a download that keeps failing its checksum.
+REPORT_URL = "https://github.com/Veyllo-Labs/VAF/issues"
+
+
+class _PiperSwapError(Exception):
+    """Renaming the new Piper folder into place failed (on Windows: Piper is running)."""
+
+
+def download_problem(subject: str, object_: str, error: Exception) -> str:
+    """One short line for the person about a failed speech download, by cause: `subject`
+    starts the sentence ("The voice de_DE-thorsten-high"), `object_` names the same thing
+    inside one ("the voice ..."). The raw error is for a dim detail line, not this one."""
+    import requests
+    from vaf.core.verified_download import DownloadIntegrityError
+
+    if isinstance(error, DownloadIntegrityError):
+        return (f"The download of {object_} did not match its expected checksum, so it was not used. "
+                f"If this keeps happening, report it at {REPORT_URL}")
+    if isinstance(error, (requests.ConnectionError, requests.Timeout)):
+        return (f"{subject} could not be downloaded: the download server could not be reached. Check the "
+                "connection and try again.")
+    if isinstance(error, requests.HTTPError):
+        status = getattr(getattr(error, "response", None), "status_code", None)
+        return f"{subject} could not be downloaded: the download server answered with an error ({status})."
+    return f"{subject} could not be installed."
+
+
 # How long a Piper install waits for another VAF process that is installing it (the
 # download is about 20-26 MB).
 PIPER_INSTALL_LOCK_TIMEOUT = 600.0
@@ -305,34 +332,56 @@ class SpeechManager:
             return self.bin_dir / "piper"
 
     def _check_piper(self) -> bool:
-        """Piper is installed as the pinned build, or it is installed now, or this is False.
+        """Piper is installed as the build this release expects, or it is installed now,
+        or this is False.
 
-        The program bin/piper/piper[.exe] counts as installed only when it is a regular
+        The installed Piper counts only when its program bin/piper/piper[.exe] is a regular
         file whose SHA-256 equals the pinned program digest of this platform's archive
-        (vaf/core/speech_assets_pin.json; hashed once per process). Missing, a link, or
-        another build: the pinned archive is downloaded, verified and swapped in whole
-        (_install_piper). Asked once per process, as before."""
+        (vaf/core/speech_assets_pin.json; hashed once per process) and no link in bin/piper
+        leads outside the folder (verified_download.refuse_escaping_links). Anything else
+        (missing, a link, another build, an escaping link left by an older unfiltered
+        unpack): the pinned archive is downloaded, verified and swapped in whole
+        (_install_piper). Asked once per process, as before.
+
+        Named boundary: the other files of an installed folder (the libraries and
+        espeak-ng-data beside the program) are not compared with the archive. That needs a
+        digest of the whole unpacked folder per platform, which only the pin script can
+        record from the six archives, and the manifest holds none yet. A Piper whose
+        program matches is therefore kept with whatever libraries an earlier VAF unpacked
+        next to it; a fresh install or a replaced one always gets the verified folder."""
         if self._piper_checked:
             return self._has_piper
         self._has_piper = False
         try:
             entry = self._pinned_piper()
             if entry is not None:
-                binary = self._get_piper_binary()
-                if verified_download.has_pinned_digest(binary, entry["program_sha256"]):
+                if self._piper_is_pinned(entry):
                     self._has_piper = True
                 else:
-                    if os.path.lexists(binary):
-                        UI.event("Speech", "The installed Piper differs from the pinned build: installing the "
-                                 "pinned one...", style="warning")
+                    size = f"{entry['size'] / 1_000_000:.1f} MB"
+                    if os.path.lexists(self._get_piper_binary()):
+                        UI.event("Speech", "The installed Piper is not the version this VAF release expects; "
+                                 f"installing the right one ({size})...", style="warning")
                     else:
-                        UI.event("Speech", "Installing Piper TTS (Offline Neural Voice)...", style="warning")
+                        UI.event("Speech", f"Installing Piper, the offline speech program ({size})...",
+                                 style="warning")
                     self._has_piper = self._install_piper(entry)
         except Exception as e:
-            UI.error(f"Piper install failed: {e}")
+            UI.error("Piper could not be installed; speech falls back to the other voices.")
+            UI.event("System", f"Details: {e}", style="dim")
             self._has_piper = False
         self._piper_checked = True
         return self._has_piper
+
+    def _piper_is_pinned(self, entry: dict) -> bool:
+        """The installed program has the pinned digest and no link in its folder leaves it."""
+        if not verified_download.has_pinned_digest(self._get_piper_binary(), entry["program_sha256"]):
+            return False
+        try:
+            verified_download.refuse_escaping_links(str(self.bin_dir), "Piper")
+        except (RuntimeError, OSError):
+            return False
+        return True
 
     def _piper_asset_name(self) -> str:
         """The name of the Piper release archive for this computer. Exception for a
@@ -370,8 +419,9 @@ class SpeechManager:
         name = self._piper_asset_name()
         entry = speech_pin.piper_asset(name)
         if entry is None:
-            UI.error(f"No pinned Piper build for {name} in {speech_pin.PIN_PATH.name}; Piper stays uninstalled "
-                     "rather than downloading an unverified one.")
+            UI.error(f"Piper has no download for this computer ({platform.system()} {platform.machine()}), "
+                     "so it stays uninstalled.")
+            UI.event("System", f"No pinned archive {name} in {speech_pin.PIN_PATH.name}", style="dim")
         return entry
 
     def _install_piper(self, entry: dict) -> bool:
@@ -395,7 +445,7 @@ class SpeechManager:
         Named boundary: on Windows the rename of bin/piper fails while piper.exe speaks;
         the install then keeps the old folder, says so, and the next process retries."""
         from filelock import FileLock, Timeout
-        from vaf.core.verified_download import DownloadIntegrityError, download_verified
+        from vaf.core.verified_download import download_verified
 
         bin_root = self.bin_dir.parent
         staging = bin_root / "piper.staging"
@@ -417,7 +467,7 @@ class SpeechManager:
             UI.error(f"The Piper folder {bin_root} cannot be used ({e}).")
             return False
         try:
-            if verified_download.has_pinned_digest(self._get_piper_binary(), entry["program_sha256"]):
+            if self._piper_is_pinned(entry):
                 return True               # another process installed it while this one waited
             try:
                 for leftover in (staging, previous):
@@ -429,9 +479,9 @@ class SpeechManager:
                 return False
             try:
                 size_mb = entry["size"] / 1_000_000
-                UI.event("Download", f"Downloading Piper {entry['name']} ({size_mb:.1f} MB, verifying SHA-256)...",
-                         style="warning")
-                archive = download_verified(entry["url"], entry["sha256"], staging / entry["name"], timeout=60)
+                UI.event("Download", f"Downloading the Piper speech program ({size_mb:.1f} MB)...", style="warning")
+                archive = download_verified(entry["url"], entry["sha256"], staging / entry["name"],
+                                            size=entry["size"], timeout=60)
                 UI.event("System", "Extracting Piper...", style="dim")
                 verified_download.extract_archive(str(archive), str(staging), program=program, what="Piper")
                 staged = staging / program
@@ -439,28 +489,32 @@ class SpeechManager:
                     raise RuntimeError(f"the archive's {program} is not the pinned program")
                 if platform.system().lower() != "windows":
                     os.chmod(staged, 0o755)
-                moved_aside = False
-                if os.path.lexists(self.bin_dir):
-                    os.rename(self.bin_dir, previous)
-                    moved_aside = True
                 try:
-                    os.rename(staging, self.bin_dir)
-                except OSError:
-                    if moved_aside:
-                        try:
-                            os.rename(previous, self.bin_dir)
-                        except OSError:
-                            pass          # the next install removes it as a leftover
-                    raise
-            except DownloadIntegrityError as e:
+                    moved_aside = False
+                    if os.path.lexists(self.bin_dir):
+                        os.rename(self.bin_dir, previous)
+                        moved_aside = True
+                    try:
+                        os.rename(staging, self.bin_dir)
+                    except OSError:
+                        if moved_aside:
+                            try:
+                                os.rename(previous, self.bin_dir)
+                            except OSError:
+                                pass      # the next install removes it as a leftover
+                        raise
+                except OSError as e:
+                    raise _PiperSwapError(e) from e
+            except _PiperSwapError as e:
                 self._remove_quietly(staging)
-                UI.error("The download of Piper did not match its pinned checksum, so it was not used and "
-                         "nothing was changed. Try again later; if it keeps happening, report it.")
-                UI.event("System", f"Checksum details: {e}", style="dim")
+                UI.error("Piper could not be replaced right now (it may be in use); your current Piper is "
+                         "unchanged and VAF tries again on its next start.")
+                UI.event("System", f"Details: {e.__cause__}", style="dim")
                 return False
             except Exception as e:
                 self._remove_quietly(staging)
-                UI.error(f"Piper install failed, the installed Piper is unchanged: {e}")
+                UI.error(download_problem("Piper", "Piper", e) + " Your current Piper is unchanged.")
+                UI.event("System", f"Details: {e}", style="dim")
                 return False
             try:
                 verified_download.remove_tree_or_link(str(previous))
@@ -542,7 +596,12 @@ class SpeechManager:
         pinned digest is kept (hashed once per process), a truncated or foreign one is
         replaced by verified bytes, and bytes that hash differently are never written
         under the voice's name. None, with the reason said, when the voice is not pinned or
-        could not be fetched."""
+        could not be fetched.
+
+        A voice whose download failed its checksum or was refused by the server is not
+        fetched again in this process (a 63 to 128 MB transfer would otherwise repeat at
+        every spoken reply); the next start of VAF tries again. A connection that could not
+        be made is retried at the next reply."""
         from vaf.core import speech_pin
         from vaf.core.verified_download import DownloadIntegrityError, fetch_verified, has_pinned_digest
 
@@ -556,32 +615,36 @@ class SpeechManager:
 
         onnx_file = self.models_dir / f"{model_name}.onnx"
         json_file = self.models_dir / f"{model_name}.onnx.json"
+        failed = self.__dict__.setdefault("_voice_failed", set())
+        if model_name in failed:
+            return None
         try:
             pinned = speech_pin.voice_files(model_name)
         except RuntimeError as e:
-            UI.error(str(e))
+            UI.error("The list of voices this VAF release may download cannot be read, so no voice is "
+                     "downloaded.")
+            UI.event("System", f"Details: {e}", style="dim")
             return None
         if pinned is None:
-            UI.error(f"No pinned download for the voice {model_name}; it is not downloaded unverified.")
+            UI.error(f"The voice {model_name} has no download in this VAF release.")
             return None
         onnx, config = pinned
         try:
             if has_pinned_digest(onnx_file, onnx["sha256"], onnx["size"]) \
                     and has_pinned_digest(json_file, config["sha256"], config["size"]):
                 return onnx_file
-            UI.event("Download", f"Downloading voice: {model_name} ({onnx['size'] / 1_000_000:.1f} MB, "
-                     "verifying SHA-256)...", style="warning")
+            UI.event("Download", f"Downloading the voice {model_name} ({onnx['size'] / 1_000_000:.1f} MB)...",
+                     style="warning")
             fetch_verified(onnx["url"], onnx["sha256"], onnx_file, size=onnx["size"], timeout=60)
             fetch_verified(config["url"], config["sha256"], json_file, size=config["size"], timeout=60)
             UI.success(f"Voice {model_name} ready.")
             return onnx_file
-        except DownloadIntegrityError as e:
-            UI.error(f"The download of the voice {model_name} did not match its pinned checksum, so it was "
-                     "not used. Try again later; if it keeps happening, report it.")
-            UI.event("System", f"Checksum details: {e}", style="dim")
-            return None
         except Exception as e:
-            UI.error(f"Failed to download voice: {e}")
+            import requests
+            if isinstance(e, (DownloadIntegrityError, requests.HTTPError)):
+                failed.add(model_name)
+            UI.error(download_problem(f"The voice {model_name}", f"the voice {model_name}", e))
+            UI.event("System", f"Details: {e}", style="dim")
             return None
 
     def _play_audio(self, file_path: str):

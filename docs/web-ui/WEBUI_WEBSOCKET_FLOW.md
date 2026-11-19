@@ -934,7 +934,7 @@ When the frontend receives `history_update`, it applies a multi-step pipeline to
 
 ## WebSocket Connection Role Storage
 
-When a WebSocket connection is established, the user's role from the JWT token is stored via `manager.set_connection_user(websocket, user_id, username=..., role=...)`. The `get_config` and `save_config` handlers use `manager.get_connection_user_role(websocket)` to determine admin status, in addition to the legacy scope-based check. This ensures that the admin role from the JWT is respected even if the scope ID does not match the local admin scope. The session ownership gate also reads this stored role, treating role `admin` (or a connection scope equal to the local-admin scope) as admin, so the desktop/admin connection is not locked out of session commands even when its connection scope is `None`.
+When a WebSocket connection is established, the user's role from the JWT token is stored via `manager.set_connection_user(websocket, user_id, username=..., role=...)`. The `get_config` and `save_config` handlers use `manager.get_connection_user_role(websocket)` to determine admin status, in addition to the legacy scope-based check. `save_config` refuses a `config` that is not a JSON object with `config_saved` and `status: "error"`, as `PATCH /api/config` answers 422 (`Config.require_save_body`). This ensures that the admin role from the JWT is respected even if the scope ID does not match the local admin scope. The session ownership gate also reads this stored role, treating role `admin` (or a connection scope equal to the local-admin scope) as admin, so the desktop/admin connection is not locked out of session commands even when its connection scope is `None`.
 
 ## WebSocket Frame Sizing
 

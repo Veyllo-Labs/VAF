@@ -487,7 +487,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   left open while a Telegram contact, relay contact or WhatsApp number was removed (or the
   Veyllo relay switched off) wrote the old list back on its next save, giving the removed
   person their access again. The pairing lists and the relay switch now change only
-  through their own buttons and commands. A save keeps what is stored.
+  through their own buttons and commands. A save keeps what is stored. A settings save
+  that is not a JSON object is now refused with an error: sent over the live connection
+  as a list of key and value pairs, it skipped these checks, and an account without admin
+  rights could change another account's mail server.
 - **Only an admin can change where requests go, the vision and browser-agent models, and
   the instance's secrets and limits.** A settings save by any signed-in account could change
   them:

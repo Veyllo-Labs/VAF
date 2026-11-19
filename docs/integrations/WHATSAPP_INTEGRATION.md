@@ -249,7 +249,11 @@ WhatsApp process runs for this account" and an empty chat list. A send that know
 both carry it) is held to that scope even under the process's own name, and a notification
 that arrives without a name is delivered under its scope's account
 (`messaging_connections.send_to_main_messenger` resolves the name; the registered-number
-lookup with a scope matches that scope only).
+lookup with a scope matches that scope only). A stored chat that is another account's
+registered number (older versions could store the admin's number for another account, or
+another account's number under the name "admin") is reset to the account's own registered
+number on the next read, before anything is sent, and logged once as `owner_endpoint_reset`
+in the security log (`messaging_connections.get_whatsapp_chat_jid`).
 
 - **Self-chat (the linked account's own chat)**: A message in the linked account's "message yourself" chat is somebody typing on the agent's phone, not the owner talking to the agent. The bridge drops it before the store, the activity and the queue; a downloaded voice file is deleted. In logs you will see `SELF_CHAT dropped`. The Node decides `selfChat` by comparing the sender with the linked account (for `@lid` senders only after resolving the LID to a number).
 

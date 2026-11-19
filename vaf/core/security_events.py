@@ -126,8 +126,8 @@ SECURITY_EVENT_KINDS: dict[str, str] = {
     "owner_endpoint_reset": "The stored chat where VAF reaches an account on a messenger was "
                             "not that account's own paired chat and was reset; `channel` the "
                             "platform, `username` the account, `path` the discarded id, "
-                            "`detail` what it was (a contact by name) and what the account is "
-                            "reached on now",
+                            "`detail` what it was (a contact by name, or another account's "
+                            "registered number) and what the account is reached on now",
     "contact_access_changed": "A contact's 'can reach your assistant' flag was switched, so the "
                               "contact may (or may no longer) talk to the agent's Front Office; "
                               "`username` who changed it, `path` the contact id, `detail` the "

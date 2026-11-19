@@ -506,6 +506,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **WhatsApp: a notification can no longer go to another account's number because of an old
+  saved chat.** Earlier versions could save the admin's registered number as another
+  account's WhatsApp chat, or another account's number as the admin's. VAF now checks the
+  saved chat before every send, resets one that is another account's registered number to
+  your own, and records it in the security log as "Delivery chat corrected".
 - **WhatsApp: an account can no longer make a stranger your agent's owner, or send as your
   agent's number.** Assigning a chat's hidden WhatsApp ID (LID) to a number used to apply to
   every account. A non-admin could bind any ID to the admin's own number, so that sender was

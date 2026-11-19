@@ -327,6 +327,24 @@ def test_second_admin_deletes_lists_and_restores_a_root_task(store):
     assert (store / ADMIN2 / "ad200009.json").exists()
 
 
+def test_admin_restores_a_task_the_machine_owner_deleted(store):
+    """The machine owner's own delete lands in its scoped trash. A second admin saw the task
+    while it was live, so it lists and restores it from there too; a tenant does not.
+    MUTATION: drop the machine owner's store from `AutomationAccess._stores`."""
+    from vaf.tools.automation import DeleteAutomationTool, ListTrashTool, RestoreAutomationTool
+
+    owner = {"user_scope_id": LOCAL, "user_role": None}
+    admin = {"user_scope_id": ADMIN2, "user_role": "admin"}
+    tenant = {"user_scope_id": TENANT_A, "user_role": "user"}
+    assert "Deleted (Moved to Trash)" in DeleteAutomationTool().run(task_id=LOCAL_ID, **owner)
+    assert (store / LOCAL / "trash" / f"{LOCAL_ID}.json").exists()
+    assert LOCAL_ID not in ListTrashTool().run(**tenant)
+    assert "not found in trash" in RestoreAutomationTool().run(task_id=LOCAL_ID, **tenant)
+    assert LOCAL_ID in ListTrashTool().run(**admin)
+    assert "Restored" in RestoreAutomationTool().run(task_id=LOCAL_ID, **admin)
+    assert _path(store, LOCAL_ID).exists()
+
+
 def test_tenant_trash_round_trip_unchanged(store):
     """A tenant's own trash, including a record written without a scope, still lists and
     restores. MUTATION: drop the scope stamp in `AutomationManager.list_trash`."""
@@ -500,7 +518,9 @@ _PLANNER = ("automation_note", "automation_todo")
 
 def _branch_literals(test) -> list:
     """The `type` literals an `if` test dispatches on: `type == "x"`, `"x" == type` and
-    `type in ("x", "y")`."""
+    `type in ("x", "y")`, also inside an `and`/`or` condition."""
+    if isinstance(test, ast.BoolOp):
+        return [lit for value in test.values for lit in _branch_literals(value)]
     if not (isinstance(test, ast.Compare) and len(test.ops) == 1 and len(test.comparators) == 1):
         return []
     left, op, right = test.left, test.ops[0], test.comparators[0]
@@ -517,15 +537,29 @@ def _branch_literals(test) -> list:
     return []
 
 
+_NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+
+
+def _own_path(nodes):
+    """Every node of `nodes` that runs on the code's own path: nested functions, lambdas
+    and classes are skipped, because a call inside one runs only if that one is called."""
+    stack = [node for node in nodes if not isinstance(node, _NESTED_SCOPES)]
+    while stack:
+        node = stack.pop()
+        yield node
+        stack.extend(child for child in ast.iter_child_nodes(node)
+                     if not isinstance(child, _NESTED_SCOPES))
+
+
 def _calls(nodes, name: str) -> bool:
-    """Whether `name` is CALLED (as `name(...)` or `x.name(...)`), not merely mentioned."""
-    for stmt in nodes:
-        for sub in ast.walk(stmt):
-            if isinstance(sub, ast.Call):
-                f = sub.func
-                if (isinstance(f, ast.Name) and f.id == name) or (
-                        isinstance(f, ast.Attribute) and f.attr == name):
-                    return True
+    """Whether `name` is CALLED (as `name(...)` or `x.name(...)`) on the code's own path,
+    not merely mentioned and not only inside a nested function or lambda."""
+    for sub in _own_path(nodes):
+        if isinstance(sub, ast.Call):
+            f = sub.func
+            if (isinstance(f, ast.Name) and f.id == name) or (
+                    isinstance(f, ast.Attribute) and f.attr == name):
+                return True
     return False
 
 
@@ -546,7 +580,21 @@ def _ws_branch_violations(source: str) -> tuple:
     """(violations, branch literals) for every branch of `websocket_endpoint` that
     dispatches on a `type` literal naming an automation, plus three file-wide checks: no
     `AutomationManager(...)` without `user_scope_id`, no `x.AutomationManager(...)` and no
-    aliased import of it (either would hide a call from the first check)."""
+    aliased import of it (either would hide a call from the first check).
+
+    A store branch must CALL `AutomationAccess(...)` on its own path (a call inside a
+    nested function or lambda does not count) and must not name `AutomationManager`.
+
+    Named boundaries, not seen by this guard (the behaviour tests over a real `/ws` cover
+    the commands that exist):
+    - a helper that builds the global store elsewhere (`get_manager()`,
+      `ensure_scheduler_started()`, a function in another module), or a rebind by plain
+      assignment (`AM = AutomationManager` outside the branch, then `AM()`), or `getattr`;
+    - dispatch not written as a comparison of the name `type`: `cmd.get("type") == ...`,
+      `match`/`case`, `type.startswith(...)`;
+    - a command whose literal does not contain "automation", such as the thinking-workspace
+      handoff commands, which reach the store through `_apply_automation_action` (asks
+      `AutomationAccess`; pinned by the handoff tests below)."""
     tree = ast.parse(source)
     fn = next(n for n in ast.walk(tree)
               if isinstance(n, ast.AsyncFunctionDef) and n.name == "websocket_endpoint")
@@ -614,12 +662,19 @@ async def websocket_endpoint(websocket, token=None):
             mgr = A.AutomationManager(user_scope_id=scope)
         elif "copy_automation" == type:
             mgr = A.AutomationManager(user_scope_id=scope)
+        elif type == "move_automation" and cmd.get("id"):
+            mgr = load_store(scope)
+        elif type == "clone_automation":
+            def never_called():
+                return AutomationAccess(scope, role).list()
+            mgr = load_store(scope)
         elif type == "get_automation_notes":
             notes = list_notes(scope)
 '''
     bad, seen = _ws_branch_violations(synthetic)
     for literal in ("pause_automation", "rename_automation",
-                    "archive_automation|unarchive_automation", "copy_automation"):
+                    "archive_automation|unarchive_automation", "copy_automation",
+                    "move_automation", "clone_automation"):
         assert any(b.startswith(f"{literal}:") for b in bad), (literal, bad)
     assert any("without user_scope_id" in b for b in bad), bad
     assert any("imported as AM" in b for b in bad), bad
@@ -630,42 +685,79 @@ async def websocket_endpoint(websocket, token=None):
 # ── AC10: the agent tools ask the rule ────────────────────────────────────────
 
 def _tool_violations(source: str) -> tuple:
-    """(violations, names) for every tool class in the module whose category, own or
-    inherited from another class in the module, is `automations`: its `run`, own or
-    inherited, must CALL `AutomationAccess(...)`. Subclasses of an existing tool count.
-    `create_automation` included: its duplicate check reads only what the caller sees."""
+    """(violations, names) for every tool class in the module whose category is
+    `automations`: the `run` Python would call, resolved in method resolution order over the
+    module's own classes, must CALL `AutomationAccess(...)` on its own path. Subclasses of
+    an existing tool count, a `category` may be annotated, and the base may be spelled
+    `base.BaseTool`. `create_automation` is included: its duplicate check reads only what
+    the caller sees.
+
+    Named boundaries, not seen by this guard: a base class from another module (its
+    attributes and `run` are unknown here), a `run` that calls the rule and then reaches
+    the global store through a helper, and a class whose category is computed rather than a
+    literal."""
     tree = ast.parse(source)
     classes = {c.name: c for c in tree.body if isinstance(c, ast.ClassDef)}
 
-    def resolve(cls, depth=0):
-        """(is_tool, attrs, run) with the module's own inheritance applied."""
-        is_tool, attrs, run = False, {}, None
-        for base in cls.bases:
-            if isinstance(base, ast.Name) and base.id == "BaseTool":
-                is_tool = True
-            elif isinstance(base, ast.Name) and base.id in classes and depth < 20:
-                b_tool, b_attrs, b_run = resolve(classes[base.id], depth + 1)
-                is_tool = is_tool or b_tool
-                attrs = {**b_attrs, **attrs}
-                run = run or b_run
+    def base_name(base):
+        if isinstance(base, ast.Name):
+            return base.id
+        if isinstance(base, ast.Attribute):
+            return base.attr
+        return None
+
+    def mro(name, depth=0):
+        """C3 linearization over the module's classes; any other base is a leaf."""
+        cls = classes.get(name)
+        if cls is None or depth > 50:
+            return [name]
+        bases = [b for b in (base_name(b) for b in cls.bases) if b]
+        seqs = [mro(b, depth + 1) for b in bases] + [list(bases)]
+        out = [name]
+        while any(seqs):
+            for seq in seqs:
+                head = seq[0] if seq else None
+                if head is not None and not any(head in other[1:] for other in seqs):
+                    break
+            else:
+                raise ValueError(f"inconsistent bases for {name}")
+            out.append(head)
+            seqs = [seq[1:] if seq and seq[0] == head else seq for seq in seqs]
+        return out
+
+    def own(cls):
+        attrs, run = {}, None
         for stmt in cls.body:
             if isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Constant):
                 for t in stmt.targets:
                     if isinstance(t, ast.Name):
                         attrs[t.id] = stmt.value.value
-            elif isinstance(stmt, ast.FunctionDef) and stmt.name == "run":
+            elif (isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name)
+                    and isinstance(stmt.value, ast.Constant)):
+                attrs[stmt.target.id] = stmt.value.value
+            elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)) and stmt.name == "run":
                 run = stmt
-        return is_tool, attrs, run
+        return attrs, run
 
     bad, names = [], []
-    for cls in classes.values():
-        is_tool, attrs, run = resolve(cls)
-        if not is_tool or attrs.get("category") != "automations":
+    for name in classes:
+        order = mro(name)
+        if "BaseTool" not in order:
             continue
-        name = attrs.get("name")
-        names.append(name)
-        if run is None or not _calls(run.body, "AutomationAccess"):
-            bad.append(cls.name)
+        attrs, run, run_found = {}, None, False
+        for klass in reversed([k for k in order if k in classes]):
+            k_attrs, _k_run = own(classes[klass])
+            attrs.update(k_attrs)
+        for klass in (k for k in order if k in classes):
+            _a, k_run = own(classes[klass])
+            if k_run is not None:
+                run, run_found = k_run, True
+                break
+        if attrs.get("category") != "automations":
+            continue
+        names.append(attrs.get("name"))
+        if not run_found or not _calls(run.body, "AutomationAccess"):
+            bad.append(name)
     return bad, names
 
 
@@ -707,9 +799,41 @@ class RawTrashTool(ListTrashTool):
 
 class InheritedTrashTool(ListTrashTool):
     name = "inherited_trash"
+
+class AnnotatedTool(base.BaseTool):
+    name: str = "annotated_automation"
+    category: str = "automations"
+    def run(self, **kwargs):
+        return AutomationManager().list()
+
+class CallbackOnlyTool(BaseTool):
+    name = "callback_automation"
+    category = "automations"
+    def run(self, **kwargs):
+        def never_called():
+            return AutomationAccess(kwargs.get("user_scope_id")).list()
+        check = lambda: AutomationAccess(None)
+        return AutomationManager().list()
+
+class GuardedBase(BaseTool):
+    category = "automations"
+    def run(self, **kwargs):
+        return AutomationAccess(kwargs.get("user_scope_id")).list()
+
+class Left(GuardedBase):
+    name = "left_automation"
+
+class Right(GuardedBase):
+    name = "right_automation"
+    def run(self, **kwargs):
+        return AutomationManager().list()
+
+class Diamond(Left, Right):
+    name = "diamond_automation"
 '''
-    assert sorted(_tool_violations(synthetic)[0]) == ["MentionOnlyTool", "PauseAutomationTool",
-                                                      "RawTrashTool"]
+    assert sorted(_tool_violations(synthetic)[0]) == [
+        "AnnotatedTool", "CallbackOnlyTool", "Diamond", "MentionOnlyTool", "PauseAutomationTool",
+        "RawTrashTool", "Right"]
 
 
 # ── AC12: the calendar's daily check ──────────────────────────────────────────
@@ -911,6 +1035,64 @@ def test_workspace_file_paths_stay_in_the_workspace(store, workspaces):
     assert not (task_root / "workspaceX").exists() and not (task_root / "workspace2").exists()
     ws.tw.write_workspace_file(TENANT_A, ws.task_a, "notes/ok.md", "fine")
     assert ws.tw.read_workspace_file(TENANT_A, ws.task_a, "notes/ok.md") == "fine"
+
+
+def test_workspace_read_refuses_an_existing_sibling_file(store, workspaces):
+    """The read half, with a file that really exists beside the workspace: without the
+    containment the read would return it, so a refusal here is the check and not a missing
+    file. MUTATION: put the prefix comparison back in `read_workspace_file`."""
+    ws = workspaces
+    sibling = ws.root / TENANT_A / "tasks" / ws.task_a / "workspaceX"
+    sibling.mkdir(parents=True)
+    (sibling / "evil.txt").write_text("outside", encoding="utf-8")
+    with pytest.raises(ValueError):
+        ws.tw.read_workspace_file(TENANT_A, ws.task_a, "../workspaceX/evil.txt")
+    ws.tw.write_workspace_file(TENANT_A, ws.task_a, "inside.md", "in")
+    assert ws.tw.read_workspace_file(TENANT_A, ws.task_a, "inside.md") == "in"
+
+
+@pytest.mark.parametrize("action", ["approve", "reject"])
+def test_overlong_ids_answer_like_missing_and_leak_no_path(store, workspaces, monkeypatch,
+                                                           action):
+    """An id longer than any file name used to reach the filesystem, whose error came back
+    verbatim with the server's absolute data path. MUTATIONS: drop the length limit in
+    `_entry`; separately, answer an `OSError` in the WebSocket branch with `str(e)` again."""
+    ws = workspaces
+    long_id = "x" * 300
+    replies = _ws(monkeypatch, role="user", scope=TENANT_A, frames=[
+        _handoff(action, ws.task_a, "ffff0000"),
+        _handoff(action, ws.task_a, long_id),
+        _handoff(action, long_id, "ffff0000"),
+    ])
+    missing = _without_ids(replies[0])
+    for reply in replies[1:]:
+        assert _without_ids(reply) == missing, reply
+        text = json.dumps(reply)
+        assert str(ws.root) not in text and TENANT_A not in text and "Errno" not in text, text
+    # Refused before any filesystem call, not only caught afterwards.
+    from vaf.core.path_jail import PathEscape
+    assert ws.tw._handoff_paths(TENANT_A, ws.task_a, long_id) is None
+    assert ws.tw._handoff_paths(TENANT_A, long_id, "ffff0000") is None
+    with pytest.raises(PathEscape):
+        ws.tw._task_root(TENANT_A, "y" * 129)
+    assert ws.tw._handoff_paths(TENANT_A, ws.task_a, "z" * 100) is not None
+
+
+def test_handoff_oserror_answers_like_missing(store, workspaces, monkeypatch):
+    """Any filesystem error on these two commands answers "handoff not found", never the
+    error text (it names the data path). MUTATION: answer an `OSError` with `str(e)`."""
+    ws = workspaces
+
+    def boom(*a, **kw):
+        raise OSError(36, "File name too long", str(ws.root / TENANT_A / "secret"))
+
+    monkeypatch.setattr(ws.tw, "approve_handoff", boom)
+    monkeypatch.setattr(ws.tw, "reject_handoff", boom)
+    replies = _ws(monkeypatch, role="user", scope=TENANT_A, frames=[
+        _handoff("approve", ws.task_a, "ffff0000"), _handoff("reject", ws.task_a, "ffff0000")])
+    for reply, action in zip(replies, ("approve", "reject")):
+        assert reply["ok"] is False and reply["error"] == "handoff not found", reply
+        assert reply["action"] == action and str(ws.root) not in json.dumps(reply), reply
 
 
 def test_workspace_task_id_is_one_entry(store, workspaces):

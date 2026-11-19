@@ -9034,6 +9034,18 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             "automation_action_result": action_result,
                             "error": None if ok else "handoff not found",
                         })
+                    except OSError:
+                        # A filesystem error names the server's data path; it is answered
+                        # like a missing handoff, the same as a refused id.
+                        await websocket.send_json({
+                            "type": "thinking_workspace_handoff_result",
+                            "ok": False,
+                            "action": "approve",
+                            "task_id": str(cmd.get("task_id") or "").strip(),
+                            "handoff_id": str(cmd.get("handoff_id") or "").strip(),
+                            "automation_action_result": None,
+                            "error": "handoff not found",
+                        })
                     except Exception as e:
                         await websocket.send_json({
                             "type": "thinking_workspace_handoff_result",
@@ -9094,6 +9106,17 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             "task_id": task_id,
                             "handoff_id": handoff_id,
                             "error": None if ok else "handoff not found",
+                        })
+                    except OSError:
+                        # A filesystem error names the server's data path; it is answered
+                        # like a missing handoff, the same as a refused id.
+                        await websocket.send_json({
+                            "type": "thinking_workspace_handoff_result",
+                            "ok": False,
+                            "action": "reject",
+                            "task_id": str(cmd.get("task_id") or "").strip(),
+                            "handoff_id": str(cmd.get("handoff_id") or "").strip(),
+                            "error": "handoff not found",
                         })
                     except Exception as e:
                         await websocket.send_json({

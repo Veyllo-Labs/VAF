@@ -50,12 +50,26 @@ def ensure_workspace(user_scope_id: Optional[str]) -> Path:
     return root
 
 
+# Task and handoff ids are 8 hex characters. A longer name is refused before any
+# filesystem call: one past the file system's name limit made the OS error, which quotes
+# the absolute data path, the answer a client saw.
+_MAX_ID_LEN = 128
+
+
+def _entry(name: str) -> str:
+    """`name` as one entry of at most `_MAX_ID_LEN` characters, or `PathEscape`."""
+    entry = safe_entry_name(name)
+    if len(entry) > _MAX_ID_LEN:
+        raise PathEscape("name is too long")
+    return entry
+
+
 def _task_root(user_scope_id: Optional[str], task_id: str) -> Path:
     """A task's directory. `task_id` reaches here from the client (the WebSocket handoff
     commands) and from the model (the workspace tools), so it must be ONE entry: a walk
     such as `../../<other scope>/tasks/<id>` would otherwise land in another account's
     workspace. Raises `PathEscape` (a `ValueError`)."""
-    return ensure_workspace(user_scope_id) / "tasks" / safe_entry_name(task_id)
+    return ensure_workspace(user_scope_id) / "tasks" / _entry(task_id)
 
 
 def _handoff_paths(user_scope_id: Optional[str], task_id: str,
@@ -65,8 +79,8 @@ def _handoff_paths(user_scope_id: Optional[str], task_id: str,
     account's automation file, and a different answer would tell which ids exist."""
     try:
         handoff_dir = _task_root(user_scope_id, task_id) / "handoff"
-        return (handoff_dir / safe_entry_name(f"{handoff_id}.json"),
-                handoff_dir / safe_entry_name(f"{handoff_id}.md"))
+        return (handoff_dir / _entry(f"{handoff_id}.json"),
+                handoff_dir / _entry(f"{handoff_id}.md"))
     except PathEscape:
         return None
 
@@ -279,6 +293,11 @@ def _apply_automation_action(user_scope_id: Optional[str], action: Dict[str, Any
     Supported operations:
     - create: requires prompt; optional name/description/frequency/time/weekday/day/enabled
     - update: requires task_id; supports name/description/prompt/frequency/time/weekday/day/enabled
+
+    Named boundary: the update asks `AutomationAccess(user_scope_id)` WITHOUT the role, so a
+    second admin's approved proposal reaches only its own automations, not the root and
+    machine-owner tasks its list shows. Narrower than the WebSocket and the tools, and safe;
+    the approval lane carries no role today.
     """
     from vaf.core.automation import AutomationAccess, AutomationManager, AutomationTask
 

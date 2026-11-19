@@ -2586,6 +2586,13 @@ class AutomationAccess:
     - Anyone else sees only the tasks of its own non-empty scope.
     - `get` answers a foreign id exactly like a missing one, `(None, None)`: ids are names,
       not capabilities, and a lane must not become an existence oracle.
+    - A record whose stored scope carries surrounding whitespace is seen by nobody (see
+      `sees`): the rule would read it stripped while the store and the scheduler use the
+      raw string.
+    - `trash()` lists the trashed tasks the caller sees, each with the manager whose trash
+      holds it, across every store its tasks can live in (`_stores`: the own scope's, and for
+      an admin the machine owner's and the root trash too), so a restore runs where the
+      delete put the task.
 
     Named boundaries:
     - The CLI (`vaf automation ...`), the TUI screens and the scheduler use the global manager
@@ -2671,12 +2678,17 @@ class AutomationAccess:
         return out
 
     def _stores(self) -> List[Callable[[], AutomationManager]]:
-        """The stores this caller's tasks can live in, own scope first. Never the global
-        store for a non-admin, and none at all for a blank scope."""
+        """The stores this caller's tasks can live in, own scope first. For an admin also
+        the machine owner's scoped store (when it is not the admin's own) and the global
+        one: the machine owner deletes its own tasks into its scoped trash, which neither
+        the admin's own trash nor the root trash holds. Never the global store for a
+        non-admin, and none at all for a blank scope."""
         stores: List[Callable[[], AutomationManager]] = []
         if self.own:
             stores.append(lambda: AutomationManager(user_scope_id=self.own))
         if self.is_admin:
+            if self._local and self._local != self.own:
+                stores.append(lambda: AutomationManager(user_scope_id=self._local))
             stores.append(AutomationManager)
         return stores
 

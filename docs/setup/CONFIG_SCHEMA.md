@@ -12,8 +12,11 @@ person may set is declared there first (measured before the rule: a non-admin sa
 `vaf_home` moved the TLS directory into their own folder, where the tray then wrote the
 server key and the CA key). The route-owned keys (`Config.ROUTE_OWNED_KEYS`: the profile, the
 engine, the own certificate pair and the per-account cloud, mail and GitHub lists) leave every
-save, for every caller; only their own lane writes them. A save that is not a JSON object is
-refused on both lanes (`Config.require_save_body`). Inside the messenger blocks, the
+save, for every caller; only their own lane writes them. A save that is not a JSON object, or that
+nests deeper than `Config.MAX_SAVE_DEPTH` (64 levels), is refused on both lanes
+(`Config.require_save_body`); a value stored deeper before that bound existed stays until an
+admin replaces it (see "Config: global vs user-scoped" in
+[USER_ISOLATION.md](../security/USER_ISOLATION.md)). Inside the messenger blocks, the
 sub-keys only their routes and bridges write (`Config.ROUTE_OWNED_SUBKEYS`) are put back to
 their stored value on every save, and one the store does not hold is not created, because a
 page loaded before a route ran sends its old copy of the whole block: `telegram_config`

@@ -487,10 +487,17 @@ async def patch_config(
     _user: Dict[str, Any] = Depends(get_current_user_or_local_admin),
 ) -> Dict[str, Any]:
     """Merge provided keys into config and save. Non-admins: global keys ignored; connection toggles (Telegram/WhatsApp/Discord) stored per-user only."""
-    # Named boundary: this path strips keys other writers own (below) but checks no key's
-    # VALUE. A value only some writers check is caught at its reader instead, for example
+    # Named boundary: this path strips keys other writers own (below) and refuses a body
+    # nested too deep, but checks no key's VALUE otherwise. A value only some writers check is caught at its reader instead, for example
     # `deepseek_reasoning_effort`: `vaf models config` refuses a bad one, here it is stored,
     # the backend ignores it with a warning and Settings shows it as ignored.
+    try:
+        # A body nested deeper than any config value; FastAPI already refused a body that
+        # is not an object.
+        Config.require_save_body(body)
+    except (TypeError, ValueError) as e:
+        raise HTTPException(status_code=422,
+                            detail=f"Settings not saved: {e}.") from e
     current = Config.load()
 
     # In server_mode: LAN settings are locked — they cannot be disabled via the API.

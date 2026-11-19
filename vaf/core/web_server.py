@@ -6770,13 +6770,16 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                 elif type == "save_config":
                     new_config = cmd.get("config")
-                    if new_config is not None and not isinstance(new_config, dict):
-                        # A list of [key, value] pairs passed every strip below (they read
-                        # an object) and became one in `dict(body)`; PATCH answers 422.
+                    try:
+                        # Not an object (a list of [key, value] pairs became one in
+                        # `dict(body)` and skipped every strip below), null, or nested
+                        # deeper than any config value; PATCH answers these with 422.
+                        Config.require_save_body(new_config)
+                    except (TypeError, ValueError) as e:
                         await websocket.send_json({
                             "type": "config_saved",
                             "status": "error",
-                            "error": "A settings save must be a JSON object.",
+                            "error": f"Settings not saved: {e}.",
                             "requires_refresh": False,
                         })
                         continue

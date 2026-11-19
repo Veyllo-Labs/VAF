@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 from vaf.core import model_catalog as _model_catalog
 from vaf.core.channels import CHAT_CHANNELS as _CHAT_CHANNELS
 from vaf.core.channels import KNOWN_CHANNELS as _KNOWN_CHANNELS
+from vaf.core.nesting import nesting_depth as _nesting_depth
 
 # Single source of truth for legacy local-admin scope (before bootstrap sets real admin UUID)
 LEGACY_LOCAL_ADMIN_SCOPE_ID = "00000000-0000-0000-0000-000000000001"
@@ -1589,15 +1590,32 @@ class Config:
         },
     }
 
-    @staticmethod
-    def require_save_body(body) -> None:
-        """Refuse a settings save that is not a JSON object. Every step of the save path
-        reads it as one; ``dict(body)`` on a list of ``[key, value]`` pairs builds a dict
-        from it, and that dict has passed none of the steps before. Measured over the
-        WebSocket `save_config`: an admin's stale page brought back every messenger pairing,
-        and a non-admin replaced another account's mail host. PATCH answers it with 422."""
+    # How deeply a settings save may nest, counting containers (the body is level 1). The
+    # deepest value the code itself stores is a mail account list as the page sends it back
+    # (body, `email_config_by_scope`, scope, `accounts`, account: 5, measured through the
+    # account helper, the channel timelines and the relay switch); DEFAULTS nests 3 at most.
+    # This is more than ten times that, and about six times below the first recursive walk
+    # that breaks on the way back out: FastAPI's response encoder at about 400 levels, which
+    # turned one account's deep `theme` into a 500 on every account's GET /api/config, and
+    # `copy.deepcopy` at about 500.
+    MAX_SAVE_DEPTH = 64
+
+    @classmethod
+    def require_save_body(cls, body) -> None:
+        """Refuse a settings save that is not a JSON object (``TypeError``) or nests deeper
+        than ``MAX_SAVE_DEPTH`` (``ValueError``).
+
+        Every step of the save path reads the body as an object; ``dict(body)`` on a list of
+        ``[key, value]`` pairs builds a dict from it, and that dict has passed none of the
+        steps before. Measured over the WebSocket `save_config`: an admin's stale page
+        brought back every messenger pairing, and a non-admin replaced another account's
+        mail host. The depth is measured without recursion (`nesting.nesting_depth`): a
+        value nested a few hundred levels deep was saved, and every account's config read
+        failed on it afterwards. Both lanes answer either refusal as an error."""
         if not isinstance(body, dict):
             raise TypeError(f"a settings save must be a JSON object, not {type(body).__name__}")
+        if _nesting_depth(body, cls.MAX_SAVE_DEPTH) > cls.MAX_SAVE_DEPTH:
+            raise ValueError(f"a settings save may nest at most {cls.MAX_SAVE_DEPTH} levels")
 
     @classmethod
     def is_route_owned_key(cls, key: str) -> bool:

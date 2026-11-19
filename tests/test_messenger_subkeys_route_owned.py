@@ -357,18 +357,19 @@ OTHER_MAIL = {OTHER_SCOPE: {"accounts": [{"account_id": "bob@example.net",
 def test_a_socket_save_that_is_not_an_object_is_refused(stored, monkeypatch, user):
     """A `config` sent as a list of [key, value] pairs passed both strips (they looked at
     dicts only) and became a dict in the next step: an admin's stale page brought back
-    every pairing, and a non-admin replaced another account's mail host. PATCH answers it
-    with 422 already. MUTATIONS: drop the lane's object check (the strip's refusal ends the
-    socket, no answer); drop it and let the strip pass a non-object through (every case
-    red, the store changes)."""
+    every pairing, and a non-admin replaced another account's mail host. A `config` of null
+    got no answer at all. PATCH answers both with 422. MUTATIONS: drop the lane's check (the
+    strip's refusal ends the socket, no answer); drop it and let the strip pass a
+    non-object through (every case red, the store changes); let null through silently."""
     cfg = copy.deepcopy(STORED)
     cfg["email_config_by_scope"] = copy.deepcopy(OTHER_MAIL)
     stored.write(cfg)
     pairs = [[k, v] for k, v in PAGE.items()] + [
         ["email_config_by_scope", {OTHER_SCOPE: {"accounts": [
             {"account_id": "bob@example.net", "imap_host": "mail.attacker.example"}]}}]]
-    answer = _ws_save(monkeypatch, user, pairs, expect="error")
-    assert answer.get("error")
+    for body in (pairs, None):
+        answer = _ws_save(monkeypatch, user, body, expect="error")
+        assert answer.get("error"), body
     raw = stored.raw()
     assert raw["email_config_by_scope"] == OTHER_MAIL
     for block, sub in PAIRS:
@@ -389,44 +390,126 @@ def test_the_save_steps_refuse_a_body_that_is_not_an_object():
 
 
 def _deep(depth: int):
+    """A value of exactly `depth` container levels."""
     value = "x"
     for _ in range(depth):
         value = [value]
     return value
 
 
-def test_a_deeply_nested_value_still_saves(stored):
-    """A 600-deep value in a block saved on the base; a recursive comparison of the restored
-    block raised RecursionError for every caller. MUTATIONS: drop the identity shortcut (the
-    identity assert goes red); drop the RecursionError guard (the helper raises)."""
-    from vaf.core.config import _same_json
+def test_a_save_nested_deeper_than_the_bound_is_refused():
+    """The bound itself, at its edge, and that the deepest legitimate shapes pass: a mail
+    account list and a channel timeline as the page sends them. MUTATIONS: drop the depth
+    check; compare with `>=` (the edge goes red)."""
+    bound = Config.MAX_SAVE_DEPTH
+    assert bound == 64
+    Config.require_save_body({"theme": _deep(bound - 1)})
+    with pytest.raises(ValueError):
+        Config.require_save_body({"theme": _deep(bound)})
+    with pytest.raises(ValueError):
+        Config.without_route_owned_keys({"theme": _deep(bound)}, stored={})
+    page = {**copy.deepcopy(PAGE), "email_config_by_scope": {TENANT_SCOPE: {"accounts": [
+        {"account_id": "alice@example.com", "folders": ["INBOX", {"name": "Archive"}]}]}}}
+    Config.require_save_body(page)
 
-    held = copy.deepcopy(STORED)
-    deep = _deep(600)
-    body = {"telegram_config": {**copy.deepcopy(STORED["telegram_config"]), "note": deep}}
-    # Every guarded sub-key equals the stored one, and the deep value is the same object on
-    # both sides of the comparison: nothing changed.
-    assert Config.without_route_owned_keys(body, stored=held) is body
-    # Equal but distinct deep values: too deep to walk is "changed", never an exception.
-    assert _same_json(_deep(600), _deep(600)) is False
-    assert _same_json(_deep(5), _deep(5)) is True
-    # A store an older save wrote from a body can hold one too: too deep to copy, it is
-    # kept as loaded. MUTATION: drop the RecursionError guard around the copy.
-    deep_held = {"telegram_config": {"whitelist": _deep(600)}}
-    out = Config.without_route_owned_keys({"telegram_config": {"whitelist": []}},
-                                          stored=deep_held)
-    assert out["telegram_config"]["whitelist"] is deep_held["telegram_config"]["whitelist"]
 
-    import asyncio
+def _app_as(user: dict):
+    """The real config router behind a stand-in for the auth middleware."""
+    from fastapi import FastAPI
 
     from vaf.api import config_routes
-    request = SimpleNamespace(state=SimpleNamespace(user=LOCAL_ADMIN))
-    page = {"default_language": "de",
-            "telegram_config": {**PAGE["telegram_config"], "note": _deep(600)}}
-    asyncio.run(config_routes.patch_config(page, request, LOCAL_ADMIN))
-    raw = json.loads(stored.path.read_text(encoding="utf-8"))
-    assert raw["default_language"] == "de"
-    assert raw["telegram_config"]["whitelist"] == STORED["telegram_config"]["whitelist"]
+
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def _as_user(request, call_next):
+        request.state.user = user
+        return await call_next(request)
+
+    app.include_router(config_routes.router)
+    return app
+
+
+@pytest.mark.parametrize("lane", ["patch", "ws"])
+def test_a_deep_value_from_one_account_cannot_break_every_accounts_config(stored, monkeypatch,
+                                                                         lane):
+    """A non-admin's `theme` nested 400 levels deep was saved, and from then on every
+    account's GET /api/config answered 500 (the response encoder walks it recursively).
+    Refused at the door on both lanes now. MUTATIONS: drop the depth check (the save lands
+    and the admin's GET goes 500); drop the PATCH lane's answer (500 instead of 422); narrow
+    the socket lane's answer to TypeError (no answer)."""
+    from fastapi.testclient import TestClient
+
+    body = {"theme": _deep(400), "default_language": "de"}
+    if lane == "patch":
+        res = TestClient(_app_as(NON_ADMIN)).patch("/api/config", json=body)
+        assert res.status_code == 422, res.text
+        assert "nest" in res.json()["detail"]
+    else:
+        _ws_save(monkeypatch, NON_ADMIN, body, expect="error")
+    assert stored.raw()["default_language"] == "en"
+    res = TestClient(_app_as(LOCAL_ADMIN)).get("/api/config")
+    assert res.status_code == 200, res.text
+
+
+def test_an_admin_clears_a_deep_value_stored_before_the_bound(stored):
+    """A value stored deep by an older release is not touched by the bound; an admin clears
+    it with a save that carries the key alone, and every read works again. MUTATION: check
+    the loaded config against the bound too (the admin is locked out)."""
+    from fastapi.testclient import TestClient
+
+    cfg = copy.deepcopy(STORED)
+    cfg["theme"] = _deep(500)
+    stored.write(cfg)
+    admin = TestClient(_app_as(LOCAL_ADMIN), raise_server_exceptions=False)
+    assert admin.get("/api/config").status_code == 500
+    res = admin.patch("/api/config", json={"theme": "dark"})
+    assert res.status_code == 200, res.text
+    assert stored.raw()["theme"] == "dark"
+    assert TestClient(_app_as(NON_ADMIN)).get("/api/config").status_code == 200
+
+
+class _WalkedInto:
+    """Fails the test when a comparison looks inside it."""
+
+    def __eq__(self, other):
+        raise AssertionError("the comparison walked into a value it shares with the body")
+
+    __hash__ = object.__hash__
+
+
+def test_the_comparison_skips_shared_values_and_survives_a_walk_too_deep(monkeypatch):
+    """The strip compares the restored block with the sent one. A value the two share is
+    equal without a walk, and a walk the interpreter cannot finish counts as changed: both
+    held without depending on the recursion limit. MUTATIONS: drop the identity shortcut
+    (the shared value is walked); drop the RecursionError guard in `_same_json` or around
+    the copy of a held value (the strip raises)."""
+    from vaf.core import config as config_module
+
+    held = copy.deepcopy(STORED)
+    body = {"telegram_config": {**copy.deepcopy(STORED["telegram_config"]),
+                                "note": [_WalkedInto()]}}
+    assert Config.without_route_owned_keys(body, stored=held) is body
+
+    def too_deep(*_a, **_k):
+        raise RecursionError("maximum recursion depth exceeded")
+
+    with monkeypatch.context() as m:
+        m.setattr(config_module, "_same_json_walk", too_deep)
+        assert config_module._same_json([1], [1]) is False
+        same = {"telegram_config": copy.deepcopy(STORED["telegram_config"])}
+        out = Config.without_route_owned_keys(same, stored=held)
+    # Counted as changed: a new block, with the stored values.
+    assert out is not same
+    assert out["telegram_config"] == STORED["telegram_config"]
+
+    # A held value too deep to copy (a store an older save wrote from a body) is kept as
+    # the lane loaded it.
+    with monkeypatch.context() as m:
+        m.setattr(config_module.copy, "deepcopy", too_deep)
+        out = Config.without_route_owned_keys({"telegram_config": {"whitelist": []}},
+                                              stored=held)
+    assert out["telegram_config"]["whitelist"] is held["telegram_config"]["whitelist"]
 
 
 # --- Fuzz ---------------------------------------------------------------------------------

@@ -1081,12 +1081,14 @@ def test_persona_name_and_soul_reach_the_prompt(monkeypatch):
 
 def test_piper_voice_map_is_class_level_ssot():
     """has_local_voice and the download path must read the SAME map (a copy
-    would drift); tr/de/en present, unsupported -> None."""
+    would drift); de/en present; Turkish (no voice whose licence allows any use)
+    and unsupported -> None, so the language follow does not switch to them."""
     from vaf.core.speech import SpeechManager
-    assert SpeechManager.PIPER_VOICES["tr"] == "tr_TR-dfki-medium"
+    assert "tr" not in SpeechManager.PIPER_VOICES
     assert "de" in SpeechManager.PIPER_VOICES and "en" in SpeechManager.PIPER_VOICES
     sm = SpeechManager.__new__(SpeechManager)  # no heavy init
-    assert sm._voice_model_name("tr") == "tr_TR-dfki-medium"
+    assert sm._voice_model_name("de") == "de_DE-mls-medium"
+    assert sm._voice_model_name("tr") is None
     assert sm._voice_model_name("xx") is None
 
 

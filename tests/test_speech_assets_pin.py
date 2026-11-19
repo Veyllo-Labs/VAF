@@ -857,7 +857,7 @@ from vaf.core.speech import SpeechManager  # noqa: E402
 
 ASSET = "piper_linux_x86_64.tar.gz"
 REVISION = "0123456789abcdef0123456789abcdef01234567"
-VOICE = "de/de_DE/thorsten/high/de_DE-thorsten-high.onnx"
+VOICE = "de/de_DE/mls/medium/de_DE-mls-medium.onnx"
 HEX64 = re.compile(r"\b[0-9a-f]{64}\b")
 
 
@@ -865,16 +865,29 @@ def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _voice_row(path: str, **override) -> dict:
+    """A voice row as the pin script writes it, for the voice whose .onnx is `path`."""
+    row = {"licence": "CC0-1.0", "dataset": "https://example.invalid/dataset", "base": "scratch",
+           "card": {"path": path.rsplit("/", 1)[0] + "/MODEL_CARD", "sha256": _sha(b"card"), "size": 4},
+           "host_piper": True}
+    row.update(override)
+    return row
+
+
 def _write_pin(monkeypatch, tmp_path, *, archive: bytes | None = None, program: bytes = b"",
-               voices: dict | None = None, models: dict | None = None, asset: str = ASSET) -> None:
+               voices: dict | None = None, models: dict | None = None, asset: str = ASSET,
+               voice_row: dict | None = None, model_licence: str = "MIT") -> None:
+    files = voices or {VOICE: b"v", VOICE + ".json": b"{}"}
     pin = {"recorded": "2026-01-01",
            "piper": {"repository": "rhasspy/piper", "tag": "2023.11.14-2", "provenance": "test",
                      "assets": {asset: {"sha256": _sha(archive or b"x"), "size": len(archive or b"x"),
                                         "program_sha256": _sha(program)}}},
            "piper_voices": {"repository": "rhasspy/piper-voices", "revision": REVISION,
-                            "files": {p: {"sha256": _sha(b), "size": len(b)}
-                                      for p, b in (voices or {VOICE: b"v", VOICE + ".json": b"{}"}).items()}},
-           "models": {n: {"url": f"https://example.invalid/{n}", "sha256": _sha(b), "size": len(b)}
+                            "files": {p: {"sha256": _sha(b), "size": len(b)} for p, b in files.items()},
+                            "voices": {p.rsplit("/", 1)[1][:-len(".onnx")]: _voice_row(p, **(voice_row or {}))
+                                       for p in files if p.endswith(".onnx")}},
+           "models": {n: {"url": f"https://example.invalid/{n}", "sha256": _sha(b), "size": len(b),
+                          "licence": model_licence, "licence_source": "https://example.invalid/licence"}
                       for n, b in (models or {}).items()}}
     path = tmp_path / "speech_assets_pin.json"
     import json
@@ -1256,22 +1269,22 @@ def test_voice_bytes_that_miss_the_pin_leave_nothing(speech, monkeypatch, tmp_pa
 
 def test_a_verified_voice_downloads_nothing(speech, monkeypatch, tmp_path):
     _voice_pin(monkeypatch, tmp_path)
-    (speech.models_dir / "de_DE-thorsten-high.onnx").write_bytes(ONNX)
-    (speech.models_dir / "de_DE-thorsten-high.onnx.json").write_bytes(CONFIG)
+    (speech.models_dir / "de_DE-mls-medium.onnx").write_bytes(ONNX)
+    (speech.models_dir / "de_DE-mls-medium.onnx.json").write_bytes(CONFIG)
     _no_download(monkeypatch)
-    assert speech._ensure_voice_model("de-DE") == speech.models_dir / "de_DE-thorsten-high.onnx"
+    assert speech._ensure_voice_model("de-DE") == speech.models_dir / "de_DE-mls-medium.onnx"
 
 
 def test_a_truncated_voice_is_fetched_again(speech, monkeypatch, tmp_path):
     """An interrupted transfer of an earlier VAF left a short .onnx that counted as
     installed forever. MUTATION: let fetch_verified keep any existing file: red."""
     _voice_pin(monkeypatch, tmp_path)
-    (speech.models_dir / "de_DE-thorsten-high.onnx").write_bytes(ONNX[:100])
-    (speech.models_dir / "de_DE-thorsten-high.onnx.json").write_bytes(CONFIG)
+    (speech.models_dir / "de_DE-mls-medium.onnx").write_bytes(ONNX[:100])
+    (speech.models_dir / "de_DE-mls-medium.onnx.json").write_bytes(CONFIG)
     calls = []
     _get_by_url(monkeypatch, {".onnx": ONNX, ".onnx.json": CONFIG}, calls)
-    assert speech._ensure_voice_model("de") == speech.models_dir / "de_DE-thorsten-high.onnx"
-    assert (speech.models_dir / "de_DE-thorsten-high.onnx").read_bytes() == ONNX
+    assert speech._ensure_voice_model("de") == speech.models_dir / "de_DE-mls-medium.onnx"
+    assert (speech.models_dir / "de_DE-mls-medium.onnx").read_bytes() == ONNX
     assert len(calls) == 1, "the matching .onnx.json is kept"
 
 
@@ -1337,9 +1350,120 @@ def test_the_english_fallback_is_fetched_from_the_english_folder():
     """A language without a voice speaks English; its path is read from the voice's own
     locale (it used to be built from the requested language: xx/en_US/..., a 404)."""
     assert speech_pin.voice_path(SpeechManager.PIPER_VOICES["en"]) == \
-        "en/en_US/lessac/high/en_US-lessac-high.onnx"
+        "en/en_US/ljspeech/high/en_US-ljspeech-high.onnx"
     assert speech_pin.voice_path("pt_BR-faber-medium") == "pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx"
     assert speech_pin.voice_path("simple") is None
+
+
+@pytest.mark.parametrize("row", [{"licence": "CC-BY-NC-SA-4.0"}, {"base": "en_US-lessac-high"}, {"host_piper": False}],
+                         ids=["non-commercial", "lessac-base", "host-cannot-read"])
+def test_a_voice_outside_the_licence_list_is_never_downloaded(speech, monkeypatch, tmp_path, row):
+    """A pinned voice whose licence is not on the list, which was fine-tuned from a base
+    that is not clean, or which the pinned Piper cannot read, has no download: nothing is
+    fetched or written, and the reason is said. MUTATIONS: drop the licence check in
+    voice_files (red: non-commercial), the base check (red: lessac-base), the host_piper
+    check (red: host-cannot-read)."""
+    _write_pin(monkeypatch, tmp_path, voices={VOICE: ONNX, VOICE + ".json": CONFIG}, voice_row=row)
+    _no_download(monkeypatch)
+    assert speech_pin.voice_files("de_DE-mls-medium") is None
+    assert speech._ensure_voice_model("de") is None
+    assert sorted(p.name for p in speech.models_dir.iterdir()) == []
+    assert any("has no download in this VAF release" in e for e in speech.said["error"]), speech.said["error"]
+
+
+def test_a_voice_on_the_list_is_offered(monkeypatch, tmp_path):
+    _write_pin(monkeypatch, tmp_path, voices={VOICE: ONNX, VOICE + ".json": CONFIG})
+    assert speech_pin.voice_files("de_DE-mls-medium")[0]["path"] == VOICE
+
+
+def _retired_folder(models: Path, outside: Path) -> dict:
+    """models/voices/ as an earlier VAF left it: two retired voices (one of them only its
+    .onnx), a retired name that is a link to a file outside, a folder named like a retired
+    file, a current voice and files of the person's own."""
+    (models / "en_US-lessac-high.onnx").write_bytes(b"x" * 2_000_000)
+    (models / "en_US-lessac-high.onnx.json").write_bytes(b"{}")
+    (models / "tr_TR-dfki-medium.onnx").write_bytes(b"y" * 1_000_000)
+    outside.write_bytes(b"not VAF's")
+    if os.name != "nt":                   # a link needs a privilege on Windows
+        (models / "de_DE-thorsten-high.onnx.json").symlink_to(outside)
+    (models / "fr_FR-siwis-medium.onnx").mkdir()
+    (models / "fr_FR-siwis-medium.onnx" / "inside").write_bytes(b"kept")
+    (models / "de_DE-mls-medium.onnx").write_bytes(b"current")
+    (models / "de_DE-mls-medium.onnx.json").write_bytes(b"{}")
+    (models / "notes.onnx").write_bytes(b"mine")
+    (models / "en_US-lessac-high.onnx.bak").write_bytes(b"mine too")
+    return {"de_DE-mls-medium.onnx", "de_DE-mls-medium.onnx.json", "notes.onnx", "en_US-lessac-high.onnx.bak",
+            "fr_FR-siwis-medium.onnx"}
+
+
+def test_retired_voices_are_removed_by_exact_name_once(speech, monkeypatch, tmp_path):
+    """The voices this release no longer offers are deleted from models/voices/ by their
+    exact names: regular files and links (never what a link points to), not a folder of
+    that name, not the current voice, not any other file. Said once, with the space freed;
+    a second call in the same process does nothing. MUTATIONS: remove by a pattern (*.onnx:
+    red, notes.onnx and the current voice go), follow the link (red: the outside file goes),
+    no once-flag (red: two calls look twice)."""
+    outside = tmp_path / "outside.bin"
+    keep = _retired_folder(speech.models_dir, outside)
+    _write_pin(monkeypatch, tmp_path, voices={VOICE: b"current", VOICE + ".json": b"{}"})
+    _no_download(monkeypatch)
+    assert speech._ensure_voice_model("de") == speech.models_dir / "de_DE-mls-medium.onnx"
+    assert {p.name for p in speech.models_dir.iterdir()} == keep
+    assert outside.read_bytes() == b"not VAF's"
+    assert (speech.models_dir / "fr_FR-siwis-medium.onnx" / "inside").read_bytes() == b"kept"
+    removed = [e for e in speech.said["event"] if "no longer offers" in e]
+    assert removed == ["Speech Removed 2 voices this VAF release no longer offers: their licence does not allow any use, "
+                       "or Piper on this computer cannot read them (3 MB freed)."], removed
+
+    (speech.models_dir / "tr_TR-dfki-medium.onnx").write_bytes(b"again")
+    looked = []
+    real_lstat = os.lstat
+    monkeypatch.setattr(os, "lstat", lambda path, *a, **k: looked.append(str(path)) or real_lstat(path, *a, **k))
+    speech._ensure_voice_model("de")
+    assert not any("tr_TR-dfki-medium" in p for p in looked), "the second call does not look again"
+    assert (speech.models_dir / "tr_TR-dfki-medium.onnx").exists()
+    assert len([e for e in speech.said["event"] if "no longer offers" in e]) == 1
+
+
+def test_a_retired_voice_that_cannot_be_removed_is_said_and_left(speech, monkeypatch, tmp_path):
+    """A file in use (Windows) cannot be deleted: one dim line, the voice works on."""
+    (speech.models_dir / "en_US-lessac-high.onnx").write_bytes(b"x")
+    _write_pin(monkeypatch, tmp_path, voices={VOICE: b"current", VOICE + ".json": b"{}"})
+    (speech.models_dir / "de_DE-mls-medium.onnx").write_bytes(b"current")
+    (speech.models_dir / "de_DE-mls-medium.onnx.json").write_bytes(b"{}")
+    real_unlink = os.unlink
+
+    def busy(path, *a, **k):
+        if str(path).endswith("en_US-lessac-high.onnx"):
+            raise PermissionError(13, "in use")
+        return real_unlink(path, *a, **k)
+    monkeypatch.setattr(os, "unlink", busy)
+    assert speech._ensure_voice_model("de") is not None
+    assert (speech.models_dir / "en_US-lessac-high.onnx").exists()
+    assert any("could not be removed yet" in e for e in speech.said["event"]), speech.said["event"]
+
+
+def test_the_retired_list_and_the_current_voices_are_disjoint():
+    """A voice cannot be offered and deleted at once; every retired name is a voice name."""
+    assert not set(SpeechManager.RETIRED_VOICES) & set(SpeechManager.PIPER_VOICES.values())
+    assert len(SpeechManager.RETIRED_VOICES) == len(set(SpeechManager.RETIRED_VOICES)) == 29
+    assert all(speech_pin.voice_path(name) for name in SpeechManager.RETIRED_VOICES)
+
+
+def test_a_language_without_a_voice_says_it_reads_in_english_once(speech, monkeypatch, tmp_path):
+    """Turkish has no voice on the computer: the English voice reads it, and the person is
+    told once per language, not at every reply. MUTATIONS: delete the notice (red), say it
+    at every call (red)."""
+    en = "en/en_US/ljspeech/high/en_US-ljspeech-high.onnx"
+    _write_pin(monkeypatch, tmp_path, voices={en: ONNX, en + ".json": CONFIG})
+    (speech.models_dir / "en_US-ljspeech-high.onnx").write_bytes(ONNX)
+    (speech.models_dir / "en_US-ljspeech-high.onnx.json").write_bytes(CONFIG)
+    _no_download(monkeypatch)
+    for lang in ("tr", "tr-TR", "tr", "ja", "en", "auto"):
+        assert speech._ensure_voice_model(lang) == speech.models_dir / "en_US-ljspeech-high.onnx"
+    said = [e for e in speech.said["event"] if "the English voice reads it" in e]
+    assert said == ["Speech There is no voice for 'tr' in this VAF release; the English voice reads it.",
+                    "Speech There is no voice for 'ja' in this VAF release; the English voice reads it."], said
 
 
 # ── speaker and turn-end models ───────────────────────────────────────────────────
@@ -1360,6 +1484,23 @@ def test_speaker_models_refuse_bad_bytes(monkeypatch, tmp_path):
     _get_by_url(monkeypatch, {"silero_vad.onnx": vad, "voxceleb_16k.onnx": emb})
     assert speaker_id._ensure_models() is True
     assert (models / "silero_vad.onnx").read_bytes() == vad
+
+
+def test_a_model_outside_the_licence_list_is_not_fetched(monkeypatch, tmp_path):
+    """A speaker model whose recorded licence is not on the list is not available: nothing
+    is fetched or written. MUTATION: drop the licence check in model(): red."""
+    from vaf.core import speaker_id
+    monkeypatch.setattr(verified_download, "_verified_files", set())
+    vad, emb = b"vad" * 5000, b"emb" * 5000
+    _write_pin(monkeypatch, tmp_path, models={"silero_vad.onnx": vad,
+                                              "3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx": emb},
+               model_licence="CC-BY-NC-4.0")
+    models = tmp_path / "speaker"
+    monkeypatch.setattr(speaker_id, "_models_dir", lambda: models)
+    _no_download(monkeypatch)
+    assert speech_pin.model("silero_vad.onnx") is None
+    assert speaker_id._ensure_models() is False
+    assert not models.exists() or sorted(p.name for p in models.iterdir()) == []
 
 
 def test_smart_turn_refuses_bad_bytes_and_fails_open(monkeypatch, tmp_path):
@@ -1408,6 +1549,76 @@ def test_every_voice_name_is_pinned():
     assert re.search(r"/resolve/[0-9a-f]{40}/", turn), "the turn-end model is pinned to a commit, not main"
 
 
+# The voices of the licence audit: the computer's eleven and the container's eleven
+# languages, eighteen voices in all. A voice joins only with its licence reviewed.
+AUDITED_VOICES = {
+    "en_US-ljspeech-high", "de_DE-mls-medium", "fr_FR-mls-medium", "es_ES-carlfm-x_low", "it_IT-riccardo-x_low",
+    "is_IS-bui-medium", "sv_SE-nst-medium", "uk_UA-ukrainian_tts-medium", "kk_KZ-issai-high",
+    "el_GR-rapunzelina-medium", "nl_NL-mls-medium", "de_DE-thorsten-medium", "en_US-hifi_tts_92-medium",
+    "fr_FR-siwis-medium", "pl_PL-gosia-medium", "pt_BR-faber-medium", "ru_RU-dmitri-medium", "zh_CN-chaowen-medium",
+}
+HOST_VOICES = {"en": "en_US-ljspeech-high", "de": "de_DE-mls-medium", "fr": "fr_FR-mls-medium",
+               "es": "es_ES-carlfm-x_low", "it": "it_IT-riccardo-x_low", "is": "is_IS-bui-medium",
+               "sv": "sv_SE-nst-medium", "uk": "uk_UA-ukrainian_tts-medium", "kk": "kk_KZ-issai-high",
+               "el": "el_GR-rapunzelina-medium", "nl": "nl_NL-mls-medium"}
+CONTAINER_VOICES = {"de": "de_DE-thorsten-medium", "en": "en_US-hifi_tts_92-medium", "fr": "fr_FR-siwis-medium",
+                    "es": "es_ES-carlfm-x_low", "it": "it_IT-riccardo-x_low", "nl": "nl_NL-mls-medium",
+                    "pl": "pl_PL-gosia-medium", "pt": "pt_BR-faber-medium", "ru": "ru_RU-dmitri-medium",
+                    "uk": "uk_UA-ukrainian_tts-medium", "zh": "zh_CN-chaowen-medium"}
+
+
+def _container_table() -> dict:
+    import json
+    return json.loads((REPO / "docker" / "tts-multilang" / "models.json").read_bytes().decode("utf-8"))
+
+
+def test_every_pinned_voice_has_an_allowed_licence_and_a_card():
+    """The real manifest: every voice carries a licence on the list, a clean base whose own
+    licence is on the list, an https dataset, its MODEL_CARD by digest and the host flag.
+    MUTATIONS: set CC-BY-NC-SA-4.0 on one row (red), delete one card (red: the loader)."""
+    pin = speech_pin.load_speech_pin()
+    assert all(lic is None or lic in speech_pin.ALLOWED_WEIGHT_LICENCES for lic in speech_pin.CLEAN_BASES.values())
+    for name, row in pin["piper_voices"]["voices"].items():
+        assert row["licence"] in speech_pin.ALLOWED_WEIGHT_LICENCES, (name, row["licence"])
+        assert row["base"] in speech_pin.CLEAN_BASES, (name, row["base"])
+        assert row["dataset"].startswith("https://"), name
+        assert row["card"]["path"] == speech_pin.voice_path(name).rsplit("/", 1)[0] + "/MODEL_CARD", name
+        assert HEX64.fullmatch(row["card"]["sha256"]) and row["card"]["size"] > 0, name
+        assert isinstance(row["host_piper"], bool), name
+
+
+def test_the_pinned_voices_are_exactly_the_audited_ones():
+    """MUTATION: add ja_JP-hi_fi_captain-medium back to the manifest: red."""
+    pin = speech_pin.load_speech_pin()
+    assert set(pin["piper_voices"]["voices"]) == AUDITED_VOICES
+    assert {p.rsplit("/", 1)[1].removesuffix(".json").removesuffix(".onnx")
+            for p in pin["piper_voices"]["files"]} == AUDITED_VOICES
+
+
+def test_every_host_voice_is_loadable_by_the_pinned_piper():
+    """The computer's table is exactly the audited one, and each of its voices is one the
+    pinned Piper reads and the licence list allows. MUTATION: fr_FR-siwis-medium back as
+    the computer's French voice: red."""
+    pin = speech_pin.load_speech_pin()
+    assert SpeechManager.PIPER_VOICES == HOST_VOICES
+    for lang, name in SpeechManager.PIPER_VOICES.items():
+        assert pin["piper_voices"]["voices"][name]["host_piper"] is True, (lang, name)
+        assert speech_pin.voice_files(name) is not None, (lang, name)
+
+
+def test_the_speech_models_carry_their_licence():
+    """MUTATION: drop the licence of the Smart Turn entry: red (the loader refuses)."""
+    pin = speech_pin.load_speech_pin()
+    assert {n: m["licence"] for n, m in pin["models"].items()} == {
+        "silero_vad.onnx": "MIT", "3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx": "Apache-2.0",
+        "smart-turn-v3.2-cpu.onnx": "BSD-2-Clause"}
+    for name, meta in pin["models"].items():
+        assert meta["licence_source"].startswith("https://"), name
+        assert speech_pin.model(name) is not None, name
+    turn = pin["models"]["smart-turn-v3.2-cpu.onnx"]
+    assert turn["licence_source"].split("/raw/")[1].split("/")[0] in turn["url"], "the README of the pinned commit"
+
+
 @pytest.mark.parametrize("damage", [
     lambda p: p.pop("piper"),
     lambda p: p["piper"]["assets"][ASSET].update(sha256="short"),
@@ -1416,9 +1627,24 @@ def test_every_voice_name_is_pinned():
     lambda p: p["piper_voices"].update(revision="main"),
     lambda p: p["piper_voices"]["files"].update({"../x.onnx": {"sha256": "0" * 64, "size": 1}}),
     lambda p: p["piper_voices"]["files"][VOICE].update(size=0),
-    lambda p: p["models"].update({"m.onnx": {"url": "http://x", "sha256": "0" * 64, "size": 1}}),
+    lambda p: p["models"].update({"m.onnx": {"url": "http://x", "sha256": "0" * 64, "size": 1, "licence": "MIT",
+                                             "licence_source": "https://x"}}),
+    lambda p: p["piper_voices"].pop("voices"),
+    lambda p: p["piper_voices"]["voices"].pop("de_DE-mls-medium"),
+    lambda p: p["piper_voices"]["voices"].update({"de-x": p["piper_voices"]["voices"]["de_DE-mls-medium"]}),
+    lambda p: p["piper_voices"]["files"].pop(VOICE + ".json"),
+    lambda p: p["piper_voices"]["voices"]["de_DE-mls-medium"].update(licence=" "),
+    lambda p: p["piper_voices"]["voices"]["de_DE-mls-medium"].update(host_piper="yes"),
+    lambda p: p["piper_voices"]["voices"]["de_DE-mls-medium"]["card"].update(path="de/de_DE/mls/medium/README"),
+    lambda p: p["piper_voices"]["voices"]["de_DE-mls-medium"]["card"].update(sha256="short"),
+    lambda p: p["models"].update({"m.onnx": {"url": "https://x", "sha256": "0" * 64, "size": 1,
+                                             "licence_source": "https://x"}}),
+    lambda p: p["models"].update({"m.onnx": {"url": "https://x", "sha256": "0" * 64, "size": 1, "licence": "MIT",
+                                             "licence_source": "http://x"}}),
 ], ids=["no-piper", "short-digest", "no-program-digest", "unknown-archive", "moving-revision",
-        "climbing-path", "zero-size", "plain-http"])
+        "climbing-path", "zero-size", "plain-http", "no-voices", "onnx-without-row", "bad-voice-name",
+        "row-without-files", "empty-licence", "host-piper-string", "card-not-model-card", "card-digest",
+        "model-without-licence", "licence-source-http"])
 def test_a_malformed_manifest_is_refused(monkeypatch, tmp_path, damage):
     import json
     _write_pin(monkeypatch, tmp_path)
@@ -1467,12 +1693,55 @@ def test_the_container_copy_is_byte_identical():
 
 def test_container_and_host_pins_agree():
     """Both tables come from one commit of rhasspy/piper-voices and agree on every path
-    they share. MUTATION: change the container's revision: red."""
-    import json
+    they share and on each voice's licence; the container's languages are the audited
+    ones, each row naming its card at the revision as the licence source, and Japanese and
+    Turkish retired. MUTATIONS: change the container's revision (red), change one row's
+    licence in models.json (red)."""
     pin = speech_pin.load_speech_pin()
-    table = json.loads((REPO / "docker" / "tts-multilang" / "models.json").read_bytes().decode("utf-8"))
-    assert table["revision"] == pin["piper_voices"]["revision"]
+    table = _container_table()
+    revision = pin["piper_voices"]["revision"]
+    assert table["revision"] == revision
     assert table["source"] == f"https://huggingface.co/{speech_pin.VOICES_REPO}"
+    assert table["retired"] == ["ja", "tr"]
+    voices = {lang: f"{row['locale']}-{row['voice']}-{row['quality']}" for lang, row in table["models"].items()}
+    assert voices == CONTAINER_VOICES
     for lang, row in table["models"].items():
-        assert row["model"]["path"] == speech_pin.voice_path(f"{row['locale']}-{row['voice']}-{row['quality']}")
+        assert row["model"]["path"] == speech_pin.voice_path(voices[lang])
         assert row["config"]["path"] == row["model"]["path"] + ".json"
+        voice = pin["piper_voices"]["voices"][voices[lang]]
+        assert row["licence"] == voice["licence"], lang
+        assert row["licence_source"] == \
+            f"https://huggingface.co/{speech_pin.VOICES_REPO}/raw/{revision}/{voice['card']['path']}", lang
+
+
+def _third_party_weight_rows() -> dict:
+    """First cell -> licence cell of the rows of "Container images and model weights" in
+    docs/legal/THIRD_PARTY.md (the pattern of test_dependency_manifests_in_sync.py)."""
+    rows, section = {}, None
+    for line in (REPO / "docs" / "legal" / "THIRD_PARTY.md").read_text(encoding="utf-8").splitlines():
+        if line.startswith("## "):
+            section = line[3:].strip()
+            continue
+        if section != "Container images and model weights" or not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) >= 4 and not set(cells[0]) <= set("-: "):
+            rows[cells[0]] = cells[2]
+    return rows
+
+
+def test_third_party_names_every_pinned_voice_and_model():
+    """Every pinned voice has its own row (first cell its backticked name) whose licence
+    cell starts with the manifest's licence, no row names a voice the manifest does not
+    pin, and each model's row names its licence. MUTATIONS: delete the nl_NL-mls-medium
+    row (red), write CC0-1.0 into a CC-BY-4.0 row (red)."""
+    pin = speech_pin.load_speech_pin()
+    rows = _third_party_weight_rows()
+    voice_rows = {cell.strip("`"): lic for cell, lic in rows.items()
+                  if re.fullmatch(r"`[a-z]{2,3}_[A-Z]{2}-[A-Za-z0-9_]+-[a-z_]+`", cell)}
+    assert set(voice_rows) == set(pin["piper_voices"]["voices"])
+    for name, row in pin["piper_voices"]["voices"].items():
+        assert voice_rows[name].split(" ")[0] == row["licence"], (name, voice_rows[name])
+    for name, meta in pin["models"].items():
+        [lic] = [lic for cell, lic in rows.items() if f"`{name}`" in cell]
+        assert lic.split(" ")[0] == meta["licence"], (name, lic)

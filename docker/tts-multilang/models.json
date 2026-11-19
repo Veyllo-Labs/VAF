@@ -8,6 +8,8 @@
       "locale": "de_DE",
       "voice": "thorsten",
       "quality": "medium",
+      "licence": "CC0-1.0",
+      "licence_source": "https://huggingface.co/rhasspy/piper-voices/raw/04ca88f5685ca5253c701af3687e155b113bd512/de/de_DE/thorsten/medium/MODEL_CARD",
       "model": {
         "path": "de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx",
         "sha256": "fd270eb3d1ebf91d763f8a0f949b1b1bebdfefaea18c3aaf8577dd34536e064f",
@@ -22,17 +24,19 @@
     "en": {
       "name": "English",
       "locale": "en_US",
-      "voice": "amy",
+      "voice": "hifi_tts_92",
       "quality": "medium",
+      "licence": "CC-BY-4.0",
+      "licence_source": "https://huggingface.co/rhasspy/piper-voices/raw/04ca88f5685ca5253c701af3687e155b113bd512/en/en_US/hifi_tts_92/medium/MODEL_CARD",
       "model": {
-        "path": "en/en_US/amy/medium/en_US-amy-medium.onnx",
-        "sha256": "cf9ccdec59f05adee47173f6fb4d89e8b0c5f30c178748d2572fe4efd1d2724c",
+        "path": "en/en_US/hifi_tts_92/medium/en_US-hifi_tts_92-medium.onnx",
+        "sha256": "14d19c09e5b08c9416ef856fd669118f91813b0772714e3d989adbd70f05ff91",
         "size": 63221984
       },
       "config": {
-        "path": "en/en_US/amy/medium/en_US-amy-medium.onnx.json",
-        "sha256": "27490c2197e3e7b566b051fc0b1dae21200e72b44c209731419effdbbe0789e5",
-        "size": 6289
+        "path": "en/en_US/hifi_tts_92/medium/en_US-hifi_tts_92-medium.onnx.json",
+        "sha256": "e593b75cb2795f02e3094831754746d1a9a5abfeb1f05f948c8d1753874e288b",
+        "size": 6409
       }
     },
     "fr": {
@@ -40,6 +44,8 @@
       "locale": "fr_FR",
       "voice": "siwis",
       "quality": "medium",
+      "licence": "CC-BY-4.0",
+      "licence_source": "https://huggingface.co/rhasspy/piper-voices/raw/04ca88f5685ca5253c701af3687e155b113bd512/fr/fr_FR/siwis/medium/MODEL_CARD",
       "model": {
         "path": "fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx",
         "sha256": "b1d946fd68d0347155fa59bce0a018924abbef3c1561181db45ca463d83963ef",
@@ -56,6 +62,8 @@
       "locale": "es_ES",
       "voice": "carlfm",
       "quality": "x_low",
+      "licence": "LicenseRef-public-domain",
+      "licence_source": "https://huggingface.co/rhasspy/piper-voices/raw/04ca88f5685ca5253c701af3687e155b113bd512/es/es_ES/carlfm/x_low/MODEL_CARD",
       "model": {
         "path": "es/es_ES/carlfm/x_low/es_ES-carlfm-x_low.onnx",
         "sha256": "d69677323a907cd4963f42b29c20a98b5d6bfa7f3e64df339915e4650c00d125",
@@ -72,6 +80,8 @@
       "locale": "it_IT",
       "voice": "riccardo",
       "quality": "x_low",
+      "licence": "BSD-3-Clause",
+      "licence_source": "https://huggingface.co/rhasspy/piper-voices/raw/04ca88f5685ca5253c701af3687e155b113bd512/it/it_IT/riccardo/x_low/MODEL_CARD",
       "model": {
         "path": "it/it_IT/riccardo/x_low/it_IT-riccardo-x_low.onnx",
         "sha256": "1368de15f123275a7ef951c9e5e30be0f58a032daa14a0da44037443c1d1d21b",
@@ -88,6 +98,8 @@
       "locale": "nl_NL",
       "voice": "mls",
       "quality": "medium",
+      "licence": "CC-BY-4.0",
+      "licence_source": "https://huggingface.co/rhasspy/piper-voices/raw/04ca88f5685ca5253c701af3687e155b113bd512/nl/nl_NL/mls/medium/MODEL_CARD",
       "model": {
         "path": "nl/nl_NL/mls/medium/nl_NL-mls-medium.onnx",
         "sha256": "88312e0fbf505b87caf2373d94c1384892e86b1bf2ee482cf65dc8ba179cc7d3",
@@ -104,6 +116,8 @@
       "locale": "pl_PL",
       "voice": "gosia",
       "quality": "medium",
+      "licence": "CC0-1.0",
+      "licence_source": "https://huggingface.co/rhasspy/piper-voices/raw/04ca88f5685ca5253c701af3687e155b113bd512/pl/pl_PL/gosia/medium/MODEL_CARD",
       "model": {
         "path": "pl/pl_PL/gosia/medium/pl_PL-gosia-medium.onnx",
         "sha256": "d322ded1f1daffeab41bbacd43d6f62ac83a4a5d4d63a297aa39f345f506b358",
@@ -120,6 +134,8 @@
       "locale": "pt_BR",
       "voice": "faber",
       "quality": "medium",
+      "licence": "CC0-1.0",
+      "licence_source": "https://huggingface.co/rhasspy/piper-voices/raw/04ca88f5685ca5253c701af3687e155b113bd512/pt/pt_BR/faber/medium/MODEL_CARD",
       "model": {
         "path": "pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx",
         "sha256": "75e913eb463db0b6ac7ddf68d3e4c9ac19ace36dc3b710a81039b448352b8ffc",
@@ -134,17 +150,19 @@
     "ru": {
       "name": "Russian (Русский)",
       "locale": "ru_RU",
-      "voice": "irina",
+      "voice": "dmitri",
       "quality": "medium",
+      "licence": "CC0-1.0",
+      "licence_source": "https://huggingface.co/rhasspy/piper-voices/raw/04ca88f5685ca5253c701af3687e155b113bd512/ru/ru_RU/dmitri/medium/MODEL_CARD",
       "model": {
-        "path": "ru/ru_RU/irina/medium/ru_RU-irina-medium.onnx",
-        "sha256": "8ff38212d23da300bbe3705c645e6e5b9475f0bfde01558eb17813e22acaaaaa",
-        "size": 63201294
+        "path": "ru/ru_RU/dmitri/medium/ru_RU-dmitri-medium.onnx",
+        "sha256": "9ed9941bac7373f2ec1be36627e0e71a349a59ca5522d4363fd50701db05193a",
+        "size": 63221984
       },
       "config": {
-        "path": "ru/ru_RU/irina/medium/ru_RU-irina-medium.onnx.json",
-        "sha256": "c2ec28bb38e2b59e93b959b3e40348c1afebbd272f30fed5d41205d08e98a9d7",
-        "size": 4765
+        "path": "ru/ru_RU/dmitri/medium/ru_RU-dmitri-medium.onnx.json",
+        "sha256": "c3741c9c1558fc38e902fd80d39155c32a7d019d7d17e3a43eac66b7bd3fbe09",
+        "size": 6197
       }
     },
     "uk": {
@@ -152,6 +170,8 @@
       "locale": "uk_UA",
       "voice": "ukrainian_tts",
       "quality": "medium",
+      "licence": "CC0-1.0",
+      "licence_source": "https://huggingface.co/rhasspy/piper-voices/raw/04ca88f5685ca5253c701af3687e155b113bd512/uk/uk_UA/ukrainian_tts/medium/MODEL_CARD",
       "model": {
         "path": "uk/uk_UA/ukrainian_tts/medium/uk_UA-ukrainian_tts-medium.onnx",
         "sha256": "7920419ac5f6fd8b6450520f24b52ed5a319cb53dd018fbcd71c9e079cbac84f",
@@ -166,50 +186,24 @@
     "zh": {
       "name": "Chinese (中文)",
       "locale": "zh_CN",
-      "voice": "huayan",
+      "voice": "chaowen",
       "quality": "medium",
+      "licence": "CC0-1.0",
+      "licence_source": "https://huggingface.co/rhasspy/piper-voices/raw/04ca88f5685ca5253c701af3687e155b113bd512/zh/zh_CN/chaowen/medium/MODEL_CARD",
       "model": {
-        "path": "zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx",
-        "sha256": "9929917bf8cabb26fd528ea44d3a6699c11e87317a14765312420be230be0f3d",
-        "size": 63201294
+        "path": "zh/zh_CN/chaowen/medium/zh_CN-chaowen-medium.onnx",
+        "sha256": "83a5268616ad0aa2d3e2b67158824b5e23b24e0973473ce28859c059457b824e",
+        "size": 63221984
       },
       "config": {
-        "path": "zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx.json",
-        "sha256": "d521dc45504a8ccc99e325822b35946dd701840bfb07e3dbb31a40929ed6a82b",
-        "size": 4822
-      }
-    },
-    "ja": {
-      "name": "Japanese (日本語)",
-      "locale": "ja_JP",
-      "voice": "hi_fi_captain",
-      "quality": "medium",
-      "model": {
-        "path": "ja/ja_JP/hi_fi_captain/medium/ja_JP-hi_fi_captain-medium.onnx",
-        "sha256": "03353b7ccece261223ad74de482eb7fcc7477214eae481e4202350529082258c",
-        "size": 76753841
-      },
-      "config": {
-        "path": "ja/ja_JP/hi_fi_captain/medium/ja_JP-hi_fi_captain-medium.onnx.json",
-        "sha256": "e798dc33c968722517210bf9001330db7a0bf662dc55f68732663d1e46b3e3cb",
-        "size": 6057
-      }
-    },
-    "tr": {
-      "name": "Turkish (Türkçe)",
-      "locale": "tr_TR",
-      "voice": "dfki",
-      "quality": "medium",
-      "model": {
-        "path": "tr/tr_TR/dfki/medium/tr_TR-dfki-medium.onnx",
-        "sha256": "2844717f524ab965d3fe86e60562cbb601d3e456836efcc2196cc3a14112a8fb",
-        "size": 63201294
-      },
-      "config": {
-        "path": "tr/tr_TR/dfki/medium/tr_TR-dfki-medium.onnx.json",
-        "sha256": "13ebd7810f1b61b5027583cf3131a0a233b6ea81c38f2200ebc4ff41c3cca039",
-        "size": 4960
+        "path": "zh/zh_CN/chaowen/medium/zh_CN-chaowen-medium.onnx.json",
+        "sha256": "48477042ba5f07dc1f10ac535a25f21bb6a0f9c40581d2f6d0ce5f51a1d347a6",
+        "size": 4360
       }
     }
-  }
+  },
+  "retired": [
+    "ja",
+    "tr"
+  ]
 }

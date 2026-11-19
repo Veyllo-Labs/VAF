@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 import os
+import stat
 import platform
 import subprocess
 import shutil
@@ -541,55 +542,78 @@ class SpeechManager:
         finally:
             lock.release()
 
-    # Mapping lang -> Piper model name (high/medium quality where available).
-    # SSOT for _ensure_voice_model (download) and has_local_voice (the live
-    # call's language-follow checks THIS map + on-disk files, no download).
+    # Mapping lang -> Piper voice on this computer. SSOT for _ensure_voice_model (download)
+    # and has_local_voice (the live call's language-follow checks THIS map + on-disk files,
+    # no download). Every voice here must pass two checks recorded in
+    # vaf/core/speech_assets_pin.json: its licence (and that of the model it was fine-tuned
+    # from) is on speech_pin.ALLOWED_WEIGHT_LICENCES, and the pinned Piper program can read
+    # its settings (host_piper; most voices published since 2025 use phonemes of several
+    # codepoints, which that 2023 build refuses). A language not listed is read by the
+    # English voice, and the person is told so once.
     PIPER_VOICES = {
-            # Major Languages
-            "en": "en_US-lessac-high",
-            "de": "de_DE-thorsten-high",
-            "fr": "fr_FR-siwis-medium",
-            "es": "es_ES-sharvard-medium",
-            "zh": "zh_CN-huayan-medium",
-            "it": "it_IT-paola-medium",
-            "pt": "pt_BR-faber-medium",
-            "ru": "ru_RU-ruslan-medium",
-            
-            # Nordic
-            "da": "da_DK-talesyntese-medium",
-            "fi": "fi_FI-harri-medium",
+            "en": "en_US-ljspeech-high",
+            "de": "de_DE-mls-medium",
+            "fr": "fr_FR-mls-medium",
+            "es": "es_ES-carlfm-x_low",
+            "it": "it_IT-riccardo-x_low",
             "is": "is_IS-bui-medium",
-            "no": "no_NO-talesyntese-medium",
             "sv": "sv_SE-nst-medium",
-            
-            # Eastern Europe / Slavic
-            "cs": "cs_CZ-jirka-medium",
-            "hu": "hu_HU-anna-medium",
-            "pl": "pl_PL-darkman-medium",
-            "ro": "ro_RO-mihai-medium",
-            "sk": "sk_SK-lili-medium",
-            "sl": "sl_SI-artur-medium",
-            "sr": "sr_RS-serbski_institut-medium",
             "uk": "uk_UA-ukrainian_tts-medium",
-            "bg": "bg_BG-dimitar-medium",
-            
-            # Middle East / Asia
-            "ar": "ar_JO-kareem-low",
-            "fa": "fa_IR-amir-medium",
-            "tr": "tr_TR-dfki-medium",
-            "ka": "ka_GE-natia-medium",
             "kk": "kk_KZ-issai-high",
-            "ne": "ne_NP-google-medium",
-            "vi": "vi_VN-vivos-x_low",
-            
-            # Others
-            "ca": "ca_ES-upc_ona-medium",
-            "cy": "cy_GB-gwryw_gogleddol-medium",
             "el": "el_GR-rapunzelina-medium",
-            "lb": "lb_LU-marylux-medium",
             "nl": "nl_NL-mls-medium",
-            "sw": "sw_CD-lanfrica-medium",
     }
+
+    # Every voice an earlier VAF could have written into models/voices/ and this table no
+    # longer holds: their licence does not allow any use, or the pinned Piper cannot read
+    # them. Removed by these exact names (the .onnx and .onnx.json of each), never by a
+    # pattern, so no other file in the folder is touched.
+    RETIRED_VOICES = (
+            "ar_JO-kareem-low", "bg_BG-dimitar-medium", "ca_ES-upc_ona-medium", "cs_CZ-jirka-medium",
+            "cy_GB-gwryw_gogleddol-medium", "da_DK-talesyntese-medium", "de_DE-thorsten-high",
+            "en_US-lessac-high", "es_ES-sharvard-medium", "fa_IR-amir-medium", "fi_FI-harri-medium",
+            "fr_FR-siwis-medium", "hu_HU-anna-medium", "it_IT-paola-medium", "ka_GE-natia-medium",
+            "lb_LU-marylux-medium", "ne_NP-google-medium", "no_NO-talesyntese-medium",
+            "pl_PL-darkman-medium", "pt_BR-faber-medium", "ro_RO-mihai-medium", "ru_RU-ruslan-medium",
+            "sk_SK-lili-medium", "sl_SI-artur-medium", "sr_RS-serbski_institut-medium",
+            "sw_CD-lanfrica-medium", "tr_TR-dfki-medium", "vi_VN-vivos-x_low", "zh_CN-huayan-medium",
+    )
+
+    def _remove_retired_voices(self) -> None:
+        """Delete the files of RETIRED_VOICES from models/voices/, once per process.
+
+        Only the exact names ``<voice>.onnx`` and ``<voice>.onnx.json`` are looked at. A
+        regular file or a link there is removed (a link itself, its target never touched);
+        a folder of that name and every other file stay. What was removed is said once.
+        A file that cannot be removed (in use on Windows) is said in a dim line, and the
+        next start of VAF tries again."""
+        if self.__dict__.get("_retired_swept"):
+            return
+        self._retired_swept = True
+        removed, freed, failed = 0, 0, []
+        for name in self.RETIRED_VOICES:
+            for suffix in (".onnx", ".onnx.json"):
+                path = self.models_dir / f"{name}{suffix}"
+                try:
+                    st = os.lstat(path)
+                except OSError:
+                    continue
+                if not (stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode)):
+                    continue
+                try:
+                    os.unlink(path)
+                except OSError as e:
+                    failed.append(f"{path.name}: {e}")
+                    continue
+                removed += 1 if suffix == ".onnx" else 0
+                freed += st.st_size
+        if removed:
+            UI.event("Speech", f"Removed {removed} voice{'s' if removed != 1 else ''} this VAF release no longer "
+                               f"offers: their licence does not allow any use, or Piper on this computer cannot "
+                               f"read them ({freed / 1_000_000:.0f} MB freed).", style="dim")
+        if failed:
+            UI.event("Speech", "Some voices this VAF release no longer offers could not be removed yet; the "
+                               f"next start tries again ({'; '.join(failed[:3])}).", style="dim")
 
     def _voice_model_name(self, short_lang: str) -> Optional[str]:
         """Piper model name for a 2-letter language, or None if unsupported."""
@@ -603,8 +627,10 @@ class SpeechManager:
         only as the bytes recorded there (fetch_verified): a file already there with the
         pinned digest is kept (hashed once per process), a truncated or foreign one is
         replaced by verified bytes, and bytes that hash differently are never written
-        under the voice's name. None, with the reason said, when the voice is not pinned or
-        could not be fetched.
+        under the voice's name. None, with the reason said, when the voice is not pinned (or
+        its licence or the pinned Piper rules it out, speech_pin.voice_files) or could not
+        be fetched. A language without a voice gets the English one, said once per
+        language; the first call of a process also removes the retired voices.
 
         A voice whose download failed its checksum or was refused by the server is not
         fetched again in this process (a 63 to 128 MB transfer would otherwise repeat at
@@ -613,13 +639,23 @@ class SpeechManager:
         from vaf.core import speech_pin
         from vaf.core.verified_download import DownloadIntegrityError, fetch_verified, has_pinned_digest
 
+        self._remove_retired_voices()
+
         # Handle 'auto' -> default to English
         if lang == "auto":
             lang = "en"
 
-        # Default to English if lang not supported
+        # A language without a voice is read by the English voice, and the person is told
+        # so once per language (it used to happen silently).
         short_lang = lang[:2].lower()
-        model_name = self.PIPER_VOICES.get(short_lang, self.PIPER_VOICES["en"])
+        model_name = self.PIPER_VOICES.get(short_lang)
+        if model_name is None:
+            model_name = self.PIPER_VOICES["en"]
+            told = self.__dict__.setdefault("_english_fallback_said", set())
+            if short_lang not in told:
+                told.add(short_lang)
+                UI.event("Speech", f"There is no voice for '{short_lang}' in this VAF release; the English "
+                                   "voice reads it.", style="warning")
 
         onnx_file = self.models_dir / f"{model_name}.onnx"
         json_file = self.models_dir / f"{model_name}.onnx.json"
@@ -1058,13 +1094,10 @@ $player.Close()
                 from vaf.core import inference_profile as _profile
                 if (preferred_engine == "piper" and _profile.local_inference_allowed()
                         and self._check_piper()):
-                    # Attempt to get voice for requested language
+                    # The voice for the requested language; a language without one is read
+                    # by the English voice (_ensure_voice_model says so once). None only
+                    # when no voice could be had at all.
                     model_path = self._ensure_voice_model(lang)
-                    
-                    # Do not fallback to English here. 
-                    # If the requested language model is missing, we prefer to fall through 
-                    # to pyttsx3 (System TTS) which might have the correct language installed,
-                    # rather than speaking German/French text with an English accent.
 
                     if model_path:
                         try:

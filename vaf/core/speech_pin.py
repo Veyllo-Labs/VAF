@@ -10,13 +10,32 @@ release is prepared and only read here. It names:
   archive, its SHA-256, its size and the SHA-256 of the ``piper`` program inside it. The
   program digest is what decides whether an installed Piper is the pinned one;
 - ``piper_voices``: one commit of ``rhasspy/piper-voices`` and every voice file VAF may
-  fetch from it (the ``.onnx`` model and its ``.onnx.json`` settings), by path;
-- ``models``: the speaker recognition and turn-end models, each with its URL.
+  fetch from it (the ``.onnx`` model and its ``.onnx.json`` settings), by path, and per
+  voice (``voices``) its licence record;
+- ``models``: the speaker recognition and turn-end models, each with its URL and licence.
 
 Every download of these goes through ``vaf/core/verified_download.py`` with the digest
 recorded here. A name this manifest does not hold gets ``None``, and the caller refuses:
 there is no fallback to an unpinned URL. A missing or malformed manifest raises
 ``RuntimeError``, so a broken release installs nothing rather than something unchecked.
+
+Licences. Model weights carry a licence of their own, independent of the code that loads
+them, and VAF offers only weights whose licence allows any use, commercial use and
+redistribution included: ``ALLOWED_WEIGHT_LICENCES``, the rule of "Container images and
+model weights" in ``docs/legal/THIRD_PARTY.md``. Each voice row (``piper_voices.voices``)
+records its licence, its dataset, the model it was fine-tuned from (``base``; a fine-tune
+carries the licence of the weights it started from, so only the bases in ``CLEAN_BASES``
+count), its ``MODEL_CARD`` by digest, and ``host_piper``: whether the pinned Piper program
+can read the voice's settings at all (that 2023 build refuses a phoneme of more than one
+codepoint, and reads every phoneme type but ``text`` as espeak). Each model records its
+licence and where it was read. A licence outside the list is not a load error, which would
+take every other speech file down with it: ``voice_files`` and ``model`` answer None for
+that one entry, so it is never downloaded.
+
+Named boundary: nothing outside ``vaf/core`` calls this module (measured: 0 callers), and
+text-to-speech is the embedder's own (``docs/EMBEDDING.md``, "TTS is YOURS"), so the
+facade exports none of it. The speaker models and the turn-end model an embedder does
+reach through ``VoiceTurnEngine`` are refused here like any other weights.
 """
 from __future__ import annotations
 
@@ -35,6 +54,19 @@ PIPER_ASSETS = (
     "piper_linux_x86_64.tar.gz", "piper_linux_aarch64.tar.gz", "piper_linux_armv7l.tar.gz",
     "piper_macos_aarch64.tar.gz", "piper_macos_x64.tar.gz", "piper_windows_amd64.zip",
 )
+# The licences under which VAF offers model weights, as SPDX identifiers (public domain has
+# none, hence the LicenseRef). Each allows any use, commercial use and redistribution
+# included; CC0 and a public-domain dedication impose no condition at all. Weights with a
+# non-commercial clause, a share-alike term, a revenue threshold or any other use
+# restriction are not offered: VAF is distributed under the AGPL, which forbids passing such
+# restrictions on, and is also licensed commercially (docs/legal/THIRD_PARTY.md).
+ALLOWED_WEIGHT_LICENCES = ("MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "CC-BY-4.0", "CC0-1.0",
+                           "LicenseRef-public-domain")
+# What a voice may have been fine-tuned from, with that base's licence: trained from scratch,
+# or one of the two bases rhasspy/piper-voices trained from scratch on clean data for this.
+# A voice fine-tuned from anything else (en_US-lessac, licensed for non-commercial use only,
+# is the one most voices started from) is not offered, whatever its own dataset allows.
+CLEAN_BASES = {"scratch": None, "en_US-hifi_tts_92-medium": "CC-BY-4.0", "nl_BE-rdh-medium": "CC0-1.0"}
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _HEX40 = re.compile(r"[0-9a-f]{40}")
 # A voice file's path in the repository: language/locale/voice/quality/file, plain
@@ -60,7 +92,9 @@ def load_speech_pin() -> dict:
     """The manifest, validated. RuntimeError when it is missing or malformed: every
     ``sha256`` and ``program_sha256`` 64 lowercase hex digits, every ``size`` a positive
     integer, the voices' ``revision`` a 40-digit commit, the Piper archives among the six
-    known names, voice paths plain relative paths, model URLs https."""
+    known names, voice paths plain relative paths, model URLs https; every voice file
+    belongs to a voice row with a licence, a ``host_piper`` flag and its pinned
+    ``MODEL_CARD``, and every model names its licence and an https source for it."""
     try:
         data = json.loads(PIN_PATH.read_bytes().decode("utf-8"))
     except Exception as e:
@@ -87,6 +121,30 @@ def load_speech_pin() -> dict:
         if not _VOICE_PATH.fullmatch(path) or ".." in path.split("/"):
             raise _bad(f"bad voice path {path!r}")
         _check_file_entry(path, meta)
+    rows = voices.get("voices")
+    if not isinstance(rows, dict) or not rows:
+        raise _bad("no voice licences")
+    owned = set()
+    for name, row in rows.items():
+        path = voice_path(name)
+        if path is None or not _VOICE_PATH.fullmatch(path):
+            raise _bad(f"bad voice name {name!r}")
+        if not isinstance(row, dict):
+            raise _bad(f"voice {name} is not an entry")
+        if path not in voices["files"] or path + ".json" not in voices["files"]:
+            raise _bad(f"voice {name} has no pinned files")
+        owned |= {path, path + ".json"}
+        if not isinstance(row.get("licence"), str) or not row["licence"].strip():
+            raise _bad(f"voice {name} has no licence")
+        if not isinstance(row.get("host_piper"), bool):
+            raise _bad(f"voice {name} does not say whether the host Piper reads it")
+        card = row.get("card")
+        _check_file_entry(f"the card of {name}", card)
+        if card.get("path") != path.rsplit("/", 1)[0] + "/MODEL_CARD":
+            raise _bad(f"the card of {name} is not its MODEL_CARD")
+    stray = sorted(set(voices["files"]) - owned)
+    if stray:
+        raise _bad(f"voice files without a licence entry: {stray[:3]}")
     models = data.get("models")
     if not isinstance(models, dict):
         raise _bad("no models")
@@ -96,7 +154,16 @@ def load_speech_pin() -> dict:
         _check_file_entry(name, meta)
         if not str(meta.get("url") or "").startswith("https://"):
             raise _bad(f"{name} has no https URL")
+        if not isinstance(meta.get("licence"), str) or not meta["licence"].strip():
+            raise _bad(f"{name} has no licence")
+        if not str(meta.get("licence_source") or "").startswith("https://"):
+            raise _bad(f"{name} does not say where its licence was read")
     return data
+
+
+def voice_licence_allowed(row: dict) -> bool:
+    """True when a voice row's licence is on the list and its base is a clean one."""
+    return row.get("licence") in ALLOWED_WEIGHT_LICENCES and row.get("base") in CLEAN_BASES
 
 
 def piper_asset(name: str) -> Optional[dict]:
@@ -123,13 +190,18 @@ def voice_path(model_name: str) -> Optional[str]:
 
 
 def voice_files(model_name: str) -> Optional[Tuple[dict, dict]]:
-    """The pinned ``.onnx`` and ``.onnx.json`` of a voice, each ``{path, url, sha256,
-    size}``, or None when either is not in the manifest."""
+    """The pinned ``.onnx`` and ``.onnx.json`` of a voice for Piper on this computer, each
+    ``{path, url, sha256, size}``. None when the voice is not in the manifest, when its
+    licence or base is not on the list, or when the pinned Piper cannot read it
+    (``host_piper``): such a voice is never downloaded."""
     path = voice_path(model_name)
     if path is None:
         return None
     pin = load_speech_pin()
     voices = pin["piper_voices"]
+    row = voices["voices"].get(model_name)
+    if row is None or not voice_licence_allowed(row) or row["host_piper"] is not True:
+        return None
     out = []
     for p in (path, path + ".json"):
         meta = voices["files"].get(p)
@@ -141,8 +213,9 @@ def voice_files(model_name: str) -> Optional[Tuple[dict, dict]]:
 
 
 def model(name: str) -> Optional[dict]:
-    """``{name, url, sha256, size}`` of a pinned model file, or None."""
+    """``{name, url, sha256, size}`` of a pinned model file, or None (also when its licence
+    is not on the list)."""
     meta = load_speech_pin()["models"].get(name)
-    if meta is None:
+    if meta is None or meta.get("licence") not in ALLOWED_WEIGHT_LICENCES:
         return None
     return {"name": name, "url": meta["url"], "sha256": meta["sha256"], "size": meta["size"]}

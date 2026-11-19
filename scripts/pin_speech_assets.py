@@ -23,18 +23,26 @@ Where each digest comes from, and what is checked before it is written down:
    ``piper/``, and the SHA-256 of the unpacked ``piper`` (``piper.exe``) program is
    recorded. The program's file header is printed so the architecture can be read off.
 2. Voices (``rhasspy/piper-voices`` at one commit): the ``.onnx`` digests are the LFS
-   SHA-256 Hugging Face publishes (nothing downloaded); each ``.onnx.json`` is a plain git
-   file, so it is downloaded (a few KB), its git blob id recomputed and compared with the
-   published one, and then its SHA-256 recorded. Every voice of
-   ``SpeechManager.PIPER_VOICES`` and of the container's table must exist there.
-3. Models: Silero VAD from the digest GitHub reports for it; the ERes2Net speaker model
-   has none, so it is downloaded (about 26.5 MB) and hashed under the same
-   ``updated_at`` rule; Smart Turn from its LFS SHA-256 at the given revision.
+   SHA-256 Hugging Face publishes (nothing downloaded); each ``.onnx.json`` and each
+   voice's ``MODEL_CARD`` is a plain git file, so it is downloaded (a few KB), its git blob
+   id recomputed and compared with the published one, and then its SHA-256 recorded. Every
+   voice of ``SpeechManager.PIPER_VOICES`` and of the container's table must exist there,
+   and must have an entry in ``VOICE_LICENCES``, reviewed from its card by hand, with a
+   licence in ``speech_pin.ALLOWED_WEIGHT_LICENCES`` and a base in
+   ``speech_pin.CLEAN_BASES``; a voice without one stops the run. ``host_piper`` is read
+   from the pinned settings (``host_piper_can_load``), and a voice of
+   ``PIPER_VOICES`` the pinned Piper cannot read stops the run too.
+3. Models: Silero VAD and the ERes2Net speaker model from the digest GitHub reports for
+   them; an asset without one (ERes2Net had none until its upload was renewed) is
+   downloaded (about 26.5 MB) and hashed under the same ``updated_at`` rule; Smart Turn from its LFS SHA-256 at the given revision, and its
+   licence read from the ``license:`` line of its README at that revision. Each model is
+   recorded with the licence in ``MODEL_LICENCES``.
 
 Trust on first use means the first use, not every run: any file whose URL is the same as
 in the committed manifest but whose digest (or program digest) differs is refused unless
-``--accept-changed-digest`` is given, whatever the digest was taken from; a committed
-manifest that exists but cannot be read stops the run too.
+``--accept-changed-digest`` is given, whatever the digest was taken from (a voice's
+``MODEL_CARD`` included: a card that changed at the same address may carry another
+licence); a committed manifest that exists but cannot be read stops the run too.
 
 Nothing downloaded is executed or imported. Downloads go to a temporary folder (under
 ``TMPDIR``) that is removed at the end.
@@ -75,7 +83,65 @@ MODELS = {
     "3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx": ("github", SHERPA, "speaker-recongition-models"),
     "smart-turn-v3.2-cpu.onnx": ("huggingface", "pipecat-ai/smart-turn-v3", None),
 }
+# The licence of each model and where it was read. Smart Turn's source is its README at the
+# pinned revision, whose license: line is checked at every run.
+MODEL_LICENCES = {
+    "silero_vad.onnx": ("MIT", "https://github.com/snakers4/silero-vad/blob/master/LICENSE"),
+    "3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx": (
+        "Apache-2.0", "https://modelscope.cn/models/iic/speech_eres2net_sv_en_voxceleb_16k"),
+    "smart-turn-v3.2-cpu.onnx": ("BSD-2-Clause", None),
+}
 REPLACED_AFTER_UPLOAD = 60.0       # seconds between created_at and updated_at
+
+# Every voice VAF may fetch, reviewed by hand from its MODEL_CARD at the pinned revision:
+# the licence (an SPDX identifier from speech_pin.ALLOWED_WEIGHT_LICENCES), the dataset it
+# was trained on, and the model it was fine-tuned from ("scratch" when none). A card that
+# names no licence ("See URL") was followed to the dataset's own page, which the note
+# names. A new voice needs an entry here before it can be pinned.
+_OHF = "https://github.com/OHF-Voice/voice-datasets"
+_MLS = "https://www.openslr.org/94/"
+_HIFI = "en_US-hifi_tts_92-medium"
+VOICE_LICENCES = {
+    "de_DE-mls-medium": {"licence": "CC-BY-4.0", "dataset": _MLS, "base": "scratch",
+                         "note": "Multilingual LibriSpeech, speaker 0 of 236"},
+    "de_DE-thorsten-medium": {"licence": "CC0-1.0", "dataset": "https://github.com/thorstenMueller/Thorsten-Voice",
+                              "base": "nl_BE-rdh-medium"},
+    "el_GR-rapunzelina-medium": {"licence": "CC0-1.0",
+                                 "dataset": "https://www.kaggle.com/datasets/bryanpark/greek-single-speaker-speech-dataset",
+                                 "base": "scratch"},
+    "en_US-hifi_tts_92-medium": {"licence": "CC-BY-4.0", "dataset": "https://www.openslr.org/109/", "base": "scratch",
+                                 "note": "Hi-Fi Multi-Speaker English TTS Dataset, NVIDIA Corporation; reader 92, "
+                                         "Cori Samuel"},
+    "en_US-ljspeech-high": {"licence": "LicenseRef-public-domain", "dataset": "https://keithito.com/LJ-Speech-Dataset/",
+                            "base": "scratch"},
+    "es_ES-carlfm-x_low": {"licence": "LicenseRef-public-domain", "dataset": "https://github.com/carlfm01/my-speech-datasets",
+                           "base": "scratch"},
+    "fr_FR-mls-medium": {"licence": "CC-BY-4.0", "dataset": _MLS, "base": "scratch",
+                         "note": "Multilingual LibriSpeech, 125 speakers"},
+    "fr_FR-siwis-medium": {"licence": "CC-BY-4.0", "dataset": "https://datashare.is.ed.ac.uk/handle/10283/2353",
+                           "base": _HIFI},
+    "is_IS-bui-medium": {"licence": "CC-BY-4.0", "dataset": "https://hdl.handle.net/20.500.12537/104", "base": "scratch",
+                         "note": "the card says See URL; the dataset's page states CC BY 4.0"},
+    "it_IT-riccardo-x_low": {"licence": "BSD-3-Clause",
+                             "dataset": "https://www.caito.de/2019/01/03/the-m-ailabs-speech-dataset/",
+                             "base": "scratch",
+                             "note": "the card says See URL; the M-AILABS licence states BSD-3-Clause conditions "
+                                     "in its own wording, commercial use permitted"},
+    "kk_KZ-issai-high": {"licence": "CC-BY-4.0", "dataset": "https://github.com/IS2AI/Kazakh_TTS", "base": "scratch"},
+    "nl_NL-mls-medium": {"licence": "CC-BY-4.0", "dataset": _MLS, "base": "scratch",
+                         "note": "Multilingual LibriSpeech, 52 speakers"},
+    "pl_PL-gosia-medium": {"licence": "CC0-1.0", "dataset": _OHF, "base": _HIFI},
+    "pt_BR-faber-medium": {"licence": "CC0-1.0", "dataset": _OHF, "base": _HIFI},
+    "ru_RU-dmitri-medium": {"licence": "CC0-1.0", "dataset": _OHF, "base": _HIFI},
+    "sv_SE-nst-medium": {"licence": "CC0-1.0",
+                         "dataset": "https://www.nb.no/sprakbanken/en/resource-catalogue/oai-nb-no-sbr-17/",
+                         "base": "scratch"},
+    "uk_UA-ukrainian_tts-medium": {"licence": "CC0-1.0", "dataset": _OHF, "base": "scratch"},
+    "zh_CN-chaowen-medium": {"licence": "CC0-1.0", "dataset": _OHF, "base": _HIFI},
+}
+# Languages an earlier container table held and this one drops; the container removes their
+# installed voices at start. Japanese and Turkish: no voice of either has a licence on the list.
+CONTAINER_RETIRED = ("ja", "tr")
 
 
 def _post_form(url: str, data) -> list:
@@ -232,6 +298,66 @@ def _git_blob_id(data: bytes) -> str:
     return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
 
 
+def _one_codepoint(text) -> bool:
+    """Piper's isSingleCodepoint: exactly one codepoint of valid UTF-8. A string that is
+    not valid UTF-8 (a lone surrogate) makes Piper throw, so it fails closed."""
+    if not isinstance(text, str):
+        return False
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return len(text) == 1
+
+
+def host_piper_can_load(config: dict) -> bool:
+    """Whether the pinned Piper program (2023.11.14-2) can read a voice's ``.onnx.json``.
+
+    Mirrors ``parsePhonemizeConfig`` and ``parseSynthesisConfig`` in its ``piper.cpp``: a
+    ``phoneme_type`` other than ``text`` is phonemized as espeak, so only ``espeak`` and
+    ``text`` (or none) are read right; every key of ``phoneme_id_map``, every key and every
+    value of ``phoneme_map`` and every key of ``inference.phoneme_silence`` must be one
+    codepoint, or the program aborts. Anything of another shape fails closed."""
+    if not isinstance(config, dict):
+        return False
+    if "phoneme_type" in config and config["phoneme_type"] not in ("espeak", "text"):
+        return False
+    id_map = config.get("phoneme_id_map", {})
+    if not isinstance(id_map, dict) or not all(_one_codepoint(k) for k in id_map):
+        return False
+    phoneme_map = config.get("phoneme_map", {})
+    if not isinstance(phoneme_map, dict):
+        return False
+    for key, targets in phoneme_map.items():
+        if not _one_codepoint(key) or not isinstance(targets, list) \
+                or not all(_one_codepoint(t) for t in targets):
+            return False
+    inference = config.get("inference", {})
+    if not isinstance(inference, dict):
+        return False
+    silence = inference.get("phoneme_silence", {})
+    return isinstance(silence, dict) and all(_one_codepoint(k) for k in silence)
+
+
+def _card_path(voice_file: str) -> str:
+    return voice_file.rsplit("/", 1)[0] + "/MODEL_CARD"
+
+
+def _curated(name: str) -> dict:
+    """The reviewed licence entry of a voice; the run stops when there is none or it is not
+    allowed."""
+    entry = VOICE_LICENCES.get(name)
+    if entry is None:
+        raise SystemExit(f"voice {name} has no licence entry: review its MODEL_CARD and add it to VOICE_LICENCES")
+    if entry.get("licence") not in speech_pin.ALLOWED_WEIGHT_LICENCES:
+        raise SystemExit(f"voice {name}: licence {entry.get('licence')!r} is not in ALLOWED_WEIGHT_LICENCES")
+    if entry.get("base") not in speech_pin.CLEAN_BASES:
+        raise SystemExit(f"voice {name}: base {entry.get('base')!r} is not one of {sorted(speech_pin.CLEAN_BASES)}")
+    if not str(entry.get("dataset") or "").startswith("https://"):
+        raise SystemExit(f"voice {name}: the dataset is not an https URL")
+    return entry
+
+
 def _container_voices() -> dict:
     table = json.loads(CONTAINER_TABLE.read_bytes().decode("utf-8"))
     out = {}
@@ -244,19 +370,23 @@ def pin_voices(work: Path, revision: str) -> tuple[dict, dict]:
     from vaf.core.speech import SpeechManager
 
     container = _container_voices()
-    names = sorted(set(SpeechManager.PIPER_VOICES.values())
-                   | {f"{v['locale']}-{v['voice']}-{v['quality']}" for v in container.values()})
+    kept = sorted(set(container) & set(CONTAINER_RETIRED))
+    if kept:
+        raise SystemExit(f"the container table still holds the retired languages {kept}")
+    host = set(SpeechManager.PIPER_VOICES.values())
+    names = sorted(host | {f"{v['locale']}-{v['voice']}-{v['quality']}" for v in container.values()})
     wanted = []
     for name in names:
+        _curated(name)
         path = speech_pin.voice_path(name)
         if path is None:
             raise SystemExit(f"voice {name!r} is not locale-voice-quality")
-        wanted += [path, path + ".json"]
+        wanted += [path, path + ".json", _card_path(path)]
     info = _paths_info(speech_pin.VOICES_REPO, revision, wanted)
     missing = [p for p in wanted if p not in info]
     if missing:
         raise SystemExit(f"not in {speech_pin.VOICES_REPO} at {revision}: {missing}")
-    files = {}
+    files, cards, host_piper = {}, {}, {}
     for path in wanted:
         row = info[path]
         if path.endswith(".onnx"):
@@ -272,17 +402,39 @@ def pin_voices(work: Path, revision: str) -> tuple[dict, dict]:
             if _git_blob_id(data) != row.get("oid"):
                 raise SystemExit(f"{path}: git blob id {_git_blob_id(data)} differs from the published "
                                  f"{row.get('oid')}")
+            if path.endswith("/MODEL_CARD"):
+                cards[path] = {"path": path, "sha256": sha, "size": size}
+                continue
             files[path] = {"sha256": sha, "size": size}
+            try:
+                settings = json.loads(data.decode("utf-8"))
+            except ValueError as e:
+                raise SystemExit(f"{path}: not readable as JSON ({e})")
+            host_piper[path[:-len(".json")]] = host_piper_can_load(settings)
+    rows = {}
+    for name in names:
+        path = speech_pin.voice_path(name)
+        entry = _curated(name)
+        if name in host and not host_piper[path]:
+            raise SystemExit(f"voice {name} is in SpeechManager.PIPER_VOICES, but the pinned Piper {PIPER_TAG} "
+                             "cannot read its settings (host_piper_can_load)")
+        rows[name] = dict(entry, card=cards[_card_path(path)], host_piper=host_piper[path])
+        print(f"  {name}: {entry['licence']}, base {entry['base']}, "
+              f"{'read' if host_piper[path] else 'not read'} by the pinned Piper")
     total = sum(m["size"] for p, m in files.items())
     print(f"  {len(names)} voices, {len(files)} files, {total} bytes in all")
     table = {"description": "The Piper voices the speech container may install, pinned by SHA-256 "
                             "(written by scripts/pin_speech_assets.py)",
-             "source": f"{HF}/{speech_pin.VOICES_REPO}", "revision": revision, "models": {}}
+             "source": f"{HF}/{speech_pin.VOICES_REPO}", "revision": revision, "models": {},
+             "retired": list(CONTAINER_RETIRED)}
     for lang, v in container.items():
-        path = speech_pin.voice_path(f"{v['locale']}-{v['voice']}-{v['quality']}")
-        table["models"][lang] = dict(v, model=dict(path=path, **files[path]),
+        name = f"{v['locale']}-{v['voice']}-{v['quality']}"
+        path = speech_pin.voice_path(name)
+        table["models"][lang] = dict(v, licence=rows[name]["licence"],
+                                     licence_source=f"{HF}/{speech_pin.VOICES_REPO}/raw/{revision}/{_card_path(path)}",
+                                     model=dict(path=path, **files[path]),
                                      config=dict(path=path + ".json", **files[path + ".json"]))
-    return {"repository": speech_pin.VOICES_REPO, "revision": revision, "files": files}, table
+    return {"repository": speech_pin.VOICES_REPO, "revision": revision, "files": files, "voices": rows}, table
 
 
 def pin_models(work: Path, smart_turn_revision: str | None) -> dict:
@@ -302,6 +454,7 @@ def pin_models(work: Path, smart_turn_revision: str | None) -> dict:
             else:
                 how = "GitHub digest"
             out[name] = {"url": asset["browser_download_url"], "sha256": sha, "size": size}
+            licence, source = MODEL_LICENCES[name]
         else:
             rev = _revision(repo, smart_turn_revision)
             row = _paths_info(repo, rev, [name]).get(name)
@@ -311,13 +464,31 @@ def pin_models(work: Path, smart_turn_revision: str | None) -> dict:
             out[name] = {"url": f"{HF}/{repo}/resolve/{rev}/{quote(name)}", "sha256": lfs["oid"],
                          "size": int(lfs.get("size") or row["size"])}
             how = "LFS SHA-256"
+            licence, source = MODEL_LICENCES[name][0], f"{HF}/{repo}/raw/{rev}/README.md"
+            stated = _readme_licence(source)
+            if stated != licence.lower():
+                raise SystemExit(f"{repo} at {rev}: its README says license {stated!r}, not {licence}")
+        if licence not in speech_pin.ALLOWED_WEIGHT_LICENCES:
+            raise SystemExit(f"{name}: licence {licence!r} is not in ALLOWED_WEIGHT_LICENCES")
+        out[name].update(licence=licence, licence_source=source)
         print(f"  {name}: {out[name]['size']} bytes, sha256 {out[name]['sha256']} ({how})")
     return out
 
 
+def _readme_licence(url: str) -> str:
+    """The ``license:`` value of a Hugging Face README's front matter, lowercased."""
+    r = requests.get(url, timeout=60, headers={"User-Agent": HEADERS["User-Agent"]})
+    r.raise_for_status()
+    for line in r.text.splitlines():
+        if line.strip().lower().startswith("license:"):
+            return line.split(":", 1)[1].strip().lower()
+    return ""
+
+
 def _digests_by_url(manifest: dict) -> dict:
     """{url: {label: digest}} for every file a manifest pins: the Piper archives ("archive"
-    and "program"), every voice file at its revision and every model ("file")."""
+    and "program"), every voice file at its revision and every model ("file"), and every
+    voice's MODEL_CARD ("card")."""
     out = {}
     piper = manifest.get("piper") or {}
     for name, meta in (piper.get("assets") or {}).items():
@@ -327,6 +498,10 @@ def _digests_by_url(manifest: dict) -> dict:
     for path, meta in (voices.get("files") or {}).items():
         url = f"{HF}/{voices.get('repository')}/resolve/{voices.get('revision')}/{quote(path)}"
         out[url] = {"file": meta.get("sha256")}
+    for row in (voices.get("voices") or {}).values():
+        card = (row or {}).get("card") or {}
+        url = f"{HF}/{voices.get('repository')}/resolve/{voices.get('revision')}/{quote(str(card.get('path')))}"
+        out[url] = {"card": card.get("sha256")}
     for meta in (manifest.get("models") or {}).values():
         out[meta.get("url")] = {"file": meta.get("sha256")}
     return out

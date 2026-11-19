@@ -295,9 +295,27 @@ weights carry their own license independent of the code that loads them.
 | openai-whisper (the ASR engine inside it) | that image's `.venv` | MIT | Copyright (c) 2022 OpenAI - https://github.com/openai/whisper |
 | Whisper model weights (`base` by default) | downloaded at first use into the `vaf_stt_models` volume | MIT | OpenAI - "Whisper's code and model weights are released under the MIT License" (upstream README) |
 | Piper (the program, `speech_tts_engine = piper`) | release archive `2023.11.14-2` of https://github.com/rhasspy/piper, downloaded at first use into `bin/piper/`; pinned by SHA-256 in `vaf/core/speech_assets_pin.json` | MIT (the repository's LICENSE.md; the archives carry no license file, measured) | Copyright (c) 2022 Michael Hansen - https://github.com/rhasspy/piper. The archive bundles espeak-ng (GPL-3.0-or-later, https://github.com/espeak-ng/espeak-ng) and onnxruntime (MIT, Microsoft), run as a separate program |
-| Piper voices | downloaded at first use into `models/voices/` (host) and on demand into the speech container's volume, from one pinned commit of https://huggingface.co/rhasspy/piper-voices; pinned by SHA-256 in `vaf/core/speech_assets_pin.json` and `docker/tts-multilang/models.json` | per voice, as listed in the `MODEL_CARD` beside each voice at the pinned commit; these licenses have not yet been checked against the rule below (open) | the voice's dataset authors, named in its `MODEL_CARD` |
+| Piper voices (one row each below) | downloaded at first use into `models/voices/` (computer) and on demand into the speech container's volume (container), from one pinned commit of https://huggingface.co/rhasspy/piper-voices; pinned by SHA-256 in `vaf/core/speech_assets_pin.json` and `docker/tts-multilang/models.json`, each with its licence and its `MODEL_CARD` (by digest) | per voice, below; each one checked against the rule below, the model it was fine-tuned from included | the voice's dataset authors, named in its row |
+| `en_US-ljspeech-high` | Piper voice; computer (`en`, and the voice that reads every language without one) | LicenseRef-public-domain (the dataset is placed in the public domain by its publisher) | LJ Speech Dataset - https://keithito.com/LJ-Speech-Dataset/; trained from scratch |
+| `de_DE-mls-medium` | Piper voice; computer (`de`) | CC-BY-4.0 | Multilingual LibriSpeech (MLS), derived from LibriVox audiobooks - https://www.openslr.org/94/ (speaker 0 of 236); trained from scratch |
+| `fr_FR-mls-medium` | Piper voice; computer (`fr`) | CC-BY-4.0 | Multilingual LibriSpeech (MLS), derived from LibriVox audiobooks - https://www.openslr.org/94/ (125 speakers); trained from scratch |
+| `nl_NL-mls-medium` | Piper voice; computer and container (`nl`) | CC-BY-4.0 | Multilingual LibriSpeech (MLS), derived from LibriVox audiobooks - https://www.openslr.org/94/ (52 speakers); trained from scratch |
+| `es_ES-carlfm-x_low` | Piper voice; computer and container (`es`) | LicenseRef-public-domain (the card's licence) | carlfm01's speech datasets - https://github.com/carlfm01/my-speech-datasets; trained from scratch |
+| `it_IT-riccardo-x_low` | Piper voice; computer and container (`it`) | BSD-3-Clause (the M-AILABS licence states BSD-3-Clause conditions in its own wording and permits commercial use; the card only says "See URL") | The M-AILABS Speech Dataset - https://www.caito.de/2019/01/03/the-m-ailabs-speech-dataset/; trained from scratch |
+| `is_IS-bui-medium` | Piper voice; computer (`is`) | CC-BY-4.0 (stated on the dataset's page; the card only says "See URL") | Talrómur 1 - https://hdl.handle.net/20.500.12537/104; trained from scratch |
+| `sv_SE-nst-medium` | Piper voice; computer (`sv`) | CC0-1.0 | NST Swedish speech synthesis data, Språkbanken at the National Library of Norway - https://www.nb.no/sprakbanken/en/resource-catalogue/oai-nb-no-sbr-17/; trained from scratch by KBLab at the National Library of Sweden |
+| `uk_UA-ukrainian_tts-medium` | Piper voice; computer and container (`uk`) | CC0-1.0 | OHF-Voice voice datasets - https://github.com/OHF-Voice/voice-datasets; trained from scratch |
+| `kk_KZ-issai-high` | Piper voice; computer (`kk`) | CC-BY-4.0 | KazakhTTS, ISSAI - https://github.com/IS2AI/Kazakh_TTS; trained from scratch |
+| `el_GR-rapunzelina-medium` | Piper voice; computer (`el`) | CC0-1.0 | Greek Single Speaker Speech Dataset - https://www.kaggle.com/datasets/bryanpark/greek-single-speaker-speech-dataset; trained from scratch |
+| `de_DE-thorsten-medium` | Piper voice; container (`de`) | CC0-1.0 | Thorsten-Voice, Thorsten Müller - https://github.com/thorstenMueller/Thorsten-Voice; fine-tuned from `nl_BE-rdh-medium` (CC0-1.0, trained from scratch) |
+| `en_US-hifi_tts_92-medium` | Piper voice; container (`en`) | CC-BY-4.0 | Hi-Fi Multi-Speaker English TTS Dataset, NVIDIA Corporation (Bakhturina, Lavrukhin, Ginsburg and Zhang, Interspeech 2021), reader 92 Cori Samuel, from LibriVox public-domain audiobooks - https://www.openslr.org/109/; trained from scratch |
+| `fr_FR-siwis-medium` | Piper voice; container (`fr`) | CC-BY-4.0 | The SIWIS French Speech Synthesis Database - https://datashare.is.ed.ac.uk/handle/10283/2353; fine-tuned from `en_US-hifi_tts_92-medium` (CC-BY-4.0: Hi-Fi Multi-Speaker English TTS Dataset, NVIDIA Corporation, reader 92 Cori Samuel - https://www.openslr.org/109/) |
+| `pl_PL-gosia-medium` | Piper voice; container (`pl`) | CC0-1.0 | OHF-Voice voice datasets - https://github.com/OHF-Voice/voice-datasets; fine-tuned from `en_US-hifi_tts_92-medium` (CC-BY-4.0: Hi-Fi Multi-Speaker English TTS Dataset, NVIDIA Corporation, reader 92 Cori Samuel - https://www.openslr.org/109/) |
+| `pt_BR-faber-medium` | Piper voice; container (`pt`) | CC0-1.0 | OHF-Voice voice datasets - https://github.com/OHF-Voice/voice-datasets; fine-tuned from `en_US-hifi_tts_92-medium` (CC-BY-4.0: Hi-Fi Multi-Speaker English TTS Dataset, NVIDIA Corporation, reader 92 Cori Samuel - https://www.openslr.org/109/) |
+| `ru_RU-dmitri-medium` | Piper voice; container (`ru`) | CC0-1.0 | OHF-Voice voice datasets - https://github.com/OHF-Voice/voice-datasets; fine-tuned from `en_US-hifi_tts_92-medium` (CC-BY-4.0: Hi-Fi Multi-Speaker English TTS Dataset, NVIDIA Corporation, reader 92 Cori Samuel - https://www.openslr.org/109/) |
+| `zh_CN-chaowen-medium` | Piper voice; container (`zh`) | CC0-1.0 | OHF-Voice voice datasets - https://github.com/OHF-Voice/voice-datasets; fine-tuned from `en_US-hifi_tts_92-medium` (CC-BY-4.0: Hi-Fi Multi-Speaker English TTS Dataset, NVIDIA Corporation, reader 92 Cori Samuel - https://www.openslr.org/109/) |
 | Silero VAD (`silero_vad.onnx`) | downloaded at first use into `models/speaker/` from the k2-fsa/sherpa-onnx release `asr-models`; pinned by SHA-256 in `vaf/core/speech_assets_pin.json` | MIT | Silero Team - https://github.com/snakers4/silero-vad |
-| 3D-Speaker ERes2Net speaker model (`3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx`) | downloaded at first use into `models/speaker/` from the k2-fsa/sherpa-onnx release `speaker-recongition-models`; pinned by SHA-256 in `vaf/core/speech_assets_pin.json` | Apache-2.0 | Alibaba DAMO Academy, 3D-Speaker - https://github.com/modelscope/3D-Speaker |
+| 3D-Speaker ERes2Net speaker model (`3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx`) | downloaded at first use into `models/speaker/` from the k2-fsa/sherpa-onnx release `speaker-recongition-models`; pinned by SHA-256 in `vaf/core/speech_assets_pin.json` | Apache-2.0 | Alibaba DAMO Academy, 3D-Speaker - https://github.com/modelscope/3D-Speaker (the licence as stated for `iic/speech_eres2net_sv_en_voxceleb_16k` on ModelScope; trained on VoxCeleb, CC BY 4.0) |
 | Smart Turn v3 model weights (`smart-turn-v3.2-cpu.onnx`, ~8 MB int8) | downloaded at first use into `models/speaker/` when `voice_semantic_endpoint_enabled` is on (default off); loader `vaf/core/voice_vad.py`; pinned to a commit and by SHA-256 in `vaf/core/speech_assets_pin.json` | BSD-2-Clause | Pipecat AI - https://huggingface.co/pipecat-ai/smart-turn-v3 (semantic voice turn-end; Whisper-Tiny encoder + linear head) |
 | Sandbox environment image (`vaf-sandbox-env`) | built LOCALLY from `vaf/assets/sandbox/Dockerfile` by `vaf/core/environment_image.py`; never published as a prebuilt image | aggregate of the components below and the Debian packages of the base image, each under its own licence | Veyllo GmbH (the Dockerfile, AGPL-3.0-or-later) |
 | Node.js 24 (in that image) | official release tarball, version-pinned with a sha256 per architecture | MIT (bundled third-party components under their own permissive licences, listed in its `LICENSE`) | OpenJS Foundation and Node.js contributors - https://nodejs.org |
@@ -323,13 +341,26 @@ license file) rather than from upstream documentation, so this row states what t
 image actually contains.
 
 **The rule this row establishes, because model weights are the easy thing to get
-wrong:** VAF ships only weights under MIT, Apache-2.0, BSD or CC-BY-4.0. Weights
-carrying a non-commercial clause, a revenue threshold, a registration requirement or
-any other use restriction are neither shipped nor offered as a default, because VAF
-is distributed under the AGPL (which forbids adding such restrictions downstream)
-and is also licensed commercially. This is not hypothetical: the openWakeWord
-weights are excluded in `.gitignore` for exactly this reason (CC-BY-NC-SA-4.0), and
-CrisperWhisper 2.0 was evaluated and rejected on the same ground in August 2026.
+wrong:** VAF ships and offers only weights under MIT, Apache-2.0, BSD, CC-BY-4.0,
+CC0-1.0 or a public-domain dedication (`ALLOWED_WEIGHT_LICENCES` in
+`vaf/core/speech_pin.py`; CC0 and public domain impose no condition at all, strictly less
+than CC-BY-4.0). Weights carrying a non-commercial clause, a share-alike term, a revenue
+threshold, a registration requirement or any other use restriction are neither shipped
+nor offered, because VAF is distributed under the AGPL (which forbids adding such
+restrictions downstream) and is also licensed commercially. **A fine-tuned model carries
+the licence of the model it started from**, whatever its own dataset allows: its
+weights are a derivative of the base's weights. This is not hypothetical: the
+openWakeWord weights are excluded in `.gitignore` for exactly this reason
+(CC-BY-NC-SA-4.0); CrisperWhisper 2.0 was evaluated and rejected on the same ground in
+August 2026; and the Piper voice `en_US-lessac` is licensed for non-commercial use only
+("released under a license for non-commercial use only", excluding the development of
+voice synthesis products), so neither it nor any voice fine-tuned from it is offered,
+although many of those voices name CC0 data of their own. The two bases Piper voices
+may start from are `en_US-hifi_tts_92-medium` (CC-BY-4.0) and `nl_BE-rdh-medium`
+(CC0-1.0), both trained from scratch (`CLEAN_BASES`). A voice whose card names no
+licence ("See URL") is offered only when the page it points to states one on the list.
+The pin script (`scripts/pin_speech_assets.py`) refuses a voice without a reviewed entry,
+and `tests/test_speech_assets_pin.py` keeps the rows above and the manifest in step.
 
 ---
 

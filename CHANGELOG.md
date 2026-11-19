@@ -84,12 +84,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   of the server could make VAF stop an unrelated program, also one that merely had
   `llama-server` in its command line, such as an editor with its log open. Now a process
   is stopped only when it is the `llama-server` program itself.
-- **Nine voices that could never be downloaded now work.** Portuguese, Swedish, Bulgarian,
-  Kazakh, Greek, Luxembourgish, Dutch and Swahili for Piper on your computer (63 MB each,
-  Dutch 77 MB, Kazakh 128 MB), and Japanese in the speech container (77 MB). Portuguese on
-  your computer is now the Brazilian voice, the same one the speech container uses; no
-  European Portuguese voice can be downloaded that way. A voice install that fails in
-  Settings > Voice & Speech now says why on the language card.
+- **Four voices that could never be downloaded now work.** Swedish, Kazakh, Greek and Dutch
+  for Piper on your computer (63 MB each, Dutch 77 MB, Kazakh 128 MB). A voice install that
+  fails in Settings > Voice & Speech now says why on the language card.
 - **DeepSeek Auto costs are no longer overstated.** Calls made with DeepSeek Auto were
   priced as if the model were unknown ($15 / $75 per million tokens), more than ten times
   what DeepSeek charges. They are now priced at the model that answered (`deepseek-flash` or
@@ -458,6 +455,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Changed
 
+- **Speech voices whose licence forbids commercial use are no longer offered.** VAF now
+  offers only voices whose licence allows any use, and records each licence. Piper on your
+  computer speaks English, German, French, Spanish, Italian, Icelandic, Swedish, Ukrainian,
+  Kazakh, Greek and Dutch; the other languages are read by the English voice, and VAF says
+  so once. English, German and French get another voice (114, 77 and 77 MB). The speech
+  container drops Japanese and Turkish, for which no voice with such a licence exists, and
+  gets new voices for English, Russian and Chinese. Voices an earlier version downloaded and
+  this one no longer offers are deleted; a container voice from an earlier version is
+  downloaded again at the first start (28 to 77 MB per language).
 - **API, llama.cpp and vLLM in one picker in the terminal app.** `c` and Settings > AI Provider
   list `local · llama.cpp` and `local · vLLM` above the API providers; picking an engine there or
   under Settings > Engine moves the main chat to this machine, and asks before installing vLLM.
@@ -550,9 +556,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   program, the Piper voices, the speaker recognition models and the model that notices when
   you have finished speaking against known checksums before using them. A download that
   does not match is thrown away and what you had stays as it was. A Piper you already have
-  is replaced once (about 19 to 27 MB) if it is not the version this release expects. Voices that the
-  speech container installed before this update are not checked again; remove and install a
-  language in Settings > Voice & Speech to get a checked copy.
+  is replaced once (about 19 to 27 MB) if it is not the version this release expects.
 - **Commands nobody confirmed no longer reach a network share.** The host shell (`host_bash`)
   and `python_exec` now refuse a network share or Windows device path (`\\server\share`,
   `\\?\UNC\...`, `file://server/...`) in a coding agent run or a workflow step, where nobody

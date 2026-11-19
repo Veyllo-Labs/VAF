@@ -75,22 +75,67 @@ The `vaf-tts` container (`docker/tts-multilang`) supports multiple languages wit
 | Language | Voice Model | Quality |
 |----------|-------------|---------|
 | German (de) | `de_DE-thorsten-medium` | Medium |
-| English (en) | `en_US-amy-medium` | Medium |
+| English (en) | `en_US-hifi_tts_92-medium` | Medium |
 | French (fr) | `fr_FR-siwis-medium` | Medium |
 | Spanish (es) | `es_ES-carlfm-x_low` | Extra low |
 | Italian (it) | `it_IT-riccardo-x_low` | Extra low |
 | Dutch (nl) | `nl_NL-mls-medium` | Medium |
 | Polish (pl) | `pl_PL-gosia-medium` | Medium |
 | Portuguese (pt) | `pt_BR-faber-medium` | Medium |
-| Russian (ru) | `ru_RU-irina-medium` | Medium |
+| Russian (ru) | `ru_RU-dmitri-medium` | Medium |
 | Ukrainian (uk) | `uk_UA-ukrainian_tts-medium` | Medium |
-| Chinese (zh) | `zh_CN-huayan-medium` | Medium |
-| Japanese (ja) | `ja_JP-hi_fi_captain-medium` | Medium |
-| Turkish (tr) | `tr_TR-dfki-medium` | Medium |
+| Chinese (zh) | `zh_CN-chaowen-medium` | Medium |
 
 The container installs a voice on demand (Settings > Voice & Speech) from the table in
 `docker/tts-multilang/models.json`; see
 [Where Piper and its voices come from](#where-piper-and-its-voices-come-from).
+Portuguese is the Brazilian voice: Piper's European Portuguese voice has a non-ASCII name,
+which VAF's voice paths do not take.
+
+### Which voices VAF offers
+
+VAF offers only voices whose licence allows any use, commercial use and redistribution
+included: MIT, Apache-2.0, BSD, CC-BY-4.0, CC0-1.0 or public domain
+(`ALLOWED_WEIGHT_LICENCES` in `vaf/core/speech_pin.py`, the rule in
+[THIRD_PARTY.md](../legal/THIRD_PARTY.md#container-images-and-model-weights), where each
+voice has its row). A voice fine-tuned from another model carries that model's licence
+too: most published Piper voices started from `en_US-lessac`, which is licensed for
+non-commercial use only, so they are not offered whatever their own data allows. The
+manifest records per voice its licence, its dataset, the model it started from and its
+`MODEL_CARD` (by digest); a voice whose licence is not on the list is never downloaded.
+
+Piper on your computer (`speech_tts_engine = piper`) has a second limit: the pinned Piper
+program, from 2023, cannot read most voices published since 2025 (their phonemes have
+more than one codepoint, which it refuses, and it reads only espeak and plain-text
+phonemes). The voices of the computer are therefore the ones both checks allow:
+
+| Language | Voice | Licence |
+|----------|-------|---------|
+| English (en) | `en_US-ljspeech-high` | public domain |
+| German (de) | `de_DE-mls-medium` | CC-BY-4.0 |
+| French (fr) | `fr_FR-mls-medium` | CC-BY-4.0 |
+| Spanish (es) | `es_ES-carlfm-x_low` | public domain |
+| Italian (it) | `it_IT-riccardo-x_low` | BSD-3-Clause |
+| Icelandic (is) | `is_IS-bui-medium` | CC-BY-4.0 |
+| Swedish (sv) | `sv_SE-nst-medium` | CC0-1.0 |
+| Ukrainian (uk) | `uk_UA-ukrainian_tts-medium` | CC0-1.0 |
+| Kazakh (kk) | `kk_KZ-issai-high` | CC-BY-4.0 |
+| Greek (el) | `el_GR-rapunzelina-medium` | CC0-1.0 |
+| Dutch (nl) | `nl_NL-mls-medium` | CC-BY-4.0 |
+
+Any other language is read by the English voice, and VAF says so once per language ("There
+is no voice for 'tr' in this VAF release; the English voice reads it."). A speech
+recognition language is not affected: Whisper still understands every language it knows.
+
+Voices an earlier VAF downloaded and this release no longer offers are deleted from
+`models/voices/` the first time VAF prepares a Piper voice after the update, by their exact
+names (the `.onnx` and `.onnx.json` of each voice in `SpeechManager.RETIRED_VOICES`), never
+by a pattern; a folder or any other file there stays, a link is removed without touching what
+it points to, and VAF says how many voices it removed and how much space that freed. A file
+that cannot be removed (in use on Windows) is tried again at the next start. The speech
+container removes the voices of the languages it no longer offers at its start (`retired`
+in its table: Japanese and Turkish, for which no voice with such a licence exists) and
+installs again any voice that is not the pinned one (see below).
 
 ### Where Piper and its voices come from
 
@@ -132,16 +177,21 @@ readable by their owner only (mode 0600 on Linux and macOS).
   bytes that do not match are never written under the voice's name. A voice whose download
   did not match, or that the server refused (a 4xx answer), is not fetched again until VAF
   starts anew; a server error (5xx) or a connection that failed is tried again at the next
-  reply.
-  Portuguese (`pt`) is the Brazilian voice `pt_BR-faber-medium`: Piper's European
-  Portuguese voice has a non-ASCII name, which VAF's voice paths do not take.
+  reply. A voice whose licence is not on the list, or that the pinned Piper cannot read, has
+  no download at all ([Which voices VAF offers](#which-voices-vaf-offers)).
 - **The speech container's voices**: the same commit, from `models.json`; both files of a
   voice are staged in a folder of their own, which replaces the installed folder whole only
   when both matched (so an installed pair is never a mix of two downloads); a mismatch ends
   the install with an error, and the language card in Settings shows that error (wrapped,
   up to three lines; below the `lg` width the card takes the full row). A second install of a language that
-  is downloading is answered with the running one. Voices the container installed before
-  this check existed are not checked again; reinstalling a language fetches it verified.
+  is downloading is answered with the running one. A language counts as installed only
+  when its installed pair is the pinned voice: the model of the pinned size and the
+  settings with the pinned digest (hashed once per process). A voice an earlier VAF
+  installed under the same language (another build or another speaker) is therefore not
+  installed and never synthesized; at its start the container installs the pinned one
+  again, one language after another in the background, with the progress on the language
+  card, and the server answers meanwhile. Named boundary: the model file itself is
+  identified by its size and its settings, not hashed again at every start.
   Named boundary: a container killed between the two renames of that swap, or a rename
   back that fails, leaves the language shown as not installed with its old voice whole in
   `.<lang>.previous`; the next start of the container, or the next install of that
@@ -927,12 +977,12 @@ curl -X POST "http://localhost:5003/asr?encode=true&output=json" \
 
 ### TTS (Piper Neural Voices)
 
-40+ languages including:
-- **Major:** English, German, French, Spanish, Chinese, Italian, Portuguese, Russian
-- **Nordic:** Danish, Finnish, Icelandic, Norwegian, Swedish
-- **Eastern Europe:** Czech, Hungarian, Polish, Romanian, Slovak, Slovenian, Serbian, Ukrainian, Bulgarian
-- **Middle East/Asia:** Arabic, Persian, Turkish, Georgian, Kazakh, Nepali, Vietnamese
-- **Others:** Catalan, Welsh, Greek, Luxembourgish, Dutch, Swahili
+- **Piper on your computer:** English, German, French, Spanish, Italian, Icelandic, Swedish,
+  Ukrainian, Kazakh, Greek, Dutch; any other language is read by the English voice.
+- **The speech container:** German, English, French, Spanish, Italian, Dutch, Polish,
+  Portuguese, Russian, Ukrainian, Chinese.
+
+Why these: [Which voices VAF offers](#which-voices-vaf-offers).
 
 ### STT (Whisper)
 

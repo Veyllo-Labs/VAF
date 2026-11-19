@@ -102,13 +102,10 @@ VAF provides multi-language TTS via Docker containers using Piper neural voices.
 
 #### Multi-Language Container (`vaf-tts`)
 
-The primary TTS container supports multiple languages with automatic voice selection:
-
-| Language | Voice Model | Quality |
-|----------|-------------|---------|
-| German (de) | `de_DE-thorsten-high` | High |
-| English (en) | `en_US-kusal-medium` | Medium |
-| French (fr) | `fr_FR-siwis-medium` | Medium |
+The primary TTS container supports multiple languages with automatic voice selection. Its
+languages and voices, pinned in `docker/tts-multilang/models.json`, are listed in one place:
+[SPEECH_FEATURES.md, Multi-Language Docker TTS](../web-ui/SPEECH_FEATURES.md#multi-language-docker-tts)
+(and why these voices: [Which voices VAF offers](../web-ui/SPEECH_FEATURES.md#which-voices-vaf-offers)).
 
 **API Endpoint:** `POST http://localhost:5002/synthesize`
 

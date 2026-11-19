@@ -158,16 +158,27 @@ waiting for a stable `X.Y.Z`.
    The speech files are pinned the same way (`vaf/core/speech_assets_pin.json` and the
    speech container's `docker/tts-multilang/models.json`): the Piper archives with the
    digest of their program, one commit of `rhasspy/piper-voices` with every voice VAF may
-   fetch, and the speaker recognition and turn-end models. Refresh both with
+   fetch (each with its licence and the digest of its `MODEL_CARD`), and the speaker
+   recognition and turn-end models (each with its licence). A new voice needs an entry in
+   `VOICE_LICENCES` in the script first: read its `MODEL_CARD` at the revision, follow a
+   "See URL" to the dataset's own page, and check the model it was fine-tuned from; the
+   licence must be in `ALLOWED_WEIGHT_LICENCES` and the base in `CLEAN_BASES`
+   (`vaf/core/speech_pin.py`, the rule in `docs/legal/THIRD_PARTY.md`, where the voice also
+   gets its row). Without an entry the script stops and names the voice, and a voice of
+   `SpeechManager.PIPER_VOICES` whose settings the pinned Piper cannot read
+   (`host_piper_can_load`) stops it too; such a voice can only go into the container's
+   table. A language dropped from the container's table goes into `CONTAINER_RETIRED`, a
+   voice dropped from `PIPER_VOICES` into `SpeechManager.RETIRED_VOICES`, so installed
+   copies are removed. Refresh both with
    `venv/bin/python scripts/pin_speech_assets.py` (options `--voices-revision` and
    `--smart-turn-revision` take a commit, `main` otherwise). It downloads the six Piper
-   archives (138.7 MB) and the ERes2Net speaker model (26.5 MB), because no digest is
-   published for them, and hashes them; nothing is run. The Piper pin is trust on first
-   use from an archived (read-only) release; an asset updated after its upload is refused.
+   archives (138.7 MB), because no digest is published for them, and the ERes2Net speaker
+   model (26.5 MB) when GitHub reports no digest for it, and hashes them; nothing is run.
+   The Piper pin is trust on first use from an archived (read-only) release; an asset updated after its upload is refused.
    So is a new digest for any file the committed manifest already pins at the same URL (a
-   Piper archive or its program, a voice, any model, whichever source the digest came
-   from): the script lists each old and new digest, labeled (archive, program, file), and
-   stops. Find out why the published file changed before you rerun with
+   Piper archive or its program, a voice, a voice's `MODEL_CARD`, any model, whichever
+   source the digest came from): the script lists each old and new digest, labeled
+   (archive, program, file, card), and stops. Find out why the published file changed before you rerun with
    `--accept-changed-digest`, and compare the manifest diff against the previous pin
    before committing it. A committed manifest that exists but cannot be read stops the
    script before anything is fetched, and `--accept-changed-digest` does not get past it:

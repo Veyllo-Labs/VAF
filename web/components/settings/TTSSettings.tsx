@@ -424,6 +424,19 @@ export default function TTSSettings({
                                                     <div className="font-medium text-gray-700 text-sm truncate">
                                                         {lang.name}
                                                     </div>
+                                                    {/* A failed install says why, in the speech service's own
+                                                        words (one line, full text on hover); the Install button
+                                                        beside it is the retry. */}
+                                                    {lang.download_status?.status === 'error' && lang.download_status.error && (
+                                                        <div
+                                                            className="flex items-center gap-1 text-xs text-red-600 min-w-0"
+                                                            title={lang.download_status.error}
+                                                            role="status"
+                                                        >
+                                                            <AlertCircle className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
+                                                            <span className="truncate">{lang.download_status.error}</span>
+                                                        </div>
+                                                    )}
                                                 </div>
                                                 {lang.download_status?.status === 'downloading' ? (
                                                     <div className="flex items-center gap-1">

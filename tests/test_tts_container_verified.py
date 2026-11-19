@@ -178,3 +178,15 @@ def test_uninstall_refuses_a_language_outside_the_table(container, monkeypatch, 
     out = container.uninstall_language()
     assert isinstance(out, tuple) and out[1] == 400, out
     assert (sentinel / "keep").read_bytes() == b"keep"
+
+
+def test_the_settings_card_shows_why_an_install_failed():
+    """The container's error line (a checksum refusal, no connection) reached the browser
+    and was dropped: the language card fell back to the plain Install icon. It is shown on
+    the card now, with the full text on hover, and Install stays as the retry.
+    MUTATION: remove the error line from the card: red."""
+    src = (REPO / "web" / "components" / "settings" / "TTSSettings.tsx").read_text(encoding="utf-8")
+    card = src[src.index("{availableLanguages.map(lang => ("):src.index("{/* Auto-detect & Auto-speak */}")]
+    assert "lang.download_status?.status === 'error' && lang.download_status.error" in card
+    assert "{lang.download_status.error}</span>" in card and "title={lang.download_status.error}" in card
+    assert 'title="Install"' in card, "the Install button is the retry"

@@ -271,6 +271,7 @@
         "licence": "CC-BY-4.0",
         "dataset": "https://datashare.is.ed.ac.uk/handle/10283/2353",
         "base": "en_US-hifi_tts_92-medium",
+        "note": "fine-tuned from en_US-hifi_tts_92-medium, whose CC-BY-4.0 asks for credit to the Hi-Fi Multi-Speaker English TTS Dataset (NVIDIA Corporation) as well",
         "card": {
           "path": "fr/fr_FR/siwis/medium/MODEL_CARD",
           "sha256": "f75d76ec577b5e7a49a7462883d31ef65383022387818a9a0b75bdaf90b9010c",
@@ -329,6 +330,7 @@
         "licence": "CC0-1.0",
         "dataset": "https://github.com/OHF-Voice/voice-datasets",
         "base": "en_US-hifi_tts_92-medium",
+        "note": "fine-tuned from en_US-hifi_tts_92-medium, whose CC-BY-4.0 asks for credit to the Hi-Fi Multi-Speaker English TTS Dataset (NVIDIA Corporation) as well",
         "card": {
           "path": "pl/pl_PL/gosia/medium/MODEL_CARD",
           "sha256": "238bae411adb04592aedec7f297270323b6f6f4a41542232cfc1c25fb61f75a9",
@@ -340,6 +342,7 @@
         "licence": "CC0-1.0",
         "dataset": "https://github.com/OHF-Voice/voice-datasets",
         "base": "en_US-hifi_tts_92-medium",
+        "note": "fine-tuned from en_US-hifi_tts_92-medium, whose CC-BY-4.0 asks for credit to the Hi-Fi Multi-Speaker English TTS Dataset (NVIDIA Corporation) as well",
         "card": {
           "path": "pt/pt_BR/faber/medium/MODEL_CARD",
           "sha256": "a99caaa7e04fea58294ba4dea46a7ba07fa1f7902c6dff65b6ea2be0e98c5132",
@@ -351,6 +354,7 @@
         "licence": "CC0-1.0",
         "dataset": "https://github.com/OHF-Voice/voice-datasets",
         "base": "en_US-hifi_tts_92-medium",
+        "note": "fine-tuned from en_US-hifi_tts_92-medium, whose CC-BY-4.0 asks for credit to the Hi-Fi Multi-Speaker English TTS Dataset (NVIDIA Corporation) as well",
         "card": {
           "path": "ru/ru_RU/dmitri/medium/MODEL_CARD",
           "sha256": "4da875aca6642bd96f0327705e874cbbcc44bc1790ee1d08b3fc0eb266523e5d",
@@ -384,6 +388,7 @@
         "licence": "CC0-1.0",
         "dataset": "https://github.com/OHF-Voice/voice-datasets",
         "base": "en_US-hifi_tts_92-medium",
+        "note": "fine-tuned from en_US-hifi_tts_92-medium, whose CC-BY-4.0 asks for credit to the Hi-Fi Multi-Speaker English TTS Dataset (NVIDIA Corporation) as well",
         "card": {
           "path": "zh/zh_CN/chaowen/medium/MODEL_CARD",
           "sha256": "4f9386b738601ccfdcca09ba34deef9b976e60930a010c7d5444716d3cfdb0ef",

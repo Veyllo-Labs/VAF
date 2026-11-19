@@ -28,21 +28,26 @@ Where each digest comes from, and what is checked before it is written down:
    id recomputed and compared with the published one, and then its SHA-256 recorded. Every
    voice of ``SpeechManager.PIPER_VOICES`` and of the container's table must exist there,
    and must have an entry in ``VOICE_LICENCES``, reviewed from its card by hand, with a
-   licence in ``speech_pin.ALLOWED_WEIGHT_LICENCES`` and a base in
-   ``speech_pin.CLEAN_BASES``; a voice without one stops the run. ``host_piper`` is read
+   licence in ``speech_pin.ALLOWED_WEIGHT_LICENCES``, a base in ``speech_pin.CLEAN_BASES``
+   and the SHA-256 of the card it was reviewed from; a voice without one, or whose card
+   now differs from the reviewed one at whatever revision, stops the run. ``host_piper`` is read
    from the pinned settings (``host_piper_can_load``), and a voice of
    ``PIPER_VOICES`` the pinned Piper cannot read stops the run too.
 3. Models: Silero VAD and the ERes2Net speaker model from the digest GitHub reports for
    them; an asset without one (ERes2Net had none until its upload was renewed) is
-   downloaded (about 26.5 MB) and hashed under the same ``updated_at`` rule; Smart Turn from its LFS SHA-256 at the given revision, and its
-   licence read from the ``license:`` line of its README at that revision. Each model is
-   recorded with the licence in ``MODEL_LICENCES``.
+   downloaded (about 26.5 MB) and hashed under the same ``updated_at`` rule; Smart Turn
+   from its LFS SHA-256 at the given revision, and its licence read from the ``license:``
+   line of its README at that revision. Each model is recorded with the licence in
+   ``MODEL_LICENCES``.
 
 Trust on first use means the first use, not every run: any file whose URL is the same as
 in the committed manifest but whose digest (or program digest) differs is refused unless
-``--accept-changed-digest`` is given, whatever the digest was taken from (a voice's
-``MODEL_CARD`` included: a card that changed at the same address may carry another
-licence); a committed manifest that exists but cannot be read stops the run too.
+``--accept-changed-digest`` is given, whatever the digest was taken from. A voice whose
+``.onnx`` the committed manifest already pins is compared by its path across revisions
+too: a moved revision serves new URLs, so the same voice name with other weights (a
+retrain, possibly from another base) is refused the same way. A card is never accepted
+by the flag: it must equal the one its licence entry was reviewed from. A committed
+manifest that exists but cannot be read stops the run too.
 
 Nothing downloaded is executed or imported. Downloads go to a temporary folder (under
 ``TMPDIR``) that is removed at the end.
@@ -95,49 +100,139 @@ REPLACED_AFTER_UPLOAD = 60.0       # seconds between created_at and updated_at
 
 # Every voice VAF may fetch, reviewed by hand from its MODEL_CARD at the pinned revision:
 # the licence (an SPDX identifier from speech_pin.ALLOWED_WEIGHT_LICENCES), the dataset it
-# was trained on, and the model it was fine-tuned from ("scratch" when none). A card that
-# names no licence ("See URL") was followed to the dataset's own page, which the note
-# names. A new voice needs an entry here before it can be pinned.
+# was trained on, the model it was fine-tuned from ("scratch" when none), and the SHA-256 of
+# the card that review read (card_sha256). A card that names no licence ("See URL") was
+# followed to the dataset's own page, which the note names. A new voice needs an entry here
+# before it can be pinned, and a card whose bytes differ from the reviewed one (at any
+# revision) stops the run until the card is read again and its entry updated: the review
+# is tied to the text it was made from, not to the voice's name.
 _OHF = "https://github.com/OHF-Voice/voice-datasets"
 _MLS = "https://www.openslr.org/94/"
 _HIFI = "en_US-hifi_tts_92-medium"
+# A fine-tune of the Hi-Fi TTS base carries that base's CC-BY-4.0 on top of its own licence.
+HIFI_NOTE = ("fine-tuned from en_US-hifi_tts_92-medium, whose CC-BY-4.0 asks for credit to the Hi-Fi "
+             "Multi-Speaker English TTS Dataset (NVIDIA Corporation) as well")
 VOICE_LICENCES = {
-    "de_DE-mls-medium": {"licence": "CC-BY-4.0", "dataset": _MLS, "base": "scratch",
-                         "note": "Multilingual LibriSpeech, speaker 0 of 236"},
-    "de_DE-thorsten-medium": {"licence": "CC0-1.0", "dataset": "https://github.com/thorstenMueller/Thorsten-Voice",
-                              "base": "nl_BE-rdh-medium"},
-    "el_GR-rapunzelina-medium": {"licence": "CC0-1.0",
-                                 "dataset": "https://www.kaggle.com/datasets/bryanpark/greek-single-speaker-speech-dataset",
-                                 "base": "scratch"},
-    "en_US-hifi_tts_92-medium": {"licence": "CC-BY-4.0", "dataset": "https://www.openslr.org/109/", "base": "scratch",
-                                 "note": "Hi-Fi Multi-Speaker English TTS Dataset, NVIDIA Corporation; reader 92, "
-                                         "Cori Samuel"},
-    "en_US-ljspeech-high": {"licence": "LicenseRef-public-domain", "dataset": "https://keithito.com/LJ-Speech-Dataset/",
-                            "base": "scratch"},
-    "es_ES-carlfm-x_low": {"licence": "LicenseRef-public-domain", "dataset": "https://github.com/carlfm01/my-speech-datasets",
-                           "base": "scratch"},
-    "fr_FR-mls-medium": {"licence": "CC-BY-4.0", "dataset": _MLS, "base": "scratch",
-                         "note": "Multilingual LibriSpeech, 125 speakers"},
-    "fr_FR-siwis-medium": {"licence": "CC-BY-4.0", "dataset": "https://datashare.is.ed.ac.uk/handle/10283/2353",
-                           "base": _HIFI},
-    "is_IS-bui-medium": {"licence": "CC-BY-4.0", "dataset": "https://hdl.handle.net/20.500.12537/104", "base": "scratch",
-                         "note": "the card says See URL; the dataset's page states CC BY 4.0"},
-    "it_IT-riccardo-x_low": {"licence": "BSD-3-Clause",
-                             "dataset": "https://www.caito.de/2019/01/03/the-m-ailabs-speech-dataset/",
-                             "base": "scratch",
-                             "note": "the card says See URL; the M-AILABS licence states BSD-3-Clause conditions "
-                                     "in its own wording, commercial use permitted"},
-    "kk_KZ-issai-high": {"licence": "CC-BY-4.0", "dataset": "https://github.com/IS2AI/Kazakh_TTS", "base": "scratch"},
-    "nl_NL-mls-medium": {"licence": "CC-BY-4.0", "dataset": _MLS, "base": "scratch",
-                         "note": "Multilingual LibriSpeech, 52 speakers"},
-    "pl_PL-gosia-medium": {"licence": "CC0-1.0", "dataset": _OHF, "base": _HIFI},
-    "pt_BR-faber-medium": {"licence": "CC0-1.0", "dataset": _OHF, "base": _HIFI},
-    "ru_RU-dmitri-medium": {"licence": "CC0-1.0", "dataset": _OHF, "base": _HIFI},
-    "sv_SE-nst-medium": {"licence": "CC0-1.0",
-                         "dataset": "https://www.nb.no/sprakbanken/en/resource-catalogue/oai-nb-no-sbr-17/",
-                         "base": "scratch"},
-    "uk_UA-ukrainian_tts-medium": {"licence": "CC0-1.0", "dataset": _OHF, "base": "scratch"},
-    "zh_CN-chaowen-medium": {"licence": "CC0-1.0", "dataset": _OHF, "base": _HIFI},
+    "de_DE-mls-medium": {
+        "licence": "CC-BY-4.0",
+        "dataset": _MLS,
+        "base": "scratch",
+        "note": "Multilingual LibriSpeech, speaker 0 of 236",
+        "card_sha256": "ca1bf03a3c287fb6968acfa010e1917f85f0aa59db0f371efc3a2857f4035ffd",
+    },
+    "de_DE-thorsten-medium": {
+        "licence": "CC0-1.0",
+        "dataset": "https://github.com/thorstenMueller/Thorsten-Voice",
+        "base": "nl_BE-rdh-medium",
+        "card_sha256": "c638118fb06eb07d59e60270097c250cf2de81a037320a8a6306fec652ad13b0",
+    },
+    "el_GR-rapunzelina-medium": {
+        "licence": "CC0-1.0",
+        "dataset": "https://www.kaggle.com/datasets/bryanpark/greek-single-speaker-speech-dataset",
+        "base": "scratch",
+        "card_sha256": "dc69f15382dabed061fa8d31b65c14e5c4b57ba2fe6906012c756478da156b50",
+    },
+    "en_US-hifi_tts_92-medium": {
+        "licence": "CC-BY-4.0",
+        "dataset": "https://www.openslr.org/109/",
+        "base": "scratch",
+        "note": "Hi-Fi Multi-Speaker English TTS Dataset, NVIDIA Corporation; reader 92, Cori Samuel",
+        "card_sha256": "62cafa98605100626d876aadcfd3dfa961cac263fa338b1fe17fe0989545e700",
+    },
+    "en_US-ljspeech-high": {
+        "licence": "LicenseRef-public-domain",
+        "dataset": "https://keithito.com/LJ-Speech-Dataset/",
+        "base": "scratch",
+        "card_sha256": "289f7421072d689a3d91f6c632f486af46f9b8b04417536104a4ea667b8a394b",
+    },
+    "es_ES-carlfm-x_low": {
+        "licence": "LicenseRef-public-domain",
+        "dataset": "https://github.com/carlfm01/my-speech-datasets",
+        "base": "scratch",
+        "card_sha256": "a6e62a3d36c37c7702d877f784001208b952e2bf4d17c72a6b5da442fbefb4b3",
+    },
+    "fr_FR-mls-medium": {
+        "licence": "CC-BY-4.0",
+        "dataset": _MLS,
+        "base": "scratch",
+        "note": "Multilingual LibriSpeech, 125 speakers",
+        "card_sha256": "443ca90f1ed8e57d9fb802da6dc19c302d5d9b51ddbfbf27a17f3fb5c37ad154",
+    },
+    "fr_FR-siwis-medium": {
+        "licence": "CC-BY-4.0",
+        "dataset": "https://datashare.is.ed.ac.uk/handle/10283/2353",
+        "base": _HIFI,
+        "note": HIFI_NOTE,
+        "card_sha256": "f75d76ec577b5e7a49a7462883d31ef65383022387818a9a0b75bdaf90b9010c",
+    },
+    "is_IS-bui-medium": {
+        "licence": "CC-BY-4.0",
+        "dataset": "https://hdl.handle.net/20.500.12537/104",
+        "base": "scratch",
+        "note": "the card says See URL; the dataset's page states CC BY 4.0",
+        "card_sha256": "b01efb62ec770a1c1ebe2015d8f9985e6e1bf43fd72a42a6710d142e93752ce3",
+    },
+    "it_IT-riccardo-x_low": {
+        "licence": "BSD-3-Clause",
+        "dataset": "https://www.caito.de/2019/01/03/the-m-ailabs-speech-dataset/",
+        "base": "scratch",
+        "note": ("the card says See URL; the M-AILABS licence states BSD-3-Clause conditions in its own "
+                 "wording, commercial use permitted"),
+        "card_sha256": "7ce3b2fc4f454c84936887971574e436cc2154049b427a530f70bee050b2fdc6",
+    },
+    "kk_KZ-issai-high": {
+        "licence": "CC-BY-4.0",
+        "dataset": "https://github.com/IS2AI/Kazakh_TTS",
+        "base": "scratch",
+        "card_sha256": "1b0704348a17a5f84fba84caa20d14a116eea9953bb9bc147ada4234d18687a2",
+    },
+    "nl_NL-mls-medium": {
+        "licence": "CC-BY-4.0",
+        "dataset": _MLS,
+        "base": "scratch",
+        "note": "Multilingual LibriSpeech, 52 speakers",
+        "card_sha256": "73d70ff5a8501a80335498135bd773cd9ae01133cf0ac33916538f4d51e13e6e",
+    },
+    "pl_PL-gosia-medium": {
+        "licence": "CC0-1.0",
+        "dataset": _OHF,
+        "base": _HIFI,
+        "note": HIFI_NOTE,
+        "card_sha256": "238bae411adb04592aedec7f297270323b6f6f4a41542232cfc1c25fb61f75a9",
+    },
+    "pt_BR-faber-medium": {
+        "licence": "CC0-1.0",
+        "dataset": _OHF,
+        "base": _HIFI,
+        "note": HIFI_NOTE,
+        "card_sha256": "a99caaa7e04fea58294ba4dea46a7ba07fa1f7902c6dff65b6ea2be0e98c5132",
+    },
+    "ru_RU-dmitri-medium": {
+        "licence": "CC0-1.0",
+        "dataset": _OHF,
+        "base": _HIFI,
+        "note": HIFI_NOTE,
+        "card_sha256": "4da875aca6642bd96f0327705e874cbbcc44bc1790ee1d08b3fc0eb266523e5d",
+    },
+    "sv_SE-nst-medium": {
+        "licence": "CC0-1.0",
+        "dataset": "https://www.nb.no/sprakbanken/en/resource-catalogue/oai-nb-no-sbr-17/",
+        "base": "scratch",
+        "card_sha256": "c85d3e26e47d93e9d9b8572d3c89537c3f8ff212595cb9a3fbd2e07c19432317",
+    },
+    "uk_UA-ukrainian_tts-medium": {
+        "licence": "CC0-1.0",
+        "dataset": _OHF,
+        "base": "scratch",
+        "card_sha256": "ce09d0c9d1d90cdc98d1ea8a4ecbdeb5e937d44593876e4194302c5eabbaad9d",
+    },
+    "zh_CN-chaowen-medium": {
+        "licence": "CC0-1.0",
+        "dataset": _OHF,
+        "base": _HIFI,
+        "note": HIFI_NOTE,
+        "card_sha256": "4f9386b738601ccfdcca09ba34deef9b976e60930a010c7d5444716d3cfdb0ef",
+    },
 }
 # Languages an earlier container table held and this one drops; the container removes their
 # installed voices at start. Japanese and Turkish: no voice of either has a licence on the list.
@@ -317,7 +412,10 @@ def host_piper_can_load(config: dict) -> bool:
     ``phoneme_type`` other than ``text`` is phonemized as espeak, so only ``espeak`` and
     ``text`` (or none) are read right; every key of ``phoneme_id_map``, every key and every
     value of ``phoneme_map`` and every key of ``inference.phoneme_silence`` must be one
-    codepoint, or the program aborts. Anything of another shape fails closed."""
+    codepoint, or the program aborts. It also converts every id of ``phoneme_id_map`` to an
+    integer and every value of ``phoneme_silence`` to a float, which throws for a string or
+    a list; here an id must be an integer and a silence a number. Anything of another shape
+    fails closed (a bool or a fractional id included, which no voice uses)."""
     if not isinstance(config, dict):
         return False
     if "phoneme_type" in config and config["phoneme_type"] not in ("espeak", "text"):
@@ -325,6 +423,9 @@ def host_piper_can_load(config: dict) -> bool:
     id_map = config.get("phoneme_id_map", {})
     if not isinstance(id_map, dict) or not all(_one_codepoint(k) for k in id_map):
         return False
+    for ids in id_map.values():
+        if not isinstance(ids, list) or not all(isinstance(i, int) and not isinstance(i, bool) for i in ids):
+            return False
     phoneme_map = config.get("phoneme_map", {})
     if not isinstance(phoneme_map, dict):
         return False
@@ -336,7 +437,8 @@ def host_piper_can_load(config: dict) -> bool:
     if not isinstance(inference, dict):
         return False
     silence = inference.get("phoneme_silence", {})
-    return isinstance(silence, dict) and all(_one_codepoint(k) for k in silence)
+    return isinstance(silence, dict) and all(
+        _one_codepoint(k) and isinstance(v, (int, float)) and not isinstance(v, bool) for k, v in silence.items())
 
 
 def _card_path(voice_file: str) -> str:
@@ -355,6 +457,8 @@ def _curated(name: str) -> dict:
         raise SystemExit(f"voice {name}: base {entry.get('base')!r} is not one of {sorted(speech_pin.CLEAN_BASES)}")
     if not str(entry.get("dataset") or "").startswith("https://"):
         raise SystemExit(f"voice {name}: the dataset is not an https URL")
+    if not speech_pin._HEX64.fullmatch(str(entry.get("card_sha256") or "")):
+        raise SystemExit(f"voice {name}: the entry does not name the SHA-256 of the card it was reviewed from")
     return entry
 
 
@@ -415,10 +519,16 @@ def pin_voices(work: Path, revision: str) -> tuple[dict, dict]:
     for name in names:
         path = speech_pin.voice_path(name)
         entry = _curated(name)
+        card = cards[_card_path(path)]
+        if card["sha256"] != entry["card_sha256"]:
+            raise SystemExit(f"voice {name}: its MODEL_CARD at {revision} (sha256 {card['sha256']}) is not the card "
+                             f"its licence entry was reviewed from ({entry['card_sha256']}). Read the card again, "
+                             "check licence, dataset and base, and update its VOICE_LICENCES entry.")
         if name in host and not host_piper[path]:
             raise SystemExit(f"voice {name} is in SpeechManager.PIPER_VOICES, but the pinned Piper {PIPER_TAG} "
                              "cannot read its settings (host_piper_can_load)")
-        rows[name] = dict(entry, card=cards[_card_path(path)], host_piper=host_piper[path])
+        reviewed = {k: v for k, v in entry.items() if k != "card_sha256"}
+        rows[name] = dict(reviewed, card=card, host_piper=host_piper[path])
         print(f"  {name}: {entry['licence']}, base {entry['base']}, "
               f"{'read' if host_piper[path] else 'not read'} by the pinned Piper")
     total = sum(m["size"] for p, m in files.items())
@@ -524,6 +634,25 @@ def changed_digests(old: dict, new: dict) -> list[str]:
     return lines
 
 
+def changed_voice_weights(old: dict, new: dict) -> list[str]:
+    """Every voice model (``.onnx``) both manifests pin by the same path at different
+    revisions, whose digest differs: the same voice name now stands for other weights (a
+    retrain, possibly from another base), which a comparison by URL never sees because the
+    URL carries the revision. One line per voice. At the same revision changed_digests
+    already reports it."""
+    was, now = old.get("piper_voices") or {}, new.get("piper_voices") or {}
+    if was.get("revision") == now.get("revision"):
+        return []
+    before = was.get("files") or {}
+    lines = []
+    for path, meta in (now.get("files") or {}).items():
+        prior = before.get(path)
+        if path.endswith(".onnx") and prior is not None and prior.get("sha256") != meta.get("sha256"):
+            lines.append(f"{path}: {prior.get('sha256')} at {was.get('revision')} -> {meta.get('sha256')} at "
+                         f"{now.get('revision')}")
+    return lines
+
+
 def _shown(path: Path) -> str:
     try:
         return path.relative_to(ROOT).as_posix()
@@ -570,10 +699,17 @@ def main(argv: list[str]) -> int:
         piper = pin_piper(work)
     manifest = {"recorded": date.today().isoformat(), "piper": piper, "piper_voices": voices, "models": models}
     changes = changed_digests(old, manifest)
+    retrained = changed_voice_weights(old, manifest)
     if changes:
         print("These files are pinned at the same address, and their digest is different now:")
         for line in changes:
             print(f"  {line}")
+    if retrained:
+        print("These voices are already pinned, and the new revision gives them other weights (review their "
+              "cards and VOICE_LICENCES before you accept them):")
+        for line in retrained:
+            print(f"  {line}")
+    if changes or retrained:
         if not args.accept_changed_digest:
             raise SystemExit("Refusing to record the new digests. Find out why the published file changed; "
                              "only then rerun with --accept-changed-digest.")

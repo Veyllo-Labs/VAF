@@ -1593,6 +1593,25 @@ def test_every_pinned_voice_has_an_allowed_licence_and_a_card():
         assert isinstance(row["host_piper"], bool), name
 
 
+def test_the_manifest_rows_are_the_reviewed_entries():
+    """Each voice row is its reviewed VOICE_LICENCES entry (licence, dataset, base, note),
+    its card is the one that entry was reviewed from, and the reviewed digest itself stays
+    in the script. MUTATIONS: change a licence in VOICE_LICENCES (red), drop a base note
+    from the manifest (red)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("pin_speech_assets_rows", REPO / "scripts" / "pin_speech_assets.py")
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
+    rows = speech_pin.load_speech_pin()["piper_voices"]["voices"]
+    assert set(rows) == set(script.VOICE_LICENCES)
+    for name, row in rows.items():
+        entry = dict(script.VOICE_LICENCES[name])
+        assert row["card"]["sha256"] == entry.pop("card_sha256"), name
+        assert {k: v for k, v in row.items() if k not in ("card", "host_piper")} == entry, name
+        if row["base"] == "en_US-hifi_tts_92-medium":
+            assert "CC-BY-4.0" in row["note"] and "NVIDIA" in row["note"], name
+
+
 def test_the_pinned_voices_are_exactly_the_audited_ones():
     """MUTATION: add ja_JP-hi_fi_captain-medium back to the manifest: red."""
     pin = speech_pin.load_speech_pin()

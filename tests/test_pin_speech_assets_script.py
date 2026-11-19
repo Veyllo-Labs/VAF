@@ -168,14 +168,23 @@ def _cfg(**over) -> dict:
     (_cfg(phoneme_id_map={"e\u0301": [1]}), False),
     (_cfg(phoneme_map={"a": "b"}), False),
     (_cfg(phoneme_id_map=["a"]), False),
+    (_cfg(phoneme_id_map={"a": ["bad"]}), False),
+    (_cfg(phoneme_id_map={"a": [1.5]}), False),
+    (_cfg(phoneme_id_map={"a": [True]}), False),
+    (_cfg(phoneme_id_map={"a": 1}), False),
+    (_cfg(inference={"phoneme_silence": {".": "long"}}), False),
+    (_cfg(inference={"phoneme_silence": {".": 1}}), True),
 ], ids=["espeak", "text", "no-type", "map-ok", "silence-ok", "vowel-cluster-key", "map-value", "map-key",
         "silence-key", "pinyin", "japanese", "empty-key", "lone-surrogate", "combining-mark", "map-value-not-list",
-        "id-map-not-object"])
+        "id-map-not-object", "id-not-a-number", "fractional-id", "bool-id", "ids-not-a-list", "silence-not-a-number",
+        "silence-int"])
 def test_host_loadability_mirrors_piper_cpp(script, config, loads):
     """The 2023 Piper program aborts on a phoneme of more than one codepoint (in the id map,
     the phoneme map keys and values, the silence map) and reads every phoneme type but text
-    as espeak. MUTATIONS: drop the phoneme_map value check (red: map-value), accept pinyin
-    (red: pinyin)."""
+    as espeak; it converts each id to an integer and each silence to a float, which throws
+    for a string. MUTATIONS: drop the phoneme_map value check (red: map-value), accept
+    pinyin (red: pinyin), drop the id value check (red: id-not-a-number), drop the silence
+    value check (red: silence-not-a-number)."""
     assert script.host_piper_can_load(config) is loads
 
 
@@ -273,6 +282,11 @@ def _pin_voices_offline(script, monkeypatch, tmp_path, configs: dict | None = No
 
     monkeypatch.setattr(script, "_paths_info", paths_info)
     monkeypatch.setattr(script, "_download_hash", download)
+    # The served cards are the reviewed ones: each entry names the digest of the fake card.
+    for name, entry in list(script.VOICE_LICENCES.items()):
+        card = script._card_path(script.speech_pin.voice_path(name))
+        monkeypatch.setitem(script.VOICE_LICENCES, name,
+                            dict(entry, card_sha256=hashlib.sha256(body(card)).hexdigest()))
     return calls
 
 
@@ -295,6 +309,46 @@ def test_pinned_voices_carry_their_licence_card_and_host_flag(script, monkeypatc
                                     "/de/de_DE/thorsten/medium/MODEL_CARD")
 
 
+def test_a_card_that_is_not_the_reviewed_one_stops_the_run(script, monkeypatch, tmp_path):
+    """The licence entry was reviewed from one card; at any revision, a card with other
+    bytes may name another licence or base, so the run stops and asks for a new review, and
+    --accept-changed-digest does not get past it. MUTATION: drop the card comparison in
+    pin_voices: red."""
+    _pin_voices_offline(script, monkeypatch, tmp_path, host={"en": "en_US-ljspeech-high"})
+    entry = script.VOICE_LICENCES["en_US-ljspeech-high"]
+    monkeypatch.setitem(script.VOICE_LICENCES, "en_US-ljspeech-high", dict(entry, card_sha256="9" * 64))
+    with pytest.raises(SystemExit, match="is not the card its licence entry was reviewed from"):
+        script.pin_voices(tmp_path, "1" * 40)
+
+
+def test_the_reviewed_card_digest_is_not_copied_into_the_manifest(script, monkeypatch, tmp_path):
+    _pin_voices_offline(script, monkeypatch, tmp_path, host={"en": "en_US-ljspeech-high"})
+    voices, _ = script.pin_voices(tmp_path, "0" * 40)
+    row = voices["voices"]["en_US-ljspeech-high"]
+    assert "card_sha256" not in row
+    assert row["card"]["sha256"] == script.VOICE_LICENCES["en_US-ljspeech-high"]["card_sha256"]
+
+
+def test_other_weights_for_a_pinned_voice_at_a_new_revision_are_refused(script, monkeypatch, tmp_path):
+    """Two manifests at different revisions: every URL is new, so the comparison by URL
+    sees nothing, but de_DE-mls-medium.onnx now has another digest (a retrain). The run
+    stops unless the release manager accepts it; the same weights at a new revision, or a
+    first run, are not a change. MUTATIONS: compare by URL only (drop the
+    changed_voice_weights check in main): red."""
+    old, new = _manifest(revision="0" * 40), _manifest(voice=H["d"], revision="1" * 40)
+    assert script.changed_digests(old, new) == []
+    [line] = script.changed_voice_weights(old, new)
+    assert line == f"{VOICE}: {H['e']} at {'0' * 40} -> {H['d']} at {'1' * 40}", line
+    assert script.changed_voice_weights(old, _manifest(revision="1" * 40)) == []
+    assert script.changed_voice_weights({}, new) == []
+    script.speech_pin.PIN_PATH.write_text(json.dumps(old), encoding="utf-8")
+    _fake_run(script, monkeypatch, new)
+    with pytest.raises(SystemExit, match="accept-changed-digest"):
+        script.main([])
+    assert json.loads(script.speech_pin.PIN_PATH.read_text(encoding="utf-8")) == old
+    assert script.main(["--accept-changed-digest"]) == 0
+
+
 def test_a_voice_without_a_curated_licence_stops_the_run(script, monkeypatch, tmp_path):
     """A voice nobody reviewed is not pinned, and the run stops before it asks the network.
     MUTATION: drop the curated-entry check: red."""
@@ -309,7 +363,8 @@ def test_a_voice_without_a_curated_licence_stops_the_run(script, monkeypatch, tm
     ({"licence": "CC-BY-NC-SA-4.0", "dataset": "https://x/d", "base": "scratch"}, "not in ALLOWED_WEIGHT_LICENCES"),
     ({"licence": "CC0-1.0", "dataset": "https://x/d", "base": "en_US-lessac-high"}, "base"),
     ({"licence": "CC0-1.0", "dataset": "http://x/d", "base": "scratch"}, "not an https URL"),
-], ids=["non-commercial", "lessac-base", "plain-http-dataset"])
+    ({"licence": "CC0-1.0", "dataset": "https://x/d", "base": "scratch"}, "SHA-256 of the card"),
+], ids=["non-commercial", "lessac-base", "plain-http-dataset", "no-reviewed-card"])
 def test_a_disallowed_curated_licence_stops_the_run(script, monkeypatch, tmp_path, entry, why):
     """MUTATION: accept any licence in _curated: red (non-commercial)."""
     _pin_voices_offline(script, monkeypatch, tmp_path, host={"en": "en_US-ljspeech-high"})

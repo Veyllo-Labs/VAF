@@ -160,8 +160,9 @@ waiting for a stable `X.Y.Z`.
    digest of their program, one commit of `rhasspy/piper-voices` with every voice VAF may
    fetch (each with its licence and the digest of its `MODEL_CARD`), and the speaker
    recognition and turn-end models (each with its licence). A new voice needs an entry in
-   `VOICE_LICENCES` in the script first: read its `MODEL_CARD` at the revision, follow a
-   "See URL" to the dataset's own page, and check the model it was fine-tuned from; the
+   `VOICE_LICENCES` in the script first: read its `MODEL_CARD` at the revision (and record
+   its SHA-256 as `card_sha256`), follow a "See URL" to the dataset's own page, and check
+   the model it was fine-tuned from; the
    licence must be in `ALLOWED_WEIGHT_LICENCES` and the base in `CLEAN_BASES`
    (`vaf/core/speech_pin.py`, the rule in `docs/legal/THIRD_PARTY.md`, where the voice also
    gets its row). Without an entry the script stops and names the voice, and a voice of
@@ -174,13 +175,20 @@ waiting for a stable `X.Y.Z`.
    `--smart-turn-revision` take a commit, `main` otherwise). It downloads the six Piper
    archives (138.7 MB), because no digest is published for them, and the ERes2Net speaker
    model (26.5 MB) when GitHub reports no digest for it, and hashes them; nothing is run.
-   The Piper pin is trust on first use from an archived (read-only) release; an asset updated after its upload is refused.
+   The Piper pin is trust on first use from an archived (read-only) release; an asset
+   updated after its upload is refused.
    So is a new digest for any file the committed manifest already pins at the same URL (a
-   Piper archive or its program, a voice, a voice's `MODEL_CARD`, any model, whichever
-   source the digest came from): the script lists each old and new digest, labeled
-   (archive, program, file, card), and stops. Find out why the published file changed before you rerun with
-   `--accept-changed-digest`, and compare the manifest diff against the previous pin
-   before committing it. A committed manifest that exists but cannot be read stops the
+   Piper archive or its program, a voice, any model, whichever source the digest came
+   from), and, across revisions, new weights (`.onnx`) for a voice name the manifest
+   already pins: a new revision gives every voice a new URL, so only the comparison by
+   path sees a retrained voice. The script lists each old and new digest, labeled
+   (archive, program, file; a voice with both revisions), and stops. Find out why the
+   published file changed before you rerun with `--accept-changed-digest`, and compare the
+   manifest diff against the previous pin before committing it. A `MODEL_CARD` is checked
+   differently, at every revision and without an override: each `VOICE_LICENCES` entry
+   names the SHA-256 of the card it was reviewed from, and a card with other bytes stops
+   the run until it has been read again and its entry (licence, dataset, base and
+   `card_sha256`) updated. A committed manifest that exists but cannot be read stops the
    script before anything is fetched, and `--accept-changed-digest` does not get past it:
    restore the committed manifest first
    (`git restore --source=HEAD --staged --worktree vaf/core/speech_assets_pin.json`; this

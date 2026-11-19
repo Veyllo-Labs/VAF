@@ -490,9 +490,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   through their own buttons and commands. A save keeps what is stored. A settings save
   that is not a JSON object is now refused with an error: sent over the live connection
   as a list of key and value pairs, it skipped these checks, and an account without admin
-  rights could change another account's mail server. A save nested deeper than 64 levels
-  is refused too: one account's deeply nested setting used to break the settings of every
-  account.
+  rights could change another account's mail server. A save nested deeper than 64 levels,
+  or holding text that cannot be stored as UTF-8, is refused too: one account's deeply
+  nested or malformed setting used to break the settings of every account.
 - **Only an admin can change where requests go, the vision and browser-agent models, and
   the instance's secrets and limits.** A settings save by any signed-in account could change
   them:

@@ -570,9 +570,12 @@ LLAMA_REPO_ID = 612354784          # what the provenance attestation must name
 # unpacks, and a chain stored in reverse order makes that cost grow with the square of its
 # length (26 s at 4000 links), so more than this is refused before anything is unpacked.
 MAX_ARCHIVE_LINKS = 512
-# The errors of a probe that say "no process could be started right now", not "this binary
-# does not run" (ServerManager._probe_build).
-_PROBE_TRANSIENT_ERRNOS = frozenset({errno.EAGAIN, errno.ENOMEM, errno.EINTR})
+# The errors of a probe that establish "this binary cannot run": not a program, no
+# permission, gone, or a missing interpreter. Every other error (no memory, too many
+# processes or open files, interrupted, anything unknown) says nothing about the binary
+# (ServerManager._probe_build).
+_PROBE_CANNOT_RUN_ERRNOS = frozenset({errno.ENOEXEC, errno.EACCES, errno.EPERM, errno.ENOENT,
+                                      errno.ENOTDIR, errno.EISDIR})
 # How long a start waits for another VAF process that is installing the backend (the
 # download of the Windows NVIDIA build alone is about 700 MB).
 INSTALL_LOCK_TIMEOUT = 1800.0
@@ -999,22 +1002,27 @@ class ServerManager:
         return self._probe_build(path or self.server_path)[1]
 
     def _probe_build(self, path: str):
-        """(answered, build) for the llama-server at `path`. answered is False when the
-        question could not be put at all: the probe timed out, the system could not start
-        a process right now (no memory, too many processes, interrupted), or failed in a
-        way nothing here knows. Those say nothing about the binary, so a decision that
-        would delete or replace a build must not be taken on them. Everything else
-        answers: no file, a file the system refuses to run (not a program, no
-        permission), and a program that ran and printed no build number (a missing
-        runtime library) all mean "this build does not start" (build None)."""
-        if not os.path.exists(path):
+        """(answered, build) for the llama-server at `path`. Answered, with build None
+        ("this build does not start"): no file there (os.stat says so), a file the system
+        refuses to run (_PROBE_CANNOT_RUN_ERRNOS: not a program, no permission, a missing
+        interpreter), or a program that ran and printed no build number (a missing runtime
+        library). Not answered: the file could not be looked up, the probe timed out, the
+        system could not start a process right now (no memory, too many processes or open
+        files, interrupted), or anything else nothing here knows. Those say nothing about
+        the binary, so no decision that deletes, replaces or re-downloads a build is taken
+        on them."""
+        try:
+            os.stat(path)
+        except (FileNotFoundError, NotADirectoryError):
             return True, None
+        except OSError:
+            return False, None
         try:
             output = self._version_output(path)
         except subprocess.TimeoutExpired:
             return False, None
         except OSError as e:
-            return (e.errno not in _PROBE_TRANSIENT_ERRNOS), None
+            return (e.errno in _PROBE_CANNOT_RUN_ERRNOS), None
         except Exception:
             return False, None
         return True, self.parse_build_number(output)
@@ -1028,7 +1036,8 @@ class ServerManager:
         decisions the build number drives have to hold on every host. Standing in for
         this method keeps those tests host-independent.
         """
-        out = subprocess.run([path or self.server_path, "--version"], capture_output=True, text=True, timeout=20)
+        out = subprocess.run([path or self.server_path, "--version"], capture_output=True, text=True,
+                             errors="replace", timeout=20)
         return (out.stdout or "") + (out.stderr or "")
 
     @staticmethod
@@ -1230,25 +1239,42 @@ class ServerManager:
         reports the pinned number are the legacy files at the top of bin/ removed
         (_remove_legacy_layout).
 
-        The unpacked build must report the pinned number (installed_build on the staged
-        binary) before anything else happens: a build that does not start on this host (a
-        missing runtime library) is refused while the old server still runs and the old
-        install is untouched. Only then is a llama server of this installation that still
-        runs stopped (on `port`, the port the start serves), before the first rename:
-        Windows cannot rename a folder whose program runs, and elsewhere the reuse check of
-        the start would keep serving the old build. A server that does not stop leaves
-        everything as it was. The replaced build stays in bin/llama-cpp.previous until the
-        new one reports the pinned number at its final path as well; when it does not, or
-        when the new folder cannot be put in place, the previous build is moved back, by
-        renames only (_put_previous_back). A previous build that could not be moved back is
-        recovered at the start of the next attempt, before anything else: when bin/llama-cpp
-        is missing, or holds a build that reports no number while .previous reports one.
-        When either of the two could not be asked (a probe that timed out or could not
-        start a process, _probe_build), both are kept and the start fails instead.
+        The unpacked build must report the pinned number (_probe_build on the staged binary)
+        before anything else happens: a build that does not start on this host (a missing
+        runtime library) is refused while the old server still runs and the old install is
+        untouched. Only then is a llama server of this installation that still runs stopped
+        (on `port`, the port the start serves), before the first rename: Windows cannot
+        rename a folder whose program runs, and elsewhere the reuse check of the start would
+        keep serving the old build. A server that does not stop leaves everything as it was.
+
+        The replaced build stays in bin/llama-cpp.previous until the new one reports the
+        pinned number at its final path as well, and goes at once when it does
+        (_retire_previous). So a .previous next to a build that is not the pinned one
+        always belongs to a swap that has not passed that check, and the start of every
+        attempt decides about it first: when bin/llama-cpp is missing, or the build there
+        is not the pinned one while .previous reports a build, .previous is put back, by
+        renames only (_put_previous_back). A failed final check moves it back the same way
+        at once.
+
+        bin/llama-cpp is asked once per start (a second probe only after a restore), and a
+        probe that could not be put (timed out, no process could be started, the file could
+        not be looked up, an error nothing here knows; _probe_build) decides nothing: no
+        rollback, no swap, no removal, no download. The start then fails and says which
+        folder could not be asked and the hand step if that keeps happening.
 
         The whole of it runs under a file lock next to the folder (bin/.llama-cpp.lock), so
-        two VAF processes never install at once; a start waits up to INSTALL_LOCK_TIMEOUT
-        for another one's install."""
+        two VAF processes never install at once; a start that finds the lock held says it
+        is waiting and waits up to INSTALL_LOCK_TIMEOUT for the other one's install.
+
+        Named boundaries, each needing a third independent failure before it matters, so
+        not handled further: a .previous that can be neither renamed nor removed after a
+        verified install (and a warning said so) is taken for an unfinished swap once the
+        pin moves on, put back for one start, and the pinned build then installed again
+        (a downgrade for one start, nothing lost); a pinned binary that Windows reports as
+        EACCES while a scanner holds it counts as "does not start" (put next to a
+        .previous, the older build runs for one start and the pinned one is installed
+        again); a dangling bin/llama-cpp link with no .previous fails every swap with
+        ENOTDIR until it is removed by hand (the message names the folder)."""
         from filelock import FileLock, Timeout
 
         try:
@@ -1262,7 +1288,12 @@ class ServerManager:
         try:
             os.makedirs(self.bin_root, exist_ok=True)
             lock = FileLock(os.path.join(self.bin_root, ".llama-cpp.lock"))
-            lock.acquire(timeout=INSTALL_LOCK_TIMEOUT)
+            try:
+                lock.acquire(timeout=0)
+            except Timeout:
+                UI.event("System", "Waiting for another VAF process that is installing the backend...",
+                         style="warning")
+                lock.acquire(timeout=INSTALL_LOCK_TIMEOUT)
         except Timeout:
             UI.error(f"Another VAF process has been installing the backend for more than "
                      f"{int(INSTALL_LOCK_TIMEOUT // 60)} minutes. Start VAF again once it has finished.")
@@ -1281,35 +1312,46 @@ class ServerManager:
 
         staging = self.bin_dir + ".staging"
         previous = self.bin_dir + ".previous"
-        recover = False
-        if os.path.lexists(previous):
-            if not os.path.lexists(self.bin_dir):
-                recover = True
-            else:
-                current_answered, current = self._probe_build(self.server_path)
-                if current is None:
-                    previous_answered, earlier = self._probe_build(os.path.join(previous, self.server_exe))
-                    if not (current_answered and previous_answered):
-                        # One of the two could not be asked: deciding now could delete or
-                        # replace the only working build, so both stay as they are.
-                        UI.error(f"The installed backends in {self.bin_dir} and {previous} could not be "
-                                 "asked for their build right now; both are kept. Start VAF again.")
-                        return False
-                    recover = earlier is not None
-        if recover:
-            # An earlier swap moved the old build aside and could not put it back (nothing in
-            # bin/llama-cpp), or stopped with a build there that does not start (a crash after
-            # the swap, a roll-back whose renames failed). .previous is then the only working
-            # build, so it goes back into place before the leftover step could remove it.
-            failure = self._put_previous_back(staging, previous)
-            if failure:
-                UI.error(f"The previous backend in {previous} could not be put back ({failure}). Remove "
-                         f"{self.bin_dir}, rename {previous} to it and start VAF again.")
-                return False
-            UI.event("System", "Recovered the previous backend from an interrupted update.", style="warning")
+        previous_exe = os.path.join(previous, self.server_exe)
         want = self.pinned_build(pin)
-        have = self.installed_build()
-        if os.path.exists(self.server_path) and have == want:
+        if os.path.lexists(previous) and not os.path.lexists(self.bin_dir):
+            # An earlier swap moved the old build aside and could not put it back.
+            if not self._recover_previous(staging, previous):
+                return False
+        # One probe of bin/llama-cpp per start; it is asked again only after a restore.
+        current_answered, current = self._probe_build(self.server_path)
+        if os.path.lexists(previous) and not (current_answered and current == want):
+            # A .previous next to a build that is not the pinned one belongs to a swap that has
+            # not passed its final check: a verified install retires .previous at once
+            # (_retire_previous). It may be the only working build, so it is asked too.
+            previous_answered, earlier = self._probe_build(previous_exe)
+            if not (current_answered and previous_answered):
+                hints = []
+                if not current_answered:
+                    hints.append(f"If this keeps happening, remove {self.bin_dir}; the next start then "
+                                 f"puts {previous} back.")
+                if not previous_answered:
+                    hints.append(f"If this keeps happening, remove {previous}; the next start then "
+                                 f"installs the pinned b{want}.")
+                unasked = " and ".join(path for path, answered in
+                                       ((self.bin_dir, current_answered), (previous, previous_answered))
+                                       if not answered)
+                UI.error(f"The backend in {unasked} could not be asked for its build right now, so "
+                         f"{self.bin_dir} and {previous} are both kept. Start VAF again. " + " ".join(hints))
+                return False
+            if earlier is not None:
+                # The new build does not start or reports another number; the old one does start.
+                if not self._recover_previous(staging, previous):
+                    return False
+                current_answered, current = self._probe_build(self.server_path)
+        if not current_answered:
+            UI.error(f"The backend in {self.bin_dir} could not be asked for its build right now. Start VAF "
+                     f"again; if this keeps happening, remove {self.bin_dir} and VAF installs the pinned "
+                     f"b{want} again.")
+            return False
+        have = current
+        if have == want:
+            self._retire_previous(staging, previous)
             if os.path.exists(self.legacy_server_path):
                 self._remove_legacy_layout()     # an earlier cleanup could not finish
             return True
@@ -1361,7 +1403,12 @@ class ServerManager:
             if self.system != "Windows":
                 os.chmod(staged_exe, 0o755)
             # The new build must start on this host before the old server is touched.
-            staged = self.installed_build(staged_exe)
+            staged_answered, staged = self._probe_build(staged_exe)
+            if not staged_answered:
+                shutil.rmtree(staging, ignore_errors=True)
+                UI.error(f"The downloaded backend b{want} could not be asked for its build right now, so it "
+                         "was not installed. Your current backend is unchanged. Start VAF again.")
+                return False
             if staged != want:
                 shutil.rmtree(staging, ignore_errors=True)
                 UI.error(f"The downloaded backend b{want} does not start on this computer (it reports "
@@ -1399,29 +1446,63 @@ class ServerManager:
             UI.error(f"Backend download failed: {e}")
             return False
 
-        got = self.installed_build()
+        final_answered, got = self._probe_build(self.server_path)
+        if not final_answered:
+            # Neither verified nor refuted: nothing is rolled back and nothing retired. .previous
+            # stays, so the next start decides with the rule at the top.
+            kept = (f" The previous backend is kept in {previous}; the next start asks again, keeps the new "
+                    f"one if it reports b{want} and otherwise puts the previous one back.") if moved_aside else ""
+            UI.error(f"The new backend b{want} is in place but could not be asked for its build right now.{kept}")
+            return False
         if got != want:
             restored = ""
             if moved_aside:
                 if not self._put_previous_back(staging, previous):
                     restored = " The previous backend was put back."
-                elif not os.path.lexists(self.bin_dir) or got is None:
-                    restored = " The previous backend stays in llama-cpp.previous and is put back on the next start."
                 else:
-                    # bin/llama-cpp still holds the new build, which runs but reports another
-                    # number; the next attempt replaces it and treats .previous as a leftover.
-                    restored = " The previous backend could not be put back."
+                    restored = (f" The previous backend stays in {previous}; the next start asks both builds "
+                                f"again and puts it back unless the new one then reports b{want}.")
             UI.error(f"Backend installed but reports build b{got or '?'} instead of the pinned b{want}.{restored}")
             return False
-        try:
-            self._remove_tree_or_link(previous)
-        except OSError as e:          # the new build is in place; the next install retries
-            UI.event("System", f"The new backend runs, but the replaced one could not be removed ({e}). "
-                     f"Remove {previous} by hand.", style="warning")
+        self._retire_previous(staging, previous)
         UI.event("System", f"Backend b{want} installed and verified.", style="success")
         if os.path.exists(self.legacy_server_path):
             self._remove_legacy_layout()
         return True
+
+    def _recover_previous(self, staging: str, previous: str) -> bool:
+        """Put .previous back into bin/llama-cpp (_put_previous_back) and say so; False, with
+        the hand step, when it could not be done."""
+        failure = self._put_previous_back(staging, previous)
+        if failure:
+            UI.error(f"The previous backend in {previous} could not be put back ({failure}). Remove "
+                     f"{self.bin_dir}, rename {previous} to it and start VAF again.")
+            return False
+        UI.event("System", "Recovered the previous backend from an interrupted update.", style="warning")
+        return True
+
+    def _retire_previous(self, staging: str, previous: str) -> None:
+        """Remove .previous once bin/llama-cpp has reported the pinned build where it runs.
+        Its existence is what tells the next start that a swap has not passed that check,
+        so it goes at once: first renamed to the staging name (a rename cannot stop halfway,
+        and every attempt clears that name), then removed as far as it goes. When even the
+        rename fails it is removed in place; when that fails too, the person is told."""
+        if not os.path.lexists(previous):
+            return
+        try:
+            self._remove_tree_or_link(staging)
+            os.rename(previous, staging)
+        except OSError:
+            try:
+                self._remove_tree_or_link(previous)
+            except OSError as e:
+                UI.event("System", f"The new backend runs, but the replaced one could not be removed ({e}). "
+                         f"Remove {previous} by hand.", style="warning")
+            return
+        try:
+            self._remove_tree_or_link(staging)
+        except OSError:
+            pass                          # a leftover the next attempt clears
 
     def _put_previous_back(self, staging: str, previous: str) -> str:
         """Swap bin/llama-cpp.previous back into bin/llama-cpp, by renames only: whatever

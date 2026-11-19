@@ -20,6 +20,7 @@ earlier VAF put straight into bin/ is moved there and its top-level files cleane
 after the new build is verified. A llama server that still runs is stopped after the
 verified download and before the first rename.
 """
+import errno
 import hashlib
 import io
 import os
@@ -251,7 +252,7 @@ def test_a_binary_that_cannot_be_started_reads_as_no_build(linux_install, monkey
     m, payload = linux_install
     Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10021)
     monkeypatch.setattr(backend.ServerManager, "_version_output",
-                        lambda self, path=None: (_ for _ in ()).throw(OSError("Exec format error")))
+                        lambda self, path=None: (_ for _ in ()).throw(OSError(errno.ENOEXEC, "Exec format error")))
     assert m.installed_build() is None
     _fake_get(monkeypatch, payload)
     assert m.ensure_server_exists() is False, "an unidentifiable binary is not a green light"
@@ -554,7 +555,7 @@ def test_vaf_info_names_an_unreadable_binary_as_present(linux_install, monkeypat
 
     def version_output(self, path=None):
         if os.path.abspath(path or self.server_path) == os.path.abspath(m.server_path):
-            raise OSError("Exec format error")
+            raise OSError(errno.ENOEXEC, "Exec format error")
         return Path(path).read_text(encoding="utf-8")
 
     monkeypatch.setattr(backend.ServerManager, "_version_output", version_output)
@@ -905,21 +906,29 @@ def test_a_leftover_that_cannot_be_removed_ends_the_install_cleanly(linux_instal
 
 
 def test_a_replaced_build_that_cannot_be_removed_does_not_fail_the_install(linux_install, monkeypatch):
-    """The swap went through; only removing the replaced build failed. The new build runs,
-    the person is told, the next install retries. MUTATION: let that failure reach the
-    install's handler again and the install reports False."""
+    """The swap went through; only retiring the replaced build failed, both its rename and
+    its removal. The new build runs, the person is told. MUTATION: let that failure reach
+    the install's handler again and the install reports False."""
     m, payload = linux_install
     Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10021)
     events = []
     monkeypatch.setattr(backend.UI, "event", lambda *a, **k: events.append(" ".join(map(str, a))))
     real = backend.ServerManager._remove_tree_or_link
+    real_rename = os.rename
 
     def remove(path):
         if path.endswith(".previous") and os.path.lexists(path):
             raise PermissionError(5, "Access is denied")
         return real(path)
 
+    def rename(src, dst):
+        if os.path.abspath(src) == os.path.abspath(m.bin_dir + ".previous") \
+                and os.path.abspath(dst) == os.path.abspath(m.bin_dir + ".staging"):
+            raise PermissionError(5, "Access is denied")
+        return real_rename(src, dst)
+
     monkeypatch.setattr(backend.ServerManager, "_remove_tree_or_link", staticmethod(remove))
+    monkeypatch.setattr(backend.os, "rename", rename)
     _fake_get(monkeypatch, payload)
     assert m.ensure_server_exists() is True
     assert m.installed_build() == 10955
@@ -946,12 +955,17 @@ def test_debris_a_leftover_removal_could_not_clear_stops_the_install(linux_insta
 
 # ── the new build proves itself before the old one goes ──────────────────────────
 
+_LOADER_ERROR = "llama-server: error while loading shared libraries: libvulkan.so.1\n"
+
+
 def _failing_probe(monkeypatch, fails):
-    """`llama-server --version` read from the stub's bytes, except where `fails(path)`."""
+    """`llama-server --version` read from the stub's bytes, except where `fails(path)`: there
+    the binary runs and the loader prints why it cannot start, with no build number, as a
+    real build missing a runtime library does."""
     def version_output(self, path=None):
         target = path or self.server_path
         if fails(target):
-            raise OSError("error while loading shared libraries: libvulkan.so.1")
+            return _LOADER_ERROR
         return Path(target).read_text(encoding="utf-8", errors="replace")
     monkeypatch.setattr(backend.ServerManager, "_version_output", version_output)
 
@@ -1137,36 +1151,42 @@ def test_a_crash_after_the_swap_with_a_build_that_does_not_start_recovers_the_pr
     assert any("Recovered the previous backend" in e for e in events), events
 
 
-def test_a_previous_build_is_left_alone_while_the_current_one_works(linux_install, monkeypatch):
-    """The recovery applies only when bin/llama-cpp reports no build. A working current
-    build stays, and a .previous next to it is the leftover it looks like (here with a
-    refused download, so the current build is what remains). MUTATION: recover whenever
-    .previous reports a build and the older b9999 replaces the working b10021."""
+def test_a_verified_install_retires_previous_even_when_its_removal_fails(linux_install, monkeypatch):
+    """.previous next to a build that is not the pinned one is read as an unfinished swap,
+    so a verified install must not leave one behind: it is renamed to the staging name
+    first, which works where removing the folder does not. MUTATION: retire by removal
+    only and the .previous stays next to the verified build."""
     m, payload = linux_install
     Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10021)
-    Path(m.bin_dir + ".previous").mkdir(); _stub_server(Path(m.bin_dir + ".previous") / m.server_exe, 9999)
-    _fake_get(monkeypatch, payload + b"tampered")
-    assert m.ensure_server_exists() is False
-    assert m.installed_build() == 10021
+    real = backend.ServerManager._remove_tree_or_link
+
+    def remove(path):
+        if path.endswith(".previous") and os.path.lexists(path):
+            raise PermissionError(5, "Access is denied")
+        return real(path)
+
+    monkeypatch.setattr(backend.ServerManager, "_remove_tree_or_link", staticmethod(remove))
+    _fake_get(monkeypatch, payload)
+    assert m.ensure_server_exists() is True and m.installed_build() == 10955
     assert not os.path.lexists(m.bin_dir + ".previous")
 
 
 def test_the_legacy_cleanup_leaves_the_installs_own_names_alone(linux_install, monkeypatch, tmp_path):
-    """On the up-to-date path the legacy cleanup runs and the install's own recovery and
-    leftover steps do not; a .previous link whose disk is offline (is_dir() False, a name
-    the llama.cpp pattern matches) waits for them. MUTATION: drop the exclusion of the
-    install's own names and this goes red."""
+    """On the up-to-date path the legacy cleanup runs and the install's leftover step does
+    not; a .staging link whose disk is offline (is_dir() False, a name the llama.cpp
+    pattern matches) is the install's to clear, at its next swap. MUTATION: drop the
+    exclusion of the install's own names and this goes red."""
     if not _can_symlink(tmp_path):
         pytest.skip("no symlink privilege")
     m, _ = linux_install
     Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10955)
     _stub_server(m.legacy_server_path, 10021)
-    os.symlink(tmp_path / "unmounted" / "llama-cpp", m.bin_dir + ".previous")
+    os.symlink(tmp_path / "unmounted" / "llama-cpp", m.bin_dir + ".staging")
     monkeypatch.setattr("vaf.core.verified_download.requests.get",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("no download")))
     assert m.ensure_server_exists() is True
     assert not os.path.lexists(m.legacy_server_path)
-    assert os.path.islink(m.bin_dir + ".previous")
+    assert os.path.islink(m.bin_dir + ".staging")
 
 
 def test_a_partly_removed_new_build_next_to_previous_completes_the_roll_back(linux_install, monkeypatch):
@@ -1244,7 +1264,7 @@ def _timeout_once(monkeypatch, m, target):
             raise _subprocess.TimeoutExpired([path, "--version"], 20)
         text = Path(path).read_text(encoding="utf-8")
         if os.path.abspath(path) == os.path.abspath(m.server_path) and "10955-new" in text:
-            raise OSError("error while loading shared libraries: libvulkan.so.1")
+            return _LOADER_ERROR
         return text
 
     monkeypatch.setattr(backend.ServerManager, "_version_output", version_output)
@@ -1267,7 +1287,8 @@ def test_a_previous_build_that_could_not_be_asked_is_kept(linux_install, monkeyp
     _fake_get(monkeypatch, payload + b"tampered")
     assert m.ensure_server_exists() is False
     assert previous.is_dir() and (previous / m.server_exe).exists(), ".previous is kept"
-    assert any("both are kept" in e for e in errors), errors
+    assert any(f"The backend in {previous} could not be asked" in e and "are both kept" in e
+               and f"remove {previous}" in e for e in errors), errors
 
     assert m.ensure_server_exists() is False          # the refused download, after the recovery
     assert m.installed_build() == 10021
@@ -1318,11 +1339,13 @@ def test_an_install_waits_for_another_process_and_gives_up_with_a_message(linux_
     assert m.ensure_server_exists() is True and m.installed_build() == 10955
 
 
-def test_a_roll_back_that_cannot_rename_promises_nothing_it_does_not_do(linux_install, monkeypatch):
+def test_a_denied_roll_back_is_completed_by_the_next_start(linux_install, monkeypatch):
     """The new build reports another number at its final place and bin/llama-cpp cannot
-    be renamed aside: the message says the previous backend could not be put back, not
-    that a later start or a hand step will (the next attempt treats .previous as a
-    leftover while bin/llama-cpp reports a build). MUTATION: restore the old promise."""
+    be renamed aside: the message says where .previous is and that the next start asks
+    both builds again; that start puts it back (b10500 is not the pinned build, so the
+    swap never passed its final check), and a refused download then leaves b10021.
+    MUTATION: treat a .previous next to a build that reports a number as a leftover and
+    the next start deletes the only working build."""
     m, payload = linux_install
     Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10021)
 
@@ -1335,12 +1358,12 @@ def test_a_roll_back_that_cannot_rename_promises_nothing_it_does_not_do(linux_in
 
     monkeypatch.setattr(backend.ServerManager, "_version_output", version_output)
     real_rename = os.rename
-    state = {"swapped": False}
+    state = {"swapped": False, "deny": True}
 
     def rename(src, dst):
         if os.path.abspath(dst) == os.path.abspath(m.bin_dir) and os.path.abspath(src) == os.path.abspath(m.bin_dir + ".staging"):
             state["swapped"] = True
-        elif state["swapped"] and os.path.abspath(src) == os.path.abspath(m.bin_dir):
+        elif state["deny"] and state["swapped"] and os.path.abspath(src) == os.path.abspath(m.bin_dir):
             raise PermissionError(5, "Access is denied")
         return real_rename(src, dst)
 
@@ -1349,5 +1372,189 @@ def test_a_roll_back_that_cannot_rename_promises_nothing_it_does_not_do(linux_in
     monkeypatch.setattr(backend.UI, "error", lambda *a, **k: errors.append(" ".join(map(str, a))))
     _fake_get(monkeypatch, payload)
     assert m.ensure_server_exists() is False
-    assert any("could not be put back" in e for e in errors), errors
-    assert not any("next start" in e or "rename" in e for e in errors), errors
+    assert any(m.bin_dir + ".previous" in e and "puts it back unless" in e for e in errors), errors
+
+    state["deny"] = False
+    _fake_get(monkeypatch, payload + b"tampered")
+    assert m.ensure_server_exists() is False
+    assert m.installed_build() == 10021
+
+
+# ── one probe per folder, and a probe that could not run decides nothing anywhere ──
+
+def _probe_counter(monkeypatch, m, *, timeout_after: int | None = None, timeout_paths=None):
+    """The stub's version line, counting the probes of each path. From the
+    `timeout_after`-th probe of a path in `timeout_paths` on, that probe times out."""
+    import subprocess as _subprocess
+    counts = {}
+
+    def version_output(self, path=None):
+        path = os.path.abspath(path or self.server_path)
+        counts[path] = counts.get(path, 0) + 1
+        if timeout_after is not None and path in (timeout_paths or ()) and counts[path] >= timeout_after:
+            raise _subprocess.TimeoutExpired([path, "--version"], 20)
+        return Path(path).read_text(encoding="utf-8")
+
+    monkeypatch.setattr(backend.ServerManager, "_version_output", version_output)
+    return counts
+
+
+def test_the_current_build_is_asked_once_per_start(linux_install, monkeypatch):
+    """The pinned build with a .previous beside it: the answer of the first probe decides
+    the start; a second probe of the same unchanged folder would only add a chance of a
+    timeout (and with it a needless download). MUTATION: ask bin/llama-cpp again for the
+    up-to-date check and the second probe times out."""
+    m, _ = linux_install
+    Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10955)
+    Path(m.bin_dir + ".previous").mkdir(); _stub_server(Path(m.bin_dir + ".previous") / m.server_exe, 10021)
+    counts = _probe_counter(monkeypatch, m, timeout_after=2, timeout_paths={os.path.abspath(m.server_path)})
+    monkeypatch.setattr("vaf.core.verified_download.requests.get",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no download")))
+    assert m.ensure_server_exists() is True
+    assert counts[os.path.abspath(m.server_path)] == 1
+    assert not os.path.lexists(m.bin_dir + ".previous"), "retired next to the verified build"
+
+
+def test_a_pinned_install_that_could_not_be_asked_is_not_downloaded_again(linux_install, monkeypatch):
+    """No .previous, and the only probe of the pinned build times out: the start fails
+    with a message naming the folder and the hand step, and nothing is downloaded or
+    replaced. MUTATION: take that probe as "no build" and the pinned build is downloaded
+    and swapped in again."""
+    m, payload = linux_install
+    Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10955)
+    before = _tree(Path(m.bin_dir))
+    _probe_counter(monkeypatch, m, timeout_after=1, timeout_paths={os.path.abspath(m.server_path)})
+    errors = []
+    monkeypatch.setattr(backend.UI, "error", lambda *a, **k: errors.append(" ".join(map(str, a))))
+    monkeypatch.setattr("vaf.core.verified_download.requests.get",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no download")))
+    assert m.ensure_server_exists() is False
+    assert _tree(Path(m.bin_dir)) == before
+    assert any(f"The backend in {m.bin_dir} could not be asked" in e and f"remove {m.bin_dir}" in e
+               for e in errors), errors
+
+
+def test_a_final_probe_that_could_not_run_rolls_nothing_back(linux_install, monkeypatch):
+    """The new build passed in staging and its probe at the final place times out: it is
+    neither verified nor refuted, so it stays, .previous stays, and the message says
+    where .previous is and that the next start decides. That start asks again and keeps
+    the new build. MUTATION: roll back on a final probe that could not run and the
+    verified-in-staging build is removed."""
+    import subprocess as _subprocess
+    m, payload = linux_install
+    Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10021)
+    state = {"timeout": True}
+
+    def version_output(self, path=None):
+        path = path or self.server_path
+        text = Path(path).read_text(encoding="utf-8")
+        if state["timeout"] and os.path.abspath(path) == os.path.abspath(m.server_path) and "10955" in text:
+            raise _subprocess.TimeoutExpired([path, "--version"], 20)
+        return text
+
+    monkeypatch.setattr(backend.ServerManager, "_version_output", version_output)
+    errors = []
+    monkeypatch.setattr(backend.UI, "error", lambda *a, **k: errors.append(" ".join(map(str, a))))
+    _fake_get(monkeypatch, payload)
+    assert m.ensure_server_exists() is False
+    assert "10955" in Path(m.server_path).read_text(encoding="utf-8"), "the new build stays"
+    assert os.path.isdir(m.bin_dir + ".previous")
+    assert any("could not be asked" in e and m.bin_dir + ".previous" in e and "next start" in e
+               for e in errors), errors
+
+    state["timeout"] = False
+    monkeypatch.setattr("vaf.core.verified_download.requests.get",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no download")))
+    assert m.ensure_server_exists() is True and m.installed_build() == 10955
+    assert not os.path.lexists(m.bin_dir + ".previous")
+
+
+def test_a_staged_probe_that_could_not_run_installs_nothing_and_says_so(linux_install, monkeypatch):
+    """MUTATION: report a staged probe that could not run as "does not start on this
+    computer" and the message blames the build."""
+    import subprocess as _subprocess
+    m, payload = linux_install
+    Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10021)
+    before = _tree(Path(m.bin_dir))
+
+    def version_output(self, path=None):
+        path = path or self.server_path
+        if ".staging" in path:
+            raise _subprocess.TimeoutExpired([path, "--version"], 20)
+        return Path(path).read_text(encoding="utf-8")
+
+    monkeypatch.setattr(backend.ServerManager, "_version_output", version_output)
+    swap = _Swap(m, monkeypatch)
+    errors = []
+    monkeypatch.setattr(backend.UI, "error", lambda *a, **k: errors.append(" ".join(map(str, a))))
+    _fake_get(monkeypatch, payload)
+    assert m.ensure_server_exists() is False
+    assert swap.order == [] and _tree(Path(m.bin_dir)) == before
+    assert any("could not be asked" in e and "unchanged" in e for e in errors), errors
+    assert not any("does not start" in e for e in errors), errors
+
+
+def test_a_crash_after_the_swap_with_a_build_of_another_number_puts_previous_back(linux_install, monkeypatch):
+    """The process died after the swap; the new build at bin/llama-cpp reports a number,
+    just not the pinned one, and .previous is still there, so the swap never passed its
+    final check. The next start puts .previous back. MUTATION: put .previous back only
+    when bin/llama-cpp reports no build and it is deleted as a leftover."""
+    m, payload = linux_install
+    Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10500)
+    Path(m.bin_dir + ".previous").mkdir(); _stub_server(Path(m.bin_dir + ".previous") / m.server_exe, 10021)
+    _fake_get(monkeypatch, payload + b"tampered")
+    assert m.ensure_server_exists() is False
+    assert m.installed_build() == 10021
+
+
+def test_the_probe_classifies_lookup_and_resource_errors(linux_install, monkeypatch, tmp_path):
+    """A file that cannot be looked up, and a launch that fails for want of file
+    descriptors, say nothing about the binary; a file that is not there does.
+    MUTATIONS: answer every errno, or decide by os.path.exists, and this goes red."""
+    import errno as _errno
+    m, _ = linux_install
+    exe = tmp_path / "llama-server"
+    _stub_server(exe, 10955)
+    real_stat = os.stat
+
+    def stat(path, *a, **k):
+        if os.path.abspath(path) == os.path.abspath(exe) and state["stat"]:
+            raise PermissionError(_errno.EACCES, "Permission denied")
+        return real_stat(path, *a, **k)
+
+    state = {"stat": True}
+    monkeypatch.setattr(backend.os, "stat", stat)
+    assert m._probe_build(str(exe)) == (False, None), "a lookup error is not an absence"
+    state["stat"] = False
+    monkeypatch.setattr(backend.ServerManager, "_version_output",
+                        lambda self, path=None: (_ for _ in ()).throw(OSError(_errno.EMFILE, "Too many open files")))
+    assert m._probe_build(str(exe)) == (False, None)
+    assert m._probe_build(str(tmp_path / "missing")) == (True, None)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="a shell stub is not a program on Windows")
+def test_a_version_line_with_an_undecodable_byte_still_answers(tmp_path):
+    """A byte the locale cannot decode must not turn an answer into "could not ask"
+    (which blocks every start next to a .previous). MUTATION: decode strictly again."""
+    m = _manager("Linux", tmp_path=tmp_path)
+    Path(m.bin_dir).mkdir(parents=True)
+    Path(m.server_path).write_bytes(b"#!/bin/sh\nprintf 'version: 1.0.0 (build 12359, commit b1b770d90)\\n\\377\\n'\n")
+    Path(m.server_path).chmod(0o755)
+    assert m._probe_build(m.server_path) == (True, 12359)
+
+
+def test_a_start_that_finds_the_install_lock_held_says_it_waits(linux_install, monkeypatch):
+    """MUTATION: drop the first try without waiting and the start waits silently."""
+    from filelock import FileLock
+    m, _ = linux_install
+    Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10955)
+    monkeypatch.setattr(backend, "INSTALL_LOCK_TIMEOUT", 0.2)
+    events = []
+    monkeypatch.setattr(backend.UI, "event", lambda *a, **k: events.append(" ".join(map(str, a))))
+    other = FileLock(os.path.join(m.bin_root, ".llama-cpp.lock"))
+    other.acquire()
+    try:
+        assert m.ensure_server_exists() is False
+    finally:
+        other.release()
+    assert any("Waiting for another VAF process that is installing the backend" in e for e in events), events

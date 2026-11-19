@@ -1934,8 +1934,10 @@ class Config:
         # dedicated status endpoints, not raw secrets.)
         for k in [k for k in out if cls.is_secret_config_key(k)]:
             out.pop(k, None)
-        # The local admin's scope id names another account; no page reads it.
+        # The local admin's scope id names another account, and the data directory is a host
+        # path that may carry the machine owner's home folder name; no page reads either.
         out.pop("local_admin_scope_id", None)
+        out.pop("vaf_home", None)
 
         # Email: only this user's accounts (email_config_by_scope[user_scope_id])
         by_scope = config.get("email_config_by_scope") or {}

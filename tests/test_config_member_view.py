@@ -265,13 +265,17 @@ def test_the_other_blocks_keep_their_view(state):
 
 
 def test_the_local_admin_scope_is_not_sent_to_a_non_admin(state):
+    state["vaf_home"] = "/home/user/.vaf"
     for emit, view in _views(state).items():
         assert "local_admin_scope_id" not in view, emit
+        # A host path, which may carry the machine owner's home folder name.
+        assert "vaf_home" not in view, emit
         # The Connections page compares it with the signed-in name to pick the admin's lists.
         assert view["local_admin_username"] == "admin", emit
 
 
 def test_admin_views_are_unchanged(state):
+    state["vaf_home"] = "/home/user/.vaf"
     stored = _rich()
     for admin in (LOCAL_ADMIN, SECOND_ADMIN):
         for view in (_view(state, admin), _get(admin)):
@@ -283,6 +287,7 @@ def test_admin_views_are_unchanged(state):
                 k: v for k, v in stored["slack_config"].items() if k != "enabled"}
             assert view["telegram_config"]["relay_whitelist"] == stored["telegram_config"]["relay_whitelist"]
             assert view["local_admin_scope_id"] == ADMIN_SCOPE
+            assert view["vaf_home"] == "/home/user/.vaf"
             assert view["email_config_by_scope"] == stored["email_config_by_scope"]
             assert view["api_key_openai"] == "", "a secret value reached an admin's browser"
     # The global switch is the local admin's; a second admin sees their own.
@@ -364,7 +369,6 @@ REVIEWED_INSTALLATION_SETTINGS = {
     "speech_language": "this machine's speech input language",
     "speech_mic_index": "this machine's microphone",
     "update_include_prereleases": "which releases the installation updates to",
-    "vaf_home": "the installation's data directory on this machine; names no account",
     "workflows_enabled": "the workflow engine switch, one for the installation",
 }
 # A name of this shape is keyed by account, so it can never be an installation setting.

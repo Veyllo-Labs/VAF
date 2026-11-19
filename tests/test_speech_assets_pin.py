@@ -548,6 +548,28 @@ def test_another_program_is_replaced_whole_and_tenants_stay(speech, monkeypatch,
     assert any("differs from the pinned build" in e for e in speech.said["event"]), speech.said["event"]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="symlink privilege")
+def test_a_program_that_is_a_link_is_replaced_and_its_target_left_alone(speech, monkeypatch, tmp_path):
+    """bin/piper/piper as a link to a file with the pinned bytes elsewhere is not the
+    pinned program: the folder is swapped, and the link's target is neither followed by
+    chmod nor removed. MUTATION: decide on os.stat (following the link) and the link
+    counts as installed."""
+    program = b"pinned piper"
+    archive = _piper_archive(speech, program)
+    _write_pin(monkeypatch, tmp_path, archive=archive, program=program)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.write_bytes(program)
+    elsewhere.chmod(0o600)
+    speech.bin_dir.mkdir(parents=True)
+    os.symlink(elsewhere, speech.bin_dir / _program_name(speech))
+    calls = []
+    _get_by_url(monkeypatch, {ASSET: archive}, calls)
+    assert speech._check_piper() is True and len(calls) == 1
+    program_path = speech.bin_dir / _program_name(speech)
+    assert not program_path.is_symlink() and program_path.read_bytes() == program
+    assert elsewhere.read_bytes() == program and (elsewhere.stat().st_mode & 0o777) == 0o600
+
+
 def test_a_failed_swap_puts_the_old_piper_back(speech, monkeypatch, tmp_path):
     """The second rename (staging into bin/piper) fails: the old folder is renamed back.
     MUTATION: drop the rename-back and bin/piper is gone."""

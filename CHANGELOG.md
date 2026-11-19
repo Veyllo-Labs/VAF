@@ -530,7 +530,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   program, the Piper voices, the speaker recognition models and the model that notices when
   you have finished speaking against known checksums before using them. A download that
   does not match is thrown away and what you had stays as it was. A Piper you already have
-  is replaced once (26.5 MB) if it is not the version this release expects. Voices that the
+  is replaced once (about 19 to 27 MB) if it is not the version this release expects. Voices that the
   speech container installed before this update are not checked again; remove and install a
   language in Settings > Voice & Speech to get a checked copy.
 - **Commands nobody confirmed no longer reach a network share.** The host shell (`host_bash`)

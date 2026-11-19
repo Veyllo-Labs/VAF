@@ -164,8 +164,10 @@ waiting for a stable `X.Y.Z`.
    archives (138.7 MB) and the ERes2Net speaker model (26.5 MB), because no digest is
    published for them, and hashes them; nothing is run. The Piper pin is trust on first
    use from an archived (read-only) release; an asset updated after its upload is refused.
-   So is new bytes for a file already pinned from its bytes (a Piper archive or its
-   program, the ERes2Net model): the script lists the old and new digest and stops. Find
+   So is a new digest for any file the committed manifest already pins at the same URL (a
+   Piper archive or its program, a voice, any model, whichever source the digest came
+   from), and so is a committed manifest that exists but cannot be read: the script lists
+   the old and new digest and stops. Find
    out why the published file changed before you rerun with `--accept-changed-digest`,
    and compare the manifest diff against the previous pin before committing it.
    Then check it: `speech_tts_engine = piper` with text-to-speech on and `bin/piper/`

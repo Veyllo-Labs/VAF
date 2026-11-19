@@ -50,9 +50,11 @@ HOSTILE = {"vision_provider": "openrouter", "vision_model": "openrouter/auto",
            "vision_mode": "inline_multimodal", "vision_description_max_tokens": 999999,
            "tts_auto_speak": True}
 
-# The control characters the oracle refuses: C0, DEL, C1, the line and paragraph separators.
+# The characters the oracle refuses: C0, DEL, C1, the line and paragraph separators, and the
+# bidi controls (they reorder how a line of the log file reads).
+_BIDI = "\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"
 _BAD = frozenset([*map(chr, range(0x00, 0x20)), "\x7f", *map(chr, range(0x80, 0xA0)),
-                  "\u2028", "\u2029"])
+                  "\u2028", "\u2029", *_BIDI])
 
 
 def _clean(text: str) -> bool:
@@ -169,9 +171,10 @@ def test_every_key_that_picks_a_provider_or_model_is_admin_only():
     """Every role setting a settings screen can change, and every key that names a model
     or the provider a model id belongs to, decides what runs on the instance's API keys
     for every account. MUTATION: drop either prefix."""
-    from vaf.core.model_roles import ROLE_CONFIG_KEYS
+    from vaf.core.model_roles import ROLE_CONFIG_KEYS, ROLES
 
-    keys = set(ROLE_CONFIG_KEYS) | set(MODEL_ID_KEYS) | set(MODEL_PROVIDER_KEYS.values())
+    keys = (set(ROLE_CONFIG_KEYS) | set(MODEL_ID_KEYS) | set(MODEL_PROVIDER_KEYS.values())
+            | {r.setting for r in ROLES if r.setting})
     # A source that silently became empty would make this pass on nothing.
     assert len(keys) >= 30, sorted(keys)
     assert set(LANE_KEYS) <= keys
@@ -267,11 +270,12 @@ def test_foreign_model_note_is_one_line(_quiet):
         assert repr(model) in text
     assert line.startswith("[FOREIGN_MODEL] browser_agent_model 'x\\n\\rFORGED\\x1b")
 
-    # An unknown provider is its own label: a line break in it reads as a space.
-    assert pr.note_foreign_model("evil\nprov", "m", "browser_agent_model") is True
-    shown = str(_quiet.events[-1][1])
-    assert _clean(shown), repr(shown)
-    assert "is not one of evil prov's models" in shown
+    # An unknown provider is its own label: a line break in it reads as a space, a bidi
+    # control (here a right-to-left override and an isolate) is gone, in the log line too.
+    assert pr.note_foreign_model("evil\nprov\u202e\u2066", "m", "browser_agent_model") is True
+    for text in (str(_quiet.events[-1][1]), str(_quiet.log[-1][1])):
+        assert _clean(text), repr(text)
+        assert "is not one of evil prov's models" in text
 
 
 def test_ordinary_foreign_model_note_reads_as_before(_quiet):
@@ -293,6 +297,9 @@ def test_foreign_noted_keeps_digests(_quiet):
     held = sum(len(str(part)) for entry in pr._foreign_noted for part in entry)
     assert held < 1000, held
     assert pr.note_foreign_model(provider, models[1], "browser_agent_model") is False
+    # A lone surrogate is its own value, not a "?": both are news.
+    assert pr.note_foreign_model("deepseek", "abc\ud800", "browser_agent_model") is True
+    assert pr.note_foreign_model("deepseek", "abc?", "browser_agent_model") is True
     # The line quotes a clipped value and a clipped label, not the whole ones.
     assert all(len(str(a[1])) < 1000 for a in _quiet.log)
 
@@ -313,13 +320,35 @@ def test_reset_notice_is_one_line(notice):
     text = notice("browser_agent_model", "a\nb\x1bc", "openai")
     assert not any(ord(ch) < 0x20 for ch in text), repr(text)
     assert "browser_agent_model 'a\\nb\\x1bc' is not one of OpenAI's models" in text
-    text = notice("browser_agent_model", "m", "evil\nprov\x1b")
+    text = notice("browser_agent_model", "m", "evil\nprov\x1b\u202e")
     assert _clean(text), repr(text)
-    assert "is not one of evil prov 's models" in text
+    assert "is not one of evil prov's models" in text
     # An ordinary id reads as before.
     assert notice("browser_agent_model", "gpt-5.6-terra", "deepseek").startswith(
         "browser_agent_model 'gpt-5.6-terra' is not one of DeepSeek's models and was reset; "
         "DeepSeek's own model (gpt-5.6-terra) is used now.")
+
+
+def test_reset_notice_model_used_now_is_one_line(monkeypatch):
+    """The model used now comes from `api_model_<provider>`, a stored value too. MUTATION:
+    show it without `one_line`."""
+    import vaf.core.model_roles as roles
+    from vaf.cli.cmd import models
+    monkeypatch.setattr(roles, "resolve_role",
+                        lambda *a, **kw: SimpleNamespace(model="m\nFORGED\r\u2028x"))
+    text = models._reset_notice("browser_agent_model", "gpt-5.6-terra", "deepseek")
+    assert _clean(text), repr(text)
+    assert "DeepSeek's own model (m FORGED  x) is used now" in text
+
+
+def test_lane_reset_log_tells_a_lone_surrogate_from_a_question_mark(monkeypatch, _quiet):
+    """MUTATION: digest with "replace" in `Config.reset_foreign_lane_models`."""
+    for value in ("abc\ud800", "abc?"):
+        # Held by OpenAI as its model, so not one of DeepSeek's.
+        Config.reset_foreign_lane_models({"provider": "deepseek", "api_model_openai": value,
+                                          "browser_agent_model": value})
+    lines = [a[1] for a in _quiet.log if "[LANE_MODEL_RESET]" in str(a[1])]
+    assert len(lines) == 2, lines
 
 
 # ── Fuzz: both texts over hostile values ──────────────────────────────────────

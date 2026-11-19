@@ -480,13 +480,17 @@ def provider_label(provider: str) -> str:
 def provider_label_line(provider: str) -> str:
     """``provider_label`` for a line of text: one line and at most a few hundred
     characters. An unknown provider is its own label, and that value is a stored setting
-    or an embedder's ``config=``: a line break in it would start a second line, and its
-    length is whatever was written."""
+    or an embedder's ``config=``: a line break in it would start a second line, a bidi
+    control would reorder how the line reads in the log file, and its length is whatever
+    was written. `terminal_text` removes escape sequences, the controls, the bidi controls
+    and lone surrogates; `one_line` turns the line breaks left (and the clip's own) into
+    spaces."""
     from vaf.core.security_events import one_line
+    from vaf.core.terminal_text import terminal_text
     from vaf.core.tool_dispatch import clip_middle
 
-    return one_line(clip_middle(provider_label(provider), _FOREIGN_SHOWN_CHARS,
-                                marker="... ({left_out} chars left out) ..."))
+    return one_line(terminal_text(clip_middle(provider_label(provider), _FOREIGN_SHOWN_CHARS,
+                                              marker="... ({left_out} chars left out) ...")))
 
 
 def note_foreign_model(provider: str, model: str, source: str) -> bool:
@@ -502,7 +506,8 @@ def note_foreign_model(provider: str, model: str, source: str) -> bool:
     import hashlib
 
     def digest(value: str) -> str:
-        return hashlib.sha256(value.encode("utf-8", "replace")).hexdigest()
+        # surrogatepass: "replace" made a lone surrogate and a "?" one value.
+        return hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()
 
     key = (str(source), digest(str(provider or "").lower()), digest(str(model or "")))
     with _foreign_lock:

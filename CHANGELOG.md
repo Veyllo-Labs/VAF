@@ -477,14 +477,26 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
-- **Only an admin can choose the vision and browser-agent models.** `vision_provider`,
-  `vision_model`, `browser_agent_provider`, `browser_agent_model` and the other `vision_`
-  settings could be changed by any signed-in account through a settings save, which pointed
-  that lane, for every account, at a provider of their choice on the instance's API key. A
-  non-admin save now leaves them unchanged. Values already stored are kept: check Settings,
-  AI & Model if other people use this VAF. The warnings that quote such a stored model or
-  provider (an ignored lane model, a reset after a provider switch) now always stay one line
-  in the terminal and the backend log.
+- **Only an admin can change where requests go, the vision and browser-agent models, and
+  the instance's secrets and limits.** A settings save by any signed-in account could change
+  them:
+  - the Veyllo endpoint (`veyllo_base_url`): every Veyllo request, the image lane among
+    them, then went to an address of their choice with the instance's Veyllo key;
+  - the vision and browser-agent lanes (`vision_provider`, `vision_model`,
+    `browser_agent_provider`, `browser_agent_model` and the other `vision_` settings),
+    pointing them, for every account, at a provider of their choice on the instance's key;
+  - the encryption keys and the memory database addresses (`memory_db_url`,
+    `memory_db_owner_url`), and the config's format version, which re-ran the settings
+    migrations;
+  - the timeouts (`api_timeout_*`, `tool_timeout_seconds`, `browser_timeout_seconds` and
+    the other run-time bounds), the server mode, the upload scans and the security log
+    retention.
+
+  A non-admin save now leaves all of them unchanged. `memory_db_owner_url`, which can hold
+  the database owner's password, is no longer shown to non-admin accounts. Values already
+  stored are kept: check Settings, AI & Model if other people use this VAF. The warnings
+  that quote a stored model or provider now always stay one line in the terminal and the
+  backend log.
 
 - **Commands nobody confirmed no longer reach a network share.** The host shell (`host_bash`)
   and `python_exec` now refuse a network share or Windows device path (`\\server\share`,

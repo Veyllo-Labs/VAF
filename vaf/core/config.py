@@ -1157,7 +1157,9 @@ class Config:
             from vaf.core.provider_registry import provider_label
             from vaf.core.tool_dispatch import clip_middle
             for key, (value, lane) in resets.items():
-                seen = (key, hashlib.sha256(str(value).encode("utf-8", "replace")).hexdigest(), lane)
+                # surrogatepass: "replace" made a lone surrogate and a "?" one value.
+                seen = (key, hashlib.sha256(str(value).encode("utf-8", "surrogatepass")).hexdigest(),
+                        lane)
                 if seen in cls._lane_reset_logged:
                     continue
                 # Recorded before the write: the log may read the config, and that
@@ -1232,6 +1234,10 @@ class Config:
         "vision_",
         # Browser-agent LLM lane: its provider and model, the same reason.
         "browser_agent_",
+        # The OpenAI-compatible client's connect, write, read and pool bounds: one client
+        # configuration for every account's API calls (a read bound of a second cuts every
+        # reasoning stream; an hour holds a worker per hung call).
+        "api_timeout_",
         "subagent_",
         "thinking_",
         "librarian_",
@@ -1414,12 +1420,53 @@ class Config:
         # Same reason, one step further: `max` thinks longer than DeepSeek's default and
         # bills the extra output tokens on every DeepSeek call of the instance.
         "deepseek_reasoning_effort",
+        # Where every Veyllo request goes (chat, vision, the browser lane, speech, the key
+        # check), each one carrying the instance's Veyllo key as a Bearer token: whoever
+        # sets the address receives the key. Every base-URL key a provider spec names is
+        # held to this set by a test.
+        "veyllo_base_url",
+        # The config's format version: a lower value re-runs the migrations on the next
+        # load, over every key the admin set since (one of them raises the login token
+        # lifetime).
+        "config_format_version",
+        # Run-time bounds of every account's work: a tool call without its own budget, a
+        # browser run, an automation run, a workflow's generation and its agent steps, and
+        # one chat turn (`chat_step_wall_clock_seconds`, a timeout in all but name). Raised,
+        # one account's run holds a shared worker for hours; lowered, everyone's runs are
+        # cut off. The `api_timeout_` prefix covers the API client's bounds.
+        "tool_timeout_seconds",
+        "browser_timeout_seconds",
+        "automation_run_timeout_seconds",
+        "workflow_generation_timeout_seconds",
+        "workflow_agent_step_timeout_seconds",
+        "chat_step_wall_clock_seconds",
+        # Controls that defend every account. `server_mode` is the installation kind (the
+        # LAN lock, provisioning); the two upload scans check every account's files; the
+        # security log retention is how long the audit trail survives (a day, and the
+        # collector deletes it); the contact-reply approval is reserved (no reader yet) and
+        # would decide whether outward replies wait for review, so it is gated before it is
+        # wired; `memory_db_echo` writes every memory query with its parameters, other
+        # accounts' memories among them, into the log; `auto_install_gpu` and
+        # `update_include_prereleases` decide which code the machine installs.
+        "server_mode",
+        "upload_threat_scan_enabled",
+        "upload_scan_advisory_enabled",
+        "security_log_retention_days",
+        "front_office_contact_reply_require_approval",
+        "memory_db_echo",
+        "auto_install_gpu",
+        "update_include_prereleases",
     ])
 
     @classmethod
     def is_global_config_key(cls, key: str) -> bool:
-        """True if this config key may only be written by an admin (backend/network/API)."""
-        if key in cls.GLOBAL_CONFIG_KEYS:
+        """True if this config key may only be written by an admin (backend/network/API).
+
+        Every secret (`is_secret_config_key`) is one: a value nobody but an admin may read
+        is not one anybody may write. Without it the encryption keys, the KEK and the
+        memory database's address were writable by any signed-in account, which would
+        move every account's memory to a server of their choice on the next start."""
+        if key in cls.GLOBAL_CONFIG_KEYS or cls.is_secret_config_key(key):
             return True
         return any(key.startswith(prefix) for prefix in cls.GLOBAL_CONFIG_KEY_PREFIXES)
 
@@ -1442,7 +1489,10 @@ class Config:
     SECRET_CONFIG_KEY_PREFIXES = ("api_key_",)
     SECRET_CONFIG_KEYS = frozenset({
         "secure_store_kek",
+        # The memory database DSNs (`db_credentials._DSN_KEYS`, held to this set by a
+        # test): each may carry a password, the owner's that of the superuser role.
         "memory_db_url",
+        "memory_db_owner_url",
         "redis_url",
     })
 

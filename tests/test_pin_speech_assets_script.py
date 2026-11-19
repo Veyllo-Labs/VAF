@@ -73,6 +73,20 @@ def test_a_changed_digest_at_the_same_address_is_reported_for_every_kind_of_file
     assert script.changed_digests({}, _manifest(piper_sha=H["d"])) == []
 
 
+def test_the_refusal_labels_each_digest_it_lists(script):
+    """The listing names what each digest is of (the archive, the program inside it, a
+    file) and shows only what moved, without Python tuple brackets. MUTATION: list the
+    raw digest tuples again: red."""
+    old = _manifest()
+    [line] = script.changed_digests(old, _manifest(program=H["d"]))
+    assert line.endswith(f": program {H['b']} -> {H['d']}"), line
+    assert "archive" not in line and "(" not in line and "'" not in line, line
+    [line] = script.changed_digests(old, _manifest(piper_sha=H["d"], program=H["d"]))
+    assert f"archive {H['a']} -> {H['d']}; program {H['b']} -> {H['d']}" in line, line
+    [line] = script.changed_digests(old, _manifest(silero=H["d"]))
+    assert line == f"https://x/s: file {H['f']} -> {H['d']}", line
+
+
 def _fake_run(script, monkeypatch, new: dict):
     monkeypatch.setattr(script, "_revision", lambda repo, rev: "0" * 40)
     monkeypatch.setattr(script, "pin_voices", lambda work, rev: (new["piper_voices"], {"models": {}}))

@@ -95,7 +95,7 @@ def test_bytes_that_miss_the_pin_end_in_an_error_and_leave_nothing(container, mo
     assert container.download_model("de") is False
     status = container.download_progress["de"]
     assert status["status"] == "error" and "did not match its expected checksum" in status["error"], status
-    assert sorted(p.name for p in (container.MODELS_DIR / "de").iterdir()) == []
+    assert sorted(p.name for p in container.MODELS_DIR.iterdir()) == [], "no voice, no staging folder"
 
 
 def test_pinned_bytes_complete_from_the_pinned_revision(container, monkeypatch):
@@ -124,8 +124,8 @@ def test_the_table_is_read_from_models_json_and_no_url_is_written_into_the_app(m
 
 def test_a_rejected_config_keeps_the_installed_pair(container, monkeypatch):
     """The model verified, the config did not: the pair already installed stays as it was
-    and no staged file is left. MUTATION: download straight into the final names and
-    remove both on an error (as before): red."""
+    and no staging folder is left. MUTATION: download into the installed folder and remove
+    both files on an error (as before): red."""
     d = container.MODELS_DIR / "de"
     d.mkdir(parents=True)
     (d / "de.onnx").write_bytes(b"installed model")
@@ -136,6 +136,7 @@ def test_a_rejected_config_keeps_the_installed_pair(container, monkeypatch):
     assert sorted(p.name for p in d.iterdir()) == ["de.onnx", "de.onnx.json"]
     assert (d / "de.onnx").read_bytes() == b"installed model"
     assert (d / "de.onnx.json").read_bytes() == b"installed config"
+    assert sorted(p.name for p in container.MODELS_DIR.iterdir()) == ["de"]
 
 
 def test_an_unreachable_server_is_said_in_one_line(container, monkeypatch):
@@ -191,19 +192,19 @@ def test_the_settings_card_shows_why_an_install_failed():
     assert "{installError}</span>" in card and "title={installError}" in card
     assert 'title="Install"' in card, "the Install button is the retry"
     # The cause comes last in every message: the line wraps (three lines at most) instead
-    # of being cut to one, and on a phone the failed card takes the full row.
+    # of being cut to one, and below lg the failed card takes the full row.
     span = card[card.index("<span", card.index("title={installError}")):card.index("{installError}</span>")]
     assert "truncate" not in span and "line-clamp-3" in span and "break-words" in span, span
-    assert 'installError && "max-md:col-span-2"' in card
+    assert 'installError && "max-lg:col-span-2"' in card, "below lg (tablets, narrow windows) it takes the full row"
 
 
 def test_a_failed_setup_does_not_leave_the_language_stuck_downloading(container, monkeypatch):
     """/install marks the language as downloading before its thread starts; a folder that
-    cannot be made (here a file in its place) used to kill the thread before its error
-    handling, and the mark stayed until a restart. MUTATION: make the folder before the
-    try again: red (still "downloading", a second install is refused)."""
-    container.MODELS_DIR.mkdir(parents=True)
-    (container.MODELS_DIR / "de").write_bytes(b"not a folder")
+    cannot be made (here a file where the models folder belongs) used to kill the thread
+    before its error handling, and the mark stayed until a restart. MUTATION: make the
+    folder before the try again: red (still "downloading", a second install is refused)."""
+    container.MODELS_DIR.parent.mkdir(parents=True, exist_ok=True)
+    container.MODELS_DIR.write_bytes(b"not a folder")
     assert container.download_model("de") is False, "the failed setup is reported, not raised"
     assert container.download_progress["de"]["status"] == "error"
     monkeypatch.setattr(container.threading, "Thread",
@@ -217,50 +218,137 @@ def test_a_failed_setup_does_not_leave_the_language_stuck_downloading(container,
     assert "already being downloaded" not in container.install_language().get("message", "")
 
 
-def test_a_failed_promotion_puts_the_installed_pair_back(container, monkeypatch):
-    """Both files verified, then the second rename fails: the new model must not stay next
-    to the old config (the language would count as installed and never be repaired).
-    MUTATION: promote with two plain renames: red."""
-    import os
+def _installed(container, model=b"installed model", config=b"installed config"):
     d = container.MODELS_DIR / "de"
     d.mkdir(parents=True)
-    (d / "de.onnx").write_bytes(b"installed model")
-    (d / "de.onnx.json").write_bytes(b"installed config")
-    real_replace = os.replace
+    (d / "de.onnx").write_bytes(model)
+    (d / "de.onnx.json").write_bytes(config)
+    return d
 
-    def replace(src, dst):
-        if str(dst).endswith("de.onnx.json") and str(src).endswith(".incoming"):
-            raise PermissionError(13, "Permission denied")
-        return real_replace(src, dst)
 
-    monkeypatch.setattr(os, "replace", replace)
+def _failing_renames(monkeypatch, *failing):
+    """os.rename raising for the given (source suffix, destination suffix) pairs."""
+    import os
+    real_rename = os.rename
+
+    def rename(src, dst):
+        for a, b in failing:
+            if str(src).endswith(a) and str(dst).endswith(b):
+                raise PermissionError(13, "Permission denied")
+        return real_rename(src, dst)
+
+    monkeypatch.setattr(os, "rename", rename)
+    return real_rename
+
+
+def test_a_failed_swap_puts_the_installed_voice_back(container, monkeypatch):
+    """Both files verified, then the staged folder cannot take the installed one's place:
+    the installed folder is renamed back, whole. MUTATION: drop the rename back: red."""
+    d = _installed(container)
+    _failing_renames(monkeypatch, (".de.incoming", "/de"))
     calls = []
     _network(monkeypatch, container, {"onnx": MODEL, "onnx.json": CONFIG}, calls)
     assert container.download_model("de") is False
     assert (d / "de.onnx").read_bytes() == b"installed model"
     assert (d / "de.onnx.json").read_bytes() == b"installed config"
-    assert sorted(p.name for p in d.iterdir()) == ["de.onnx", "de.onnx.json"]
+    assert sorted(p.name for p in container.MODELS_DIR.iterdir()) == ["de"]
 
 
-def test_the_staged_files_are_gone_before_the_error_allows_a_retry(container, monkeypatch):
-    """The error status is what lets a retry start; a retry writes the same staged names,
+def test_a_failed_rename_back_keeps_the_old_voice_aside_and_the_next_install_restores_it(container, monkeypatch):
+    """The double fault: the swap fails and the rename back fails too. No pair is mixed:
+    the language shows as not installed, the old voice stays whole in .de.previous, the
+    error says that it could not be put back (both errors in the detail). The next
+    attempt puts it back before anything else: even when that attempt fails its own
+    download, the old voice is installed again and was never overwritten.
+    MUTATIONS: report the double fault as a plain rename failure (red: the line), or let
+    the next attempt start without recovering (red: the old voice is lost)."""
+    _installed(container)
+    real_rename = _failing_renames(monkeypatch, (".de.incoming", "/de"), (".de.previous", "/de"))
+    calls = []
+    _network(monkeypatch, container, {"onnx": MODEL, "onnx.json": CONFIG}, calls)
+    assert container.download_model("de") is False
+    status = container.download_progress["de"]
+    assert "could not be put back" in status["error"], status
+    assert "could not be put in place" in status["detail"], status
+    assert "putting the installed one back failed" in status["detail"], status
+    assert not container.is_language_installed("de")
+    kept = container.MODELS_DIR / ".de.previous"
+    assert (kept / "de.onnx").read_bytes() == b"installed model"
+    assert (kept / "de.onnx.json").read_bytes() == b"installed config"
+    assert sorted(p.name for p in container.MODELS_DIR.iterdir()) == [".de.previous"]
+
+    import os
+    monkeypatch.setattr(os, "rename", real_rename)
+    _network(monkeypatch, container, {"onnx": MODEL + b"x", "onnx.json": CONFIG}, calls)
+    assert container.download_model("de") is False
+    d = container.MODELS_DIR / "de"
+    assert (d / "de.onnx").read_bytes() == b"installed model", "the kept voice is back, not overwritten"
+    assert container.is_language_installed("de")
+    assert sorted(p.name for p in container.MODELS_DIR.iterdir()) == ["de"]
+
+
+def test_a_voice_kept_aside_by_a_killed_install_is_back_at_start(container):
+    """A container killed between the two renames: no installed folder, the old voice in
+    .de.previous. The start puts it back before the first request. MUTATION: do not
+    recover at start: red."""
+    kept = container.MODELS_DIR / ".de.previous"
+    kept.mkdir(parents=True)
+    (kept / "de.onnx").write_bytes(b"installed model")
+    (kept / "de.onnx.json").write_bytes(b"installed config")
+    container.recover_interrupted_installs()
+    assert container.is_language_installed("de")
+    assert sorted(p.name for p in container.MODELS_DIR.iterdir()) == ["de"]
+    src = (CONTAINER / "app.py").read_text(encoding="utf-8")
+    main = src[src.index('if __name__ == "__main__":'):]
+    assert main.index("recover_interrupted_installs()") < main.index("download_model(DEFAULT_LANG)")
+
+
+def test_a_stale_kept_voice_next_to_an_installed_one_is_removed(container, monkeypatch):
+    """.de.previous next to an installed folder: the swap finished, only the removal of
+    the old voice failed. It is stale, removed, and the install goes on."""
+    _installed(container)
+    kept = container.MODELS_DIR / ".de.previous"
+    kept.mkdir()
+    (kept / "de.onnx").write_bytes(b"older model")
+    calls = []
+    _network(monkeypatch, container, {"onnx": MODEL, "onnx.json": CONFIG}, calls)
+    assert container.download_model("de") is True
+    assert (container.MODELS_DIR / "de" / "de.onnx").read_bytes() == MODEL
+    assert sorted(p.name for p in container.MODELS_DIR.iterdir()) == ["de"]
+
+
+def test_uninstall_removes_what_an_interrupted_install_left(container, monkeypatch):
+    """Otherwise a kept voice would come back at the next start after it was removed."""
+    _installed(container)
+    for name in (".de.previous", ".de.incoming"):
+        (container.MODELS_DIR / name).mkdir()
+    monkeypatch.setattr(container, "load_config",
+                        lambda: {"installed_languages": ["de"], "language_priority": ["de"]})
+    monkeypatch.setattr(container, "save_config", lambda c: None)
+    container.request.body = {"language": "de"}
+    assert container.uninstall_language()["status"] == "uninstalled"
+    assert list(container.MODELS_DIR.iterdir()) == []
+
+
+def test_the_staging_folder_is_gone_before_the_error_allows_a_retry(container, monkeypatch):
+    """The error status is what lets a retry start; a retry stages into the same folder,
     so this attempt's cleanup must be over by then. MUTATION: report the error before the
     cleanup: red."""
-    import pathlib
     seen = []
-    real_unlink = pathlib.Path.unlink
+    real_remove = container.remove_path
 
-    def unlink(self, *a, **k):
-        if self.name.endswith(".incoming"):
+    def remove(path):
+        if path.name == ".de.incoming":
             seen.append(container.download_progress.get("de", {}).get("status"))
-        return real_unlink(self, *a, **k)
+        return real_remove(path)
 
-    monkeypatch.setattr(pathlib.Path, "unlink", unlink)
+    monkeypatch.setattr(container, "remove_path", remove)
     calls = []
     _network(monkeypatch, container, {"onnx": MODEL, "onnx.json": CONFIG + b"x"}, calls)
     assert container.download_model("de") is False
-    assert seen and all(status == "downloading" for status in seen), seen
+    assert len(seen) == 2 and all(status == "downloading" for status in seen), seen
     assert container.download_progress["de"]["status"] == "error"
+    assert not (container.MODELS_DIR / ".de.incoming").exists()
 
 
 def test_whatever_escapes_the_download_still_ends_the_downloading_mark(container, monkeypatch):

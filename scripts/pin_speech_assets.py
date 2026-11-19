@@ -316,18 +316,19 @@ def pin_models(work: Path, smart_turn_revision: str | None) -> dict:
 
 
 def _digests_by_url(manifest: dict) -> dict:
-    """{url: digests} for every file a manifest pins: the Piper archives (archive and
-    program digest), every voice file at its revision, every model."""
+    """{url: {label: digest}} for every file a manifest pins: the Piper archives ("archive"
+    and "program"), every voice file at its revision and every model ("file")."""
     out = {}
     piper = manifest.get("piper") or {}
     for name, meta in (piper.get("assets") or {}).items():
         url = f"https://github.com/{piper.get('repository')}/releases/download/{piper.get('tag')}/{name}"
-        out[url] = (meta.get("sha256"), meta.get("program_sha256"))
+        out[url] = {"archive": meta.get("sha256"), "program": meta.get("program_sha256")}
     voices = manifest.get("piper_voices") or {}
     for path, meta in (voices.get("files") or {}).items():
-        out[f"{HF}/{voices.get('repository')}/resolve/{voices.get('revision')}/{quote(path)}"] = (meta.get("sha256"),)
+        url = f"{HF}/{voices.get('repository')}/resolve/{voices.get('revision')}/{quote(path)}"
+        out[url] = {"file": meta.get("sha256")}
     for meta in (manifest.get("models") or {}).values():
-        out[meta.get("url")] = (meta.get("sha256"),)
+        out[meta.get("url")] = {"file": meta.get("sha256")}
     return out
 
 
@@ -336,10 +337,16 @@ def changed_digests(old: dict, new: dict) -> list[str]:
     address now serves other bytes. No hand-kept list: this holds for the Piper archives
     (also when only the program digest moved), the voices and every model, whichever
     source the digest came from. A file at a new URL (a new tag or revision) is not a
-    change."""
+    change. One line per file, each changed digest labeled with what it is a digest of."""
     before = _digests_by_url(old)
-    return [f"{url}: {before[url]} -> {now}" for url, now in _digests_by_url(new).items()
-            if url in before and before[url] != now]
+    lines = []
+    for url, now in _digests_by_url(new).items():
+        was = before.get(url)
+        if was is None or was == now:
+            continue
+        moved = [f"{label} {was.get(label)} -> {digest}" for label, digest in now.items() if was.get(label) != digest]
+        lines.append(f"{url}: " + "; ".join(moved))
+    return lines
 
 
 def _shown(path: Path) -> str:

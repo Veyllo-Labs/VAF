@@ -25,6 +25,7 @@ from typing import Optional, Dict, List, Any
 from flask import Flask, request, jsonify, Response, send_file
 from flask_cors import CORS
 import io
+import shutil
 import wave
 from urllib.parse import quote
 
@@ -127,93 +128,132 @@ def download_error_message(name: str, error: Exception) -> str:
     return f"The {name} voice could not be installed. Try again later."
 
 
-def promote_pair(moves) -> None:
-    """Put each staged file in place of its installed one, all of them or none.
+class SwapRestoreError(RuntimeError):
+    """The new voice could not be put in place, and putting the installed one back failed
+    too: the installed voice is kept aside in .<lang>.previous."""
 
-    `moves` is a sequence of (staged, final, kept): every installed file is first renamed
-    to its kept name, then every staged file is renamed to its final name. When any step
-    fails, the files already promoted are removed and the kept ones are renamed back, so
-    the installed pair is exactly as it was; the error is raised. On success the kept
-    files are removed."""
-    kept = []
-    promoted = []
-    try:
-        for staged, final, keep in moves:
-            if final.exists():
-                os.replace(final, keep)
-                kept.append((keep, final))
-        for staged, final, keep in moves:
-            os.replace(staged, final)
-            promoted.append(final)
-    except Exception:
-        for final in promoted:
-            try:
-                final.unlink()
-            except OSError:
-                pass
-        for keep, final in kept:
-            try:
-                os.replace(keep, final)
-            except OSError:
-                pass
-        raise
-    for keep, _ in kept:
+
+def swap_paths(lang: str):
+    """The installed folder of `lang`, its staging folder and the name the installed one
+    is kept under while a new one takes its place."""
+    return MODELS_DIR / lang, MODELS_DIR / f".{lang}.incoming", MODELS_DIR / f".{lang}.previous"
+
+
+def remove_path(path: Path) -> None:
+    """Remove a folder with everything in it, or a file or link (never followed)."""
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.is_dir():
+        shutil.rmtree(path)
+
+
+def recover_previous(lang: str) -> None:
+    """Settle what an interrupted swap of `lang` left behind, before anything else may
+    touch it. A kept .<lang>.previous with no installed folder: an earlier swap moved the
+    installed voice aside and neither finished nor put it back (the container was killed,
+    or the rename back failed), so it is renamed back now. A .previous next to an installed
+    folder: that swap finished and only the removal of the old voice failed, so it is
+    stale and removed. A later install therefore never replaces a kept voice before it
+    was put back or known to be stale. Raises OSError when either step fails."""
+    final, _, previous = swap_paths(lang)
+    if not os.path.lexists(previous):
+        return
+    if os.path.lexists(final):
+        remove_path(previous)
+    else:
+        os.rename(previous, final)
+
+
+def recover_interrupted_installs() -> None:
+    """recover_previous for every language, at start: a voice an interrupted install kept
+    aside is installed again before the first request."""
+    for lang in AVAILABLE_MODELS:
         try:
-            keep.unlink()
-        except OSError:
-            pass
+            recover_previous(lang)
+        except OSError as e:
+            print(f"[TTS] The voice of {lang} kept from an interrupted install could not be put back: {e}",
+                  flush=True)
+
+
+def swap_in(lang: str) -> None:
+    """Put the staged folder of `lang` in place of the installed one, by renames only.
+
+    The installed folder (if any) is renamed to .<lang>.previous, the staging folder to
+    the installed name; if that second rename fails, nothing new is in place and the
+    installed folder is renamed back. If that fails too, SwapRestoreError says so (both
+    errors), and the voice stays whole in .previous for recover_previous. On success the
+    old voice is removed; a failure there only leaves a stale .previous behind. The two
+    files of a voice always move together, so the installed pair is never a mix of two
+    downloads."""
+    final, staging, previous = swap_paths(lang)
+    moved_aside = False
+    if os.path.lexists(final):
+        os.rename(final, previous)
+        moved_aside = True
+    try:
+        os.rename(staging, final)
+    except OSError as e:
+        if moved_aside:
+            try:
+                os.rename(previous, final)
+            except OSError as restore_error:
+                raise SwapRestoreError(f"the new voice could not be put in place ({e}), and putting the "
+                                       f"installed one back failed too ({restore_error})") from e
+        raise
+    try:
+        remove_path(previous)
+    except OSError as e:
+        print(f"[TTS] The replaced voice of {lang} could not be removed: {e}", flush=True)
 
 
 def download_model(lang: str) -> bool:
     """Download a language model, verified against its pinned SHA-256. Returns True on
     success.
 
-    Both files are fetched under staged names next to the installed pair, each only as the
+    Both files are fetched into a staging folder (.<lang>.incoming), each only as the
     bytes pinned for it (download_verified: its own partial file, renamed into place only
-    once its content matched), and they replace the installed pair only when both
-    verified, together (promote_pair: a failed rename puts the installed pair back). A
-    failure removes the staged files first and only then reports the error status, so a
-    retry the status allows never meets this attempt's cleanup; an installed pair stays as
-    it was, and the status says why (a checksum mismatch, the download error).
+    once its content matched), and the staging folder replaces the installed one whole
+    (swap_in), so the pair is never a mix. Before anything else, what an interrupted
+    earlier install left is settled (recover_previous). A failure removes the staging
+    folder first and only then reports the error status, so a retry the status allows
+    never meets this attempt's cleanup; an installed voice stays as it was, and the status
+    says why (a checksum mismatch, the download error, or a voice that could not be put
+    back).
 
-    Named boundary: a process killed between the renames of promote_pair (a window of
-    microseconds) can leave the new model beside an older config, and the language then
-    counts as installed; removing and installing it again in Settings repairs it.
-    is_language_installed deliberately does not require the pinned digests: that would
-    count every voice installed before the digests existed as missing."""
+    Named boundary: a container killed between the two renames of swap_in, or a rename
+    back that fails, leaves the language without an installed folder (it shows as not
+    installed) and its old voice whole in .<lang>.previous. The next start of the
+    container, or the next install of that language, puts it back before anything else."""
     if lang not in AVAILABLE_MODELS:
         return False
 
     model_info = AVAILABLE_MODELS[lang]
-    model_dir = MODELS_DIR / lang
-
-    model_file = model_dir / f"{lang}.onnx"
-    config_file = model_dir / f"{lang}.onnx.json"
-    staged_model = model_dir / f".{lang}.onnx.incoming"
-    staged_config = model_dir / f".{lang}.onnx.json.incoming"
+    final, staging, _ = swap_paths(lang)
 
     try:
         # Update progress
         with download_lock:
             download_progress[lang] = {"status": "downloading", "progress": 0}
 
-        model_dir.mkdir(parents=True, exist_ok=True)
+        MODELS_DIR.mkdir(parents=True, exist_ok=True)
+        recover_previous(lang)
+        remove_path(staging)              # a leftover of an earlier attempt of this language
+        staging.mkdir()
         total_size = model_info["model_size"]
 
         def on_progress(received: int) -> None:
             with download_lock:
                 download_progress[lang]["progress"] = int(received / total_size * 90)
 
-        download_verified(model_info["model_url"], model_info["model_sha256"], staged_model,
+        download_verified(model_info["model_url"], model_info["model_sha256"], staging / f"{lang}.onnx",
                           size=model_info["model_size"], timeout=60, progress=on_progress)
 
         with download_lock:
             download_progress[lang]["progress"] = 95
 
-        download_verified(model_info["config_url"], model_info["config_sha256"], staged_config,
+        download_verified(model_info["config_url"], model_info["config_sha256"], staging / f"{lang}.onnx.json",
                           size=model_info["config_size"], timeout=60)
-        promote_pair(((staged_model, model_file, model_dir / f".{lang}.onnx.previous"),
-                      (staged_config, config_file, model_dir / f".{lang}.onnx.json.previous")))
+        swap_in(lang)
 
         # Update config
         config = load_config()
@@ -228,14 +268,17 @@ def download_model(lang: str) -> bool:
 
     except Exception as e:
         print(f"[TTS] Installing {lang} failed: {e}", flush=True)
-        for staged in (staged_model, staged_config):
-            try:
-                staged.unlink()
-            except OSError:
-                pass
+        try:
+            remove_path(staging)
+        except OSError:
+            pass
+        if isinstance(e, SwapRestoreError):
+            message = (f"The {model_info['name']} voice could not be installed, and the voice installed "
+                       "before could not be put back yet; installing the language again puts it back.")
+        else:
+            message = download_error_message(model_info["name"], e)
         with download_lock:
-            download_progress[lang] = {"status": "error", "error": download_error_message(model_info["name"], e),
-                                       "detail": str(e)}
+            download_progress[lang] = {"status": "error", "error": message, "detail": str(e)}
         return False
 
 
@@ -484,10 +527,10 @@ def uninstall_language():
     if lang not in AVAILABLE_MODELS:
         return jsonify({"error": f"Unknown language: {lang}"}), 400
 
-    model_dir = MODELS_DIR / lang
-    if model_dir.exists():
-        import shutil
-        shutil.rmtree(model_dir)
+    # The installed folder and what an interrupted install of it may have left.
+    for path in swap_paths(lang):
+        if os.path.lexists(path):
+            remove_path(path)
 
     # Update config
     config = load_config()
@@ -636,6 +679,9 @@ if __name__ == "__main__":
     # Ensure directories exist
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    # A voice an interrupted install kept aside is put back first.
+    recover_interrupted_installs()
 
     # Auto-install default language if nothing installed
     config = load_config()

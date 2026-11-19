@@ -58,14 +58,21 @@ import requests
 MAX_ARCHIVE_LINKS = 512
 
 
-# A partial file this much older than now belongs to a download that was killed (a running
-# one writes to it continuously and gives up after its read timeout), so the next download
-# of the same file removes it.
+# A partial file whose last write is this long ago is taken for the leftover of a killed
+# download, and the next download of the same file removes it (sweep_stale_partials).
 STALE_PARTIAL_SECONDS = 3600.0
 
 
 class DownloadIntegrityError(RuntimeError):
     """The downloaded bytes do not hash to the digest that was pinned for them."""
+
+
+def _pinned_size(size) -> int:
+    """The pinned size as a positive int, or ValueError: without it the download would have
+    no cap, and a missing or zero size is a broken pin, not a reason to download anyway."""
+    if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+        raise ValueError(f"a verified download needs the pinned size as a positive int, got {size!r}")
+    return size
 
 
 def _expected_digest(sha256: str) -> str:
@@ -80,19 +87,19 @@ def download_verified(
     sha256: str,
     dest: str | os.PathLike,
     *,
-    size: Optional[int] = None,
+    size: int,
     timeout: float = 30.0,
     chunk_size: int = 1 << 16,
     progress: Optional[Callable[[int], None]] = None,
 ) -> Path:
     """Stream ``url`` into ``dest`` and return its path once the SHA-256 matches.
 
-    ``sha256`` is the expected hex digest (case-insensitive). ``size``, when given, is the
-    pinned length: the transfer stops with ``DownloadIntegrityError`` as soon as more bytes
+    ``sha256`` is the expected hex digest (case-insensitive). ``size`` is the pinned length,
+    required: the transfer stops with ``DownloadIntegrityError`` as soon as more bytes
     arrive, so an endless stream cannot fill the disk. ``progress`` is called with the
     bytes received so far. Raises ``DownloadIntegrityError`` on a mismatch (the partial
-    file is removed), ``ValueError`` when no digest is given, and the ``requests`` errors
-    for the transfer itself.
+    file is removed), ``ValueError`` when no digest or no positive size is given, and the
+    ``requests`` errors for the transfer itself.
 
     Every call writes its own partial file next to the destination, created exclusively
     (tempfile.mkstemp: a new name, never opened through an existing file or link), and
@@ -102,7 +109,7 @@ def download_verified(
     that fails removes only its own partial file.
     """
     expected = _expected_digest(sha256)
-    limit = None if size is None else int(size)
+    limit = _pinned_size(size)
     target = Path(dest)
     target.parent.mkdir(parents=True, exist_ok=True)
     sweep_stale_partials(target)
@@ -118,7 +125,7 @@ def download_verified(
                 if not chunk:
                     continue
                 received += len(chunk)
-                if limit is not None and received > limit:
+                if received > limit:
                     raise DownloadIntegrityError(
                         f"{target.name}: more than the pinned {limit} bytes from {url}")
                 f.write(chunk)
@@ -143,10 +150,19 @@ def download_verified(
 
 
 def sweep_stale_partials(target: str | os.PathLike) -> None:
-    """Remove the partial files of `target` (``.<name>.<random>.part`` next to it) that are
-    older than STALE_PARTIAL_SECONDS: what a download killed hard (power loss, SIGKILL) left
-    behind, since the finally of download_verified did not run. A link is removed, never
-    followed; a partial file of a download still running is never that old."""
+    """Remove the partial files next to `target` (``.<name>.<random>.part``) whose last write
+    is older than STALE_PARTIAL_SECONDS: what a download killed hard (power loss, SIGKILL)
+    left behind, since the finally of download_verified did not run. A link is removed,
+    never followed. The name test also matches the partial files of a destination whose
+    name extends this one (``.v.onnx.json.<random>.part`` for ``v.onnx``); those are just as
+    stale once that old.
+
+    Named boundary, no lock: a download whose transfer stalls for an hour without writing a
+    chunk (the read timeout only bounds each read, a server can trickle below a chunk) can
+    have its partial file removed here by another download of the same file. That download
+    then fails closed: its final rename finds no file, it raises, and the destination never
+    receives bytes that were not verified. On Windows an open file cannot be removed, so
+    the sweep skips it there."""
     target = Path(target)
     prefix = "." + target.name + "."
     cutoff = time.time() - STALE_PARTIAL_SECONDS
@@ -216,16 +232,17 @@ def fetch_verified(
     sha256: str,
     dest: str | os.PathLike,
     *,
-    size: Optional[int] = None,
+    size: int,
     timeout: float = 30.0,
     progress: Optional[Callable[[int], None]] = None,
 ) -> Path:
-    """``dest`` with the pinned digest: kept when it already has it (has_pinned_digest),
+    """``dest`` with the pinned digest and size (required): kept when it already has them
+    (has_pinned_digest),
     otherwise downloaded with ``download_verified``, which replaces whatever is there (a
     truncated or foreign file) only once the new bytes verified. Raises what
     ``download_verified`` raises."""
     target = Path(dest)
-    if has_pinned_digest(target, sha256, size):
+    if has_pinned_digest(target, sha256, _pinned_size(size)):
         return target
     return download_verified(url, sha256, target, size=size, timeout=timeout, progress=progress)
 

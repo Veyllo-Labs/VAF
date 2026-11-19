@@ -165,13 +165,14 @@ def test_matching_bytes_land_and_mismatching_bytes_never_touch_the_target(monkey
     payload = b"llama" * 1000
     _fake_get(monkeypatch, payload)
     dest = tmp_path / "asset.tar.gz"
-    assert download_verified("https://example.invalid/x", hashlib.sha256(payload).hexdigest(), dest) == dest
+    assert download_verified("https://example.invalid/x", hashlib.sha256(payload).hexdigest(), dest,
+                             size=len(payload)) == dest
     assert dest.read_bytes() == payload and not dest.with_name("asset.tar.gz.part").exists()
     with pytest.raises(DownloadIntegrityError):
-        download_verified("https://example.invalid/x", "ab" * 32, tmp_path / "other.tar.gz")
+        download_verified("https://example.invalid/x", "ab" * 32, tmp_path / "other.tar.gz", size=len(payload))
     assert not (tmp_path / "other.tar.gz").exists() and not (tmp_path / "other.tar.gz.part").exists()
     with pytest.raises(ValueError):
-        download_verified("https://example.invalid/x", "", tmp_path / "third.tar.gz")
+        download_verified("https://example.invalid/x", "", tmp_path / "third.tar.gz", size=len(payload))
 
 
 # ── the install ───────────────────────────────────────────────────────────────────

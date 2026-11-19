@@ -656,10 +656,12 @@ class SpeechManager:
             return onnx_file
         except Exception as e:
             import requests
-            # Remembered: a checksum failure and a refusal (4xx). A server error (5xx) or a
-            # connection that could not be made is transient and retried at the next reply.
+            # Remembered: a checksum failure and a refusal (4xx). A server error (5xx), a
+            # timeout or rate limit (408, 429) and a connection that could not be made are
+            # transient and retried at the next reply.
             status = http_status(e) if isinstance(e, requests.HTTPError) else None
-            if isinstance(e, DownloadIntegrityError) or (status is not None and 400 <= status < 500):
+            refused = status is not None and 400 <= status < 500 and status not in (408, 429)
+            if isinstance(e, DownloadIntegrityError) or refused:
                 failed.add(model_name)
             UI.error(download_problem(f"The voice {model_name}", f"the voice {model_name}", e))
             UI.event("System", f"Details: {e}", style="dim")

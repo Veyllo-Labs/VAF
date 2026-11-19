@@ -420,9 +420,10 @@ export default function TTSSettings({
                                                 key={lang.code}
                                                 className={cn(
                                                     "flex items-center gap-2 p-2 bg-gray-50 rounded-xl border border-gray-200",
-                                                    // On a phone a two-column card leaves the error
-                                                    // about eight characters: it takes the full row.
-                                                    installError && "max-md:col-span-2"
+                                                    // Below lg the settings window is too narrow for
+                                                    // two cards with an error beside each other (an
+                                                    // 84 px text column at 768 px): it takes the full row.
+                                                    installError && "max-lg:col-span-2"
                                                 )}
                                             >
                                                 <div className="w-8 h-8 rounded-lg bg-gray-200 flex items-center justify-center text-xs font-bold text-gray-500">

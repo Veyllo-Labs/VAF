@@ -430,6 +430,52 @@ def test_a_partial_file_left_by_a_killed_download_is_swept(monkeypatch, tmp_path
     assert dest.read_bytes() == good
 
 
+@pytest.mark.parametrize("size", [None, 0, -5, "100", True, 1.5],
+                         ids=["none", "zero", "negative", "text", "bool", "float"])
+def test_a_download_without_a_positive_pinned_size_is_refused(monkeypatch, tmp_path, size):
+    """The size is required (no default) and must be a positive int: a missing or broken
+    one would switch off the cap on the stream. Refused before anything is fetched, by
+    both entry points. MUTATION: drop the check in _pinned_size: red."""
+    _no_download(monkeypatch)
+    digest = _sha(b"x")
+    with pytest.raises(ValueError, match="positive int"):
+        verified_download.download_verified("https://example.invalid/x", digest, tmp_path / "x", size=size)
+    with pytest.raises(ValueError, match="positive int"):
+        verified_download.fetch_verified("https://example.invalid/x", digest, tmp_path / "y", size=size)
+    with pytest.raises(TypeError):
+        verified_download.download_verified("https://example.invalid/x", digest, tmp_path / "z")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_stalled_download_whose_partial_was_swept_fails_closed(monkeypatch, tmp_path):
+    """Named boundary of the sweep: a transfer that wrote nothing for an hour can lose its
+    partial file to another download of the same file. It must then fail, never leave
+    unverified bytes at the destination. MUTATION: tolerate a missing partial at the
+    final rename (create it again and rename that): red."""
+    import time as _time
+    good = b"g" * 4096
+    dest = tmp_path / "voice.onnx"
+
+    def fake_get(url, **kwargs):
+        class R:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def raise_for_status(self): pass
+            def iter_content(self, chunk_size):
+                yield good[:1024]
+                old = _time.time() - verified_download.STALE_PARTIAL_SECONDS - 60
+                for p in tmp_path.glob(".voice.onnx.*.part"):
+                    os.utime(p, (old, old))
+                verified_download.sweep_stale_partials(dest)     # another download's sweep
+                yield good[1024:]
+        return R()
+
+    monkeypatch.setattr("vaf.core.verified_download.requests.get", fake_get)
+    with pytest.raises(OSError):
+        verified_download.download_verified("https://example.invalid/v", _sha(good), dest, size=len(good))
+    assert not dest.exists() and list(tmp_path.iterdir()) == []
+
+
 def test_every_download_in_the_tree_passes_its_pinned_size():
     """The size cap only works where a caller passes the size. Every call of
     download_verified( and fetch_verified( outside the module itself, in vaf/ and the speech
@@ -927,11 +973,13 @@ def test_a_voice_that_failed_its_checksum_is_not_fetched_at_every_reply(speech, 
     assert len(calls) == 2, "a connection failure is retried at the next reply"
 
 
-@pytest.mark.parametrize("status,remembered", [(404, True), (403, True), (503, False), (500, False)])
+@pytest.mark.parametrize("status,remembered", [(404, True), (403, True), (503, False), (500, False),
+                                               (408, False), (429, False)])
 def test_only_a_refusal_is_remembered_never_a_server_error(speech, monkeypatch, tmp_path, status, remembered):
     """The web app runs for days: one 503 from the voice host must not silence the voice
-    until a restart. A 4xx (and a checksum failure) is remembered for the process.
-    MUTATION: remember every HTTP error: red for 5xx."""
+    until a restart. A 4xx (and a checksum failure) is remembered for the process, except
+    a timeout (408) or rate limit (429). MUTATION: remember every HTTP error: red for 5xx;
+    remember every 4xx: red for 408 and 429."""
     import requests
     _voice_pin(monkeypatch, tmp_path)
     calls = []

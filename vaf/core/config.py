@@ -78,13 +78,28 @@ LANE_MODEL_KEYS = ("subagent_model", "browser_agent_model")
 
 def _same_json(a, b) -> bool:
     """Equal values of equal types, all the way down: ``==`` holds ``True == 1`` and
-    ``0 == 0.0``, so a stored ``1`` would count as the ``True`` a body sent."""
+    ``0 == 0.0``, so a stored ``1`` would count as the ``True`` a body sent. Floats still
+    compare by ``==``, so ``-0.0`` counts as ``0.0``.
+
+    A value nested too deep to walk counts as changed rather than raising: a body may nest
+    a value hundreds of levels deep (``json.loads`` accepts thousands), and the comparison
+    runs on every save. The same object on both sides is equal without a walk, which is the
+    case for every key a strip leaves alone."""
+    try:
+        return _same_json_walk(a, b)
+    except RecursionError:
+        return False
+
+
+def _same_json_walk(a, b) -> bool:
+    if a is b:
+        return True
     if type(a) is not type(b):
         return False
     if isinstance(a, dict):
-        return a.keys() == b.keys() and all(_same_json(a[k], b[k]) for k in a)
+        return a.keys() == b.keys() and all(_same_json_walk(a[k], b[k]) for k in a)
     if isinstance(a, list):
-        return len(a) == len(b) and all(_same_json(x, y) for x, y in zip(a, b))
+        return len(a) == len(b) and all(_same_json_walk(x, y) for x, y in zip(a, b))
     return a == b
 
 
@@ -1574,6 +1589,16 @@ class Config:
         },
     }
 
+    @staticmethod
+    def require_save_body(body) -> None:
+        """Refuse a settings save that is not a JSON object. Every step of the save path
+        reads it as one; ``dict(body)`` on a list of ``[key, value]`` pairs builds a dict
+        from it, and that dict has passed none of the steps before. Measured over the
+        WebSocket `save_config`: an admin's stale page brought back every messenger pairing,
+        and a non-admin replaced another account's mail host. PATCH answers it with 422."""
+        if not isinstance(body, dict):
+            raise TypeError(f"a settings save must be a JSON object, not {type(body).__name__}")
+
     @classmethod
     def is_route_owned_key(cls, key: str) -> bool:
         """True for a key only its own lane writes (``ROUTE_OWNED_KEYS``)."""
@@ -1598,9 +1623,12 @@ class Config:
         left alone (the merge keeps the stored block). Named boundary: a block sent as
         anything else that is not an object is left alone too; the block as a whole stays an
         admin's to set, and every reader treats a block that is not an object as absent.
-        Neither argument is changed."""
-        if not isinstance(payload, dict):
-            return payload
+        Neither argument is changed.
+
+        A payload that is not an object raises ``TypeError`` (``require_save_body``): passed
+        through, a list of ``[key, value]`` pairs became a dict in the next step and skipped
+        this strip."""
+        cls.require_save_body(payload)
         out = payload
         if any(cls.is_route_owned_key(k) for k in payload):
             out = {k: v for k, v in payload.items() if not cls.is_route_owned_key(k)}
@@ -1614,7 +1642,12 @@ class Config:
             restored = {k: v for k, v in sent.items() if k not in owned}
             for sub in owned:
                 if sub in held:
-                    restored[sub] = copy.deepcopy(held[sub])
+                    try:
+                        restored[sub] = copy.deepcopy(held[sub])
+                    except RecursionError:
+                        # Too deep to copy (a store an older save wrote from a body): the
+                        # lane loaded `stored` for this save alone, so sharing it is safe.
+                        restored[sub] = held[sub]
             if _same_json(restored, sent):
                 continue
             if out is payload:
@@ -1721,6 +1754,7 @@ class Config:
         # non-admin PATCH replaced the Telegram whitelist with their own entry, making them
         # the bot's owner, and replaced the bot token. The only thing a non-admin may say
         # about a channel is their own on/off, which is what the toggles carry.
+        cls.require_save_body(body)
         scope_str = str(user_scope_id).strip() if user_scope_id else ""
         toggles = {}
         body_filtered = dict(body)
@@ -1755,6 +1789,7 @@ class Config:
         The two paths used to carry the non-admin half by hand, one copy each.
         """
         from vaf.core.channels import CHANNEL_ACCOUNTS
+        cls.require_save_body(body)
         scope_str = str(user_scope_id).strip() if user_scope_id else ""
         body = dict(body)
         # Every account's own switches change only here (below, from the `enabled` a save

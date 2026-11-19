@@ -151,7 +151,7 @@ def _patch(body: dict, user: dict) -> dict:
     return asyncio.run(config_routes.patch_config(copy.deepcopy(body), request, user))
 
 
-def _ws_save(monkeypatch, user: dict, body: dict) -> dict:
+def _ws_save(monkeypatch, user: dict, body, expect: str = "success") -> dict:
     """One `save_config` over a real `/ws` connection with a signed token; the answer."""
     import jwt
     from starlette.testclient import TestClient
@@ -181,7 +181,7 @@ def _ws_save(monkeypatch, user: dict, body: dict) -> dict:
         reader.start()
         reader.join(20)
     assert "msg" in box, f"no config_saved ({box.get('error')!r})"
-    assert box["msg"].get("status") == "success", box["msg"]
+    assert box["msg"].get("status") == expect, box["msg"]
     return box["msg"]
 
 
@@ -345,6 +345,88 @@ def test_the_strip_keeps_its_invariants():
     body = {"veyllo_app_config": {"relay_enabled": True}}
     out = Config.without_route_owned_keys(body, stored={"veyllo_app_config": {"relay_enabled": 1}})
     assert _canon(out["veyllo_app_config"]["relay_enabled"]) == "1"
+
+
+OTHER_SCOPE = "ab12cd34-0000-4000-8000-000000000002"
+OTHER_MAIL = {OTHER_SCOPE: {"accounts": [{"account_id": "bob@example.net",
+                                          "imap_host": "imap.example.net"}]}}
+
+
+@pytest.mark.parametrize("user", [LOCAL_ADMIN, SECOND_ADMIN, NON_ADMIN],
+                         ids=["local_admin", "second_admin", "non_admin"])
+def test_a_socket_save_that_is_not_an_object_is_refused(stored, monkeypatch, user):
+    """A `config` sent as a list of [key, value] pairs passed both strips (they looked at
+    dicts only) and became a dict in the next step: an admin's stale page brought back
+    every pairing, and a non-admin replaced another account's mail host. PATCH answers it
+    with 422 already. MUTATIONS: drop the lane's object check (the strip's refusal ends the
+    socket, no answer); drop it and let the strip pass a non-object through (every case
+    red, the store changes)."""
+    cfg = copy.deepcopy(STORED)
+    cfg["email_config_by_scope"] = copy.deepcopy(OTHER_MAIL)
+    stored.write(cfg)
+    pairs = [[k, v] for k, v in PAGE.items()] + [
+        ["email_config_by_scope", {OTHER_SCOPE: {"accounts": [
+            {"account_id": "bob@example.net", "imap_host": "mail.attacker.example"}]}}]]
+    answer = _ws_save(monkeypatch, user, pairs, expect="error")
+    assert answer.get("error")
+    raw = stored.raw()
+    assert raw["email_config_by_scope"] == OTHER_MAIL
+    for block, sub in PAIRS:
+        assert _canon(raw[block].get(sub)) == _canon(STORED[block][sub]), (block, sub)
+    assert raw["default_language"] == "en"
+
+
+def test_the_save_steps_refuse_a_body_that_is_not_an_object():
+    """The framework half: no step of the save path turns a pair list into a dict.
+    MUTATION: any of the three back to passing it through or `dict(body)`."""
+    pairs = [["email_config_by_scope", {}]]
+    with pytest.raises(TypeError):
+        Config.without_route_owned_keys(pairs, stored={})
+    with pytest.raises(TypeError):
+        Config.split_connection_toggles({}, pairs, TENANT_SCOPE, is_admin=False)
+    with pytest.raises(TypeError):
+        Config.extract_connection_toggles_for_scope(pairs, TENANT_SCOPE)
+
+
+def _deep(depth: int):
+    value = "x"
+    for _ in range(depth):
+        value = [value]
+    return value
+
+
+def test_a_deeply_nested_value_still_saves(stored):
+    """A 600-deep value in a block saved on the base; a recursive comparison of the restored
+    block raised RecursionError for every caller. MUTATIONS: drop the identity shortcut (the
+    identity assert goes red); drop the RecursionError guard (the helper raises)."""
+    from vaf.core.config import _same_json
+
+    held = copy.deepcopy(STORED)
+    deep = _deep(600)
+    body = {"telegram_config": {**copy.deepcopy(STORED["telegram_config"]), "note": deep}}
+    # Every guarded sub-key equals the stored one, and the deep value is the same object on
+    # both sides of the comparison: nothing changed.
+    assert Config.without_route_owned_keys(body, stored=held) is body
+    # Equal but distinct deep values: too deep to walk is "changed", never an exception.
+    assert _same_json(_deep(600), _deep(600)) is False
+    assert _same_json(_deep(5), _deep(5)) is True
+    # A store an older save wrote from a body can hold one too: too deep to copy, it is
+    # kept as loaded. MUTATION: drop the RecursionError guard around the copy.
+    deep_held = {"telegram_config": {"whitelist": _deep(600)}}
+    out = Config.without_route_owned_keys({"telegram_config": {"whitelist": []}},
+                                          stored=deep_held)
+    assert out["telegram_config"]["whitelist"] is deep_held["telegram_config"]["whitelist"]
+
+    import asyncio
+
+    from vaf.api import config_routes
+    request = SimpleNamespace(state=SimpleNamespace(user=LOCAL_ADMIN))
+    page = {"default_language": "de",
+            "telegram_config": {**PAGE["telegram_config"], "note": _deep(600)}}
+    asyncio.run(config_routes.patch_config(page, request, LOCAL_ADMIN))
+    raw = json.loads(stored.path.read_text(encoding="utf-8"))
+    assert raw["default_language"] == "de"
+    assert raw["telegram_config"]["whitelist"] == STORED["telegram_config"]["whitelist"]
 
 
 # --- Fuzz ---------------------------------------------------------------------------------

@@ -6770,6 +6770,16 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                 elif type == "save_config":
                     new_config = cmd.get("config")
+                    if new_config is not None and not isinstance(new_config, dict):
+                        # A list of [key, value] pairs passed every strip below (they read
+                        # an object) and became one in `dict(body)`; PATCH answers 422.
+                        await websocket.send_json({
+                            "type": "config_saved",
+                            "status": "error",
+                            "error": "A settings save must be a JSON object.",
+                            "requires_refresh": False,
+                        })
+                        continue
                     if new_config:
                         from vaf.core.config import is_admin_identity
                         user_scope_id = manager.get_connection_user(websocket) if manager else None

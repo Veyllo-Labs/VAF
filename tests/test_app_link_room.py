@@ -152,8 +152,14 @@ def test_app_id_refused_by_delete_rename_hide(room_home):
 
 # ── the projection ────────────────────────────────────────────────────────────
 
+# The projection compares a line's age with `time.time()` (a line older than the device
+# queue's window reads `expired`), so the stamps sit an hour behind that same clock instead of
+# on a fixed date. One base for the whole module keeps equal minutes equal and the order intact.
+_BASE = datetime.fromtimestamp(time.time() // 60 * 60) - timedelta(hours=1)
+
+
 def _at(minutes):
-    return (datetime(2026, 11, 12, 9, 0) + timedelta(minutes=minutes)).isoformat()
+    return (_BASE + timedelta(minutes=minutes)).isoformat()
 
 
 def _store(sid, scope, messages):

@@ -41,7 +41,7 @@ NON_ADMIN = {"role": "user", "user_scope_id": TENANT_SCOPE, "username": "alice"}
 # The table, written out here so the test does not follow a change of the constant.
 GUARDED = {
     "telegram_config": ("whitelist", "relay_whitelist", "bot_username", "chat_activity"),
-    "whatsapp_config": ("whitelist", "lid_to_e164", "owner_control", "chat_activity"),
+    "whatsapp_config": ("whitelist", "lid_to_e164", "lid_to_e164_by_scope", "owner_control", "chat_activity"),
     "discord_config": ("chat_activity",),
     "veyllo_app_config": ("relay_enabled", "relay_instance_id"),
 }
@@ -71,6 +71,7 @@ STORED = {
         "chat_sync_interval_sec": 600,
         "whitelist": [WA_OWNER],
         "lid_to_e164": {"111111111@lid": "+49123456789"},
+        "lid_to_e164_by_scope": {TENANT_SCOPE: {"333333333@lid": "+49987654321"}},
         "owner_control": {"+49123456789": {"paused": True}},
         "chat_activity": [{"ts": "2026-11-02T10:00:00", "chat_id": "+49123456789"}],
     },
@@ -100,6 +101,8 @@ PAGE = {
         "chat_sync_interval_sec": 600,
         "whitelist": [WA_OWNER, WA_REMOVED],
         "lid_to_e164": {"111111111@lid": "+49123456789", "222222222@lid": "+49987654321"},
+        "lid_to_e164_by_scope": {TENANT_SCOPE: {"333333333@lid": "+49987654321", "444444444@lid": "+49123456789"},
+                                 LOCAL_ADMIN_SCOPE: {"555555555@lid": "+49123456789"}},
         "owner_control": {"+49123456789": {"paused": False}},
         "chat_activity": [{"ts": "2026-11-01T09:00:00", "chat_id": "+49123456789"}],
     },

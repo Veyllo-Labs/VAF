@@ -8,6 +8,7 @@ Handles WhatsApp bridge start/stop, QR display for linking, status, and whitelis
 """
 import json
 import logging
+import re
 import subprocess
 import threading
 from pathlib import Path
@@ -68,6 +69,19 @@ def get_current_vaf_user(request: Request) -> Dict[str, str]:
         "user_scope_id": get_local_admin_scope_id(),
         "username": get_local_admin_username(),
     }
+
+
+def _own_caller(request: Request) -> Dict[str, str]:
+    """The non-admin account a write is for, read strictly from the authenticated request.
+    `get_current_vaf_user` reads a signed-in account without a scope as the local admin,
+    which is right for a read and wrong for a write: the write would land on the admin's
+    entries (the same rule as `telegram_routes._pairing_caller`)."""
+    state_user = getattr(request.state, "user", None)
+    scope = str(state_user.get("user_scope_id") or "").strip() if isinstance(state_user, dict) else ""
+    name = str(state_user.get("username") or "").strip() if isinstance(state_user, dict) else ""
+    if not scope or not name:
+        raise HTTPException(status_code=400, detail="This account has no scope to change WhatsApp settings for.")
+    return {"user_scope_id": scope, "username": name}
 
 
 class WhitelistAddRequest(BaseModel):
@@ -429,7 +443,9 @@ async def get_whatsapp_dashboard(request: Request):
                 node_by_lid[str(lid_val)] = e164_val
     except Exception:
         pass
-    lid_to_e164 = dict((whatsapp_config.get("lid_to_e164") or {}) if isinstance(whatsapp_config, dict) else {})
+    # This account's lane: the shared map plus its own assignments (contacts_store.whatsapp_lid_map).
+    from vaf.core.contacts_store import whatsapp_lid_map
+    lid_to_e164 = whatsapp_lid_map(user_scope_id)
     for lid_jid, e164 in list(lid_to_e164.items()):
         if not lid_jid or not e164 or "@lid" not in str(lid_jid):
             continue
@@ -467,45 +483,6 @@ async def get_whatsapp_dashboard(request: Request):
             rec2["session_id"] = rec.get("session_id") or whatsapp_session_id(username, e164)
             sessions_by_chat[e164] = rec2
         del sessions_by_chat[key]
-    # Infer LID→E.164 when we have one FO contact with no messages and one LID-style session with messages (same user)
-    try:
-        from vaf.core.contacts_store import front_office_endpoints
-        fo_phones = front_office_endpoints(username, user_info.get("user_scope_id"), "whatsapp")
-        lid_sessions_with_messages = [
-            rec for rec in sessions_by_chat.values()
-            if (rec.get("message_count") or 0) > 0
-            and str(rec.get("session_id") or "").startswith("whatsapp_")
-            and rec.get("chat_id") not in whitelist_by_phone
-            and _normalize_chat_id(rec.get("chat_id") or "") not in fo_phones
-        ]
-        fo_without_messages = [
-            rec for rec in sessions_by_chat.values()
-            if (rec.get("message_count") or 0) == 0
-            and _normalize_chat_id(rec.get("chat_id") or "") in fo_phones
-        ]
-        if len(lid_sessions_with_messages) == 1 and len(fo_without_messages) == 1:
-            lid_rec = lid_sessions_with_messages[0]
-            fo_rec = fo_without_messages[0]
-            sid = lid_rec.get("session_id") or ""
-            chat_id_lid = lid_rec.get("chat_id") or ""
-            lid_digits = "".join(c for c in str(chat_id_lid) if c.isdigit())
-            if len(lid_digits) >= 10 and sid:
-                e164_fo = _normalize_chat_id(fo_rec.get("chat_id") or "") or (fo_rec.get("chat_id") or "").strip()
-                lid_jid = f"{lid_digits}@lid"
-                if e164_fo and lid_jid not in lid_to_e164:
-                    lid_to_e164[lid_jid] = e164_fo
-                    try:
-                        cfg = Config.load()
-                        wc = (cfg.get("whatsapp_config") or {}) if isinstance(cfg.get("whatsapp_config"), dict) else {}
-                        wc = dict(wc)
-                        wc["lid_to_e164"] = dict(lid_to_e164)
-                        cfg["whatsapp_config"] = wc
-                        Config.save(cfg)
-                    except Exception:
-                        pass
-                    fo_rec["session_id"] = sid
-    except Exception:
-        pass
     now_ts = int(_time.time())
     # Clamp last_ts to now so UI never shows future dates (e.g. bad Baileys timestamp for a chat)
     for rec in sessions_by_chat.values():
@@ -523,7 +500,7 @@ async def get_whatsapp_dashboard(request: Request):
     fo_phones, denied_phones, channel_open = access_inputs("whatsapp", username, user_info.get("user_scope_id"))
 
     # LID resolution (config + node) for session enrichment and lid_chats_to_assign
-    lid_to_e164_cfg = dict((whatsapp_config.get("lid_to_e164") or {}) if isinstance(whatsapp_config, dict) else {})
+    lid_to_e164_cfg = lid_to_e164
     lid_mappings_from_node: list = []
     node_by_lid: dict = {}
     try:
@@ -1218,20 +1195,31 @@ async def remove_whitelist_entry(request: Request, body: WhitelistAddRequest):
     phone = (body.phone_number or "").strip()
     if not phone:
         raise HTTPException(status_code=400, detail="phone_number required")
-    user_info = get_current_vaf_user(request)
+    is_admin = caller_is_admin(request)
+    user_info = get_current_vaf_user(request) if is_admin else _own_caller(request)
     user_scope_id = user_info.get("user_scope_id")
     config = Config.load()
     wc = config.get("whatsapp_config") or {}
     if not isinstance(wc, dict):
         wc = {}
     whitelist = list(wc.get("whitelist") or [])
-    if not caller_is_admin(request):
-        # Non-admin: only allow removing an entry that belongs to this user
-        entry = next((e for e in whitelist if isinstance(e, dict) and str(e.get("phone_number", "")).strip() == phone), None)
-        if entry and str(entry.get("user_scope_id")) != str(user_scope_id):
+
+    def _carries(e) -> bool:
+        return isinstance(e, dict) and str(e.get("phone_number", "")).strip() == phone
+
+    if is_admin:
+        removes = _carries
+    else:
+        # A non-admin removes their OWN entries for the number and nothing else. Two accounts
+        # may register the same number; the check used to authorise by the first entry that
+        # carried it and then remove every one, so an account removed the admin's owner entry.
+        def removes(e) -> bool:
+            return _carries(e) and str(e.get("user_scope_id")) == str(user_scope_id)
+
+        if any(_carries(e) for e in whitelist) and not any(removes(e) for e in whitelist):
             raise HTTPException(status_code=403, detail="You can only remove your own whitelist entry.")
     before = len(whitelist)
-    whitelist = [e for e in whitelist if not (isinstance(e, dict) and str(e.get("phone_number", "")).strip() == phone)]
+    whitelist = [e for e in whitelist if not removes(e)]
     wc["whitelist"] = whitelist
     config["whatsapp_config"] = wc
     Config.save(config)
@@ -1254,8 +1242,9 @@ async def add_whitelist_entry(request: Request, body: WhitelistAddRequest):
         user_scope_id = body.user_scope_id or user_info["user_scope_id"]
     else:
         # Non-admin users may only create/update their own whitelist entry.
-        vaf_username = (user_info["username"] or "admin").strip()
-        user_scope_id = user_info["user_scope_id"]
+        own = _own_caller(request)
+        vaf_username = own["username"]
+        user_scope_id = own["user_scope_id"]
 
     # The linked account is the agent's own number. Registering it as the main-user
     # number would recreate the "chat with yourself" model this bridge no longer supports.
@@ -1314,34 +1303,85 @@ async def add_whitelist_entry(request: Request, body: WhitelistAddRequest):
     return {"status": "added", "message": "Whitelist entry added."}
 
 
+# A LID is WhatsApp's opaque per-person id: ASCII digits and "@lid", nothing else (no
+# ":device" suffix, no other server). 24 digits is far above the 15 a LID carries today.
+_LID_JID = re.compile(r"[0-9]{1,24}@lid")
+# How many LIDs one non-admin account may bind in its own lane. A person's contact book
+# rarely holds more LID-addressed chats; the cap keeps one account from growing the shared
+# config file without bound.
+LID_BINDINGS_PER_ACCOUNT = 1000
+
+
 @router.post("/lid-assign")
 async def assign_lid_to_number(request: Request, body: LidAssignRequest):
-    """Assign a LID (e.g. 491701234567@lid) to an E.164 number so the bridge accepts messages from that chat. The number must be in whitelist or a Front Office contact."""
+    """Bind a WhatsApp LID chat (``123456789012345@lid``) to the number it stands for, so the
+    bridge reads that chat as that number (and a send to the number may go to the LID).
+
+    An admin's binding goes into the shared map (`whatsapp_config.lid_to_e164`), which every
+    account's bridge reads. Anybody else's goes into their own map
+    (`lid_to_e164_by_scope[<their scope>]`), which only their own lane reads
+    (`contacts_store.whatsapp_lid_map`). Measured on the single map: a non-admin bound a LID to
+    the admin's own number, the admin's bridge then answered that sender as the admin, and
+    every send to the admin's number went to that sender. The number is the caller's word,
+    whitelist and contact book included (both are self-asserted), so "own" is safe only where
+    the binding acts on nobody else's lane.
+
+    The LID must be digits and ``@lid``, the number 7 to 15 digits in the form every send
+    uses (`whatsapp_store_key`), and the two must differ: a LID whose digits are the number's
+    is not a LID (the bridge refuses to learn one too)."""
+    from vaf.core.contacts_store import whatsapp_store_key
+    from vaf.core.shown_text import phone_digits
+
     lid_jid = (body.lid_jid or "").strip()
-    phone = (body.phone_number or "").strip()
-    if not lid_jid or "@lid" not in lid_jid:
-        raise HTTPException(status_code=400, detail="lid_jid required (e.g. 491701234567@lid)")
+    if not _LID_JID.fullmatch(lid_jid):
+        raise HTTPException(status_code=400, detail="lid_jid must be the chat's WhatsApp ID: digits followed by @lid (e.g. 123456789012345@lid).")
+    plain = phone_digits(body.phone_number or "")
+    phone = whatsapp_store_key(plain) if plain else None
     if not phone:
-        raise HTTPException(status_code=400, detail="phone_number required (E.164)")
-    if not phone.startswith("+"):
-        phone = "+" + phone
+        raise HTTPException(status_code=400, detail="phone_number must be a phone number of 7 to 15 digits in international form (e.g. +491701234567).")
+    if lid_jid.split("@", 1)[0] == phone[1:]:
+        raise HTTPException(status_code=400, detail="This ID is the number itself, not a WhatsApp LID; nothing to assign.")
+    if caller_is_admin(request):
+        who = get_current_vaf_user(request)
+        scope = None
+    else:
+        who = _own_caller(request)
+        scope = who["user_scope_id"]
     config = Config.load()
     wc = config.get("whatsapp_config") or {}
-    if not isinstance(wc, dict):
-        wc = {}
-    lid_map = dict(wc.get("lid_to_e164") or {})
-    previous = str(lid_map.get(lid_jid) or "").strip()
-    lid_map[lid_jid] = phone
-    wc["lid_to_e164"] = lid_map
+    wc = dict(wc) if isinstance(wc, dict) else {}
+    if scope is None:
+        lid_map = dict(wc.get("lid_to_e164") or {}) if isinstance(wc.get("lid_to_e164"), dict) else {}
+        previous = str(lid_map.get(lid_jid) or "").strip()
+        lid_map[lid_jid] = phone
+        wc["lid_to_e164"] = lid_map
+    else:
+        by_scope = dict(wc.get("lid_to_e164_by_scope") or {}) if isinstance(wc.get("lid_to_e164_by_scope"), dict) else {}
+        own = dict(by_scope.get(scope) or {}) if isinstance(by_scope.get(scope), dict) else {}
+        if lid_jid not in own and len(own) >= LID_BINDINGS_PER_ACCOUNT:
+            raise HTTPException(
+                status_code=409,
+                detail=f"This account already has {LID_BINDINGS_PER_ACCOUNT} assigned chats. Ask an admin to assign this one.",
+            )
+        previous = str(own.get(lid_jid) or "").strip()
+        own[lid_jid] = phone
+        by_scope[scope] = own
+        wc["lid_to_e164_by_scope"] = by_scope
     config["whatsapp_config"] = wc
     Config.save(config)
     # Binding a LID chat to an allowed number gives that chat the number's access; the
-    # same binding written again changes nothing and records nothing.
+    # same binding written again changes nothing and records nothing. `path` is the LID, so
+    # the log names who made each binding.
     if previous != phone:
         log_security_event("channel_paired", channel="whatsapp",
-                           username=str(get_current_vaf_user(request).get("username") or ""),
-                           path=lid_jid, detail=f"lid {lid_jid} as {phone}" + (f" (was {previous})" if previous else ""))
-    return {"status": "assigned", "message": f"LID {lid_jid} assigned to {phone}. Bridge will accept messages from this chat.", "lid_jid": lid_jid, "phone_number": phone}
+                           username=str(who.get("username") or ""),
+                           path=lid_jid, detail=f"lid {lid_jid} as {phone}" + (f" (was {previous})" if previous else "")
+                           + ("" if scope is None else " (this account only)"))
+    if scope is None:
+        message = f"LID {lid_jid} assigned to {phone} for every account. The bridge will accept messages from this chat."
+    else:
+        message = f"LID {lid_jid} assigned to {phone} for this account. Your bridge will accept messages from this chat."
+    return {"status": "assigned", "message": message, "lid_jid": lid_jid, "phone_number": phone}
 
 
 @router.post("/sync-chats")

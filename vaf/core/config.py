@@ -809,7 +809,7 @@ class Config:
         # account), never the linked number itself. `reply_window_hours`: a number the agent
         # wrote to may answer for this long without being a contact (0 = off).
         "inbox_waits_threshold": 0.6,                                # Inbox: an inbound message waits for the person when its reply-expectation score (0..1, from the text, no model: question marks and request cues raise it, a thank-you or goodbye lowers it) reaches this. Lower = more chats wait, higher = fewer.
-        "whatsapp_config": None,                                   # { enabled, inbound_to_agent, reply_window_hours (72), chat_sync_interval_sec (600), whitelist: [{ phone_number, user_scope_id, vaf_username }], lid_to_e164: {}, owner_control: {}, chat_activity: [] }
+        "whatsapp_config": None,                                   # { enabled, inbound_to_agent, reply_window_hours (72), chat_sync_interval_sec (600), whitelist: [{ phone_number, user_scope_id, vaf_username }], lid_to_e164: {}, lid_to_e164_by_scope: { <scope>: {} }, owner_control: {}, chat_activity: [] }
         # Per-user connection toggles (sliders). Only non-admins use this; admin uses global telegram/whatsapp/discord_config.enabled.
         "connection_enabled_by_scope": None,                       # { "<user_scope_id>": { "telegram": bool, "whatsapp": bool, "discord": bool } }
         # Channel ingress policy (default-deny / explicit pairing). `mode` has one value,
@@ -1564,7 +1564,8 @@ class Config:
     # so a page loaded before a pairing was removed wrote the pairing back (measured: all ten
     # route-written sub-keys returned on both lanes, for the local admin and a second admin).
     # A settings field inside one of these blocks must not take one of these names: a save
-    # would ignore it.
+    # would ignore it. Which CALLER may drive each route that writes one of them (admin, own
+    # entries, own lane) is pinned per route by tests/test_channel_route_write_rights.py.
     ROUTE_OWNED_SUBKEYS = {
         "telegram_config": {
             "whitelist": "channel_pairing.pair_telegram_account",
@@ -1575,7 +1576,10 @@ class Config:
         },
         "whatsapp_config": {
             "whitelist": "whatsapp whitelist routes and bridge",
-            "lid_to_e164": "whatsapp lid-assign route, dashboard and bridge",
+            # The shared map applies to every account: an admin's assignment and the bridge.
+            "lid_to_e164": "whatsapp lid-assign route (admin) and bridge",
+            # Everybody else's assignment, keyed by scope, read by their own lane only.
+            "lid_to_e164_by_scope": "whatsapp lid-assign route",
             "owner_control": "whatsapp_bridge._dispatch_bridge_event",
             "chat_activity": "messaging_connections.append_channel_activity",
         },

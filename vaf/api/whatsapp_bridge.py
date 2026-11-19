@@ -53,6 +53,8 @@ _chat_sync_thread: Optional[threading.Thread] = None
 _bridge_stop = threading.Event()
 _processes: Dict[str, subprocess.Popen] = {}
 _process_lock = threading.Lock()
+# What a send answers when the account has no Node process of its own (see _process_for).
+NO_PROCESS_FOR_ACCOUNT = "No WhatsApp process runs for this account. Link WhatsApp in Settings, Connections."
 _outgoing_queue: Optional[queue.Queue] = None
 # username -> user_scope_id of every running process, so the sender loop stores outbound
 # rows in the same per-scope store the inbound lane writes to.
@@ -867,6 +869,81 @@ def spawn_node_bridge(node: str, wa_js: Path, auth_dir: Path) -> subprocess.Pope
     return proc
 
 
+def _account_scope(username: str) -> str:
+    """The scope an account name stands for here: the one its running process was started
+    with, else the account directory's answer; an empty name is the local admin."""
+    name = (username or "").strip()
+    if not name:
+        from vaf.core.config import get_local_admin_scope_id
+        return str(get_local_admin_scope_id() or "").strip()
+    known = _scope_by_user.get(name)
+    if known:
+        return str(known).strip()
+    from vaf.core.config import scope_id_for_username
+    return str(scope_id_for_username(name) or "").strip()
+
+
+def _process_for(username: str) -> Tuple[Optional[str], Optional[subprocess.Popen]]:
+    """(name, process) of the Node process that acts for this account, or (None, None).
+
+    The account's own live process first. Otherwise the only running process, but ONLY when
+    it was started for the same scope (the same account under another spelling of its name).
+    Every lane that writes to a Node process asks here, and asks without holding
+    `_process_lock` (this takes it). Measured on the twelve hand copies this replaced, which
+    took the only process whoever it belonged to: an account without a linked WhatsApp sent
+    from another account's agent number, read its chat list and loaded its history."""
+    name = (username or "").strip()
+    with _process_lock:
+        own = _processes.get(name) if name else None
+        if own is not None and own.poll() is None:
+            return name, own
+        only_name, only = next(iter(_processes.items())) if len(_processes) == 1 else (None, None)
+        only_scope = str(_scope_by_user.get(only_name) or "").strip() if only_name else ""
+    if only is None or only.poll() is not None or not only_scope:
+        return None, None
+    if _account_scope(name) != only_scope:
+        return None, None
+    return only_name, only
+
+
+def _preferred_lid_jid(username: str, chat_jid: str, kind: str) -> str:
+    """The JID a send to `chat_jid` goes to: the genuine LID this account's map binds to
+    EXACTLY the recipient's number (some LID-migrated accounts receive voice, and some text,
+    only on their LID), else `chat_jid` itself.
+
+    The match is `_lid_keys_for_digits`, the exact canonical number. The copies this replaced
+    matched by suffix in both directions, so a LID mapped to "+1" took every send to a number
+    ending in 1 (measured: ten bindings to +0 ... +9 caught three unrelated recipients). A
+    LID whose digits equal the number's is not a LID (WhatsApp sends `<number>@lid` at times)
+    and is skipped, as is a key that is not digits."""
+    jid = (chat_jid or "").strip()
+    if not jid or jid.endswith("@lid"):
+        return chat_jid
+    digits = _phone_digits_canonical(jid)
+    if not digits:
+        return chat_jid
+    try:
+        from vaf.core.contacts_store import _lid_keys_for_digits, whatsapp_lid_map
+        candidates = _lid_keys_for_digits([digits], whatsapp_lid_map(_account_scope(username) or None))
+    except Exception:
+        return chat_jid
+    for lid in candidates:
+        lid_digits = lid.split("@", 1)[0]
+        if not lid_digits.isascii() or not lid_digits.isdigit():
+            continue
+        if lid_digits == digits:
+            logger.info("WhatsApp %s: skipping fake LID %s (lid digits == phone digits)", kind, lid)
+            continue
+        logger.info("WhatsApp %s: resolved %s → %s via the LID map", kind, chat_jid, lid)
+        try:
+            from vaf.core.log_helper import log_whatsapp_reply
+            log_whatsapp_reply(f"{kind.upper()}_LID_RESOLVE {chat_jid} → {lid}")
+        except Exception:
+            pass
+        return lid
+    return chat_jid
+
+
 def _sender_loop() -> None:
     """Read (username, chat_jid, text, voice_path?, req_id?, document_path?, response_path?, origin?)
     from the queue and write to that user's Node stdin. `origin` is "owner" when the person
@@ -894,17 +971,15 @@ def _sender_loop() -> None:
                 continue
             if not voice_path and not text and not document_path:
                 continue
-            with _process_lock:
-                proc = _processes.get(username)
-                if (not proc or proc.poll() is not None) and len(_processes) == 1:
-                    proc = next(iter(_processes.values()))
+            _, proc = _process_for(username)
             if not proc or proc.poll() is not None:
+                # Never another account's process: that would send from its agent number.
                 logger.warning("WhatsApp process for %s not running, dropped reply", username)
                 if req_id:
                     _complete_send_request(
                         req_id,
                         False,
-                        "Process not running (bridge may have restarted)",
+                        NO_PROCESS_FOR_ACCOUNT,
                         response_path=response_path,
                     )
                 try:
@@ -919,36 +994,7 @@ def _sender_loop() -> None:
                     # For voice messages, prefer @lid JID over @s.whatsapp.net when known.
                     # Some WhatsApp accounts (privacy-migrated) only receive voice via @lid;
                     # text works with @s.whatsapp.net but voice does not.
-                    voice_jid = chat_jid
-                    if not (chat_jid or "").endswith("@lid"):
-                        try:
-                            from vaf.core.config import Config as _Cfg
-                            _wc = _Cfg.get("whatsapp_config") or {}
-                            _lid_map = (_wc.get("lid_to_e164") or {}) if isinstance(_wc, dict) else {}
-                            # Build reverse map: E.164 digits → @lid JID
-                            _jid_digits = "".join(c for c in (chat_jid or "").split("@")[0] if c.isdigit())
-                            for _lid, _e164 in _lid_map.items():
-                                _e164_digits = "".join(c for c in str(_e164) if c.isdigit())
-                                if not (_e164_digits and _jid_digits):
-                                    continue
-                                if not (_e164_digits.endswith(_jid_digits) or _jid_digits.endswith(_e164_digits)):
-                                    continue
-                                # Only use genuine LIDs: a real LID has different digits than the phone number.
-                                # If lid_digits == phone_digits it was incorrectly stored (phone@lid, not a real LID).
-                                _lid_digits = "".join(c for c in (_lid or "").split("@")[0] if c.isdigit())
-                                if _lid_digits == _jid_digits:
-                                    logger.info("WhatsApp voice: skipping fake LID %s (lid digits == phone digits)", _lid)
-                                    continue
-                                voice_jid = _lid
-                                logger.info("WhatsApp voice: resolved %s → %s via lid_to_e164", chat_jid, voice_jid)
-                                try:
-                                    from vaf.core.log_helper import log_whatsapp_reply
-                                    log_whatsapp_reply(f"VOICE_LID_RESOLVE {chat_jid} → {voice_jid}")
-                                except Exception:
-                                    pass
-                                break
-                        except Exception:
-                            pass
+                    voice_jid = _preferred_lid_jid(username, chat_jid, "voice")
                     p = Path(voice_path)
                     if p.is_file():
                         size = p.stat().st_size
@@ -989,34 +1035,7 @@ def _sender_loop() -> None:
             else:
                 # For text messages, also prefer @lid JID when known (same reason as voice).
                 # Some LID-migrated WhatsApp accounts only reliably receive messages via @lid JID.
-                text_jid = chat_jid
-                if not (chat_jid or "").endswith("@lid"):
-                    try:
-                        from vaf.core.config import Config as _Cfg
-                        _wc = _Cfg.get("whatsapp_config") or {}
-                        _lid_map = (_wc.get("lid_to_e164") or {}) if isinstance(_wc, dict) else {}
-                        _jid_digits = "".join(c for c in (chat_jid or "").split("@")[0] if c.isdigit())
-                        for _lid, _e164 in _lid_map.items():
-                            _e164_digits = "".join(c for c in str(_e164) if c.isdigit())
-                            if not (_e164_digits and _jid_digits):
-                                continue
-                            if not (_e164_digits.endswith(_jid_digits) or _jid_digits.endswith(_e164_digits)):
-                                continue
-                            # Only use genuine LIDs (real LID digits ≠ phone digits).
-                            _lid_digits = "".join(c for c in (_lid or "").split("@")[0] if c.isdigit())
-                            if _lid_digits == _jid_digits:
-                                logger.info("WhatsApp text: skipping fake LID %s (lid digits == phone digits)", _lid)
-                                continue
-                            text_jid = _lid
-                            logger.info("WhatsApp text: resolved %s → %s via lid_to_e164", chat_jid, text_jid)
-                            try:
-                                from vaf.core.log_helper import log_whatsapp_reply
-                                log_whatsapp_reply(f"TEXT_LID_RESOLVE {chat_jid} → {text_jid}")
-                            except Exception:
-                                pass
-                            break
-                    except Exception:
-                        pass
+                text_jid = _preferred_lid_jid(username, chat_jid, "text")
                 chunks = chunk_whatsapp_text(text)
                 for i, chunk in enumerate(chunks):
                     cmd = {"cmd": "send", "to": text_jid, "text": chunk}
@@ -1060,18 +1079,18 @@ def _sender_loop() -> None:
             logger.exception("WhatsApp sender error: %s", e)
 
 
-def _jid_to_chat_id(username: str, chat_jid: str) -> str:
-    """The store key (E.164 display form) for a JID. An @lid resolves through the persisted
-    lid_to_e164 map or the Node's mapping; an unresolved @lid has no key, because a LID is
-    not a number and must not be matched against one."""
+def _jid_to_chat_id(username: str, chat_jid: str, user_scope_id: Optional[str] = None) -> str:
+    """The store key (E.164 display form) for a JID. An @lid resolves through the account's
+    persisted LID map (`whatsapp_lid_map`) or the Node's mapping; an unresolved @lid has no
+    key, because a LID is not a number and must not be matched against one."""
     jid = (chat_jid or "").strip()
     if not jid:
         return ""
     if jid.endswith("@lid"):
         try:
-            wc = Config.get("whatsapp_config") or {}
-            lid_map = (wc.get("lid_to_e164") or {}) if isinstance(wc, dict) else {}
-            mapped = str(lid_map.get(jid) or "").strip()
+            from vaf.core.contacts_store import whatsapp_lid_map
+            scope = str(user_scope_id or "").strip() or _account_scope(username)
+            mapped = str(whatsapp_lid_map(scope or None).get(jid) or "").strip()
         except Exception:
             mapped = ""
         if not mapped:
@@ -1097,7 +1116,7 @@ def _is_reply_allowed(username: str, chat_jid: str, user_scope_id: Optional[str]
     from vaf.core.config import scope_id_for_username
     uname = (username or "").strip() or "admin"
     scope = str(user_scope_id).strip() if user_scope_id else None
-    chat_id = _jid_to_chat_id(uname, chat_jid)
+    chat_id = _jid_to_chat_id(uname, chat_jid, user_scope_id=scope)
     if not chat_id:
         return False
     # A missing scope is resolved from the NAME (the admin's own scope for the admin, a
@@ -1194,15 +1213,8 @@ def send_whatsapp_with_confirmation(
             "a contact who can reach the assistant, nor an open conversation. "
             "Register the number in Settings → Connections → WhatsApp, or address a contact with to_phone."
         )
-    use_external_ipc = _outgoing_queue is None
-    with _process_lock:
-        proc = _processes.get(username)
-        if (not proc or proc.poll() is not None) and len(_processes) == 1:
-            proc = next(iter(_processes.values()), None)
-        if not proc or proc.poll() is not None:
-            use_external_ipc = True
-        else:
-            use_external_ipc = False
+    _, proc = _process_for(username)
+    use_external_ipc = not proc or proc.poll() is not None
     if use_external_ipc:
         state = _read_bridge_state()
         if not state.get("running"):
@@ -1459,12 +1471,11 @@ def _not_a_persons_chat(jid: str) -> bool:
             or j.endswith("@g.us"))
 
 
-def _lid_map_e164(jid: str) -> str:
-    """The configured lid_to_e164 mapping for a JID, or an empty string."""
+def _lid_map_e164(jid: str, user_scope_id: Optional[str]) -> str:
+    """The number this account's LID map (`whatsapp_lid_map`) binds a JID to, or ""."""
     try:
-        wc = Config.get("whatsapp_config") or {}
-        lid_map = wc.get("lid_to_e164") if isinstance(wc, dict) else None
-        e164 = str((lid_map or {}).get(str(jid)) or "").strip() if isinstance(lid_map, dict) else ""
+        from vaf.core.contacts_store import whatsapp_lid_map
+        e164 = str(whatsapp_lid_map(user_scope_id).get(str(jid)) or "").strip()
         return ("+" + e164) if e164 and not e164.startswith("+") else e164
     except Exception:
         return ""
@@ -1662,7 +1673,7 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
                 msg_ts = _payload_ts({"ts": obj.get("msg_ts")}) or _payload_ts(obj)
                 # The same key the inbound path derives: the resolved number first, then the
                 # configured LID map, then the JID's own digits; an unresolved @lid keeps the JID.
-                raw = str(obj.get("fromE164") or "").strip() or _lid_map_e164(from_jid) or _jid_to_e164(from_jid) or ""
+                raw = str(obj.get("fromE164") or "").strip() or _lid_map_e164(from_jid, user_scope_id) or _jid_to_e164(from_jid) or ""
                 chat_id = (_to_e164_display(raw) if raw else "") or str(from_jid)
                 append_message(username, chat_id, body, direction="out",
                                sender_jid=OWNER_SENDER, message_id=str(obj.get("message_id") or "") or None,
@@ -1742,21 +1753,14 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
             except Exception:
                 pass
             return
-        # Resolve unresolved @lid via manual config (lid_to_e164) so known contacts like Bob can still be accepted when Node doesn't send fromE164
+        # Resolve an unresolved @lid through this account's LID map (the shared one plus its
+        # own assignments, never another account's), so a known contact is still accepted
+        # when the Node sends no fromE164.
         resolved_e164_from_config: Optional[str] = None
         if (from_jid or "").endswith("@lid") and not from_e164:
-            try:
-                wc = Config.get("whatsapp_config") or {}
-                if isinstance(wc, dict):
-                    lid_map = wc.get("lid_to_e164") or {}
-                    if isinstance(lid_map, dict):
-                        resolved_e164_from_config = (lid_map.get(str(from_jid)) or "").strip()
-                        if resolved_e164_from_config and not resolved_e164_from_config.startswith("+"):
-                            resolved_e164_from_config = "+" + resolved_e164_from_config
-            except Exception:
-                pass
-        # Store key: fromE164 when available (resolved @lid from Node); else manual lid_to_e164
-        # mapping; else derived from the JID. An unresolved @lid keeps the JID as chat_id.
+            resolved_e164_from_config = _lid_map_e164(str(from_jid), user_scope_id) or None
+        # Store key: fromE164 when available (resolved @lid from Node); else the LID map;
+        # else derived from the JID. An unresolved @lid keeps the JID as chat_id.
         raw = from_e164 or resolved_e164_from_config or _jid_to_e164(from_jid) or ""
         chat_id = _to_e164_display(raw) if raw else str(from_jid or "")
         if not chat_id:
@@ -2270,27 +2274,13 @@ def has_process_for_user(username: str) -> bool:
     if not is_bridge_running():
         return False
     uname = (username or "").strip() or "admin"
-    with _process_lock:
-        proc = _processes.get(uname)
-        if proc and proc.poll() is None and proc.stdin:
-            return True
-        if len(_processes) == 1:
-            p = next(iter(_processes.values()))
-            return p.poll() is None and p.stdin is not None
-        return False
+    _, proc = _process_for(uname)
+    return bool(proc is not None and proc.poll() is None and proc.stdin)
 
 
 def _request_chats(username: str) -> Optional[str]:
     """Send getChats to the Node process. Returns the username whose process was used (for lookup), or None."""
-    with _process_lock:
-        proc = _processes.get(username)
-        target_username = username
-        if not proc or proc.poll() is not None or not proc.stdin:
-            if len(_processes) == 1:
-                target_username = next(iter(_processes.keys()))
-                proc = _processes.get(target_username)
-            else:
-                proc = None
+    target_username, proc = _process_for(username)
     if proc and proc.poll() is None and proc.stdin:
         try:
             proc.stdin.write(json.dumps({"cmd": "getChats"}) + "\n")
@@ -2303,15 +2293,7 @@ def _request_chats(username: str) -> Optional[str]:
 
 def _request_sync_chats(username: str) -> Optional[str]:
     """Send syncChats to the Node (triggers Baileys fetchMessageHistory so full chat list is synced). Returns username used, or None."""
-    with _process_lock:
-        proc = _processes.get(username)
-        target_username = username
-        if not proc or proc.poll() is not None or not proc.stdin:
-            if len(_processes) == 1:
-                target_username = next(iter(_processes.keys()))
-                proc = _processes.get(target_username)
-            else:
-                proc = None
+    target_username, proc = _process_for(username)
     if proc and proc.poll() is None and proc.stdin:
         try:
             proc.stdin.write(json.dumps({"cmd": "syncChats"}) + "\n")
@@ -2396,10 +2378,7 @@ def fetch_older_messages(
         # instead of asking: the first stored message (an inbound, a send) is the cursor.
         out.update({"ok": True, "no_cursor": True})
         return out
-    with _process_lock:
-        proc = _processes.get(uname)
-        if (not proc or proc.poll() is not None or not proc.stdin) and len(_processes) == 1:
-            proc = next(iter(_processes.values()))
+    _, proc = _process_for(uname)
     if not proc or proc.poll() is not None or not proc.stdin:
         out["error"] = "WhatsApp bridge is not running."
         return out
@@ -2488,10 +2467,7 @@ def get_avatar(username: str, chat_jid: str, wait_timeout: float = 8.0) -> Optio
             return None
     except OSError:
         pass
-    with _process_lock:
-        proc = _processes.get(uname)
-        if (not proc or proc.poll() is not None or not proc.stdin) and len(_processes) == 1:
-            proc = next(iter(_processes.values()))
+    _, proc = _process_for(uname)
     if not proc or proc.poll() is not None or not proc.stdin:
         return None
     with _avatar_query_lock:
@@ -2542,10 +2518,7 @@ def resync_contacts(username: str, wait_timeout: float = 60.0, user_scope_id: Op
     app-state contact collection; see `resyncContacts` in wa-bridge.js). Returns
     (ok, error). Slow by nature: WhatsApp streams the whole collection."""
     uname = (username or "").strip() or "admin"
-    with _process_lock:
-        proc = _processes.get(uname)
-        if (not proc or proc.poll() is not None or not proc.stdin) and len(_processes) == 1:
-            proc = next(iter(_processes.values()))
+    _, proc = _process_for(uname)
     if not proc or proc.poll() is not None or not proc.stdin:
         return False, "WhatsApp bridge is not running."
     req_id = str(uuid.uuid4())
@@ -2602,10 +2575,7 @@ def _fetch_names_per_chat(username: str, user_scope_id: Optional[str]) -> int:
             newest = []
         if not newest or not newest[0].get("message_id") or str(newest[0]["message_id"]).startswith("_"):
             continue
-        with _process_lock:
-            proc = _processes.get(uname)
-            if (not proc or proc.poll() is not None or not proc.stdin) and len(_processes) == 1:
-                proc = next(iter(_processes.values()))
+        _, proc = _process_for(uname)
         if not proc or proc.poll() is not None or not proc.stdin:
             break
         cmd = {
@@ -2630,15 +2600,7 @@ def _fetch_names_per_chat(username: str, user_scope_id: Optional[str]) -> int:
 
 def _request_lid_mappings(username: str) -> Optional[str]:
     """Ask Node for LID→E.164 from Baileys lidMapping. Returns username used for lookup."""
-    with _process_lock:
-        proc = _processes.get(username)
-        target_username = username
-        if not proc or proc.poll() is not None or not proc.stdin:
-            if len(_processes) == 1:
-                target_username = next(iter(_processes.keys()))
-                proc = _processes.get(target_username)
-            else:
-                proc = None
+    target_username, proc = _process_for(username)
     if proc and proc.poll() is None and proc.stdin:
         try:
             proc.stdin.write(json.dumps({"cmd": "getLidMappings"}) + "\n")
@@ -2651,15 +2613,7 @@ def _request_lid_mappings(username: str) -> Optional[str]:
 
 def _request_contacts(username: str) -> Optional[str]:
     """Ask the Node for its named numbers. Returns the username whose process answered, or None."""
-    with _process_lock:
-        proc = _processes.get(username)
-        target_username = username
-        if not proc or proc.poll() is not None or not proc.stdin:
-            if len(_processes) == 1:
-                target_username = next(iter(_processes.keys()))
-                proc = _processes.get(target_username)
-            else:
-                proc = None
+    target_username, proc = _process_for(username)
     if proc and proc.poll() is None and proc.stdin:
         try:
             proc.stdin.write(json.dumps({"cmd": "getContacts"}) + "\n")
@@ -2715,15 +2669,7 @@ def get_connection_status(username: str, wait_timeout: float = 5.0) -> bool:
     if not is_bridge_running():
         return False
     uname = (username or "").strip() or "admin"
-    with _process_lock:
-        proc = _processes.get(uname)
-        target = uname
-        if not proc or proc.poll() is not None or not proc.stdin:
-            if len(_processes) == 1:
-                target = next(iter(_processes.keys()))
-                proc = _processes.get(target)
-            else:
-                proc = None
+    target, proc = _process_for(uname)
     if not proc or proc.poll() is not None or not proc.stdin:
         return False
     with _connection_lock:

@@ -694,8 +694,8 @@ def _session_id(channel: str, chat_id: str, username: Optional[str]) -> str:
 
 
 def _lid_needs_assign(chat_id: str, lid_map: Dict[str, Any]) -> bool:
-    """A WhatsApp chat keyed by a LID that `whatsapp_config.lid_to_e164` (resolved once per
-    listing by the caller) does not map to a number yet."""
+    """A WhatsApp chat keyed by a LID that the account's LID map (`whatsapp_lid_map`, resolved
+    once per listing by the caller) does not map to a number yet."""
     cid = str(chat_id or "")
     if "@lid" not in cid:
         return False
@@ -715,11 +715,10 @@ def _messenger_rows(username: Optional[str], user_scope_id: Optional[str], chann
     # which is every chat once the channel switch is off.
     lid_map: Dict[str, Any] = {}
     try:
-        from vaf.core.config import Config
         from vaf.core.messaging_connections import whatsapp_inbound_to_agent
-        wc = Config.get("whatsapp_config") or {}
+        from vaf.core.contacts_store import whatsapp_lid_map
         whatsapp_off = not whatsapp_inbound_to_agent()
-        lid_map = dict((wc.get("lid_to_e164") or {}) if isinstance(wc, dict) else {})
+        lid_map = whatsapp_lid_map(user_scope_id)
     except Exception:
         whatsapp_off = False
     for channel in channels:

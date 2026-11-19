@@ -1032,6 +1032,10 @@ def contact_timeline(
                           "direction": None, "title": (str(shown).strip() or None) if shown else None,
                           "body": created["source"], "source": created["source"], "ref": {"source": created["source"]}})
 
+    # The LID bindings of this account's own lane count too: its messages to a LID-addressed
+    # person sit under that LID in its own store.
+    if lid_map is None:
+        lid_map = whatsapp_lid_map(user_scope_id)
     endpoints = contact_endpoints(contact, with_lids=True, lid_map=lid_map) if ({"message", "mail"} & want) else {}
 
     if "message" in want:
@@ -1103,6 +1107,8 @@ def contact_activity_stats(
     STORED message (history loads on demand), so the window labels it as such; the true
     first-seen date is contact_created. Same channel and identity rules as contact_timeline."""
     out: Dict[str, Any] = {"messages": 0, "from_agent": 0, "first_ts": None, "last_ts": None, "by_channel": {}}
+    if lid_map is None:
+        lid_map = whatsapp_lid_map(user_scope_id)
     endpoints = contact_endpoints(contact, with_lids=True, lid_map=lid_map)
     for chan in _MESSAGE_CHANNELS:
         keys = endpoints.get(chan) or []
@@ -1302,26 +1308,55 @@ def get_contacts_denied_assistant(username: Optional[str] = None, user_scope_id:
 # keys, so the dashboard, the bridge, the cross-chat filter and the timeline never build
 # a key by hand again.
 
+def whatsapp_lid_map(user_scope_id: Optional[str] = None) -> Dict[str, Any]:
+    """The LID -> number map one account's WhatsApp lane reads: the installation's shared map
+    (`whatsapp_config.lid_to_e164`) overlaid with that account's own bindings
+    (`whatsapp_config.lid_to_e164_by_scope[user_scope_id]`). Without a scope it is the shared
+    map alone. A shape that is not a dict counts as empty; values come back as stored.
+
+    The ONE reader of both maps: the bridge's inbound and send paths, the store's LID lookup,
+    the contact lookup, the inbox and the dashboard all ask here, so the scope rule holds in
+    every one of them at once. The shared map applies to every account, which is why only an
+    admin's assignment and a mapping WhatsApp itself supplied are written there; anybody
+    else's assignment lands in their own map and acts on their own lane only. Measured on the
+    single map this replaced: a non-admin bound a LID to the admin's own number, the admin's
+    bridge answered that sender as the admin, and every send to the admin's number went to it."""
+    try:
+        from vaf.core.config import Config
+        wc = Config.get("whatsapp_config") or {}
+    except Exception:
+        return {}
+    if not isinstance(wc, dict):
+        return {}
+    shared = wc.get("lid_to_e164")
+    out: Dict[str, Any] = dict(shared) if isinstance(shared, dict) else {}
+    scope = str(user_scope_id or "").strip()
+    if scope:
+        by_scope = wc.get("lid_to_e164_by_scope")
+        own = by_scope.get(scope) if isinstance(by_scope, dict) else None
+        if isinstance(own, dict):
+            out.update(own)
+    return out
+
+
 def _lid_keys_for_digits(digit_keys: List[str], lid_map: Optional[Dict[str, Any]]) -> List[str]:
     """The "<lid>@lid" jids whose mapped number is one of these canonical digit strings.
     Agent-sent messages to a LID-addressed account are stored under the raw lid jid, so a
-    person's messages can sit under two keys; the persisted lid_to_e164 map joins them."""
+    person's messages can sit under two keys; the persisted LID map joins them. Without a
+    `lid_map` the shared map is read (`whatsapp_lid_map(None)`)."""
     if lid_map is None:
-        try:
-            from vaf.core.config import Config
-            wc = Config.get("whatsapp_config") or {}
-            lid_map = (wc.get("lid_to_e164") or {}) if isinstance(wc, dict) else {}
-        except Exception:
-            lid_map = {}
+        lid_map = whatsapp_lid_map(None)
     if not isinstance(lid_map, dict) or not lid_map:
         return []
     wanted = set(digit_keys)
     out: List[str] = []
     for lid, e164 in lid_map.items():
         lid_s = str(lid or "").strip()
-        if not lid_s.endswith("@lid"):
+        # A number is a string (an int from a hand edit reads the same); anything else is
+        # not a number, whatever digits its printed form carries.
+        if not lid_s.endswith("@lid") or isinstance(e164, bool) or not isinstance(e164, (str, int)):
             continue
-        if phone_digits_canonical(str(e164 or "")) in wanted and lid_s not in out:
+        if phone_digits_canonical(str(e164)) in wanted and lid_s not in out:
             out.append(lid_s)
     return out
 
@@ -1419,15 +1454,14 @@ def find_contact_by_channel(
     if chan == "whatsapp":
         if raw.endswith("@lid"):
             # A LID is an opaque id, not a number: its digits must never be read as a phone.
-            # The persisted map (`whatsapp_config.lid_to_e164`, written by the dashboard's
-            # assignment and inference) says which number it stands for; without an entry
-            # there is no key, so the lookup finds nobody rather than a wrong somebody. The
-            # bridge's live Node mappings are its own and are resolved there before it asks
-            # here; the headless runner and the admission ask with the raw JID and land here.
+            # The persisted map of this account's lane (`whatsapp_lid_map`: the shared map an
+            # admin's assignment or the bridge writes, overlaid with this account's own
+            # assignments) says which number it stands for; without an entry there is no key,
+            # so the lookup finds nobody rather than a wrong somebody. The bridge's live Node
+            # mappings are its own and are resolved there before it asks here; the headless
+            # runner and the admission ask with the raw JID and land here.
             try:
-                from vaf.core.config import Config
-                wc = Config.get("whatsapp_config") or {}
-                mapped = str(((wc.get("lid_to_e164") or {}) if isinstance(wc, dict) else {}).get(raw) or "").strip()
+                mapped = str(whatsapp_lid_map(user_scope_id).get(raw) or "").strip()
             except Exception:
                 mapped = ""
             if not mapped:

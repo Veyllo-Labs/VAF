@@ -974,27 +974,24 @@ def get_chat_messages(
     channel: Optional[str] = "whatsapp",
     before_ts: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
-    """Get messages for a chat, newest first. When chat_id is a @lid, also look up lid_to_e164 so messages stored under the resolved E.164 are found.
+    """Get messages for a chat, newest first. When chat_id is a @lid, also look it up in the account's LID map (contacts_store.whatsapp_lid_map) so messages stored under the resolved E.164 are found.
     Each row carries its message_id (the channel's own id, or the store's `_<ts>_<dir>` fallback key),
     so a reader that pages by time can tell two messages of the same second apart.
     channel: filter to one channel ('whatsapp' default, 'telegram', ...); None/'' = all channels.
     before_ts: only rows at or before this unix time (inclusive), the cursor a paged reader
     passes so page two starts where page one ended instead of at the newest row again."""
     import sqlite3
-    from vaf.core.config import Config
     init_store(username, user_scope_id)
     chat_ids_to_try = [chat_id or ""]
     if (chat_id or "").strip().endswith("@lid"):
         try:
-            wc = Config.get("whatsapp_config") or {}
-            if isinstance(wc, dict):
-                lid_map = wc.get("lid_to_e164") or {}
-                if isinstance(lid_map, dict):
-                    resolved = (lid_map.get(chat_id.strip()) or "").strip()
-                    if resolved and not resolved.startswith("+"):
-                        resolved = "+" + resolved
-                    if resolved:
-                        chat_ids_to_try.append(resolved)
+            # This account's lane: the shared map plus its own assignments, never another's.
+            from vaf.core.contacts_store import whatsapp_lid_map
+            resolved = str(whatsapp_lid_map(user_scope_id).get(chat_id.strip()) or "").strip()
+            if resolved and not resolved.startswith("+"):
+                resolved = "+" + resolved
+            if resolved:
+                chat_ids_to_try.append(resolved)
         except Exception:
             pass
     conn = _get_conn(username, user_scope_id)

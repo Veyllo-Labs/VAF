@@ -92,6 +92,9 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
     // Set the moment Cancel is pressed, before its DELETE goes out: a poll answer that arrives
     // after the withdrawal ("pending: false") must not read as an invite that ended by itself.
     const relayCancelRef = useRef(false);
+    // One number per invite flow, raised when an invite starts, is cancelled or the window
+    // closes: a reload that finishes after that belongs to a flow nobody looks at any more.
+    const relayGenRef = useRef(0);
     const [note, setNote] = useState<string | null>(null);
     // The jump id waiting to be checked against the loaded sessions. A ref, consumed once,
     // so the check runs on the load that follows the jump and not on every later refresh
@@ -152,10 +155,11 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
     useEffect(() => { if (isOpen) fetchDashboard(); }, [isOpen, fetchDashboard]);
     // A closed window stops waiting but leaves the link live: closing it is what one does after
     // sending the link, and the person may open it later. Cancel is what takes a link back.
-    useEffect(() => { if (!isOpen) { setRelayInvite(null); setRelayInviteEnded(false); } }, [isOpen]);
+    useEffect(() => { if (!isOpen) { relayGenRef.current += 1; setRelayInvite(null); setRelayInviteEnded(false); } }, [isOpen]);
 
     const startRelayInvite = async () => {
         const relayContacts = data?.relay_whitelist;
+        relayGenRef.current += 1;
         relayCancelRef.current = false;
         setRelayError(null);
         setRelayInviteCopied(false);
@@ -184,9 +188,11 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
         // new contact came with it. Not after Cancel, and not once the window closed.
         const finishInvite = async () => {
             if (closed || relayCancelRef.current) return;
+            const gen = relayGenRef.current;
             setRelayInvite(null);
             setRelayError(null);
             const ids = await fetchDashboard();
+            if (gen !== relayGenRef.current) return;
             if (ids && !ids.some(id => !relayInvite.knownIds.includes(id))) setRelayInviteEnded(true);
         };
         const timer = setInterval(async () => {
@@ -210,6 +216,7 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
     const cancelRelayInvite = async () => {
         setRelayError(null);
         relayCancelRef.current = true;
+        relayGenRef.current += 1;
         try {
             const res = await fetch(api('api/telegram/relay-pair'), { method: 'DELETE', credentials: 'include' });
             if (!res.ok) {

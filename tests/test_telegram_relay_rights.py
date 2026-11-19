@@ -435,6 +435,13 @@ def test_the_telegram_window_invites_by_code_and_offers_the_id_form_to_admins_on
         "an invite that ended without a new contact says so"
     assert "if (closed || relayCancelRef.current) return;" in finish, "a deliberate Cancel never reads as ended"
     assert "setRelayError(null)" in finish, "a stale error goes with the invite"
+    after = finish[finish.index("await fetchDashboard()"):]
+    assert "if (gen !== relayGenRef.current) return;" in after.split("setRelayInviteEnded(true)")[0], \
+        "a reload that finishes after a close, a cancel or a new invite changes nothing"
+    for start, end in (("const startRelayInvite", "try {"), ("const cancelRelayInvite", "try {"),
+                       ("// A closed window stops waiting", "const startRelayInvite")):
+        part = src[src.index(start):]
+        assert "relayGenRef.current += 1;" in part[:part.index(end)], start
     timer = poll[poll.index("const timer"):]
     expiry = timer[timer.index("relayInvite.expiresIn * 1000"):timer.index("try {")]
     assert "await finishInvite();" in expiry, "the client timer reloads before it says no contact came"

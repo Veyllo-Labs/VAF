@@ -402,11 +402,12 @@ def test_keys_are_owner_only_from_creation(tmp_path, monkeypatch, no_interfaces,
 
 # ── the generic saves cannot set them ────────────────────────────────────────
 
-def test_without_certificate_keys_drops_both():
+def test_the_route_owned_strip_drops_both_certificate_keys():
+    from vaf.core.config import Config
     payload = {"local_network_ssl_cert": "/tmp/x.pem", "local_network_ssl_key": "/tmp/x.key",
                "theme": "dark"}
-    assert ssl_utils.without_certificate_keys(payload) == {"theme": "dark"}
-    assert ssl_utils.without_certificate_keys({"theme": "dark"}) == {"theme": "dark"}
+    assert Config.without_route_owned_keys(payload) == {"theme": "dark"}
+    assert Config.without_route_owned_keys({"theme": "dark"}) == {"theme": "dark"}
 
 
 # ── untrusted bytes, read safely ─────────────────────────────────────────────

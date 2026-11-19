@@ -4,6 +4,16 @@ Authoritative reference for VAF's configuration keys. The single source of truth
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
 keys by area. Defaults shown here match `Config.DEFAULTS` (385 keys).
 
+Who may write a key through a settings save (`PATCH /api/config`, the WebSocket
+`save_config`) is decided by its name, `Config.is_global_config_key`, and the rule is an
+allowlist: a non-admin's save keeps only keys declared in `DEFAULTS` that are not admin-only.
+A key the code reads with an inline default, outside `DEFAULTS`, is admin-only, so a key a
+person may set is declared there first (measured before the rule: a non-admin save of
+`vaf_home` moved the TLS directory into their own folder, where the tray then wrote the
+server key and the CA key). The route-owned keys (`Config.ROUTE_OWNED_KEYS`: the profile, the
+engine, the own certificate pair and the per-account cloud, mail and GitHub lists) leave every
+save, for every caller; only their own lane writes them.
+
 ## How configuration is set
 
 There are two ways to supply configuration, and they compose:
@@ -173,7 +183,7 @@ These are sent only on the local path; cloud APIs ignore them.
 
 Which engine runs the local model; switched with `vaf engine`, in Settings > AI & Model or in
 the full-screen TUI, all through `local_engine.apply`, never by a Settings save: both save
-lanes drop `local_engine` and every `vllm_` key (`local_engine.without_engine_keys`), and
+lanes drop `local_engine` and every `vllm_` key (`Config.ROUTE_OWNED_KEYS`), and
 `vaf models config` refuses `local_engine` and `vllm_model`. See
 [VLLM_ENGINE.md](../llm/VLLM_ENGINE.md).
 
@@ -492,7 +502,7 @@ Most of these are populated by the setup wizard / Connections UI, not hand-edite
 | `telegram_debounce_seconds` | `5` | Telegram message debounce. |
 | `telegram_idle_timeout` | `120` | Telegram session idle timeout. |
 | `whatsapp_config` | `None` | WhatsApp bridge config (set via UI). Sub-keys: `enabled`; `inbound_to_agent` (`True`; off stops every sender before the agent and closes the Front Office switch on WhatsApp with it, read in one place, `messaging_connections.whatsapp_inbound_to_agent`); `reply_window_hours` (`72`, `0` = off) which is DISPLAY ONLY: it says how long a conversation the agent started counts as live in the WhatsApp window and admits nobody, because a window that admitted the people the agent had written to answered them on channels the owner had closed; `chat_sync_interval_sec` (`600`); `whitelist` (registered main-user numbers, one per VAF account: `phone_number`, `user_scope_id`, `vaf_username`; the linked account itself is the agent's number and is refused here); managed: `lid_to_e164`, `owner_control`, `chat_activity`. See [WHATSAPP_INTEGRATION.md](../integrations/WHATSAPP_INTEGRATION.md). |
-| `email_config*` | `None` | Email account config: `email_config` (the local admin's), `email_config_by_scope`, `email_config_by_user` (legacy, by username). Changed only through the mail routes and the account helpers (`email_accounts.save_email_config`): both settings saves drop all three for every caller (`email_accounts.without_mail_account_keys`), because a save sends the page's scoped view back. |
+| `email_config*` | `None` | Email account config: `email_config` (the local admin's), `email_config_by_scope`, `email_config_by_user` (legacy, by username). Changed only through the mail routes and the account helpers (`email_accounts.save_email_config`): both settings saves drop all three for every caller (`Config.ROUTE_OWNED_KEYS`), because a save sends the page's scoped view back. |
 | `email_oauth_*_client_id` | `""` | Email OAuth client IDs (Google/Microsoft). |
 | `email_oauth_*_client_secret` | `""` | Email OAuth client secrets (Google/Microsoft). Read-redacted for non-admins. |
 | `email_allow_private_hosts` | `False` | SSRF guard for IMAP/SMTP. When false (default), VAF refuses to connect to a mail host that resolves to loopback, RFC-1918 private, or link-local addresses (incl. the `169.254.169.254` cloud-metadata endpoint); set true only to use a legitimate LAN / self-hosted mail server. Multicast/reserved addresses are always refused. Admin-only. |
@@ -527,6 +537,20 @@ Most of these are populated by the setup wizard / Connections UI, not hand-edite
 | `channel_ingress_policy` | `{...}` | Inbound-channel pairing policy: `mode` (`paired_only`, the only value; it is the floor, not a choice), `throttle_seconds` (`60`) for the REJECT log lines, and per channel (`telegram`, `whatsapp`, `discord`, `email`) a `mode` (`inherit`) and `open_to_new_senders` (`False`); the `email` entry additionally carries `reply_mode` (`draft`: the agent's answer is held in the mail outbox for the owner's approval; `send`: it leaves at once) and `opened_at` (the moment the mail switch was turned on, stamped by the switch; mail dated before it is never answered). `open_to_new_senders` is the Front Office switch of that channel in Settings → Connections: it answers everybody the owner has not decided about, and only there (inert outside WhatsApp, Telegram, Discord and mail, and on mail only a sender the provider verified is answered, see [FRONT_OFFICE.md](../agents/FRONT_OFFICE.md#mail)). Who else gets in is the person's own state in the contact book (`assistant_access`), not a key here: the two expert doors that used to say the same thing (`permissive`, `allow_contact_fallback`) are gone, a stored `permissive` is read once and coerced to `paired_only`, and an open channel is what the security overview warns about now (`front_office_state` and `set_front_office` in `vaf/core/channel_ingress_policy.py`). Admin-only. |
 | `connection_enabled_by_scope` | `None` | Per-scope connection toggles: `{<scope>: {<channel>: bool}}`, each account's own switch. Read by one rule, `messaging_connections.channel_enabled_for_scope`: on WhatsApp every account but the local admin (whose switch is `whatsapp_config.enabled`) needs its own; on Telegram nothing is on while the bot is off, admins ride the bot and every other account needs its own; Discord has no lane but the local admin's. A pairing by code turns the account's Telegram switch on. Never written as a whole by a settings save: `split_connection_toggles` drops it from every body and records only the saving account's own `enabled`; the pairings write the other switch-ons. A non-admin reads only their own entry. |
 | `front_office_contact_reply_require_approval` | `False` | Reserved: not read by any code at the moment, every messenger Front Office reply is sent directly; mail has its own review, `channel_ingress_policy.email.reply_mode` (see FRONT_OFFICE.md, Reply approval). Admin-only, so the switch is the admin's once it is read. |
+
+## Read with an inline default (admin-only)
+
+Outside `DEFAULTS`, so admin-only by the allowlist above; each is also a named entry of
+`GLOBAL_CONFIG_KEYS`, so declaring it in `DEFAULTS` later cannot open it.
+
+| Key | Default | Description |
+|---|---|---|
+| `vaf_home` | `~/.vaf` | Folder the TLS directory (`ssl/`) is built from: the server key and the CA key live there. Admin-only. |
+| `task_stuck_guard_enabled` | `True` | Auto-continue's guard against a step that makes no progress (nudge, then mark done). Admin-only: a guard of every account's turns. |
+| `workflows_enabled` | `True` | `False` switches workflow selection off for every account. Admin-only. |
+| `force_server` | `None` | Run the local model in the llama server instead of in-process (`None`: on Windows yes, elsewhere no). Admin-only. |
+| `persist_server` | `False` | Keep the local model server running after the terminal exits. Admin-only. |
+| `github_config`, `github_config_by_user` | `None` | The local admin's GitHub accounts and every other account's, by username, each with its `allow_write` switch. Route-owned: only the GitHub routes write them (`Config.ROUTE_OWNED_KEYS`), and a non-admin reads only their own entry. |
 
 ## Internal / managed (do not hand-edit)
 

@@ -495,7 +495,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
     workflow as the machine owner), the agent's guardrails the Security dashboard reports
     (`plan_gate_enabled`, `proactive_reply_mutation_gate_enabled`,
     `ask_first_drain_gate_enabled`) and the task overwrite guard, the skill threat rescan
-    and the cleanup ages (`gc_*`).
+    and the cleanup ages (`gc_*`);
+  - the folder the server's TLS keys are written to (`vaf_home`): pointed at their own
+    folder, the account could then read the server key and the CA key. A non-admin save
+    now keeps only the settings VAF declares, so no setting the code reads without
+    declaring it can be set that way either.
 
   A non-admin save now leaves all of them unchanged. `memory_db_owner_url`, which can hold
   the database owner's password, is no longer shown to non-admin accounts. Values already
@@ -511,6 +515,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   received that account's mail password or sign-in. The mail account lists now change only
   through the mail setup, and an account's channel switches only through its own toggles
   and the pairings, never through a settings save.
+- **GitHub connections are per account.** A settings save could turn on write access for
+  the admin's GitHub account and empty another account's list, and every account could see
+  every connected GitHub login. The lists now change only through Connections, GitHub, and
+  each account sees only its own.
 
 - **Commands nobody confirmed no longer reach a network share.** The host shell (`host_bash`)
   and `python_exec` now refuse a network share or Windows device path (`\\server\share`,

@@ -1201,7 +1201,9 @@ class Config:
     ]
 
     # Keys (and prefixes) that only admins can change. Non-admins can change user-scoped
-    # settings (e.g. language, interface) but not backend/network/API config.
+    # settings (e.g. language, interface) but not backend/network/API config. Every key
+    # outside DEFAULTS is admin-only as well (`is_global_config_key`); these lists name the
+    # DEFAULTS keys that are, plus undeclared ones that must stay so if declared later.
     # Named boundary: the web saves (PATCH /api/config, the WebSocket `save_config`) ask this
     # list; the terminal writers (`vaf models config`, `vaf settings`, the terminal app,
     # `vaf setup`) consult it for no key, because they run as the OS account that owns the
@@ -1478,23 +1480,91 @@ class Config:
         # The periodic threat rescan of the installed skills: 0 switches it off for the
         # whole instance.
         "skills_rescan_interval_hours",
+        # Read with an inline default, outside DEFAULTS, so admin-only already by the rule
+        # in `is_global_config_key`; named here so that registering one in DEFAULTS later
+        # cannot open it. `vaf_home` is where the TLS directory lives (`ssl_utils`): pointed
+        # at an account's own folder, the tray wrote the server key and the CA key there,
+        # where that account's file tools read them. `task_stuck_guard_enabled` is a loop
+        # guard of every account's turns; `workflows_enabled` switches the workflow engine
+        # off for everyone; `force_server` and `persist_server` decide how the one local
+        # model server runs and whether it outlives the terminal.
+        "vaf_home",
+        "task_stuck_guard_enabled",
+        "workflows_enabled",
+        "force_server",
+        "persist_server",
     ])
+
+    # Keys a settings save never writes, for ANY caller, each with the one lane that does.
+    # A save sends the whole page, so a page loaded before that lane ran writes the old value
+    # back, and a non-admin's page holds a scoped VIEW of the per-account lists (written back
+    # whole, it removed the other accounts' entries). Both save lanes (PATCH /api/config, the
+    # WebSocket `save_config`) pass `without_route_owned_keys`; it replaced five hand-written
+    # strips of the same shape, one per owner.
+    ROUTE_OWNED_KEYS = {
+        # `inference_profile.apply` also stops or starts the speech containers.
+        "inference_profile": "inference_profile.apply",
+        # `local_engine.apply` installs, downloads, stops a server and checks the fit; every
+        # `vllm_` key rides it (ROUTE_OWNED_PREFIXES).
+        "local_engine": "local_engine.apply",
+        # The own certificate pair: only the checked route behind a second factor
+        # (`ssl_utils.install_certificate`), or a stolen session points them at a file it
+        # planted.
+        "local_network_ssl_cert": "ssl_utils.install_certificate",
+        "local_network_ssl_key": "ssl_utils.install_certificate",
+        # The per-account connection lists: the cloud routes and the sync worker, the mail
+        # routes (`email_accounts.save_email_config`), the GitHub routes
+        # (`github_routes._save_github_config`). A body could otherwise point another
+        # account's mail host at a server that receives its password, or turn on
+        # `allow_write` for another account's GitHub token.
+        "cloud_config": "cloud routes",
+        "cloud_config_by_user": "cloud routes",
+        "email_config": "email_accounts.save_email_config",
+        "email_config_by_scope": "email_accounts.save_email_config",
+        "email_config_by_user": "email_accounts.save_email_config",
+        "github_config": "github_routes._save_github_config",
+        "github_config_by_user": "github_routes._save_github_config",
+    }
+    ROUTE_OWNED_PREFIXES = {
+        "vllm_": "local_engine.apply",
+    }
+
+    @classmethod
+    def is_route_owned_key(cls, key: str) -> bool:
+        """True for a key only its own lane writes (``ROUTE_OWNED_KEYS``)."""
+        return key in cls.ROUTE_OWNED_KEYS or any(
+            str(key).startswith(prefix) for prefix in cls.ROUTE_OWNED_PREFIXES)
+
+    @classmethod
+    def without_route_owned_keys(cls, payload):
+        """A settings save without the route-owned keys, for every caller. The same object
+        back when it holds none."""
+        if isinstance(payload, dict) and any(cls.is_route_owned_key(k) for k in payload):
+            return {k: v for k, v in payload.items() if not cls.is_route_owned_key(k)}
+        return payload
 
     @classmethod
     def is_global_config_key(cls, key: str) -> bool:
         """True if this config key may only be written by an admin (backend/network/API).
 
-        Every secret (`is_secret_config_key`) is one: a value nobody but an admin may read
-        is not one anybody may write. Without it the encryption keys, the KEK and the
+        An allowlist, not a list of forbidden names: a key outside ``DEFAULTS`` is one. Code
+        reads keys that ``DEFAULTS`` does not declare (an inline default), and a denylist let
+        every one of them through: measured, a non-admin save of ``vaf_home`` moved the TLS
+        directory into their own folder, where the tray then wrote the server key and the CA
+        key. A key a person may set is declared in ``DEFAULTS`` first.
+
+        Every secret (`is_secret_config_key`) is one too: a value nobody but an admin may
+        read is not one anybody may write. Without it the encryption keys, the KEK and the
         memory database's address were writable by any signed-in account, which would
         move every account's memory to a server of their choice on the next start."""
-        if key in cls.GLOBAL_CONFIG_KEYS or cls.is_secret_config_key(key):
+        if (key not in cls.DEFAULTS or key in cls.GLOBAL_CONFIG_KEYS
+                or cls.is_secret_config_key(key)):
             return True
         return any(key.startswith(prefix) for prefix in cls.GLOBAL_CONFIG_KEY_PREFIXES)
 
     # Secret config values that must NEVER be returned to a non-admin client.
     # This is a READ-redaction list and is intentionally NARROWER than the
-    # global write-denylist above: keys like api_model_* or non-secret
+    # admin-only write set above (`is_global_config_key`): keys like api_model_* or non-secret
     # local_network_* are admin-only to *write* but safe for any user to *read*
     # (the UI needs them), whereas the entries below are credentials/keys
     # (API keys, OAuth client secrets, the JWT secret, encryption keys, DB URLs
@@ -1638,10 +1708,13 @@ class Config:
         return body
 
     @classmethod
-    def config_for_user(cls, config: dict, user_scope_id: Optional[str], role: str) -> dict:
+    def config_for_user(cls, config: dict, user_scope_id: Optional[str], role: str,
+                        username: Optional[str] = None) -> dict:
         """
-        Return a copy of config safe to send to a given user. Admins get the full config.
-        Non-admins get connection data scoped to their user_scope_id only (no other users' mail, telegram, whatsapp, etc.).
+        Return a copy of config safe to send to a given user. Admins get the full config with
+        every secret VALUE blanked. Non-admins get no secret and connection data scoped to
+        their user_scope_id only (no other users' mail, telegram, whatsapp, etc.), and for the
+        lists keyed by username (GitHub) only the entry of ``username``.
         """
         # The profile as every choke point reads it (inference_profile.current: trimmed, any
         # case, anything else is local), not the raw value: the settings compare it with
@@ -1707,6 +1780,15 @@ class Config:
         # Legacy email_config / email_config_by_user: non-admin should not see other users; expose only empty or own
         out["email_config"] = None
         out["email_config_by_user"] = {}
+
+        # GitHub: the local admin's list is `github_config`, every other account's is its entry
+        # in `github_config_by_user`, keyed by username (`github_routes`). Each names a GitHub
+        # login and its write permission, so a non-admin gets only their own entry.
+        out["github_config"] = None
+        gh_by_user = config.get("github_config_by_user") or {}
+        name = str(username or "").strip()
+        own_gh = gh_by_user.get(name) if isinstance(gh_by_user, dict) and name else None
+        out["github_config_by_user"] = {name: own_gh} if isinstance(own_gh, dict) else {}
 
         # Cloud: only the accounts this user connected, recognised by the scope the connect
         # route records in each entry. The owner's list and other accounts' lists name

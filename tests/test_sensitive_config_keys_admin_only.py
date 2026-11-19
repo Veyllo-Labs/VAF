@@ -41,6 +41,10 @@ CONTROLS = ("server_mode", "upload_threat_scan_enabled", "upload_scan_advisory_e
             "security_log_retention_days", "front_office_contact_reply_require_approval",
             "memory_db_echo", "auto_install_gpu", "update_include_prereleases",
             "config_format_version")
+# Read with an inline default, outside DEFAULTS; named as entries so that declaring one in
+# DEFAULTS later cannot open it.
+UNDECLARED_CONTROLS = ("vaf_home", "task_stuck_guard_enabled", "workflows_enabled",
+                       "force_server", "persist_server")
 
 
 # ── the classes ───────────────────────────────────────────────────────────────
@@ -147,6 +151,70 @@ def test_every_flag_the_security_dashboard_reports_is_admin_only():
     assert open_keys == [], f"a reported guardrail writable by any signed-in account: {open_keys}"
 
 
+# ── the allowlist: a key outside DEFAULTS is admin-only ─────────────────────────
+
+_VAF = __import__("pathlib").Path(__file__).resolve().parent.parent / "vaf"
+# `Config.get("key"`, the module aliases of Config (`_CfgOv.get(`, `_CfgAuto.get(`, ...) and the
+# agent's loaded copy (`self.config.get(`, `agent.config.get(`).
+_READ = re.compile(r"\b(?:Config|_Cfg\w*|self\.config|agent\.config)\.get(?:_bool|_int|_float)?"
+                   r"\(\s*[\"']([a-z][a-z0-9_]*)[\"']")
+
+
+def _keys_the_code_reads() -> set:
+    keys = set()
+    for source in _VAF.rglob("*.py"):
+        keys |= set(_READ.findall(source.read_bytes().decode("utf-8", "replace")))
+    return keys
+
+
+def test_every_key_the_code_reads_is_declared_or_admin_only():
+    """A key read with an inline default is not in DEFAULTS, and a denylist let it through
+    every non-admin save (`vaf_home` moved the TLS directory; the loop guards, the workflow
+    switch and the research timeouts were stored too). MUTATION: drop the `not in
+    cls.DEFAULTS` clause of `is_global_config_key`."""
+    keys = _keys_the_code_reads()
+    undeclared = sorted(k for k in keys if k not in Config.DEFAULTS)
+    # A parser that silently matches nothing would make this pass on nothing.
+    assert len(keys) >= 300 and len(undeclared) >= 40, (len(keys), len(undeclared))
+    assert {"vaf_home", "task_stuck_guard_enabled", "research_overall_timeout_seconds",
+            "workflows_enabled", "force_server"} <= keys
+    open_keys = [k for k in undeclared if not Config.is_global_config_key(k)]
+    assert open_keys == [], f"read outside DEFAULTS and writable by any account: {open_keys}"
+    assert Config.is_global_config_key("a_key_nobody_has_written_yet")
+
+
+def test_the_undeclared_controls_are_named_entries():
+    """MUTATION: drop the `vaf_home` entry (or another of the five)."""
+    missing = [k for k in UNDECLARED_CONTROLS if k not in Config.GLOBAL_CONFIG_KEYS]
+    assert missing == [], missing
+
+
+def test_one_table_of_route_owned_keys_and_one_strip():
+    """Five owners (the profile, the engine, the certificate pair, the cloud, mail and GitHub
+    lists) had a strip each, called one after another in both lanes. MUTATIONS: a lane that
+    skips the strip (source); an owner constant that grows a key the table lacks."""
+    import inspect
+
+    from vaf.api import config_routes
+    from vaf.core import local_engine, web_server
+    from vaf.network import ssl_utils
+
+    for key in (*local_engine.ENGINE_KEYS, *ssl_utils.CERTIFICATE_KEYS, "inference_profile",
+                "cloud_config", "cloud_config_by_user", "email_config", "email_config_by_scope",
+                "email_config_by_user", "github_config", "github_config_by_user"):
+        assert Config.is_route_owned_key(key), key
+    body = {"theme": "dark"}
+    assert Config.without_route_owned_keys(body) is body
+    patch_src = inspect.getsource(config_routes.patch_config)
+    lane = inspect.getsource(web_server)
+    lane = lane[lane.index('elif type == "save_config":'):]
+    lane = lane[:lane.index("Config.split_connection_toggles")]
+    for src in (patch_src, lane):
+        assert "Config.without_route_owned_keys(" in src
+        assert not re.search(r"without_(profile_key|engine_keys|certificate_keys|cloud_account_keys"
+                             r"|mail_account_keys)\(", src)
+
+
 # ── the save lanes, end to end ─────────────────────────────────────────────────
 
 @pytest.fixture
@@ -187,7 +255,10 @@ HOSTILE = {"veyllo_base_url": "http://192.0.2.10:8000/v1",
            "server_mode": True, "security_log_retention_days": 1,
            "upload_threat_scan_enabled": False, "workflow_identity_injection": "legacy",
            "plan_gate_enabled": False, "gc_max_age_hours": 1,
-           "skills_rescan_interval_hours": 0, "tts_auto_speak": True}
+           "skills_rescan_interval_hours": 0,
+           "vaf_home": "/home/user/VAF_Projects/ab12cd34", "task_stuck_guard_enabled": False,
+           "workflows_enabled": False, "research_overall_timeout_seconds": 1,
+           "a_key_nobody_has_written_yet": "x", "tts_auto_speak": True}
 KEPT = [k for k in HOSTILE if k != "tts_auto_speak"]
 
 
@@ -238,9 +309,13 @@ def _assert_kept(stored):
 
     raw = stored.raw()
     for key in KEPT:
+        # A key the admin never set stays unset.
         expected = (migrations.CONFIG_FORMAT_VERSION if key == "config_format_version"
-                    else ADMIN_SET[key])
+                    else ADMIN_SET.get(key))
         assert raw.get(key) == expected, (key, raw.get(key))
+    # The TLS directory stays the admin's: the tray writes the server and CA keys there.
+    from vaf.network.ssl_utils import _ssl_dir_path
+    assert "VAF_Projects" not in str(_ssl_dir_path())
     assert raw["tts_auto_speak"] is True
     # The migrations did not run again over the admin's settings.
     assert Config.load()["local_network_jwt_expiry_hours"] == 24

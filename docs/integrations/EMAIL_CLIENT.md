@@ -639,7 +639,7 @@ one and there is no silent fallback to the local admin. Account config resolves
 layout that is never served from the engine store. All three lists change only through
 the mail routes and the account helpers (`email_accounts.save_email_config`): both
 settings saves (`PATCH /api/config`, the WebSocket `save_config`) drop them for every
-caller (`email_accounts.without_mail_account_keys`). A save sends the page's scoped view
+caller (`Config.ROUTE_OWNED_KEYS`). A save sends the page's scoped view
 back, so merging it set the local admin's `email_config` to None and replaced the other
 accounts' entries, and a hand-written body could point another account's IMAP or SMTP host
 at a server that then received its stored credential. Deletion is explicit: removing

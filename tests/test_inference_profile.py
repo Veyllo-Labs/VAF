@@ -516,8 +516,8 @@ def test_a_settings_save_never_carries_the_profile(monkeypatch):
         {"inference_profile": "local", "tts_auto_speak": True},
         types.SimpleNamespace(state=types.SimpleNamespace(user=user)), user))
     assert state["inference_profile"] == "api" and state["tts_auto_speak"] is True
-    assert ip.without_profile_key({"inference_profile": "local", "a": 1}) == {"a": 1}
-    assert "_inference_profile.without_profile_key(new_config)" in inspect.getsource(web_server)
+    assert Config.without_route_owned_keys({"inference_profile": "local", "a": 1}) == {"a": 1}
+    assert "Config.without_route_owned_keys(new_config)" in inspect.getsource(web_server)
 
 
 def test_no_model_resolved_leaves_the_configured_model_alone(monkeypatch):

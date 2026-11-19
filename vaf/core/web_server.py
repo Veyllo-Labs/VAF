@@ -6406,7 +6406,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     is_admin = is_admin_identity(stored_role, user_scope_id)
                     role = "admin" if is_admin else "user"
                     full_cfg = Config.load()
-                    cfg = Config.config_for_user(full_cfg, str(user_scope_id) if user_scope_id else None, role)
+                    cfg = Config.config_for_user(
+                        full_cfg, str(user_scope_id) if user_scope_id else None, role,
+                        username=manager.get_connection_username(websocket) if manager else None)
                     await websocket.send_json({
                         "type": "config_update",
                         "config": cfg
@@ -6774,20 +6776,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         stored_role = manager.get_connection_user_role(websocket) if manager else None
                         is_admin = is_admin_identity(stored_role, user_scope_id)
                         existing = Config.load()
-                        new_config = _inference_profile.without_profile_key(new_config)
-                        # The engine changes only through local_engine.apply.
-                        from vaf.core.local_engine import without_engine_keys
-                        new_config = without_engine_keys(new_config)
-                        # The certificate keys change only through the checked route
-                        # (/api/network/certificate, behind a second factor).
-                        from vaf.network.ssl_utils import without_certificate_keys
-                        new_config = without_certificate_keys(new_config)
-                        # The cloud account lists change only through the cloud routes.
-                        from vaf.cloud.base import without_cloud_account_keys
-                        new_config = without_cloud_account_keys(new_config)
-                        # The mail account lists only through the mail routes.
-                        from vaf.core.email_accounts import without_mail_account_keys
-                        new_config = without_mail_account_keys(new_config)
+                        # Keys only their own lane writes (the profile, the engine, the
+                        # certificate pair, the per-account connection lists):
+                        # `Config.ROUTE_OWNED_KEYS`, for every caller.
+                        new_config = Config.without_route_owned_keys(new_config)
                         new_config = Config.split_connection_toggles(
                             existing, new_config, str(user_scope_id) if user_scope_id else None, is_admin=is_admin)
                         # A changed sub-agent provider brings its gate along; the Settings

@@ -20,7 +20,7 @@ two differences in wire format live here, once each: the ``/tokenize`` contract
 The switch itself is ``apply`` (with ``validate``, ``state``, ``uninstall_vllm`` and
 ``status_row`` around it): one implementation behind `vaf engine`, the web route of Settings >
 AI & Model (vaf/api/system_routes.py) and the full-screen TUI (agent_bridge). The engine and
-its model never change through a Settings save (``without_engine_keys``): a save sends the
+its model never change through a Settings save (``Config.ROUTE_OWNED_KEYS``): a save sends the
 whole page, and a switch installs, downloads, stops a server and checks the fit. The GPU
 memory share of vLLM rides the same switch (``apply(..., gpu_share=...)``): vLLM cannot
 change its share while it runs, so a new share is fitted and test-started before
@@ -1413,16 +1413,3 @@ def status_row(config: Optional[Dict] = None) -> Dict[str, Any]:
             "code": "llama_running" if running else "llama_idle", "params": {"model": model},
             "text": "llama.cpp, server running." if running else "llama.cpp, server idle.",
             "version": "", "model": model}
-
-
-def without_engine_keys(payload: Dict) -> Dict:
-    """A Settings save without ``local_engine`` and the ``vllm_`` keys. They change only
-    through ``apply``, which installs, downloads, stops a server and checks the fit; a save
-    sends the whole page, and a page loaded before a switch (another tab, the terminal, the
-    switch still running) would write the old engine back without any of that. Both save
-    lanes pass it: the WebSocket ``save_config`` and ``PATCH /api/config``."""
-    if isinstance(payload, dict) and any(k == "local_engine" or str(k).startswith("vllm_")
-                                         for k in payload):
-        return {k: v for k, v in payload.items()
-                if k != "local_engine" and not str(k).startswith("vllm_")}
-    return payload

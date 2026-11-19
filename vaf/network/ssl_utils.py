@@ -1988,16 +1988,6 @@ def renew_authority(*, username: str = "", via: str = "", reload: bool = True) -
         return ChangeResult(reload=reloaded, old_authority=old, new_authority=new)
 
 
-def without_certificate_keys(payload):
-    """A Settings save without the two certificate keys. They change only through the
-    checked route (``install_certificate``, behind a second factor): a save sends the whole
-    page, and a stolen session could otherwise point them at a file it planted. Both save
-    lanes pass it: the WebSocket ``save_config`` and ``PATCH /api/config``."""
-    if isinstance(payload, dict) and any(k in payload for k in CERTIFICATE_KEYS):
-        return {k: v for k, v in payload.items() if k not in CERTIFICATE_KEYS}
-    return payload
-
-
 # ── the state, for the settings, the CLI and the doctor ─────────────────────
 
 def local_authority() -> Optional[Dict[str, Any]]:

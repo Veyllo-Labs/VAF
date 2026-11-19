@@ -88,7 +88,7 @@ the provider step leaves no local model to fall back on.
 
 The profile is admin-only (`GLOBAL_CONFIG_KEYS`): it starts and stops containers and
 decides about downloads for every account at once. A Settings save never writes it
-(`inference_profile.without_profile_key` in both save lanes): a page loaded before a switch
+(`Config.ROUTE_OWNED_KEYS`, stripped in both save lanes): a page loaded before a switch
 would otherwise write the old profile back without stopping or starting anything.
 
 ## What the lean profile guarantees, and where

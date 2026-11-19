@@ -17,8 +17,8 @@ THE DEFECT, measured on both save lanes (PATCH /api/config and the real WebSocke
 - `connection_enabled_by_scope`, the map of every account's channel switches, was merged as
   sent: a non-admin turned another account's WhatsApp lane on.
 
-THE RULE: both save lanes pass `email_accounts.without_mail_account_keys` for every caller
-(the model of `cloud.base.without_cloud_account_keys`), `split_connection_toggles` drops
+THE RULE: the mail lists are in `Config.ROUTE_OWNED_KEYS`, which both save lanes strip for
+every caller (`Config.without_route_owned_keys`), `split_connection_toggles` drops
 the switch map from every body, and a non-admin reads only their own switches.
 Synthetic identities and a scratch config only.
 """
@@ -228,19 +228,18 @@ def test_both_lanes_strip_the_mail_lists_before_the_shared_step():
     from vaf.core import web_server
 
     patch_src = inspect.getsource(config_routes.patch_config)
-    assert "without_mail_account_keys(" in patch_src
-    assert patch_src.index("without_mail_account_keys(") < patch_src.index(
+    assert "Config.without_route_owned_keys(" in patch_src
+    assert patch_src.index("Config.without_route_owned_keys(") < patch_src.index(
         "Config.split_connection_toggles(")
     source = inspect.getsource(web_server)
     lane = source[source.index('elif type == "save_config":'):]
     lane = lane[:lane.index("Config.split_connection_toggles")]
-    assert "new_config = without_mail_account_keys(new_config)" in lane
+    assert "new_config = Config.without_route_owned_keys(new_config)" in lane
 
 
-def test_without_mail_account_keys_leaves_other_keys_alone():
-    from vaf.core.email_accounts import MAIL_ACCOUNT_KEYS, without_mail_account_keys
-
+def test_the_route_owned_strip_drops_the_mail_lists_and_leaves_other_keys_alone():
     body = {"language": "de"}
-    assert without_mail_account_keys(body) is body
-    assert without_mail_account_keys({k: 1 for k in MAIL_ACCOUNT_KEYS} | {"theme": "x"}) == {
+    assert Config.without_route_owned_keys(body) is body
+    mail = ("email_config", "email_config_by_scope", "email_config_by_user")
+    assert Config.without_route_owned_keys({k: 1 for k in mail} | {"theme": "x"}) == {
         "theme": "x"}

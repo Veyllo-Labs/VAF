@@ -575,7 +575,7 @@ checked by the next start's fit.
 **Applies right away, never with Save changes.** A switch installs, downloads, stops a server
 and checks the fit, and a save sends the whole page: a page opened before a switch would write
 the old engine back. Both save lanes (the WebSocket `save_config` and `PATCH /api/config`) drop
-`local_engine` and every `vllm_` key (`local_engine.without_engine_keys`); the engine changes
+`local_engine` and every `vllm_` key (`Config.ROUTE_OWNED_KEYS`); the engine changes
 only through `local_engine.apply`.
 
 **The routes** (admin-only): `GET /api/system/local-engine[?model=owner/name]` is

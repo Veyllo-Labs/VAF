@@ -321,11 +321,14 @@ def test_both_save_lanes_pass_the_filter():
     web = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
     lane = web[web.index('elif type == "save_config":'):]
     lane = lane[:lane.index("Config.save(merged)")]
-    assert "without_certificate_keys(new_config)" in lane
+    assert "Config.without_route_owned_keys(new_config)" in lane
     patch = (ROOT / "vaf" / "api" / "config_routes.py").read_text(encoding="utf-8")
     route = patch[patch.index("async def patch_config"):]
     route = route[:route.index("Config.save(merged)")]
-    assert "without_certificate_keys(" in route
+    assert "Config.without_route_owned_keys(" in route
+    from vaf.core.config import Config
+    from vaf.network.ssl_utils import CERTIFICATE_KEYS
+    assert all(Config.is_route_owned_key(k) for k in CERTIFICATE_KEYS)
 
 
 @pytest.mark.parametrize("content_type", ["text/plain", None])

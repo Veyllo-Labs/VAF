@@ -64,6 +64,7 @@ async def get_config(request: Request) -> Dict[str, Any]:
         full,
         user.get("user_scope_id"),
         user.get("role", "user"),
+        username=user.get("username"),
     )
 
 
@@ -496,13 +497,9 @@ async def patch_config(
     if current.get("server_mode", False):
         _SERVER_LOCKED = {"local_network_enabled", "local_network_tls_enabled", "server_mode"}
         body = {k: v for k, v in body.items() if k not in _SERVER_LOCKED}
-    from vaf.core.inference_profile import without_profile_key
-    from vaf.core.local_engine import without_engine_keys
-    from vaf.network.ssl_utils import without_certificate_keys
-    from vaf.cloud.base import without_cloud_account_keys
-    from vaf.core.email_accounts import without_mail_account_keys
-    body = without_mail_account_keys(without_cloud_account_keys(
-        without_certificate_keys(without_engine_keys(without_profile_key(body)))))
+    # Keys only their own lane writes (the profile, the engine, the certificate pair, the
+    # per-account connection lists): `Config.ROUTE_OWNED_KEYS`, for every caller.
+    body = Config.without_route_owned_keys(body)
 
     # The shared rule (`is_admin_identity` over the request as authenticated), the one the
     # WebSocket save uses too; this path used to know only the role.
@@ -524,7 +521,8 @@ async def patch_config(
     # holds - estate API keys, the KEK, other users' connection configs - and this
     # response goes to whoever sent the PATCH, admin or not. Returning it unfiltered was
     # a second copy of the leak the GET route had, one save away from every reader.
-    return Config.config_for_user(merged, _user.get("user_scope_id"), "admin" if is_admin else "user")
+    return Config.config_for_user(merged, _user.get("user_scope_id"), "admin" if is_admin else "user",
+                                  username=_user.get("username"))
 
 
 @router.get("/config/api-keys")

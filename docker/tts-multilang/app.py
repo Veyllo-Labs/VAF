@@ -236,9 +236,14 @@ def swap_in(lang: str) -> None:
         print(f"[TTS] The replaced voice of {lang} could not be removed: {e}", flush=True)
 
 
-def download_model(lang: str) -> bool:
+def download_model(lang: str, mark: Optional[Dict[str, Any]] = None) -> bool:
     """Download a language model, verified against its pinned SHA-256. Returns True on
     success.
+
+    `mark` is the download_progress entry a queued replacement was given: the download
+    starts only while that very entry is still the language's status, checked under the
+    same lock that marks the download as started. A language uninstalled (its mark deleted)
+    or installed anew (a new mark) after it was queued returns False and fetches nothing.
 
     Both files are fetched into a staging folder (.<lang>.incoming), each only as the
     bytes pinned for it (download_verified: its own partial file, renamed into place only
@@ -263,6 +268,8 @@ def download_model(lang: str) -> bool:
     try:
         # Update progress
         with download_lock:
+            if mark is not None and download_progress.get(lang) is not mark:
+                return False
             download_progress[lang] = {"status": "downloading", "progress": 0}
 
         MODELS_DIR.mkdir(parents=True, exist_ok=True)
@@ -330,7 +337,7 @@ def remove_retired_languages() -> None:
                     print(f"[TTS] The voice of {code}, which this release no longer offers, could not be "
                           f"removed: {e}", flush=True)
         for key in ("installed_languages", "language_priority"):
-            if code in config.get(key, []):
+            if isinstance(config.get(key), list) and code in config[key]:
                 config[key] = [c for c in config[key] if c != code]
                 changed = True
         if config.get("default_language") == code:
@@ -342,11 +349,11 @@ def remove_retired_languages() -> None:
         save_config(config)
 
 
-def _download_guarded(lang: str) -> None:
+def _download_guarded(lang: str, mark: Optional[Dict[str, Any]] = None) -> None:
     """download_model in a background thread: whatever it did not report itself still ends
     the "downloading" mark, or every later install of the language would be refused."""
     try:
-        download_model(lang)
+        download_model(lang, mark)
     except Exception as e:
         with download_lock:
             download_progress[lang] = {"status": "error", "detail": str(e),
@@ -358,8 +365,11 @@ def _replacement_order() -> List[str]:
     """The table's languages, the default language first and then the priority list, so
     the voice a person hears first is installed first."""
     config = load_config()
-    first = [config.get("default_language", DEFAULT_LANG), *config.get("language_priority", [])]
-    ordered = [lang for lang in first if lang in AVAILABLE_MODELS]
+    priority = config.get("language_priority")
+    first = [config.get("default_language", DEFAULT_LANG), *(priority if isinstance(priority, list) else [])]
+    # Only strings: a hand-edited or damaged settings file may hold a list or an object
+    # there, which must not stop the container at start.
+    ordered = [lang for lang in first if isinstance(lang, str) and lang in AVAILABLE_MODELS]
     ordered += [lang for lang in AVAILABLE_MODELS if lang not in ordered]
     return list(dict.fromkeys(ordered))
 
@@ -370,9 +380,10 @@ def replace_unpinned_installs() -> List[str]:
     the default language first. The languages are marked as downloading first, so the
     settings card shows the progress and /install does not start a second download of
     them; one background thread fetches them one after another, and the server answers
-    meanwhile. A queued language whose mark is gone or was replaced before its turn (it
-    was uninstalled, or installed anew) is skipped, so an uninstall is not undone by the
-    queue. Returns the languages."""
+    meanwhile. A queued language whose mark is gone or was replaced by the time its
+    download starts (it was uninstalled, or installed anew) is skipped: download_model
+    checks the mark under the lock that starts the download, so an uninstall before that
+    moment is never undone by the queue. Returns the languages."""
     queued = {}
     for lang in _replacement_order():
         if os.path.lexists(MODELS_DIR / lang) and not is_language_installed(lang):
@@ -386,10 +397,7 @@ def replace_unpinned_installs() -> List[str]:
 
     def work() -> None:
         for lang, mark in queued.items():
-            with download_lock:
-                if download_progress.get(lang) is not mark:
-                    continue
-            _download_guarded(lang)
+            _download_guarded(lang, mark)
 
     if queued:
         threading.Thread(target=work, daemon=True).start()

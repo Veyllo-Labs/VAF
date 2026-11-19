@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 import sys
 import types
 from pathlib import Path
@@ -498,7 +499,7 @@ def test_a_pinned_install_downloads_nothing_at_start(container, monkeypatch):
 
 def _calls_to_download_model(monkeypatch, container) -> list:
     calls = []
-    monkeypatch.setattr(container, "download_model", lambda lang: calls.append(lang) or True)
+    monkeypatch.setattr(container, "download_model", lambda lang, mark=None: calls.append(lang) or True)
     return calls
 
 
@@ -558,17 +559,77 @@ def test_the_default_language_is_replaced_first(two_languages, monkeypatch):
     assert app.replace_unpinned_installs() == ["en", "de"]
 
 
-def test_a_queued_language_that_was_uninstalled_is_not_installed_again(two_languages, monkeypatch):
-    """German is being replaced and English waits in the queue; the person removes English.
-    Its turn must not bring it back. MUTATION: drop the mark check in the queue: red."""
-    app = two_languages
+def _queue_two(app, monkeypatch) -> tuple:
+    """German and English queued for replacement, the worker not yet run; the fake network
+    records every fetch."""
     started = []
     monkeypatch.setattr(app.threading, "Thread",
                         lambda target, daemon=True: types.SimpleNamespace(start=lambda: started.append(target)))
-    calls = _calls_to_download_model(monkeypatch, app)
+    calls = []
+    _network(monkeypatch, app, {"onnx": MODEL, "onnx.json": CONFIG}, calls)
+    app.save_config({"installed_languages": ["de", "en"], "language_priority": ["de", "en"],
+                     "auto_detect": True, "default_language": "de"})
     assert app.replace_unpinned_installs() == ["de", "en"]
+    return started[0], calls
+
+
+def _removed_for_good(app, lang):
+    assert not os.path.lexists(app.MODELS_DIR / lang)
+    config = app.load_config()
+    assert lang not in config["installed_languages"] and lang not in config["language_priority"]
+
+
+def test_a_queued_language_that_was_uninstalled_is_not_installed_again(two_languages, monkeypatch):
+    """German is being replaced and English waits in the queue; the person removes English.
+    Its turn must not bring it back. MUTATION: drop the mark check in download_model: red."""
+    app = two_languages
+    work, calls = _queue_two(app, monkeypatch)
     app.request.body = {"language": "en"}
     assert app.uninstall_language()["status"] == "uninstalled"
-    started[0]()
-    assert calls == ["de"]
-    assert not (app.MODELS_DIR / "en").exists()
+    work()
+    assert len(calls) == 2, "only German's two files"
+    assert app.is_language_installed("de")
+    _removed_for_good(app, "en")
+
+
+def test_an_uninstall_just_before_the_download_starts_is_kept(two_languages, monkeypatch):
+    """The narrowest ordering: English's turn has come, and the person removes it after the
+    worker picked it up but before its download marks itself as started. The mark is
+    checked under the lock that starts the download, so nothing is fetched and English stays
+    removed. MUTATION: check the mark in the worker before calling download_model, not in
+    download_model (red: English is downloaded again)."""
+    app = two_languages
+    work, calls = _queue_two(app, monkeypatch)
+    real = app._download_guarded
+
+    def remove_first(lang, mark=None):
+        if lang == "en":
+            app.request.body = {"language": "en"}
+            assert app.uninstall_language()["status"] == "uninstalled"
+        return real(lang, mark)
+    monkeypatch.setattr(app, "_download_guarded", remove_first)
+    work()
+    assert len(calls) == 2, "only German's two files"
+    _removed_for_good(app, "en")
+    assert "en" not in app.download_progress
+
+
+@pytest.mark.parametrize("config", [
+    {"installed_languages": ["de"], "default_language": ["en"], "language_priority": ["de"]},
+    {"installed_languages": ["de"], "default_language": "de", "language_priority": [{"en": 1}, "en"]},
+    {"installed_languages": ["de"], "default_language": "de", "language_priority": 5},
+    {"installed_languages": ["de"], "default_language": {"x": 1}, "language_priority": None},
+], ids=["default-a-list", "priority-holds-an-object", "priority-a-number", "default-an-object"])
+def test_a_damaged_settings_file_does_not_stop_the_start(two_languages, monkeypatch, config):
+    """The settings file is the container's own, but a hand edit or a damaged volume can put
+    a list or an object where a language belongs; the start must still come up and replace
+    the voices. MUTATIONS: let _replacement_order take any entry (red), drop the list check
+    in remove_retired_languages (red: priority-a-number)."""
+    app = two_languages
+    app.CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    app.CONFIG_FILE.write_text(json.dumps(dict(config, auto_detect=True)), encoding="utf-8")
+    monkeypatch.setattr(app.threading, "Thread", lambda target, daemon=True: types.SimpleNamespace(start=lambda: None))
+    calls = _calls_to_download_model(monkeypatch, app)
+    app.prepare_voices()
+    assert sorted(app._replacement_order()) == ["de", "en"]
+    assert calls == []

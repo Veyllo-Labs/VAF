@@ -15,7 +15,8 @@ THE RULE: every messenger block is built from an allowlist, a registry channel w
 view of its own reads as the account's own switch, and `local_admin_scope_id` stays with the
 admins. The drift guard below fails when a key reaches a non-admin as stored without a
 reviewed reason: a structured key, a key that defaults to None, a key named like one
-account's id, and a key the code reads or writes by name without a `DEFAULTS` row. Synthetic identities and an in-memory config only.
+account's id (`*_scope_id`, `*_user_id`, `*_account_id`), and a key the code reads or writes
+by name without a `DEFAULTS` row. Synthetic identities and an in-memory config only.
 """
 import ast
 import asyncio
@@ -374,7 +375,7 @@ REVIEWED_INSTALLATION_SETTINGS = {
 # A name of this shape is keyed by account, so it can never be an installation setting.
 PER_ACCOUNT_NAME = re.compile(r"(_by_(scope|user|username|account)$)|(^(email|github|cloud)_config)")
 # A scalar of this shape names one account.
-ACCOUNT_ID_NAME = re.compile(r"_(scope|user)_id$")
+ACCOUNT_ID_NAME = re.compile(r"_(scope|user|account)_id$")
 SENTINEL = "zz-another-account-sentinel"
 
 _VAF_ROOT = Path(__file__).resolve().parent.parent / "vaf"
@@ -409,11 +410,39 @@ def _own_nodes(scope):
             stack.extend(ast.iter_child_nodes(node))
 
 
+def _bound_in(scope, nodes) -> set:
+    """The names a function binds itself (parameters and assignments), which hide the same
+    names of the functions around it; `nonlocal` and `global` names are not its own, and a
+    comprehension's loop variable lives in the comprehension."""
+    names = set()
+    if isinstance(scope, _SCOPES):
+        args = scope.args
+        names |= {a.arg for a in args.posonlyargs + args.args + args.kwonlyargs}
+        names |= {a.arg for a in (args.vararg, args.kwarg) if a is not None}
+    in_comprehension = {id(n) for node in nodes if isinstance(node, ast.comprehension)
+                        for n in ast.walk(node.target)}
+    names |= {node.id for node in nodes if isinstance(node, ast.Name)
+              and isinstance(node.ctx, ast.Store) and id(node) not in in_comprehension}
+    names -= {name for node in nodes if isinstance(node, (ast.Nonlocal, ast.Global))
+              for name in node.names}
+    return names
+
+
+def _loaded_names(nodes) -> set:
+    """Names bound to a loaded config: `cfg = Config.load()`, `cfg: dict = Config.load()`."""
+    names = set()
+    for node in nodes:
+        if isinstance(node, ast.Assign) and _loads_config(node.value):
+            names |= {t.id for t in node.targets if isinstance(t, ast.Name)}
+        elif (isinstance(node, ast.AnnAssign) and node.value is not None
+              and _loads_config(node.value) and isinstance(node.target, ast.Name)):
+            names.add(node.target.id)
+    return names
+
+
 def _written_in(scope, inherited: frozenset, keys: set) -> None:
     nodes = list(_own_nodes(scope))
-    loaded = inherited | {target.id for node in nodes
-                          if isinstance(node, ast.Assign) and _loads_config(node.value)
-                          for target in node.targets if isinstance(target, ast.Name)}
+    loaded = (inherited - _bound_in(scope, nodes)) | _loaded_names(nodes)
     for node in nodes:
         if isinstance(node, _SCOPES):
             # A closure writes through the name its enclosing function loaded.
@@ -442,12 +471,10 @@ def _keys_the_code_writes(root: Path) -> frozenset:
     `name` was bound to a loaded config in that function or one enclosing it, and through the
     agent's loaded copy (`self.config["key"]`, `agent.config["key"]`)."""
     keys: set = set()
+    # Every module, without a text filter: a filter on spellings missed `self.config ["k"]`,
+    # and parsing all of them costs well under a second more (measured 3.9 s against 3.2 s).
     for source in root.rglob("*.py"):
-        text = source.read_bytes()
-        # Only a module that names the class, an alias or the agent's copy can write one.
-        if b"Config" not in text and b"_Cfg" not in text and b".config[" not in text:
-            continue
-        _written_in(ast.parse(text), frozenset(), keys)
+        _written_in(ast.parse(source.read_bytes()), frozenset(), keys)
     return frozenset(keys)
 
 
@@ -504,7 +531,8 @@ def test_every_structured_key_is_projected_or_reviewed():
 
 
 def test_every_account_id_setting_is_projected_or_reviewed():
-    """A scalar setting named like one account's id (`local_admin_scope_id`)."""
+    """A scalar setting named like one account's id (`local_admin_scope_id`, `*_user_id`,
+    `*_account_id`)."""
     keys = {k for k, v in Config.DEFAULTS.items()
             if ACCOUNT_ID_NAME.search(k) and not isinstance(v, (dict, list))}
     passing = {k for k in keys
@@ -535,16 +563,42 @@ def test_the_guard_flags_a_key_without_a_defaults_row(monkeypatch, tmp_path):
         "    cfg = Config.load()\n"
         "    def inner():\n"
         "        cfg['zz_closure_key'] = 1\n"
-        "    return inner\n", encoding="utf-8")
+        "    def rebinds():\n"
+        "        nonlocal cfg\n"
+        "        cfg = dict(cfg)\n"
+        "        cfg['zz_nonlocal_key'] = 1\n"
+        "    def render(cfg):\n"
+        "        cfg['zz_parameter_key'] = 1\n"
+        "    def local():\n"
+        "        cfg = {}\n"
+        "        cfg['zz_local_key'] = 1\n"
+        "    def listing():\n"
+        "        names = [cfg for cfg in ()]\n"
+        "        cfg['zz_comprehension_key'] = 1\n"
+        "        return names\n"
+        "    return inner, rebinds, render, local, listing\n"
+        "def annotated():\n"
+        "    cfg: dict = Config.load()\n"
+        "    cfg['zz_annotated_key'] = 1\n"
+        "    Config.save(cfg)\n", encoding="utf-8")
+    # The agent's loaded copy, in a module that names neither the class nor an alias.
+    (tmp_path / "zz_agent.py").write_text(
+        "class Agent:\n"
+        "    def remember(self, numbers):\n"
+        "        self.config [\"zz_spaced_key\"] = numbers\n", encoding="utf-8")
     monkeypatch.setattr(reads_guard, "_VAF", tmp_path)
     monkeypatch.setattr(sys.modules[__name__], "_VAF_ROOT", tmp_path)
-    keys = {"zz_owner_numbers", "zz_set_key", "zz_read_key", "zz_closure_key"}
+    keys = {"zz_owner_numbers", "zz_set_key", "zz_read_key", "zz_closure_key", "zz_nonlocal_key",
+            "zz_comprehension_key", "zz_annotated_key", "zz_spaced_key"}
     assert keys <= _undeclared_keys()
+    # A function's own parameter or local of the same name is not the loaded config.
+    assert not {"zz_parameter_key", "zz_local_key"} & _keys_the_code_writes(tmp_path)
     assert keys <= _surviving_keys(_swept_keys()) - set(REVIEWED_INSTALLATION_SETTINGS)
 
 
-def test_the_id_guard_flags_a_new_account_id(monkeypatch):
-    monkeypatch.setattr(Config, "DEFAULTS", {**Config.DEFAULTS, "zz_owner_user_id": ""})
+@pytest.mark.parametrize("key", ["zz_owner_scope_id", "zz_owner_user_id", "zz_owner_account_id"])
+def test_the_id_guard_flags_a_new_account_id(monkeypatch, key):
+    monkeypatch.setattr(Config, "DEFAULTS", {**Config.DEFAULTS, key: ""})
     with pytest.raises(AssertionError):
         test_every_account_id_setting_is_projected_or_reviewed()
 

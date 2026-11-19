@@ -499,6 +499,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **An account without admin rights no longer receives other accounts' WhatsApp data with
+  its settings.** Its settings read carried the installation's whole WhatsApp block apart
+  from the number list: which WhatsApp IDs belong to which phone numbers, the chats a person
+  had taken over on the agent's phone (by number), and the latest chat events of every
+  account. It now carries only the account's own switch and its own registered number. The
+  local admin's account id is no longer sent to it either, and a messenger added later
+  shows such an account nothing but its own switch. A WhatsApp number list stored in the
+  wrong shape no longer breaks these accounts' settings.
 - **A Settings save no longer brings back a removed messenger pairing.** A settings page
   left open while a Telegram contact, relay contact or WhatsApp number was removed (or the
   Veyllo relay switched off) wrote the old list back on its next save, giving the removed

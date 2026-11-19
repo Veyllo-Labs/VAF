@@ -685,7 +685,10 @@ takes them out of every save on both save paths (`api_keys.absorb_config_keys`),
 them in the config the browser receives, and removes them only through
 `DELETE /api/config/channels/{channel}/credentials` (a disconnect), because an empty field
 means "not re-sent". `tests/test_channel_secrets.py` refuses any other module reading a
-credential field out of a config block. Everything that
+credential field out of a config block. A channel's config block reaches an account
+without admin rights only through the view `Config.config_for_user` builds for it, and a
+channel without a view of its own there shows that account its own switch only, so a new
+channel's block never goes out as stored. Everything that
 has to know "which channels are there" reads it: the chat sources the tool policy and
 host_bash's own guard recognise (`CHAT_CHANNELS`, `CHAT_SESSION_PREFIXES`), the ingress
 policy and its closed-by-default doors (and `CHANNEL_TASK_SOURCES` beside it, the queue

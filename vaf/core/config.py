@@ -1860,9 +1860,26 @@ class Config:
                         username: Optional[str] = None) -> dict:
         """
         Return a copy of config safe to send to a given user. Admins get the full config with
-        every secret VALUE blanked. Non-admins get no secret and connection data scoped to
-        their user_scope_id only (no other users' mail, telegram, whatsapp, etc.), and for the
-        lists keyed by username (GitHub) only the entry of ``username``.
+        every secret VALUE blanked.
+
+        Non-admins get no secret and no other account's identifier (scope id, phone number,
+        WhatsApp ID, chat id, login, mail address), and of every per-account list only their
+        own part: mail by ``user_scope_id``, GitHub by ``username``, cloud by the scope each
+        entry records, their own channel switches. Every messenger block is built from an
+        allowlist of fields, never spread from the stored block, because the bridges and
+        routes keep runtime data about every account in it (WhatsApp's ID-to-number map, its
+        owner-control map keyed by number, every account's chat activity). A registry channel
+        without a view of its own here reads as the account's own switch, so a channel added
+        to `vaf.core.channels` later fails closed.
+
+        Named boundaries: installation settings that hold no account's data stay readable
+        (scalar settings, and the structured ones `tests/test_config_member_view.py` lists
+        with their reasons), because the pages render from them; ``local_admin_username``
+        stays, because the Connections page compares it with the signed-in name to pick the
+        local admin's GitHub and cloud lists. Not on the facade: one implementation, and its
+        three callers are the harness's config emits to a browser (GET and PATCH
+        ``/api/config``, the WebSocket ``get_config``); an embedder's agent reads settings
+        server-side through ``Config.get`` and has no per-account browser view to project.
         """
         # The profile as every choke point reads it (inference_profile.current: trimmed, any
         # case, anything else is local), not the raw value: the settings compare it with
@@ -1917,6 +1934,8 @@ class Config:
         # dedicated status endpoints, not raw secrets.)
         for k in [k for k in out if cls.is_secret_config_key(k)]:
             out.pop(k, None)
+        # The local admin's scope id names another account; no page reads it.
+        out.pop("local_admin_scope_id", None)
 
         # Email: only this user's accounts (email_config_by_scope[user_scope_id])
         by_scope = config.get("email_config_by_scope") or {}
@@ -1965,6 +1984,16 @@ class Config:
         # Only the account's own switches: the map is keyed by every account's scope.
         out["connection_enabled_by_scope"] = {scope_str: user_toggles} if scope_str else {}
 
+        # Every registry channel's block reads as the account's own switch, unless a view of
+        # its own follows below. A block that passed through whole carried what its bridge
+        # and routes store about every account (measured on WhatsApp, and Slack's block went
+        # out as stored), so a channel added to the registry later shows nothing else either.
+        for channel in _KNOWN_CHANNELS:
+            key = f"{channel}_config"
+            if key in config:
+                out[key] = ({"enabled": bool(user_toggles.get(channel, False))}
+                            if isinstance(config.get(key), dict) else None)
+
         # Telegram: do not expose full whitelist to non-admin; enabled = per-user toggle (default False for new user)
         tc = config.get("telegram_config") or {}
         if isinstance(tc, dict):
@@ -1977,15 +2006,20 @@ class Config:
         else:
             out["telegram_config"] = None
 
-        # WhatsApp: only whitelist entries for this user; enabled = per-user toggle (default False for new user)
+        # WhatsApp: the account's own switch and its own registered numbers, nothing else. The
+        # block also holds the WhatsApp-ID-to-number map, the owner-control map keyed by
+        # number and every account's chat activity with its scope; the dashboards read those
+        # server-side. A whitelist that is not a list (hand-edited) reads as empty instead of
+        # failing every non-admin's config read.
         wc = config.get("whatsapp_config") or {}
         if isinstance(wc, dict):
-            whitelist = wc.get("whitelist") or []
+            whitelist = wc.get("whitelist")
+            whitelist = whitelist if isinstance(whitelist, list) else []
             if scope_str:
                 my_entries = [e for e in whitelist if isinstance(e, dict) and str(e.get("user_scope_id")) == scope_str]
             else:
                 my_entries = []
-            out["whatsapp_config"] = {**wc, "whitelist": my_entries, "enabled": user_toggles.get("whatsapp", False)}
+            out["whatsapp_config"] = {"enabled": user_toggles.get("whatsapp", False), "whitelist": my_entries}
         else:
             out["whatsapp_config"] = None
 

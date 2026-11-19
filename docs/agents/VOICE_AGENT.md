@@ -222,8 +222,8 @@ suffices.
    synthesizing for nobody. Model-written spoken text is voiced in ITS OWN language, not the
    input language: `_tts_lang_for` detects the reply text's language
    (`_detect_language_simple`, langid) and, when it differs from the call language AND the
-   lane can speak it (`call_lane_speaks`), follows it - so a Turkish answer to a German turn
-   is voiced by a Turkish voice (the Docker lane switches voice by the `language` it is
+   lane can speak it (`call_lane_speaks`), follows it - so a Dutch answer to a German turn
+   is voiced by a Dutch voice (the Docker lane switches voice by the `language` it is
    sent, a cloud lane gets the language), else it stays on the call language (never a
    mid-call voice download). This applies to the model reply and the chime-in; vocab lines
    (greeting/reask/clarify) are already in the call language, and the delegated-result

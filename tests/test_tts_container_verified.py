@@ -300,10 +300,12 @@ def test_a_voice_kept_aside_by_a_killed_install_is_back_at_start(container):
     container.recover_interrupted_installs()
     assert container.is_language_installed("de")
     assert sorted(p.name for p in container.MODELS_DIR.iterdir()) == ["de"]
+    import inspect
     src = (CONTAINER / "app.py").read_text(encoding="utf-8")
-    main = src[src.index('if __name__ == "__main__":'):]
-    order = [main.index(step) for step in ("recover_interrupted_installs()", "remove_retired_languages()",
-                                            "replace_unpinned_installs()", "download_model(DEFAULT_LANG)")]
+    assert "prepare_voices()" in src[src.index('if __name__ == "__main__":'):]
+    start = inspect.getsource(container.prepare_voices)
+    order = [start.index(step) for step in ("recover_interrupted_installs()", "remove_retired_languages()",
+                                             "replace_unpinned_installs()", "download_model(DEFAULT_LANG)")]
     assert order == sorted(order), "recover, then retired languages, then unpinned voices, then the default"
 
 
@@ -492,3 +494,81 @@ def test_a_pinned_install_downloads_nothing_at_start(container, monkeypatch):
     assert container.replace_unpinned_installs() == []
     assert started == []
     assert container.is_language_installed("de")
+
+
+def _calls_to_download_model(monkeypatch, container) -> list:
+    calls = []
+    monkeypatch.setattr(container, "download_model", lambda lang: calls.append(lang) or True)
+    return calls
+
+
+def test_a_default_language_being_replaced_is_not_installed_a_second_time(container, monkeypatch):
+    """Nothing in the settings counts as installed, and the default language's folder holds
+    a voice of another build: the background replaces it, so the start must not install
+    it as well (two downloads into one staging folder). MUTATION: drop the
+    "DEFAULT_LANG not in replacing" guard: red."""
+    _installed(container, model=MODEL, config=b"other build")
+    started = []
+    monkeypatch.setattr(container.threading, "Thread",
+                        lambda target, daemon=True: types.SimpleNamespace(start=lambda: started.append(target)))
+    calls = _calls_to_download_model(monkeypatch, container)
+    container.prepare_voices()
+    assert calls == [], "only the background thread installs it"
+    assert len(started) == 1
+    started[0]()
+    assert calls == ["de"]
+
+
+def test_with_nothing_installed_the_default_language_is_installed_at_start(container, monkeypatch):
+    calls = _calls_to_download_model(monkeypatch, container)
+    container.prepare_voices()
+    assert calls == [container.DEFAULT_LANG]
+
+
+@pytest.fixture
+def two_languages(monkeypatch, tmp_path):
+    """The container with German and English, both pinned to the same fixture voice."""
+    row = {"locale": "de_DE", "voice": "thorsten", "quality": "medium",
+           "model": {"path": "de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx",
+                     "sha256": hashlib.sha256(MODEL).hexdigest(), "size": len(MODEL)},
+           "config": {"path": "de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx.json",
+                      "sha256": hashlib.sha256(CONFIG).hexdigest(), "size": len(CONFIG)}}
+    table = tmp_path / "models.json"
+    table.write_text(json.dumps({"source": "https://example.invalid/voices", "revision": "0" * 40,
+                                 "models": {"de": dict(row, name="German"), "en": dict(row, name="English")}}),
+                     encoding="utf-8")
+    app = _load_app(monkeypatch, table)
+    monkeypatch.setattr(app, "MODELS_DIR", tmp_path / "models")
+    monkeypatch.setattr(app, "CONFIG_FILE", tmp_path / "config" / "tts_config.json")
+    for lang in ("de", "en"):
+        d = app.MODELS_DIR / lang
+        d.mkdir(parents=True)
+        (d / f"{lang}.onnx").write_bytes(MODEL)
+        (d / f"{lang}.onnx.json").write_bytes(b"other build")
+    return app
+
+
+def test_the_default_language_is_replaced_first(two_languages, monkeypatch):
+    """English is the default: its voice comes back first, not after German's 63 MB.
+    MUTATION: queue in table order: red."""
+    app = two_languages
+    app.save_config({"installed_languages": ["de", "en"], "language_priority": ["de", "en"],
+                     "auto_detect": True, "default_language": "en"})
+    monkeypatch.setattr(app.threading, "Thread", lambda target, daemon=True: types.SimpleNamespace(start=lambda: None))
+    assert app.replace_unpinned_installs() == ["en", "de"]
+
+
+def test_a_queued_language_that_was_uninstalled_is_not_installed_again(two_languages, monkeypatch):
+    """German is being replaced and English waits in the queue; the person removes English.
+    Its turn must not bring it back. MUTATION: drop the mark check in the queue: red."""
+    app = two_languages
+    started = []
+    monkeypatch.setattr(app.threading, "Thread",
+                        lambda target, daemon=True: types.SimpleNamespace(start=lambda: started.append(target)))
+    calls = _calls_to_download_model(monkeypatch, app)
+    assert app.replace_unpinned_installs() == ["de", "en"]
+    app.request.body = {"language": "en"}
+    assert app.uninstall_language()["status"] == "uninstalled"
+    started[0]()
+    assert calls == ["de"]
+    assert not (app.MODELS_DIR / "en").exists()

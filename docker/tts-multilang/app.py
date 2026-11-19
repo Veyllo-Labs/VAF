@@ -354,25 +354,64 @@ def _download_guarded(lang: str) -> None:
                                                 "installed. Try again later."}
 
 
+def _replacement_order() -> List[str]:
+    """The table's languages, the default language first and then the priority list, so
+    the voice a person hears first is installed first."""
+    config = load_config()
+    first = [config.get("default_language", DEFAULT_LANG), *config.get("language_priority", [])]
+    ordered = [lang for lang in first if lang in AVAILABLE_MODELS]
+    ordered += [lang for lang in AVAILABLE_MODELS if lang not in ordered]
+    return list(dict.fromkeys(ordered))
+
+
 def replace_unpinned_installs() -> List[str]:
     """At start: install again every language whose folder is there but whose voice is not
-    the one the table pins (an earlier VAF installed another build or another speaker).
-    The languages are marked as downloading first, so the settings card shows the progress
-    and /install does not start a second download of them; one background thread fetches
-    them one after another, and the server answers meanwhile. Returns the languages."""
-    queued = []
-    for lang in AVAILABLE_MODELS:
+    the one the table pins (an earlier VAF installed another build or another speaker),
+    the default language first. The languages are marked as downloading first, so the
+    settings card shows the progress and /install does not start a second download of
+    them; one background thread fetches them one after another, and the server answers
+    meanwhile. A queued language whose mark is gone or was replaced before its turn (it
+    was uninstalled, or installed anew) is skipped, so an uninstall is not undone by the
+    queue. Returns the languages."""
+    queued = {}
+    for lang in _replacement_order():
         if os.path.lexists(MODELS_DIR / lang) and not is_language_installed(lang):
             with download_lock:
                 if (download_progress.get(lang) or {}).get("status") == "downloading":
                     continue
-                download_progress[lang] = {"status": "downloading", "progress": 0}
+                mark = download_progress[lang] = {"status": "downloading", "progress": 0}
             print(f"[TTS] The installed voice of {lang} is not the one this release pins; installing it again.",
                   flush=True)
-            queued.append(lang)
+            queued[lang] = mark
+
+    def work() -> None:
+        for lang, mark in queued.items():
+            with download_lock:
+                if download_progress.get(lang) is not mark:
+                    continue
+            _download_guarded(lang)
+
     if queued:
-        threading.Thread(target=lambda: [_download_guarded(lang) for lang in queued], daemon=True).start()
-    return queued
+        threading.Thread(target=work, daemon=True).start()
+    return list(queued)
+
+
+def prepare_voices() -> None:
+    """At start, before the server answers: a voice an interrupted install kept aside is
+    put back; the voices of languages this release no longer offers go; an installed voice
+    that is not the pinned one is installed again (in the background); and when nothing is
+    installed, the default language is installed now, unless the background already
+    replaces it (two downloads of one language would share its staging folder)."""
+    recover_interrupted_installs()
+    remove_retired_languages()
+    replacing = replace_unpinned_installs()
+    config = load_config()
+    if not config.get("installed_languages") and DEFAULT_LANG not in replacing:
+        print(f"No languages installed. Installing default: {DEFAULT_LANG}")
+        if download_model(DEFAULT_LANG):
+            print(f"Successfully installed {DEFAULT_LANG}")
+        else:
+            print(f"Failed to install {DEFAULT_LANG}")
 
 
 def detect_language(text: str) -> str:
@@ -764,21 +803,7 @@ if __name__ == "__main__":
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-    # A voice an interrupted install kept aside is put back first; then the voices of
-    # languages this release no longer offers go, and an installed voice that is not the
-    # pinned one is installed again (in the background).
-    recover_interrupted_installs()
-    remove_retired_languages()
-    replacing = replace_unpinned_installs()
-
-    # Auto-install default language if nothing installed
-    config = load_config()
-    if not config.get("installed_languages") and DEFAULT_LANG not in replacing:
-        print(f"No languages installed. Installing default: {DEFAULT_LANG}")
-        if download_model(DEFAULT_LANG):
-            print(f"Successfully installed {DEFAULT_LANG}")
-        else:
-            print(f"Failed to install {DEFAULT_LANG}")
+    prepare_voices()
 
     port = int(os.environ.get("TTS_PORT", 5000))
     print(f"Starting TTS server on port {port}")

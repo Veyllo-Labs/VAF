@@ -1001,7 +1001,7 @@ class ServerManager:
         server_path (`vaf info` names the build of a legacy install with it)."""
         return self._probe_build(path or self.server_path)[1]
 
-    def _probe_build(self, path: str):
+    def _probe_build(self, path: str, *, eacces_undecided: bool = False):
         """(answered, build) for the llama-server at `path`. Answered, with build None
         ("this build does not start"): no file there (os.stat says so), a file the system
         refuses to run (_PROBE_CANNOT_RUN_ERRNOS: not a program, no permission, a missing
@@ -1010,7 +1010,9 @@ class ServerManager:
         system could not start a process right now (no memory, too many processes or open
         files, interrupted), or anything else nothing here knows. Those say nothing about
         the binary, so no decision that deletes, replaces or re-downloads a build is taken
-        on them."""
+        on them. `eacces_undecided` moves EACCES to the undecided side: Windows reports a
+        sharing violation (a scanner or another process holding the file) as EACCES, which
+        says nothing about whether the build runs."""
         try:
             os.stat(path)
         except (FileNotFoundError, NotADirectoryError):
@@ -1022,6 +1024,8 @@ class ServerManager:
         except subprocess.TimeoutExpired:
             return False, None
         except OSError as e:
+            if eacces_undecided and e.errno == errno.EACCES:
+                return False, None
             return (e.errno in _PROBE_CANNOT_RUN_ERRNOS), None
         except Exception:
             return False, None
@@ -1267,14 +1271,24 @@ class ServerManager:
         is waiting and waits up to INSTALL_LOCK_TIMEOUT for the other one's install.
 
         Named boundaries, each needing a third independent failure before it matters, so
-        not handled further: a .previous that can be neither renamed nor removed after a
-        verified install (and a warning said so) is taken for an unfinished swap once the
-        pin moves on, put back for one start, and the pinned build then installed again
-        (a downgrade for one start, nothing lost); a pinned binary that Windows reports as
-        EACCES while a scanner holds it counts as "does not start" (put next to a
-        .previous, the older build runs for one start and the pinned one is installed
-        again); a dangling bin/llama-cpp link with no .previous fails every swap with
-        ENOTDIR until it is removed by hand (the message names the folder)."""
+        not handled further:
+
+        1. A .previous that can be neither renamed nor removed after a verified install (a
+           warning said so) is taken for an unfinished swap once the pin moves on: it is put
+           back and the pinned build installed again. This repeats at every start until a
+           download succeeds; an older build runs meanwhile, nothing is lost.
+        2. On Windows a sharing violation (EACCES) on the pinned binary in bin/llama-cpp
+           still counts as "does not start": next to a .previous, the older build runs for
+           one start and the pinned one is installed again. The other side, an EACCES on
+           .previous, is handled: it counts as undecided, so .previous is never deleted on
+           it.
+        3. A hand-made state at bin/llama-cpp, a dangling link or a plain file, makes every
+           start download the verified asset again and fail its swap; the message names the
+           folder to remove.
+        4. A .previous left behind as in 1, and a later pin change: the recovery renames the
+           running install aside to put .previous back. Windows refuses to rename a folder
+           whose program runs, so that start fails with the hand step, at every start until
+           the server is stopped or .previous is removed by hand."""
         from filelock import FileLock, Timeout
 
         try:
@@ -1324,7 +1338,10 @@ class ServerManager:
             # A .previous next to a build that is not the pinned one belongs to a swap that has
             # not passed its final check: a verified install retires .previous at once
             # (_retire_previous). It may be the only working build, so it is asked too.
-            previous_answered, earlier = self._probe_build(previous_exe)
+            # .previous may be the only working build: on Windows an EACCES (a sharing
+            # violation) must not read as "does not start" and let it be deleted.
+            previous_answered, earlier = self._probe_build(previous_exe,
+                                                           eacces_undecided=self.system == "Windows")
             if not (current_answered and previous_answered):
                 hints = []
                 if not current_answered:

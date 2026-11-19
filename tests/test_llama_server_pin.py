@@ -1558,3 +1558,79 @@ def test_a_start_that_finds_the_install_lock_held_says_it_waits(linux_install, m
     finally:
         other.release()
     assert any("Waiting for another VAF process that is installing the backend" in e for e in events), events
+
+
+def test_on_windows_an_eacces_on_previous_keeps_both(linux_install, monkeypatch):
+    """Windows reports a sharing violation (a scanner holding the file) as EACCES. On the
+    .previous probe that is undecided, so the only working build is never deleted on it.
+    The manager's platform is set to Windows (patching os.name would turn every Path of
+    the test into a WindowsPath); the download is the Linux asset so the install would
+    reach its leftover step. MUTATION: count that EACCES as "does not start" and .previous
+    is deleted as a leftover."""
+    m, payload = linux_install
+    linux_assets = backend.ServerManager.pinned_assets
+    monkeypatch.setattr(backend.ServerManager, "pinned_assets",
+                        lambda self, pin=None: linux_assets(SimpleNamespace(system="Linux", machine="x86_64"), pin))
+    m.system = "Windows"
+    Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10955)
+    previous = Path(m.bin_dir + ".previous")
+    previous.mkdir(); _stub_server(previous / m.server_exe, 10021)
+
+    def version_output(self, path=None):
+        path = path or self.server_path
+        if os.path.abspath(path) == os.path.abspath(previous / m.server_exe):
+            raise PermissionError(errno.EACCES, "The process cannot access the file because it is being used by another process")
+        if os.path.abspath(path) == os.path.abspath(m.server_path):
+            return _LOADER_ERROR
+        return Path(path).read_text(encoding="utf-8")
+
+    monkeypatch.setattr(backend.ServerManager, "_version_output", version_output)
+    errors = []
+    monkeypatch.setattr(backend.UI, "error", lambda *a, **k: errors.append(" ".join(map(str, a))))
+    _fake_get(monkeypatch, payload + b"tampered")
+    assert m.ensure_server_exists() is False
+    assert (previous / m.server_exe).exists(), ".previous is kept"
+    assert any(f"The backend in {previous} could not be asked" in e for e in errors), errors
+
+
+def test_a_previous_that_does_not_start_is_not_put_back_over_a_working_build(linux_install, monkeypatch):
+    """bin/llama-cpp holds a working build that is not the pinned one, .previous prints no
+    build: there is nothing to put back, and with a refused download the working build
+    stays. MUTATION: put .previous back whatever it answered and the working build is
+    replaced by one that does not start."""
+    m, payload = linux_install
+    Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10021)
+    previous = Path(m.bin_dir + ".previous")
+    previous.mkdir(); (previous / m.server_exe).write_text("garbage", encoding="utf-8")
+    _failing_probe(monkeypatch, lambda path: os.path.abspath(path) == os.path.abspath(previous / m.server_exe))
+    _fake_get(monkeypatch, payload + b"tampered")
+    assert m.ensure_server_exists() is False
+    assert m.installed_build() == 10021
+
+
+def test_the_lock_is_tried_without_waiting_before_the_message_and_the_long_wait(linux_install, monkeypatch):
+    """The first acquire does not wait; the message comes before the second, long one.
+    MUTATIONS: wait at once, or say it after the wait, and the order goes red."""
+    import filelock
+    m, _ = linux_install
+    Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10955)
+    monkeypatch.setattr(backend, "INSTALL_LOCK_TIMEOUT", 0.2)
+    other = filelock.FileLock(os.path.join(m.bin_root, ".llama-cpp.lock"))
+    other.acquire()
+    order = []
+    real_acquire = filelock.FileLock.acquire
+
+    def acquire(self, timeout=None, *a, **k):
+        order.append(("acquire", timeout))
+        return real_acquire(self, timeout, *a, **k)
+
+    monkeypatch.setattr(filelock.FileLock, "acquire", acquire)
+    monkeypatch.setattr(backend.UI, "event", lambda *a, **k: order.append(("event", " ".join(map(str, a)))))
+    try:
+        assert m.ensure_server_exists() is False
+    finally:
+        monkeypatch.undo()
+        other.release()
+    assert order[0] == ("acquire", 0), order
+    assert order[1][0] == "event" and "Waiting for another VAF process" in order[1][1], order
+    assert order[2] == ("acquire", 0.2), order

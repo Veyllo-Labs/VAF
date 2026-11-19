@@ -1402,20 +1402,19 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   shell's error message fed into a shell); two generators of subscripts, line continuations,
   funsubs, descriptors and stdin chains, and of the pinned rows mutated, run through bash in a
   read-only sandbox with a marker `rm`: 60 000 and 40 000 draws, 2 473 and 2 350 of the 7 052
-  and 4 392 run in bash ran the marker, with no twin let through; and five more, of bash's
-  argv drawn as values and rendered through variables, tildes, brace words and splices
-  (long options with one dash, clusters with values, option words with unknown values,
-  tilde scripts, nested braces, names set in pieces, aliases); of option clusters with
-  values (`-eo pipefail`), brace and tilde words, scripts given by an expansion after `-c`
-  and names spelled in pieces; of option words (`+c`, `-$x`, `"$x"`), setters of a name or
-  of the positional parameters and literal text beside a quoted expansion; of substring
-  windows, `$'...'` in arithmetic, closer targets and words at a shell's script name; and of
-  vanishing words, broken substring names, descriptors an enclosing redirection points at
-  the pipe and `$$` beside quotes: 20 000 and 30 000 draws, 3 241 of 3 884, 2 606 of 3 657,
-  3 440 of 4 316, 2 502 of 5 584 and 2 274 of 4 149 run in bash (each under a cap of 32
-  processes, with `env`, `nice`, `timeout`, `nohup` and `stdbuf` at hand) ran the marker,
-  with no twin let through. On the readings before, the first three had found 4 862, 7 261
-  and 9 627 twins; every class of them is read and pinned or named below as a boundary. Two
+  and 4 392 run in bash ran the marker, with no twin let through; and on this reading three
+  more: a channel model of how a payload reaches a shell (tilde scripts and the directory
+  stack, HOME set in pieces, quoted option values, descriptor copies, `eval`, `trap` and
+  `env -S` sinks), bash's argv drawn as values and rendered through variables, tildes, brace
+  words and splices, and option clusters with values, brace and tilde words and names
+  spelled in pieces: 20 000, 20 000 and 30 000 draws, 2 719 of 8 145, 3 283 of 3 884 and
+  2 572 of 3 605 run in bash (each under a cap of 32 processes, with `env`, `nice`,
+  `timeout`, `nohup` and `stdbuf` at hand) ran the marker. The last two let no twin through;
+  the first let 1 186 through, each of a named boundary below (a tilde word run by `eval`,
+  `trap` or `env -S`, 723; the pipe copied to another descriptor and back, 420; a quoted
+  word that looks like a redirection, 37; an alias, 6). On the readings before, these three
+  generators and one more had found 3 001, 4 862, 7 261 and 9 627 twins; every class of them
+  is read and pinned or named below as a boundary. Two
   tests guard what such runs cannot see: everyday shell invocations (brace expansion and
   tilde paths in `-c` scripts, loops, globs, long options) pass, and one adversarial shape for
   every scan the shell readings add, many distinct words after an option word included,

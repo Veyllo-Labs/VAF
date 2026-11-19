@@ -4974,7 +4974,8 @@ def _script_input(exe: str, args: List[str], carried: List[tuple],
         if not (_HERE_OPERATOR_RE.match(word) or _REDIRECT_RE.match(word)
                 or word[:1] in ("<", ">")):
             return True
-        return raws is not None and p < len(raws) and raws[p] != word
+        # (the reading as before, `cluster_values` False, takes no quoted value either)
+        return cluster_values and raws is not None and p < len(raws) and raws[p] != word
 
     script = None
     from_stdin = False

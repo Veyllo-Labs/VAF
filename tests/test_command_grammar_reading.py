@@ -1186,6 +1186,9 @@ _BASE_REFUSALS = [
     "command bash -nor -O nullglob <<< 'rm -rf /'",
     "sh -profile +o nullglob <<< 'rm -rf /'",
     "exec bash -dump-strings --noediting -eo pipefail nounset <<< 'rm -rf /'",
+    # ... and it took no quoted value either: `'<<<'` read as the operator it looks like
+    "x6='-co'; /bin/bash --rcfile '<<<' -protected -posixx -ue -e$x6 <<< 'rm -rf /'",
+    "env bash -nor --rcfile '<' -ec --init-file /dev/null -init-file '<<<' 'rm -rf /'",
     # bash runs the marker; refused, here by its depth (nested quote levels in backticks)
     'sh -c \': `: $(\\\'\'\'\\\'\')\nbash<<W\n:()if :;then "";fi\neval "\'\\\'\'\\\\\\"\'\\\'\'\nprintf \'%s\\\'\'rm -rf /\'\\\'\'|sh"\nW`\'',
 ]
@@ -1194,7 +1197,8 @@ _BASE_REFUSALS = [
 @pytest.mark.parametrize("cmd", _BASE_REFUSALS)
 def test_a_refusal_of_the_base_stays(cmd):
     """MUTATION: take the word after `<<` as its delimiter even when it is an operator - red;
-    MUTATION: drop the reading of clusters without their values - red (the `-uo vi` rows)."""
+    MUTATION: drop the reading of clusters without their values - red (the `-uo vi` rows);
+    MUTATION: take quoted values in that reading too - red (the `'<<<'` rows)."""
     for profile in ("host", "jailed", "remote"):
         assert classify_command(cmd, profile=profile).blocked, (profile, cmd)
 

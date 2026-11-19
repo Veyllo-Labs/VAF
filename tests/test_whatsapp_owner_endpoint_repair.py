@@ -126,13 +126,23 @@ def test_kind_a_without_own_number_returns_none(world):
 
 # -- AC2 kind (a) through a LID -------------------------------------------------------------
 
-def test_kind_a_through_a_lid(world):
-    """MUTATION: read the number with `phone_digits_canonical(jid)` only -> the LID is kept -> red."""
-    world.state["whatsapp_config"]["lid_to_e164"] = {ADMIN_LID: ADMIN_PHONE}
-    world.stored(by_scope={ALI: ADMIN_LID})
+@pytest.mark.parametrize("where, stored", [
+    ("shared", ADMIN_LID), ("own", ADMIN_LID), ("shared", ADMIN_LID.replace("@lid", ":3@lid")),
+], ids=["shared-map", "own-map", "device-suffix"])
+def test_kind_a_through_a_lid(world, where, stored):
+    """The LID's number comes from the lane's own view: the shared map plus the lane's own
+    bindings, and a stored `<lid>:<device>@lid` is the LID without its device.
+    MUTATION: read the number with `phone_digits_canonical(jid)` only -> red.
+    MUTATION: read the shared map only (`whatsapp_lid_map(None)`) -> the own-map row is kept -> red.
+    MUTATION: no second lookup without the device -> the device-suffix row is kept -> red."""
+    if where == "shared":
+        world.state["whatsapp_config"]["lid_to_e164"] = {ADMIN_LID: ADMIN_PHONE}
+    else:
+        world.state["whatsapp_config"]["lid_to_e164_by_scope"] = {ALI: {ADMIN_LID: ADMIN_PHONE}}
+    world.stored(by_scope={ALI: stored})
 
     assert mc.get_whatsapp_chat_jid(ALI, "alice") == ALICE_JID
-    assert [r["path"] for r in world.resets()] == [ADMIN_LID]
+    assert [r["path"] for r in world.resets()] == [stored]
     assert mc.get_whatsapp_chat_jid(ALI, "alice") == ALICE_JID
     assert len(world.resets()) == 1
 
@@ -144,7 +154,8 @@ def test_kind_a_through_a_lid(world):
 def test_kind_b_on_the_scoped_and_the_scopeless_lane(world, admin_scope_key, first):
     """MUTATION: decide "own" with `_entry_is_mine` (the admin owns every entry) -> red.
     MUTATION: stop at the first kept value -> the scoped admin read leaves the foreign name
-    key for the scopeless lane, which then reports it a second time -> red."""
+    key for the scopeless lane, which then reports it a second time -> red. MUTATION: report
+    the fallback as the outcome although another stored chat was kept -> red."""
     world.stored(by_scope={ADM: ADMIN_JID} if admin_scope_key else {}, by_name={"admin": ALICE_JID})
 
     got = mc.get_whatsapp_chat_jid(*first)
@@ -152,8 +163,10 @@ def test_kind_b_on_the_scoped_and_the_scopeless_lane(world, admin_scope_key, fir
     if admin_scope_key or first == (ADM, "admin"):
         assert got == ADMIN_JID
     assert world.on_disk()["whatsapp_by_username"].get("admin") != ALICE_JID
+    kept = admin_scope_key and first == (ADM, "admin")
+    outcome = "kept its other saved chat" if kept else "reset to the registered number"
     assert world.resets() == [{"channel": "whatsapp", "username": "admin", "path": ALICE_JID,
-                               "detail": "registered number of account alice; reset to the registered number"}]
+                               "detail": f"registered number of account alice; {outcome}"}]
     for lane in [(ADM, "admin"), (None, None)]:
         assert mc.get_whatsapp_chat_jid(*lane) != ALICE_JID
     assert len(world.resets()) == 1, "reported again"
@@ -243,26 +256,37 @@ def test_other_accounts_keys_are_untouched(world):
     assert [r["path"] for r in world.resets()] == [ADMIN_JID]
 
 
-def test_another_accounts_name_key_is_skipped_not_cleared(world):
+ADMIN_SELF_CHAT = "4917000000555@s.whatsapp.net"   # the admin's old self-chat, registered by nobody
+
+
+@pytest.mark.parametrize("admin_value", [ADMIN_JID, ADMIN_SELF_CHAT], ids=["admin-number", "self-chat"])
+@pytest.mark.parametrize("alice_registered", [True, False], ids=["alice-registered", "alice-unregistered"])
+def test_another_accounts_name_key_is_not_read(world, admin_value, alice_registered):
     """A background lane of Alice that passes the local admin's name (`thinking_mode` reads
-    `_current_username or` the admin's name) reads the admin's key. It must not get the
-    admin's number, and must neither clear nor overwrite that key. MUTATION: treat every
-    consulted name key as the lane's own -> the admin's key is deleted and reported -> red.
-    MUTATION: save the fallback under the given name -> the admin's key holds Alice's number."""
-    world.stored(by_name={"admin": ADMIN_JID})
-    assert mc.get_whatsapp_chat_jid(ALI, "admin") == ALICE_JID
+    `_current_username or` the admin's name) must not read the admin's key at all: neither the
+    admin's number nor the admin's unregistered self-chat, and it neither clears nor overwrites
+    that key. MUTATION: consult the name key whoever holds it (only refusing to clear it) ->
+    the self-chat rows return the admin's chat -> red. MUTATION: treat every consulted name key
+    as the lane's own -> the admin's key is deleted and reported -> red. MUTATION: save the
+    fallback under the given name -> the admin's key holds Alice's number -> red."""
+    if not alice_registered:
+        world.whitelist(ADMIN_ENTRY, BOB_ENTRY)
+    world.stored(by_name={"admin": admin_value})
+    expected = ALICE_JID if alice_registered else None
+    assert mc.get_whatsapp_chat_jid(ALI, "admin") == expected
     disk = world.on_disk()
-    assert disk["whatsapp_by_username"] == {"admin": ADMIN_JID}
-    assert disk["whatsapp_by_scope"] == {ALI: ALICE_JID}
+    assert disk["whatsapp_by_username"] == {"admin": admin_value}
+    assert disk["whatsapp_by_scope"] == ({ALI: ALICE_JID} if alice_registered else {})
     assert world.resets() == []
-    assert mc.get_whatsapp_chat_jid(None, None) == ADMIN_JID
+    assert mc.get_whatsapp_chat_jid(None, None) == admin_value
 
 
 def test_an_ordinary_account_named_admin(world):
     """The local admin is "dana"; account B registered as "admin". B's read clears the local
-    admin's number from the "admin" key it owns. The admin's scopeless lane neither takes B's
-    number nor saves it, so nothing is reported in a loop. MUTATION: drop the fallback check ->
-    the scopeless lane returns B's number -> red."""
+    admin's number from the "admin" key it owns. The admin's scopeless lane does not read B's
+    key, rejects B's number found by name and uses Dana's own registered number, without saving
+    it under B's name, so nothing is reported in a loop. MUTATION: drop the fallback check ->
+    the scopeless lane returns B's number -> red. MUTATION: no own-number stand-in -> None -> red."""
     world.state["local_admin_username"] = "dana"
     world.whitelist(_entry(ADMIN_PHONE, ADM, "dana"), _entry(BOB_PHONE, B_ADMIN, "admin"))
     world.stored(by_name={"admin": ADMIN_JID})
@@ -271,12 +295,34 @@ def test_an_ordinary_account_named_admin(world):
     assert world.on_disk()["whatsapp_by_username"] == {"admin": BOB_JID}
     # The scopeless lane is the local admin's; the "admin" key is B's, so it is left alone.
     before = world.store.read_bytes()
-    assert mc.get_whatsapp_chat_jid(None, None) is None
+    assert mc.get_whatsapp_chat_jid(None, None) == ADMIN_JID
     assert world.store.read_bytes() == before
     world.stored()
-    assert mc.get_whatsapp_chat_jid(None, None) is None
-    assert world.on_disk()["whatsapp_by_username"] == {}, "B's number saved under the admin's lane"
+    assert mc.get_whatsapp_chat_jid(None, None) == ADMIN_JID
+    assert world.on_disk()["whatsapp_by_username"] == {}, "saved under B's name"
     assert len(world.resets()) == 1
+
+
+B_OWN_LID = "100000000000014@lid"
+
+
+@pytest.mark.parametrize("dana_registered", [True, False], ids=["dana-registered", "dana-unregistered"])
+def test_the_discord_lane_never_takes_an_ordinary_admin_accounts_lid(world, dana_registered):
+    """The Discord bridge's identity is `(None, "admin")`, the local admin's lane. With the
+    local admin named "dana" and an ordinary account named "admin" whose own chat is a LID
+    bound only in its own map, that lane got the account's LID. MUTATION: consult the name key
+    whoever holds it -> the LID is returned -> red."""
+    world.state["local_admin_username"] = "dana"
+    world.state["whatsapp_config"]["lid_to_e164_by_scope"] = {B_ADMIN: {B_OWN_LID: BOB_PHONE}}
+    entries = [_entry(BOB_PHONE, B_ADMIN, "admin")]
+    if dana_registered:
+        entries.insert(0, _entry(ADMIN_PHONE, ADM, "dana"))
+    world.whitelist(*entries)
+    world.stored(by_scope={B_ADMIN: B_OWN_LID}, by_name={"admin": B_OWN_LID})
+    before = world.store.read_bytes()
+    assert mc.get_whatsapp_chat_jid(None, "admin") == (ADMIN_JID if dana_registered else None)
+    assert world.store.read_bytes() == before and world.resets() == []
+    assert mc.get_whatsapp_chat_jid(B_ADMIN, "admin") == B_OWN_LID, "B keeps its own chat"
 
 
 def test_a_scopeless_caller_naming_another_account_repairs_nothing(world):
@@ -380,7 +426,9 @@ def _draw(rng):
     registered people). Every label is the person a value was rendered from."""
     registered = {p for p in PEOPLE if rng.random() < 0.8}
     whitelist = []
-    for person in registered:
+    # Declared order, never the set's: string hashes differ between processes, and the draws
+    # must replay from the seed.
+    for person in (p for p in PEOPLE if p in registered):
         scope, digits = PEOPLE[person]
         if person == "admin" and rng.random() < 0.3:
             whitelist.append(_entry(_render_phone(rng, digits), None, rng.choice(["admin", ""])))
@@ -466,9 +514,20 @@ def _run_fuzz(world, seed, draws):
         if got and foreign(got_label):
             problems.append(f"returned {got_label}'s {got}")
         consulted = _consulted(caller)
+
+        def owns(block, key):
+            return lane_person is None or block == "whatsapp_by_scope" or key == lane_person
+
+        # 5. A name key the lane does not own is not read: its value never comes back unless
+        #    it is the lane's own person's anyway, or a key the lane owns holds it too.
+        unowned = [(b, k) for b, k in consulted if not owns(b, k) and before[b].get(k)]
+        owned_values = {before[b].get(k) for b, k in consulted if owns(b, k)}
+        for b, k in unowned:
+            if got == before[b][k] and labels.get((b, k)) != lane_person and got not in owned_values:
+                problems.append(f"returned {b}[{k}] ({labels.get((b, k))}), a key the lane does not own")
         for block, key in consulted:
             label = labels.get((block, key))
-            own_key = lane_person is None or block == "whatsapp_by_scope" or key == lane_person
+            own_key = owns(block, key)
             changed = after[block].get(key) != before[block].get(key)
             # 2. A name key the lane does not own is never changed; a value of the lane's own
             #    person, or of nobody registered, is never dropped; a foreign one in a key the
@@ -479,7 +538,7 @@ def _run_fuzz(world, seed, draws):
                 problems.append(f"kept foreign {block}[{key}] ({label})")
         for event in events:
             if not any(event["path"] == before[b].get(k) and foreign(labels.get((b, k)))
-                       for b, k in consulted):
+                       for b, k in consulted if owns(b, k)):
                 problems.append(f"reported {event['path']}")
         # 4. Keys the read does not consult are byte-identical.
         for block in ("whatsapp_by_scope", "whatsapp_by_username"):
@@ -492,8 +551,9 @@ def _run_fuzz(world, seed, draws):
         mc.get_whatsapp_chat_jid(*caller)
         if len(world.resets()) != n or world.store.read_bytes() != settled:
             problems.append("second read not silent")
-        # Differential: with no foreign value consulted, exactly what the reader returned before.
-        if not any(foreign(labels.get(ck)) for ck in consulted) and got != reference:
+        # Differential: with no foreign value consulted and no key the lane does not own read
+        # before, exactly what the reader returned before.
+        if not unowned and not any(foreign(labels.get(ck)) for ck in consulted) and got != reference:
             problems.append(f"differs from before: {got!r} != {reference!r}")
         if problems:
             violations.append((i, caller, problems))

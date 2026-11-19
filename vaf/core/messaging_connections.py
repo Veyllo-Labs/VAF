@@ -27,6 +27,7 @@ from vaf.core.config import Config, is_admin_account, is_local_admin_lane  # noq
 from vaf.core.platform import Platform
 from vaf.core.channel_secrets import channel_secret, has_channel_secret
 from vaf.core.contacts_store import phone_digits_canonical, whatsapp_lid_map
+# A line of its own: tests/test_whatsapp_send_jid.py pins this exact import.
 from vaf.core.contacts_store import whatsapp_send_jid
 
 # ── Channel registry ─────────────────────────────────────────────────────────
@@ -310,7 +311,7 @@ def _local_admin_scope() -> str:
 
 
 def _lane_owner_scope(value: Any, admin_scope: str) -> str:
-    """Whose a Telegram whitelist entry or a lane is: its scope, and the local admin's when it
+    """Whose a whitelist entry or a lane is: its scope, and the local admin's when it
     carries none. That is how the bot's own lane switch reads a missing scope
     (`config.is_local_admin_lane`): the Discord bridge queues the local admin's turns with
     no scope and the name "admin", and the Telegram bridge admits an entry without a scope
@@ -622,12 +623,13 @@ def _whatsapp_lane(user_scope_id: Optional[Any], username: Optional[str], admin_
 
 def _whatsapp_name_is_lanes(name: str, lane: str, entries: List[Tuple[str, Optional[str], str]],
                             admin_scope: str) -> bool:
-    """Whether the `whatsapp_by_username` key `name` is this lane's own to clear: an entry of
+    """Whether the `whatsapp_by_username` key `name` is this lane's own to read: an entry of
     the lane is filed under it, or nobody else holds it (an entry of another scope filed under
     it, and for every lane but the local admin's the local admin's name and "admin"). The same
     rule as Telegram's `_telegram_account_names`: a background lane passes the local admin's
     name when it has none of its own (`thinking_mode` reads `_current_username or` the local
-    admin's), and the store keeps the admin's chat under it, which that lane must not clear."""
+    admin's), and the store keeps the admin's chat under it, which that lane must neither take
+    nor clear."""
     low = name.strip().lower()
     filed = [(scope, (n or "admin").lower()) for _, scope, n in entries]
     if any(scope == lane and n == low for scope, n in filed):
@@ -682,8 +684,11 @@ def get_whatsapp_chat_jid(
     local admin's only under the admin's name, otherwise nobody's), and a LID's number comes
     from the lane's own map (`contacts_store.whatsapp_lid_map`). A number registered by the
     lane itself is never foreign, even when another account registered it too. A name key that
-    another account holds (`_whatsapp_name_is_lanes`) is not this lane's: a foreign JID there
-    is skipped, never deleted, and the fallback is saved under the scope only. Pinned by
+    another account holds (`_whatsapp_name_is_lanes`) is not this lane's: it is not read at
+    all (an unregistered self-chat there is that account's, not this lane's), never deleted,
+    and the fallback is saved under the scope only. When the fallback found by name is another
+    account's number (an ordinary account named "admin" on the scopeless lane), the lane's own
+    first registered number is used instead. Pinned by
     tests/test_whatsapp_owner_endpoint_repair.py.
 
     Named boundaries:
@@ -695,9 +700,14 @@ def get_whatsapp_chat_jid(
       the web UI only. That trade is not made here; the reply check refuses a send to such a
       JID unless that number may be answered.
     - A caller without a scope that names an account other than the local admin's repairs
-      nothing (`_whatsapp_lane`): the store cannot tell that account's scope.
+      nothing (`_whatsapp_lane`): the store cannot tell that account's scope, so its stored
+      JID is returned unchecked, as before.
     - The registered-number helpers stay private: this is the one reader of "whose number is
       this"; a second reader is the measurement that would earn a public primitive.
+    - Cost: one canonicalisation per whitelist entry, plus one LID-map copy when another
+      account registered a number. Linear: measured about 1.8 ms per read at 1,000 entries and
+      LIDs, 19 ms at 10,000 and 200 ms at 100,000. Only an admin adds whitelist entries beyond
+      an account's own one, so no account can grow it for another.
     """
     scope_key = str(user_scope_id) if user_scope_id is not None else None
     # The name is a key of its own only when it was given, or for a caller without any
@@ -719,20 +729,19 @@ def get_whatsapp_chat_jid(
     dropped: List[Tuple[str, str]] = []
     with _ENDPOINTS_LOCK:
         data = _load_endpoints()
-        consulted = ([("whatsapp_by_scope", scope_key, True)] if scope_key is not None else []) \
-            + ([("whatsapp_by_username", uname, name_is_lanes)] if uname else [])
+        consulted = ([("whatsapp_by_scope", scope_key)] if scope_key is not None else []) \
+            + ([("whatsapp_by_username", uname)] if name_is_lanes else [])
         changed = False
-        for block, key, clearable in consulted:
+        for block, key in consulted:
             jid = data[block].get(key)
             if not jid:
                 continue
             number = _whatsapp_jid_number(jid, lid_map) if foreign else ""
             if number in foreign:
-                if clearable:
-                    del data[block][key]
-                    changed = True
-                    if all(jid != seen for seen, _ in dropped):
-                        dropped.append((jid, number))
+                del data[block][key]
+                changed = True
+                if all(jid != seen for seen, _ in dropped):
+                    dropped.append((jid, number))
             elif found is None:
                 found = jid
         if changed:
@@ -741,13 +750,18 @@ def get_whatsapp_chat_jid(
     if dropped or not found:
         own_jid = get_whatsapp_chat_jid_from_whitelist(user_scope_id, username)
         # The scopeless lane finds its number by name, and an ordinary account may be named
-        # "admin": a fallback that is another account's number would be saved and dropped again.
+        # "admin": a fallback that is another account's number would be saved and dropped
+        # again. The lane's own first registered number stands in for it.
         if own_jid and _whatsapp_jid_number(own_jid, lid_map) in foreign:
-            own_jid = None
+            own_jid = next((jid for jid in (whatsapp_send_jid(num) for num, scope, _ in entries
+                                            if num and scope == lane) if jid), None)
     if dropped:
         from vaf.core.config import resolve_caller_username
         account = resolve_caller_username(username, scope_key)
-        outcome = "reset to the registered number" if own_jid else "no registered number"
+        # What the account is reached on now: the other stored chat this read kept, else the
+        # registered number it falls back to.
+        outcome = ("kept its other saved chat" if found
+                   else "reset to the registered number" if own_jid else "no registered number")
         for jid, number in dropped:
             whose = foreign.get(number) or ""
             what = f"registered number of account {whose}" if whose else "registered number of another account"

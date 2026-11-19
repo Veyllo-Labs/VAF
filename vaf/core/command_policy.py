@@ -2493,17 +2493,17 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[list],
                 # The grammar text drops a function's head and a loop's name (`for s in`):
                 # the names are read from the text as written as well.
                 script_name = _ScriptName(_names_from + "\n" + text, _depth > 0)
-            # bash takes its long options first; `sh` may be bash or dash: both readings
-            # (union).
+            # Every reading of a shell's options (_shell_readings), joined (union).
+            readings = _shell_readings(exe) if exe in _STDIN_SHELLS else ((False, True),)
             from_where, script_literals, from_pipe = _script_input(
-                exe, args, carried, sink_raws, script_name, long_options=exe in ("bash", "sh"))
-            if exe == "sh":
-                where_dash, literals_dash, pipe_dash = _script_input(
-                    exe, args, carried, sink_raws, script_name)
-                from_where = from_where or where_dash
+                exe, args, carried, sink_raws, script_name, *readings[0])
+            for long_options, cluster_values in readings[1:]:
+                where_other, literals_other, pipe_other = _script_input(
+                    exe, args, carried, sink_raws, script_name, long_options, cluster_values)
+                from_where = from_where or where_other
                 script_literals = script_literals + [
-                    t for t in literals_dash if t not in script_literals]
-                from_pipe = from_pipe or pipe_dash
+                    t for t in literals_other if t not in script_literals]
+                from_pipe = from_pipe or pipe_other
             for alt in alternatives if exe_at >= 0 else ():
                 extra_literals = _script_input(exe, alt[exe_at + 1:], carried)[1]
                 script_literals = script_literals + [
@@ -4940,7 +4940,8 @@ class _ScriptName:
 
 def _script_input(exe: str, args: List[str], carried: List[tuple],
                   raws: Optional[List[str]] = None,
-                  name: Optional["_ScriptName"] = None, long_options: bool = False) -> tuple:
+                  name: Optional["_ScriptName"] = None, long_options: bool = False,
+                  cluster_values: bool = True) -> tuple:
     """(where its script comes from, literal script texts) for a shell or an interpreter:
     "output" when another command's output, "descriptor" when a descriptor this command
     does not open, "" otherwise.
@@ -5066,7 +5067,8 @@ def _script_input(exe: str, args: List[str], carried: List[tuple],
                 "s" in letters or any(m in letters for m in _EXPANSION_MARKS)))
             # A value option takes one word, a cluster one per `o` or `O` in it (`bash -eo
             # pipefail` reads its input); never a redirection or a here-string.
-            values = 1 if tok in _SHELL_VALUE_OPTIONS else (_cluster_values(tok) if shell else 0)
+            values = 1 if tok in _SHELL_VALUE_OPTIONS else (
+                _cluster_values(tok) if shell and cluster_values else 0)
             pos += 1
             while values and pos < len(args):
                 if not is_value(pos):
@@ -5817,7 +5819,8 @@ _SCRIPT_MISSING = object()
 
 
 def _shell_c_script(args: List[str], strip_redirections: bool = True,
-                    long_options: bool = False, braces: Optional[List[bool]] = None) -> list:
+                    long_options: bool = False, braces: Optional[List[bool]] = None,
+                    cluster_values: bool = True) -> list:
     """The scripts a shell's `-c` may run, in one reading of its arguments: [] without `-c`,
     [_SCRIPT_MISSING] when `-c` has none. `long_options`: bash's long options at the head are
     stepped over first (_long_options_end: `-norc`, `-rcfile F`), as parse_long_options does.
@@ -5883,7 +5886,7 @@ def _shell_c_script(args: List[str], strip_redirections: bool = True,
             has_c = has_c or (not tok.startswith("--") and ("c" in tok[1:] or expands))
             if expands and unsure < 0:
                 unsure = k + 1
-            k += 1 + _cluster_values(tok)
+            k += 1 + (_cluster_values(tok) if cluster_values else 0)
             continue
         break
     if not has_c:
@@ -5907,16 +5910,24 @@ def _shell_c_script(args: List[str], strip_redirections: bool = True,
     return found
 
 
+def _shell_readings(exe: str) -> tuple:
+    """The readings of a shell's arguments, (long options first, clusters take values), all
+    joined (union): bash's long options; `sh` may be bash or dash; and clusters without
+    their values, as the check read them before, so no refusal of that reading is lost."""
+    if exe in ("bash", "sh"):
+        return ((True, True), (False, True), (False, False))
+    return ((False, True), (False, False))
+
+
 def _shell_c_scripts(exe: str, args: List[str], braces: Optional[List[bool]] = None) -> list:
     """Every script a shell's `-c` may run (_shell_c_script), in each reading of its
-    arguments: bash takes its long options first, `sh` may be bash or dash, so both readings
-    count for it (union), and with and without the words that look like redirections."""
-    readings = (True,) if exe == "bash" else (True, False) if exe == "sh" else (False,)
+    arguments (_shell_readings: bash's long options first, `sh` as bash or dash, clusters with
+    and without their values), and with and without the words that look like redirections."""
     found: list = []
     seen: set = set()                   # the sentinels hash by identity, the texts by value
-    for long_options in readings:
+    for long_options, cluster_values in _shell_readings(exe):
         for strip in (True, False):
-            for script in _shell_c_script(args, strip, long_options, braces):
+            for script in _shell_c_script(args, strip, long_options, braces, cluster_values):
                 if script not in seen:
                     seen.add(script)
                     found.append(script)

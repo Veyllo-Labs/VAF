@@ -1181,8 +1181,11 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   words before a program are
   stepped over in every form bash takes (`a+=1 cmd`, `a[0]=1 cmd`, `a[${#a[@]}]=x`), and a
   shell reads its long options first, with one dash or two (`-norc` and `--norc`, `-rcfile F`
-  and `-init-file F` with their value; `sh`, which may be dash, is read both ways, and a long
-  option with an expansion in it may be any of them, refused or its input read), then its
+  and `-init-file F` with their value, also quoted to look like a redirection, `-rcfile '<'`;
+  `sh`, which may be dash, is read both ways, and so is every shell with its clusters taking
+  their values and not, as the check read them before, so no refusal of that reading is
+  lost; a long option with an expansion in it may be any of them, refused or its input
+  read), then its
   options after `-c` too, and runs the first word that is none (`bash -c -e '...'`,
   `sh -c - '...'`), `+c` being `-c` as well (`bash +c '...'` runs it), and so does an option
   word with an expansion in it, a word that starts with one or a tilde word (`~`, `~+`,

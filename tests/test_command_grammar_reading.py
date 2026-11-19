@@ -1180,6 +1180,12 @@ _BASE_REFUSALS = [
     'printf \'%s\\n\' "it\'s"\nbash <<< $\'x=$(echo \\\\#\\\' ;\\n: $[ 1 + 1 ]; bash <<\\\'E9\\\'\\nrm -rf /\\nE9\\n)\\ncat <<< \\\'it\\\'\\\\\\\'\\\'s\\\'\'',
     'cat <<EOF\nEO\\\nF && find . -maxdepth 0 -exec bash -c \'echo \'\\\'\'echo "${u:-$(builtin command rm -r\'\\\'\'\\\'\\\'\'\'\\\'\'\'\\\'\'\\\'\\\'\'\'\\\'\'f /)}"\'\\\'\' | bash\' \\; && cat <<EOF $(echo a)\nit\'s\nEOF',
     "bash << <<< 'rm -rf /'",
+    # refused when a cluster's `o` took no value; bash takes one (and then runs a file or
+    # fails), so the reading without values stays joined: no refusal of it is lost
+    "bash -verbose -uo vi pipefail <<< 'rm -rf /'",
+    "command bash -nor -O nullglob <<< 'rm -rf /'",
+    "sh -profile +o nullglob <<< 'rm -rf /'",
+    "exec bash -dump-strings --noediting -eo pipefail nounset <<< 'rm -rf /'",
     # bash runs the marker; refused, here by its depth (nested quote levels in backticks)
     'sh -c \': `: $(\\\'\'\'\\\'\')\nbash<<W\n:()if :;then "";fi\neval "\'\\\'\'\\\\\\"\'\\\'\'\nprintf \'%s\\\'\'rm -rf /\'\\\'\'|sh"\nW`\'',
 ]
@@ -1187,7 +1193,8 @@ _BASE_REFUSALS = [
 
 @pytest.mark.parametrize("cmd", _BASE_REFUSALS)
 def test_a_refusal_of_the_base_stays(cmd):
-    """MUTATION: take the word after `<<` as its delimiter even when it is an operator - red."""
+    """MUTATION: take the word after `<<` as its delimiter even when it is an operator - red;
+    MUTATION: drop the reading of clusters without their values - red (the `-uo vi` rows)."""
     for profile in ("host", "jailed", "remote"):
         assert classify_command(cmd, profile=profile).blocked, (profile, cmd)
 
@@ -1679,7 +1686,7 @@ def test_an_option_cluster_takes_a_value_per_o():
                 "x='rm -rf /'; bash +c \"$x\"", "HOME='rm -rf /'; bash -c ~",
                 "bash {-c,'rm -rf /'}", "bash {-c,} 'rm -rf /'", "sh {-,+}c 'rm -rf /'",
                 feed + "{-s,}", "HOME=-c; bash ~ 'rm -rf /'", "PWD=-c; bash ~+ 'rm -rf /'",
-                "HOME=-s; " + feed + "~"):
+                "HOME=-s; " + feed + "~", "x=s; echo 'rm -rf /' | dash -$x vi"):
         assert classify_command(cmd, profile="host").blocked, cmd
     for cmd in ("set -euo pipefail; echo hi", "bash -eo pipefail script.sh",
                 "bash -euo pipefail -c 'echo hi'", "echo {a,b}.txt", "ls ~"):

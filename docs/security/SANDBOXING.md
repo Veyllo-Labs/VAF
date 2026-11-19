@@ -1399,8 +1399,8 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   of the positional parameters and literal text beside a quoted expansion; of substring
   windows, `$'...'` in arithmetic, closer targets and words at a shell's script name; and of
   vanishing words, broken substring names, descriptors an enclosing redirection points at
-  the pipe and `$$` beside quotes: 20 000 and 30 000 draws, 3 243 of 3 865, 2 579 of 3 647,
-  3 391 of 4 306, 2 504 of 5 603 and 2 264 of 4 160 run in bash (each under a cap of 32
+  the pipe and `$$` beside quotes: 20 000 and 30 000 draws, 3 241 of 3 884, 2 606 of 3 657,
+  3 440 of 4 316, 2 502 of 5 584 and 2 274 of 4 149 run in bash (each under a cap of 32
   processes, with `env`, `nice`, `timeout`, `nohup` and `stdbuf` at hand) ran the marker,
   with no twin let through. On the readings before, the first three had found 4 862, 7 261
   and 9 627 twins; every class of them is now read and pinned. Two tests guard what such

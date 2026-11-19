@@ -74,6 +74,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **A llama.cpp or Piper install that was interrupted no longer blocks every later one.**
+  Leftover folders that had lost their permissions are now removed, a stray link or file
+  where `bin/llama-cpp/` belongs is replaced instead of failing each start with a new
+  download, and on Windows a pending llama.cpp update no longer fails at every start while
+  the model server runs. Quitting VAF or switching models now stops a process only when it
+  really is VAF's model server.
 - **Nine voices that could never be downloaded now work.** Portuguese, Swedish, Bulgarian,
   Kazakh, Greek, Luxembourgish, Dutch and Swahili for Piper on your computer (63 MB each,
   Dutch 77 MB, Kazakh 128 MB), and Japanese in the speech container (77 MB). Portuguese on

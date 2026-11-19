@@ -80,7 +80,7 @@ Two separate PID files, two separate meanings:
 
 | File | Written by | Holds | Read by |
 |---|---|---|---|
-| `~/.vaf/server.pid` | `vaf/core/backend.py` | the local model server | orphan cleanup on the next start |
+| `~/.vaf/server.pid` | `vaf/core/backend.py` | the local model server | the orphan cleanup on the next start; every stop (`stop_server(force_external=True)`: Tray Quit, a model swap, the handover to vLLM, `vaf profile api`); the backend install before it replaces the running build |
 | `~/.vaf/service.pid` | `vaf/cli/cmd/service.py` | the VAF background service (tray) | `vaf start` / `stop` / `status`, the updater |
 
 They must never share a name. The orphan cleanup kills the process recorded in
@@ -89,7 +89,10 @@ service PID written into that file made a freshly started VAF kill itself one
 second in (live incident). Since then the cleanup also verifies the recorded
 process really is a model server before killing anything, and skips the record
 otherwise: not killing a stale entry costs a port conflict, killing the wrong
-process costs somebody's work.
+process costs somebody's work. Every reader that kills does the same: the
+orphan cleanup, every stop and the install's handover kill only a process
+verified to be a llama server (`_looks_like_llama_server`), and a record naming
+any other process is left alone.
 
 ### 5. **Session Management**
 

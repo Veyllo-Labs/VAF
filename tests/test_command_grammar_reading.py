@@ -1723,14 +1723,39 @@ def test_bash_reads_its_long_options_first():
 def test_an_option_word_with_an_expansion_may_take_any_values():
     """An option word given by an expansion or a tilde may hold `o` letters, each taking a
     word: every later word may be the script (union).
-    MUTATION: the later words not read - red (`-c$x pipefail '...'`)."""
+    A brace word among them, or more of them than one command may read, makes the script
+    unknown; a later `c` keeps the input a spliced head word may leave read.
+    MUTATION: the later words not read - red (`-c$x pipefail '...'`);
+    MUTATION: no brace check among them - red; no cap on them - red (100 words);
+    MUTATION: a later `c` drops the input - red (`sh -rc${e}file -c`)."""
     for cmd in ("x=o; bash -c$x pipefail 'rm -rf /'", "x=o; bash -c -$x pipefail 'rm -rf /'",
                 "x=oo; bash -c$x pipefail errexit 'rm -rf /'", "x=co; bash -$x pipefail 'rm -rf /'",
                 "x=-oc; bash \"$x\" pipefail 'rm -rf /'", "v1='+Cofc'; sh \"$v1\" posix 'rm -rf /'",
-                "bash \"$(echo -co)\" errexit 'rm -rf /'", "HOME=-o; bash ~ errexit +c 'rm -rf /'"):
+                "bash \"$(echo -co)\" errexit 'rm -rf /'", "HOME=-o; bash ~ errexit +c 'rm -rf /'",
+                "x=o; bash -$x pipefail {-c,'rm -rf /'}", "HOME=-o; bash ~ errexit {-c,'rm -rf /'}",
+                "sh -p\"$e\"osix {-c,'rm -rf /'}", "echo 'rm -rf /' | sh -rc${e}file -c"):
         assert classify_command(cmd, profile="host").blocked, cmd
     assert cp._shell_c_script(["-c$x", "pipefail", "y"]) == ["pipefail", "y"]
+    words = ["w%d" % i for i in range(cp.MAX_NESTED_COMMANDS + 1)]
+    assert cp._shell_c_script(["-c$x"] + words) == [cp._UNKNOWN_SCRIPT]
+    assert cp._shell_c_script(["-c$x"] + words[:-1]) == words[:-1]
     assert not classify_command('bash "$SCRIPT" <<< "$INPUT"', profile="host").blocked
+
+
+def test_a_long_option_value_may_look_like_a_redirection():
+    """`-rcfile '<'` takes `<` as its value, quoted as written; the here-string after it is
+    still the input. Unquoted, such a word leaves the input read as well (fail closed).
+    MUTATION: a value that looks like a redirection never taken - red;
+    MUTATION: no input read when it is not taken - red (`-eo` with no raw words)."""
+    for value in ("'<'", "'>'", "'2>'", "'<<<'", B + "<"):
+        cmd = "bash -rcfile " + value + " <<< 'rm -rf /'"
+        assert classify_command(cmd, profile="host").blocked, cmd
+    for cmd in ("exec bash -rcfile '<' <<< 'rm -rf /'", "bash --rcfile '<' <<< 'rm -rf /'",
+                "bash -verbose -debugger -rcfile '>' <<< 'rm -rf /'"):
+        assert classify_command(cmd, profile="host").blocked, cmd
+    assert cp._script_input("bash", [">f", "-eo", ">g", "script.sh"], [], None, None, True)[2]
+    for cmd in ("bash -rcfile ~/.bashrc -c 'echo hi'", "bash --rcfile setup.sh -i"):
+        assert not classify_command(cmd, profile="host").blocked, cmd
 
 
 def test_a_tilde_script_runs_what_the_text_may_set():
@@ -1738,10 +1763,21 @@ def test_a_tilde_script_runs_what_the_text_may_set():
     the text may set them (HOME named, a `cd` for the other two, always for those), also after
     `-` or `--`; a tilde path in a text that sets nothing passes.
     MUTATION: a tilde prefix as a plain script - red; only the exact `~` - red (`~/`);
-    MUTATION: HOME never settable - red."""
+    MUTATION: HOME never settable - red;
+    MUTATION: HOME looked for in the text as written only - red (names in pieces, a loop, a
+    nested text, `{HO,}ME`);
+    MUTATION: no directory stack - red (`~0`); no assignment-shaped word - red (`a=~`)."""
+    home = "HOME='rm -rf / #'; "
     for cmd in ("HOME='rm -rf / #'; bash -c ~/", "PWD='rm -rf / #'; sh -c ~+/",
                 "HOME='rm -rf / #'; bash +c ~/x", "HOME='rm -rf / #'; bash -c -- ~",
-                "PWD='rm -rf /'; bash -c -- ~+", "HOME='rm -rf /'; bash -c ~"):
+                "PWD='rm -rf /'; bash -c -- ~+", "HOME='rm -rf /'; bash -c ~",
+                "declare HOM''E='rm -rf / #' && sh -c ~", "read -r HO\"\"ME <<< 'x'; bash -c ~",
+                "declare HO''ME='rm -rf / #'; bash -c ~/", "declare {HO,}ME='rm -rf / #'; bash -c ~",
+                "for HOME in 'rm -rf / #'; do bash -c ~; done", home + "(bash -c ~)",
+                home + "eval 'bash -c ~'", home + "echo $(bash -c ~)", home + "{ bash -c ~; } | cat",
+                "HOME='rm -rf / #' env sh -c 'bash -c ~'", home + "cat <(bash -c ~)",
+                "cd 'x;rm -rf /'; bash -c ~0", "bash -c ~+1", "HOME=';rm -rf / #'; bash -c a=~",
+                "HOME=';rm -rf / #'; bash -c a=x:~", "bash -c a=~+"):
         assert classify_command(cmd, profile="host").blocked, cmd
     for cmd in ("bash -c ~/bin/tool.sh", "bash ~/bin/tool.sh", "bash -c 'ls ~/x'"):
         assert not classify_command(cmd, profile="host").blocked, cmd
@@ -1763,16 +1799,21 @@ def test_a_brace_word_is_read_where_bash_expands_it():
 
 
 def test_the_input_redirected_from_itself_is_the_pipe():
-    """`<&0`, `</dev/stdin`, `</dev/fd/0`, `</proc/self/fd/0` reopen the input it already has:
-    the pipe still feeds the shell. Another file or descriptor does not.
-    MUTATION: take them for a redirection - red."""
+    """`<&0`, `</dev/stdin`, `</dev/fd/0`, `</proc/self/fd/0` reopen the input it already has,
+    and `<&0-` moves descriptor 0 onto itself: the pipe still feeds the shell. A target with
+    an expansion in it may be any of them (`<&$z`). Another file or descriptor does not.
+    MUTATION: take them for a redirection - red;
+    MUTATION: `<&0-` a move away - red; an expansion target a file - red (`<&$z`)."""
     feed = "echo 'rm -rf /' | bash "
     for redir in ("<&0", "0<&0", "</dev/stdin", "0</dev/stdin", "</dev/fd/0", "</proc/self/fd/0",
-                  "-s </dev/stdin", "-eo pipefail </dev/stdin", "< /dev/stdin"):
+                  "-s </dev/stdin", "-eo pipefail </dev/stdin", "< /dev/stdin", "<&0-", "0<&0-",
+                  "<&00-", "-s <&0-"):
         assert classify_command(feed + redir, profile="host").blocked, redir
+    for cmd in ("z=0; " + feed + "<&$z", "z=0; " + feed + "<&\"$z\"", "z=0; " + feed + "</dev/fd/${z:-0}"):
+        assert classify_command(cmd, profile="host").blocked, cmd
     for cmd in ("echo x | bash setup.sh </dev/null", "bash < setup.sh"):
         assert not classify_command(cmd, profile="host").blocked, cmd
-    assert not cp._self_stdin("<", "/proc/1/fd/0") and not cp._self_stdin("<&", "0-")
+    assert not cp._self_stdin("<", "/proc/1/fd/0") and cp._self_stdin("<&", "0-")
 
 
 def test_the_name_lookup_cap_is_64():
@@ -2065,13 +2106,16 @@ def test_a_text_nested_past_the_grammar_depth_is_refused_as_too_deep():
 
 # Every row that ran the marker and stays refused, and the named boundaries the rest belong to
 # (docs/security/SANDBOXING.md, "what it does not read").
-_NEVER_AGAIN_SIZE = 3146
+_NEVER_AGAIN_SIZE = 3368
 _NAMED_BOUNDARIES = {
     "a substitution's output inside [[ ]] that a redirection of the compound command sends "
     "into the pipe",
     "a function used as what prints into a shell",
     "a named pipe's text",
     "a shell's input moved to another descriptor and back",
+    "a quoted word that looks like a redirection where a reading takes it for one",
+    "a tilde word run as code by eval, trap or env -S",
+    "an alias with expand_aliases",
 }
 
 
@@ -2228,31 +2272,45 @@ _COST_SHAPES = [
     ("closers with descriptor 3", False,
      lambda n: "{ ( x >&3 ) >/dev/null; } 3>&1 | bash; " * (n // 41)),
     ("dollar continuations", True, lambda n: "x=$" + (B + NL) * (n // 2) + "'a'"),
+    ("distinct words after an expansion option", False,
+     lambda n: "x=c; bash -c$x " + " ".join("w%d" % i for i in range(n // 7))),
+    ("distinct words after sh -$x", False,
+     lambda n: "x=c; sh -$x " + " ".join("w%d" % i for i in range(n // 7))),
+    ("distinct words under xargs", False,
+     lambda n: "xargs -I{} bash -c$x " + " ".join("w%d" % i for i in range(n // 7))),
+    ("distinct words after a tilde", False,
+     lambda n: "bash ~ " + " ".join("w%d" % i for i in range(n // 7))),
+    ("distinct words after a quoted expansion", False,
+     lambda n: "bash \"$x\" " + " ".join("w%d" % i for i in range(n // 7))),
 ]
 
 
 @pytest.mark.parametrize("name, one_word, build", _COST_SHAPES, ids=[s[0] for s in _COST_SHAPES])
 def test_the_shell_readings_scale_linearly(name, one_word, build):
-    """Gate against superlinear scans: from 16 K to 128 K characters each doubling costs at most
-    2.3 times as much (plus 0.03 s of noise), for a one-word shape at most 1.25 times what a
-    plain word's doubling costs, and 128 K stays under 3 s.
+    """Gate against superlinear scans: from 15 K to 120 K characters (every text read, none
+    past the length limit) each doubling costs at most 2.6 times the CPU time (plus 0.03 s), a
+    quadratic scan 4 times; for a one-word shape at most 1.25 times what a plain word's
+    doubling costs; 120 K stays under 3 s. CPU time, best of two, so a busy machine does not
+    move the bound.
     MUTATION: the brace test as a backtracking pattern - red (the brace rows);
     MUTATION: read printf's first word from each match to the word's end - red (glued printf);
-    MUTATION: read the text for HOME at every tilde script - red (tilde paths after -c)."""
+    MUTATION: read the text for HOME at every tilde script - red (tilde paths after -c);
+    MUTATION: later-word candidates deduplicated in a list - red (the distinct-words rows)."""
     def took(text):
+        assert len(text) <= cp._MAX_COMMAND_CHARS, (name, len(text))
         best = None
         for _ in range(2):
-            start = time.perf_counter()
+            start = time.process_time()
             classify_command(text, profile="host_unattended")
-            spent = time.perf_counter() - start
+            spent = time.process_time() - start
             best = spent if best is None else min(best, spent)
         return best
-    sizes = (16000, 32000, 64000, 128000)
+    sizes = (15000, 30000, 60000, 120000)
     times = [took(build(n)) for n in sizes]
-    bounds = [2.3] * 3
+    bounds = [2.6] * 3
     if one_word:
         plain = [took(_plain_word(len(build(n)))) for n in sizes]
-        bounds = [max(2.3, 1.25 * large / small) for small, large in zip(plain, plain[1:])]
+        bounds = [max(2.6, 1.25 * large / small) for small, large in zip(plain, plain[1:])]
     for small, large, bound in zip(times, times[1:], bounds):
         assert large <= bound * small + 0.03, (name, times, bounds)
     assert times[-1] < 3.0, (name, times)

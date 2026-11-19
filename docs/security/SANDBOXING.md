@@ -929,7 +929,9 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   subshell's or an `exec`'s redirections give its input. A descriptor counts as opened only by
   a redirection BEFORE the one that copies it (`bash <&3- 3<f` copies what an earlier command
   opened, then opens 3), and a copy keeps what that descriptor holds (`cat 3< <(base64 -d f)
-  <&3 | bash` hands bash decoded text). A recursive delete whose target puts a variable after a protected
+  <&3 | bash` hands bash decoded text), but a copy of the pipe itself back onto the input
+  (`... | bash 3<&0 <&3`) is the named boundary of an input moved to another descriptor and
+  back, below. A recursive delete whose target puts a variable after a protected
   root is judged by that root (`rm -rf /$X`, `"$HOME/$X"`); one that starts with the variable
   is not (`rm -rf "$BUILD_DIR"` passes).
 - **A program it cannot see is refused (`opaque_command`), with the way out in the
@@ -1191,9 +1193,16 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   `o` or `O` in it (`bash -ceo pipefail '...'`, and `bash -eo pipefail` has no script, so it
   reads its input), an option word with an expansion in it may be `-s` as well, after a `c`
   a word that starts with an expansion is the script itself (`bash -c -e "$x"`, refused as
-  opaque), and one that starts with a tilde runs a directory variable's value, refused when
-  the text may set it (`HOME='...'; bash -c ~/`; `~+` and `~-`, PWD and OLDPWD, which a `cd`
-  sets, always), while `bash -c ~/bin/tool.sh` in a text that sets nothing passes; a word bash
+  opaque), and one with a tilde prefix (at its start, or after the `=` and each `:` of an
+  assignment-shaped word, `a=~`) runs a directory variable's value, refused when the text
+  may set it: HOME when the text may give it a value as for a quoted script name below
+  (names in pieces, a loop's name, a brace-built name; in a text another command runs,
+  always), `~+`, `~-` and the directory stack (`~0`, `~+1`) always, since a `cd` sets them;
+  `bash -c ~/bin/tool.sh` in a text that sets nothing passes, while
+  `HOME=/tmp/h bash -c ~/x.sh`, `export PATH=$PATH:~/bin; bash -c ~/x.sh`,
+  `source env.sh; bash -c ~/x.sh`, `bash -c ~+/x.sh` and every tilde script in a text
+  another command runs (`sh -c 'bash -c ~/x.sh'`) are refused, known over-refusals that
+  fail closed; a word bash
   brace-expands, its braces unquoted, nested too (`bash {-c,'...'}`, `{-s,{x}}`), makes the
   script unknown, refused, also as the script itself, while a quoted script keeps its braces
   as text (`bash -c 'for i in {1..3}; do ...; done'` passes; a brace word as a script file,
@@ -1403,16 +1412,17 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   3 440 of 4 316, 2 502 of 5 584 and 2 274 of 4 149 run in bash (each under a cap of 32
   processes, with `env`, `nice`, `timeout`, `nohup` and `stdbuf` at hand) ran the marker,
   with no twin let through. On the readings before, the first three had found 4 862, 7 261
-  and 9 627 twins; every class of them is now read and pinned. Two tests guard what such
-  runs cannot see: everyday shell invocations (brace expansion and tilde paths in `-c`
-  scripts, loops, globs, long options) pass, and one adversarial shape for every scan the
-  shell readings add grows linearly from 16 K to 128 K characters. No refusal of the reading
+  and 9 627 twins; every class of them is read and pinned or named below as a boundary. Two
+  tests guard what such runs cannot see: everyday shell invocations (brace expansion and
+  tilde paths in `-c` scripts, loops, globs, long options) pass, and one adversarial shape for
+  every scan the shell readings add, many distinct words after an option word included,
+  grows linearly in CPU time from 15 K to 120 K characters. No refusal of the reading
   before this change was lost in
   any of them (bash 5.3; the suite runs 1 600 draws). The classes the differential found on the way are each pinned in
   `tests/test_command_grammar_reading.py`, and every probe written while the reading was
-  built and checked, every pinned row and every corpus row that ran the marker in bash, 3 146
+  built and checked, every pinned row and every corpus row that ran the marker in bash, 3 368
   of them, is in `tests/fixtures/command_policy/never_again.json` and refused on every lane
-  (16 more belong to the named boundaries below and are kept apart under their names).
+  (102 more belong to the named boundaries below and are kept apart under their names).
 - **Named boundary: what it does not read.** cmd.exe's and PowerShell's own grammar (`%VAR%`
   as the program, the text `pwsh -Command` runs); dash's differences from bash, read as bash,
   the larger grammar; decompressors and other programs that write new text piped into a
@@ -1449,8 +1459,14 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   whose descriptor a redirection of that command sends into the pipe
   (`[[ -n $( ( ... >&2 ) >/dev/null ) ]] 2>&1 | bash`,
   `[[ -n $( ( ... >&3 ) >/dev/null 2>/dev/null ) ]] 3>&1 | bash`); a
-  shell's input moved to another descriptor and back (`... | bash 1>&0- 0<&1`), read as
-  coming from a descriptor this text does not open. A
+  shell's input moved to another descriptor and back (`... | bash 1>&0- 0<&1`), or copied
+  there and back (`... | bash 3<&0 <&3`, `3</dev/stdin <&3`), read as coming from a
+  descriptor this text does not open; a quoted word that looks like a redirection where a
+  reading takes it for one (`echo ... | bash -rcfile '<'`, `bash -rcfile '<' -x"$e"x -c
+  '...'`: the here-string form `bash -rcfile '<' <<< ...` is read); a tilde word or a
+  directory variable run as code by `eval`, `trap` or `env -S` (`HOME='...'; eval ~/`,
+  `eval -- ~+/`, `trap ~/ EXIT`, `eval "$HOME/"`), the twins of `eval "$HOME"`, which is
+  refused; an alias with `expand_aliases` (named above) also when it stands for `bash -c`. A
   `case` statement inside a substitution stays refused as unreadable (see
   `case` above).
 - **Comments and heredocs in the other two readings.** Neither takes a `#` as a comment, so

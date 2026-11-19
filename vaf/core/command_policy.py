@@ -1707,9 +1707,13 @@ def _nested_commands(exe: str, args: List[str], reparse: bool = True,
         # (`bash -c -e '...'`, `bash -c -- '...'`): that word is the script, read as well;
         # `+c`, a word with an expansion that may be either, a cluster's values and bash's
         # long options count there (_shell_c_scripts).
+        seen = set(found)
         for script in _shell_c_scripts(exe, args, braces):
             if isinstance(script, str):
-                found += [entry for entry in again("local", script) if entry not in found]
+                for entry in again("local", script):
+                    if entry not in seen:
+                        seen.add(entry)
+                        found.append(entry)
         return found
     if exe == "su":
         for pos, tok in enumerate(args):
@@ -2478,9 +2482,10 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[list],
         alternatives = [alt for alt in (spoken_toks, ansi_here) if alt is not None]
         if exe in _SHELL_SINKS:
             # The words as written tell a quoted expansion (`bash "$S"`, never empty words) from
-            # a bare one that may vanish (`bash $S`).
+            # a bare one that may vanish (`bash $S`), and a quoted option value from a
+            # redirection (`bash -rcfile '<' <<< ...`).
             sink_raws = None
-            if exe_at >= 0 and any(a[:1] in ("$", _SUBST_BARE) for a in args):
+            if exe_at >= 0 and any(a[:1] in ("$", _SUBST_BARE, "<", ">") for a in args):
                 written = _raw_words(seg)
                 if len(written) == len(toks):
                     sink_raws = written[exe_at + 1:]
@@ -2563,14 +2568,17 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[list],
             raws = _raw_words(seg)
             if len(raws) == len(toks):
                 braces = [_brace_word(r) for r in raws[exe_at + 1:]]
-        # A script that starts with a tilde runs HOME, PWD or OLDPWD as code when the text may
-        # set it (`HOME='...'; bash -c ~/`): refused as an expansion.
+        # A script with a tilde prefix runs HOME, PWD, OLDPWD or a directory-stack entry as
+        # code when the text may set it (`HOME='...'; bash -c ~/`, `bash -c a=~`): refused as
+        # an expansion. Whether the text may set HOME is _ScriptName's question (names in
+        # pieces, a loop's name, every nested text), asked once per text.
         if exe_at >= 0 and exe in _COMMAND_STRING_SHELLS and "~" in seg:
             tildes = [s for s in _shell_c_scripts(exe, args, braces)
-                      if isinstance(s, str) and s[:1] == "~"]
+                      if isinstance(s, str) and _tilde_prefixes(s)]
             if tildes and home_settable is None:
-                # read once per text: a segment each would read the text again
-                home_settable = "HOME" in text or _sets_any_name(text)
+                if script_name is None:
+                    script_name = _ScriptName(_names_from + "\n" + text, _depth > 0)
+                home_settable = script_name.may_set("HOME")
             if any(_tilde_script(s, bool(home_settable)) for s in tildes):
                 if "opaque_command" not in cats:
                     cats.append("opaque_command")
@@ -4909,16 +4917,25 @@ class _ScriptName:
         if name not in self.seen:
             if len(self.seen) >= self.limit:
                 return True                 # more names than are looked for: fail closed
-            if self.any_name is None:
-                text = self.text
-                self.any_name = _sets_any_name(text) or _brace_word(text, quotes=False)
-                text = text.replace("\\\n", "").replace("$''", "").replace('$""', "")
-                self.plain_text = text.replace("'", "").replace('"', "").replace("\\", "")
-            # An expansion of the name gives it no value; any other occurrence may.
-            text = self.plain_text
-            self.seen[name] = self.any_name \
-                or text.count(name) > text.count("$" + name) + text.count("${" + name + "}")
+            self.seen[name] = self.may_set(name)
         return self.seen[name]
+
+    def may_set(self, name: str) -> bool:
+        """Whether the text may give `name` a value (also asked for HOME by _tilde_script):
+        always in a text another command runs; otherwise when the text may assign a name it
+        does not spell, or the name stands in it other than as its own expansion, with line
+        continuations, `$''`, quotes and backslashes taken out. The text is prepared once."""
+        if self.nested:
+            return True
+        if self.any_name is None:
+            text = self.text
+            self.any_name = _sets_any_name(text) or _brace_word(text, quotes=False)
+            text = text.replace("\\\n", "").replace("$''", "").replace('$""', "")
+            self.plain_text = text.replace("'", "").replace('"', "").replace("\\", "")
+        # An expansion of the name gives it no value; any other occurrence may.
+        text = self.plain_text
+        return self.any_name \
+            or text.count(name) > text.count("$" + name) + text.count("${" + name + "}")
 
 
 def _script_input(exe: str, args: List[str], carried: List[tuple],
@@ -4948,6 +4965,16 @@ def _script_input(exe: str, args: List[str], carried: List[tuple],
     shell = exe in _STDIN_SHELLS
     inline = "c" if shell else "cemr"          # -c CODE, -e/-r CODE, -m MODULE
     long_ok = long_options                  # bash's long options may still come
+
+    def is_value(p: int) -> bool:
+        # An option's value: a word that is no redirection, or one quoted as written
+        # (`-rcfile '<'`: the token alone looks like the operator).
+        word = args[p]
+        if not (_HERE_OPERATOR_RE.match(word) or _REDIRECT_RE.match(word)
+                or word[:1] in ("<", ">")):
+            return True
+        return raws is not None and p < len(raws) and raws[p] != word
+
     script = None
     from_stdin = False
     proc_fed = False
@@ -5014,9 +5041,11 @@ def _script_input(exe: str, args: List[str], carried: List[tuple],
             if long_ok and tok[:1] == "-" and tok != "--" and (
                     long_name in _BASH_LONG_FLAGS or long_name in _BASH_LONG_VALUES):
                 pos += 1
-                if long_name in _BASH_LONG_VALUES and pos < len(args) \
-                        and not _REDIRECT_RE.match(args[pos]) and args[pos][:1] not in ("<", ">"):
-                    pos += 1
+                if long_name in _BASH_LONG_VALUES and pos < len(args):
+                    if is_value(pos):
+                        pos += 1
+                    else:
+                        from_stdin = True   # its value may be the next word after all
                 continue
             # A head word with an expansion in it may be a long option too, with one dash as
             # well (`-restricte"$u"d`): the input is read (fail closed), and the scan goes on
@@ -5027,8 +5056,10 @@ def _script_input(exe: str, args: List[str], carried: List[tuple],
                 continue
             long_ok = False
             letters = tok[1:] if not tok.startswith("--") else ""
-            if any(c in inline for c in letters):
-                return "", [], False        # code given inline: read elsewhere (`bash -c`)
+            # Code given inline is read elsewhere (`bash -c`), unless a word before may have
+            # left the shell reading its input (`sh -rc${e}file -c`: `-c` is rcfile's value).
+            if any(c in inline for c in letters) and not from_stdin:
+                return "", [], False
             # `-s` reads the input, and so may an option word with an expansion in it
             # (`x=s; ... | bash -$x`).
             from_stdin = from_stdin or (shell and (
@@ -5037,8 +5068,10 @@ def _script_input(exe: str, args: List[str], carried: List[tuple],
             # pipefail` reads its input); never a redirection or a here-string.
             values = 1 if tok in _SHELL_VALUE_OPTIONS else (_cluster_values(tok) if shell else 0)
             pos += 1
-            while values and pos < len(args) and not _HERE_OPERATOR_RE.match(args[pos]) \
-                    and not _REDIRECT_RE.match(args[pos]) and args[pos][:1] not in ("<", ">"):
+            while values and pos < len(args):
+                if not is_value(pos):
+                    from_stdin = from_stdin or shell    # its value may be a later word
+                    break
                 pos += 1
                 values -= 1
             continue
@@ -5125,13 +5158,17 @@ def _stdin_descriptor(op: str, target: str) -> str:
 
 def _self_stdin(op: str, target: str) -> bool:
     """Whether a redirection of descriptor 0 opens descriptor 0 itself (`<&0`, `0<&0`,
-    `</dev/stdin`, `</dev/fd/0`, `</proc/self/fd/0`): the input stays what it was, a pipe
-    included. Another process's descriptor (`/proc/<pid>/fd/0`) and the move `<&0-` are not."""
+    `</dev/stdin`, `</dev/fd/0`, `</proc/self/fd/0`, and the move `<&0-` onto itself): the
+    input stays what it was, a pipe included. A target with an expansion in it may be any of
+    them (`<&$z`), so it counts too (fail closed). Another process's descriptor
+    (`/proc/<pid>/fd/0`) does not."""
     m = _INPUT_OPERATOR_RE.match(op)
     if not m or m.group(1).lstrip("0"):
         return False
+    if any(mark in target for mark in ("$", "`", _SUBST_BARE, _SUBST_QUOTED)):
+        return True                 # (a process substitution is another command's output)
     if m.group(2) == "<&":
-        return bool(re.fullmatch(r"0+", target))
+        return bool(re.fullmatch(r"0+-?", target))
     if not target.startswith("/"):
         return False
     path = _normal_path(target)
@@ -5853,9 +5890,20 @@ def _shell_c_script(args: List[str], strip_redirections: bool = True,
         return []
     found: list = [args[k] if k < len(args) else _SCRIPT_MISSING]
     # The later words as candidates once, in the reading without redirections (a here-string's
-    # word is the input, never the script: `bash "$S" <<< "$IN"`).
+    # word is the input, never the script: `bash "$S" <<< "$IN"`). A brace word among them may
+    # be any words, and more of them than one command may read is no script anyone can know:
+    # unknown either way (fail closed).
     if unsure >= 0 and strip_redirections:
-        found += [a for a in args[unsure:] if a not in found]
+        later = args[unsure:]
+        if len(later) > MAX_NESTED_COMMANDS or any(
+                flags[j] if flags is not None else _brace_word(a, quotes=False)
+                for j, a in enumerate(later, unsure)):
+            return [_UNKNOWN_SCRIPT]
+        seen = set(found)
+        for a in later:
+            if a not in seen:
+                seen.add(a)
+                found.append(a)
     return found
 
 
@@ -5865,23 +5913,38 @@ def _shell_c_scripts(exe: str, args: List[str], braces: Optional[List[bool]] = N
     count for it (union), and with and without the words that look like redirections."""
     readings = (True,) if exe == "bash" else (True, False) if exe == "sh" else (False,)
     found: list = []
+    seen: set = set()                   # the sentinels hash by identity, the texts by value
     for long_options in readings:
         for strip in (True, False):
             for script in _shell_c_script(args, strip, long_options, braces):
-                if not any(script is f or script == f for f in found):
+                if script not in seen:
+                    seen.add(script)
                     found.append(script)
     return found
 
 
+def _tilde_prefixes(word: str) -> List[str]:
+    """The parts of a word bash tilde-expands: the word itself when it starts with `~`, and
+    in an assignment-shaped word (`a=~`, `a=x:~/b`) each part after the `=` and each `:`."""
+    found = [word] if word[:1] == "~" else []
+    m = _ASSIGNMENT_WORD_RE.match(word)
+    if m:
+        found += [part for part in word[m.end():].split(":") if part[:1] == "~"]
+    return found
+
+
 def _tilde_script(script: str, home_settable: bool) -> bool:
-    """Whether a script word that starts with a tilde runs a value the text may set:
-    `~+` and `~-` are PWD and OLDPWD (a `cd` sets them), `~` and `~/...` are HOME when
-    `home_settable` (the text names HOME or may assign a name it does not spell); `~user` is
-    from the password file."""
-    head = script.split("/", 1)[0]
-    if head in ("~+", "~-"):
-        return True
-    return head == "~" and home_settable
+    """Whether a script word with a tilde prefix (_tilde_prefixes) runs a value the text may
+    set: `~+`, `~-` and the directory stack (`~0`, `~+1`, `~-0`) are PWD, OLDPWD and dirs
+    entries (a `cd` sets them), `~` and `~/...` are HOME when `home_settable`
+    (_ScriptName.may_set); `~user` is from the password file."""
+    for prefix in _tilde_prefixes(script):
+        head = prefix.split("/", 1)[0]
+        if head[1:2] in ("+", "-") or head[1:2].isdigit():
+            return True
+        if head == "~" and home_settable:
+            return True
+    return False
 
 
 def _xargs_runs_its_input(toks: List[str], exe_at: int, args: List[str]) -> bool:

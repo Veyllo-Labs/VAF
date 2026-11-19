@@ -694,6 +694,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
     extglob on): list the globs (`ls *.py *.txt`).
   - A word a shell brace-expands where its options stand (`bash {a,b}.sh`): write the words
     out.
+  - A shell's `-c` script given as a tilde path where the command may set HOME, or as `~+`
+    or a directory-stack entry (`HOME=/tmp/h bash -c ~/x.sh`, `source env.sh; bash -c
+    ~/x.sh`, `bash -c ~+/x.sh`, also inside `sh -c '...'`): write the path out
+    (`bash /home/me/x.sh`).
   - `... | base64 -d | sh`, `xxd -r -p | sh`, `... | rev | sh`: decode into a file, read it,
     then run it.
   - `powershell -EncodedCommand ...` (also `-enc`, `-e`, `-ec`): `-Command` with the text.

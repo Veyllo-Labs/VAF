@@ -1685,6 +1685,11 @@ def _bindings(scope, outer: dict, declared: set = frozenset()) -> dict:
             bind(node.id)
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             bind(node.name)
+        elif isinstance(node, _COMPREHENSIONS):
+            # `:=` in a comprehension binds in the scope around it (PEP 572)
+            for inner in ast.walk(node):
+                if isinstance(inner, ast.NamedExpr) and isinstance(inner.target, ast.Name):
+                    bind(inner.target.id)
         elif isinstance(node, ast.ExceptHandler) and node.name:
             bind(node.name)
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
@@ -1989,7 +1994,8 @@ def test_the_fd_redirection_scanner_resolves_only_a_single_plain_assignment():
     MUTATION: count a comprehension's variable - red;
     MUTATION: read a class body as part of the module - red (the method of the same name);
     MUTATION: give a method the class's names - red (the method row);
-    MUTATION: a comprehension sees the class - red; a class header in the class - red."""
+    MUTATION: a comprehension sees the class - red; a class header in the class - red;
+    MUTATION: a comprehension's `:=` bound inside it - red (the walrus row)."""
     assert _fd_redirections(ast.parse(
         'cmd = "echo x"\n'
         'cmd += " >&12"\n'
@@ -2045,6 +2051,11 @@ def test_the_fd_redirection_scanner_resolves_only_a_single_plain_assignment():
         'class A:\n'
         '    script = "cat <&10"\n'
         '    results = [x for x in os.system(script)]')) == [2]
+    # `:=` in a comprehension rebinds the name in the scope around it
+    assert _fd_redirections(ast.parse(
+        'script = "cat <&10"\n'
+        '[(script := "true") for _ in range(1)]\n'
+        'os.system(script)')) == []
     # a class's bases and a function's decorators are evaluated in the defining scope
     assert _fd_redirections(ast.parse(
         'script = "cat <&10"\n'

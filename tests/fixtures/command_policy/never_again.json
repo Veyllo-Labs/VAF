@@ -352,6 +352,11 @@
   "BASH_ARGV0=-s; echo 'rm -rf /' | bash \"${0}\"",
   "BASH_ARGV0=-xs; printf '%s\\n' 'rm -r -f /' | bash +eo posix $'\\x2b\\x65' $0",
   "FOO=1 $(echo rm) -rf /",
+  "HOME+=';rm -fr / #'\nbash -c a=~",
+  "HOME+=';rm -r -f / #'\nbash -e -c -- a=~/",
+  "HOME+=';rm -r -f / #'; sh -c a=~",
+  "HOME+=';rm -rf / #'; bash -c a=~",
+  "HOME+=';rm -rf / #'; sh -c a=~",
   "HOME='+Ob'; echo x | xargs bash --restricted ~ dotglob +c $'r\\x6d \\x2dRf /' name",
   "HOME='+Po'; env -u X bash -noediting +uOe globstar ~ pipefail +ec $\"rm -Rf /\"",
   "HOME='-Hot'; bash ~ noclobber +ec $\"rm -rf /\" name",
@@ -364,6 +369,16 @@
   "HOME='-o'; v1='rm -rf /'; echo x | xargs bash -verbose ~ xtrace +ec \"$v1\" name",
   "HOME='-oo'; exec bash ~ xtrace errexit +o $'e\\x72re\\x78i\\x74' +ec \"rm -rf /\"",
   "HOME='-uoh'; exec sh ~ pipefail -fo nounset +ec $'\\x72m -\\x72f \\x2f'",
+  "HOME=';rm -fr / #'\nexec bash +c a=~",
+  "HOME=';rm -fr / #'\ntimeout 5 bash -ec a=~/",
+  "HOME=';rm -r -f / #'\nexec bash -c -- a=~/",
+  "HOME=';rm -r -f / #' && bash -c a=~",
+  "HOME=';rm -r -f / #'; sh -c a=~",
+  "HOME=';rm -rf / #'; bash -c -- a=~",
+  "HOME=';rm -rf / #'; bash -c a=x:~",
+  "HOME=';rm -rf / #'; bash -c a=~",
+  "HOME=';rm -rf / #'; bash -e -c a=~",
+  "HOME=';rm -rf / #'; sh -c a=~",
   "HOME='rm -Rf / #'; bash +c ~/",
   "HOME='rm -Rf / #'; bash -c ~/",
   "HOME='rm -Rf / #'; sh +c ~/",
@@ -381,18 +396,32 @@
   "HOME='rm -fr / #'; sh -ec ~/",
   "HOME='rm -fr /'; env bash -c -- ~",
   "HOME='rm -r -f / #'; sh -c ~//",
+  "HOME='rm -rf / #' env sh -c 'bash -c ~'",
+  "HOME='rm -rf / #'; (bash -c ~)",
   "HOME='rm -rf / #'; bash +c ~/",
   "HOME='rm -rf / #'; bash +c ~//",
   "HOME='rm -rf / #'; bash +c ~/x",
+  "HOME='rm -rf / #'; bash -c \"$HOME\"",
   "HOME='rm -rf / #'; bash -c -- ~",
   "HOME='rm -rf / #'; bash -c -e ~/",
   "HOME='rm -rf / #'; bash -c ~",
   "HOME='rm -rf / #'; bash -c ~/",
   "HOME='rm -rf / #'; bash -c ~/x",
+  "HOME='rm -rf / #'; cat <(bash -c ~)",
+  "HOME='rm -rf / #'; echo $(bash -c ~)",
+  "HOME='rm -rf / #'; env bash -c ~/",
+  "HOME='rm -rf / #'; eval \"$HOME\"",
+  "HOME='rm -rf / #'; eval $HOME",
+  "HOME='rm -rf / #'; eval 'bash -c ~'",
   "HOME='rm -rf / #'; sh +c ~/",
   "HOME='rm -rf / #'; sh -c ~/",
+  "HOME='rm -rf / #'; timeout 5 bash -c ~/",
+  "HOME='rm -rf / #'; trap \"$HOME\" EXIT",
   "HOME='rm -rf / #'; x=c; bash -$x ~/",
+  "HOME='rm -rf / #'; xargs bash -c ~/ </dev/null",
+  "HOME='rm -rf / #'; { bash -c ~; } | cat",
   "HOME='rm -rf /'; bash -c ~",
+  "HOME='rm -rf /'; env -S \"$HOME\"",
   "HOME=+s; sh ~ <<< 'rm -rf /'",
   "HOME=--; sh ~ <<< 'rm -fr /'",
   "HOME=-; bash ~ <<< 'rm -fr /'",
@@ -400,9 +429,12 @@
   "HOME=-; v1='-oE'; echo 'rm -Rf /' | timeout 9 bash -noediting \"${v1}\" noclobber ~",
   "HOME=-c; bash ~ 'rm -rf /'",
   "HOME=-o; bash ~ errexit +c 'rm -rf /'",
+  "HOME=-o; bash ~ errexit {-c,'rm -rf /'}",
   "HOME=-s; echo 'rm -rf /' | bash -norc ~",
   "HOME=-s; echo 'rm -rf /' | bash ~",
   "HOME=-s; timeout 9 bash -noprofile -login $'-\\x4fbt' dotglob ~ <<< 'rm -r -f /'",
+  "IFS= read -r HOM''E <<< 'rm -rf / #'\nsh -c ~",
+  "IFS=, read -r HO''ME x <<< 'rm -rf / #,y'; bash -c ~/",
   "OLDPWD='+oOv'; v1='-c'; nohup bash \"--norc\" ~- noclobber failglob \"$v1\" \"$(echo 'rm -Rf /')\"",
   "OLDPWD='-'; echo 'rm -r -f /' | nice -n 5 bash -noprofile -login \"$(echo '-oTf')\" posix ~-",
   "OLDPWD='-bhOc'; v1='xtrace'; v2='rm -rf /'; bash --restricted --noprofile ~- failglob -o \"$v1\" \"$v2\" name",
@@ -418,6 +450,7 @@
   "OLDPWD=-c; bash ~- 'rm -rf /'",
   "P='rm -rf /'; bash <<EOF\n\\\\$P\nEOF",
   "P='rm -rf /'; cat <<EOF | bash\n\\\\$P\nEOF",
+  "PWD+=';rm -fr / #'\nexec bash +c a=~+",
   "PWD='+Ceoo'; v1='+c'; bash ~+ pipefail $\"posix\" $v1 -fo xtrace $\"rm -Rf /\"",
   "PWD='-'; v1='-O'; stdbuf -o0 sh -noediting --rcfile /dev/null \"$v1\" failglob ~+ <<< 'rm -rf /'",
   "PWD='-c'; v1='-xao'; v2='noclobber'; nice -n 5 bash -init-file /dev/null ~+ \"${v1}\" $v2 'rm -r -f /'",
@@ -425,6 +458,9 @@
   "PWD='-o'; bash --noprofile --noprofile ~+ nounset +ec $\"rm -fr /\" name",
   "PWD='-o'; v1='rm -Rf /'; v2='name'; nice -n 5 sh ~+ pipefail +c \"$v1\" \"${v2}\"",
   "PWD='-rcfile'; echo x | xargs bash ~+ /dev/null +$''c $'rm\\x20-\\x72f\\x20/'",
+  "PWD=';rm -fr / #'\nbash -c a=~+",
+  "PWD=';rm -rf / #' && exec bash -ec a=~+",
+  "PWD=';rm -rf / #'; bash -c a=~+",
   "PWD='rm -Rf / #'; bash +c ~+/x",
   "PWD='rm -Rf / #'; bash -c ~+/",
   "PWD='rm -Rf / #'; sh +c ~+//",
@@ -542,6 +578,14 @@
   "a=--; echo 'rm -rf /' | bash \"$a\"",
   "a=--; echo 'rm -rf /' | bash \"${a}\"",
   "a=-s; echo 'rm -rf /' | sh \"$a\"",
+  "a=QRSTUVWXYZ; printf -vABCDEFGHIJ$a %s -s; echo 'rm -rf /' | bash \"$ABCDEFGHIJQRSTUVWXYZ\"",
+  "a=S; declare \\\n\"$a$a=-s\"; echo 'rm -rf /' | bash \"$SS\"",
+  "a=S; export \\\n\"$a$a=-s\"; echo 'rm -rf /' | bash \"$SS\"",
+  "a=S; o=-v; printf \"$o\" \"$a$a\" %s -s; echo 'rm -rf /' | bash \"$SS\"",
+  "a=S; o=-v; printf \\\n\"$o\" \"$a$a\" %s -s; echo 'rm -rf /' | bash \"$SS\"",
+  "a=S; read \\\n\"$a$a\" <<< -s; echo 'rm -rf /' | bash \"$SS\"",
+  "a=v; printf ''''''''''-$a S %s -s; echo 'rm -rf /' | bash \"$S\"",
+  "a=v; printf -\"\"\"\"\"\"\"\"\"$a\" S %s -s; echo 'rm -rf /' | bash \"$S\"",
   "a=xyz; : \"${a:$'$(rm -rf /)'}\"",
   "a=xyz; : ${a:$\"$(rm -rf /)\"}",
   "a=xyz; : ${a:$'$(rm -rf /)'}",
@@ -816,6 +860,7 @@
   "b['`rm -rf /`' ]=1",
   "b['`rm -rf /`']=1",
   "b['x'$(rm -rf /)]=1",
+  "bash \"\"{-c,'rm -rf /'}",
   "bash \"$(echo +c)\" -e 'rm -rf /'",
   "bash \"$(echo -c)\" 'rm -rf /'",
   "bash \"$(echo -co)\" errexit 'rm -rf /'",
@@ -842,7 +887,9 @@
   "bash $\"-c\" 'rm -rf /'",
   "bash $'+c' 'rm -rf /'",
   "bash $'-c' 'rm -rf /'",
+  "bash $(: #'\n){-c,'rm -rf /'}",
   "bash $(echo -c) 'rm -rf /'",
+  "bash ''{-c,'rm -rf /'}",
   "bash '+e' -euo pipefail +c \"r\"\"m -rf /\"",
   "bash +$'c' 'rm -rf /'",
   "bash +O extglob +c 'rm -rf /'",
@@ -884,6 +931,8 @@
   "bash --norc +c 'rm -rf /'",
   "bash --posix -noediting -$''O dotglob -ce - $\"rm -fr /\"",
   "bash --posix -restricted <<< 'rm -Rf /'",
+  "bash --rcfile '<' -c 'rm -rf /'",
+  "bash --rcfile '<' <<< 'rm -rf /'",
   "bash --rcfile /dev/null \"-norc\" -o posix +ec $\"rm -Rf /\"",
   "bash --rcfile /dev/null +c 'rm -rf /'",
   "bash --rcfile${u} /dev/null -s <<< 'rm -rf /'",
@@ -988,6 +1037,7 @@
   "bash -ceo pipefail 'rm -rf /'",
   "bash -ceo pipefail -- 'rm -rf /'",
   "bash -co pipefail 'rm -rf /'",
+  "bash -c{,} 'rm -rf /'",
   "bash -e +c $'rm -rf /'",
   "bash -e {-c,{\\ rm\\ -rf\\ /\\;}}",
   "bash -eO extglob <<< 'rm -rf /'",
@@ -1006,6 +1056,8 @@
   "bash -euo pipefail <<'EOF'\nset -x\nrm -rf /\nEOF",
   "bash -euo pipefail \\+''O extglob +e\\c $'rm -rf /'",
   "bash -euxo pipefail <<EOF\nrm -rf /\nEOF",
+  "bash -init-file '<' -O extglob <<< 'rm -r -f /'",
+  "bash -init-file '<' <<< 'rm -rf /'",
   "bash -init-file /dev/null +c 'rm -rf /'",
   "bash -init-file /dev/null -c 'rm -rf /'",
   "bash -init-file /dev/null -o noclobber -O extglob $\"+c\" $\"rm -fr /\"",
@@ -1026,6 +1078,7 @@
   "bash -norc -TCo pipefail {-s,} <<< 'rm -r -f /'",
   "bash -norc -hov nounset -ce \"rm -fr /\"",
   "bash -norc -o nounset {--,} <<< 'rm -rf /'",
+  "bash -norc -rcfi\"\"le '<<<' <<< 'rm -fr /'",
   "bash -o <<<'rm -rf /'",
   "bash -o pipefail +c 'rm -rf /'",
   "bash -o pipefail -euo 'pipefail' \"`echo +c`\" $'-\\x65' - 'rm -rf '/",
@@ -1035,8 +1088,17 @@
   "bash -posix \"-cot\" noclobber 'rm -rf /'",
   "bash -posix +c 'rm -rf /'",
   "bash -posix -O dotglob +ec $\"rm -fr /\"",
+  "bash -rcfile '2>' <<< 'rm -rf /'",
+  "bash -rcfile '<' +c 'rm -rf /'",
+  "bash -rcfile '<' -s <<< 'rm -rf /'",
+  "bash -rcfile '<' <<< 'rm -rf /'",
+  "bash -rcfile '<<<' <<< 'rm -rf /'",
+  "bash -rcfile '<x' <<< 'rm -rf /'",
+  "bash -rcfile '>' <<< 'rm -rf /'",
+  "bash -rcfile '>x' <<< 'rm -rf /'",
   "bash -rcfile /dev/null +c 'rm -rf /'",
   "bash -rcfile /dev/null -c 'rm -rf /'",
+  "bash -rcfile \\< <<< 'rm -rf /'",
   "bash -restricted -s <<< 'rm -fr /'",
   "bash -restricted <<< 'rm -Rf /'",
   "bash -s '${' <<X\n\\$(echo rm) -rf /\nX",
@@ -1060,8 +1122,11 @@
   "bash -u -eo pipefail $(printf %s -c) 'rm -fr /'",
   "bash -u {+c,} $'rm -rf /'",
   "bash -u {-,} <<< 'rm -rf /'",
+  "bash -ver\"$e\"bose {-c,'rm -fr /'}",
   "bash -verbose +c 'rm -rf /'",
   "bash -verbose -c -e 'rm -rf /'",
+  "bash -verbose -debugger -rcfile '>' <<< 'rm -fr /'",
+  "bash -verbose -debugger -rcfile '>' <<< 'rm -rf /'",
   "bash -x $'\\x2do' $'\\x70ipe\\x66\\x61\\x69\\x6c' +oc posix -x -e \"r\"\"m -fr /\"",
   "bash -x +c 'rm -rf /'",
   "bash -x {--,} <<< 'rm -rf /'",
@@ -1080,6 +1145,7 @@
   "bash 2>&1 <<< \"$(echo rm -rf /)\"",
   "bash 2>&1 <<< '$(echo rm) -rf /'",
   "bash 2>&1 <<< 'rm -rf /'",
+  "bash <&0 <<< 'rm -rf /'",
   "bash <<$$'x'\necho ok\n$$x\nrm -rf /",
   "bash <<'E' | bash\necho rm -rf /\nE",
   "bash <<'EOF'\n$(echo rm) -rf /\nEOF",
@@ -1106,6 +1172,7 @@
   "bash <<< 'env rm -rf /'",
   "bash <<< 'rm -rf /'",
   "bash <<< 'rm -rf /' &>/dev/null",
+  "bash <<< 'rm -rf /' <&0",
   "bash <<<\"$(echo rm) -rf /\"",
   "bash <<<'$(echo rm) -rf /'",
   "bash <<<'rm -rf /'",
@@ -1126,6 +1193,7 @@
   "bash {-,} <<< 'rm -rf /'",
   "bash {--,} <<< 'rm -rf /'",
   "bash {-c,'rm -rf /'}",
+  "bash {-c,'rm -rf /'}''",
   "bash {-c,-e} 'rm -fr '/",
   "bash {-c,-e} rm\\ -fr\\ /",
   "bash {-c,-} 'rm -fr '/",
@@ -1256,6 +1324,7 @@
   "command bash -euo \\p\\\ni\\pefail \"`echo +c`\" 'rm -fr /'",
   "command bash -euo pipefail $(echo -c) $'rm -rf /'",
   "command bash -o pipefail +\"\"c $'-\\x65\\x6f' errexit \"rm -rf /\"",
+  "command bash -rcfile '<<<' -rcfile x <<< 'rm -fr /'",
   "command bash -verbose $\"+c\" \"rm -Rf /\"",
   "command bash -verbose +ec 'rm -rf /'",
   "command bash -verbose -O \"failglob\" \"-ce\" -oum xtrac\"$__u\"e \"$(echo 'rm -r -f /')\"",
@@ -1272,7 +1341,9 @@
   "de''clare \"$(printf '\\121')=--\"; echo 'rm -rf /' | bash \"$Q\"",
   "declare \"$(echo cz0tLQo= | base64 -d)\"; echo 'rm -rf /' | bash \"$s\"",
   "declare $\"SS\"=-s; echo 'rm -rf /' | bash \"$SS\"",
+  "declare $'HOME'='rm -rf / #'; bash -c ~/",
   "declare $'SS=-s'; echo 'rm -rf /' | bash \"$SS\"",
+  "declare $'\\x48OME'='rm -rf / #'; bash -c ~/",
   "declare 'S'S=-s; echo 'rm -rf /' | bash \"$SS\"",
   "declare 'SS=-s'; echo 'rm -rf /' | bash \"$SS\"",
   "declare 'a[$(rm -rf /)]=1'",
@@ -1316,7 +1387,22 @@
   "declare -n r='a[$(rm -rf /)]'; r=1",
   "declare -n r='a[${ rm -rf /; }]'; : $r",
   "declare -n r='a[${ rm -rf /;}]'; r=1",
+  "declare -n r=HO''ME; r='rm -rf / #'; bash -c ~/",
   "declare -n r=x; x=--; echo 'rm -rf /' | bash \"$r\"",
+  "declare -n r_=HOM\"\"E; r_='rm -rf / #'\nsh -c ~",
+  "declare -x HOM\\E=';rm -rf / #'; sh -c - a=~/",
+  "declare H''OME='rm -rf / #' && command bash -debugge\"$e\"r -c ~",
+  "declare HO''ME='rm -rf / #'\nbash -c -- ~",
+  "declare HO''ME='rm -rf / #'; bash -c ~/",
+  "declare HOM\"\"E=';rm -r -f / #'; bash -c - a=~",
+  "declare HOM''E='rm -fr / #' && sh -c ~",
+  "declare HOM''E='rm -rf / #' && sh -c ~",
+  "declare HOME=';rm -fr / #'; exec bash +c a=~",
+  "declare HOME=';rm -rf / #'\nnice bash +c a=x:~",
+  "declare HOME=';rm -rf / #' && bash +c a=x:~",
+  "declare HOME=';rm -rf / #' && bash +c a=~/",
+  "declare OLDPWD=';rm -fr / #'; bash -c - a=~-",
+  "declare PWD=';rm -r -f / #'\nbash -x -ec a=~+",
   "declare S\"\"S=-es; echo 'rm -rf /' | command bash \"$SS\"",
   "declare S\"\"S=-es; printf '%s\\n' 'rm -fr /' | sh -o pipefail \"${SS}\"",
   "declare S\"\"S=-s; echo 'rm -rf /' | bash \"$SS\"",
@@ -1334,6 +1420,7 @@
   "declare x''y=--; printf '%s\\n' 'rm -rf /' | b''ash -\\u \"\"\"${xy}\"",
   "declare x=-c; bash -euo pipefail ${x} \"rm -rf /\"",
   "declare x=-c; sh $'+eo' posi\\x \"${x}\" 'rm -fr '/",
+  "declare {HO,}ME='rm -rf / #'; bash -c ~",
   "declare {Q,Z}1=+s; b''ash \"\"\"${Q1}\" <<< 'rm -fr /'",
   "declare {Q,Z}1=+s; echo 'rm -fr /' | bash \"\"\"${Q1}\"",
   "declare {Q,Z}1=--; echo 'rm -r -f /' | bash \"$Q1\"''",
@@ -1356,6 +1443,14 @@
   "declare {x,Z}y=-es; echo 'rm -rf /' | b''ash -o pipefail \"\"\"${xy}\"",
   "diff <(bash -c 'rm -rf /') <(ls)",
   "diff <(rm -rf /) <(ls)",
+  "e=\ndeclare -x P$\"\"WD=';rm -rf / #'\nsh +c a=~+",
+  "e=\necho 'rm -rf /' | sh --rcfile '<' -no${e}editing +o errexit",
+  "e=\ntypeset HO$\"\"ME=';rm -rf / #'\nbash -c a=x:~",
+  "e= && exec bash -rcf${e}ile -- {-c,{'rm -rf /',}}",
+  "e= && { sh <&0-; } <<< 'rm -rf /'",
+  "e=; echo 'rm -fr /' | sh - 0<&0-",
+  "e=; x3='s'; echo 'rm -fr /' | nice bash --init-file '<' -e$x3",
+  "e=; { sh <&0-; } <<< 'rm -fr /'",
   "echo \"$$'\\'\" $(rm -rf /)",
   "echo \"$$(\"\nrm -rf /",
   "echo \"$(( $(echo rm) -rf / # ))\n))\"",
@@ -1534,23 +1629,36 @@
   "echo 'rm -Rf /' | bash -restricted -o errexit -",
   "echo 'rm -Rf /' | nice -n 5 sh -noediting $\"-o\" pipefail {,-bo} $\"noclobber\" -s",
   "echo 'rm -fr /' | bash +O $'e\\x78\\x74\\x67lo\\x62' {-s,}",
+  "echo 'rm -fr /' | bash - <&0-",
   "echo 'rm -fr /' | bash -init-file /dev/null",
+  "echo 'rm -fr /' | bash -s <&0-",
   "echo 'rm -fr /' | bash -x\\O e\"\"xtgl''ob $'-oo' $'\\x70ipefail' errexit",
+  "echo 'rm -fr /' | bash 0<&0-",
+  "echo 'rm -fr /' | bash <&0-",
   "echo 'rm -fr /' | bash {--,}",
   "echo 'rm -fr /' | command bash -restricted -s",
+  "echo 'rm -fr /' | env bash 0<&0-",
+  "echo 'rm -fr /' | env bash <&0-",
   "echo 'rm -fr /' | env sh -norc --",
+  "echo 'rm -fr /' | exec bash <&0-",
   "echo 'rm -fr /' | nohup sh -init-file /dev/null --posix -oo $\"posix\" $'\\x70osi\\x78' -o errexit",
+  "echo 'rm -fr /' | sh -rc${e}file -c",
   "echo 'rm -fr /' | sh -restricted -of nounset -",
+  "echo 'rm -fr /' | sh 0<&0-",
   "echo 'rm -fr /' | sh {-,}",
   "echo 'rm -fr /' | sh {-s,-e}",
   "echo 'rm -fr /' | stdbuf -o0 sh -restricted",
   "echo 'rm -fr /' | timeout -k 1 9 bash -noediting --rcfile /dev/null -o posix --",
   "echo 'rm -fr /' | timeout 9 bash -noprofile \"$(echo '--verbose')\" -Ob failglob --",
   "echo 'rm -fr /' | timeout 9 sh -noediting -o xtrace --",
+  "echo 'rm -r -f /' | bash - 0<&0-",
   "echo 'rm -r -f /' | bash -norc -ox xtrace",
+  "echo 'rm -r -f /' | bash 0<&0-",
   "echo 'rm -r -f /' | command bash -oo pipefail $'e\\x72r\\x65xit' $(true)",
   "echo 'rm -r -f /' | nice -n 5 bash -restricted -verbose $\"--\"",
   "echo 'rm -r -f /' | nice sh -restricted -norc -o noclobber {--,}",
+  "echo 'rm -r -f /' | sh 0<&0-",
+  "echo 'rm -r -f /' | sh <&0-",
   "echo 'rm -rf /' 1>&000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001 | bash",
   "echo 'rm -rf /' 1>&0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001 | bash",
   "echo 'rm -rf /' 1>&0000000000000000000000000000001 | bash",
@@ -1644,14 +1752,19 @@
   "echo 'rm -rf /' | bash +O extglob",
   "echo 'rm -rf /' | bash +o posix",
   "echo 'rm -rf /' | bash --init-file /dev/null",
+  "echo 'rm -rf /' | bash --rcfile -c",
   "echo 'rm -rf /' | bash --rcfile /dev/null",
   "echo 'rm -rf /' | bash -O extglob",
+  "echo 'rm -rf /' | bash -debugger",
+  "echo 'rm -rf /' | bash -e 0<&0-",
+  "echo 'rm -rf /' | bash -e <&0-",
   "echo 'rm -rf /' | bash -eO extglob",
   "echo 'rm -rf /' | bash -e\\\no pipefail",
   "echo 'rm -rf /' | bash -eo pipefail",
   "echo 'rm -rf /' | bash -eo pipefail $x",
   "echo 'rm -rf /' | bash -eo pipefail </dev/stdin",
   "echo 'rm -rf /' | bash -euo pipefail",
+  "echo 'rm -rf /' | bash -init-file -norc",
   "echo 'rm -rf /' | bash -init-file /dev/null",
   "echo 'rm -rf /' | bash -n\"\"orc",
   "echo 'rm -rf /' | bash -noediting -Eeo errexit",
@@ -1659,8 +1772,18 @@
   "echo 'rm -rf /' | bash -noprofile -posix +o xtrace",
   "echo 'rm -rf /' | bash -norc",
   "echo 'rm -rf /' | bash -norc +O extglob -s",
+  "echo 'rm -rf /' | bash -norc +o errexit",
+  "echo 'rm -rf /' | bash -norc -",
+  "echo 'rm -rf /' | bash -norc --",
+  "echo 'rm -rf /' | bash -norc -e",
+  "echo 'rm -rf /' | bash -norc -o errexit",
   "echo 'rm -rf /' | bash -norc$u",
   "echo 'rm -rf /' | bash -posix",
+  "echo 'rm -rf /' | bash -rcfile '&>'",
+  "echo 'rm -rf /' | bash -rcfile '>'",
+  "echo 'rm -rf /' | bash -rcfile '>' -s",
+  "echo 'rm -rf /' | bash -rcfile '>x'",
+  "echo 'rm -rf /' | bash -rcfile -c",
   "echo 'rm -rf /' | bash -rcfile /dev/null",
   "echo 'rm -rf /' | bash -restricted",
   "echo 'rm -rf /' | bash -s </dev/stdin",
@@ -1672,12 +1795,17 @@
   "echo 'rm -rf /' | bash 3>&0- 0<&3",
   "echo 'rm -rf /' | bash < /dev/stdin",
   "echo 'rm -rf /' | bash <&0",
+  "echo 'rm -rf /' | bash <&0 -s",
+  "echo 'rm -rf /' | bash <//dev/fd/0",
+  "echo 'rm -rf /' | bash </dev/./stdin",
   "echo 'rm -rf /' | bash </dev/fd/0",
   "echo 'rm -rf /' | bash </dev/stdin",
   "echo 'rm -rf /' | bash </proc/self/fd/0",
+  "echo 'rm -rf /' | bash </proc/thread-self/fd/0",
   "echo 'rm -rf /' | bash \\\n\"$x\"-s",
   "echo 'rm -rf /' | bash \\\n-s",
   "echo 'rm -rf /' | bash \\-\"$x\"s",
+  "echo 'rm -rf /' | bash {,}",
   "echo 'rm -rf /' | bash {-,}",
   "echo 'rm -rf /' | bash {-s,{x}}",
   "echo 'rm -rf /' | bash {-s,}",
@@ -1687,6 +1815,8 @@
   "echo 'rm -rf /' | env A=1 bash -restricted",
   "echo 'rm -rf /' | env A=1 sh -rcfile $\"/dev/null\" -noediting -O extglob {,-s}",
   "echo 'rm -rf /' | env bash -eo pipefail",
+  "echo 'rm -rf /' | env bash 0<&0-",
+  "echo 'rm -rf /' | exec bash <&0-",
   "echo 'rm -rf /' | nice -n 5 sh --rcfile /dev/null -noediting +o xtrace -s",
   "echo 'rm -rf /' | nice bash -euo pipefail",
   "echo 'rm -rf /' | nohup bash -eo pipefail",
@@ -1694,7 +1824,15 @@
   "echo 'rm -rf /' | sh \"$x\"-s",
   "echo 'rm -rf /' | sh \"${x--s}\"",
   "echo 'rm -rf /' | sh \"`echo -`\"",
+  "echo 'rm -rf /' | sh - <&0-",
+  "echo 'rm -rf /' | sh -e -s <&0-",
   "echo 'rm -rf /' | sh -eo errexit",
+  "echo 'rm -rf /' | sh -noediting -init-file '>' +O nullglob",
+  "echo 'rm -rf /' | sh -norc <&0-",
+  "echo 'rm -rf /' | sh -rc${e}file -c",
+  "echo 'rm -rf /' | sh -s -e <&0-",
+  "echo 'rm -rf /' | sh 0<&0-",
+  "echo 'rm -rf /' | sh <&0",
   "echo 'rm -rf /' | sh {--,}",
   "echo 'rm -rf /' | sh {-s,-e}",
   "echo 'rm -rf /' | source /dev/stdin",
@@ -1863,6 +2001,7 @@
   "exec bash +eo posix +''eo p\\\nos''ix +$'c' 'rm -rf /'",
   "exec bash +eo posix -e $'\\x2b\\x63' \"r\"\"m -r -f /\"",
   "exec bash --noediting -verbose -oEo noclobber nounset $(echo '-ce') $'rm -\\x66r /'",
+  "exec bash --rcfile '<' <<< 'rm -r -f /'",
   "exec bash -O extglob +eo posix \"+xc\" rm\\ -rf\\ /",
   "exec bash -e -xO $'e\\x78\\x74\\x67lo\\x62' $'+c' $'rm -r -f /'",
   "exec bash -euo pipefail \"$(echo +c)\" \"rm -r -f /\"",
@@ -1874,11 +2013,17 @@
   "exec bash -noprofile +\"$__u\"c $'\\x72m\\x20\\x2d\\x52\\x66 \\x2f'",
   "exec bash -posix +kof noclobber +c {-oOh,} nounset extglob $'r\\x6d -r\\x66 \\x2f'",
   "exec bash -posix {,+Eo} errexit +c 'rm -r -f /'",
+  "exec bash -rcfile '<' <<< 'rm -rf /'",
   "exec bash -xO extglob -eo pipefail +\\c $'rm -rf /'",
   "exec bash {-,} <<< 'rm -rf /'",
   "exec sh -verbose +oE errexit +c 'rm -r -f /'",
   "export \"$(echo cz0tLQo= | base64 -d)\"; echo 'rm -rf /' | bash \"$s\"",
+  "export H''OME=';rm -r -f / #' && sh -ec a=~",
+  "export HOME=';rm -fr / #' && sh -ec a=~",
   "export HOME='rm -rf / #'; sh -c ~/x",
+  "export H\\OME='rm -rf / #'; bash -c ~/",
+  "export OLDPWD=';rm -fr / #' && sh -c a=~-",
+  "export OLDPWD=';rm -rf / #' && sh -c a=~-",
   "export Q\"\"1='-s'; timeout 9 bash -restricted -norc \"${Q1}\" <<< 'rm -r -f /'",
   "export Q\"\"1=-; printf '%s\\n' 'rm -rf /' | exec bash \"${Q1}\"",
   "export Q''1=+s; printf '%s\\n' 'rm -rf /' | exec bash \"$Q1\"",
@@ -1887,6 +2032,7 @@
   "export S''S=-c; bash \"${SS}\" 'rm -rf /'",
   "export S''S=-s; echo 'rm -rf /' | bash \"$SS\"",
   "export a\"\"b=--; printf '%s\\n' 'rm -rf /' | b''ash --noprofile \"\"\"${ab}\"",
+  "export rm='rm -rf /'; bash -c \\${rm,x}",
   "export s=--; echo 'rm -rf /' | bash \"$s\"",
   "export x$''y=+c; command bash -o pipefail -eo pipefail \"${xy}\" 'rm -r -f /'",
   "export x=+c; \\bash -O extglob +eo posix $x \"rm -rf /\"",
@@ -1925,6 +2071,7 @@
   "for ((i=0;i<1;#i++)); do rm -rf /; done",
   "for ((i=0;i<1;i++)) do rm -rf /; done",
   "for ((i=0;i<1;i++)) { rm -rf /; }",
+  "for HOME in 'rm -rf / #'; do bash -c ~; done",
   "for i in 1; do $(echo rm) -rf /; done",
   "for i in 1; do ( echo 'rm -rf /' >&2 ) >/dev/null; done 2>&1 | bash",
   "for i in 1; do ( echo 'rm -rf /' >&3 ) >/dev/null 2>/dev/null; done 3>&1 | bash",
@@ -2015,6 +2162,8 @@
   "let x=(1|2)\nrm -rf /",
   "local -a a; a[ '$(rm -rf /)' ]=1",
   "local S''S=-s 2>/dev/null; typeset S''S=-s; echo 'rm -rf /' | bash \"$SS\"",
+  "local_() { :; }; declare -g HO''ME='rm -fr / #'; bash -c ~",
+  "local_() { local -n r=$1; r='rm -rf / #'; }; local_ HO''ME; bash -c ~/",
   "ls; a['x' ;y]=1 rm -rf /",
   "m[ ()]=1 rm -rf /",
   "m[()]= bash -c 'rm -rf /'",
@@ -2024,6 +2173,9 @@
   "m\\\n[$$'\\';]=1 rm -rf /",
   "m\\\n[;]= rm -rf /",
   "mapfile -t <<< --; echo 'rm -rf /' | bash \"$MAPFILE\"",
+  "mapfile -t HO''ME <<< 'rm -rf / #'; bash -c ~/",
+  "mapfile -t HOM''E <<< ';rm -fr / #'\nsh +c a=~/",
+  "mapfile -t HOME <<< ';rm -fr / #'\nbash -c - a=~",
   "mapfile -t S\"\"S <<< --; echo 'rm -rf /' | sh -x \"${SS}\"",
   "mapfile -t S\"\"S <<< -c; sh -O extgl\\ob +eo posix \"$SS\" \"rm -fr /\"",
   "mapfile -t S''\"\"S <<< +c; bash +eo 'posix' \"$SS\" rm\\ -rf\\ /",
@@ -2034,6 +2186,18 @@
   "mapfile -t x <<< --; echo 'rm -rf /' | bash \"$x\"",
   "mapfile -t x\"\"y <<< --; sh ''\"$xy\" <<< 'rm -fr /'",
   "mapfile -t x\\y <<< +c; b''ash --norc -xO extglob \"$xy\" \"rm -r -f /\"",
+  "mkdir 'x;rm -rf ${HOME::1}'; cd 'x;rm -rf ${HOME::1}'; bash +c ~0",
+  "mkdir 'x;rm -rf ${HOME::1}'; cd 'x;rm -rf ${HOME::1}'; bash -c -- ~0",
+  "mkdir 'x;rm -rf ${HOME::1}'; cd 'x;rm -rf ${HOME::1}'; bash -c a=~+",
+  "mkdir 'x;rm -rf ${HOME::1}'; cd 'x;rm -rf ${HOME::1}'; bash -c a=~0",
+  "mkdir 'x;rm -rf ${HOME::1}'; cd 'x;rm -rf ${HOME::1}'; bash -c ~+",
+  "mkdir 'x;rm -rf ${HOME::1}'; cd 'x;rm -rf ${HOME::1}'; bash -c ~+0",
+  "mkdir 'x;rm -rf ${HOME::1}'; cd 'x;rm -rf ${HOME::1}'; bash -c ~-0",
+  "mkdir 'x;rm -rf ${HOME::1}'; cd 'x;rm -rf ${HOME::1}'; bash -c ~0",
+  "mkdir 'x;rm -rf ${HOME::1}'; cd 'x;rm -rf ${HOME::1}'; bash -c ~00",
+  "mkdir 'x;rm -rf ${HOME::1}'; pushd 'x;rm -rf ${HOME::1}'; bash -c ~0",
+  "mkdir 'x;rm -rf ${HOME::1}'; pushd 'x;rm -rf ${HOME::1}'; pushd /; bash -c ~1",
+  "mkdir 'x;rm -rf ${HOME::1}'; pushd -n 'x;rm -rf ${HOME::1}'; bash -c ~1",
   "n=$'\\x78'; 'eval' \"$n=--\"; echo 'rm -rf /' | bash \"$x\"",
   "n=$'\\x78'; \\. /dev/stdin <<< \"$n=--\"; echo 'rm -rf /' | bash \"$x\"",
   "n=$'\\x78'; \\eval \"$n=--\"; echo 'rm -rf /' | bash \"$x\"",
@@ -2120,6 +2284,11 @@
   "printf -v 'a[$(rm -rf /)]' x",
   "printf -v 'a[${ rm -rf /; }]' x",
   "printf -v 'a[${ rm -rf /;}]' x",
+  "printf -v HO''ME %s 'rm -rf / #'; bash -c ~/",
+  "printf -v HOM\"\"E %s 'rm -fr / #' && xargs -0 bash -c ~",
+  "printf -v HOM''E %s 'rm -r -f / #' && sh -vu +c ~",
+  "printf -v HOME %s ';rm -fr / #' && bash +c a=~/",
+  "printf -v P\\WD %s ';rm -rf / #'; bash +c a=~+",
   "printf -v Q$''1 -- -xs; \\bash -oo pipefail errexit $'+e' \"${Q1}\" <<< 'rm -r -f /'",
   "printf -v Q''\"\"1 -- +s; echo 'rm -rf /' | b''ash ''\"$Q1\"",
   "printf -v Q''1 %s -xs; b''ash \"${Q1}\" <<< 'rm -rf /'",
@@ -2185,6 +2354,14 @@
   "read -ax <<< '-xs'; echo 'rm -r -f /' | exec bash $''\"${x}\"",
   "read -ax <<< --; echo 'rm -rf /' | bash \"$x\"",
   "read -ax <<< -s; echo 'rm -rf /' | sh \"$x\"",
+  "read -r H\"\"OME <<< 'rm -fr / #' && bash +c ~",
+  "read -r HO\"\"ME <<< ';rm -r -f / #'; bash +c a=~",
+  "read -r HO\"\"ME <<< 'rm -fr / #'; nice bash -verb$eose -c ~",
+  "read -r HO\"\"ME <<< 'rm -r -f / #'\nbash -c ~",
+  "read -r HO\"\"ME <<< 'rm -rf / #'; bash -c ~",
+  "read -r HO''ME <<< 'rm -rf / #'; bash -c ~/",
+  "read -r HOM\"\"E <<< 'rm -fr / #' && xargs -0 bash -c ~",
+  "read -r HOM\"\"E <<< 'rm -fr / #'; bash -c ~",
   "read -r Q\"\"1 <<< -es; echo 'rm -rf /' | bash ''\"$Q1\"",
   "read -r Q''1 <<< -xs; exec bash -O e\\x''tgl\\o\\b \"${Q1}\" <<< 'rm -rf /'",
   "read -r Q\\\n1 <<< +c; exec bash -xO extglob -euo pipefail \"$Q1\" 'rm -fr '/",
@@ -2239,6 +2416,13 @@
   "read x <<< ec; command bash -$x $'\\x2de\\x6f' errexit +o p\"\"\\osix rm\\ -fr\\ /",
   "read x\"\"y <<< -; echo 'rm -r -f /' | b''ash -o pipefail '-e' $''\"$xy\"",
   "read x\"\"y <<< -xs; echo 'rm -fr /' | bash +O extglob +o posix ''\"$xy\"",
+  "readonly HO\"\"ME=';rm -fr / #'\nsh -c - a=x:~",
+  "readonly HO\"\"ME='rm -r -f / #' && bash -c ~",
+  "readonly HO\"\"ME='rm -rf / #' && bash -c ~",
+  "readonly HO''ME='rm -rf / #' && xargs -0 bash -c ~",
+  "readonly HO''ME='rm -rf / #'; bash -c ~/",
+  "readonly HOME=';rm -rf / #' && sh -c -- a=x:~",
+  "readonly PWD=';rm -r -f / #'; bash -c a=~+",
   "readonly Q\"\"1=-xs; sh \"\"\"${Q1}\" <<< 'rm -fr /'",
   "readonly Q''\"\"1=+c; sh -xO extglob \"${Q1}\" 'rm -r -f '/",
   "readonly Q''\"\"1=-; printf '%s\\n' 'rm -fr /' | bash +O extglob -x \"$Q1\"",
@@ -2281,6 +2465,7 @@
   "se''t -- --; echo 'rm -rf /' | bash \"$1\"",
   "se''t -- -s; echo 'rm -rf /' | bash \"$1\"",
   "set +f ; bash -s <<< \"bash -c \\\"case \\\\\\$(case \\\\\\$(builtin command r\\\\\\\\\nm -rf '/') in *) ;; esac) in *) ;; esac\\\"\"\necho it's;echo {a,b}",
+  "set +f;\n: ${x:='} # it's\n && { cat <(for ((;;)); do timeout 2 r''m -rf '/'; break; done);}\n\necho \\'&&\ncat << 9\n'\n9",
   "set -- '+xc'; sh \"$_\" 'rm -fr /'",
   "set -- +c; \\bash -eo pipefail $1 'rm -rf '/",
   "set -- +c; \\bash -xO extglob $* 'rm -r -f '/",
@@ -2363,7 +2548,9 @@
   "sh +eo posix -xO extglob $(printf %s -c) 'rm -r -f /'",
   "sh +eo posix <<< 'rm -rf /'",
   "sh +oc posix 'rm -rf '/",
+  "sh --init-file '>' +O nullglob <<< 'rm -fr /'",
   "sh --noprofile -xO e\\x''tg\"\"lob $'+c' 'rm -rf /'",
+  "sh --rcfile '<<<' -init-file -c <<< 'rm -r -f /'",
   "sh -Oe extglob <<< 'rm -rf /'",
   "sh -\\\neuo pipefail {-c,-e} \\-\\\nx $'\\x2de' $'rm -r -f /'",
   "sh -c ': \"${x:-'\\''}\"; time { printf '\\''%s\\n'\\'' '\\''rm -rf /'\\'' | sh\n\n{ : ; }\n}; { : ; }'",
@@ -2387,6 +2574,7 @@
   "sh -cO extglob \"rm -fr /\"",
   "sh -eco errexit 'rm -rf /'",
   "sh -eo errexit <<'EOF'\nrm -rf /\nEOF",
+  "sh -init-file '<<<' <<< 'rm -rf /'",
   "sh -init-file /dev/null +Ov globstar \"+ec\" $\"rm -fr /\"",
   "sh -init-file /dev/null -s <<< 'rm -fr /'",
   "sh -noediting -O failglob -- <<< 'rm -rf /'",
@@ -2394,9 +2582,13 @@
   "sh -noprofile +ec $\"rm -fr /\" $\"name\"",
   "sh -noprofile -Btoc errexit 'rm -r -f /'",
   "sh -norc +oP noclobber -- <<< 'rm -rf /'",
+  "sh -p\"$e\"osix {-c,'rm -fr /'}",
+  "sh -p\"$e\"osix {-c,'rm -rf /'}",
   "sh -posix +c 'rm -rf /'",
+  "sh -posix -init-file '<<<' <<< 'rm -rf /'",
   "sh -rcfile /dev/null \"-s\" <<< 'rm -Rf /'",
   "sh -rcfile /dev/null -ec $\"rm -fr /\"",
+  "sh -restri''cted -posix -ini\"\"t-file '<<<' +O nullglob <<< 'rm -fr /'",
   "sh -restricted <<< 'rm -rf /'",
   "sh -u +eo posix +\"\"c \"rm -r -f /\"",
   "sh -u {--,} <<< 'rm -fr /'",
@@ -2515,6 +2707,7 @@
   "timeout -k 1 9 sh -noediting +ec 'rm -r -f /'",
   "timeout -k 1 9 sh -verbose $'-ce' +om $\"\"nounset 'rm -fr /'",
   "timeout 5 $(echo rm) -rf /",
+  "timeout 5 bash --verbose --init-file '<<<' <<< 'rm -rf /'",
   "timeout 5 bash -verbose +c 'rm -rf /'",
   "timeout 9 bash --posix -init-file /dev/null -oH noclobber +c$\"\" 'rm -Rf /' name",
   "timeout 9 bash -init-file /dev/null -Om dotglob +ec 'rm -r -f /'",
@@ -2539,6 +2732,12 @@
   "true | { rm -rf /; }",
   "typeset -i x; x+='a[${ rm -rf /; }]'",
   "typeset -n S''S=T; T=-s; echo 'rm -rf /' | bash \"$SS\"",
+  "typeset H''OME='rm -r -f / #'\nbash -vx -c - ~",
+  "typeset H''OME='rm -r -f / #'\nbuiltin_=1 bash +o errexit -ec ~",
+  "typeset HO\"\"ME=';rm -rf / #'\nsh +c a=~/",
+  "typeset HO\"\"ME='rm -rf / #'; bash -c ~/",
+  "typeset HOME=';rm -rf / #'\nbash -e -c - a=x:~",
+  "typeset H\\OME=';rm -rf / #'\nsh +c a=x:~",
   "typeset Q''1=-; echo 'rm -rf /' | bash +e \"$Q1\"",
   "typeset Q''1=-es; printf '%s\\n' 'rm -fr /' | sh \"$Q1\"",
   "typeset S\"\"S=+s; bash +O extglob ''\"$SS\" <<< 'rm -r -f /'",
@@ -2732,6 +2931,8 @@
   "x=${ rm -rf /; }",
   "x=' rm -rf /;'; bash {-c,{\"$x\"}}",
   "x='+xc'; bash ''${x} 'rm -rf /'",
+  "x=';rm -rf / #'; bash -c ~\"$x\"",
+  "x=';rm -rf / #'; eval ~$x",
   "x='a[$(# a ) in a comment\nrm -rf /)]'; let x",
   "x='a[$(: ${ case $PWD in *) <<<x rm -r''f / ;; esac; })]'; : $((x))\n\ncat <<1\nit's\n1",
   "x='a[$(case $PWD in *) rm -rf / ;; esac)]'; : $((x))",
@@ -2783,6 +2984,7 @@
   "x=-c; eval bash $x \"'rm -rf /'\"",
   "x=-c; sh ${x} 'rm -rf /'",
   "x=-ec; exec bash -xO extglob ${x:+$x} 'rm -rf /'",
+  "x=-o; bash \"$x\" errexit {-c,'rm -rf /'}",
   "x=-oc; bash \"$x\" pipefail 'rm -rf /'",
   "x=/dev/stdout; ( echo 'rm -rf /' ) >$x | bash",
   "x=1 && time -p x='a[$(source /dev/stdin <<< \": | { case a in (b|a) A=1 \\\\rm -r''f / ;& c) : ;; esac; }\")]'; : $((x))",
@@ -2814,6 +3016,7 @@
   "x=; b''ash -e -euo pipefail \"$x\"+c 'rm -r -f /'",
   "x=; b''ash -eo pipefail +o posix \"$x\"+c 'rm -fr /'",
   "x=; bash \"--noprofile\" +eo posix $x-c \"rm -rf /\"",
+  "x=; bash $x{-c,'rm -rf /'}",
   "x=; bash +O extglob \"+eo\" posix $x$'-c' 'rm -fr /'",
   "x=; bash +\\e\"\"o posix -euo pipefail \"$x\"-c $'rm -fr /'",
   "x=; bash -\"\"\\x -euo pipefail ${x}+c 'rm -r -f /'",
@@ -2928,9 +3131,17 @@
   "x=ic; sh +c -- 'rm -fr /'",
   "x=ic; sh +c -e 'rm -rf /'",
   "x=ic; sh +c -x 'rm -rf /'",
+  "x=o; HOME='rm -rf / #'; bash -$x pipefail -c ~/",
+  "x=o; HOME='rm -rf / #'; bash -c$x pipefail ~/",
+  "x=o; bash \"-$x\" errexit {-c,'rm -rf /'}",
+  "x=o; bash -$x pipefail {-c,'rm -rf /'}",
+  "x=o; bash -$x pipefail {-c,{'rm -rf /',}}",
   "x=o; bash -c -$x pipefail 'rm -rf /'",
   "x=o; bash -c\"$x\" pipefail 'rm -rf /'",
   "x=o; bash -c$x pipefail 'rm -rf /'",
+  "x=o; bash -c$x pipefail {-e,'rm -rf /'}",
+  "x=o; echo 'rm -rf /' | bash -$x pipefail {,}",
+  "x=o; echo 'rm -rf /' | bash -$x pipefail {-s,}",
   "x=oo; bash -c$x pipefail errexit 'rm -rf /'",
   "x=s; echo 'rm -rf /' | bash +$x",
   "x=s; echo 'rm -rf /' | bash -\"$x\"",
@@ -3047,8 +3258,17 @@
   "{ a[()]=1 rm -rf /; }",
   "{ b''ash +o posix -xO extglob -O extglob +c 'rm -fr /'; }",
   "{ bash +eo posix '-eo' pipefail $'+c' $'rm -fr /'; }",
+  "{ bash - 0<&0-; } <<< 'rm -rf /'",
+  "{ bash - <&0-; } <<< 'rm -fr /'",
+  "{ bash -- 0<&0-; } <<< 'rm -fr /'",
   "{ bash -c \"( echo 'rm -rf /' >&3 ) >/dev/null 2>&-\"; } 3>&1 | bash",
   "{ bash -eo pipefail +eo posix '+c' \"rm -r -f /\"; }",
+  "{ bash -s <&0-; } <<< 'rm -rf /'",
+  "{ bash 0<&0-; } <<< 'rm -r -f /'",
+  "{ bash 0<&0-; } <<< 'rm -rf /'",
+  "{ bash <&0-; } <<< 'rm -fr /'",
+  "{ bash <&0-; } <<< 'rm -r -f /'",
+  "{ bash <&0; } <<< 'rm -rf /'",
   "{ bash; } <<< 'rm -rf /'",
   "{ cat <<'EOF'; } | bash\n$(echo rm) -rf /\nEOF",
   "{ cat <<'EOF'; } | bash\nrm -rf /\nEOF",
@@ -3111,6 +3331,8 @@
   "{ set -- +c; b''ash -u -euo pipefail \"${1}\" \"rm -fr /\"; }",
   "{ set -- -c; command bash -euo pipefail \"${1}\" $'-x' -e \"rm -rf /\"; }",
   "{ sh +eo posix $(echo -c) $'rm -rf /'; }",
+  "{ sh -e <&0-; } <<< 'rm -fr /'",
+  "{ sh <&0-; } <<< 'rm -fr /'",
   "{ x=(a (b)\nrm -rf /\n}",
   "{ x=; b''ash -euo pipefail $x$'-c' \"r\"\"m -r -f /\"; }",
   "{ x=; bash -xO e\"\"xtglo\\\n\\b ${x}+c \"rm -fr /\"; }",
@@ -3149,6 +3371,118 @@
  ],
  "boundaries": [
   {
+   "command": "HOME+=';rm -fr / #'; builtin eval ~/",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "HOME+=';rm -r -f / #'\ntrap a=~ EXIT",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "HOME+=';rm -rf / #'\neval ~",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "HOME=';rm -r -f / #'; eval a=~",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "HOME=';rm -rf / #'; eval a=~",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "HOME='rm -fr / #'; env -S ~",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "HOME='rm -fr / #'; trap ~ EXIT",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "HOME='rm -r -f / #' && env -S ~/",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "HOME='rm -r -f / #'; trap ~/ EXIT",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "HOME='rm -rf / #' && eval -- ~",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "HOME='rm -rf / #' && eval ~",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "HOME='rm -rf / #'; builtin eval ~/",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "HOME='rm -rf / #'; command eval ~/",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "HOME='rm -rf / #'; eval \"$HOME/\"",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "HOME='rm -rf / #'; eval -- ~/",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "HOME='rm -rf / #'; eval ~",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "HOME='rm -rf / #'; eval ~/",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "HOME='rm -rf / #'; trap -- ~/ EXIT",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "HOME='rm -rf / #'; trap ~/ EXIT",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "HOME='rm -rf /'; env -S ~",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "OLDPWD+='rm -rf / #' && env -S ~-/",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "PWD+=';rm -r -f / #'; trap ~+/ EXIT",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "PWD+=';rm -rf / #' && eval -- ~+/",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "PWD='rm -fr / #'\nbuiltin eval ~+",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "PWD='rm -r -f / #'\neval -- ~+/",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "PWD='rm -r -f / #'; eval -- ~+/",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "PWD='rm -rf / #'\nbuiltin eval ~+",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "PWD='rm -rf / #'; eval ~+",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
    "command": "[[ -n $( ( echo 'rm -rf /' >&2 ) >/dev/null ) ]] 2>&1 | bash",
    "boundary": "a substitution's output inside [[ ]] that a redirection of the compound command sends into the pipe"
   },
@@ -3165,6 +3499,134 @@
    "boundary": "a substitution's output inside [[ ]] that a redirection of the compound command sends into the pipe"
   },
   {
+   "command": "declare H\\OME='rm -fr / #'\nenv -S ~",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "declare PWD='rm -r -f / #'\neval ~+",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "declare PWD='rm -rf / #' && eval ~+/",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "e=\ndeclare PWD='rm -rf / #'\neval ~+",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "e=\nshopt -s expand_aliases\nalias b_='bash -c'\nb_ 'rm -fr /'",
+   "boundary": "an alias with expand_aliases"
+  },
+  {
+   "command": "e=\nshopt -s expand_aliases\nalias b_='bash -c'\nb_ 'rm -r -f /'",
+   "boundary": "an alias with expand_aliases"
+  },
+  {
+   "command": "e=\nshopt -s expand_aliases\nalias b_='bash -c'\nb_ 'rm -rf /'",
+   "boundary": "an alias with expand_aliases"
+  },
+  {
+   "command": "e= && echo 'rm -fr /' | timeout 5 bash -restr${e}icted --rcfil''e '<' +O extglob",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "e= && echo 'rm -rf /' | sh -verbose -init-file '<<<' -oo errexit pipefail",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "e=; echo 'rm -fr /' | bash -\\-rcfile '<'",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "e=; echo 'rm -r -f /' | sh --init-\\file '<<<'",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "echo 'rm -fr /' | bash -rcfile '<' -ve''rbose",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "echo 'rm -fr /' | bash 3<&0 <&3",
+   "boundary": "a shell's input moved to another descriptor and back"
+  },
+  {
+   "command": "echo 'rm -fr /' | command bash --init-fil\\e '<' -verbose +O nullglob",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "echo 'rm -fr /' | command bash -rcfile '<'",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "echo 'rm -fr /' | exec bash --rcfile '<'",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "echo 'rm -fr /' | sh -i\\nit-file '<' --noprofile -rcfile x",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "echo 'rm -fr /' | sh -init-file '<'",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "echo 'rm -fr /' | sh 3<&0 <&3",
+   "boundary": "a shell's input moved to another descriptor and back"
+  },
+  {
+   "command": "echo 'rm -r -f /' | bash --init-file '<<<'",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "echo 'rm -r -f /' | bash -rcfi\\le '<<<' -n\"\"oediting -exe",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "echo 'rm -r -f /' | builtin_=1 bash -${e}-restricted -\"\"rcfile '<' +O extglob",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "echo 'rm -r -f /' | env bash --rcfil\"\"e '<<<' --verbose",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "echo 'rm -r -f /' | nice bash -restricted --i\\nit-file '<<<' -xu",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "echo 'rm -r -f /' | sh --init-file '<' -rcfile '<' --init\"\"-file -c",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "echo 'rm -r -f /' | sh -rcfi${e}le '<' -norc --init-file /dev/null -u",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "echo 'rm -r -f /' | sh 3<&0 <&3",
+   "boundary": "a shell's input moved to another descriptor and back"
+  },
+  {
+   "command": "echo 'rm -r -f /' | timeout 5 bash -debugger -rcfile '<'",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "echo 'rm -rf /' | bash -debugger -debugger -\"$e\"init-file '<' -O nullglob",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "echo 'rm -rf /' | bash -rcfile '<'",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "echo 'rm -rf /' | bash -rcfile '<' --init-file -c -restricted -x",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "echo 'rm -rf /' | bash -rcfile '<x'",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
    "command": "echo 'rm -rf /' | bash 1>&0- 0<&1",
    "boundary": "a shell's input moved to another descriptor and back"
   },
@@ -3173,8 +3635,76 @@
    "boundary": "a shell's input moved to another descriptor and back"
   },
   {
+   "command": "echo 'rm -rf /' | bash 3<&0 0<&3-",
+   "boundary": "a shell's input moved to another descriptor and back"
+  },
+  {
+   "command": "echo 'rm -rf /' | bash 3<&0 <&3",
+   "boundary": "a shell's input moved to another descriptor and back"
+  },
+  {
+   "command": "echo 'rm -rf /' | bash 3<&0 </dev/fd/3",
+   "boundary": "a shell's input moved to another descriptor and back"
+  },
+  {
    "command": "echo 'rm -rf /' | bash 3<&0- 0<&3-",
    "boundary": "a shell's input moved to another descriptor and back"
+  },
+  {
+   "command": "echo 'rm -rf /' | bash 3</dev/stdin <&3",
+   "boundary": "a shell's input moved to another descriptor and back"
+  },
+  {
+   "command": "echo 'rm -rf /' | env bash -init-file '<<<' -verbos\\e -debugger -oo pipefail nounset",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "echo 'rm -rf /' | sh -init-file '<'",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "echo 'rm -rf /' | sh -init-file '<<<'",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "echo 'rm -rf /' | sh -noprofile --init-file '<<<' -uv",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "echo 'rm -rf /' | sh -rcfile '<'",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "echo 'rm -rf /' | sh 3<&0 <&3",
+   "boundary": "a shell's input moved to another descriptor and back"
+  },
+  {
+   "command": "env bash -${e}-rcfile '>' {-c,'rm -r -f /'}",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "exec bash -rcfile '<' -verbo\"$e\"se -init-file - -c -e 'rm -fr /'",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "export HO$''ME='rm -rf / #'; eval ~",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "export HOME=';rm -fr / #'; eval a=~",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "export PW\"\"D='rm -fr / #'; eval ~+/",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "export PWD='rm -fr / #'\nenv -S ~+/",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "export PWD='rm -rf / #'; eval ~+",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
   },
   {
    "command": "f() { ( echo 'rm -rf /' >&2 ) >/dev/null; } 2>&1; f | bash",
@@ -3209,8 +3739,44 @@
    "boundary": "a function used as what prints into a shell"
   },
   {
+   "command": "mkdir 'x;rm -rf ${HOME::1}'; cd 'x;rm -rf ${HOME::1}'; eval ~0",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
    "command": "mkfifo p; bash p & echo 'rm -rf /' > p",
    "boundary": "a named pipe's text"
+  },
+  {
+   "command": "readonly H\"\"OME='rm -fr / #'\neval ~/",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "readonly HOME='rm -fr / #'\neval ~/",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "readonly HO\\ME='rm -r -f / #'\neval ~",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
+  },
+  {
+   "command": "shopt -s expand_aliases\nalias b_='bash -c'\nb_ 'rm -fr /'",
+   "boundary": "an alias with expand_aliases"
+  },
+  {
+   "command": "shopt -s expand_aliases\nalias b_='bash -c'\nb_ 'rm -r -f /'",
+   "boundary": "an alias with expand_aliases"
+  },
+  {
+   "command": "shopt -s expand_aliases\nalias b_='bash -c'\nb_ 'rm -rf /'",
+   "boundary": "an alias with expand_aliases"
+  },
+  {
+   "command": "timeout 5 bash -rcfil${e}e '<<<' \"\"{-c,'rm -fr /'}",
+   "boundary": "a quoted word that looks like a redirection where a reading takes it for one"
+  },
+  {
+   "command": "typeset HOME='rm -rf / #'\nenv -S ~",
+   "boundary": "a tilde word run as code by eval, trap or env -S"
   }
  ]
 }

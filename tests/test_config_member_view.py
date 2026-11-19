@@ -401,19 +401,20 @@ _SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
 
 
 def _own_nodes(scope):
-    """The nodes of one scope, without descending into the functions defined in it."""
+    """The nodes of one scope, without descending into the functions and classes defined in
+    it: a class body is a scope of its own."""
     stack = list(ast.iter_child_nodes(scope))
     while stack:
         node = stack.pop()
         yield node
-        if not isinstance(node, _SCOPES):
+        if not isinstance(node, _SCOPES + (ast.ClassDef,)):
             stack.extend(ast.iter_child_nodes(node))
 
 
 def _bound_in(scope, nodes) -> set:
-    """The names a function binds itself (parameters and assignments), which hide the same
-    names of the functions around it; `nonlocal` and `global` names are not its own, and a
-    comprehension's loop variable lives in the comprehension."""
+    """The names a scope binds itself (parameters, assignments, `except ... as`, `import ...
+    as`), which hide the same names of the functions around it; `nonlocal` and `global` names
+    are not its own, and a comprehension's loop variable lives in the comprehension."""
     names = set()
     if isinstance(scope, _SCOPES):
         args = scope.args
@@ -423,6 +424,9 @@ def _bound_in(scope, nodes) -> set:
                         for n in ast.walk(node.target)}
     names |= {node.id for node in nodes if isinstance(node, ast.Name)
               and isinstance(node.ctx, ast.Store) and id(node) not in in_comprehension}
+    names |= {node.name for node in nodes if isinstance(node, ast.ExceptHandler) and node.name}
+    names |= {alias.asname or alias.name.split(".")[0] for node in nodes
+              if isinstance(node, (ast.Import, ast.ImportFrom)) for alias in node.names}
     names -= {name for node in nodes if isinstance(node, (ast.Nonlocal, ast.Global))
               for name in node.names}
     return names
@@ -443,10 +447,13 @@ def _loaded_names(nodes) -> set:
 def _written_in(scope, inherited: frozenset, keys: set) -> None:
     nodes = list(_own_nodes(scope))
     loaded = (inherited - _bound_in(scope, nodes)) | _loaded_names(nodes)
+    # A function or class defined in a class body skips the class's names and sees the
+    # function around the class.
+    passed_on = inherited if isinstance(scope, ast.ClassDef) else frozenset(loaded)
     for node in nodes:
-        if isinstance(node, _SCOPES):
+        if isinstance(node, _SCOPES + (ast.ClassDef,)):
             # A closure writes through the name its enclosing function loaded.
-            _written_in(node, frozenset(loaded), keys)
+            _written_in(node, passed_on, keys)
             continue
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                 and node.func.attr == "set" and _is_config(node.func.value) and node.args
@@ -576,7 +583,22 @@ def test_the_guard_flags_a_key_without_a_defaults_row(monkeypatch, tmp_path):
         "        names = [cfg for cfg in ()]\n"
         "        cfg['zz_comprehension_key'] = 1\n"
         "        return names\n"
-        "    return inner, rebinds, render, local, listing\n"
+        "    def with_class():\n"
+        "        class Display:\n"
+        "            cfg = {}\n"
+        "            def show(self):\n"
+        "                cfg['zz_method_key'] = 1\n"
+        "        cfg['zz_class_body_key'] = 1\n"
+        "        return Display\n"
+        "    def handles():\n"
+        "        try:\n"
+        "            pass\n"
+        "        except Exception as cfg:\n"
+        "            cfg['zz_except_key'] = 1\n"
+        "    def imports():\n"
+        "        import json as cfg\n"
+        "        cfg['zz_import_key'] = 1\n"
+        "    return inner, rebinds, render, local, listing, with_class, handles, imports\n"
         "def annotated():\n"
         "    cfg: dict = Config.load()\n"
         "    cfg['zz_annotated_key'] = 1\n"
@@ -589,10 +611,12 @@ def test_the_guard_flags_a_key_without_a_defaults_row(monkeypatch, tmp_path):
     monkeypatch.setattr(reads_guard, "_VAF", tmp_path)
     monkeypatch.setattr(sys.modules[__name__], "_VAF_ROOT", tmp_path)
     keys = {"zz_owner_numbers", "zz_set_key", "zz_read_key", "zz_closure_key", "zz_nonlocal_key",
-            "zz_comprehension_key", "zz_annotated_key", "zz_spaced_key"}
+            "zz_comprehension_key", "zz_annotated_key", "zz_spaced_key", "zz_class_body_key",
+            "zz_method_key"}
     assert keys <= _undeclared_keys()
     # A function's own parameter or local of the same name is not the loaded config.
-    assert not {"zz_parameter_key", "zz_local_key"} & _keys_the_code_writes(tmp_path)
+    assert not ({"zz_parameter_key", "zz_local_key", "zz_except_key", "zz_import_key"}
+                & _keys_the_code_writes(tmp_path))
     assert keys <= _surviving_keys(_swept_keys()) - set(REVIEWED_INSTALLATION_SETTINGS)
 
 

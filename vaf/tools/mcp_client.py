@@ -79,11 +79,14 @@ _STOP_GRACE = 2.0
 _LAUNCH_WAIT = 1.0
 # Seconds between two looks at the caller's cancel flag while a request waits on its server.
 _IO_POLL = 0.25
-# The longest output line read, in bytes. A line is held in memory whole and decoding it as
-# JSON takes about five to six times its size at peak (measured), so a server that wrote one
-# without end grew the application by about 0.9 GB/s until the deadline. 64 MiB still holds a
-# file of 48 MB returned as base64 inside one result, larger than any tool result a model can
-# take in, and bounds that peak at about 400 MB.
+# The longest output line read, in bytes. A line is held in memory whole, so a server that
+# wrote one without end grew the application by about 0.9 GB/s until the deadline. 64 MiB
+# still holds a file of 48 MB returned as base64 inside one result, larger than any tool
+# result a model can take in. The worst case the limit leaves is one line of empty JSON
+# containers, which decodes to about 26 times its size: measured, a line just under 64 MiB
+# of ``{},`` grew the application by 1671 MiB, and twenty such lines in one request by 1673
+# MiB, since only one decoded line is alive at a time (`_json_rpc`; 3279 MiB while the
+# previous one was still held). Text and ordinary JSON stay at about five to six times.
 _MAX_LINE = 64 * 1024 * 1024
 # The JSON-RPC error code of a request that got no answer in time (the TypeScript SDK's
 # REQUEST_TIMEOUT; the Python SDK names the same value).
@@ -482,8 +485,10 @@ class MCPClientTool(BaseTool):
         ``timeout`` the length it was set from (`_request_timeout`; without a deadline, one is
         set from it here). The handshake and ``notifications/initialized`` wait for it at
         most; a server that misses it is retired and None returned, and ``why`` (a list, when
-        given) gets the deadline's own words, "no answer within N s". Nothing the server wrote
-        is put there.
+        given) gets "no answer within N s", built here once the deadline has passed. Nothing
+        the server wrote is put there: a server may answer the handshake with the same error
+        code (-32001) and words of its own, so the code alone does not say the deadline ran
+        out.
 
         The pipes are binary and the output is decoded as UTF-8 (`_json_rpc`); stderr goes to
         the null device, since nothing reads it and a server whose log filled the pipe (64 KB
@@ -584,9 +589,8 @@ class MCPClientTool(BaseTool):
             "clientInfo": {"name": "VAF", "version": __version__},
         }, request_id=next(self._request_ids), deadline=deadline, timeout=timeout)
         if init is None or "error" in init:
-            error = (init or {}).get("error")
-            if why is not None and isinstance(error, dict) and error.get("code") == _REQUEST_TIMEOUT:
-                why.append(str(error.get("message", "")))
+            if why is not None and time.monotonic() >= deadline:
+                why.append(f"no answer within {timeout:g} s")
             self._retire(process)
             return None
         # Per the MCP spec, signal initialized. A failed write is left to the request after
@@ -751,6 +755,9 @@ class MCPClientTool(BaseTool):
             self._retire(process)
             return None
         for _ in range(max_reads):
+            # The previous line's message goes before the next line is read and decoded: kept
+            # alive, two decoded lines were held at once and the peak doubled (`_MAX_LINE`).
+            msg = None
             reading = pipe.next_line()
             state = _await(reading, deadline)
             if state != _DONE:
@@ -768,6 +775,7 @@ class MCPClientTool(BaseTool):
                                                  f"{_MAX_LINE // (1024 * 1024)} MiB"}}
                 raw = bytes(raw).strip()
                 line = raw.decode("utf-8", errors="replace") if raw else ""
+                raw = None  # only the text is decoded from here on
             else:
                 line = str(raw).strip()
             if not line:
@@ -815,11 +823,12 @@ class MCPClientTool(BaseTool):
 
         A local listing has the deadline `call_stdio` has (``timeout``; None: the tool budget,
         ``tool_timeout_seconds``), counted from the moment it has the server's lock: the start,
-        the handshake and the listing included, with the same named boundary. At that deadline, or once its caller gives up
-        (the cancel flag of `bounded_run`, also armed by `cancel_when`), the process is retired
-        and the listing returns []. A listing whose caller gave up while it waited for the lock
-        returns [] without starting or asking a server. A remote listing keeps the remote
-        lane's own deadlines and ignores ``timeout``."""
+        the handshake and the listing included, with the same named boundary. At that
+        deadline, or once its caller gives up (the cancel flag of `bounded_run`, also armed by
+        `cancel_when`), the process is retired and the listing returns []. A listing whose
+        caller gave up while it waited for the lock returns [] without starting or asking a
+        server. A remote listing keeps the remote lane's own deadlines and ignores
+        ``timeout``."""
         if transport in ("http", "sse"):
             if not server_url:
                 return []

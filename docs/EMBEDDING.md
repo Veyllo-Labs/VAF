@@ -3130,7 +3130,9 @@ usable from an embedded engine too, documented in their own pages:
   bounded steps can run past the deadline: replacing a cached process that has exited first
   stops what it left behind (up to a 2 s grace and a SIGKILL), and the last line read is
   decoded whole (about 2 s for a line of 64 MiB of deeply nested JSON). A line is read up
-  to 64 MiB; a longer one ends the call with a -32700 error. A server whose output ended,
+  to 64 MiB; a longer one ends the call with a -32700 error. One decoded line is held at a
+  time, which at the limit costs up to about 1.7 GB for a line of empty JSON containers
+  (measured) and about five to six times the line for text. A server whose output ended,
   or whose input could no longer be written, is replaced on the next call too.
   `list_server_tools(server_command, timeout=...)` does the same for a local listing and
   answers `[]`. Under `vaf.core.bounded_run.run_bounded`, as `ToolCaller` runs the

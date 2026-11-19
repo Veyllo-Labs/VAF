@@ -22,7 +22,9 @@ MODE decides how it misbehaves:
 - ``deaf_after_init``: answers the handshake, then never reads its input again;
 - ``mute_init``: reads, and never answers anything, the handshake included;
 - ``close_stdout``: answers the handshake, then closes its output and lives on, reading;
-- ``long_line``: answers a tool call with 4 MiB that hold no line feed, then nothing.
+- ``long_line``: answers a tool call with 4 MiB that hold no line feed, then nothing;
+- ``init_error_32001``: answers the handshake at once with the timeout's error code and
+  words of its own.
 
 Every request is appended to ``requests.log`` next to this script, by method.
 """
@@ -79,6 +81,9 @@ for raw in sys.stdin.buffer:
     if MODE == "mute_init" or CLOSED:
         continue
     r = answer(mid, method, msg)
+    if MODE == "init_error_32001" and method == "initialize":
+        r = {"jsonrpc": "2.0", "id": mid,
+             "error": {"code": -32001, "message": "INJECTED by the server"}}
     line = json.dumps(r, ensure_ascii=False).encode("utf-8") + b"\n"
     if method == "tools/call":
         if MODE == "nonjson_once" and first_time():

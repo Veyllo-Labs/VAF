@@ -252,8 +252,9 @@ ends it too: the wait looks at the cancel flag of `bounded_run` every 0.25 s, wh
 raise for a listing they gave up on (`cancel_when`). At the deadline the process is stopped
 and dropped, the lock is free, and the next call starts a fresh process; the call answers
 `MCP Error: no answer within N s (code: -32001)`, or `Error: Failed to initialize MCP server
-(no answer within N s)` when the deadline passed during the handshake (only the deadline's
-own words are added there, never text the server wrote), and the shared result classifier
+(no answer within N s)` when the deadline passed during the handshake (that text is built
+locally once the deadline has passed, never taken from the server's answer, which may carry
+the same code with words of its own), and the shared result classifier
 reads both as a failure. A request whose deadline has already passed when it would be
 written (a slow handshake used it up) is not written, so the tool does not run after its
 time is up. A caller that gave up gets "No response from MCP server", which nobody reads any
@@ -276,9 +277,12 @@ non-blocking mode; the client uses neither, and a test keeps it that way. Named 
 - a line is read up to 64 MiB and held in memory whole; a longer one ends the request with
   a -32700 error ("a line longer than 64 MiB") and retires the process, since the rest of
   it is still on the stream. Measured before the limit: a server that wrote one line
-  without end grew the application by about 0.9 GB/s until the deadline. Decoding a line
-  takes about five to six times its size at peak, so the limit bounds that peak at about
-  400 MB, and 64 MiB still holds a 48 MB file returned as base64 in one result;
+  without end grew the application by about 0.9 GB/s until the deadline. 64 MiB still
+  holds a 48 MB file returned as base64 in one result. Only one decoded line is alive at a
+  time, so the worst case is one line: text and ordinary JSON decode to about five to six
+  times their size, and a line of empty JSON containers to about 26 times (measured: a
+  line just under 64 MiB of `{},` grew the application by 1671 MiB, twenty of them in one
+  request by 1673 MiB, against 3279 MiB while two decoded lines were held at once);
 - two bounded steps can run past the deadline: replacing a cached process that has exited
   first stops what it left in its group (up to the 2 s grace and a SIGKILL), and the last
   line read is decoded whole (about 2 s for 64 MiB of deeply nested JSON, measured at

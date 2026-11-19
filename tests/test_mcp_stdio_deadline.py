@@ -27,6 +27,7 @@ import subprocess
 import sys
 import threading
 import time
+import types
 import weakref
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -312,6 +313,44 @@ def test_a_read_whose_wait_gave_up_is_handed_to_the_next_wait():
     assert mcp_client._await(again, time.monotonic() + 5) == mcp_client._DONE
     assert pipe.take(again) == b"first\n"
     assert _bounded(lambda: pipe.take(pipe.next_line()), 5) == b"second\n"
+
+
+def test_a_handshake_error_with_the_timeout_code_adds_no_server_text(server):
+    """The deadline's words are built here, once the deadline has passed; a server that
+    answers the handshake with the same code and words of its own gets the plain line."""
+    client, command = server("init_error_32001")
+    out = _bounded(lambda: client.call_stdio(command, "echo", {"text": "a"}, timeout=5))
+    assert out == "Error: Failed to initialize MCP server"
+    assert "INJECTED" not in out
+
+
+def test_the_previous_message_is_let_go_before_the_next_line_is_decoded(monkeypatch):
+    """Holding the last decoded message while the next line decodes kept two at once: a
+    request of twenty large lines peaked at twice what one line costs (measured 3279 MiB
+    against 1673 MiB)."""
+    real = json
+    refs, alive = [], []
+
+    class _Message(dict):
+        pass
+
+    def loads(text):
+        alive.append(sum(ref() is not None for ref in refs))
+        value = real.loads(text)
+        if isinstance(value, dict):
+            value = _Message(value)
+            refs.append(weakref.ref(value))
+        return value
+
+    monkeypatch.setattr(mcp_client, "json", types.SimpleNamespace(
+        loads=loads, dumps=real.dumps, JSONDecodeError=real.JSONDecodeError))
+    note = real.dumps({"jsonrpc": "2.0", "method": "notifications/progress", "params": {}})
+    answer = real.dumps({"jsonrpc": "2.0", "id": 3, "result": {"ok": True}})
+    process = _QuietProcess()
+    process.stdout = io.BytesIO(f"{note}\n{note}\n{answer}\n".encode("utf-8"))
+    got = MCPClientTool()._json_rpc(process, "tools/call", {}, request_id=3, timeout=5)
+    assert got == {"jsonrpc": "2.0", "id": 3, "result": {"ok": True}}
+    assert alive == [0, 0, 0], f"decoded messages still held at each decode: {alive}"
 
 
 # ── the end of the stream, a failed write, a line without end, a deadline already past ────

@@ -92,7 +92,9 @@ otherwise: not killing a stale entry costs a port conflict, killing the wrong
 process costs somebody's work. Every reader that kills does the same: the
 orphan cleanup, every stop and the install's handover kill only a process
 verified to be a llama server (`_looks_like_llama_server`), and a record naming
-any other process is left alone.
+any other process is left alone. The rule: the process name or its argv[0] must be
+`llama-server` or `llama-server.exe` as a whole name, so a process that only
+mentions it in its arguments (an editor, `tail -f` of the server log) is refused.
 
 ### 5. **Session Management**
 

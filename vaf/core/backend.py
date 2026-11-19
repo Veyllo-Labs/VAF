@@ -874,6 +874,11 @@ class ServerManager:
         work. A zombie answers False too (its command line cannot be read): it holds no
         memory, and the wait after a stop ends on it. The own pid can never qualify - a
         pid file naming this very process is always a stale record.
+
+        Named boundary: the check asks whether the process is the llama-server program, not
+        whether VAF started it. Another llama-server (one the person started by hand), or a
+        process that gives itself that name or argv[0], still matches; it takes a process of
+        the same account, and a stale pid that is reused onto exactly such a process.
         """
         try:
             if pid <= 0 or pid == os.getpid():

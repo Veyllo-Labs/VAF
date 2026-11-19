@@ -80,7 +80,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   of failing each start with a new download, and on Windows a pending llama.cpp update no
   longer fails at every start while the model server runs: a running model server is now
   stopped before an older build is put back.
-- **Quitting VAF or switching models stops only VAF's model server.** A leftover record
+- **Quitting VAF or switching models stops only a `llama-server` program.** A leftover record
   of the server could make VAF stop an unrelated program, also one that merely had
   `llama-server` in its command line, such as an editor with its log open. Now a process
   is stopped only when it is the `llama-server` program itself.

@@ -1415,6 +1415,12 @@
       "remove": "Entfernen",
       "removeRelayConfirm": "Diesen Relais-Kontakt entfernen?",
       "addFailed": "Der Kontakt konnte nicht hinzugefügt werden.",
+      "relayInvite": "Relais-Kontakt einladen",
+      "relayInviteHint": "Schick diesen Link an die Person. Er lässt sich einmal nutzen und gilt {minutes} Minuten.",
+      "relayInviteCopy": "Link kopieren",
+      "relayInviteCopied": "Kopiert",
+      "relayInviteFailed": "Der Einladungslink konnte nicht erstellt werden.",
+      "relayInviteWaiting": "Wartet, bis die Person den Link in Telegram öffnet.",
       "cardActivityTitle": "Aktivität (letzte 7 Tage)",
       "jumpChatNotFound": "Für diesen Kontakt ist hier kein Chat gespeichert."
     },

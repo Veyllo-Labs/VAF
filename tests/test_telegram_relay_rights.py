@@ -407,6 +407,25 @@ def test_the_desktop_without_a_sign_in_is_the_local_admin(world, monkeypatch):
     assert not hasattr(routes, "get_current_vaf_user"), "the lenient reader is gone"
 
 
+# -- the window -------------------------------------------------------------------------------
+
+def test_the_telegram_window_invites_by_code_and_offers_the_id_form_to_admins_only():
+    """Source guard for the page half (AC8): every account gets the invite, the id form
+    shows only with `can_add_by_id`, the field is forwarded, and an error shows the route's
+    detail."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "web" / "components" / "connections"
+           / "TelegramDashboard.tsx").read_text(encoding="utf-8")
+    assert "api('api/telegram/relay-pair'), { method: 'POST'" in src
+    assert "can_add_by_id: json.can_add_by_id === true" in src
+    form = src[src.index("{data?.can_add_by_id && ("):]
+    assert "onClick={handleRelayAdd}" in form[:form.index("</div>")], "the id form sits inside the admin branch"
+    assert "{data?.can_add_by_id && e.vaf_username && <span>{e.vaf_username}</span>}" in src, \
+        "an admin sees whose relay contact each entry is"
+    invite = src[src.index("const startRelayInvite"):src.index("const handleRelayAdd")]
+    assert "data?.detail || t('relayInviteFailed')" in invite
+
+
 # -- fuzz -------------------------------------------------------------------------------------
 
 _ID = re.compile(r"[0-9]{1,20}")

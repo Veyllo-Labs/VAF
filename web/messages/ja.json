@@ -1415,6 +1415,12 @@
       "remove": "削除",
       "removeRelayConfirm": "このリレー連絡先を削除しますか？",
       "addFailed": "連絡先を追加できませんでした。",
+      "relayInvite": "リレー連絡先を招待",
+      "relayInviteHint": "このリンクを相手に送ってください。使えるのは1回だけで、有効期間は{minutes}分です。",
+      "relayInviteCopy": "リンクをコピー",
+      "relayInviteCopied": "コピーしました",
+      "relayInviteFailed": "招待リンクを作成できませんでした。",
+      "relayInviteWaiting": "相手がTelegramでリンクを開くのを待っています。",
       "cardActivityTitle": "アクティビティ（過去7日間）",
       "jumpChatNotFound": "この連絡先のチャットはここに保存されていません。"
     },

@@ -1415,6 +1415,12 @@
       "remove": "Remove",
       "removeRelayConfirm": "Remove this relay contact?",
       "addFailed": "The contact could not be added.",
+      "relayInvite": "Invite a relay contact",
+      "relayInviteHint": "Send this link to the person. It works once, for {minutes} minutes.",
+      "relayInviteCopy": "Copy link",
+      "relayInviteCopied": "Copied",
+      "relayInviteFailed": "The invite link could not be created.",
+      "relayInviteWaiting": "Waiting for the person to open the link in Telegram.",
       "cardActivityTitle": "Activity (last 7 days)",
       "jumpChatNotFound": "No chat is stored here for this contact."
     },

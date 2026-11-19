@@ -1415,6 +1415,12 @@
       "remove": "삭제",
       "removeRelayConfirm": "이 전달 연락처를 삭제할까요?",
       "addFailed": "연락처를 추가하지 못했어요.",
+      "relayInvite": "전달 연락처 초대",
+      "relayInviteHint": "이 링크를 상대에게 보내세요. 한 번만, {minutes}분 동안 쓸 수 있어요.",
+      "relayInviteCopy": "링크 복사",
+      "relayInviteCopied": "복사했어요",
+      "relayInviteFailed": "초대 링크를 만들지 못했어요.",
+      "relayInviteWaiting": "상대가 Telegram에서 링크를 열기를 기다리는 중이에요.",
       "cardActivityTitle": "활동 (최근 7일)",
       "jumpChatNotFound": "이 연락처의 채팅이 여기에 저장되어 있지 않아요."
     },

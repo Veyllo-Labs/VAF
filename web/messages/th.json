@@ -1415,6 +1415,12 @@
       "remove": "ลบ",
       "removeRelayConfirm": "ลบผู้ติดต่อแบบส่งต่อนี้ไหม",
       "addFailed": "เพิ่มผู้ติดต่อไม่ได้",
+      "relayInvite": "เชิญผู้ติดต่อแบบส่งต่อ",
+      "relayInviteHint": "ส่งลิงก์นี้ให้คนนั้น ใช้ได้ครั้งเดียว ภายใน {minutes} นาที",
+      "relayInviteCopy": "คัดลอกลิงก์",
+      "relayInviteCopied": "คัดลอกแล้ว",
+      "relayInviteFailed": "สร้างลิงก์เชิญไม่ได้",
+      "relayInviteWaiting": "กำลังรอให้คนนั้นเปิดลิงก์ใน Telegram",
       "cardActivityTitle": "กิจกรรม (7 วันล่าสุด)",
       "jumpChatNotFound": "ไม่มีแชตของผู้ติดต่อนี้บันทึกไว้ที่นี่"
     },

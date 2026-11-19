@@ -6,13 +6,18 @@
 // The Telegram window on the shared channel shell: one chat per paired user or relay
 // contact, badges for full access / relay / read-only, settings with the bot, the
 // paired users, the relay list and the activity chart.
+//
+// A relay contact is invited by a one-time link the person opens in Telegram
+// (POST/GET api/telegram/relay-pair; vaf/core/channel_pairing.py), so the person chooses
+// the account. The add by Telegram id is an admin's (`can_add_by_id`).
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslations } from 'next-intl';
 import { Send, ExternalLink, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { copyText } from '@/lib/clipboard';
 import MessagesChart from './MessagesChart';
-import ChannelDashboardShell, { BADGE_CLS, BTN, BTN_PRIMARY, INPUT, KvRow, SettingsCard, ShellChat } from './ChannelDashboardShell';
+import ChannelDashboardShell, { BADGE_CLS, BTN, BTN_PRIMARY, INPUT, KvRow, SFC_FILL, SettingsCard, ShellChat } from './ChannelDashboardShell';
 
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
 
@@ -56,10 +61,19 @@ interface DashboardData {
     admin_whitelist: WhitelistEntry[];
     relay_whitelist: WhitelistEntry[];
     running: boolean;
+    /** Whether this account may add a relay contact by its Telegram id (admins). */
+    can_add_by_id: boolean;
+}
+
+interface RelayInvite {
+    command: string;
+    link: string | null;
+    expiresIn: number;
 }
 
 export default function TelegramDashboard({ isOpen, onClose, config, onConfigChange, initialChatId }: TelegramDashboardProps) {
     const t = useTranslations('settings.telegramDashboard');
+    const tCommon = useTranslations('common');
     const [data, setData] = useState<DashboardData | null>(null);
     const [loading, setLoading] = useState(false);
     const [loadFailed, setLoadFailed] = useState(false);
@@ -68,6 +82,8 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
     const [relayAddId, setRelayAddId] = useState('');
     const [relayAddUsername, setRelayAddUsername] = useState('');
     const [relayError, setRelayError] = useState<string | null>(null);
+    const [relayInvite, setRelayInvite] = useState<RelayInvite | null>(null);
+    const [relayInviteCopied, setRelayInviteCopied] = useState(false);
     const [note, setNote] = useState<string | null>(null);
     // The jump id waiting to be checked against the loaded sessions. A ref, consumed once,
     // so the check runs on the load that follows the jump and not on every later refresh
@@ -94,6 +110,7 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                 admin_whitelist: Array.isArray(json.admin_whitelist) ? json.admin_whitelist : [],
                 relay_whitelist: Array.isArray(json.relay_whitelist) ? json.relay_whitelist : [],
                 running: status?.running === true,
+                can_add_by_id: json.can_add_by_id === true,
             });
             setSelectedChatId(prev => prev ?? (sessions[0]?.chat_id ?? null));
             const pendingJump = jumpPendingRef.current;
@@ -121,6 +138,51 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
     }, [initialChatId, isOpen]);
 
     useEffect(() => { if (isOpen) fetchDashboard(); }, [isOpen, fetchDashboard]);
+    // A closed window waits for nobody: the code runs out on the server on its own.
+    useEffect(() => { if (!isOpen) setRelayInvite(null); }, [isOpen]);
+
+    const startRelayInvite = async () => {
+        setRelayError(null);
+        setRelayInviteCopied(false);
+        try {
+            const res = await fetch(api('api/telegram/relay-pair'), { method: 'POST', credentials: 'include' });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                setRelayError(data?.detail || t('relayInviteFailed'));
+                return;
+            }
+            setRelayInvite({ command: data.command, link: data.link ?? null, expiresIn: Number(data.expires_in) || 600 });
+        } catch {
+            setRelayError(t('relayInviteFailed'));
+        }
+    };
+
+    // While the link is out, ask every few seconds whether the bot has redeemed it; the code
+    // runs out on the server, and the wait stops with it.
+    useEffect(() => {
+        if (!relayInvite) return;
+        const started = Date.now();
+        const timer = setInterval(async () => {
+            if (Date.now() - started > relayInvite.expiresIn * 1000) {
+                setRelayInvite(null);
+                return;
+            }
+            try {
+                const res = await fetch(api('api/telegram/relay-pair'), { credentials: 'include' });
+                const data = await res.json();
+                if (res.ok && data?.pending === false) {
+                    setRelayInvite(null);
+                    fetchDashboard();
+                }
+            } catch { /* keep waiting */ }
+        }, 3000);
+        return () => clearInterval(timer);
+    }, [relayInvite, fetchDashboard]);
+
+    const copyRelayInvite = async () => {
+        if (!relayInvite) return;
+        setRelayInviteCopied(await copyText(relayInvite.link || relayInvite.command));
+    };
 
     const handleRelayAdd = async () => {
         const id = relayAddId.trim();
@@ -216,17 +278,37 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
             <SettingsCard title={t('cardRelayTitle')} desc={t('cardRelayDesc')}>
                 {(data?.relay_whitelist || []).map((e, i) => (
                     <KvRow key={i} left={label(e)} right={<>
+                        {/* An admin's list holds every account's relay contacts: say whose each one is. */}
+                        {data?.can_add_by_id && e.vaf_username && <span>{e.vaf_username}</span>}
                         <span>{e.telegram_user_id}</span>
                         <button type="button" title={t('remove')} onClick={() => { if (confirm(t('removeRelayConfirm'))) handleRelayRemove(e.telegram_user_id); }}
                             className="p-1 rounded hover:bg-red-100 text-gray-500 hover:text-red-600"><Trash2 className="w-3.5 h-3.5" /></button>
                     </>} />
                 ))}
                 {(!data?.relay_whitelist || data.relay_whitelist.length === 0) && <p className="text-[12.5px] text-gray-500 mb-2">{t('noneRelay')}</p>}
-                <div className="flex gap-2 flex-wrap">
-                    <input type="text" placeholder={t('relayIdPlaceholder')} value={relayAddId} onChange={e => setRelayAddId(e.target.value)} className={cn('flex-1 min-w-[10rem]', INPUT)} />
-                    <input type="text" placeholder={t('relayUserPlaceholder')} value={relayAddUsername} onChange={e => setRelayAddUsername(e.target.value)} className={cn('flex-1 min-w-[10rem]', INPUT)} />
-                    <button type="button" onClick={handleRelayAdd} disabled={!relayAddId.trim()} className={BTN_PRIMARY}>{t('add')}</button>
-                </div>
+                {!relayInvite ? (
+                    <button type="button" onClick={startRelayInvite} className={cn(BTN_PRIMARY, 'mb-2')}>{t('relayInvite')}</button>
+                ) : (
+                    <div className={cn(SFC_FILL, 'rounded-lg p-2.5 mb-2 space-y-2 text-[13px]')}>
+                        <p className="text-gray-700">{t('relayInviteHint', { minutes: Math.round(relayInvite.expiresIn / 60) })}</p>
+                        {relayInvite.link && (
+                            <code className="block font-mono text-xs break-all select-all">{relayInvite.link}</code>
+                        )}
+                        <code className="block font-mono text-xs break-all select-all text-gray-500">{relayInvite.command}</code>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <button type="button" onClick={copyRelayInvite} className={BTN}>{relayInviteCopied ? t('relayInviteCopied') : t('relayInviteCopy')}</button>
+                            <button type="button" onClick={() => setRelayInvite(null)} className={BTN}>{tCommon('cancel')}</button>
+                        </div>
+                        <p className="text-xs text-gray-500">{t('relayInviteWaiting')}</p>
+                    </div>
+                )}
+                {data?.can_add_by_id && (
+                    <div className="flex gap-2 flex-wrap">
+                        <input type="text" placeholder={t('relayIdPlaceholder')} value={relayAddId} onChange={e => setRelayAddId(e.target.value)} className={cn('flex-1 min-w-[10rem]', INPUT)} />
+                        <input type="text" placeholder={t('relayUserPlaceholder')} value={relayAddUsername} onChange={e => setRelayAddUsername(e.target.value)} className={cn('flex-1 min-w-[10rem]', INPUT)} />
+                        <button type="button" onClick={handleRelayAdd} disabled={!relayAddId.trim()} className={BTN_PRIMARY}>{t('add')}</button>
+                    </div>
+                )}
                 {relayError && <p className="mt-2 text-xs text-red-600">{relayError}</p>}
             </SettingsCard>
 

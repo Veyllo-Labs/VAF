@@ -1415,6 +1415,12 @@
       "remove": "移除",
       "removeRelayConfirm": "移除这个转达联系人？",
       "addFailed": "无法添加联系人。",
+      "relayInvite": "邀请转达联系人",
+      "relayInviteHint": "把这个链接发给对方。它只能用一次，{minutes} 分钟内有效。",
+      "relayInviteCopy": "复制链接",
+      "relayInviteCopied": "已复制",
+      "relayInviteFailed": "无法创建邀请链接。",
+      "relayInviteWaiting": "正在等对方在 Telegram 中打开链接。",
       "cardActivityTitle": "活动（最近 7 天）",
       "jumpChatNotFound": "这里没有为这个联系人保存的聊天。"
     },

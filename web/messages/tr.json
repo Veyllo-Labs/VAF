@@ -1415,6 +1415,12 @@
       "remove": "Kaldır",
       "removeRelayConfirm": "Bu aktarma kişisi kaldırılsın mı?",
       "addFailed": "Kişi eklenemedi.",
+      "relayInvite": "Aktarma kişisi davet et",
+      "relayInviteHint": "Bu bağlantıyı kişiye gönder. Bir kez ve {minutes} dakika boyunca çalışır.",
+      "relayInviteCopy": "Bağlantıyı kopyala",
+      "relayInviteCopied": "Kopyalandı",
+      "relayInviteFailed": "Davet bağlantısı oluşturulamadı.",
+      "relayInviteWaiting": "Kişinin bağlantıyı Telegram'da açması bekleniyor.",
       "cardActivityTitle": "Etkinlik (son 7 gün)",
       "jumpChatNotFound": "Bu kişi için burada kayıtlı bir sohbet yok."
     },

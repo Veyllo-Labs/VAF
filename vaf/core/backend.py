@@ -11,8 +11,6 @@ import re
 import shutil
 import stat
 import subprocess
-import zipfile
-import tarfile
 import threading
 import time
 import requests
@@ -24,6 +22,7 @@ from vaf.core.config import Config
 from vaf.core.gpu_detection import get_primary_gpu
 from vaf.core.log_helper import get_app_log_dir, get_dated_log_path, is_debug_logging_enabled
 from vaf.core.platform import Platform
+from vaf.core import verified_download
 
 
 # Bare GGUF filenames of the built-in default models map back to their HuggingFace repo, so a config
@@ -562,14 +561,10 @@ def _server_ready_budget() -> float:
 # the SHA-256 of every release asset the launcher may pick. The launcher installs that
 # build, and only bytes that hash to the recorded digest (vaf/core/verified_download.py),
 # so a release asset replaced after the pin, a truncated transfer or a poisoned mirror
-# never runs. A newer llama.cpp arrives with the VAF release that carries a new manifest.
+# never runs. The unpack and its link checks (extract_archive, refuse_escaping_links,
+# MAX_ARCHIVE_LINKS) live in that module too, shared with the Piper install. A newer llama.cpp arrives with the VAF release that carries a new manifest.
 LLAMA_REPO = "ggml-org/llama.cpp"
 LLAMA_REPO_ID = 612354784          # what the provenance attestation must name
-# Links (symbolic or hard) one release archive may hold. A release has a few dozen (the
-# version links of its libraries). The data filter resolves every link member as it
-# unpacks, and a chain stored in reverse order makes that cost grow with the square of its
-# length (26 s at 4000 links), so more than this is refused before anything is unpacked.
-MAX_ARCHIVE_LINKS = 512
 # The errors of a probe that establish "this binary cannot run": not a program, no
 # permission, gone, or a missing interpreter. Every other error (no memory, too many
 # processes or open files, interrupted, anything unknown) says nothing about the binary
@@ -618,52 +613,6 @@ def load_llama_pin() -> dict:
         if not LLAMA_ASSET_PATTERN.fullmatch(name) or not re.fullmatch(r"[0-9a-f]{64}", digest):
             raise RuntimeError(f"llama.cpp pin manifest: bad entry {name!r}")
     return data
-
-
-def _link_leaves_folder(link: str, depth: int, real_root: str) -> str:
-    """Why the link at `link`, `depth` folders below the root whose resolved path is
-    `real_root`, can point outside it, or "" when it cannot (see
-    ServerManager._refuse_escaping_links)."""
-    from vaf.core.path_jail import is_rooted
-
-    try:
-        target = os.readlink(link)
-    except OSError as e:
-        return f"unreadable link: {e}"
-    if is_rooted(target) or os.path.isabs(target):
-        return f"absolute target {target!r}"
-    # Only leading ".." count as climbing: "d/.." goes wherever d's target goes when d is a
-    # link (d -> . makes d/.. the folder's PARENT), so a ".." after a named part is refused.
-    # Each link then stays inside on its own, whatever the folder is called, also where the
-    # extraction left its target unnormalized (tarfile before the 2025 fix: 3.10.12-3.10.17,
-    # 3.11.4-3.11.12, 3.12.0-3.12.10, 3.13.0-3.13.3).
-    level = depth
-    named = False
-    seps = os.sep + (os.altsep or "")
-    for part in re.split("[" + re.escape(seps) + "]", target):
-        if part in ("", "."):
-            continue
-        if part == "..":
-            if named:
-                return f"target {target!r} goes back up after a named part"
-            level -= 1
-            if level < 0:
-                return f"target {target!r} climbs above the folder"
-        else:
-            named = True
-            level += 1
-    try:
-        os.stat(link)
-    except FileNotFoundError:
-        pass                              # dangling: nothing is reached through it
-    except OSError as e:
-        return f"cannot be followed: {e.strerror or e}"
-    real = os.path.realpath(link)
-    try:
-        inside = os.path.commonpath([real, real_root]) == real_root
-    except ValueError:                    # another drive on Windows
-        inside = False
-    return "" if inside else f"resolves outside to {real!r}"
 
 
 class ServerManager:
@@ -1118,115 +1067,6 @@ class ServerManager:
 
         return {"tag": tag, "main": entry(main), "dep": entry(dep) if dep else None}
 
-    def _extract_archive(self, archive_path: str, into: str) -> None:
-        """Unpack a release archive into `into` and lift a nested folder's files to its top.
-
-        Tarballs go through tarfile's "data" filter, which refuses an absolute link and one
-        that climbs out of `into`. A Python without that filter (3.10.0 to 3.10.11) gets no
-        unfiltered fallback: the install fails instead. The filter judges a link where it
-        is unpacked, though, and the lift then moves build/bin/ two levels up without
-        rewriting links, so `build/bin/d -> ../x` passes the filter and points out of the
-        folder afterwards. Every link is therefore checked again after the lift, on its
-        path on disk (_refuse_escaping_links): one whose target is absolute or climbs above
-        the folder, that the kernel will not follow, or that resolves outside `into` fails
-        the install. The relative library links of a release (libllama.so ->
-        libllama.so.1 -> libllama.so.1.0.0) stay inside and are kept. A tarball with more
-        than MAX_ARCHIVE_LINKS links is refused before it is unpacked. Zip archives cannot
-        hold links, and zipfile strips ".." and absolute names itself."""
-        if archive_path.endswith(".tar.gz") or archive_path.endswith(".tgz"):
-            with tarfile.open(archive_path, "r:gz") as tar_ref:
-                links = sum(1 for m in tar_ref.getmembers() if m.issym() or m.islnk())
-                if links > MAX_ARCHIVE_LINKS:
-                    raise RuntimeError(f"the archive holds {links} links, more than the {MAX_ARCHIVE_LINKS} "
-                                       "a release can need")
-                try:
-                    tar_ref.extractall(into, filter="data")
-                except TypeError as e:     # a Python without the filter argument
-                    raise RuntimeError(
-                        "this Python cannot unpack the backend safely (tarfile has no data filter); "
-                        "update Python to 3.10.12 or newer, 3.11.4 or newer, or 3.12 or newer") from e
-        else:
-            with zipfile.ZipFile(archive_path, "r") as zip_ref:
-                zip_ref.extractall(into)
-        os.remove(archive_path)
-        # GitHub archives often carry a top-level folder; the launcher expects the files
-        # directly at the top.
-        found_path = None
-        for root, dirs, files in os.walk(into):
-            if root != into and self.server_exe in files:
-                found_path = os.path.join(root, self.server_exe)
-                break
-        if found_path:
-            parent_dir = os.path.dirname(found_path)
-            for item in os.listdir(parent_dir):
-                src = os.path.join(parent_dir, item)
-                dst = os.path.join(into, item)
-                if os.path.exists(dst):
-                    if os.path.isdir(dst): shutil.rmtree(dst)
-                    else: os.remove(dst)
-                shutil.move(src, dst)
-            try:
-                os.rmdir(parent_dir)
-            except OSError:
-                pass
-        self._refuse_escaping_links(into)
-
-    @staticmethod
-    def _refuse_escaping_links(root: str) -> None:
-        """RuntimeError when a link anywhere below `root` could point outside the folder
-        once it is installed. Each link is decided on its path on disk (entry.path, its
-        name exactly as stored, odd characters included), three ways:
-
-        - by its target as written (os.readlink): an absolute or drive-anchored target
-          (path_jail.is_rooted), one whose leading ".." climb above `root` from the link's
-          own folder, and one with a ".." after a named part (``d/..`` is d's target's
-          parent when d is a link) are refused. This does not depend on the folder's name,
-          so a link that leaves and comes back by the temporary name
-          (``../llama-cpp.staging/x``, or ``d/../llama-cpp.staging/x`` with d -> .) is
-          refused although it resolves inside while the folder still has that name;
-        - by the kernel's own resolution (os.stat): a chain the kernel refuses to follow
-          (more than its hop limit, 40 on Linux, or a loop) is refused, which also keeps the
-          next step linear in the number of links;
-        - by where it resolves (os.path.realpath, through every other link): outside
-          `root` is refused. With the rules above every link of a listed folder stays
-          inside by itself, so this step cannot change the outcome (it may name the reason
-          first, for a link that runs through another one the rules refuse later in the
-          listing); it guards those rules rather than deciding a shape of its own.
-
-        A dangling link that stays inside is accepted (it cannot reach anything), and so are
-        the release's relative library links (libllama.so -> libllama.so.1). The folders are
-        listed without following links (path_jail.walk_without_links)."""
-        from vaf.core.path_jail import walk_without_links
-
-        real_root = os.path.realpath(root)
-        folders = [""] + [rel for rel, is_folder in walk_without_links(root) if is_folder]
-        for rel in folders:
-            depth = len(rel.split("/")) if rel else 0
-            with os.scandir(os.path.join(root, *rel.split("/")) if rel else root) as entries:
-                for entry in entries:
-                    if not entry.is_symlink():
-                        continue
-                    name = f"{rel}/{entry.name}" if rel else entry.name
-                    reason = _link_leaves_folder(entry.path, depth, real_root)
-                    if reason:
-                        raise RuntimeError(f"the archive holds a link that leaves the backend folder: {name!r} ({reason})")
-
-    @staticmethod
-    def _remove_tree_or_link(path: str) -> None:
-        """Remove `path` whatever it is: a link (to a folder or not) is unlinked, never
-        followed, a folder is removed with everything in it, a file is unlinked. rmtree
-        refuses a link, so a linked leftover would otherwise stay and block every later swap.
-        OSError when anything of it is still there afterwards (rmtree skips what it cannot
-        remove): the next install must not unpack on top of debris."""
-        if os.path.islink(path):
-            os.unlink(path)
-        elif os.path.isdir(path):
-            shutil.rmtree(path, ignore_errors=True)
-        elif os.path.lexists(path):
-            os.unlink(path)
-        if os.path.lexists(path):
-            raise OSError(f"{path} could not be removed completely")
-
     def ensure_server_exists(self, port: int = 8080):
         """The pinned llama-server is on disk, or it is installed now, or this is False.
 
@@ -1392,7 +1232,7 @@ class ServerManager:
         # or removed, never bin/ itself.
         try:
             for leftover in (staging, previous):
-                self._remove_tree_or_link(leftover)
+                verified_download.remove_tree_or_link(leftover)
             os.makedirs(self.bin_root, exist_ok=True)
             os.makedirs(staging, exist_ok=True)
         except OSError as e:
@@ -1409,7 +1249,7 @@ class ServerManager:
                 downloaded.append(str(download_verified(part["url"], part["sha256"], os.path.join(staging, part["name"]))))
             UI.event("System", "Extracting backend...", style="dim")
             for archive in downloaded:
-                self._extract_archive(archive, staging)
+                verified_download.extract_archive(archive, staging, program=self.server_exe)
             staged_exe = os.path.join(staging, self.server_exe)
             try:
                 exe_is_file = stat.S_ISREG(os.lstat(staged_exe).st_mode)
@@ -1507,17 +1347,17 @@ class ServerManager:
         if not os.path.lexists(previous):
             return
         try:
-            self._remove_tree_or_link(staging)
+            verified_download.remove_tree_or_link(staging)
             os.rename(previous, staging)
         except OSError:
             try:
-                self._remove_tree_or_link(previous)
+                verified_download.remove_tree_or_link(previous)
             except OSError as e:
                 UI.event("System", f"The new backend runs, but the replaced one could not be removed ({e}). "
                          f"Remove {previous} by hand.", style="warning")
             return
         try:
-            self._remove_tree_or_link(staging)
+            verified_download.remove_tree_or_link(staging)
         except OSError:
             pass                          # a leftover the next attempt clears
 
@@ -1531,13 +1371,13 @@ class ServerManager:
         leftover. Returns "" when the previous build is in place, else why it is not."""
         try:
             if os.path.lexists(self.bin_dir):
-                self._remove_tree_or_link(staging)       # the name must be free for the rename
+                verified_download.remove_tree_or_link(staging)       # the name must be free for the rename
                 os.rename(self.bin_dir, staging)
             os.rename(previous, self.bin_dir)
         except OSError as e:
             return str(e)
         try:
-            self._remove_tree_or_link(staging)
+            verified_download.remove_tree_or_link(staging)
         except OSError:
             pass                          # a leftover the next attempt clears
         return ""

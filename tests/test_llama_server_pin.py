@@ -31,7 +31,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from vaf.core import backend
+from vaf.core import backend, verified_download
 from vaf.core.verified_download import DownloadIntegrityError, download_verified
 
 REPO = Path(__file__).resolve().parents[1]
@@ -599,7 +599,7 @@ def test_a_link_that_leaves_the_folder_after_the_lift_is_refused(linux_install, 
     """The data filter judges a link where it is unpacked (staging/build/bin), and those
     links stay inside staging there. The lift moves build/bin up two levels without
     rewriting them, and then they point out of bin/llama-cpp. MUTATIONS: drop the check
-    after the lift (_refuse_escaping_links), decide a link on its name passed through
+    after the lift (refuse_escaping_links), decide a link on its name passed through
     contained_path (which strips whitespace and reads a backslash as a separator), or drop
     the check of the target as written (the staging-name shape): each goes red."""
     m, _ = linux_install
@@ -629,14 +629,14 @@ def test_a_link_through_a_link_and_back_up_is_refused_whatever_the_folder_is_cal
     os.symlink(".", root / "d")
     os.symlink(os.path.join("d", "..", "llama-cpp.staging", "x"), root / "t")
     with pytest.raises(RuntimeError, match="after a named part"):
-        backend.ServerManager._refuse_escaping_links(str(root))
+        verified_download.refuse_escaping_links(str(root))
 
     os.unlink(root / "t"); os.unlink(root / "d")
     (root / "libllama.so.1.0.0").write_bytes(b"lib")
     os.symlink("libllama.so.1.0.0", root / "libllama.so.1")
     os.symlink("libllama.so.1", root / "libllama.so")
     os.symlink(os.path.join("..", "libllama.so"), root / "sub" / "l")
-    backend.ServerManager._refuse_escaping_links(str(root))
+    verified_download.refuse_escaping_links(str(root))
     final = bin_root / "llama-cpp"
     os.rename(root, final)
     for link in (final / "libllama.so", final / "libllama.so.1", final / "sub" / "l"):
@@ -658,15 +658,15 @@ def test_the_resolution_step_refuses_what_resolves_outside(tmp_path):
     os.symlink("x", elsewhere / "l")
     root = tmp_path / "bin" / "llama-cpp.staging"
     root.mkdir(parents=True)
-    reason = backend._link_leaves_folder(str(elsewhere / "l"), 0, os.path.realpath(root))
+    reason = verified_download.link_leaves_folder(str(elsewhere / "l"), 0, os.path.realpath(root))
     assert reason.startswith("resolves outside"), reason
-    assert backend._link_leaves_folder(str(elsewhere / "l"), 0, os.path.realpath(elsewhere)) == ""
+    assert verified_download.link_leaves_folder(str(elsewhere / "l"), 0, os.path.realpath(elsewhere)) == ""
 
     (root / "deep").mkdir()
     os.symlink("..", root / "deep" / "s")
     os.symlink(os.path.join("s", ".."), root / "deep" / "t")
     with pytest.raises(RuntimeError, match="after a named part"):
-        backend.ServerManager._refuse_escaping_links(str(root))
+        verified_download.refuse_escaping_links(str(root))
 
 
 @pytest.mark.skipif(os.name == "nt", reason="tar links are not extracted as links without the symlink privilege")
@@ -679,7 +679,7 @@ def test_a_chain_past_the_kernels_hop_limit_is_refused(linux_install, monkeypatc
     import time as _time
     m, _ = linux_install
     n = 200
-    assert n <= backend.MAX_ARCHIVE_LINKS
+    assert n <= verified_download.MAX_ARCHIVE_LINKS
     payload = _archive(10955, links=[(f"a{i}", f"a{i + 1}" if i + 1 < n else "llama-server") for i in range(n)])
     _pin(monkeypatch, payload)
     _fake_get(monkeypatch, payload)
@@ -913,7 +913,7 @@ def test_a_replaced_build_that_cannot_be_removed_does_not_fail_the_install(linux
     Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10021)
     events = []
     monkeypatch.setattr(backend.UI, "event", lambda *a, **k: events.append(" ".join(map(str, a))))
-    real = backend.ServerManager._remove_tree_or_link
+    real = verified_download.remove_tree_or_link
     real_rename = os.rename
 
     def remove(path):
@@ -927,7 +927,7 @@ def test_a_replaced_build_that_cannot_be_removed_does_not_fail_the_install(linux
             raise PermissionError(5, "Access is denied")
         return real_rename(src, dst)
 
-    monkeypatch.setattr(backend.ServerManager, "_remove_tree_or_link", staticmethod(remove))
+    monkeypatch.setattr(verified_download, "remove_tree_or_link", remove)
     monkeypatch.setattr(backend.os, "rename", rename)
     _fake_get(monkeypatch, payload)
     assert m.ensure_server_exists() is True
@@ -1111,7 +1111,7 @@ def test_a_roll_back_whose_cleanup_fails_still_keeps_the_previous_build(linux_in
     before = _tree(Path(m.bin_dir))
     _failing_probe(monkeypatch, lambda path: os.path.abspath(path) == os.path.abspath(m.server_path)
                    and "10955" in Path(path).read_text(encoding="utf-8"))
-    real_remove = backend.ServerManager._remove_tree_or_link
+    real_remove = verified_download.remove_tree_or_link
 
     def remove(path):
         if os.path.abspath(path) in (os.path.abspath(m.bin_dir), os.path.abspath(m.bin_dir + ".staging")) \
@@ -1119,7 +1119,7 @@ def test_a_roll_back_whose_cleanup_fails_still_keeps_the_previous_build(linux_in
             raise PermissionError(13, "Permission denied")       # leaves everything in place
         return real_remove(path)
 
-    monkeypatch.setattr(backend.ServerManager, "_remove_tree_or_link", staticmethod(remove))
+    monkeypatch.setattr(verified_download, "remove_tree_or_link", remove)
     errors = []
     monkeypatch.setattr(backend.UI, "error", lambda *a, **k: errors.append(" ".join(map(str, a))))
     _fake_get(monkeypatch, payload)
@@ -1158,14 +1158,14 @@ def test_a_verified_install_retires_previous_even_when_its_removal_fails(linux_i
     only and the .previous stays next to the verified build."""
     m, payload = linux_install
     Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10021)
-    real = backend.ServerManager._remove_tree_or_link
+    real = verified_download.remove_tree_or_link
 
     def remove(path):
         if path.endswith(".previous") and os.path.lexists(path):
             raise PermissionError(5, "Access is denied")
         return real(path)
 
-    monkeypatch.setattr(backend.ServerManager, "_remove_tree_or_link", staticmethod(remove))
+    monkeypatch.setattr(verified_download, "remove_tree_or_link", remove)
     _fake_get(monkeypatch, payload)
     assert m.ensure_server_exists() is True and m.installed_build() == 10955
     assert not os.path.lexists(m.bin_dir + ".previous")

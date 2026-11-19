@@ -483,6 +483,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **A Settings save no longer brings back a removed messenger pairing.** A settings page
+  left open while a Telegram contact, relay contact or WhatsApp number was removed (or the
+  Veyllo relay switched off) wrote the old list back on its next save, giving the removed
+  person their access again. The pairing lists and the relay switch now change only
+  through their own buttons and commands. A save keeps what is stored.
 - **Only an admin can change where requests go, the vision and browser-agent models, and
   the instance's secrets and limits.** A settings save by any signed-in account could change
   them:

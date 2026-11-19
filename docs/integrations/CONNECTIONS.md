@@ -359,6 +359,7 @@ never sent back to the browser, and **Disconnect** removes it together with the 
 ### Whitelist and multi-user
 
 - Each whitelist entry links one Telegram user to one VAF user (user_scope_id and username from the Web UI session when that user was added).
+- The whitelist changes only through pairing, and the relay whitelist only through its add and remove; a settings save never changes either (`Config.ROUTE_OWNED_SUBKEYS`), so a Settings page left open while a contact was removed cannot bring it back.
 - **Verified account owner**: The user who paired their Telegram with the bot (the whitelist step or a pairing code) does not need to be manually re-added for proactive sends. The chat VAF reaches them on is only ever one of their own paired Telegram ids: the one they last wrote from when they paired two, else their first. An entry belongs to an account by its scope alone, and an entry or a lane without one is the local admin's (as the bot's own lane switch reads it), so a background lane that knows the scope but not the name still finds it, and a name never hands one account's pairing to another. A contact you allowed, a relay contact, somebody the open Inbound answered or a group chat never sets it, and another account's pairing is never yours, the admin's included (`messaging_connections.save_telegram_chat_id` refuses anything else). Released versions stored the chat of every sender the bot admitted; a stored chat that is not one of your paired ids is reset before VAF next writes to you, recorded once as the security event "Delivery chat corrected" (`owner_endpoint_reset`, see [USER_ISOLATION.md](../security/USER_ISOLATION.md#telegram)).
 - **Front Office on Telegram**: with Front Office switched on for Telegram (Settings → Connections → Front Office; `channel_ingress_policy.telegram.open_to_new_senders`) everybody the owner has not decided about is answered in Front Office mode and a new sender is added to the owner's contact book with no decision on them; a person the owner blocked is still turned away. Because the bot is shared by every account, the enrolment works only while exactly one owner is on the whitelist. With Front Office off, the default, only a contact the owner set to **allowed** is answered, and everybody else is turned away. The whitelist and the relay whitelist are the owner's own pairing and are not affected.
 - The whitelist is the OWNER's pairing: a number on it gets the full agent. Everybody else is answered only through Front Office, which is the bullet above: a contact you allowed, or, while Telegram Inbound is on and exactly one owner is on the whitelist, somebody you have not decided about. Anyone else is not answered at all (no queue task, no agent run), which keeps the abuse and amplification risk down; the message itself is kept in the channel store so you can read it in the Telegram window and through the inbox tools.
@@ -483,6 +484,7 @@ The WhatsApp window (Settings → Connections → WhatsApp) is laid out like the
 ```
 
 - **`inbound_to_agent`** (default `true`): When `true`, incoming WhatsApp messages are enqueued and the agent replies (two-way chat). When `false`, WhatsApp is send-only: the bot can send you content (text, voice, documents), but incoming messages do **not** trigger the agent. The user stays reachable; only the direction "user → agent" is disabled. Off stops every sender, so an open Inbound switch answers nobody on WhatsApp while it is off, and the inbox rows and the WhatsApp window say so (`messaging_connections.whatsapp_inbound_to_agent` is the one reader of the key; `front_office_open("whatsapp")` folds it in).
+- **`whitelist`** and **`lid_to_e164`** change only through the dashboard's add, remove and LID-assign routes and the bridge; a settings save never changes them (`Config.ROUTE_OWNED_SUBKEYS`), so a Settings page left open while a number was removed cannot bring it back.
 
 ### Troubleshooting
 
@@ -756,6 +758,10 @@ What a new channel still needs, because it differs per channel:
    (`tests/test_inbox_lanes_sync.py` refuses one without the other; see
    [INBOX.md](INBOX.md#the-lanes)). A channel whose far end is only the account holder stays
    out, as the Veyllo App does.
+8. A row in `Config.ROUTE_OWNED_SUBKEYS` for every sub-key of its `<platform>_config` that
+   only its routes or bridge write (a pairing list, a runtime timeline): a settings save
+   sends the page's old copy of the whole block, and the table puts those sub-keys back to
+   their stored value (`tests/test_messenger_subkeys_route_owned.py`).
 
 ## Veyllo App
 

@@ -425,7 +425,7 @@ The reflex system is broadly multilingual, with a few layers that are language-s
   `voice_vad.StreamEndpointer` per call - browser streams mic PCM
   (`voice_call_chunk`), Silero yields per-frame voicedness, `TurnDetector` finds the
   boundary, and Smart Turn v3 (`SemanticTurnJudge`, 8 MB int8 ONNX, CPU, BSD-2,
-  downloaded on first use) may VETO a timer end because the speaker only paused
+  downloaded on first use, checked against its pinned SHA-256) may VETO a timer end because the speaker only paused
   mid-sentence. The server then pushes `voice_turn_end`, which triggers the same
   browser `stop()` the silence timer would; the timer stays as the fallback. A CI
   guard pins that the browser and server constants cannot drift

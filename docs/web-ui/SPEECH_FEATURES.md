@@ -57,7 +57,7 @@ VAF supports multiple TTS engines configured via `speech_tts_engine`:
 |--------|-------------|----------|
 | `docker` | HTTP TTS service (Piper in container) | **Recommended** - Best quality |
 | `chatterbox` | Chatterbox-style HTTP TTS server (`speech_tts_chatterbox_url`) | Alternative HTTP TTS backend |
-| `piper` | Local Piper binary | Offline without Docker |
+| `piper` | Local Piper binary (`bin/piper/`), downloaded on first use, checked against its pinned SHA-256 | Offline without Docker |
 | `system` | macOS `say` command only (pyttsx3 removed - caused 1-4 GB RAM explosion on Windows via SAPI/comtypes) | macOS fallback only |
 
 When `speech_tts_provider` is set (`elevenlabs` or `openai`), the cloud lane takes
@@ -74,9 +74,51 @@ The `vaf-tts` container (`docker/tts-multilang`) supports multiple languages wit
 
 | Language | Voice Model | Quality |
 |----------|-------------|---------|
-| German (de) | `de_DE-thorsten-high` | High |
-| English (en) | `en_US-kusal-medium` | Medium |
+| German (de) | `de_DE-thorsten-medium` | Medium |
+| English (en) | `en_US-amy-medium` | Medium |
 | French (fr) | `fr_FR-siwis-medium` | Medium |
+| Spanish (es) | `es_ES-carlfm-x_low` | Extra low |
+| Italian (it) | `it_IT-riccardo-x_low` | Extra low |
+| Dutch (nl) | `nl_NL-mls-medium` | Medium |
+| Polish (pl) | `pl_PL-gosia-medium` | Medium |
+| Portuguese (pt) | `pt_BR-faber-medium` | Medium |
+| Russian (ru) | `ru_RU-irina-medium` | Medium |
+| Ukrainian (uk) | `uk_UA-ukrainian_tts-medium` | Medium |
+| Chinese (zh) | `zh_CN-huayan-medium` | Medium |
+| Japanese (ja) | `ja_JP-hi_fi_captain-medium` | Medium |
+| Turkish (tr) | `tr_TR-dfki-medium` | Medium |
+
+The container installs a voice on demand (Settings > Voice & Speech) from the table in
+`docker/tts-multilang/models.json`; see
+[Where Piper and its voices come from](#where-piper-and-its-voices-come-from).
+
+### Where Piper and its voices come from
+
+Every speech file VAF downloads is checked against a SHA-256 recorded with the release,
+in `vaf/core/speech_assets_pin.json` (written by `scripts/pin_speech_assets.py`, see
+[RELEASING.md](../setup/RELEASING.md)), before it is unpacked, loaded or run:
+
+- **The Piper program** (`speech_tts_engine = piper`): the archive of Piper release
+  `2023.11.14-2` for this computer. It is downloaded into `bin/piper.staging/`, unpacked
+  there the same way as llama.cpp (tarfile's data filter, at most 512 links, every link
+  checked again after the archive's `piper/` folder is lifted), and its `piper` program
+  must have the recorded digest; only then is `bin/piper/` replaced as a whole folder. A
+  download that does not match changes nothing. An installed Piper counts as installed only
+  when its program has the recorded digest (checked once per process), so a Piper of another
+  build is replaced on its next use. The install runs under a file lock (`bin/.piper.lock`);
+  a second VAF process says it is waiting. On Apple Silicon the program of Piper's macOS
+  arm64 archive is an x86_64 build (measured: both macOS archives hold the same program),
+  so it runs through Rosetta 2.
+- **The Piper voices** (on the host, `models/voices/`): from one pinned commit of
+  `rhasspy/piper-voices`, both the `.onnx` model and its `.onnx.json`. A voice already
+  there with the recorded digest is kept, a truncated or different one is fetched again, and
+  bytes that do not match are never written under the voice's name.
+- **The speech container's voices**: the same commit, from `models.json`; a mismatch ends
+  the install with an error and leaves no file. Voices the container installed before this
+  check existed are not checked again; reinstalling a language fetches it verified.
+- **Speaker recognition** (`silero_vad.onnx`, the 3D-Speaker ERes2Net model) and the
+  turn-end model (`smart-turn-v3.2-cpu.onnx`, pinned to a commit): the same check, in
+  `models/speaker/`.
 
 **API Endpoint:** `POST /synthesize`
 
@@ -879,7 +921,7 @@ docker build -t vaf-tts-multilang:latest .
 
 The container includes:
 - Piper TTS with ONNX runtime
-- Pre-downloaded voice models (DE, EN, FR)
+- No voice models: each language is installed on demand, checked against its pinned SHA-256
 - ffmpeg for OGG/Opus conversion
 - Flask API server
 

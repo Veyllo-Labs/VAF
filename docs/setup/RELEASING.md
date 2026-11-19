@@ -155,6 +155,18 @@ waiting for a stable `X.Y.Z`.
    starts llama-server on, `LLAMA_SERVER_PORT` only changes where clients connect),
    and only then commit the manifest with the release. A start with vLLM as the engine
    or with auto-start off never installs llama.cpp, so it checks nothing.
+   The speech files are pinned the same way (`vaf/core/speech_assets_pin.json` and the
+   speech container's `docker/tts-multilang/models.json`): the Piper archives with the
+   digest of their program, one commit of `rhasspy/piper-voices` with every voice VAF may
+   fetch, and the speaker recognition and turn-end models. Refresh both with
+   `venv/bin/python scripts/pin_speech_assets.py` (options `--voices-revision` and
+   `--smart-turn-revision` take a commit, `main` otherwise). It downloads the six Piper
+   archives (138.7 MB) and the ERes2Net speaker model (26.5 MB), because no digest is
+   published for them, and hashes them; nothing is run. The Piper pin is trust on first
+   use from an archived (read-only) release; an asset updated after its upload is refused.
+   Then check it: `speech_tts_engine = piper` with text-to-speech on and `bin/piper/`
+   moved away, start VAF and send one message, and confirm a spoken reply and no
+   `bin/piper.staging` or `bin/piper.previous` afterwards.
    The vLLM engine is pinned the same way, by version (`PIN` in
    `vaf/core/vllm_server.py`): bumping it is a release decision too. Edit `PIN`, run
    `vaf engine vllm` once on a supported machine (Linux, NVIDIA, compute capability

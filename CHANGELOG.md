@@ -520,6 +520,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   every connected GitHub login. The lists now change only through Connections, GitHub, and
   each account sees only its own.
 
+- **Piper, its voices and the voice models are checked before use.** VAF now downloads the
+  Piper program, the Piper voices (on your computer and in the speech container), the
+  speaker recognition models and the turn-end model only as the exact files recorded with
+  the release, and refuses anything that differs, without changing what was installed.
+  Piper is unpacked the same safe way as llama.cpp, into its own folder, and an existing
+  Piper whose program differs from the recorded one is replaced on its next use. Eight
+  languages whose voice could never be downloaded (Portuguese, Swedish, Bulgarian, Kazakh,
+  Greek, Luxembourgish, Dutch, Swahili) and Japanese in the speech container now get a
+  working voice.
 - **Commands nobody confirmed no longer reach a network share.** The host shell (`host_bash`)
   and `python_exec` now refuse a network share or Windows device path (`\\server\share`,
   `\\?\UNC\...`, `file://server/...`) in a coding agent run or a workflow step, where nobody

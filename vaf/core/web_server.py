@@ -6778,8 +6778,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         existing = Config.load()
                         # Keys only their own lane writes (the profile, the engine, the
                         # certificate pair, the per-account connection lists):
-                        # `Config.ROUTE_OWNED_KEYS`, for every caller.
-                        new_config = Config.without_route_owned_keys(new_config)
+                        # `Config.ROUTE_OWNED_KEYS`, for every caller. Inside the messenger
+                        # blocks, the pairings and the relay switch go back to their stored
+                        # value (`Config.ROUTE_OWNED_SUBKEYS`): the page sends its old copy
+                        # of the whole block.
+                        new_config = Config.without_route_owned_keys(new_config, stored=existing)
                         new_config = Config.split_connection_toggles(
                             existing, new_config, str(user_scope_id) if user_scope_id else None, is_admin=is_admin)
                         # A changed sub-agent provider brings its gate along; the Settings

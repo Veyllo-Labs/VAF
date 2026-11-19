@@ -81,14 +81,14 @@ def test_save_lanes_drop_cloud_account_keys(stored, user):
     source = inspect.getsource(web_server)
     lane = source[source.index('elif type == "save_config":'):]
     lane = lane[:lane.index("Config.split_connection_toggles")]
-    assert "new_config = Config.without_route_owned_keys(new_config)" in lane
+    assert "new_config = Config.without_route_owned_keys(new_config, stored=existing)" in lane
 
 
 def test_the_route_owned_strip_drops_the_cloud_lists_and_leaves_other_keys_alone():
     from vaf.core.config import Config
     body = {"language": "de"}
-    assert Config.without_route_owned_keys(body) is body
-    assert Config.without_route_owned_keys(dict(HOSTILE)) == {"tts_auto_speak": True}
+    assert Config.without_route_owned_keys(body, stored={}) is body
+    assert Config.without_route_owned_keys(dict(HOSTILE), stored={}) == {"tts_auto_speak": True}
 
 
 def test_non_admin_view_holds_only_own_cloud_accounts():

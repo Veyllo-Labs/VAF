@@ -199,7 +199,7 @@ def test_save_lanes_drop_engine_keys(monkeypatch):
     source = inspect.getsource(web_server)
     lane = source[source.index('elif type == "save_config":'):]
     lane = lane[:lane.index("Config.split_connection_toggles")]
-    assert "new_config = Config.without_route_owned_keys(new_config)" in lane
+    assert "new_config = Config.without_route_owned_keys(new_config, stored=existing)" in lane
 
 
 def test_ws_cancel_admin_only(monkeypatch):

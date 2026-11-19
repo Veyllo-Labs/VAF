@@ -406,8 +406,8 @@ def test_the_route_owned_strip_drops_both_certificate_keys():
     from vaf.core.config import Config
     payload = {"local_network_ssl_cert": "/tmp/x.pem", "local_network_ssl_key": "/tmp/x.key",
                "theme": "dark"}
-    assert Config.without_route_owned_keys(payload) == {"theme": "dark"}
-    assert Config.without_route_owned_keys({"theme": "dark"}) == {"theme": "dark"}
+    assert Config.without_route_owned_keys(payload, stored={}) == {"theme": "dark"}
+    assert Config.without_route_owned_keys({"theme": "dark"}, stored={}) == {"theme": "dark"}
 
 
 # ── untrusted bytes, read safely ─────────────────────────────────────────────

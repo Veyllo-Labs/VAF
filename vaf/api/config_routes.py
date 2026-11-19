@@ -498,8 +498,10 @@ async def patch_config(
         _SERVER_LOCKED = {"local_network_enabled", "local_network_tls_enabled", "server_mode"}
         body = {k: v for k, v in body.items() if k not in _SERVER_LOCKED}
     # Keys only their own lane writes (the profile, the engine, the certificate pair, the
-    # per-account connection lists): `Config.ROUTE_OWNED_KEYS`, for every caller.
-    body = Config.without_route_owned_keys(body)
+    # per-account connection lists): `Config.ROUTE_OWNED_KEYS`, for every caller. Inside the
+    # messenger blocks, the pairings and the relay switch go back to their stored value
+    # (`Config.ROUTE_OWNED_SUBKEYS`): the page sends its old copy of the whole block.
+    body = Config.without_route_owned_keys(body, stored=current)
 
     # The shared rule (`is_admin_identity` over the request as authenticated), the one the
     # WebSocket save uses too; this path used to know only the role.

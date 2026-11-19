@@ -234,12 +234,12 @@ def test_both_lanes_strip_the_mail_lists_before_the_shared_step():
     source = inspect.getsource(web_server)
     lane = source[source.index('elif type == "save_config":'):]
     lane = lane[:lane.index("Config.split_connection_toggles")]
-    assert "new_config = Config.without_route_owned_keys(new_config)" in lane
+    assert "new_config = Config.without_route_owned_keys(new_config, stored=existing)" in lane
 
 
 def test_the_route_owned_strip_drops_the_mail_lists_and_leaves_other_keys_alone():
     body = {"language": "de"}
-    assert Config.without_route_owned_keys(body) is body
+    assert Config.without_route_owned_keys(body, stored={}) is body
     mail = ("email_config", "email_config_by_scope", "email_config_by_user")
-    assert Config.without_route_owned_keys({k: 1 for k in mail} | {"theme": "x"}) == {
+    assert Config.without_route_owned_keys({k: 1 for k in mail} | {"theme": "x"}, stored={}) == {
         "theme": "x"}

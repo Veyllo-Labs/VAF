@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
+import copy
 import os
 import json
 import tempfile
@@ -73,6 +74,18 @@ MODEL_PROVIDER_KEYS = {
 # to an API provider and back. When their own provider changes, the Settings selects
 # reset them.
 LANE_MODEL_KEYS = ("subagent_model", "browser_agent_model")
+
+
+def _same_json(a, b) -> bool:
+    """Equal values of equal types, all the way down: ``==`` holds ``True == 1`` and
+    ``0 == 0.0``, so a stored ``1`` would count as the ``True`` a body sent."""
+    if type(a) is not type(b):
+        return False
+    if isinstance(a, dict):
+        return a.keys() == b.keys() and all(_same_json(a[k], b[k]) for k in a)
+    if isinstance(a, list):
+        return len(a) == len(b) and all(_same_json(x, y) for x, y in zip(a, b))
+    return a == b
 
 
 class Config:
@@ -1500,7 +1513,9 @@ class Config:
     # back, and a non-admin's page holds a scoped VIEW of the per-account lists (written back
     # whole, it removed the other accounts' entries). Both save lanes (PATCH /api/config, the
     # WebSocket `save_config`) pass `without_route_owned_keys`; it replaced five hand-written
-    # strips of the same shape, one per owner.
+    # strips of the same shape, one per owner. The messenger blocks cannot join this table
+    # whole: an admin edits `enabled` and other fields of the same block in Settings, so
+    # their route-written sub-keys sit in `ROUTE_OWNED_SUBKEYS` below.
     ROUTE_OWNED_KEYS = {
         # `inference_profile.apply` also stops or starts the speech containers.
         "inference_profile": "inference_profile.apply",
@@ -1528,6 +1543,36 @@ class Config:
     ROUTE_OWNED_PREFIXES = {
         "vllm_": "local_engine.apply",
     }
+    # Sub-keys inside a messenger block that only their routes and bridges write, each with
+    # that lane: `{block: {sub_key: lane}}`. A save sends the page's copy of the whole block,
+    # so a page loaded before a pairing was removed wrote the pairing back (measured: all ten
+    # route-written sub-keys returned on both lanes, for the local admin and a second admin).
+    # A settings field inside one of these blocks must not take one of these names: a save
+    # would ignore it.
+    ROUTE_OWNED_SUBKEYS = {
+        "telegram_config": {
+            "whitelist": "channel_pairing.pair_telegram_account",
+            "relay_whitelist": "telegram relay-whitelist routes",
+            # A cache of the bot's `getMe` answer.
+            "bot_username": "telegram_routes._get_bot_username",
+            "chat_activity": "messaging_connections.append_channel_activity",
+        },
+        "whatsapp_config": {
+            "whitelist": "whatsapp whitelist routes and bridge",
+            "lid_to_e164": "whatsapp lid-assign route, dashboard and bridge",
+            "owner_control": "whatsapp_bridge._dispatch_bridge_event",
+            "chat_activity": "messaging_connections.append_channel_activity",
+        },
+        "discord_config": {
+            "chat_activity": "messaging_connections.append_channel_activity",
+        },
+        "veyllo_app_config": {
+            # The relay switch: `PUT /api/app-link/relay` and `vaf relay on/off`.
+            "relay_enabled": "app_link.relay.set_relay_enabled",
+            # Learned at a claim, cleared at a dissolve.
+            "relay_instance_id": "app_link.relay._set_instance",
+        },
+    }
 
     @classmethod
     def is_route_owned_key(cls, key: str) -> bool:
@@ -1536,12 +1581,46 @@ class Config:
             str(key).startswith(prefix) for prefix in cls.ROUTE_OWNED_PREFIXES)
 
     @classmethod
-    def without_route_owned_keys(cls, payload):
-        """A settings save without the route-owned keys, for every caller. The same object
-        back when it holds none."""
-        if isinstance(payload, dict) and any(cls.is_route_owned_key(k) for k in payload):
-            return {k: v for k, v in payload.items() if not cls.is_route_owned_key(k)}
-        return payload
+    def without_route_owned_keys(cls, payload, *, stored):
+        """A settings save without what other lanes own, for every caller. The same object
+        back when nothing changes.
+
+        - The top-level route-owned keys (``ROUTE_OWNED_KEYS``, ``ROUTE_OWNED_PREFIXES``)
+          leave the payload.
+        - In a messenger block the payload sends as an object, every sub-key of
+          ``ROUTE_OWNED_SUBKEYS`` is put back to its value in ``stored`` (the config the lane
+          loaded), and one the stored block does not hold is left out: a save never creates
+          it. A page loaded before a route ran sends its old copy of the whole block, and the
+          merge replaces a block whole.
+
+        ``stored`` is required: treated as empty, the sub-keys would be wiped by the merge;
+        treated as "skip", the old copy would be written back. A block sent as ``None`` is
+        left alone (the merge keeps the stored block). Named boundary: a block sent as
+        anything else that is not an object is left alone too; the block as a whole stays an
+        admin's to set, and every reader treats a block that is not an object as absent.
+        Neither argument is changed."""
+        if not isinstance(payload, dict):
+            return payload
+        out = payload
+        if any(cls.is_route_owned_key(k) for k in payload):
+            out = {k: v for k, v in payload.items() if not cls.is_route_owned_key(k)}
+        for block, owned in cls.ROUTE_OWNED_SUBKEYS.items():
+            sent = out.get(block)
+            if not isinstance(sent, dict):
+                continue
+            held = stored.get(block) if isinstance(stored, dict) else None
+            if not isinstance(held, dict):
+                held = {}
+            restored = {k: v for k, v in sent.items() if k not in owned}
+            for sub in owned:
+                if sub in held:
+                    restored[sub] = copy.deepcopy(held[sub])
+            if _same_json(restored, sent):
+                continue
+            if out is payload:
+                out = dict(payload)
+            out[block] = restored
+        return out
 
     @classmethod
     def is_global_config_key(cls, key: str) -> bool:

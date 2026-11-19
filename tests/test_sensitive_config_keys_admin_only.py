@@ -204,7 +204,7 @@ def test_one_table_of_route_owned_keys_and_one_strip():
                 "email_config_by_user", "github_config", "github_config_by_user"):
         assert Config.is_route_owned_key(key), key
     body = {"theme": "dark"}
-    assert Config.without_route_owned_keys(body) is body
+    assert Config.without_route_owned_keys(body, stored={}) is body
     patch_src = inspect.getsource(config_routes.patch_config)
     lane = inspect.getsource(web_server)
     lane = lane[lane.index('elif type == "save_config":'):]

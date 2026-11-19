@@ -610,9 +610,9 @@ def test_the_route_owned_strip_drops_the_engine_keys():
     from vaf.core.config import Config
     payload = {"local_engine": "llama", "vllm_model": "a/b", "vllm_gpu_memory_utilization": 0.9,
                "model": "x.gguf", "provider": "local"}
-    assert Config.without_route_owned_keys(payload) == {"model": "x.gguf", "provider": "local"}
+    assert Config.without_route_owned_keys(payload, stored={}) == {"model": "x.gguf", "provider": "local"}
     same = {"model": "x.gguf"}
-    assert Config.without_route_owned_keys(same) is same
+    assert Config.without_route_owned_keys(same, stored={}) is same
     assert all(Config.is_route_owned_key(k) for k in le.ENGINE_KEYS)
 
 

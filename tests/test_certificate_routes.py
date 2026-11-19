@@ -321,7 +321,7 @@ def test_both_save_lanes_pass_the_filter():
     web = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
     lane = web[web.index('elif type == "save_config":'):]
     lane = lane[:lane.index("Config.save(merged)")]
-    assert "Config.without_route_owned_keys(new_config)" in lane
+    assert "Config.without_route_owned_keys(new_config, stored=existing)" in lane
     patch = (ROOT / "vaf" / "api" / "config_routes.py").read_text(encoding="utf-8")
     route = patch[patch.index("async def patch_config"):]
     route = route[:route.index("Config.save(merged)")]

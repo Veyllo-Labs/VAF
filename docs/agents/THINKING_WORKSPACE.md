@@ -109,5 +109,5 @@ These tools are loaded only on an agent built with `run_kind="thinking"` (`_load
 - `approve_thinking_workspace_handoff` -> `thinking_workspace_handoff_result`
 - `reject_thinking_workspace_handoff` -> `thinking_workspace_handoff_result`
 
-All operations are scoped to the current connection user.
+All operations are scoped to the current connection user. `task_id` and `handoff_id` arrive from the client, so each must be a single entry name (`safe_entry_name`); one that is not, such as a walk out of the workspace, is answered exactly like a missing handoff, and nothing is read, written or archived. File paths inside a task's workspace go through `contained_path`. An approved `automation_action` updates only an automation the account sees (`AutomationAccess`) and is refused for a caller without an account.
 

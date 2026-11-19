@@ -19,8 +19,9 @@ import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
+from vaf.core.path_jail import PathEscape, contained_path, safe_entry_name
 from vaf.core.platform import Platform
 
 
@@ -49,15 +50,25 @@ def ensure_workspace(user_scope_id: Optional[str]) -> Path:
     return root
 
 
-def _safe_join(base: Path, relative_path: str) -> Path:
-    target = (base / (relative_path or "")).resolve()
-    if not str(target).startswith(str(base.resolve())):
-        raise ValueError("Path escapes workspace boundary")
-    return target
-
-
 def _task_root(user_scope_id: Optional[str], task_id: str) -> Path:
-    return ensure_workspace(user_scope_id) / "tasks" / task_id
+    """A task's directory. `task_id` reaches here from the client (the WebSocket handoff
+    commands) and from the model (the workspace tools), so it must be ONE entry: a walk
+    such as `../../<other scope>/tasks/<id>` would otherwise land in another account's
+    workspace. Raises `PathEscape` (a `ValueError`)."""
+    return ensure_workspace(user_scope_id) / "tasks" / safe_entry_name(task_id)
+
+
+def _handoff_paths(user_scope_id: Optional[str], task_id: str,
+                   handoff_id: str) -> Optional[Tuple[Path, Path]]:
+    """(json, md) of one handoff, or None when either id is not a single entry. Callers
+    answer None exactly like a missing handoff: a walk in the handoff id reached any
+    account's automation file, and a different answer would tell which ids exist."""
+    try:
+        handoff_dir = _task_root(user_scope_id, task_id) / "handoff"
+        return (handoff_dir / safe_entry_name(f"{handoff_id}.json"),
+                handoff_dir / safe_entry_name(f"{handoff_id}.md"))
+    except PathEscape:
+        return None
 
 
 def _task_meta_path(user_scope_id: Optional[str], task_id: str) -> Path:
@@ -158,7 +169,10 @@ def list_tasks(user_scope_id: Optional[str], status: Optional[str] = None) -> Li
 
 
 def get_task(user_scope_id: Optional[str], task_id: str) -> Optional[Dict[str, Any]]:
-    meta = _load_json(_task_meta_path(user_scope_id, task_id), {})
+    try:
+        meta = _load_json(_task_meta_path(user_scope_id, task_id), {})
+    except PathEscape:
+        return None
     if not isinstance(meta, dict) or not meta.get("id"):
         return None
     return meta
@@ -182,7 +196,7 @@ def write_workspace_file(
     if not task:
         raise FileNotFoundError("Task not found")
     base = _task_root(user_scope_id, task_id) / "workspace"
-    target = _safe_join(base, relative_path)
+    target = contained_path(base, relative_path)
     target.parent.mkdir(parents=True, exist_ok=True)
     mode = "a" if append else "w"
     with open(target, mode, encoding="utf-8") as f:
@@ -192,8 +206,11 @@ def write_workspace_file(
 
 
 def read_workspace_file(user_scope_id: Optional[str], task_id: str, relative_path: str) -> str:
-    base = _task_root(user_scope_id, task_id) / "workspace"
-    target = _safe_join(base, relative_path)
+    try:
+        base = _task_root(user_scope_id, task_id) / "workspace"
+    except PathEscape:
+        raise FileNotFoundError("File not found")
+    target = contained_path(base, relative_path)
     if not target.exists():
         raise FileNotFoundError("File not found")
     return target.read_text(encoding="utf-8")
@@ -247,8 +264,10 @@ def list_pending_handoffs(user_scope_id: Optional[str]) -> List[Dict[str, Any]]:
 
 def get_handoff(user_scope_id: Optional[str], task_id: str, handoff_id: str) -> Optional[Dict[str, Any]]:
     """Get a single handoff JSON by ids."""
-    hpath = _task_root(user_scope_id, task_id) / "handoff" / f"{handoff_id}.json"
-    handoff = _load_json(hpath, {})
+    paths = _handoff_paths(user_scope_id, task_id, handoff_id)
+    if paths is None:
+        return None
+    handoff = _load_json(paths[0], {})
     if not isinstance(handoff, dict) or not handoff.get("id"):
         return None
     return handoff
@@ -261,11 +280,15 @@ def _apply_automation_action(user_scope_id: Optional[str], action: Dict[str, Any
     - create: requires prompt; optional name/description/frequency/time/weekday/day/enabled
     - update: requires task_id; supports name/description/prompt/frequency/time/weekday/day/enabled
     """
-    from vaf.core.automation import AutomationManager, AutomationTask
+    from vaf.core.automation import AutomationAccess, AutomationManager, AutomationTask
 
     op = str(action.get("operation") or "").strip().lower()
-    mgr = AutomationManager(user_scope_id=user_scope_id) if user_scope_id else AutomationManager()
+    if not str(user_scope_id or "").strip():
+        # The unscoped manager is every account's store; an action without an account is
+        # refused, never applied there.
+        return {"ok": False, "error": "no account for this action"}
     if op == "create":
+        mgr = AutomationManager(user_scope_id=user_scope_id)
         prompt = (action.get("prompt") or "").strip()
         if not prompt:
             return {"ok": False, "error": "create requires prompt"}
@@ -304,6 +327,11 @@ def _apply_automation_action(user_scope_id: Optional[str], action: Dict[str, Any
                 update_params[key] = action[key]
         if not update_params:
             return {"ok": False, "error": "no fields to update"}
+        # The same rule as every other automation lane: an id this account does not see
+        # is "not found".
+        mgr, _seen = AutomationAccess(user_scope_id).get(target_id)
+        if mgr is None:
+            return {"ok": False, "error": "automation not found"}
         task = mgr.update(target_id, **update_params)
         if not task:
             return {"ok": False, "error": "automation not found"}
@@ -313,8 +341,10 @@ def _apply_automation_action(user_scope_id: Optional[str], action: Dict[str, Any
 
 
 def approve_handoff(user_scope_id: Optional[str], task_id: str, handoff_id: str) -> bool:
-    hpath = _task_root(user_scope_id, task_id) / "handoff" / f"{handoff_id}.json"
-    mdpath = _task_root(user_scope_id, task_id) / "handoff" / f"{handoff_id}.md"
+    paths = _handoff_paths(user_scope_id, task_id, handoff_id)
+    if paths is None:
+        return False
+    hpath, mdpath = paths
     handoff = _load_json(hpath, {})
     if not isinstance(handoff, dict) or not handoff.get("id"):
         return False
@@ -342,8 +372,10 @@ def approve_handoff(user_scope_id: Optional[str], task_id: str, handoff_id: str)
 
 
 def reject_handoff(user_scope_id: Optional[str], task_id: str, handoff_id: str, reason: str = "") -> bool:
-    hpath = _task_root(user_scope_id, task_id) / "handoff" / f"{handoff_id}.json"
-    mdpath = _task_root(user_scope_id, task_id) / "handoff" / f"{handoff_id}.md"
+    paths = _handoff_paths(user_scope_id, task_id, handoff_id)
+    if paths is None:
+        return False
+    hpath, mdpath = paths
     handoff = _load_json(hpath, {})
     if not isinstance(handoff, dict) or not handoff.get("id"):
         return False

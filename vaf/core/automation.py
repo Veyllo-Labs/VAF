@@ -2614,8 +2614,18 @@ class AutomationAccess:
             self.is_admin = bool(is_admin_identity(user_role, self.own))
 
     def sees(self, task: Any) -> bool:
-        """Whether this caller may see (and therefore act on) `task`."""
-        ts = str(getattr(task, "user_scope_id", None) or "").strip()
+        """Whether this caller may see (and therefore act on) `task`.
+
+        A record whose stored scope carries surrounding whitespace (`" <scope>"`, or a
+        scope that is only a no-break space) is visible to nobody: this rule would read it
+        stripped, as the machine owner's or a root task, while `_path_for_task` and the
+        scheduler use the raw value, so a change would land in a directory named by that
+        string and the run would carry it as its scope. Every lane stamps the scope from the signed identity, so such a
+        record is never written by VAF; it is refused rather than guessed at."""
+        raw = getattr(task, "user_scope_id", None)
+        if raw is not None and str(raw) != str(raw).strip():
+            return False
+        ts = str(raw or "").strip()
         if self.is_admin:
             return ts == "" or ts == self.own or (bool(self._local) and ts == self._local)
         return bool(self.own) and ts == self.own
@@ -2638,17 +2648,37 @@ class AutomationAccess:
         task_id = str(task_id or "").strip()
         if not task_id:
             return None, None
-        managers: List[Callable[[], AutomationManager]] = []
-        if self.own:
-            managers.append(lambda: AutomationManager(user_scope_id=self.own))
-        if self.is_admin:
-            managers.append(AutomationManager)
-        for make in managers:
+        for make in self._stores():
             mgr = make()
             task = mgr.get(task_id)
             if task is not None and self.sees(task):
                 return mgr, task
         return None, None
+
+    def trash(self) -> List[Tuple[AutomationManager, AutomationTask]]:
+        """Every trashed task this caller sees, each with the manager whose trash holds it
+        (so a restore runs on that manager). An admin's own scope keeps a trash of its own
+        beside the root trash, and both are read: an account's earlier deletes stay
+        listable and restorable wherever they landed."""
+        out: List[Tuple[AutomationManager, AutomationTask]] = []
+        ids: set = set()
+        for make in self._stores():
+            mgr = make()
+            for task in mgr.list_trash():
+                if task.id not in ids and self.sees(task):
+                    ids.add(task.id)
+                    out.append((mgr, task))
+        return out
+
+    def _stores(self) -> List[Callable[[], AutomationManager]]:
+        """The stores this caller's tasks can live in, own scope first. Never the global
+        store for a non-admin, and none at all for a blank scope."""
+        stores: List[Callable[[], AutomationManager]] = []
+        if self.own:
+            stores.append(lambda: AutomationManager(user_scope_id=self.own))
+        if self.is_admin:
+            stores.append(AutomationManager)
+        return stores
 
 
 def get_next_automation_run_utc(user_scope_id: Optional[str]) -> Optional[datetime]:

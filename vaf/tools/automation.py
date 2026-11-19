@@ -1338,14 +1338,12 @@ Use this when user wants to remove an automation but might want to restore it la
             return "Error: No task ID provided."
         
         try:
-            manager, _ = _manager_for_scope(kwargs.get("user_scope_id"))
-            task = manager.get(task_id)
-            # A task this caller does not see answers like a missing one.
-            if task and not AutomationAccess(kwargs.get("user_scope_id"),
-                                             kwargs.get("user_role")).sees(task):
-                task = None
+            # The store that holds a task this caller sees (an admin's root and machine-owner
+            # tasks included); a task it does not see answers like a missing one.
+            manager, task = AutomationAccess(kwargs.get("user_scope_id"),
+                                             kwargs.get("user_role")).get(task_id)
             
-            if not task:
+            if manager is None or not task:
                 # IDEMPOTENT: If automation doesn't exist, it's already deleted (success)
                 return f"""✅ **Automation Already Deleted**
 
@@ -1405,15 +1403,13 @@ Use this when user wants to recover a previously deleted automation."""
             return "Error: No task ID provided."
         
         try:
-            manager, _ = _manager_for_scope(kwargs.get("user_scope_id"))
-            
-            # Check if task exists in trash, and is one this caller sees: the root trash
-            # holds whatever the global store deleted, whoever it belonged to.
+            # Only a trashed task this caller sees, restored by the manager whose trash holds
+            # it: the root trash holds whatever the global store deleted, whoever it
+            # belonged to.
             access = AutomationAccess(kwargs.get("user_scope_id"), kwargs.get("user_role"))
-            trash_tasks = manager.list_trash()
-            task_in_trash = any(t.id == task_id and access.sees(t) for t in trash_tasks)
+            manager = next((mgr for mgr, t in access.trash() if t.id == task_id), None)
             
-            if not task_in_trash:
+            if manager is None:
                 return f"Error: Automation with ID '{task_id}' not found in trash."
             
             # Restore from trash
@@ -1455,9 +1451,8 @@ class ListTrashTool(BaseTool):
     
     def run(self, **kwargs) -> str:
         try:
-            manager, _ = _manager_for_scope(kwargs.get("user_scope_id"))
             access = AutomationAccess(kwargs.get("user_scope_id"), kwargs.get("user_role"))
-            tasks = [t for t in manager.list_trash() if access.sees(t)]
+            tasks = [t for _mgr, t in access.trash()]
             
             if not tasks:
                 return "🗑️ Trash is empty. No deleted automations to restore."

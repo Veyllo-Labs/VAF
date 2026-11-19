@@ -39,7 +39,7 @@ WHAT THIS FILE CAN SEE, measured rather than asserted. It reads tool classes und
                  lives in `vaf/tools/`; there are zero elsewhere. Nothing enters unseen.
   DECISIONS      1 of 4. Where containment is actually decided is mostly NOT in reach:
                    `is_safe_path`        vaf/tools/filesystem.py          <- seen
-                   `_safe_join`          vaf/core/thinking_workspace.py   <- not seen
+                   `contained_path`      vaf/core/thinking_workspace.py   <- not seen
                    automation runner     vaf/core/automation.py           <- not seen (no check)
                    `/api/file` allowlist vaf/core/web_server.py           <- not seen
 
@@ -47,7 +47,7 @@ That asymmetry cuts BOTH ways, and it is why `CONTAINED_ELSEWHERE` exists as its
 guard cannot see a hole that opens after the path leaves a tool - `create_automation` hands a
 model-written `output_path` to a runner that `mkdir`s it with no check at all - and it cannot
 see a containment that lives outside either, which is why the two thinking-workspace tools look
-unguarded here while `_safe_join` demonstrably contains them. Both entries had to be decided by
+unguarded here while `contained_path` demonstrably contains them. Both entries had to be decided by
 measuring the receiving end, not by reading this file.
 
 HOW IT WORKS. Every tool class declaring a path-shaped parameter must reach `is_safe_path`,
@@ -117,11 +117,13 @@ CONTAINED_ELSEWHERE = {
         "landing in another tenant's tree. Closed 2026-07-31 by DECLARING rather than "
         "hand-building - the first consumer of that primitive.",
     "thinking_workspace_read":
-        "contained by `_safe_join` (vaf/core/thinking_workspace.py), verified by running it: "
-        "'/etc/passwd' and '../../../.ssh/id_rsa' raise ValueError('Path escapes workspace "
-        "boundary'), 'sub/ok.txt' resolves inside. The base is keyed per scope AND per task.",
+        "contained by `contained_path` (vaf/core/thinking_workspace.py), verified by running "
+        "it: '/etc/passwd', '../../../.ssh/id_rsa' and the sibling '../workspaceX/x' raise "
+        "PathEscape (a ValueError), 'sub/ok.txt' resolves inside. The base is keyed per scope "
+        "AND per task, and the task id is one entry (`safe_entry_name` in `_task_root`). The "
+        "prefix comparison this replaced let '../workspaceX/...' through.",
     "thinking_workspace_write":
-        "same `_safe_join`, same measurement. It writes rather than reads, which is why it was "
+        "same `contained_path`, same measurement. It writes rather than reads, which is why it was "
         "ranked above its sibling while both were still unmeasured - the measurement cleared "
         "both.",
 }

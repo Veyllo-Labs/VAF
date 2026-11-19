@@ -29,6 +29,7 @@ import threading
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -291,6 +292,41 @@ def test_trash_tools_refuse_a_foreign_task(store):
     assert "Restored" in back, back
 
 
+def test_second_admin_deletes_lists_and_restores_a_root_task(store):
+    """A second admin acts on the root task its list shows: delete moves it to the root
+    trash, list_trash shows it, restore brings it back; its own earlier trash (in its own
+    scope) stays listable. A tenant does none of that. MUTATIONS: choose the delete store
+    without the role again; separately, list the trash of the scoped store only."""
+    from vaf.tools.automation import DeleteAutomationTool, ListTrashTool, RestoreAutomationTool
+
+    admin = {"user_scope_id": ADMIN2, "user_role": "admin"}
+    tenant = {"user_scope_id": TENANT_A, "user_role": "user"}
+    root_file = _path(store, ROOT_ID)
+    missing = DeleteAutomationTool().run(task_id=UNKNOWN_ID, **tenant)
+    assert DeleteAutomationTool().run(task_id=ROOT_ID, **tenant) == missing.replace(UNKNOWN_ID,
+                                                                                    ROOT_ID)
+    assert root_file.exists()
+
+    out = DeleteAutomationTool().run(task_id=ROOT_ID, **admin)
+    assert "Deleted (Moved to Trash)" in out, out
+    assert not root_file.exists() and (store / "trash" / f"{ROOT_ID}.json").exists()
+    _write(store, AutomationTask(id="ad200009", name="Old admin", prompt="o",
+                                 user_scope_id=ADMIN2), trash=False)
+    (store / ADMIN2 / "trash").mkdir(parents=True, exist_ok=True)
+    (store / ADMIN2 / "ad200009.json").replace(store / ADMIN2 / "trash" / "ad200009.json")
+
+    listing = ListTrashTool().run(**admin)
+    assert ROOT_ID in listing and "ad200009" in listing, listing
+    tenant_listing = ListTrashTool().run(**tenant)
+    assert ROOT_ID not in tenant_listing and "ad200009" not in tenant_listing
+    assert "not found in trash" in RestoreAutomationTool().run(task_id=ROOT_ID, **tenant)
+
+    assert "Restored" in RestoreAutomationTool().run(task_id=ROOT_ID, **admin)
+    assert root_file.exists()
+    assert "Restored" in RestoreAutomationTool().run(task_id="ad200009", **admin)
+    assert (store / ADMIN2 / "ad200009.json").exists()
+
+
 def test_tenant_trash_round_trip_unchanged(store):
     """A tenant's own trash, including a record written without a scope, still lists and
     restores. MUTATION: drop the scope stamp in `AutomationManager.list_trash`."""
@@ -357,17 +393,35 @@ def test_access_truth_table(store, scope, role, admin):
 
 def test_tenant_sees_only_its_own_scope(store):
     access = AutomationAccess(TENANT_A, "user")
-    assert access.sees(_T(TENANT_A)) and access.sees(_T(f" {TENANT_A} "))
-    for other in (None, "", LOCAL, ADMIN2, TENANT_B, "  "):
+    assert access.sees(_T(TENANT_A)) and AutomationAccess(f" {TENANT_A} ", "user").sees(_T(TENANT_A))
+    for other in (None, "", LOCAL, ADMIN2, TENANT_B, "  ", f" {TENANT_A} "):
         assert not access.sees(_T(other)), other
 
 
 def test_admin_sees_root_own_and_local_only(store):
     access = AutomationAccess(ADMIN2, "admin")
-    for seen in (None, "", "  ", ADMIN2, LOCAL):
+    for seen in (None, "", ADMIN2, LOCAL):
         assert access.sees(_T(seen)), seen
     for other in (TENANT_A, TENANT_B):
         assert not access.sees(_T(other)), other
+
+
+@pytest.mark.parametrize("raw", ["\xa0", " ", "\t", f" {LOCAL}", f"{LOCAL} ", f" {ADMIN2}\n",
+                                 f" {TENANT_A}"])
+def test_padded_or_blank_record_scope_is_seen_by_nobody(store, raw):
+    """A stored scope this rule would read stripped while `_path_for_task` and the scheduler
+    use it raw: a blank one would pass as root, a padded one as its owner, and a change would
+    land in a directory named by the raw string. MUTATION: drop the raw-scope check in
+    `AutomationAccess.sees`."""
+    callers = [AutomationAccess(None), AutomationAccess(LOCAL), AutomationAccess(ADMIN2, "admin"),
+               AutomationAccess(TENANT_A, "user")]
+    for access in callers:
+        assert not access.sees(_T(raw)), (access.own, raw)
+    task = AutomationTask(id="0dd00001", name="odd", prompt="p", time="13:30", user_scope_id=raw)
+    (store / "0dd00001.json").write_text(json.dumps(task.to_dict()), encoding="utf-8")
+    for access in callers:
+        assert "0dd00001" not in {t.id for t in access.list()}
+        assert access.get("0dd00001") == (None, None)
 
 
 def test_blank_scope_sees_nothing_and_builds_no_manager(store, monkeypatch):
@@ -427,6 +481,8 @@ def _fuzz(draws: int, seed: int = 440) -> list:
             misses.append(("admin-foreign", scope, role, tscope))
         if scope is not None and scope != "" and not own and (seen or access.is_admin):
             misses.append(("blank-sees", scope, role, tscope))
+        if seen and tscope is not None and str(tscope) != str(tscope).strip():
+            misses.append(("padded-record-seen", scope, role, tscope))
     return misses
 
 
@@ -442,42 +498,87 @@ def test_access_fuzz_invariants(store):
 _PLANNER = ("automation_note", "automation_todo")
 
 
+def _branch_literals(test) -> list:
+    """The `type` literals an `if` test dispatches on: `type == "x"`, `"x" == type` and
+    `type in ("x", "y")`."""
+    if not (isinstance(test, ast.Compare) and len(test.ops) == 1 and len(test.comparators) == 1):
+        return []
+    left, op, right = test.left, test.ops[0], test.comparators[0]
+
+    def is_type(node):
+        return isinstance(node, ast.Name) and node.id == "type"
+
+    if isinstance(op, ast.Eq):
+        for a, b in ((left, right), (right, left)):
+            if is_type(a) and isinstance(b, ast.Constant) and isinstance(b.value, str):
+                return [b.value]
+    if isinstance(op, ast.In) and is_type(left) and isinstance(right, (ast.Tuple, ast.List, ast.Set)):
+        return [e.value for e in right.elts if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+    return []
+
+
+def _calls(nodes, name: str) -> bool:
+    """Whether `name` is CALLED (as `name(...)` or `x.name(...)`), not merely mentioned."""
+    for stmt in nodes:
+        for sub in ast.walk(stmt):
+            if isinstance(sub, ast.Call):
+                f = sub.func
+                if (isinstance(f, ast.Name) and f.id == name) or (
+                        isinstance(f, ast.Attribute) and f.attr == name):
+                    return True
+    return False
+
+
+def _mentions(nodes, name: str) -> bool:
+    for stmt in nodes:
+        for sub in ast.walk(stmt):
+            if isinstance(sub, ast.Name) and sub.id == name:
+                return True
+            if isinstance(sub, ast.Attribute) and sub.attr == name:
+                return True
+            if isinstance(sub, ast.ImportFrom) and any(
+                    name in (a.name, a.asname) for a in sub.names):
+                return True
+    return False
+
+
 def _ws_branch_violations(source: str) -> tuple:
-    """(violations, branch literals) for every `type == "..."` branch of
-    `websocket_endpoint` whose literal names an automation."""
+    """(violations, branch literals) for every branch of `websocket_endpoint` that
+    dispatches on a `type` literal naming an automation, plus three file-wide checks: no
+    `AutomationManager(...)` without `user_scope_id`, no `x.AutomationManager(...)` and no
+    aliased import of it (either would hide a call from the first check)."""
     tree = ast.parse(source)
     fn = next(n for n in ast.walk(tree)
               if isinstance(n, ast.AsyncFunctionDef) and n.name == "websocket_endpoint")
     bad, seen = [], []
     for node in ast.walk(fn):
-        if not isinstance(node, ast.If) or not isinstance(node.test, ast.Compare):
+        if not isinstance(node, ast.If):
             continue
-        left, comps = node.test.left, node.test.comparators
-        if not (isinstance(left, ast.Name) and left.id == "type" and len(comps) == 1
-                and isinstance(comps[0], ast.Constant) and isinstance(comps[0].value, str)):
+        literals = [lit for lit in _branch_literals(node.test) if "automation" in lit]
+        if not literals:
             continue
-        literal = comps[0].value
-        if "automation" not in literal:
-            continue
-        seen.append(literal)
-        names = set()
-        for stmt in node.body:
-            for sub in ast.walk(stmt):
-                if isinstance(sub, ast.Name):
-                    names.add(sub.id)
-                elif isinstance(sub, ast.ImportFrom):
-                    names.update(a.asname or a.name for a in sub.names)
-        if any(p in literal for p in _PLANNER):
-            if names & {"AutomationManager", "AutomationAccess"}:
-                bad.append(f"{literal}: a planner command touches the task store")
-        elif literal == "create_automation":
-            if "AutomationAccess" in names:
-                bad.append(f"{literal}: unexpected")
-        elif "AutomationAccess" not in names or "AutomationManager" in names:
-            bad.append(f"{literal}: does not go through AutomationAccess")
+        seen.extend(literals)
+        label = "|".join(literals)
+        store = [lit for lit in literals if not any(p in lit for p in _PLANNER)]
+        if not store:
+            if _mentions(node.body, "AutomationManager") or _mentions(node.body, "AutomationAccess"):
+                bad.append(f"{label}: a planner command touches the task store")
+        elif store == ["create_automation"]:
+            if _mentions(node.body, "AutomationAccess"):
+                bad.append(f"{label}: unexpected")
+        elif not _calls(node.body, "AutomationAccess") or _mentions(node.body, "AutomationManager"):
+            bad.append(f"{label}: does not go through AutomationAccess")
     for node in ast.walk(tree):
-        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                and node.func.id == "AutomationManager"
+        if isinstance(node, ast.ImportFrom):
+            for a in node.names:
+                if a.name == "AutomationManager" and a.asname not in (None, "AutomationManager"):
+                    bad.append(f"line {node.lineno}: AutomationManager imported as {a.asname}")
+        if not isinstance(node, ast.Call):
+            continue
+        f = node.func
+        if isinstance(f, ast.Attribute) and f.attr == "AutomationManager":
+            bad.append(f"line {node.lineno}: AutomationManager called through an attribute")
+        elif (isinstance(f, ast.Name) and f.id == "AutomationManager"
                 and not any(k.arg == "user_scope_id" for k in node.keywords)):
             bad.append(f"line {node.lineno}: AutomationManager() without user_scope_id")
     return bad, seen
@@ -493,8 +594,12 @@ def test_ws_automation_branches_ask_the_rule():
 
 
 def test_ws_guard_rejects_a_new_unruled_branch():
-    """The guard itself: a new automation command reaching the global store fails it."""
+    """The guard itself: a new automation command reaching the global store fails it,
+    however the store is spelled, and a branch that only names the rule does not pass."""
     synthetic = '''
+from vaf.core.automation import AutomationAccess, AutomationManager as AM
+import vaf.core.automation as A
+
 async def websocket_endpoint(websocket, token=None):
     while True:
         if type == "get_automations":
@@ -502,41 +607,65 @@ async def websocket_endpoint(websocket, token=None):
         elif type == "pause_automation":
             mgr = AutomationManager()
             mgr.get(cmd["id"])
+        elif type == "rename_automation":
+            _rule = AutomationAccess
+            mgr = AM(user_scope_id=None)
+        elif type in ("archive_automation", "unarchive_automation"):
+            mgr = A.AutomationManager(user_scope_id=scope)
+        elif "copy_automation" == type:
+            mgr = A.AutomationManager(user_scope_id=scope)
         elif type == "get_automation_notes":
             notes = list_notes(scope)
 '''
     bad, seen = _ws_branch_violations(synthetic)
-    assert any("pause_automation" in b for b in bad), bad
+    for literal in ("pause_automation", "rename_automation",
+                    "archive_automation|unarchive_automation", "copy_automation"):
+        assert any(b.startswith(f"{literal}:") for b in bad), (literal, bad)
     assert any("without user_scope_id" in b for b in bad), bad
-    assert not any("get_automations" in b or "notes" in b for b in bad), bad
+    assert any("imported as AM" in b for b in bad), bad
+    assert any("through an attribute" in b for b in bad), bad
+    assert not any(b.startswith(("get_automations", "get_automation_notes")) for b in bad), bad
 
 
 # ── AC10: the agent tools ask the rule ────────────────────────────────────────
 
 def _tool_violations(source: str) -> tuple:
+    """(violations, names) for every tool class in the module whose category, own or
+    inherited from another class in the module, is `automations`: its `run`, own or
+    inherited, must CALL `AutomationAccess(...)`. Subclasses of an existing tool count.
+    `create_automation` included: its duplicate check reads only what the caller sees."""
     tree = ast.parse(source)
-    bad, names = [], []
-    for cls in tree.body:
-        if not isinstance(cls, ast.ClassDef):
-            continue
-        if not any(isinstance(b, ast.Name) and b.id == "BaseTool" for b in cls.bases):
-            continue
-        attrs = {}
+    classes = {c.name: c for c in tree.body if isinstance(c, ast.ClassDef)}
+
+    def resolve(cls, depth=0):
+        """(is_tool, attrs, run) with the module's own inheritance applied."""
+        is_tool, attrs, run = False, {}, None
+        for base in cls.bases:
+            if isinstance(base, ast.Name) and base.id == "BaseTool":
+                is_tool = True
+            elif isinstance(base, ast.Name) and base.id in classes and depth < 20:
+                b_tool, b_attrs, b_run = resolve(classes[base.id], depth + 1)
+                is_tool = is_tool or b_tool
+                attrs = {**b_attrs, **attrs}
+                run = run or b_run
         for stmt in cls.body:
             if isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Constant):
                 for t in stmt.targets:
                     if isinstance(t, ast.Name):
                         attrs[t.id] = stmt.value.value
-        if attrs.get("category") != "automations":
+            elif isinstance(stmt, ast.FunctionDef) and stmt.name == "run":
+                run = stmt
+        return is_tool, attrs, run
+
+    bad, names = [], []
+    for cls in classes.values():
+        is_tool, attrs, run = resolve(cls)
+        if not is_tool or attrs.get("category") != "automations":
             continue
         name = attrs.get("name")
         names.append(name)
-        if name == "create_automation":
-            continue
-        run = next((s for s in cls.body if isinstance(s, ast.FunctionDef) and s.name == "run"), None)
-        refs = {n.id for n in ast.walk(run) if isinstance(n, ast.Name)} if run else set()
-        if "AutomationAccess" not in refs:
-            bad.append(name)
+        if run is None or not _calls(run.body, "AutomationAccess"):
+            bad.append(cls.name)
     return bad, names
 
 
@@ -551,14 +680,36 @@ def test_automation_tools_ask_the_rule():
 
 def test_tool_guard_rejects_a_new_unruled_tool():
     synthetic = '''
+class ListTrashTool(BaseTool):
+    name = "list_trash"
+    category = "automations"
+    def run(self, **kwargs):
+        return [t for _m, t in AutomationAccess(kwargs.get("user_scope_id")).trash()]
+
 class PauseAutomationTool(BaseTool):
     name = "pause_automation"
     category = "automations"
     def run(self, **kwargs):
         manager, _ = _manager_for_scope(kwargs.get("user_scope_id"))
         return manager.get(kwargs["task_id"])
+
+class MentionOnlyTool(BaseTool):
+    name = "mention_automation"
+    category = "automations"
+    def run(self, **kwargs):
+        _rule = AutomationAccess
+        return AutomationManager().list()
+
+class RawTrashTool(ListTrashTool):
+    name = "raw_trash"
+    def run(self, **kwargs):
+        return AutomationManager().list_trash()
+
+class InheritedTrashTool(ListTrashTool):
+    name = "inherited_trash"
 '''
-    assert _tool_violations(synthetic)[0] == ["pause_automation"]
+    assert sorted(_tool_violations(synthetic)[0]) == ["MentionOnlyTool", "PauseAutomationTool",
+                                                      "RawTrashTool"]
 
 
 # ── AC12: the calendar's daily check ──────────────────────────────────────────
@@ -623,3 +774,156 @@ def test_thinking_review_counts_only_the_runs_own(store):
     assert tm._automation_review_state(LOCAL)[0] == 2        # root + the owner's scope
     assert tm._automation_review_state(TENANT_B)[0] == 2
     assert tm._automation_review_state(TENANT_A)[0] == 1
+
+
+# ── the thinking-workspace handoff commands ───────────────────────────────────
+# `approve_thinking_workspace_handoff` and `reject_thinking_workspace_handoff` take a task id
+# and a handoff id from the client and used to join both into a path unchecked. A tenant
+# pointed the handoff path at another account's automation file, rewrote it (status and
+# timestamp added), copied it into its own archive, and read ok against "not found" as an
+# existence oracle; a task-id walk approved another tenant's handoff. Both ids are single
+# entries now (`safe_entry_name`), and a refused id answers exactly like a missing one.
+
+@pytest.fixture
+def workspaces(store, tmp_path, monkeypatch):
+    """Thinking workspaces under tmp_path/data: tenant A owns one task, tenant B one task
+    with a pending handoff. Notifications are recorded, not stored."""
+    import vaf.core.thinking_workspace as tw
+    import vaf.core.user_notifications as un
+
+    data = tmp_path / "data"
+    data.mkdir()
+    monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: data))
+    monkeypatch.setattr(un, "append_notification", lambda *a, **kw: None)
+    task_a = tw.create_task(TENANT_A, "A task", "test")["id"]
+    task_b = tw.create_task(TENANT_B, "B task", "test")["id"]
+    handoff_b = tw.create_handoff(TENANT_B, task_b, "B handoff", "content")["id"]
+    return SimpleNamespace(root=data / "workspaces", task_a=task_a, task_b=task_b,
+                           handoff_b=handoff_b, tw=tw)
+
+
+def _walk_to(ws, task_id: str, target: Path) -> str:
+    """A handoff id that, joined as `tasks/<task_id>/handoff/<id>.json` inside tenant A's
+    workspace, lands on `target` (a `.json` file)."""
+    handoff_dir = ws.root / TENANT_A / "tasks" / task_id / "handoff"
+    return os.path.relpath(str(target.with_suffix("")), str(handoff_dir))
+
+
+def _handoff(action, task_id, handoff_id):
+    return ({"type": f"{action}_thinking_workspace_handoff", "task_id": task_id,
+             "handoff_id": handoff_id}, "thinking_workspace_handoff_result")
+
+
+def _without_ids(reply: dict) -> dict:
+    return {k: v for k, v in reply.items() if k not in ("task_id", "handoff_id")}
+
+
+def _all_files(*roots) -> dict:
+    out = {}
+    for root in roots:
+        for p in sorted(root.rglob("*")):
+            if p.is_file() and not p.name.endswith(".log"):
+                out[p.as_posix()] = p.read_bytes()
+    return out
+
+
+@pytest.mark.parametrize("action", ["approve", "reject"])
+def test_handoff_id_walk_reaches_no_automation_file(store, workspaces, monkeypatch, action):
+    """MUTATION: drop the entry check on the handoff id (`_handoff_paths`)."""
+    ws = workspaces
+    a_ws = ws.root / TENANT_A
+    before = _all_files(store, ws.root / TENANT_B)
+    walks = [_walk_to(ws, ws.task_a, _path(store, tid)) for tid in (ROOT_ID, B_ID, LOCAL_ID)]
+    frames = [_handoff(action, ws.task_a, "ffff0000")]
+    frames += [_handoff(action, ws.task_a, walk) for walk in walks]
+    replies = _ws(monkeypatch, role="user", scope=TENANT_A, frames=frames)
+    missing = _without_ids(replies[0])
+    assert missing["ok"] is False and missing["error"] == "handoff not found", missing
+    for walk, reply in zip(walks, replies[1:]):
+        assert _without_ids(reply) == missing, (walk, reply)
+    assert _all_files(store, ws.root / TENANT_B) == before, "a foreign file changed"
+    assert not list((a_ws / "archive").rglob("*.json")), "a foreign file was copied in"
+
+
+def test_task_id_walk_approves_no_foreign_handoff(store, workspaces, monkeypatch):
+    """MUTATION: drop the entry check on the task id (`_handoff_paths`)."""
+    ws = workspaces
+    walk = f"../../{TENANT_B}/tasks/{ws.task_b}"
+    b_handoff = ws.root / TENANT_B / "tasks" / ws.task_b / "handoff" / f"{ws.handoff_b}.json"
+    before = b_handoff.read_bytes()
+    replies = _ws(monkeypatch, role="user", scope=TENANT_A, frames=[
+        _handoff("approve", "ffff0000", ws.handoff_b),
+        _handoff("approve", walk, ws.handoff_b),
+        _handoff("reject", walk, ws.handoff_b),
+    ])
+    assert _without_ids(replies[1]) == _without_ids(replies[0]), replies[1]
+    assert replies[2]["ok"] is False and replies[2]["error"] == "handoff not found"
+    assert b_handoff.read_bytes() == before
+    assert json.loads(before)["status"] == "pending"
+
+
+def test_own_handoff_still_approves_and_applies_only_own(store, workspaces, monkeypatch):
+    """An own handoff is approved, and its automation action reaches only what the account
+    sees: an update aimed at another account's id is "not found". MUTATION: let
+    `_apply_automation_action` update through the global `AutomationManager()`."""
+    ws = workspaces
+    own = ws.tw.create_handoff(TENANT_A, ws.task_a, "A handoff", "c",
+                               automation_action={"operation": "update", "task_id": A_ID,
+                                                  "name": "approved name"})["id"]
+    foreign = ws.tw.create_handoff(TENANT_A, ws.task_a, "A handoff 2", "c",
+                                   automation_action={"operation": "update", "task_id": B_ID,
+                                                      "name": "taken over"})["id"]
+    b_before = _path(store, B_ID).read_bytes()
+    replies = _ws(monkeypatch, role="user", scope=TENANT_A, frames=[
+        _handoff("approve", ws.task_a, own), _handoff("approve", ws.task_a, foreign)])
+    assert replies[0]["ok"] is True and replies[0]["automation_action_result"]["ok"] is True
+    assert json.loads(_path(store, A_ID).read_text(encoding="utf-8"))["name"] == "approved name"
+    assert replies[1]["ok"] is True
+    assert replies[1]["automation_action_result"] == {"ok": False, "error": "automation not found"}
+    assert _path(store, B_ID).read_bytes() == b_before
+
+
+def test_handoff_action_without_a_scope_is_refused(store, workspaces, monkeypatch):
+    """No scope must not mean the global store. MUTATION: restore the
+    `... if user_scope_id else AutomationManager()` fallback."""
+    def boom(self, *a, **kw):
+        raise AssertionError("a scopeless handoff action built a manager")
+
+    monkeypatch.setattr(AutomationManager, "__init__", boom)
+    for scope in (None, "", "   "):
+        for action in ({"operation": "create", "prompt": "p"},
+                       {"operation": "update", "task_id": ROOT_ID, "name": "x"}):
+            result = workspaces.tw._apply_automation_action(scope, action)
+            assert result["ok"] is False, (scope, action, result)
+
+
+def test_workspace_file_paths_stay_in_the_workspace(store, workspaces):
+    """`../workspaceX/...` starts with the workspace's own path as a string, which is all a
+    prefix comparison asked. MUTATION: put the prefix comparison back in place of
+    `contained_path`."""
+    ws = workspaces
+    task_root = ws.root / TENANT_A / "tasks" / ws.task_a
+    for rel in ("../workspaceX/evil.txt", "../workspace2/x", "../meta/task.json", "../../x"):
+        with pytest.raises(ValueError):
+            ws.tw.write_workspace_file(TENANT_A, ws.task_a, rel, "x")
+        with pytest.raises((ValueError, FileNotFoundError)):
+            ws.tw.read_workspace_file(TENANT_A, ws.task_a, rel)
+    assert not (task_root / "workspaceX").exists() and not (task_root / "workspace2").exists()
+    ws.tw.write_workspace_file(TENANT_A, ws.task_a, "notes/ok.md", "fine")
+    assert ws.tw.read_workspace_file(TENANT_A, ws.task_a, "notes/ok.md") == "fine"
+
+
+def test_workspace_task_id_is_one_entry(store, workspaces):
+    """A task id that walks is a missing task on every lane that takes one. MUTATION:
+    drop `safe_entry_name` in `_task_root`."""
+    ws = workspaces
+    walk = f"../../{TENANT_B}/tasks/{ws.task_b}"
+    assert ws.tw.get_task(TENANT_A, walk) is None
+    assert ws.tw.get_handoff(TENANT_A, walk, ws.handoff_b) is None
+    with pytest.raises(FileNotFoundError):
+        ws.tw.write_workspace_file(TENANT_A, walk, "x.md", "x")
+    with pytest.raises(FileNotFoundError):
+        ws.tw.read_workspace_file(TENANT_A, walk, "x.md")
+    with pytest.raises(FileNotFoundError):
+        ws.tw.create_handoff(TENANT_A, walk, "t", "c")
+    assert not (ws.root / TENANT_B / "tasks" / ws.task_b / "workspace" / "x.md").exists()

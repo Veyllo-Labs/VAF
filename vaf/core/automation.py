@@ -20,7 +20,7 @@ import threading
 import time
 from pathlib import Path
 from datetime import date, datetime, timedelta
-from typing import Dict, List, Optional, Any, Callable
+from typing import Dict, List, Optional, Any, Callable, Tuple
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from vaf.core.identity_binding import bind_identity, resolve_scope_identity
@@ -1542,6 +1542,10 @@ vaf automation delete <id>   # Delete task
                 if data is None:
                     continue
                 task = AutomationTask.from_dict(data)
+                # Same stamp as `_load_tasks`: a scoped manager's trash holds only its own
+                # scope's tasks, and a record written without a scope still belongs to it.
+                if self.user_scope_id and not task.user_scope_id:
+                    task.user_scope_id = self.user_scope_id
                 tasks.append(task)
             except Exception:
                 continue
@@ -2557,24 +2561,104 @@ vaf automation delete <id>   # Delete task
                     job.due = nxt
 
 
+class AutomationAccess:
+    """Which automations one caller may see, read, change or delete: the one ownership rule
+    every network lane asks (the WebSocket commands, the agent's automation tools, the
+    thinking review, the next-run lookup, the calendar's daily-check route).
+
+    Why a rule and not just a scoped manager: `AutomationManager()` without a scope loads the
+    root directory AND every `automations/<scope>/` directory, so it holds every account's
+    tasks, and a task in the root directory runs as the machine owner. A lane that falls back
+    to it on a miss hands any caller who knows (or guesses) an 8-character id another
+    account's automation.
+
+    The rule:
+    - The caller is an admin when `is_admin_identity(role, scope)` holds (the role claim or
+      the machine owner's scope). A NAMELESS caller (scope None or "") is an admin as well:
+      that is the machine owner itself (the CLI, an embedder that passes no scope), the same
+      convention as the tools' store chooser and the file jail. A scope that is present but
+      blank after stripping is corrupt, not absent, so it is never an admin and sees nothing:
+      it must not fail toward the global store.
+    - An admin sees what its automation list shows: root tasks (no scope), its own scope and
+      the machine owner's scope (system automations such as the daily calendar check). It
+      does NOT see another account's tasks: those run with that account's credentials, so an
+      admin rewriting one would make that account act on words it never wrote.
+    - Anyone else sees only the tasks of its own non-empty scope.
+    - `get` answers a foreign id exactly like a missing one, `(None, None)`: ids are names,
+      not capabilities, and a lane must not become an existence oracle.
+
+    Named boundaries:
+    - The CLI (`vaf automation ...`), the TUI screens and the scheduler use the global manager
+      on purpose: they are the machine owner at the terminal, who can read the store directly,
+      and the scheduler runs every task as its own owner. No network caller reaches them.
+    - When an admin's task lives in the global manager, the 10-minute interval check runs on
+      that manager, so its refusal can quote another account's task name to an admin. That is
+      the existing machine-wide scheduling rule, admin-only.
+    - The WebSocket never carries a scopeless connection (`websocket_endpoint` closes a
+      remote socket without context and gives a localhost one the machine owner's scope), so
+      the nameless-admin rule is reached there only through that local-admin default.
+    - Not on the public facade: `vaf/__init__.py` exports no automation store, so a rule
+      without its store would have nothing to apply to. Exporting both is one decision
+      about putting the scheduler on the public surface.
+    """
+
+    def __init__(self, user_scope_id: Optional[str], user_role: Optional[str] = None) -> None:
+        from vaf.core.config import get_local_admin_scope_id, is_admin_identity
+        self.own = str(user_scope_id or "").strip()
+        self._local = str(get_local_admin_scope_id() or "").strip()
+        if user_scope_id is None or user_scope_id == "":
+            self.is_admin = True
+        elif not self.own:
+            self.is_admin = False
+        else:
+            self.is_admin = bool(is_admin_identity(user_role, self.own))
+
+    def sees(self, task: Any) -> bool:
+        """Whether this caller may see (and therefore act on) `task`."""
+        ts = str(getattr(task, "user_scope_id", None) or "").strip()
+        if self.is_admin:
+            return ts == "" or ts == self.own or (bool(self._local) and ts == self._local)
+        return bool(self.own) and ts == self.own
+
+    def list(self, *, enabled_only: bool = False) -> List[AutomationTask]:
+        """Every task this caller sees, in the manager's order (next run first)."""
+        if self.is_admin:
+            return [t for t in AutomationManager().list(enabled_only=enabled_only) if self.sees(t)]
+        if not self.own:
+            # Never construct a manager here: `AutomationManager(user_scope_id="")` is the
+            # global one.
+            return []
+        return [t for t in AutomationManager(user_scope_id=self.own).list(enabled_only=enabled_only)
+                if self.sees(t)]
+
+    def get(self, task_id: str) -> Tuple[Optional[AutomationManager], Optional[AutomationTask]]:
+        """`(manager, task)` for a task this caller sees, else `(None, None)` - for a foreign
+        id and a missing id alike. The manager is the one that holds the task, so an
+        interval check and the save run where they ran before."""
+        task_id = str(task_id or "").strip()
+        if not task_id:
+            return None, None
+        managers: List[Callable[[], AutomationManager]] = []
+        if self.own:
+            managers.append(lambda: AutomationManager(user_scope_id=self.own))
+        if self.is_admin:
+            managers.append(AutomationManager)
+        for make in managers:
+            mgr = make()
+            task = mgr.get(task_id)
+            if task is not None and self.sees(task):
+                return mgr, task
+        return None, None
+
+
 def get_next_automation_run_utc(user_scope_id: Optional[str]) -> Optional[datetime]:
     """
-    Return the next run time (minimum across all visible automations for this user).
+    Return the next run time (minimum across the enabled automations this user sees).
     Used by thinking mode to skip starting if an automation runs within the buffer window.
-    For local admin, includes root automations (same merge as get_automations in web_server).
+    The set is `AutomationAccess(user_scope_id).list()`, the one the automation list shows:
+    for the machine owner the root tasks and its own scope, for anyone else its own scope.
     """
-    from vaf.core.config import get_local_admin_scope_id
-    tasks: List[AutomationTask] = []
-    mgr = AutomationManager(user_scope_id=user_scope_id) if user_scope_id else AutomationManager()
-    tasks.extend(mgr.list(enabled_only=True))
-    local_scope = get_local_admin_scope_id()
-    if user_scope_id and str(user_scope_id).strip() == str(local_scope).strip():
-        root_mgr = AutomationManager()
-        seen = {t.id for t in tasks}
-        for t in root_mgr.list(enabled_only=True):
-            if t.id not in seen:
-                tasks.append(t)
-                seen.add(t.id)
+    tasks = AutomationAccess(user_scope_id).list(enabled_only=True)
     upcoming = [when for when in (t.next_run_datetime for t in tasks) if when is not None]
     return min(upcoming) if upcoming else None
 

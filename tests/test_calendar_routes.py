@@ -197,7 +197,7 @@ class _FakeManager:
     def __init__(self, *a, **k):
         pass
 
-    def list(self):
+    def list(self, enabled_only=False):
         return []
 
     def create(self, task):

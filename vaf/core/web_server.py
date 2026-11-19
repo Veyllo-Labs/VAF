@@ -8739,32 +8739,17 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     except Exception as e:
                         await websocket.send_json({"type": "trusted_source_updated", "ok": False, "error": str(e)})
 
+                # AUTOMATIONS. Every branch that reads or changes the task store asks
+                # `AutomationAccess`: the unscoped `AutomationManager()` holds every account's
+                # tasks, and a root task runs as the machine owner, so a lane that reaches it by
+                # id hands one account another's automation. A foreign id answers exactly like a
+                # missing one. `create_automation` writes into the connection's own scope only.
                 elif type == "get_automations":
-                    # Return list of saved automations; each user sees only their own (user_scope_id).
-                    # Admin (local_admin_scope): also sees root automations (e.g. daily calendar check).
                     try:
-                        from vaf.core.automation import AutomationManager
-                        from vaf.core.config import get_local_admin_scope_id
+                        from vaf.core.automation import AutomationAccess
                         user_scope_id = manager.get_connection_user(websocket) if manager else None
                         stored_role = manager.get_connection_user_role(websocket) if manager else None
-                        local_admin_scope = get_local_admin_scope_id()
-                        is_admin = is_admin_identity(stored_role, user_scope_id)
-                        if is_admin:
-                            # Admin: load root + all user dirs, then filter to root + admin-visible scopes.
-                            # Some admin JWTs can have a different scope than local_admin_scope.
-                            mgr = AutomationManager()
-                            all_tasks = list(mgr.list())
-                            tasks = [
-                                t for t in all_tasks
-                                if (
-                                    t.user_scope_id is None
-                                    or str(t.user_scope_id) == str(user_scope_id)
-                                    or str(t.user_scope_id) == str(local_admin_scope)
-                                )
-                            ]
-                        else:
-                            mgr = AutomationManager(user_scope_id=user_scope_id) if user_scope_id else AutomationManager()
-                            tasks = list(mgr.list())
+                        tasks = AutomationAccess(user_scope_id, stored_role).list()
                         automations_list = [
                             _automation_wire(task)
                             for task in tasks
@@ -8784,7 +8769,16 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     try:
                         from vaf.core.automation import AutomationManager, AutomationTask
                         user_scope_id = manager.get_connection_user(websocket) if manager else None
-                        mgr = AutomationManager(user_scope_id=user_scope_id) if user_scope_id else AutomationManager()
+                        if not str(user_scope_id or "").strip():
+                            # Unreachable while every socket carries a scope; a scopeless one must
+                            # not fall through to the global store.
+                            await websocket.send_json({
+                                "type": "create_automation_result",
+                                "ok": False,
+                                "error": "No account on this connection",
+                            })
+                            continue
+                        mgr = AutomationManager(user_scope_id=user_scope_id)
                         prompt = (cmd.get("prompt") or "").strip()
                         if not prompt:
                             await websocket.send_json({
@@ -8856,37 +8850,30 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                 elif type == "delete_automation":
                     try:
-                        from vaf.core.automation import AutomationManager
+                        from vaf.core.automation import AutomationAccess
                         user_scope_id = manager.get_connection_user(websocket) if manager else None
-                        mgr = AutomationManager(user_scope_id=user_scope_id) if user_scope_id else AutomationManager()
+                        stored_role = manager.get_connection_user_role(websocket) if manager else None
                         task_id = (cmd.get("task_id") or cmd.get("id") or "").strip()
                         if not task_id:
                             await websocket.send_json({"type": "delete_automation_result", "ok": False, "error": "task_id required"})
                             continue
-                        ok = mgr.delete(task_id, permanent=True)
-                        if not ok and user_scope_id:
-                            root_mgr = AutomationManager()
-                            ok = root_mgr.delete(task_id, permanent=True)
+                        mgr, _task = AutomationAccess(user_scope_id, stored_role).get(task_id)
+                        ok = bool(mgr is not None and mgr.delete(task_id, permanent=True))
                         await websocket.send_json({"type": "delete_automation_result", "ok": ok})
                     except Exception as e:
                         await websocket.send_json({"type": "delete_automation_result", "ok": False, "error": str(e)})
 
                 elif type == "update_automation":
                     try:
-                        from vaf.core.automation import AutomationManager
+                        from vaf.core.automation import AutomationAccess
                         user_scope_id = manager.get_connection_user(websocket) if manager else None
-                        mgr = AutomationManager(user_scope_id=user_scope_id) if user_scope_id else AutomationManager()
+                        stored_role = manager.get_connection_user_role(websocket) if manager else None
                         task_id = (cmd.get("task_id") or cmd.get("id") or "").strip()
                         if not task_id:
                             await websocket.send_json({"type": "update_automation_result", "ok": False, "error": "task_id required"})
                             continue
-                        task = mgr.get(task_id)
-                        if not task and user_scope_id:
-                            root_mgr = AutomationManager()
-                            task = root_mgr.get(task_id)
-                            if task:
-                                mgr = root_mgr
-                        if not task:
+                        mgr, task = AutomationAccess(user_scope_id, stored_role).get(task_id)
+                        if mgr is None or task is None:
                             await websocket.send_json({"type": "update_automation_result", "ok": False, "error": "Automation not found"})
                             continue
                         update_params = {}

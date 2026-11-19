@@ -9,6 +9,7 @@ import re
 from typing import List, Dict, Any, Optional, Tuple
 from vaf.tools.base import BaseTool
 from vaf.core.automation import (
+    AutomationAccess,
     AutomationClarifier,
     AutomationManager,
     AutomationTask,
@@ -61,20 +62,22 @@ def _extract_first_json_array(text: str) -> Optional[List[Any]]:
 
 
 def _manager_for_scope(user_scope_id: Optional[str], user_role: Optional[str] = None) -> Tuple[AutomationManager, Optional[str]]:
-    """Return (manager, effective_scope) for user-scoped automation access.
+    """Return (manager, effective_scope): the STORE a tool reads and writes, not who may see
+    what in it. Visibility is `AutomationAccess`, which every tool asks on top of this.
 
     Local admin scope → global AutomationManager (no user_scope_id).
     Other scopes → user-scoped manager.
     """
-    from vaf.core.config import get_local_admin_scope_id
+    from vaf.core.config import get_local_admin_scope_id, is_admin_identity
     local = get_local_admin_scope_id()
 
     # If no scope provided or it's the primary local admin, use the global root manager
     if not user_scope_id or str(user_scope_id).strip() == str(local).strip():
         return AutomationManager(), None
 
-    # Role-based admin fallback: allow aggregated admin access even if scope differs.
-    if (user_role or "").strip().lower() == "admin":
+    # Role-based admin: the global store, so root and machine-owner tasks are reachable even
+    # when the admin's scope differs; `AutomationAccess` keeps other accounts' tasks out.
+    if is_admin_identity(user_role, user_scope_id):
         return AutomationManager(), user_scope_id
 
     # Regular users always use their own isolated scope
@@ -471,8 +474,10 @@ Use this when user wants to schedule recurring tasks or a one-time task at a clo
         try:
             manager, use_scope = _manager_for_scope(kwargs.get("user_scope_id"))
             
-            # Check for existing automations with same name or similar prompt
-            existing_tasks = manager.list()
+            # Check for existing automations with same name or similar prompt. Only the ones
+            # this caller sees: the replies below quote names and ids.
+            existing_tasks = AutomationAccess(kwargs.get("user_scope_id"),
+                                              kwargs.get("user_role")).list()
             existing_task = None
             
             # Check for same name (case-insensitive)
@@ -992,23 +997,7 @@ class ListAutomationsTool(BaseTool):
     
     def run(self, **kwargs) -> str:
         try:
-            user_scope_id = kwargs.get("user_scope_id")
-            user_role = kwargs.get("user_role")
-            manager, _ = _manager_for_scope(user_scope_id, user_role=user_role)
-            tasks = manager.list()
-
-            # Admins get aggregated manager; restrict visible list to root + admin-visible scopes.
-            if (user_role or "").strip().lower() == "admin" and user_scope_id:
-                from vaf.core.config import get_local_admin_scope_id
-                local_admin_scope = get_local_admin_scope_id()
-                tasks = [
-                    t for t in tasks
-                    if (
-                        t.user_scope_id is None
-                        or str(t.user_scope_id) == str(user_scope_id)
-                        or str(t.user_scope_id) == str(local_admin_scope)
-                    )
-                ]
+            tasks = AutomationAccess(kwargs.get("user_scope_id"), kwargs.get("user_role")).list()
             
             if not tasks:
                 return "No automations configured yet. Use `create_automation` to create one."
@@ -1068,6 +1057,10 @@ class ReadAutomationTool(BaseTool):
                 user_role=kwargs.get("user_role"),
             )
             task = manager.get(task_id)
+            # A task this caller does not see answers like a missing one.
+            if task and not AutomationAccess(kwargs.get("user_scope_id"),
+                                             kwargs.get("user_role")).sees(task):
+                task = None
             
             if not task:
                 return f"Error: Automation task '{task_id}' not found. Use `list_automations` to see available tasks."
@@ -1203,6 +1196,10 @@ When changing **time**, the new time must be at least 10 minutes apart from all 
                 user_role=kwargs.get("user_role"),
             )
             task = manager.get(task_id)
+            # A task this caller does not see answers like a missing one.
+            if task and not AutomationAccess(kwargs.get("user_scope_id"),
+                                             kwargs.get("user_role")).sees(task):
+                task = None
             
             if not task:
                 return f"Error: Automation with ID '{task_id}' not found. Use `list_automations` to see available automations."
@@ -1343,6 +1340,10 @@ Use this when user wants to remove an automation but might want to restore it la
         try:
             manager, _ = _manager_for_scope(kwargs.get("user_scope_id"))
             task = manager.get(task_id)
+            # A task this caller does not see answers like a missing one.
+            if task and not AutomationAccess(kwargs.get("user_scope_id"),
+                                             kwargs.get("user_role")).sees(task):
+                task = None
             
             if not task:
                 # IDEMPOTENT: If automation doesn't exist, it's already deleted (success)
@@ -1406,9 +1407,11 @@ Use this when user wants to recover a previously deleted automation."""
         try:
             manager, _ = _manager_for_scope(kwargs.get("user_scope_id"))
             
-            # Check if task exists in trash
+            # Check if task exists in trash, and is one this caller sees: the root trash
+            # holds whatever the global store deleted, whoever it belonged to.
+            access = AutomationAccess(kwargs.get("user_scope_id"), kwargs.get("user_role"))
             trash_tasks = manager.list_trash()
-            task_in_trash = any(t.id == task_id for t in trash_tasks)
+            task_in_trash = any(t.id == task_id and access.sees(t) for t in trash_tasks)
             
             if not task_in_trash:
                 return f"Error: Automation with ID '{task_id}' not found in trash."
@@ -1453,7 +1456,8 @@ class ListTrashTool(BaseTool):
     def run(self, **kwargs) -> str:
         try:
             manager, _ = _manager_for_scope(kwargs.get("user_scope_id"))
-            tasks = manager.list_trash()
+            access = AutomationAccess(kwargs.get("user_scope_id"), kwargs.get("user_role"))
+            tasks = [t for t in manager.list_trash() if access.sees(t)]
             
             if not tasks:
                 return "🗑️ Trash is empty. No deleted automations to restore."

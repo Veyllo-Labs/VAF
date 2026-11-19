@@ -383,12 +383,16 @@ async def ensure_daily_check_automation(_user: Dict[str, Any] = Depends(_get_cur
     if not has_account and not has_events:
         return {"ok": False, "created": False, "reason": "no_calendar"}
     try:
-        from vaf.core.automation import AutomationManager, AutomationTask
+        from vaf.core.automation import AutomationAccess, AutomationManager, AutomationTask
         local_scope = get_local_admin_scope_id()
         # Local admin: store in root automations/ so CLI scheduler (get_manager()) sees it.
         use_scope = None if (not user_scope_id or str(user_scope_id).strip() == str(local_scope).strip()) else user_scope_id
         mgr = AutomationManager(user_scope_id=use_scope) if use_scope else AutomationManager()
-        existing = [t for t in mgr.list() if (t.name or "").strip() == CALENDAR_DAILY_CHECK_NAME]
+        # "Already there" means among the caller's OWN automations, asked without the role: the
+        # check reads this account's calendar, so another account's task of the same name (an
+        # admin's aggregated view included) is not this account's, and its id is not returned.
+        existing = [t for t in AutomationAccess(user_scope_id).list()
+                    if (t.name or "").strip() == CALENDAR_DAILY_CHECK_NAME]
         if existing:
             return {"ok": True, "created": False, "task_id": existing[0].id}
         task = AutomationTask(

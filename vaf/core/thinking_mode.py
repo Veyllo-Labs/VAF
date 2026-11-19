@@ -2349,16 +2349,15 @@ def _build_proactive_memory_digest(agent: Any, user_scope_id: Optional[str]) -> 
 def _automation_review_state(user_scope_id: Optional[str], username: Optional[str] = None):
     """(enabled_task_count, findings) for this user's automations. ([], 0) on any failure.
 
-    Scoped through the SAME accessor the list tool uses, with the run's resolved scope - never the
-    process default, or one tenant's automations would decide another tenant's rung."""
+    Scoped through the SAME rule the list tool asks (`AutomationAccess`), with the run's resolved
+    scope - never the process default, or one tenant's automations would decide another tenant's
+    rung. The manager is kept for the task paths the run logs live beside."""
     try:
         from vaf.tools.automation import _manager_for_scope
-        from vaf.core.automation import review_findings, load_run_log
+        from vaf.core.automation import AutomationAccess, review_findings, load_run_log
         manager, _ = _manager_for_scope(user_scope_id)
-        tasks = [
-            t for t in manager.list()
-            if t.user_scope_id is None or str(t.user_scope_id) == str(user_scope_id)
-        ]
+        access = AutomationAccess(user_scope_id)
+        tasks = [t for t in manager.list() if access.sees(t)]
     except Exception as e:
         logger.debug("Thinking: automation review could not read automations: %s", e)
         return 0, []

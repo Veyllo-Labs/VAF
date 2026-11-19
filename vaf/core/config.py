@@ -1594,28 +1594,44 @@ class Config:
     # deepest value the code itself stores is a mail account list as the page sends it back
     # (body, `email_config_by_scope`, scope, `accounts`, account: 5, measured through the
     # account helper, the channel timelines and the relay switch); DEFAULTS nests 3 at most.
-    # This is more than ten times that, and about six times below the first recursive walk
-    # that breaks on the way back out: FastAPI's response encoder at about 400 levels, which
-    # turned one account's deep `theme` into a 500 on every account's GET /api/config, and
-    # `copy.deepcopy` at about 500.
+    # This is more than ten times that, and about four times below the first walk that
+    # breaks on the way back out: the response serializer (pydantic-core) stops at 254
+    # levels, which turned one account's deep `theme` into a 500 on every account's
+    # GET /api/config; `copy.deepcopy` gives up at about 500.
     MAX_SAVE_DEPTH = 64
+
+    @staticmethod
+    def require_save_object(body) -> None:
+        """Refuse a settings save that is not a JSON object (``TypeError``). Every step of
+        the save path reads the body as one; ``dict(body)`` on a list of ``[key, value]``
+        pairs builds a dict from it, and that dict has passed none of the steps before.
+        Measured over the WebSocket `save_config`: an admin's stale page brought back every
+        messenger pairing, and a non-admin replaced another account's mail host.
+
+        The steps after the strip check this only, never the depth: the strip puts stored
+        values back into the body, and those are not the caller's to answer for."""
+        if not isinstance(body, dict):
+            raise TypeError(f"a settings save must be a JSON object, not {type(body).__name__}")
 
     @classmethod
     def require_save_body(cls, body) -> None:
-        """Refuse a settings save that is not a JSON object (``TypeError``) or nests deeper
-        than ``MAX_SAVE_DEPTH`` (``ValueError``).
+        """Refuse what a caller sends as a settings save: not a JSON object (``TypeError``,
+        ``require_save_object``), nested deeper than ``MAX_SAVE_DEPTH``, or holding text
+        UTF-8 cannot encode (both ``ValueError``). Both lanes call it first and answer
+        either refusal as an error; the strip calls it again before it restores anything.
 
-        Every step of the save path reads the body as an object; ``dict(body)`` on a list of
-        ``[key, value]`` pairs builds a dict from it, and that dict has passed none of the
-        steps before. Measured over the WebSocket `save_config`: an admin's stale page
-        brought back every messenger pairing, and a non-admin replaced another account's
-        mail host. The depth is measured without recursion (`nesting.nesting_depth`): a
-        value nested a few hundred levels deep was saved, and every account's config read
-        failed on it afterwards. Both lanes answer either refusal as an error."""
-        if not isinstance(body, dict):
-            raise TypeError(f"a settings save must be a JSON object, not {type(body).__name__}")
+        The depth is measured without recursion (`nesting.nesting_depth`): a value nested a
+        few hundred levels deep was saved, and every account's config read failed on it
+        afterwards. A lone UTF-16 surrogate (a JSON ``\\ud800`` escape) did the same, because
+        the read is sent as UTF-8; the body is encoded once to find one, after the depth
+        bound keeps that walk short."""
+        cls.require_save_object(body)
         if _nesting_depth(body, cls.MAX_SAVE_DEPTH) > cls.MAX_SAVE_DEPTH:
             raise ValueError(f"a settings save may nest at most {cls.MAX_SAVE_DEPTH} levels")
+        try:
+            json.dumps(body, ensure_ascii=False).encode("utf-8")
+        except UnicodeEncodeError as e:
+            raise ValueError("a settings save may hold only text UTF-8 can encode") from e
 
     @classmethod
     def is_route_owned_key(cls, key: str) -> bool:
@@ -1643,9 +1659,9 @@ class Config:
         admin's to set, and every reader treats a block that is not an object as absent.
         Neither argument is changed.
 
-        A payload that is not an object raises ``TypeError`` (``require_save_body``): passed
-        through, a list of ``[key, value]`` pairs became a dict in the next step and skipped
-        this strip."""
+        The payload is checked first (``require_save_body``: an object, not too deep, text
+        UTF-8 can encode); passed through, a list of ``[key, value]`` pairs became a dict in
+        the next step and skipped this strip. The stored values it puts back are not."""
         cls.require_save_body(payload)
         out = payload
         if any(cls.is_route_owned_key(k) for k in payload):
@@ -1772,7 +1788,7 @@ class Config:
         # non-admin PATCH replaced the Telegram whitelist with their own entry, making them
         # the bot's owner, and replaced the bot token. The only thing a non-admin may say
         # about a channel is their own on/off, which is what the toggles carry.
-        cls.require_save_body(body)
+        cls.require_save_object(body)
         scope_str = str(user_scope_id).strip() if user_scope_id else ""
         toggles = {}
         body_filtered = dict(body)
@@ -1807,7 +1823,7 @@ class Config:
         The two paths used to carry the non-admin half by hand, one copy each.
         """
         from vaf.core.channels import CHANNEL_ACCOUNTS
-        cls.require_save_body(body)
+        cls.require_save_object(body)
         scope_str = str(user_scope_id).strip() if user_scope_id else ""
         body = dict(body)
         # Every account's own switches change only here (below, from the `enabled` a save

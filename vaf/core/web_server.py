@@ -6772,8 +6772,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     new_config = cmd.get("config")
                     try:
                         # Not an object (a list of [key, value] pairs became one in
-                        # `dict(body)` and skipped every strip below), null, or nested
-                        # deeper than any config value; PATCH answers these with 422.
+                        # `dict(body)` and skipped every strip below), null, nested deeper
+                        # than any config value, or holding text UTF-8 cannot encode;
+                        # PATCH answers these with 422.
                         Config.require_save_body(new_config)
                     except (TypeError, ValueError) as e:
                         await websocket.send_json({

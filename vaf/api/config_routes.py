@@ -488,12 +488,14 @@ async def patch_config(
 ) -> Dict[str, Any]:
     """Merge provided keys into config and save. Non-admins: global keys ignored; connection toggles (Telegram/WhatsApp/Discord) stored per-user only."""
     # Named boundary: this path strips keys other writers own (below) and refuses a body
-    # nested too deep, but checks no key's VALUE otherwise. A value only some writers check is caught at its reader instead, for example
-    # `deepseek_reasoning_effort`: `vaf models config` refuses a bad one, here it is stored,
-    # the backend ignores it with a warning and Settings shows it as ignored.
+    # nested too deep or holding text UTF-8 cannot encode, but checks no key's VALUE
+    # otherwise. A value only some writers check is caught at its reader instead, for
+    # example `deepseek_reasoning_effort`: `vaf models config` refuses a bad one, here it is
+    # stored, the backend ignores it with a warning and Settings shows it as ignored.
     try:
-        # A body nested deeper than any config value; FastAPI already refused a body that
-        # is not an object.
+        # A body nested deeper than any config value, or with a lone surrogate in it, would
+        # break every account's config read; FastAPI already refused a body that is not an
+        # object.
         Config.require_save_body(body)
     except (TypeError, ValueError) as e:
         raise HTTPException(status_code=422,

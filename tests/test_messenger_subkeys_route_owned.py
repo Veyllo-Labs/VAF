@@ -452,6 +452,54 @@ def test_a_deep_value_from_one_account_cannot_break_every_accounts_config(stored
     assert res.status_code == 200, res.text
 
 
+@pytest.mark.parametrize("lane", ["patch", "ws"])
+@pytest.mark.parametrize("user", [LOCAL_ADMIN, NON_ADMIN], ids=["local_admin", "non_admin"])
+def test_a_deep_sub_key_stored_before_the_bound_does_not_break_a_save(stored, monkeypatch,
+                                                                      lane, user):
+    """The bound is for what a caller sends. The strip puts a stored sub-key back into the
+    body, and a check of the restored body raised outside both lanes' answers: PATCH 500,
+    the socket closed without one. MUTATION: check the depth in the steps after the strip
+    again (both lanes red)."""
+    cfg = copy.deepcopy(STORED)
+    cfg["telegram_config"]["whitelist"] = _deep(63)
+    stored.write(cfg)
+    body = {"default_language": "de",
+            "telegram_config": {"enabled": True, "verified": True, "whitelist": []}}
+    if lane == "patch":
+        from fastapi.testclient import TestClient
+
+        res = TestClient(_app_as(user)).patch("/api/config", json=body)
+        assert res.status_code == 200, res.text
+    else:
+        _ws_save(monkeypatch, user, body)
+    raw = stored.raw()
+    assert raw["default_language"] == "de"
+    assert raw["telegram_config"]["whitelist"] == _deep(63)
+    if user is LOCAL_ADMIN:
+        assert raw["telegram_config"]["verified"] is True
+
+
+@pytest.mark.parametrize("lane", ["patch", "ws"])
+def test_text_utf8_cannot_encode_is_refused(stored, monkeypatch, lane):
+    """A lone surrogate in a non-admin's `theme` was saved, and from then on every account's
+    GET /api/config answered 500 (the response is encoded as UTF-8). MUTATION: drop the
+    encoding check (the save lands, the admin's GET goes 500)."""
+    from fastapi.testclient import TestClient
+
+    raw_body = '{"theme": "\\ud800", "default_language": "de"}'
+    if lane == "patch":
+        # Sent as text: the test client itself cannot encode the value.
+        res = TestClient(_app_as(NON_ADMIN)).patch(
+            "/api/config", content=raw_body, headers={"content-type": "application/json"})
+        assert res.status_code == 422, res.text
+    else:
+        _ws_save(monkeypatch, NON_ADMIN, json.loads(raw_body), expect="error")
+    assert stored.raw()["default_language"] == "en"
+    assert TestClient(_app_as(LOCAL_ADMIN)).get("/api/config").status_code == 200
+    with pytest.raises(ValueError):
+        Config.require_save_body({"\ud800": 1})
+
+
 def test_an_admin_clears_a_deep_value_stored_before_the_bound(stored):
     """A value stored deep by an older release is not touched by the bound; an admin clears
     it with a save that carries the key alone, and every read works again. MUTATION: check
@@ -469,13 +517,14 @@ def test_an_admin_clears_a_deep_value_stored_before_the_bound(stored):
     assert TestClient(_app_as(NON_ADMIN)).get("/api/config").status_code == 200
 
 
-class _WalkedInto:
-    """Fails the test when a comparison looks inside it."""
+class _WalkedInto(str):
+    """Text that fails the test when a comparison looks inside it (a str, so the save body
+    still encodes as JSON)."""
 
     def __eq__(self, other):
         raise AssertionError("the comparison walked into a value it shares with the body")
 
-    __hash__ = object.__hash__
+    __hash__ = str.__hash__
 
 
 def test_the_comparison_skips_shared_values_and_survives_a_walk_too_deep(monkeypatch):
@@ -488,7 +537,7 @@ def test_the_comparison_skips_shared_values_and_survives_a_walk_too_deep(monkeyp
 
     held = copy.deepcopy(STORED)
     body = {"telegram_config": {**copy.deepcopy(STORED["telegram_config"]),
-                                "note": [_WalkedInto()]}}
+                                "note": [_WalkedInto("x")]}}
     assert Config.without_route_owned_keys(body, stored=held) is body
 
     def too_deep(*_a, **_k):

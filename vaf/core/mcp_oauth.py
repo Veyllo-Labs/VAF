@@ -11,7 +11,10 @@ hand, PKCE, refresh). The official `mcp` SDK implements that flow
 (`mcp.client.auth.OAuthClientProvider`); this module is what VAF adds around it:
 
 - where the result lives: each account's tokens, and the client it registered, in the key ring
-  (`mcp_secrets.oauth_record`, `mcp_server.<name>.oauth.<account>`), never in a file;
+  (`mcp_secrets.oauth_record`, `mcp_server.<name>.oauth.<account>`), never in a file. The record
+  carries the address it was signed in at (`audience`), and it is used only for a server entry
+  of that origin (`_record_fits`): a tool built before the server moved holds the old address,
+  and an account's new sign-in at the new one must not be sent there;
 - how a person's browser gets into a flow the SDK runs inline, inside the HTTP request that met
   the 401: `start_sign_in` opens the account's session in the background and hands back the
   authorization address the SDK produced; `finish_sign_in` takes the code the service sent to
@@ -125,6 +128,17 @@ def _has_tokens(record: Dict[str, Any]) -> bool:
     return isinstance(tokens, dict) and bool(tokens.get("access_token") or tokens.get("refresh_token"))
 
 
+def _record_fits(record: Dict[str, Any], cfg: Dict[str, Any]) -> bool:
+    """Whether a sign-in record may be used for the server entry `cfg`: it was made at the same
+    origin (`audience`, scheme, host and port). A record without `audience` was made before the
+    address was kept with it; every move to another origin drops all records of the server
+    (`forget_server`), so it can only be one made at the origin the entry still has."""
+    if not isinstance(record, dict) or "audience" not in record:
+        return True
+    from vaf.core.mcp_registry import same_origin
+    return same_origin(str(record.get("audience") or ""), str((cfg or {}).get("url") or ""))
+
+
 def signed_in(server: str, user_scope_id: Optional[str]) -> bool:
     return _has_tokens(mcp_secrets.oauth_record(server, account_key(user_scope_id)))
 
@@ -163,7 +177,9 @@ class _RingStorage:
         if self.fresh and not self._wrote:
             return None
         record = await asyncio.to_thread(self._read)
-        if not _has_tokens(record):
+        if not _has_tokens(record) or not _record_fits(record, self.cfg):
+            # Read at every request, so a sign-in made at another address after this session's
+            # entry was built is not sent to the entry's address.
             return None
         data = {k: v for k, v in dict(record["tokens"]).items() if k != "expires_in"}
         data.setdefault("access_token", "")
@@ -190,6 +206,7 @@ class _RingStorage:
         record["tokens"] = data
         record["expires_at"] = (time.time() + int(expires_in)) if expires_in is not None else None
         record["redirect_uri"] = self.redirect_uri
+        record["audience"] = str(self.cfg.get("url") or "")
         metadata = getattr(getattr(self.provider, "context", None), "oauth_metadata", None)
         if metadata is not None and getattr(metadata, "revocation_endpoint", None):
             record["revocation_endpoint"] = str(metadata.revocation_endpoint)
@@ -305,7 +322,7 @@ def _build(server: str, cfg: Dict[str, Any], account: str, redirect_uri: str, us
 
 def _auth(server: str, cfg: Dict[str, Any], account: str) -> RemoteAuth:
     record = mcp_secrets.oauth_record(server, account)
-    if not _has_tokens(record):
+    if not _has_tokens(record) or not _record_fits(record, cfg):
         raise McpSignInRequired(_sign_in_hint(server))
     redirect_uri = str(record.get("redirect_uri") or "") or f"http://localhost{CALLBACK_PATH}"
     return RemoteAuth(_pool_account(server, account), lambda: _build(server, cfg, account, redirect_uri))
@@ -321,7 +338,7 @@ def discovery_auth(server: str, cfg: Dict[str, Any]) -> RemoteAuth:
     """A signed-in account to ask the server for its tool list with: the local admin's when
     it has signed in, else the first one that has (see the module docstring)."""
     accounts = [a for a in mcp_secrets.oauth_accounts(server)
-                if _has_tokens(mcp_secrets.oauth_record(server, a))]
+                if _has_tokens(record := mcp_secrets.oauth_record(server, a)) and _record_fits(record, cfg)]
     if not accounts:
         raise McpSignInRequired(f"no account has signed in to the MCP server '{server}' yet: "
                                 "sign in under Settings > Connections > MCP services")
@@ -512,12 +529,13 @@ def sign_in_status(user_scope_id: Optional[str]) -> List[Dict[str, Any]]:
         with _lock:
             waiting = (name, account) in _pending
             error = _last_error.get((name, account))
+        usable = _has_tokens(record) and _record_fits(record, cfg)
         out.append({
             "name": name,
             "url": str(cfg.get("url") or ""),
             "enabled": bool(cfg.get("enabled", True)),
-            "signed_in": _has_tokens(record),
-            "signed_in_at": record.get("signed_in_at") if _has_tokens(record) else None,
+            "signed_in": usable,
+            "signed_in_at": record.get("signed_in_at") if usable else None,
             "pending": waiting,
             "error": error,
         })

@@ -141,10 +141,16 @@ by hand), signs in with PKCE and refreshes the tokens.
   the tools are the server's and the same for every account. Until the first account signs in the
   server shows "sign-in needed" in the MCP list and registers no tools; the first sign-in loads them.
 - **Tokens** live in the key ring, one record per account and server
-  (`mcp_server.<name>.oauth.<account>`: the tokens, their expiry and the client the account
-  registered). A token that ran out while VAF was not running is refreshed on the next call. The
-  SDK does not restore the expiry of stored tokens by itself, and without it the provider would send
-  the old token, meet a 401 and start a new interactive sign-in instead of the refresh.
+  (`mcp_server.<name>.oauth.<account>`: the tokens, their expiry, the client the account
+  registered and the address it signed in at). A record is used only for a server entry of the
+  origin it was signed in at: a tool loaded before the server moved still names the old
+  address, and an account that signs in at the new one gets "not signed in" from that tool,
+  before any request, until the tools are reloaded. A record made before the address was kept
+  in it is used at the origin the entry names, which is the one it was made at (a move to
+  another host drops every record). A token that ran out while VAF was not running is refreshed
+  on the next call. The SDK does not restore the expiry of stored tokens by itself, and without it
+  the provider would send the old token, meet a 401 and start a new interactive sign-in instead of
+  the refresh.
 - **Signing out** deletes the record and closes the account's session first, then asks the service
   to invalidate the tokens (RFC 7009) where its metadata offers a revocation endpoint.
 - **The sign-ins belong to the server as it was set up.** A server moved to another host, switched
@@ -171,16 +177,29 @@ first sign-in, `Agent.reload_mcp_tools()` loads the server's tools.
 
 A local server's `env` values and a remote server's token live in the encrypted key ring
 (`vaf/core/mcp_secrets.py`, entries `mcp_server.<name>.env` and `mcp_server.<name>.token`), never in
-`mcp_servers.json` and never in the browser. A value written into the file by hand moves into the
+`mcp_servers.json` and never in the browser. The token entry holds the token together with the
+address it was stored for, as one value. A value written into the file by hand moves into the
 ring the next time the file is loaded (after the ring read it back; a move that fails leaves the
 file as it was and is tried again). Removing a server removes its secrets. `vaf secure status` names
 a server whose secret is still in the file. Every env value counts as a secret, not only the ones
 whose names look like one.
 
-A stored token stays with the server it was stored for (same scheme, host and port): an entry
-moved to another host without a new token keeps none, and the editor's test button sends the
-stored token only to the saved host, so a typo or a new server under an old name never receives
-it. Removing a server removes its secrets only once the file no longer lists it.
+A stored token goes only to the server it was stored for (same scheme, host and port), from
+every lane: the registered tools, discovery, the raw `mcp_call` and the editor's test button all
+put it on a request through `mcp_registry.server_headers`, which asks `stored_token(name, url)`
+with the URL the request goes to. That covers a tool loaded before the server moved, a discovery
+that read the file before a save, and another VAF process such as a CLI chat, which keeps its
+tools for as long as it runs and takes no lock of this one: the token and its address are one
+key-ring value, so they are always read together. An entry moved to another host without a new
+token keeps none; the test button sends the stored token only to the saved host, so a typo or a
+new server under an old name never receives it. A hand edit of `mcp_servers.json` that moves the
+URL to another host needs the token entered again (or written into the file with it). Removing a
+server removes its secrets only once the file no longer lists it.
+
+A token stored by an older release, without its address, still goes to the origin the entry
+names, as before, until the next save of that server binds it to the saved address. Named
+boundary: an older release that reads a token stored this way sends the stored text as it is
+and gets a 401; entering the token again there repairs it.
 
 A server with a sign-in per account adds two kinds of entry: `mcp_server.<name>.oauth.<account>`
 (one account's tokens and registered client, see "Sign-in per account") and

@@ -209,7 +209,7 @@ def test_a_removal_the_file_did_not_take_keeps_the_secrets(manifest, monkeypatch
 
 
 def test_removing_a_name_the_file_does_not_have_touches_nothing(manifest):
-    mcp_secrets.set_server_token("ghost", "tok_ghost")
+    mcp_secrets.set_server_token("ghost", "tok_ghost", audience="https://ghost.example/mcp")
     manifest.write({})
     assert reg.remove_server("ghost") is False
     assert mcp_secrets.server_token("ghost") == "tok_ghost"

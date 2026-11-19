@@ -56,14 +56,15 @@ def get_mcp_manifest_path() -> Path:
     return directory / "mcp_servers.json"
 
 
-# Serialises every read-modify-write of the manifest and its secrets: the moving of a secret
-# out of the file on load, `upsert_server`, `remove_server`, and the connection test's snapshot
-# of a saved entry with its token. The connection test runs on a worker thread, so without it
-# a load that moves a secret could write back an older snapshot over a Settings save made
-# meanwhile. Reentrant, because a save loads the manifest itself. A save holds it only for
-# the file and the key ring: its checks (the DNS lookup of a remote address included) run
-# before it is taken, and the closing of sessions (up to 10 s each) after it is released, so
-# a load waits for local writes only.
+# Serialises every read-modify-write of the manifest and its secrets within this process: the
+# moving of a secret out of the file on load, `upsert_server` and `remove_server`. Discovery and
+# the connection test load on worker threads, so without it a load that moves a secret could
+# write back an older snapshot over a Settings save made meanwhile. Reentrant, because a save
+# loads the manifest itself. It does not decide where a token may go: another VAF process does
+# not take it, which is why a token carries its own address (`stored_token`). A save holds it
+# only for the file and the key ring: its checks (the DNS lookup of a remote address included)
+# run before it is taken, and the closing of sessions (up to 10 s each) after it is released,
+# so a load waits for local writes only.
 _manifest_lock = threading.RLock()
 
 
@@ -139,16 +140,57 @@ REMOTE_TRANSPORTS = ("http", "sse")
 
 def server_headers(server_name: str, server_cfg: Dict[str, Any]) -> Dict[str, str]:
     """What a remote server is sent with every request: the manifest's own (non-secret)
-    `headers` and the access token from the key ring as `Authorization: Bearer`. A server that
-    signs every account in gets no fixed token: each session carries its account's own."""
+    `headers` and the access token from the key ring as `Authorization: Bearer`, when the token
+    was stored for the address `server_cfg` names (`stored_token`). A server that signs every
+    account in gets no fixed token: each session carries its account's own.
+
+    This is the one place a registered server's token is put on a request (the registered
+    tools, the raw `mcp_call`, discovery, the connection test), and code of an embedder's own
+    that has to reach a registered server sends these headers."""
     from vaf.core.mcp_oauth import uses_sign_in
     from vaf.core.mcp_remote import bearer_headers
-    from vaf.core.mcp_secrets import server_token
     headers = {str(k): str(v) for k, v in (server_cfg.get("headers") or {}).items()
                if str(k).lower() != "authorization"} if isinstance(server_cfg.get("headers"), dict) else {}
     if server_name and not uses_sign_in(server_cfg):
-        headers.update(bearer_headers(server_token(server_name)))
+        headers.update(bearer_headers(stored_token(server_name, str(server_cfg.get("url") or ""))))
     return headers
+
+
+def stored_token(name: str, url: str) -> str:
+    """The stored access token of server `name`, when it may go to `url`; "" otherwise.
+
+    A token is stored with the address it was stored for (`mcp_secrets.set_server_token`), in
+    the same ring value, and goes only to that origin (`same_origin`: scheme, host and port).
+    The `url` is the one the request goes to, so a tool built before the server moved, a
+    discovery that loaded the manifest before a save, or another VAF process that read an older
+    entry never sends the new token to the old address: whatever the order of the reads, the
+    token and its address come from one read.
+
+    A token stored before the address was kept with it (`server_token_record` gives no
+    audience) goes to the current entry's origin, as it always did, and only while that entry
+    is a remote server without a sign-in per account. The entry is read BEFORE the token is read
+    again: every save writes the ring before the manifest and always writes the stored format,
+    so a bare token read after the entry means no save changed the token between the two reads,
+    and the entry is the one it was stored with. Never raises."""
+    from vaf.core.mcp_secrets import server_token_record
+    target = str(url or "")
+    token, audience = server_token_record(name)
+    if not token:
+        return ""
+    if audience is not None:
+        return token if same_origin(audience, target) else ""
+    servers = (load_mcp_manifest() or {}).get("servers")
+    entry = servers.get(name) if isinstance(servers, dict) else None
+    token, audience = server_token_record(name)
+    if not token:
+        return ""
+    if audience is not None:
+        return token if same_origin(audience, target) else ""
+    from vaf.core.mcp_oauth import uses_sign_in
+    if (isinstance(entry, dict) and str(entry.get("transport", "stdio")) in REMOTE_TRANSPORTS
+            and not uses_sign_in(entry) and same_origin(str(entry.get("url") or ""), target)):
+        return token
+    return ""
 
 
 def same_origin(url_a: str, url_b: str) -> bool:
@@ -467,9 +509,10 @@ def probe_mcp_server(server_cfg: Dict[str, Any], timeout_seconds: float = 5.0, *
     and `server_cfg["env"]` values are the editor's, for a test before saving: an env value left
     empty falls back to the stored one.
 
-    A remote server's stored token is used only when the tested URL names the same server as the
-    saved one (`same_origin`): an editor pointed at another address, a typo or a new server under
-    an old name, must not send the stored token there. It then needs a token of its own.
+    A remote server's stored token goes only to the origin it was stored for (`stored_token`):
+    an editor pointed at another address, a typo or a new server under an old name, does not
+    send it there, also when a save moves the server while the test runs. It then needs a token
+    of its own.
 
     A server that signs every account in (`"auth": "oauth"`) is tested as the tester's own
     account (`user_scope_id`) when it has signed in to the saved server, never as anybody
@@ -486,29 +529,27 @@ def probe_mcp_server(server_cfg: Dict[str, Any], timeout_seconds: float = 5.0, *
     remote = str(server_cfg.get("transport", "stdio")) in REMOTE_TRANSPORTS
     saved: Dict[str, Any] = {}
     if name and remote:
-        # The saved entry's origin and its stored token are read as one snapshot, under the
-        # lock every Settings save takes: the test runs on a worker thread, and a save that
-        # moved the entry to another host with a new token between the origin check and a
-        # later read of the token by name would send that new token to the tested address.
-        from vaf.core.mcp_secrets import server_token
-        with _manifest_lock:
-            entry = ((load_mcp_manifest() or {}).get("servers") or {}).get(name)
-            if (isinstance(entry, dict) and str(entry.get("transport", "stdio")) in REMOTE_TRANSPORTS
-                    and same_origin(str(entry.get("url", "")), str(server_cfg.get("url", "")))):
-                saved = entry
-                if not token and not mcp_oauth.uses_sign_in(server_cfg):
-                    token = server_token(name) or None
-            else:
-                stored_name = ""
+        # The sign-in an account made belongs to the saved server: a test of another address
+        # does not run in it. The bearer token needs no such check here; `stored_token` sends
+        # it only to the origin it was stored for.
+        entry = ((load_mcp_manifest() or {}).get("servers") or {}).get(name)
+        if (isinstance(entry, dict) and str(entry.get("transport", "stdio")) in REMOTE_TRANSPORTS
+                and same_origin(str(entry.get("url", "")), str(server_cfg.get("url", "")))):
+            saved = entry
+        else:
+            stored_name = ""
 
     auth = None
     if stored_name and mcp_oauth.uses_sign_in(server_cfg) and mcp_oauth.signed_in(stored_name, user_scope_id):
         saved_cfg = saved if remote else (
             ((load_mcp_manifest() or {}).get("servers") or {}).get(stored_name) or {})
         if mcp_oauth.uses_sign_in(saved_cfg):
-            auth = mcp_oauth.auth_for(stored_name, saved_cfg, user_scope_id)
-    # A remote test sends the token resolved above, never one read again by name.
-    list_name = "" if remote else stored_name
+            from vaf.core.mcp_remote import McpSignInRequired
+            try:
+                auth = mcp_oauth.auth_for(stored_name, saved_cfg, user_scope_id)
+            except McpSignInRequired:
+                auth = None    # a sign-in made for another address: tested without one
+    list_name = name if remote else stored_name
 
     listing = _Listing()
 
@@ -600,9 +641,11 @@ def upsert_server(name: str, *, command: str = "", transport: str = "stdio", url
     if permission not in _PERMISSIONS:
         permission = "write"
 
-    # The manifest and the key ring change together under the lock (the connection
-    # test reads both as one snapshot); the checks above, the DNS lookup included, and
-    # the session closes below, each up to 10 s, run without it.
+    # The manifest and the key ring change together under the lock, the ring first: a token
+    # is written with its address in one value, so a reader that sees the old manifest and the
+    # new token still sends that token only to its own address (`stored_token`). The checks
+    # above, the DNS lookup included, and the session closes below, each up to 10 s, run
+    # without the lock.
     closes: List[Any] = []
     with _saving(closes):
         manifest = load_mcp_manifest() or {}
@@ -635,7 +678,13 @@ def upsert_server(name: str, *, command: str = "", transport: str = "stdio", url
         if clear_token or new_auth or (moved and not str(token or "").strip()):
             mcp_secrets.clear_server_token(name)
         elif str(token or "").strip():
-            mcp_secrets.set_server_token(name, str(token))
+            mcp_secrets.set_server_token(name, str(token), audience=url)
+        elif transport in REMOTE_TRANSPORTS and old_remote and same_origin(old_url, url):
+            # A token stored before its address was kept with it is bound now, to the address it
+            # is kept for: the saved server stays on the origin it had, so the token is its own.
+            kept, audience = mcp_secrets.server_token_record(name)
+            if kept.strip() and audience is None:
+                mcp_secrets.set_server_token(name, kept, audience=url)
         # The same for the accounts' sign-ins and the hand-registered client's secret: they belong
         # to this host, this sign-in mode and this client.
         if old_auth and (moved or not new_auth or new_client_id != old_client_id):

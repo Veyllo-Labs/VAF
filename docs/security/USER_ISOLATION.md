@@ -1406,7 +1406,9 @@ A remote MCP server with `"auth": "oauth"` (`vaf/core/mcp_oauth.py`) is set up o
 and every account signs in to it on its own (Connections, "MCP services"; the routes under
 `/api/mcp/sign-in` act on the caller's own account only). Each account's tokens are a record of
 their own in the key ring (`mcp_server.<name>.oauth.<scope>`), and each account has its own
-session at the server, keyed by the account in the session pool. The server's tools declare
+session at the server, keyed by the account in the session pool. A record carries the address it
+was signed in at and is used only for a server entry of that origin, so a tool loaded before an
+admin moved the server never sends an account's new sign-in to the old host. The server's tools declare
 `identity_kwargs = ("user_scope_id",)`, so the dispatcher assigns the caller's scope, a
 model-supplied value is overwritten, and a call runs in that account's session or not at all: an
 account that has not signed in is refused before any request, never served by another account's

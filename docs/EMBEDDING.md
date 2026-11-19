@@ -3109,7 +3109,12 @@ usable from an embedded engine too, documented in their own pages:
   older transport, a `url`); their tools appear as native tools
   (`mcp_<server>_<tool>`). Secrets do not stay in the file: `env` values and a
   remote server's token move into the key ring on the next load
-  (`vaf.core.mcp_registry.upsert_server` writes them there directly). A remote
+  (`vaf.core.mcp_registry.upsert_server` writes them there directly). The token is stored
+  with the origin it belongs to, every account's sign-in with the origin it was made at, and
+  each is sent only there, also by a tool built before the server moved and by another
+  process; code of your own that must send a registered server's headers calls
+  `vaf.core.mcp_registry.server_headers(name, cfg)`, which adds the token only for the
+  origin of `cfg["url"]`. A remote
   server with `"auth": "oauth"` signs every account in on its own:
   `vaf.core.mcp_oauth.start_sign_in` hands your UI the authorization address,
   `finish_sign_in` completes it from your callback, and its tools declare

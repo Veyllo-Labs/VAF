@@ -287,6 +287,35 @@ def test_a_sign_in_the_service_revoked_asks_to_sign_in_again_at_once(remote, man
     assert time.monotonic() - started < 15, "it must not wait for a browser nobody opened"
 
 
+def test_set_tokens_records_the_audience(remote, manifest):
+    """A sign-in record names the address it was made at; a tool built for another address
+    does not use it (tests/test_mcp_token_audience.py)."""
+    from vaf.core import mcp_oauth, mcp_secrets
+    srv = remote["http"]
+    manifest.write({"svc": {"transport": "http", "url": srv.url, "auth": "oauth"}})
+    assert _sign_in("svc", "scope-alice")["ok"] is True
+    record = mcp_secrets.oauth_record("svc", mcp_oauth.account_key("scope-alice"))
+    assert record["audience"] == srv.url
+
+
+def test_a_record_without_audience_still_signs_in(remote, manifest):
+    """A sign-in made before the record carried its address keeps working at the address the
+    entry still names (every move to another host dropped such records)."""
+    from vaf.core import mcp_oauth, mcp_secrets
+    from vaf.core.mcp_remote import get_remote_pool
+    srv = remote["http"]
+    manifest.write({"svc": {"transport": "http", "url": srv.url, "auth": "oauth"}})
+    assert _sign_in("svc", "scope-alice")["ok"] is True
+    account = mcp_oauth.account_key("scope-alice")
+    record = mcp_secrets.oauth_record("svc", account)
+    record.pop("audience", None)
+    mcp_secrets.set_oauth_record("svc", account, record)
+    get_remote_pool().close()                         # a restart: the session reads the record
+    tools, status = _tools()
+    assert status["svc"]["connected"] is True, status
+    assert tools["mcp_svc_echo"].run(text="old", user_scope_id="scope-alice") == "echo:old"
+
+
 def test_a_started_sign_in_hands_back_the_same_address_while_it_waits(remote, manifest):
     from vaf.core import mcp_oauth
     manifest.write({"svc": {"transport": "http", "url": remote["http"].url, "auth": "oauth"}})
@@ -411,7 +440,8 @@ def test_a_sign_in_server_takes_no_fixed_token(manifest):
     reg.upsert_server("svc", transport="http", url="https://mcp.example.com/mcp", token="tok_1")
     reg.upsert_server("svc", transport="http", url="https://mcp.example.com/mcp", auth="oauth", token="tok_2")
     assert mcp_secrets.server_token("svc") == ""
-    mcp_secrets.set_server_token("svc", "tok_by_hand")      # e.g. a hand edit the load moved
+    mcp_secrets.set_server_token("svc", "tok_by_hand",      # e.g. a hand edit the load moved
+                              audience="https://mcp.example.com/mcp")
     cfg = {"transport": "http", "auth": "oauth", "url": "https://mcp.example.com/mcp"}
     assert "Authorization" not in reg.server_headers("svc", cfg), "each session carries its account's own"
     assert reg.server_headers("svc", {**cfg, "auth": ""}) == {"Authorization": "Bearer tok_by_hand"}

@@ -30,6 +30,15 @@ only place they are read or written:
   token, and only an explicit `clear_token` removes it.
 - `redacted_env` is what a browser may see: the names, every value empty.
 
+A remote server's token is stored together with the URL it was stored for, in ONE ring value
+(`{"audience": <url>, "token": <token>}`), and `mcp_registry.stored_token` sends it only to that
+origin. The two have to be one value: a save writes the ring before the manifest, and another VAF
+process (a CLI chat) reads both without any lock this one holds, so an audience kept anywhere else
+can be read from one save and the token from another (measured: 246 of 800 calls sent the new
+token to the old address under a lock-held snapshot of entry and token, 0 with the audience in the
+value). A value stored before this format, a bare token, is read as such (`server_token_record`
+says so) until the next save binds it.
+
 Deliberate: EVERY env value is treated as a secret, not only the ones whose names look like
 one. A path costs nothing in the ring, and a guess by name is how a secret stays in the file.
 """
@@ -38,7 +47,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -49,14 +58,48 @@ def _ring_name(server: str, kind: str) -> str:
     return f"mcp_server.{server}.{kind}"
 
 
-def server_token(server: str) -> str:
-    """The remote server's access token, or "" (none, or the ring cannot be read)."""
+def server_token_record(server: str) -> Tuple[str, Optional[str]]:
+    """The remote server's access token and the URL it was stored for, from ONE ring read.
+
+    - A value in the stored format, a JSON object, gives its `token` and its `audience` (""
+      when a field is missing or not a string: an object without a usable audience is never
+      sent, and one without a usable token is no token).
+    - Any other value is a bare token stored before the audience was kept with it, and gives
+      `(value, None)`: None says "legacy", which `mcp_registry.stored_token` judges against
+      the current manifest entry instead.
+    - No token, or a ring that cannot be read: `("", "")`. Never raises.
+
+    Deliberate: a value that opens with `{` is the stored format, whether it parses or not. A
+    bare token is opaque text and never a JSON object, so such a value that is not a readable
+    object is damage, and damage is sent nowhere, rather than as a bare token to whatever
+    address the entry names now. One `json.loads`, linear in the value's length."""
     from vaf.core import data_keyring
     try:
-        return data_keyring.peek_data_secret(_ring_name(server, "token"))
+        raw = data_keyring.peek_data_secret(_ring_name(server, "token"))
     except Exception as exc:  # noqa: BLE001 - an unreadable ring reads as "no token"
         logger.error("The key ring cannot be read for MCP server %s: %s", server, exc)
-        return ""
+        return "", ""
+    raw = raw if isinstance(raw, str) else ""
+    if not raw:
+        return "", ""
+    if not raw.lstrip().startswith("{"):
+        return raw, None
+    try:
+        data = json.loads(raw)
+    except (ValueError, RecursionError):
+        return "", ""
+    if not isinstance(data, dict):
+        return "", ""
+    token, audience = data.get("token"), data.get("audience")
+    if not isinstance(token, str) or not token:
+        return "", ""
+    return token, audience if isinstance(audience, str) else ""
+
+
+def server_token(server: str) -> str:
+    """The remote server's access token, or "" (none, or the ring cannot be read). Says
+    nothing about where it may go: a request reads it through `mcp_registry.stored_token`."""
+    return server_token_record(server)[0]
 
 
 def server_env(server: str) -> Dict[str, str]:
@@ -102,12 +145,16 @@ def set_server_env(server: str, env: Dict[str, str]) -> None:
             _drop(_ring_name(server, "env"))
 
 
-def set_server_token(server: str, token: str) -> None:
+def set_server_token(server: str, token: str, *, audience: str) -> None:
+    """Store the token with the URL it is for (`audience`), in one ring value. An empty
+    audience is allowed and means the token is sent nowhere (a token written by hand into a
+    local server's entry)."""
     value = str(token or "").strip()
     if not value:
         raise ValueError("an empty token is not a token; use clear_server_secrets or clear_token")
+    record = json.dumps({"audience": str(audience or "").strip(), "token": value}, sort_keys=True)
     with _lock:
-        _put(_ring_name(server, "token"), value)
+        _put(_ring_name(server, "token"), record)
 
 
 def clear_server_token(server: str) -> None:
@@ -240,7 +287,8 @@ def move_manifest_secrets(manifest: Dict[str, Any]) -> bool:
                 header_token = next((_bearer(v) for k, v in headers.items()
                                      if str(k).lower() == "authorization" and _bearer(v)), "")
                 if token or header_token:
-                    set_server_token(name, token or header_token)
+                    # Bound to the entry's own URL: the token was written next to it.
+                    set_server_token(name, token or header_token, audience=str(cfg.get("url") or ""))
                     cfg.pop("token", None)
                     if header_token:
                         cfg["headers"] = {k: v for k, v in headers.items() if str(k).lower() != "authorization"}

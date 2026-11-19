@@ -942,62 +942,6 @@ def _remote_entry(tmp_path, monkeypatch, url):
     return reg, path
 
 
-def test_the_connection_test_sends_the_token_of_the_origin_it_checked(tmp_path, monkeypatch):
-    """A save that moves the entry to another host with a new token, landing while the test
-    checks the saved origin, must not hand that new token to the tested address."""
-    import vaf.core.mcp_remote as mcp_remote
-    import vaf.core.mcp_secrets as mcp_secrets
-    url_a, url_b = "https://a.example.invalid/mcp", "https://b.example.invalid/mcp"
-    reg, path = _remote_entry(tmp_path, monkeypatch, url_a)
-    box = {"token": "TOKEN-A"}
-    asked = []
-    monkeypatch.setattr(mcp_secrets, "server_token",
-                        lambda name: asked.append(name) or box["token"])
-    monkeypatch.setattr(mcp_secrets, "server_env", lambda name: {})
-    sent = []
-
-    class _Pool:
-        def list_tools(self, transport, url, headers=None, auth=None, egress=None):
-            sent.append((url, dict(headers or {})))
-            return [{"name": "t"}]
-
-    monkeypatch.setattr(mcp_remote, "get_remote_pool", lambda: _Pool())
-
-    def save_elsewhere():
-        with reg._manifest_lock:  # the lock every Settings save takes
-            path.write_text(json.dumps({"servers": {"svc": {"transport": "http", "url": url_b}}}),
-                            encoding="utf-8")
-            box["token"] = "TOKEN-B"
-
-    real_same_origin = reg.same_origin
-
-    def checking(a, b):
-        saver = threading.Thread(target=save_elsewhere, daemon=True)
-        box["saver"] = saver
-        saver.start()
-        saver.join(0.3)  # the save lands now, if nothing holds it off
-        return real_same_origin(a, b)
-
-    import vaf.core.mcp_oauth as mcp_oauth
-    real_uses_sign_in = mcp_oauth.uses_sign_in
-
-    def uses_sign_in(cfg):
-        # Asked again once the test is past its check: from here on the save has landed, so a
-        # token read by name now would be the moved entry's.
-        saver = box.get("saver")
-        if saver is not None and not reg._manifest_lock._is_owned():
-            saver.join(5)
-        return real_uses_sign_in(cfg)
-
-    monkeypatch.setattr(reg, "same_origin", checking)
-    monkeypatch.setattr(mcp_oauth, "uses_sign_in", uses_sign_in)
-    status = reg.probe_mcp_server({"transport": "http", "url": url_a}, timeout_seconds=5,
-                                  name="svc")
-    assert status["connected"] is True, status
-    assert sent == [(url_a, {"Authorization": "Bearer TOKEN-A"})], sent
-    assert asked == ["svc"], "the token was read again, or for a server without a name"
-
-
 @pytest.mark.parametrize("save", ["remove", "upsert"])
 def test_a_manifest_load_waits_for_a_save_in_progress(tmp_path, monkeypatch, save):
     """A load that moves a secret out of the file writes the manifest back; it must not do so

@@ -192,6 +192,26 @@ def test_the_editor_never_sends_a_stored_token_to_another_address(remote, manife
     assert ok["connected"] is True, "the saved address still gets it"
 
 
+def test_a_tool_loaded_before_a_move_never_sends_the_new_token_to_the_old_host(remote, manifest):
+    """The server moves to another host with a new token while a tool built for the old one is
+    still loaded (a CLI chat keeps it for its whole life): the old host must not receive the
+    new token. Measured before the change: it did, on the first call after the move."""
+    import vaf.core.mcp_registry as reg
+    reg.upsert_server("moving", transport="http", url=remote.urls["auth"], token=TOKEN)
+    tools, status = reg.discover_mcp_tools(timeout_seconds=15)
+    old_tool = tools["mcp_moving_echo"]
+    assert old_tool.run(text="before") == "echo:before"
+    reg.upsert_server("moving", transport="http", url=remote.urls["http"], token="moved-token")
+    before = len(remote.auth.requests)
+    out = old_tool.run(text="after")
+    assert not out.startswith("echo:"), out
+    sent = remote.auth.requests[before:]
+    assert sent, "the old host was asked"
+    assert not any("moved-token" in r.get("authorization", "") for r in sent), sent
+    tools, status = reg.discover_mcp_tools(timeout_seconds=15)
+    assert tools["mcp_moving_echo"].run(text="new") == "echo:new", "a reload reaches the new host"
+
+
 def test_moving_a_server_closes_the_old_session(remote, manifest):
     import vaf.core.mcp_registry as reg
     from vaf.core.mcp_remote import get_remote_pool

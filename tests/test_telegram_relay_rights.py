@@ -423,14 +423,23 @@ def test_the_telegram_window_invites_by_code_and_offers_the_id_form_to_admins_on
     row = src[src.index("{data?.can_add_by_id && e.vaf_username && ("):]
     row = row[:row.index("</span>")]
     assert "t('relayAccount', { name: e.vaf_username })" in row, "an admin sees whose relay contact each entry is"
-    assert 'className="max-w-[7rem] truncate" title={e.vaf_username}' in row, "a long account name stays in its row"
+    assert 'className="max-w-[7rem] max-md:max-w-[4.5rem] truncate"' in row, "a long account name stays in its row"
+    assert "title={t('relayAccount', { name: e.vaf_username })}" in row, "the cut-off label is whole in its title"
     cancel = src[src.index("const cancelRelayInvite"):src.index("const copyRelayInvite")]
     assert "api('api/telegram/relay-pair'), { method: 'DELETE'" in cancel, "Cancel takes the link back"
     assert "setRelayInvite(null)" in cancel[cancel.index("method: 'DELETE'"):], "the box closes after the withdrawal"
     assert "onClick={cancelRelayInvite}" in src
     poll = src[src.index("// While the link is out"):src.index("const cancelRelayInvite")]
-    assert "!ids.some(id => !relayInvite.knownIds.includes(id))) setRelayInviteEnded(true)" in poll, \
+    finish = poll[poll.index("const finishInvite"):poll.index("const timer")]
+    assert "!ids.some(id => !relayInvite.knownIds.includes(id))) setRelayInviteEnded(true)" in finish, \
         "an invite that ended without a new contact says so"
+    assert "if (closed || relayCancelRef.current) return;" in finish, "a deliberate Cancel never reads as ended"
+    assert "setRelayError(null)" in finish, "a stale error goes with the invite"
+    timer = poll[poll.index("const timer"):]
+    expiry = timer[timer.index("relayInvite.expiresIn * 1000"):timer.index("try {")]
+    assert "await finishInvite();" in expiry, "the client timer reloads before it says no contact came"
+    assert "data?.pending === false) await finishInvite();" in timer
+    assert "relayCancelRef.current = true;" in cancel[:cancel.index("method: 'DELETE'")], "set before the withdrawal"
     assert "{relayInviteEnded && <p" in src and "t('relayInviteEnded')" in src
     invite = src[src.index("const startRelayInvite"):src.index("const handleRelayAdd")]
     assert "data?.detail || t('relayInviteFailed')" in invite
@@ -533,6 +542,8 @@ def test_both_burst_handlers_split_on_a_new_destination():
         assert "rec, displaced = _join_burst(chat_id, {" in part, start
         assert "_flush_displaced(displaced, chat_id)" in part, start
         assert "not in _pending_by_chat" not in part, start
+    displaced = src[src.index("def _flush_displaced"):src.index("def _flush_pending")]
+    assert "_flush_pending(chat_id, displaced)" in displaced, "a displaced burst is sent, not dropped"
 
 
 def test_the_relay_removal_runs_under_the_config_lock():
@@ -547,6 +558,21 @@ def test_the_relay_removal_runs_under_the_config_lock():
     assert locked, "no config lock"
     inside = {ast.unparse(c.func) for w in locked for c in ast.walk(w) if isinstance(c, ast.Call)}
     assert {"Config.load", "Config.save"} <= inside
+
+
+def test_the_relay_lane_names_every_writer():
+    """`Config.ROUTE_OWNED_SUBKEYS` says which lane writes the relay list; every function of
+    `channel_pairing` that stores `relay_whitelist` is one. MUTATION: drop
+    `pair_telegram_account` from the lane text."""
+    import ast
+    from pathlib import Path
+    lane = Config.ROUTE_OWNED_SUBKEYS["telegram_config"]["relay_whitelist"]
+    src = (Path(__file__).resolve().parent.parent / "vaf" / "core" / "channel_pairing.py").read_text(encoding="utf-8")
+    writers = [fn.name for fn in ast.walk(ast.parse(src)) if isinstance(fn, ast.FunctionDef)
+               and any(isinstance(n, ast.Constant) and n.value == "relay_whitelist" for n in ast.walk(fn))]
+    assert sorted(writers) == ["pair_telegram_account", "pair_telegram_relay"]
+    for name in writers:
+        assert f"channel_pairing.{name}" in lane, name
 
 
 # -- fuzz -------------------------------------------------------------------------------------

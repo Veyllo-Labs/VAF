@@ -1569,7 +1569,7 @@ class Config:
     ROUTE_OWNED_SUBKEYS = {
         "telegram_config": {
             "whitelist": "channel_pairing.pair_telegram_account",
-            "relay_whitelist": "channel_pairing.pair_telegram_relay and the telegram relay-whitelist-remove route",
+            "relay_whitelist": "channel_pairing.pair_telegram_relay, channel_pairing.pair_telegram_account (drops the relay entry of an id it pairs as an owner) and the telegram relay-whitelist-remove route",
             # A cache of the bot's `getMe` answer.
             "bot_username": "telegram_routes._get_bot_username",
             "chat_activity": "messaging_connections.append_channel_activity",

@@ -89,6 +89,9 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
     // The invite ended (redeemed for nobody new, refused by the bot, or run out) and no
     // contact was added: said once, instead of the box just turning back into the button.
     const [relayInviteEnded, setRelayInviteEnded] = useState(false);
+    // Set the moment Cancel is pressed, before its DELETE goes out: a poll answer that arrives
+    // after the withdrawal ("pending: false") must not read as an invite that ended by itself.
+    const relayCancelRef = useRef(false);
     const [note, setNote] = useState<string | null>(null);
     // The jump id waiting to be checked against the loaded sessions. A ref, consumed once,
     // so the check runs on the load that follows the jump and not on every later refresh
@@ -153,6 +156,7 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
 
     const startRelayInvite = async () => {
         const relayContacts = data?.relay_whitelist;
+        relayCancelRef.current = false;
         setRelayError(null);
         setRelayInviteCopied(false);
         setRelayInviteEnded(false);
@@ -175,38 +179,48 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
     useEffect(() => {
         if (!relayInvite) return;
         const started = Date.now();
+        let closed = false;
+        // The invite is over (redeemed, refused or run out): reload, and say so only when no
+        // new contact came with it. Not after Cancel, and not once the window closed.
+        const finishInvite = async () => {
+            if (closed || relayCancelRef.current) return;
+            setRelayInvite(null);
+            setRelayError(null);
+            const ids = await fetchDashboard();
+            if (ids && !ids.some(id => !relayInvite.knownIds.includes(id))) setRelayInviteEnded(true);
+        };
         const timer = setInterval(async () => {
+            // The client timer starts after the server's, so a link opened in the last seconds
+            // is checked against the reloaded list here as well.
             if (Date.now() - started > relayInvite.expiresIn * 1000) {
-                setRelayInvite(null);
-                setRelayInviteEnded(true);
+                await finishInvite();
                 return;
             }
             try {
                 const res = await fetch(api('api/telegram/relay-pair'), { credentials: 'include' });
                 const data = await res.json();
-                if (res.ok && data?.pending === false) {
-                    setRelayInvite(null);
-                    const ids = await fetchDashboard();
-                    if (ids && !ids.some(id => !relayInvite.knownIds.includes(id))) setRelayInviteEnded(true);
-                }
+                if (res.ok && data?.pending === false) await finishInvite();
             } catch { /* keep waiting */ }
         }, 3000);
-        return () => clearInterval(timer);
+        return () => { closed = true; clearInterval(timer); };
     }, [relayInvite, fetchDashboard]);
 
     // Cancel takes the link back on the server (DELETE api/telegram/relay-pair): a link sent to
     // the wrong chat stops working at once instead of at the end of its lifetime.
     const cancelRelayInvite = async () => {
         setRelayError(null);
+        relayCancelRef.current = true;
         try {
             const res = await fetch(api('api/telegram/relay-pair'), { method: 'DELETE', credentials: 'include' });
             if (!res.ok) {
                 const data = await res.json().catch(() => ({}));
+                relayCancelRef.current = false;
                 setRelayError(data?.detail || t('relayInviteCancelFailed'));
                 return;
             }
             setRelayInvite(null);
         } catch {
+            relayCancelRef.current = false;
             setRelayError(t('relayInviteCancelFailed'));
         }
     };
@@ -312,7 +326,7 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                     <KvRow key={i} left={label(e)} right={<>
                         {/* An admin's list holds every account's relay contacts: say whose each one is. */}
                         {data?.can_add_by_id && e.vaf_username && (
-                            <span className="max-w-[7rem] truncate" title={e.vaf_username}>{t('relayAccount', { name: e.vaf_username })}</span>
+                            <span className="max-w-[7rem] max-md:max-w-[4.5rem] truncate" title={t('relayAccount', { name: e.vaf_username })}>{t('relayAccount', { name: e.vaf_username })}</span>
                         )}
                         <span>{e.telegram_user_id}</span>
                         <button type="button" title={t('remove')} onClick={() => { if (confirm(t('removeRelayConfirm'))) handleRelayRemove(e.telegram_user_id); }}

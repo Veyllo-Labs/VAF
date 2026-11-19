@@ -146,8 +146,12 @@ readable by their owner only (mode 0600 on Linux and macOS).
   back that fails, leaves the language shown as not installed with its old voice whole in
   `.<lang>.previous`; the next start of the container, or the next install of that
   language, puts it back before anything else. Removing a language removes such a kept
-  voice first and the installed folder last, so a removal cut short never leaves an older
-  voice for the next start to put back.
+  voice first and the installed folder last, so once the kept voice is fully removed, a
+  removal cut short cannot bring the older voice back. The kept folder is deleted file by
+  file, though: a removal killed while that is still going on, for a language with no
+  installed folder, leaves part of it, and the next start puts that part back. With both
+  files left, the older voice is installed again whole; with one, the language stays not
+  installed.
 - **Speaker recognition** (`silero_vad.onnx`, the 3D-Speaker ERes2Net model) and the
   turn-end model (`smart-turn-v3.2-cpu.onnx`, pinned to a commit): the same check, in
   `models/speaker/`.

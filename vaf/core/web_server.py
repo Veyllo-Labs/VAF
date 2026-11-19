@@ -6004,7 +6004,6 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             continue
 
                         if type == "room_invite_candidates":
-                            from vaf.core.config import is_admin_identity
                             _role = manager.connection_roles.get(websocket)
                             await websocket.send_json({
                                 "type": "room_invite_candidates",
@@ -6400,7 +6399,6 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                 elif type == "get_config":
                     # Send config to frontend; non-admins get scoped view (only their own connections)
-                    from vaf.core.config import is_admin_identity
                     user_scope_id = manager.get_connection_user(websocket) if manager else None
                     stored_role = manager.get_connection_user_role(websocket) if manager else None
                     is_admin = is_admin_identity(stored_role, user_scope_id)
@@ -6785,7 +6783,6 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         })
                         continue
                     if new_config:
-                        from vaf.core.config import is_admin_identity
                         user_scope_id = manager.get_connection_user(websocket) if manager else None
                         stored_role = manager.get_connection_user_role(websocket) if manager else None
                         is_admin = is_admin_identity(stored_role, user_scope_id)
@@ -8335,7 +8332,6 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                             # The id becomes a file name: one entry, never a path
                             # (PathEscape is a ValueError and answers as workflow_error).
-                            from vaf.core.path_jail import safe_entry_name
                             safe_entry_name(f"{_wf_id}.py")
                             if not _wf_name:
                                 raise ValueError("name is required")
@@ -8383,7 +8379,6 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                             _wf_id = str(cmd.get("workflow_id") or "").strip()
                             # One entry, never a path (PathEscape answers as workflow_error).
-                            from vaf.core.path_jail import safe_entry_name
                             safe_entry_name(f"{_wf_id}.py")
                             _user_wf_dir = _os_wf.path.expanduser("~/.vaf/workflows")
                             _wf_path = _os_wf.path.join(_user_wf_dir, f"{_wf_id}.py")

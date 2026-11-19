@@ -5018,7 +5018,10 @@ def _script_input(exe: str, args: List[str], carried: List[tuple],
                         and not _REDIRECT_RE.match(args[pos]) and args[pos][:1] not in ("<", ">"):
                     pos += 1
                 continue
-            if long_ok and tok.startswith("--") and any(m in tok for m in _EXPANSION_MARKS):
+            # A head word with an expansion in it may be a long option too, with one dash as
+            # well (`-restricte"$u"d`): the input is read (fail closed), and the scan goes on
+            # with the long options still possible.
+            if long_ok and tok[:1] == "-" and any(m in tok for m in _EXPANSION_MARKS):
                 from_stdin = True
                 pos += 1
                 continue

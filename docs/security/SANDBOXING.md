@@ -1390,20 +1390,27 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   shell's error message fed into a shell); two generators of subscripts, line continuations,
   funsubs, descriptors and stdin chains, and of the pinned rows mutated, run through bash in a
   read-only sandbox with a marker `rm`: 60 000 and 40 000 draws, 2 473 and 2 350 of the 7 052
-  and 4 392 run in bash ran the marker, with no twin let through; and four more, of
-  option clusters with values (`-eo pipefail`), brace and tilde words, scripts given by an
-  expansion after `-c` and names spelled in pieces; of option words (`+c`, `-$x`, `"$x"`),
-  setters of a name or of the positional parameters and literal text beside a quoted
-  expansion; of substring windows, `$'...'` in arithmetic, closer targets and words at a
-  shell's script name; and of vanishing words, broken substring names, descriptors an
-  enclosing redirection points at the pipe and `$$` beside quotes: 30 000 draws each, 2 301 of 3 923,
-  3 383 of 4 316, 2 500 of 5 609 and 2 273 of 4 184 run in bash (each under a cap of 32
-  processes) ran the marker, with no twin let through. On the readings before, the first two
-  had found 7 261 and 9 627 twins; every class of them is now read and pinned. No refusal of the reading
+  and 4 392 run in bash ran the marker, with no twin let through; and five more, of bash's
+  argv drawn as values and rendered through variables, tildes, brace words and splices
+  (long options with one dash, clusters with values, option words with unknown values,
+  tilde scripts, nested braces, names set in pieces, aliases); of option clusters with
+  values (`-eo pipefail`), brace and tilde words, scripts given by an expansion after `-c`
+  and names spelled in pieces; of option words (`+c`, `-$x`, `"$x"`), setters of a name or
+  of the positional parameters and literal text beside a quoted expansion; of substring
+  windows, `$'...'` in arithmetic, closer targets and words at a shell's script name; and of
+  vanishing words, broken substring names, descriptors an enclosing redirection points at
+  the pipe and `$$` beside quotes: 20 000 and 30 000 draws, 3 243 of 3 865, 2 579 of 3 647,
+  3 391 of 4 306, 2 504 of 5 603 and 2 264 of 4 160 run in bash (each under a cap of 32
+  processes, with `env`, `nice`, `timeout`, `nohup` and `stdbuf` at hand) ran the marker,
+  with no twin let through. On the readings before, the first three had found 4 862, 7 261
+  and 9 627 twins; every class of them is now read and pinned. Two tests guard what such
+  runs cannot see: everyday shell invocations (brace expansion and tilde paths in `-c`
+  scripts, loops, globs, long options) pass, and one adversarial shape for every scan the
+  shell readings add grows linearly from 16 K to 128 K characters. No refusal of the reading
   before this change was lost in
   any of them (bash 5.3; the suite runs 1 600 draws). The classes the differential found on the way are each pinned in
   `tests/test_command_grammar_reading.py`, and every probe written while the reading was
-  built and checked, every pinned row and every corpus row that ran the marker in bash, 2 852
+  built and checked, every pinned row and every corpus row that ran the marker in bash, 3 146
   of them, is in `tests/fixtures/command_policy/never_again.json` and refused on every lane
   (16 more belong to the named boundaries below and are kept apart under their names).
 - **Named boundary: what it does not read.** cmd.exe's and PowerShell's own grammar (`%VAR%`

@@ -1700,7 +1700,8 @@ def test_bash_reads_its_long_options_first():
     MUTATION: no value for `-rcfile` - red (`-init-file /dev/null +c ...`);
     MUTATION: `sh` read as bash only - red (`sh -login vi`, also with `+c`: dash's `o`
     takes `vi`);
-    MUTATION: an expansion in a long option read as nothing - red."""
+    MUTATION: an expansion in a long option read as nothing - red;
+    MUTATION: only a `--` word with an expansion as a long option - red (`-restricte"$u"d`)."""
     feed = "echo 'rm -rf /' | bash "
     for cmd in ("sh -noediting -O failglob -- <<< 'rm -rf /'", "bash -noprofile -c -- 'rm -rf /'",
                 "bash -noprofile -c - 'rm -rf /'", "bash -verbose -c -e 'rm -rf /'",
@@ -1709,7 +1710,9 @@ def test_bash_reads_its_long_options_first():
                 "u=; bash --rcfile${u} /dev/null -s <<< 'rm -rf /'", feed + "-restricted",
                 feed + "-rcfile /dev/null", feed + "-init-file /dev/null",
                 # dash reads `-login` as a cluster whose `o` takes `vi`: no script, the input
-                "echo 'rm -rf /' | sh -login vi", "sh -login vi +c 'rm -rf /'"):
+                "echo 'rm -rf /' | sh -login vi", "sh -login vi +c 'rm -rf /'",
+                "{ echo 'rm -rf /'; } | sh -rcfile /dev/null -restricte\"$u\"d",
+                "echo 'rm -rf /' | bash -norc$u"):
         assert classify_command(cmd, profile="host").blocked, cmd
     assert cp._long_options_end(["-norc", "-rcfile", "f", "-c", "x"]) == 3
     assert cp._long_options_end(["--rcfile$u", "f"]) == -1
@@ -2062,7 +2065,7 @@ def test_a_text_nested_past_the_grammar_depth_is_refused_as_too_deep():
 
 # Every row that ran the marker and stays refused, and the named boundaries the rest belong to
 # (docs/security/SANDBOXING.md, "what it does not read").
-_NEVER_AGAIN_SIZE = 2852
+_NEVER_AGAIN_SIZE = 3146
 _NAMED_BOUNDARIES = {
     "a substitution's output inside [[ ]] that a redirection of the compound command sends "
     "into the pipe",

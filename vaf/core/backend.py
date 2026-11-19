@@ -581,6 +581,9 @@ LEGACY_LLAMA_FILE = re.compile(
     re.IGNORECASE,
 )
 PIN_PATH = Path(__file__).with_name("llama_server_pin.json")
+# The names the llama.cpp server program runs under (ServerManager.server_exe per platform),
+# compared whole and case-insensitively by _looks_like_llama_server.
+LLAMA_SERVER_PROGRAMS = ("llama-server", "llama-server.exe")
 # The assets the launcher can pick, per platform and GPU: macOS (arm64, x64), Linux (CPU
 # and Vulkan, x64 and arm64), Windows (Vulkan, CPU, SYCL, CUDA and ROCm with their
 # version in the name) and the CUDA runtime archives. Everything else a release ships
@@ -858,23 +861,30 @@ class ServerManager:
                 return False
     
     def _looks_like_llama_server(self, pid: int) -> bool:
-        """True only when `pid` really is a model-server process.
+        """True only when `pid` runs the llama-server program: its process name, or the
+        program its command line starts with (argv[0], VAF starts the server as
+        [server_path, ...]), is llama-server or llama-server.exe as a whole name
+        (LLAMA_SERVER_PROGRAMS). A process that only mentions it in its arguments (an
+        editor, `tail -f llama-server.log`) is not one.
 
-        Guards the orphan cleanup's SIGKILL. Fails CLOSED (returns False) when
-        the identity cannot be established: not killing a stale record costs a
-        port conflict, killing the wrong process costs someone's work. The own
-        pid can never qualify - a pid file naming this very process is always a
-        stale record, never an orphan to clean up.
+        Guards every kill by pid: the orphan cleanup, stop_server, the handover and the
+        install. A stale server.pid survives a reboot and can name any process by then.
+        Fails CLOSED (returns False) when the identity cannot be established: not killing
+        a stale record costs a port conflict, killing the wrong process costs someone's
+        work. A zombie answers False too (its command line cannot be read): it holds no
+        memory, and the wait after a stop ends on it. The own pid can never qualify - a
+        pid file naming this very process is always a stale record.
         """
         try:
             if pid <= 0 or pid == os.getpid():
                 return False
             import psutil
             proc = psutil.Process(pid)
-            haystack = " ".join([proc.name() or ""] + list(proc.cmdline() or [])).lower()
+            argv = list(proc.cmdline() or [])
+            names = [proc.name() or ""] + argv[:1]
         except Exception:
             return False
-        return "llama-server" in haystack or "llama_server" in haystack
+        return any(re.split(r"[\\/]", str(n))[-1].lower() in LLAMA_SERVER_PROGRAMS for n in names)
 
     def _kill_process(self, pid: int):
         """Kill a process by PID (cross-platform)."""

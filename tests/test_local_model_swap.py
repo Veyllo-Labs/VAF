@@ -251,3 +251,63 @@ def test_a_reaped_child_whose_pid_was_reused_is_not_killed(monkeypatch, tmp_path
     mgr.stop_server(force_external=True, include_vllm=False)
     assert targets() == [333], targets()
     assert not (tmp_path / "server.pid").exists()
+
+
+_IDENTITY_CASES = [
+    # (process name, command line, is a llama server)
+    ("llama-server", ["/home/user/.vaf/bin/llama-cpp/llama-server", "-m", "model.gguf"], True),
+    ("llama-server", [], True),                                          # command line unreadable
+    ("python", ["llama-server", "-c", "pass"], True),                    # argv[0] is the program
+    ("llama-server.exe", ["C:\\Users\\Alice\\vaf\\bin\\llama-cpp\\llama-server.exe", "-m", "m.gguf"], True),
+    ("LLAMA-SERVER.EXE", ["C:\\VAF\\BIN\\LLAMA-SERVER.EXE"], True),
+    ("python3", ["python3", "-c", "import time; time.sleep(60)", "llama-server"], False),
+    ("vim", ["vim", "/home/user/.vaf/bin/llama-cpp/llama-server"], False),
+    ("tail", ["tail", "-f", "/home/user/.vaf/logs/llama-server.log"], False),
+    ("notepad.exe", ["C:\\Windows\\notepad.exe", "C:\\logs\\llama-server.exe"], False),
+    ("code.exe", ["C:\\Program Files\\Code\\code.exe", "llama-server.exe"], False),
+    ("llama-server-wrapper", ["/usr/local/bin/llama-server-wrapper"], False),
+    ("bash", ["bash", "-c", "exec llama-server -m m.gguf"], False),
+]
+
+
+@pytest.mark.parametrize("name,argv,expected", _IDENTITY_CASES,
+                         ids=[f"{c[0]}-{i}" for i, c in enumerate(_IDENTITY_CASES)])
+def test_only_the_llama_server_program_passes_the_identity_check(monkeypatch, name, argv, expected):
+    """A stale server.pid survives a reboot and can name any process; every kill by pid
+    (stop_server, the orphan cleanup, the handover, the install) asks this check. It took any
+    process whose name or command line contained the word, so an editor or a `tail` of the log
+    passed. Linux and Windows shapes (the backslash paths) are compared on any host.
+    MUTATIONS: the substring match back (red: the argument-only cases); drop argv[0] (red: the
+    python stand-in); drop the lower() (red: the upper-case Windows name)."""
+    psutil = pytest.importorskip("psutil")
+
+    class _Proc:
+        def __init__(self, pid):
+            self.pid = pid
+        def name(self):
+            return name
+        def cmdline(self):
+            return list(argv)
+
+    monkeypatch.setattr(psutil, "Process", _Proc)
+    mgr = backend.ServerManager.__new__(backend.ServerManager)
+    assert mgr._looks_like_llama_server(4242) is expected
+
+
+def test_a_zombie_llama_server_no_longer_counts(monkeypatch):
+    """A killed child of another process stays a zombie until it is reaped; it keeps its name
+    but its command line cannot be read. It must read as gone, or the wait after a stop never
+    ends. MUTATION: decide on the name alone (red)."""
+    psutil = pytest.importorskip("psutil")
+
+    class _Zombie:
+        def __init__(self, pid):
+            self.pid = pid
+        def name(self):
+            return "llama-server"
+        def cmdline(self):
+            raise psutil.ZombieProcess(self.pid)
+
+    monkeypatch.setattr(psutil, "Process", _Zombie)
+    mgr = backend.ServerManager.__new__(backend.ServerManager)
+    assert mgr._looks_like_llama_server(4242) is False

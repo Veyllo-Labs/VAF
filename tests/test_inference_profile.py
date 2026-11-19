@@ -621,16 +621,31 @@ def test_the_api_switch_stops_the_llama_server(config, monkeypatch):
 
 
 def _sleeper(*marker):
-    """A process that looks like a llama server to the identity check when marked."""
+    """A process that looks like a llama server to the identity check when marked: its
+    command line starts with the program name (argv[0]), the way VAF starts the server.
+    `sleep` keeps the argv it was started with on every POSIX host (a macOS framework
+    Python executes itself again and drops it); Windows has no such program, and the
+    identity's Windows shapes are pinned in test_local_model_swap. Unmarked, it is a Python
+    that names llama-server only in its arguments, which must not count."""
+    import os
+    import shutil
     import sys
     import time as _time
 
     from vaf.core.backend import ServerManager
-    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", *marker])
+    if marker:
+        if os.name == "nt":
+            pytest.skip("no program on Windows only sleeps and keeps the argv[0] it was given")
+        proc = subprocess.Popen([marker[0], "60"], executable=shutil.which("sleep") or "/bin/sleep")
+    else:
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "llama-server"])
     # The command line shows up only once the child has exec'd; before that it is ours.
     deadline = _time.monotonic() + 10
     while marker and not ServerManager(skip_cleanup=True)._looks_like_llama_server(proc.pid):
-        assert _time.monotonic() < deadline, "the stand-in never showed its command line"
+        if _time.monotonic() >= deadline:
+            proc.kill()                   # the caller never gets it to clean up
+            proc.wait()
+            raise AssertionError("the stand-in never passed the identity check")
         _time.sleep(0.05)
     return proc
 
@@ -682,8 +697,12 @@ def test_the_pid_file_counts_only_when_it_names_a_llama_server(pid_home):
     """_llama_pid is the one read of the pid file every stop, the handover and the install go
     through. MUTATION: drop its identity check (red: the unrelated process is named)."""
     from vaf.core.backend import ServerManager
-    other, server = _sleeper(), _sleeper("llama-server")
+    started = []
     try:
+        other = _sleeper()
+        started.append(other)
+        server = _sleeper("llama-server")
+        started.append(server)
         pid_home.write_text(str(other.pid))
         assert ServerManager(skip_cleanup=True)._llama_pid() is None
         pid_home.write_text(str(server.pid))
@@ -691,7 +710,7 @@ def test_the_pid_file_counts_only_when_it_names_a_llama_server(pid_home):
         pid_home.write_text("not a pid")
         assert ServerManager(skip_cleanup=True)._llama_pid() is None
     finally:
-        for proc in (other, server):
+        for proc in started:
             proc.kill()
             proc.wait()
 

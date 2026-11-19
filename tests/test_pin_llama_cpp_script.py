@@ -178,3 +178,99 @@ def test_no_attestation_at_all_is_refused(script):
     with pytest.raises(SystemExit):
         script.main(["pin_llama_cpp.py", TAG])
     assert not script.PIN_PATH.exists()
+
+
+# ── the repository id is compared exactly ──────────────────────────────────────────
+
+LLAMA_REPO_ID = 612354784
+
+ODD_IDS = ["abc", [1], None, True, 612354784.0, 612354784.9, "６１２３５４７８４",
+           " 612354784\n", "612_354_784", "612354784", {"id": 612354784}]
+
+
+def _with_id(value) -> dict:
+    att = _attestation(SELECTED)
+    att["repository_id"] = value
+    return att
+
+
+@pytest.mark.parametrize("value", ODD_IDS, ids=["text", "list", "none", "bool", "float", "float-frac", "fullwidth",
+                                                "padded", "underscored", "digits-as-text", "dict"])
+def test_an_odd_repository_id_is_refused_and_a_later_valid_statement_still_pins(script, value):
+    """int(att.get("repository_id") or 0) raised a bare ValueError or TypeError on some shapes
+    (no reason, a traceback) and coerced others (fullwidth digits, padding, underscores, a
+    float, True) into a number. MUTATION: put int(... or 0) back (red: a traceback, or the
+    odd entry accepted on its own)."""
+    script.attestations = [_with_id(value), _attestation(SELECTED)]
+    assert script.main(["pin_llama_cpp.py", TAG]) == 0, "the valid statement after it is taken"
+    assert f"(repository id {LLAMA_REPO_ID})" in _written(script)["provenance"]
+
+
+@pytest.mark.parametrize("value", ODD_IDS, ids=["text", "list", "none", "bool", "float", "float-frac", "fullwidth",
+                                                "padded", "underscored", "digits-as-text", "dict"])
+def test_only_an_odd_repository_id_exits_with_its_repr(script, value):
+    """MUTATION: coerce with int() again (red: ValueError/TypeError, or a pin written)."""
+    script.attestations = [_with_id(value)]
+    with pytest.raises(SystemExit) as exc:
+        script.main(["pin_llama_cpp.py", TAG])
+    assert repr(value) in str(exc.value.code), exc.value.code
+    assert not script.PIN_PATH.exists()
+
+
+def _odd_value(rng):
+    """One value for repository_id: near the id, the id in another type or spelling, or junk."""
+    digits = str(LLAMA_REPO_ID)
+    other_digits = ("０", "٠", "۰")             # fullwidth, Arabic-Indic, Persian zero
+    choice = rng.randrange(12)
+    if choice == 0:
+        return LLAMA_REPO_ID + rng.choice((-1, 0, 1))
+    if choice == 1:
+        return rng.choice((0, -LLAMA_REPO_ID, -1, 2 ** 63, rng.randint(-10 ** 12, 10 ** 12)))
+    if choice == 2:
+        return rng.choice((True, False))
+    if choice == 3:
+        return float(LLAMA_REPO_ID) + rng.choice((0.0, 0.5, -0.1))
+    if choice == 4:
+        return rng.choice((" ", "\t", "\n", "")) + digits + rng.choice((" ", "\n", "", "\r"))
+    if choice == 5:
+        cut = rng.randint(1, len(digits) - 1)
+        return digits[:cut] + "_" + digits[cut:]
+    if choice == 6:
+        return rng.choice(("+", "-", "")) + digits
+    if choice == 7:
+        zero = rng.choice(other_digits)
+        return "".join(chr(ord(zero) + int(c)) for c in digits)
+    if choice == 8:
+        cut = rng.randint(0, len(digits))
+        return digits[:cut] + "\u200b" + digits[cut:]
+    if choice == 9:
+        return rng.choice((None, [], [LLAMA_REPO_ID], {}, {"id": LLAMA_REPO_ID}))
+    if choice == 10:
+        return "".join(rng.choice("0123456789abc _-é") for _ in range(rng.randint(0, 12)))
+    return digits
+
+
+def test_the_repository_id_is_compared_exactly_on_random_values(script):
+    """Seeded fuzz of the repository id check against an independent predicate: a statement
+    is taken exactly when its id is an int equal to llama.cpp's, or when a valid statement
+    follows it, and nothing but SystemExit ever escapes. VAF_FUZZ_DRAWS raises the draw
+    count outside the suite. MUTATION: int(... or 0) back (red)."""
+    import os
+    import random
+
+    rng = random.Random(4051)
+    draws = int(os.environ.get("VAF_FUZZ_DRAWS", "300"))
+    for draw in range(draws):
+        value = _odd_value(rng)
+        for follow in (False, True):
+            if script.PIN_PATH.exists():
+                script.PIN_PATH.unlink()
+            script.attestations = [_with_id(value)] + ([_attestation(SELECTED)] if follow else [])
+            expect = (type(value) is int and value == LLAMA_REPO_ID) or follow
+            try:
+                pinned = script.main(["pin_llama_cpp.py", TAG]) == 0
+            except SystemExit as e:
+                pinned = False
+                assert repr(value) in str(e.code), (draw, value, e.code)
+            assert pinned == expect, (draw, value, follow)
+            assert script.PIN_PATH.exists() == expect, (draw, value, follow)

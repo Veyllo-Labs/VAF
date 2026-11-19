@@ -95,8 +95,13 @@ def _attesting_builder(tag: str, digests: dict) -> str:
     reasons: list[str] = []
     closest: list[str] | None = None
     for att in atts:
-        if int(att.get("repository_id") or 0) != LLAMA_REPO_ID:
-            reasons.append(f"an attestation of repository {att.get('repository_id')}, not {LLAMA_REPO_ID}")
+        # Deliberate: compared exactly, like the builder and the ref below. The API gives an
+        # integer; any other type (a bool, a float, a string even of the right digits) is a
+        # changed or forged answer and is refused with its repr, never coerced, and int() on
+        # it raised for some shapes and accepted fullwidth or padded digits for others.
+        rid = att.get("repository_id")
+        if type(rid) is not int or rid != LLAMA_REPO_ID:
+            reasons.append(f"an attestation of repository {rid!r}, not {LLAMA_REPO_ID}")
             continue
         try:
             payload = ((att.get("bundle") or {}).get("dsseEnvelope") or {}).get("payload")

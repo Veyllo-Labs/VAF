@@ -8960,7 +8960,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                 elif type == "approve_thinking_workspace_handoff":
                     try:
-                        from vaf.core.thinking_workspace import approve_handoff, get_handoff
+                        from vaf.core.thinking_workspace import (HandoffAlreadyDecided,
+                                                                 approve_handoff, get_handoff)
                         from vaf.core.user_notifications import append_notification
 
                         user_scope_id = manager.get_connection_user(websocket) if manager else None
@@ -8974,8 +8975,23 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 "error": "task_id and handoff_id required",
                             })
                             continue
-                        ok = approve_handoff(user_scope_id, task_id, handoff_id)
-                        handoff = get_handoff(user_scope_id, task_id, handoff_id) if ok else None
+                        # Lookup and decision. A filesystem error here names the server's
+                        # data path and is answered like a missing handoff; a handoff decided
+                        # before is not applied again. Everything after a saved decision is
+                        # best effort and never changes the answer to "not found".
+                        refusal = "handoff not found"
+                        try:
+                            ok = approve_handoff(user_scope_id, task_id, handoff_id)
+                        except HandoffAlreadyDecided:
+                            ok, refusal = False, "handoff already decided"
+                        except OSError:
+                            ok = False
+                        handoff = None
+                        if ok:
+                            try:
+                                handoff = get_handoff(user_scope_id, task_id, handoff_id)
+                            except Exception as _hf_err:
+                                log("API", f"handoff {handoff_id} approved; re-read failed: {_hf_err!r}")
                         action_result = handoff.get("automation_action_result") if isinstance(handoff, dict) else None
                         action_failed = isinstance(action_result, dict) and (action_result.get("ok") is False)
                         notif_status = "error" if (not ok or action_failed) else "success"
@@ -8993,17 +9009,20 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 summary_parts.append(f"Automation id: {action_result.get('task_id')}")
                             if action_result.get("error"):
                                 summary_parts.append(f"Error: {action_result.get('error')}")
-                        append_notification(
-                            user_scope_id,
-                            kind="system",
-                            title="Workspace handoff approved",
-                            status=notif_status,
-                            summary="\n".join(summary_parts),
-                            task_id=task_id,
-                            handoff_id=handoff_id,
-                            action="approve",
-                            automation_action_result=action_result if isinstance(action_result, dict) else None,
-                        )
+                        try:
+                            append_notification(
+                                user_scope_id,
+                                kind="system",
+                                title="Workspace handoff approved",
+                                status=notif_status,
+                                summary="\n".join(summary_parts),
+                                task_id=task_id,
+                                handoff_id=handoff_id,
+                                action="approve",
+                                automation_action_result=action_result if isinstance(action_result, dict) else None,
+                            )
+                        except Exception as _nf_err:
+                            log("API", f"handoff {handoff_id} approve notification failed: {_nf_err!r}")
                         await websocket.send_json(
                             {
                                 "type": "new_log",
@@ -9032,19 +9051,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             "task_id": task_id,
                             "handoff_id": handoff_id,
                             "automation_action_result": action_result,
-                            "error": None if ok else "handoff not found",
-                        })
-                    except OSError:
-                        # A filesystem error names the server's data path; it is answered
-                        # like a missing handoff, the same as a refused id.
-                        await websocket.send_json({
-                            "type": "thinking_workspace_handoff_result",
-                            "ok": False,
-                            "action": "approve",
-                            "task_id": str(cmd.get("task_id") or "").strip(),
-                            "handoff_id": str(cmd.get("handoff_id") or "").strip(),
-                            "automation_action_result": None,
-                            "error": "handoff not found",
+                            "error": None if ok else refusal,
                         })
                     except Exception as e:
                         await websocket.send_json({
@@ -9056,7 +9063,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                 elif type == "reject_thinking_workspace_handoff":
                     try:
-                        from vaf.core.thinking_workspace import reject_handoff
+                        from vaf.core.thinking_workspace import HandoffAlreadyDecided, reject_handoff
                         from vaf.core.user_notifications import append_notification
 
                         user_scope_id = manager.get_connection_user(websocket) if manager else None
@@ -9071,24 +9078,35 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 "error": "task_id and handoff_id required",
                             })
                             continue
-                        ok = reject_handoff(user_scope_id, task_id, handoff_id, reason=reason)
-                        append_notification(
-                            user_scope_id,
-                            kind="system",
-                            title="Workspace handoff rejected",
-                            status="success" if ok else "error",
-                            summary="\n".join(
-                                [
-                                    "Action: reject",
-                                    f"Task: {task_id}",
-                                    f"Handoff: {handoff_id}",
-                                    f"Reason: {(reason or 'n/a')[:500]}",
-                                ]
-                            ),
-                            task_id=task_id,
-                            handoff_id=handoff_id,
-                            action="reject",
-                        )
+                        # Same phases as approve: only the lookup and decision may answer
+                        # "not found"; the notification after a saved decision is best effort.
+                        refusal = "handoff not found"
+                        try:
+                            ok = reject_handoff(user_scope_id, task_id, handoff_id, reason=reason)
+                        except HandoffAlreadyDecided:
+                            ok, refusal = False, "handoff already decided"
+                        except OSError:
+                            ok = False
+                        try:
+                            append_notification(
+                                user_scope_id,
+                                kind="system",
+                                title="Workspace handoff rejected",
+                                status="success" if ok else "error",
+                                summary="\n".join(
+                                    [
+                                        "Action: reject",
+                                        f"Task: {task_id}",
+                                        f"Handoff: {handoff_id}",
+                                        f"Reason: {(reason or 'n/a')[:500]}",
+                                    ]
+                                ),
+                                task_id=task_id,
+                                handoff_id=handoff_id,
+                                action="reject",
+                            )
+                        except Exception as _nf_err:
+                            log("API", f"handoff {handoff_id} reject notification failed: {_nf_err!r}")
                         await websocket.send_json(
                             {
                                 "type": "new_log",
@@ -9105,18 +9123,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             "action": "reject",
                             "task_id": task_id,
                             "handoff_id": handoff_id,
-                            "error": None if ok else "handoff not found",
-                        })
-                    except OSError:
-                        # A filesystem error names the server's data path; it is answered
-                        # like a missing handoff, the same as a refused id.
-                        await websocket.send_json({
-                            "type": "thinking_workspace_handoff_result",
-                            "ok": False,
-                            "action": "reject",
-                            "task_id": str(cmd.get("task_id") or "").strip(),
-                            "handoff_id": str(cmd.get("handoff_id") or "").strip(),
-                            "error": "handoff not found",
+                            "error": None if ok else refusal,
                         })
                     except Exception as e:
                         await websocket.send_json({

@@ -690,7 +690,8 @@ def _tool_violations(source: str) -> tuple:
     module's own classes, must CALL `AutomationAccess(...)` on its own path. Subclasses of
     an existing tool count, a `category` may be annotated, and the base may be spelled
     `base.BaseTool`. `create_automation` is included: its duplicate check reads only what
-    the caller sees.
+    the caller sees. A `run` that also builds `AutomationManager(...)` itself is refused even
+    next to the rule call: the store is chosen by `_manager_for_scope` or by the rule.
 
     Named boundaries, not seen by this guard: a base class from another module (its
     attributes and `run` are unknown here), a `run` that calls the rule and then reaches
@@ -756,7 +757,8 @@ def _tool_violations(source: str) -> tuple:
         if attrs.get("category") != "automations":
             continue
         names.append(attrs.get("name"))
-        if not run_found or not _calls(run.body, "AutomationAccess"):
+        if (not run_found or not _calls(run.body, "AutomationAccess")
+                or _calls(run.body, "AutomationManager")):
             bad.append(name)
     return bad, names
 
@@ -804,7 +806,7 @@ class AnnotatedTool(base.BaseTool):
     name: str = "annotated_automation"
     category: str = "automations"
     def run(self, **kwargs):
-        return AutomationManager().list()
+        return _manager_for_scope(None)[0].list()
 
 class CallbackOnlyTool(BaseTool):
     name = "callback_automation"
@@ -813,7 +815,7 @@ class CallbackOnlyTool(BaseTool):
         def never_called():
             return AutomationAccess(kwargs.get("user_scope_id")).list()
         check = lambda: AutomationAccess(None)
-        return AutomationManager().list()
+        return _manager_for_scope(None)[0].list()
 
 class GuardedBase(BaseTool):
     category = "automations"
@@ -826,14 +828,21 @@ class Left(GuardedBase):
 class Right(GuardedBase):
     name = "right_automation"
     def run(self, **kwargs):
-        return AutomationManager().list()
+        return _manager_for_scope(None)[0].list()
 
 class Diamond(Left, Right):
     name = "diamond_automation"
+
+class RuleThenStoreTool(BaseTool):
+    name = "rule_then_store_automation"
+    category = "automations"
+    def run(self, **kwargs):
+        AutomationAccess(kwargs.get("user_scope_id")).list()
+        return AutomationManager().list()
 '''
     assert sorted(_tool_violations(synthetic)[0]) == [
         "AnnotatedTool", "CallbackOnlyTool", "Diamond", "MentionOnlyTool", "PauseAutomationTool",
-        "RawTrashTool", "Right"]
+        "RawTrashTool", "Right", "RuleThenStoreTool"]
 
 
 # ── AC12: the calendar's daily check ──────────────────────────────────────────
@@ -1109,3 +1118,122 @@ def test_workspace_task_id_is_one_entry(store, workspaces):
     with pytest.raises(FileNotFoundError):
         ws.tw.create_handoff(TENANT_A, walk, "t", "c")
     assert not (ws.root / TENANT_B / "tasks" / ws.task_b / "workspace" / "x.md").exists()
+
+
+# ── a decision is made once, and what follows it never unmakes the answer ────
+
+def _approve_twice_frames(task_id, handoff_id):
+    return [_handoff("approve", task_id, handoff_id), _handoff("approve", task_id, handoff_id),
+            _handoff("reject", task_id, handoff_id)]
+
+
+def test_a_decided_handoff_is_not_applied_again(store, workspaces, monkeypatch):
+    """A second approve used to apply the automation action again: a retry created a second
+    automation. MUTATION: drop the `pending` check in `_decide`."""
+    ws = workspaces
+    hid = ws.tw.create_handoff(TENANT_A, ws.task_a, "Create one", "c", automation_action={
+        "operation": "create", "prompt": "only once", "time": "13:30"})["id"]
+    a_dir = store / TENANT_A
+    before = {p.name for p in a_dir.glob("*.json")}
+    replies = _ws(monkeypatch, role="user", scope=TENANT_A,
+                  frames=_approve_twice_frames(ws.task_a, hid))
+    assert replies[0]["ok"] is True and replies[0]["automation_action_result"]["ok"] is True
+    created = {p.name for p in a_dir.glob("*.json")} - before
+    assert len(created) == 1, created
+    for reply in replies[1:]:
+        assert reply["ok"] is False and reply["error"] == "handoff already decided", reply
+    handoff = ws.tw.get_handoff(TENANT_A, ws.task_a, hid)
+    assert handoff["status"] == "approved"
+
+
+def test_a_failure_after_the_decision_still_answers_applied(store, workspaces, monkeypatch):
+    """The bookkeeping after a saved decision (archive copy, task status, event) and the
+    notification are best effort: a failure there is logged, the decision is reported as
+    applied, and no path reaches the reply. MUTATIONS: drop the `try` in `_after_decision`;
+    separately, the `try` around `append_notification` in the approve branch."""
+    import vaf.core.user_notifications as un
+
+    ws = workspaces
+    secret = str(ws.root / TENANT_A / "secret.json")
+
+    def boom(*a, **kw):
+        raise OSError(28, "No space left on device", secret)
+
+    hid = ws.tw.create_handoff(TENANT_A, ws.task_a, "Create", "c", automation_action={
+        "operation": "create", "prompt": "after the decision", "time": "14:30"})["id"]
+    rid = ws.tw.create_handoff(TENANT_A, ws.task_a, "Reject me", "c")["id"]
+    monkeypatch.setattr(ws.tw, "append_event", boom)
+    monkeypatch.setattr(un, "append_notification", boom)
+    replies = _ws(monkeypatch, role="user", scope=TENANT_A, frames=[
+        _handoff("approve", ws.task_a, hid), _handoff("reject", ws.task_a, rid)])
+    for reply in replies:
+        assert reply["ok"] is True and reply["error"] is None, reply
+        assert secret not in json.dumps(reply) and str(ws.root) not in json.dumps(reply)
+    assert replies[0]["automation_action_result"]["ok"] is True
+    assert ws.tw.get_handoff(TENANT_A, ws.task_a, hid)["status"] == "approved"
+    assert ws.tw.get_handoff(TENANT_A, ws.task_a, rid)["status"] == "rejected"
+
+
+# ── the id limit counts bytes ─────────────────────────────────────────────────
+
+@pytest.mark.parametrize("char,fits", [("é", 64), ("€", 42), ("😀", 32), ("x", 128)])
+def test_the_id_limit_counts_bytes(store, workspaces, char, fits):
+    """The filesystem's name limit is 255 BYTES; a character count let 100 three-byte
+    characters through to the filesystem. MUTATION: count characters in `_entry`."""
+    from vaf.core.path_jail import PathEscape
+
+    tw = workspaces.tw
+    assert tw._entry(char * fits) == char * fits
+    with pytest.raises(PathEscape):
+        tw._entry(char * (fits + 1))
+    with pytest.raises(PathEscape):
+        tw._entry("a\ud800b")
+
+
+@pytest.mark.parametrize("action", ["approve", "reject"])
+def test_multibyte_ids_answer_like_missing(store, workspaces, monkeypatch, action):
+    """MUTATION: count characters in `_entry` (the backstop then answers alike, but the
+    direct refusal below goes red)."""
+    ws = workspaces
+    replies = _ws(monkeypatch, role="user", scope=TENANT_A, frames=[
+        _handoff(action, ws.task_a, "ffff0000"),
+        _handoff(action, ws.task_a, "€" * 84),
+        _handoff(action, "😀" * 100, "ffff0000"),
+    ])
+    for reply in replies[1:]:
+        assert _without_ids(reply) == _without_ids(replies[0]), reply
+        assert str(ws.root) not in json.dumps(reply) and "Errno" not in json.dumps(reply)
+    assert ws.tw._handoff_paths(TENANT_A, ws.task_a, "€" * 84) is None
+    assert ws.tw._handoff_paths(TENANT_A, "😀" * 100, "ffff0000") is None
+
+
+def test_workspace_tools_quote_no_server_path(store, workspaces):
+    """The model's three workspace tools answered an OS error with its text, which quotes
+    the server's data path. Multibyte ids are refused like missing tasks, and an error the
+    OS raises (a file name too long inside the task) gives only its reason. MUTATIONS: answer
+    the `except OSError` of the read or the write tool with `str(e)`; make `describe_os_error`
+    return `str(e)`. (A character count in `_entry` is caught by the byte tests above: this
+    `except OSError` is the backstop that keeps such an id pathless here too.)"""
+    from vaf.tools.thinking_workspace_handoff import ThinkingWorkspaceHandoffTool
+    from vaf.tools.thinking_workspace_read import ThinkingWorkspaceReadTool
+    from vaf.tools.thinking_workspace_write import ThinkingWorkspaceWriteTool
+
+    ws = workspaces
+    scope = {"user_scope_id": TENANT_A}
+    outs = []
+    for bad in ("€" * 100, "😀" * 100, "é" * 200):
+        outs.append(ThinkingWorkspaceReadTool().run(mode="file", task_id=bad, path="x.md", **scope))
+        outs.append(ThinkingWorkspaceWriteTool().run(mode="write_file", task_id=bad, path="x.md",
+                                                     content="x", **scope))
+        outs.append(ThinkingWorkspaceHandoffTool().run(task_id=bad, title="t", content="c",
+                                                       **scope))
+    long_name = "n" * 300 + ".md"
+    outs.append(ThinkingWorkspaceWriteTool().run(mode="write_file", task_id=ws.task_a,
+                                                 path=long_name, content="x", **scope))
+    outs.append(ThinkingWorkspaceReadTool().run(mode="file", task_id=ws.task_a, path=long_name,
+                                                **scope))
+    for out in outs:
+        assert out.startswith("Error"), out
+        assert str(ws.root) not in out and "Errno" not in out and TENANT_A not in out, out
+    assert "File name too long" in outs[-2], outs[-2]
+    assert ws.tw.describe_os_error(FileNotFoundError("Task not found")) == "Task not found"

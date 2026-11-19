@@ -7,7 +7,7 @@ Thinking Workspace handoff tool (Thinking Mode only).
 from typing import Optional
 
 from vaf.tools.base import BaseTool
-from vaf.core.thinking_workspace import create_handoff
+from vaf.core.thinking_workspace import describe_os_error, create_handoff
 
 
 def _scope_str(user_scope_id) -> Optional[str]:
@@ -70,6 +70,9 @@ class ThinkingWorkspaceHandoffTool(BaseTool):
                 automation_action=automation_action if isinstance(automation_action, dict) else None,
             )
             return f"Handoff created: [{handoff.get('id')}] for task {task_id}"
+        except OSError as e:
+            # The operating system's error text quotes the server's absolute path.
+            return f"Error creating handoff: {describe_os_error(e)}"
         except Exception as e:
             return f"Error creating handoff: {e}"
 

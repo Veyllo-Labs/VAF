@@ -531,12 +531,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Over the web connection, an account that knew or guessed an automation's id could rewrite
   or delete another account's automation, including the machine owner's, which runs as the
   machine owner. Approving or rejecting a thinking-workspace proposal could likewise be
-  pointed at another account's automation or proposal by a crafted id. Every automation
-  command and agent tool, and the proposal approval, now acts only on the automations and
-  proposals the account can see, and an id it cannot see is answered like one that does not
-  exist. An admin acts on its own automations, the machine owner's and the shared ones,
-  which is exactly what its automation list shows. The automation list also no longer comes
-  back empty when it is the first request of a new connection.
+  pointed at another account's automation or proposal by a crafted id, and approving the
+  same proposal twice applied its automation change twice. Every automation command and
+  agent tool, and the proposal approval, now acts only on the automations and proposals the
+  account can see, and an id it cannot see is answered like one that does not exist. A
+  proposal is decided once; a second approval says it was already decided. An admin acts on
+  its own automations, the machine owner's and the shared ones, which is exactly what its
+  automation list shows. The automation list also no longer comes back empty when it is the
+  first request of a new connection.
 - **WhatsApp: an account can no longer make a stranger your agent's owner, or send as your
   agent's number.** Assigning a chat's hidden WhatsApp ID (LID) to a number used to apply to
   every account. A non-admin could bind any ID to the admin's own number, so that sender was

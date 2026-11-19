@@ -7,7 +7,7 @@ Thinking Workspace read tool (Thinking Mode only).
 from typing import Optional
 
 from vaf.tools.base import BaseTool
-from vaf.core.thinking_workspace import list_tasks, read_workspace_file, list_pending_handoffs
+from vaf.core.thinking_workspace import describe_os_error, list_tasks, read_workspace_file, list_pending_handoffs
 
 
 def _scope_str(user_scope_id) -> Optional[str]:
@@ -67,6 +67,9 @@ class ThinkingWorkspaceReadTool(BaseTool):
                 content = read_workspace_file(scope, task_id, path)
                 return content if content.strip() else "(empty file)"
             return "Error: Invalid mode."
+        except OSError as e:
+            # The operating system's error text quotes the server's absolute path.
+            return f"Error reading workspace: {describe_os_error(e)}"
         except Exception as e:
             return f"Error reading workspace: {e}"
 

@@ -21,6 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from vaf.core.log_helper import append_domain_log
 from vaf.core.path_jail import PathEscape, contained_path, safe_entry_name
 from vaf.core.platform import Platform
 
@@ -51,17 +52,38 @@ def ensure_workspace(user_scope_id: Optional[str]) -> Path:
 
 
 # Task and handoff ids are 8 hex characters. A longer name is refused before any
-# filesystem call: one past the file system's name limit made the OS error, which quotes
-# the absolute data path, the answer a client saw.
-_MAX_ID_LEN = 128
+# filesystem call: one past the file system's name limit (255 BYTES, so a short id of
+# multibyte characters can pass a character count) made the OS error, which quotes the
+# absolute data path, the answer a client saw. 128 bytes plus ".json" stays far below it.
+_MAX_ID_BYTES = 128
 
 
 def _entry(name: str) -> str:
-    """`name` as one entry of at most `_MAX_ID_LEN` characters, or `PathEscape`."""
+    """`name` as one entry of at most `_MAX_ID_BYTES` UTF-8 bytes, or `PathEscape`. A name
+    that does not encode at all (a lone surrogate) is refused too: the filesystem call
+    would fail on it."""
     entry = safe_entry_name(name)
-    if len(entry) > _MAX_ID_LEN:
+    try:
+        size = len(entry.encode("utf-8"))
+    except UnicodeEncodeError:
+        raise PathEscape("name is not encodable")
+    if size > _MAX_ID_BYTES:
         raise PathEscape("name is too long")
     return entry
+
+
+def describe_os_error(error: OSError) -> str:
+    """What a caller may read of an `OSError`: this module's own not-found errors carry no
+    file name and pass through as they are; one the operating system raised quotes the
+    server's absolute path, so only its reason is given (`File name too long`, `No space
+    left on device`)."""
+    if error.filename is None and error.filename2 is None:
+        return str(error)
+    return error.strerror or type(error).__name__
+
+
+class HandoffAlreadyDecided(Exception):
+    """The handoff was approved or rejected before; it is not applied again."""
 
 
 def _task_root(user_scope_id: Optional[str], task_id: str) -> Path:
@@ -359,14 +381,52 @@ def _apply_automation_action(user_scope_id: Optional[str], action: Dict[str, Any
     return {"ok": False, "error": "unsupported operation"}
 
 
-def approve_handoff(user_scope_id: Optional[str], task_id: str, handoff_id: str) -> bool:
+def _decide(user_scope_id: Optional[str], task_id: str, handoff_id: str):
+    """(hpath, mdpath, handoff) of a handoff that is still `pending`, None for one that
+    does not exist (or whose id is refused), `HandoffAlreadyDecided` for one approved or
+    rejected before. `create_handoff` writes `pending`; nothing else counts as undecided."""
     paths = _handoff_paths(user_scope_id, task_id, handoff_id)
     if paths is None:
-        return False
+        return None
     hpath, mdpath = paths
     handoff = _load_json(hpath, {})
     if not isinstance(handoff, dict) or not handoff.get("id"):
+        return None
+    if handoff.get("status") != "pending":
+        raise HandoffAlreadyDecided(handoff_id)
+    return hpath, mdpath, handoff
+
+
+def _after_decision(user_scope_id: Optional[str], task_id: str, handoff_id: str, hpath: Path,
+                    mdpath: Path, decision: str, event: str, details: Dict[str, Any]) -> None:
+    """The bookkeeping after a decision is saved: archive copy, task status, event. Best
+    effort: the decision stands once saved, so a failure here is logged and never turns
+    the answer into "not found"."""
+    try:
+        archive_dir = ensure_workspace(user_scope_id) / "archive" / decision / task_id
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(hpath, archive_dir / hpath.name)
+        if mdpath.exists():
+            shutil.copy2(mdpath, archive_dir / mdpath.name)
+        update_task_status(user_scope_id, task_id, decision)
+        append_event(user_scope_id, task_id, event, details)
+    except Exception as e:  # noqa: BLE001 - logged; the saved decision is the answer
+        append_domain_log("backend", f"[THINKING_WORKSPACE] {event} {handoff_id}: "
+                                     f"bookkeeping failed after the decision: {e!r}")
+
+
+def approve_handoff(user_scope_id: Optional[str], task_id: str, handoff_id: str) -> bool:
+    """Approve a pending handoff and apply its automation action, once. False for a missing
+    handoff; `HandoffAlreadyDecided` for one decided before, so a retry never applies the
+    action a second time.
+
+    Named boundary: the pending check and the save are not one atomic step, so two
+    approvals of the same handoff at the same instant (two sockets) can both pass the
+    check. One connection's commands run one after another."""
+    found = _decide(user_scope_id, task_id, handoff_id)
+    if found is None:
         return False
+    hpath, mdpath, handoff = found
     handoff["status"] = "approved"
     handoff["approved_at"] = datetime.now().isoformat()
     action_result = None
@@ -374,43 +434,26 @@ def approve_handoff(user_scope_id: Optional[str], task_id: str, handoff_id: str)
         action_result = _apply_automation_action(user_scope_id, handoff.get("automation_action") or {})
         handoff["automation_action_result"] = action_result
     _save_json(hpath, handoff)
-
-    archive_dir = ensure_workspace(user_scope_id) / "archive" / "approved" / task_id
-    archive_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(hpath, archive_dir / hpath.name)
-    if mdpath.exists():
-        shutil.copy2(mdpath, archive_dir / mdpath.name)
-    update_task_status(user_scope_id, task_id, "approved")
-    append_event(
-        user_scope_id,
-        task_id,
-        "handoff_approved",
-        {"handoff_id": handoff_id, "automation_action_result": action_result},
-    )
+    _after_decision(user_scope_id, task_id, handoff_id, hpath, mdpath, "approved",
+                    "handoff_approved",
+                    {"handoff_id": handoff_id, "automation_action_result": action_result})
     return True
 
 
 def reject_handoff(user_scope_id: Optional[str], task_id: str, handoff_id: str, reason: str = "") -> bool:
-    paths = _handoff_paths(user_scope_id, task_id, handoff_id)
-    if paths is None:
+    """Reject a pending handoff. False for a missing one; `HandoffAlreadyDecided` for one
+    decided before."""
+    found = _decide(user_scope_id, task_id, handoff_id)
+    if found is None:
         return False
-    hpath, mdpath = paths
-    handoff = _load_json(hpath, {})
-    if not isinstance(handoff, dict) or not handoff.get("id"):
-        return False
+    hpath, mdpath, handoff = found
     handoff["status"] = "rejected"
     handoff["rejected_at"] = datetime.now().isoformat()
     if reason:
         handoff["rejected_reason"] = reason[:500]
     _save_json(hpath, handoff)
-
-    archive_dir = ensure_workspace(user_scope_id) / "archive" / "rejected" / task_id
-    archive_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(hpath, archive_dir / hpath.name)
-    if mdpath.exists():
-        shutil.copy2(mdpath, archive_dir / mdpath.name)
-    update_task_status(user_scope_id, task_id, "rejected")
-    append_event(user_scope_id, task_id, "handoff_rejected", {"handoff_id": handoff_id, "reason": reason[:200]})
+    _after_decision(user_scope_id, task_id, handoff_id, hpath, mdpath, "rejected",
+                    "handoff_rejected", {"handoff_id": handoff_id, "reason": reason[:200]})
     return True
 
 

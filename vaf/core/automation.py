@@ -2664,9 +2664,10 @@ class AutomationAccess:
 
     def trash(self) -> List[Tuple[AutomationManager, AutomationTask]]:
         """Every trashed task this caller sees, each with the manager whose trash holds it
-        (so a restore runs on that manager). An admin's own scope keeps a trash of its own
-        beside the root trash, and both are read: an account's earlier deletes stay
-        listable and restorable wherever they landed."""
+        (so a restore runs on that manager). Read from every store in `_stores()`: the own
+        scope's trash, and for an admin also the machine owner's scoped trash (where the
+        machine owner's own deletes land) and the root trash. An account's earlier deletes
+        stay listable and restorable wherever they landed."""
         out: List[Tuple[AutomationManager, AutomationTask]] = []
         ids: set = set()
         for make in self._stores():

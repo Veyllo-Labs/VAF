@@ -629,7 +629,14 @@ def _whatsapp_name_is_lanes(name: str, lane: str, entries: List[Tuple[str, Optio
     rule as Telegram's `_telegram_account_names`: a background lane passes the local admin's
     name when it has none of its own (`thinking_mode` reads `_current_username or` the local
     admin's), and the store keeps the admin's chat under it, which that lane must neither take
-    nor clear."""
+    nor clear.
+
+    Named boundary: when the local admin's own entry is filed under a name (empty, "admin", or
+    a scoped entry without a name) that an ordinary account is also filed under, the key counts
+    as the admin's, and the admin's lanes read whatever that account stored there (an own-map
+    LID, an unregistered self-chat). The lane's own entry names win, as in Telegram's
+    `_telegram_account_names`; the store cannot tell two accounts filed under one name apart,
+    so the fix belongs with the name rules of the whitelist, not with this reader."""
     low = name.strip().lower()
     filed = [(scope, (n or "admin").lower()) for _, scope, n in entries]
     if any(scope == lane and n == low for scope, n in filed):
@@ -686,10 +693,9 @@ def get_whatsapp_chat_jid(
     lane itself is never foreign, even when another account registered it too. A name key that
     another account holds (`_whatsapp_name_is_lanes`) is not this lane's: it is not read at
     all (an unregistered self-chat there is that account's, not this lane's), never deleted,
-    and the fallback is saved under the scope only. When the fallback found by name is another
-    account's number (an ordinary account named "admin" on the scopeless lane), the lane's own
-    first registered number is used instead. Pinned by
-    tests/test_whatsapp_owner_endpoint_repair.py.
+    and the fallback is saved under the scope only. A fallback found by name that is another
+    account's number (an ordinary account named "admin" on the scopeless lane) is not used, and
+    the lane gets nothing. Pinned by tests/test_whatsapp_owner_endpoint_repair.py.
 
     Named boundaries:
     - A JID that is no registered number is returned as stored. Until v0.1.0a28 the bridge
@@ -751,10 +757,11 @@ def get_whatsapp_chat_jid(
         own_jid = get_whatsapp_chat_jid_from_whitelist(user_scope_id, username)
         # The scopeless lane finds its number by name, and an ordinary account may be named
         # "admin": a fallback that is another account's number would be saved and dropped
-        # again. The lane's own first registered number stands in for it.
+        # again. No number stands in for it: a request without a scope is settled by its name
+        # in the bridge (`whatsapp_bridge._process_for`), so the local admin's own number would
+        # leave through that account's process. The lane gets nothing, and the web UI.
         if own_jid and _whatsapp_jid_number(own_jid, lid_map) in foreign:
-            own_jid = next((jid for jid in (whatsapp_send_jid(num) for num, scope, _ in entries
-                                            if num and scope == lane) if jid), None)
+            own_jid = None
     if dropped:
         from vaf.core.config import resolve_caller_username
         account = resolve_caller_username(username, scope_key)

@@ -284,9 +284,10 @@ def test_another_accounts_name_key_is_not_read(world, admin_value, alice_registe
 def test_an_ordinary_account_named_admin(world):
     """The local admin is "dana"; account B registered as "admin". B's read clears the local
     admin's number from the "admin" key it owns. The admin's scopeless lane does not read B's
-    key, rejects B's number found by name and uses Dana's own registered number, without saving
-    it under B's name, so nothing is reported in a loop. MUTATION: drop the fallback check ->
-    the scopeless lane returns B's number -> red. MUTATION: no own-number stand-in -> None -> red."""
+    key and rejects B's number found by name; it gets no number (a scopeless send is settled
+    by name, so any number would leave through B's process), saves nothing under B's name and
+    reports nothing in a loop. MUTATION: drop the fallback check -> the scopeless lane returns
+    B's number -> red. MUTATION: stand Dana's own number in -> red."""
     world.state["local_admin_username"] = "dana"
     world.whitelist(_entry(ADMIN_PHONE, ADM, "dana"), _entry(BOB_PHONE, B_ADMIN, "admin"))
     world.stored(by_name={"admin": ADMIN_JID})
@@ -295,10 +296,10 @@ def test_an_ordinary_account_named_admin(world):
     assert world.on_disk()["whatsapp_by_username"] == {"admin": BOB_JID}
     # The scopeless lane is the local admin's; the "admin" key is B's, so it is left alone.
     before = world.store.read_bytes()
-    assert mc.get_whatsapp_chat_jid(None, None) == ADMIN_JID
+    assert mc.get_whatsapp_chat_jid(None, None) is None
     assert world.store.read_bytes() == before
     world.stored()
-    assert mc.get_whatsapp_chat_jid(None, None) == ADMIN_JID
+    assert mc.get_whatsapp_chat_jid(None, None) is None
     assert world.on_disk()["whatsapp_by_username"] == {}, "saved under B's name"
     assert len(world.resets()) == 1
 
@@ -310,8 +311,9 @@ B_OWN_LID = "100000000000014@lid"
 def test_the_discord_lane_never_takes_an_ordinary_admin_accounts_lid(world, dana_registered):
     """The Discord bridge's identity is `(None, "admin")`, the local admin's lane. With the
     local admin named "dana" and an ordinary account named "admin" whose own chat is a LID
-    bound only in its own map, that lane got the account's LID. MUTATION: consult the name key
-    whoever holds it -> the LID is returned -> red."""
+    bound only in its own map, that lane got the account's LID. It gets nothing now, not even
+    Dana's own number (see the route test below). MUTATION: consult the name key whoever holds
+    it -> the LID is returned -> red."""
     world.state["local_admin_username"] = "dana"
     world.state["whatsapp_config"]["lid_to_e164_by_scope"] = {B_ADMIN: {B_OWN_LID: BOB_PHONE}}
     entries = [_entry(BOB_PHONE, B_ADMIN, "admin")]
@@ -320,7 +322,7 @@ def test_the_discord_lane_never_takes_an_ordinary_admin_accounts_lid(world, dana
     world.whitelist(*entries)
     world.stored(by_scope={B_ADMIN: B_OWN_LID}, by_name={"admin": B_OWN_LID})
     before = world.store.read_bytes()
-    assert mc.get_whatsapp_chat_jid(None, "admin") == (ADMIN_JID if dana_registered else None)
+    assert mc.get_whatsapp_chat_jid(None, "admin") is None
     assert world.store.read_bytes() == before and world.resets() == []
     assert mc.get_whatsapp_chat_jid(B_ADMIN, "admin") == B_OWN_LID, "B keeps its own chat"
 
@@ -566,3 +568,36 @@ def test_fuzz_the_reader_never_returns_another_accounts_number(world):
     draws = int(os.environ.get("VAF_FUZZ_DRAWS") or 2000)
     violations = _run_fuzz(world, 4311, draws)
     assert violations == [], violations[:5]
+
+
+@pytest.mark.parametrize("inbound_open", [True, False], ids=["inbound-open", "inbound-closed"])
+def test_the_local_admins_note_never_leaves_through_an_ordinary_admin_accounts_process(
+        world, monkeypatch, inbound_open):
+    """The Discord lane's identity `(None, "admin")` with the local admin named "dana" and an
+    ordinary account named "admin" whose WhatsApp process runs. A request without a scope is
+    settled by its NAME in the bridge (`_process_for`), so whatever JID the reader hands this
+    lane goes out from that account's own WhatsApp. The lane therefore gets no number at all
+    and the note goes to the web UI. MUTATION: stand the local admin's own registered number in
+    for the rejected fallback -> with Inbound open the account's process sends it -> red."""
+    from vaf.api import whatsapp_bridge as wa
+    from vaf.core import whatsapp_reply
+    from vaf.core.channel_ingress_policy import set_front_office
+    world.state["local_admin_username"] = "dana"
+    world.state["channel_ingress_policy"] = set_front_office(None, inbound_open, "whatsapp")
+    world.whitelist(_entry(ADMIN_PHONE, ADM, "dana"), _entry(BOB_PHONE, B_ADMIN, "admin"))
+    written = io.StringIO()
+    monkeypatch.setattr(wa, "_processes", {"admin": SimpleNamespace(stdin=written, poll=lambda: None)})
+    monkeypatch.setattr(wa, "_scope_by_user", {"admin": B_ADMIN})
+    monkeypatch.setattr(wa, "_append_chat_activity", lambda *a, **k: None)
+    monkeypatch.setattr(wa, "_outgoing_queue", queue.Queue())
+    monkeypatch.setattr(whatsapp_reply, "_send_callback", wa._enqueue_reply)
+    monkeypatch.setattr("vaf.core.config.scope_id_for_username",
+                        lambda name: {"dana": ADM, "admin": B_ADMIN}.get(str(name or "")))
+    monkeypatch.setattr(mc, "get_messaging_connections",
+                        lambda username=None, user_scope_id=None: {"main_messenger": "whatsapp"})
+
+    result = mc.send_to_main_messenger(None, "admin", "dana's private note")
+    wa._outgoing_queue.put(None)
+    wa._sender_loop()
+    assert written.getvalue() == "", "sent through the ordinary admin account's process"
+    assert result == (False, None), "not handed to the web UI"

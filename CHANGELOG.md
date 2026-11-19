@@ -513,6 +513,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   It then sends to your other saved chat or your own registered number, or to the web UI
   when you have neither, and records the removal in the security log as "Delivery chat
   corrected".
+- **Telegram: another account can no longer read your Telegram conversation or take over
+  your contacts through its relay list.** Any account could add any Telegram ID as its
+  relay contact. Adding your own ID opened your whole conversation with your agent in that
+  account's Telegram window. Adding a contact you had allowed sent that contact's messages
+  to the other account instead of your agent. Now a relay contact is added by an invite
+  link that the person opens in Telegram, so it is their choice. Only an admin can still
+  add one by ID, and an ID that belongs to a VAF account can never be a relay contact. The
+  Telegram window shows a chat's history only to the account the chat belongs to. A
+  sign-in that is not linked to an account is refused on every Telegram setting instead of
+  being treated as the admin. Relay contacts added before this update stay in place: an
+  admin sees each one with its account in the Telegram window and in the security log, and
+  can remove it.
 - **WhatsApp: an account can no longer make a stranger your agent's owner, or send as your
   agent's number.** Assigning a chat's hidden WhatsApp ID (LID) to a number used to apply to
   every account. A non-admin could bind any ID to the admin's own number, so that sender was

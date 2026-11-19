@@ -95,8 +95,8 @@ class _FakeStdout:
         self._silent = silent
         self._stopped = stopped
 
-    def readline(self) -> bytes:
-        line = self._buffer.readline()
+    def readline(self, size: int = -1) -> bytes:
+        line = self._buffer.readline(size)
         if not line and self._silent:
             self._stopped.wait(30)
         return line
@@ -627,19 +627,12 @@ def test_a_deadline_on_a_server_behind_a_launcher_stops_the_launchers_child(stub
     if os.name == "nt":
         pytest.skip("POSIX process groups; Windows stops the child tree only")
     client, command = stub("silent", how=how)
-    box = {}
-    began = time.monotonic()
-    calling = threading.Thread(target=lambda: box.setdefault("out", client.call_stdio(
-        command, "echo", {"text": "a"}, timeout=1.5)), daemon=True)
-    calling.start()
-    # The child is taken while the call still waits on it, so its identity can be checked.
-    assert _wait_until((stub.dir / "silent.mark").exists), "the call never reached the server"
+    # Started and handshaken first, and the child taken then, before any deadline runs: a
+    # child taken after the deadline may already be gone, which is the success looked for.
+    assert _bounded(lambda: client._ensure_server(command)) is not None
     child = stub.child()
-    calling.join(10)
-    took = time.monotonic() - began
-    assert not calling.is_alive(), "the launcher's child kept the call waiting"
-    assert box["out"] == "MCP Error: no answer within 1.5 s (code: -32001)" and took < 3.0, (
-        box["out"], took)
+    out, took, _process = _silent_call(stub, client, command)
+    assert out == _TIMEOUT_ANSWER and took < 2.5, (out, took)
     assert _wait_until(lambda: _gone(child)), "the launcher's child kept running"
 
 
@@ -1653,7 +1646,8 @@ def _draw_lines(rng: random.Random, rid: int):
 
 def _reference(drawn, rid):
     """(expected, consumed) from the recorded kinds only; expected "PARSE" is the parse error,
-    "TIMEOUT" the deadline's error."""
+    "TIMEOUT" the deadline's error, "EOF" the end of the output before an answer (None, and
+    the process retired), None twenty lines without an answer."""
     lines = [line for kind, line in drawn if kind != "silence"]
     for index, (kind, line) in enumerate(drawn[:20]):
         if kind == "silence":
@@ -1663,7 +1657,9 @@ def _reference(drawn, rid):
             return "PARSE", consumed
         if kind in ("answer", "cr"):
             return json.loads(line), consumed
-    return None, min(len(lines), 20)
+    if len(lines) < 20:
+        return "EOF", len(lines)
+    return None, 20
 
 
 def _fuzz_draws(draws: int):
@@ -1692,12 +1688,15 @@ def _fuzz_draws(draws: int):
         elif expected == "TIMEOUT":
             ok = got == {"jsonrpc": "2.0", "id": rid, "error": {
                 "code": _TIMEOUT_CODE, "message": f"no answer within {timeout:g} s"}}
+        elif expected == "EOF":
+            ok = got is None
         else:
             ok = got == expected
-        # Only an unreadable line or the deadline retires the process; every other outcome
-        # keeps it, and the lines after the ones the request read stay unread.
+        # An unreadable line, the deadline and the end of the output retire the process;
+        # every other outcome keeps it, and the lines after the ones the request read stay
+        # unread.
         if (not ok or proc.remaining() != rest
-                or proc.retired != (expected in ("PARSE", "TIMEOUT"))):
+                or proc.retired != (expected in ("PARSE", "TIMEOUT", "EOF"))):
             mismatches.append((n, [k for k, _ in drawn][:consumed + 1], str(got)[:80]))
             continue
 

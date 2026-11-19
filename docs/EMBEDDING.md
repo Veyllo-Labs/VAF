@@ -3117,35 +3117,43 @@ usable from an embedded engine too, documented in their own pages:
   `mcp_call` tool reaches only a server registered there
   (`vaf.core.mcp_registry.registered_server`), never a command from the model's
   arguments; code of your own that chose a command calls
-  `vaf.tools.mcp_client.get_mcp_client().call_stdio(command, tool, arguments, env,
-  timeout=...)`. It returns the tool's text, an `Error:` line or an `MCP Error:` line, never
-  raises for anything the server writes, and never holds the server longer than `timeout`
-  seconds (default `tool_timeout_seconds`; a value that is not a positive finite number
-  means the default), counted from the moment it has the server's lock: the start of a fresh
-  process, the handshake, the write and the reads all count. At that deadline the server
-  process is stopped and dropped, its lock is free for the next call, which starts a fresh
-  process, and the call answers `MCP Error: no answer within N s (code: -32001)`.
-  `list_server_tools(command, timeout=...)` does the same for a local listing and answers
-  `[]`. Under `vaf.core.bounded_run.run_bounded`, as `ToolCaller` runs the registered tools,
-  the caller's own timeout or Stop also ends the call within 0.25 s: it raises the worker's
-  cancel flag (`bounded_run.cancel_requested()`), which the call looks at while it waits,
-  and which also keeps a call still queued for the server's lock, or still starting its
-  server, from sending its `tools/call` once it gets there. A deadline of your own that only
-  stops waiting (a `Future.result(timeout=...)`, a `Thread.join(timeout)`) raises no flag:
-  pass that deadline as `timeout=` instead. The pipes are read and written on helper threads
-  rather than with `select`, so this holds on Windows pipes too. Do not retry a call that
-  timed out after it wrote on your own: the server may already have acted. A cold start
-  that was already in its handshake when the caller gave up is stopped there, and one that
-  had not begun the handshake is stopped before any I/O. At exit the client stops its
-  servers, the ones whose stop was still in flight and the group of one whose own process
-  had exited included, and starts none from then on; a start still running after a 1 s wait kills its own server and its
-  group at once, without a grace, when it ends. A server that ignores the end of its stdin
-  outlives a process that is killed or crashes, that leaves while such a start is still
-  running, or whose signal handler interrupted that start on the same thread. If your
-  process leaves through `os._exit`, call `vaf.tools.mcp_client.stop_shared_servers()`
-  first. Named boundary: the facade exports no MCP client yet. These are reached by
-  importing `vaf.tools.mcp_client`; measured, the application has one caller of
-  `call_stdio` (`mcp_registry.call_registered_tool`). See
+  `vaf.tools.mcp_client.get_mcp_client().call_stdio(server_command, tool_name, arguments,
+  env=None, *, timeout=None)`. It returns the tool's text, an `Error:` line or an
+  `MCP Error:` line, and never raises for anything the server writes. Its deadline is
+  `timeout` seconds (default `tool_timeout_seconds`; a value that is not a positive finite
+  number means the default), counted from the moment it has the server's lock, and covers
+  the start of a fresh process, the handshake, the write and the reads. At that deadline the
+  server process is stopped and dropped, its lock is free for the next call, which starts a
+  fresh process, and the call answers `MCP Error: no answer within N s (code: -32001)`, or
+  `Error: Failed to initialize MCP server (no answer within N s)` when the deadline passed
+  during the handshake. A request whose deadline has already passed is not written. Two
+  bounded steps can run past the deadline: replacing a cached process that has exited first
+  stops what it left behind (up to a 2 s grace and a SIGKILL), and the last line read is
+  decoded whole (about 2 s for a line of 64 MiB of deeply nested JSON). A line is read up
+  to 64 MiB; a longer one ends the call with a -32700 error. A server whose output ended,
+  or whose input could no longer be written, is replaced on the next call too.
+  `list_server_tools(server_command, timeout=...)` does the same for a local listing and
+  answers `[]`. Under `vaf.core.bounded_run.run_bounded`, as `ToolCaller` runs the
+  registered tools, the caller's own timeout or Stop also ends the call within 0.25 s: it
+  raises the worker's cancel flag (`bounded_run.cancel_requested()`), which the call looks
+  at while it waits, and which also keeps a call still queued for the server's lock, or
+  still starting its server, from sending its `tools/call` once it gets there. A deadline
+  of your own that only stops waiting (a `Future.result(timeout=...)`, a
+  `Thread.join(timeout)`) raises no flag: pass that deadline as `timeout=` instead. The
+  pipes are read and written on helper threads rather than with `select`, so this holds on
+  Windows pipes too. Do not retry a call that timed out after it wrote on your own: the
+  server may already have acted. A cold start that was already in its handshake when the
+  caller gave up is stopped there, and one that had not begun the handshake is stopped
+  before any I/O. At exit the client stops its servers, the ones whose stop was still in
+  flight and the group of one whose own process had exited included, and starts none from
+  then on; a start still running after a 1 s wait kills its own server and its group at
+  once, without a grace, when it ends. A server that ignores the end of its stdin outlives a
+  process that is killed or crashes, that leaves while such a start is still running, or
+  whose signal handler interrupted that start on the same thread. If your process leaves
+  through `os._exit`, call `vaf.tools.mcp_client.stop_shared_servers()` first. Named
+  boundary: the facade exports no MCP client yet. These are reached by importing
+  `vaf.tools.mcp_client`; measured, the application has one caller of `call_stdio`
+  (`mcp_registry.call_registered_tool`). See
   [MCP_INTEGRATION.md](agents/MCP_INTEGRATION.md).
 - **Update-surviving local tools** - a `custom_tools/` folder in the platform
   data dir (managed via the Web UI, admin-only), see

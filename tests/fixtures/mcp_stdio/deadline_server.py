@@ -15,11 +15,14 @@ MODE decides how it misbehaves:
 - ``silent``: every tool call goes unanswered;
 - ``stderr_chatty``: 2 KB on stderr before every answer;
 - ``cr_answer``: the answer with a raw carriage return as whitespace between its tokens;
-- ``crlf_answer``: the answer line ends in a carriage return and a line feed;
+- ``crlf_answer``: a log line and then the answer, each ending in a carriage return and a
+  line feed, as a Windows server's text output does;
 - ``utf8_answer``: the answer carries a character outside Latin-1, as UTF-8;
 - ``badbytes_then_answer``: a line of bytes that are not UTF-8, then the answer;
 - ``deaf_after_init``: answers the handshake, then never reads its input again;
-- ``mute_init``: reads, and never answers anything, the handshake included.
+- ``mute_init``: reads, and never answers anything, the handshake included;
+- ``close_stdout``: answers the handshake, then closes its output and lives on, reading;
+- ``long_line``: answers a tool call with 4 MiB that hold no line feed, then nothing.
 
 Every request is appended to ``requests.log`` next to this script, by method.
 """
@@ -32,6 +35,7 @@ MODE = sys.argv[1]
 HERE = os.path.dirname(os.path.abspath(__file__))
 MARK = os.path.join(HERE, "misbehaved.mark")
 OUT = sys.stdout.buffer
+CLOSED = False
 
 
 def out(data: bytes) -> None:
@@ -72,7 +76,7 @@ for raw in sys.stdin.buffer:
         continue
     with open(os.path.join(HERE, "requests.log"), "a") as log:
         log.write(str(method) + "\n")
-    if MODE == "mute_init":
+    if MODE == "mute_init" or CLOSED:
         continue
     r = answer(mid, method, msg)
     line = json.dumps(r, ensure_ascii=False).encode("utf-8") + b"\n"
@@ -90,13 +94,21 @@ for raw in sys.stdin.buffer:
         if MODE == "cr_answer":
             line = json.dumps(r, separators=(",\r", ":\r")).encode("utf-8") + b"\n"
         elif MODE == "crlf_answer":
+            out(b"server log: working\r\n")
             line = json.dumps(r).encode("utf-8") + b"\r\n"
+        elif MODE == "long_line":
+            out(b"x" * (4 * 1024 * 1024))
+            continue
         elif MODE == "badbytes_then_answer":
             out(b"\xff\xfe log\n")
     if MODE == "stderr_chatty":
         sys.stderr.write("x" * 2047 + "\n")
         sys.stderr.flush()
     out(line)
+    if MODE == "close_stdout" and method == "initialize":
+        OUT.close()
+        os.close(1)
+        CLOSED = True
     if MODE == "deaf_after_init" and method == "initialize":
         while True:
             time.sleep(3600)

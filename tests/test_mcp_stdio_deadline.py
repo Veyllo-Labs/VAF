@@ -15,7 +15,9 @@ The stub server is tests/fixtures/mcp_stdio/deadline_server.py, run as a real pr
 call runs under `_bounded`, so a regression fails instead of hanging the suite.
 """
 import ast
+import gc
 import io
+import json
 import math
 import os
 import select
@@ -25,6 +27,7 @@ import subprocess
 import sys
 import threading
 import time
+import weakref
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -181,6 +184,10 @@ def test_a_raw_carriage_return_in_an_answer_is_read(server):
 
 
 def test_an_answer_ending_in_crlf_is_read(server):
+    """A regression pin for a Windows server's line ending: a log line and the answer, each
+    ending in ``\r\n``. No reader mutation turns this alone red, because JSON reads the
+    ``\r`` as whitespace either way; the raw ``\r`` test above and the fuzz's lines ending in
+    ``\r`` carry that load."""
     client, command = server("crlf_answer")
     assert _bounded(lambda: client.call_stdio(command, "echo", {"text": "crlf ok"},
                                               timeout=5)) == "echoed: crlf ok"
@@ -256,7 +263,7 @@ class _QuietProcess:
         self._stopped = threading.Event()
         self.stdout = self
 
-    def readline(self):
+    def readline(self, size=-1):
         self._stopped.wait(30)
         return b""
 
@@ -290,7 +297,7 @@ def test_a_read_whose_wait_gave_up_is_handed_to_the_next_wait():
     lines = iter([b"first\n", b"second\n"])
 
     class _SlowOutput:
-        def readline(self):
+        def readline(self, size=-1):
             release.wait(10)
             return next(lines, b"")
 
@@ -305,6 +312,119 @@ def test_a_read_whose_wait_gave_up_is_handed_to_the_next_wait():
     assert mcp_client._await(again, time.monotonic() + 5) == mcp_client._DONE
     assert pipe.take(again) == b"first\n"
     assert _bounded(lambda: pipe.take(pipe.next_line()), 5) == b"second\n"
+
+
+# ── the end of the stream, a failed write, a line without end, a deadline already past ────
+
+def test_a_server_that_closed_its_output_is_replaced(server):
+    """Its process lives on, so before every later call read the closed stream and failed
+    the same way until VAF restarted; the end of the output now retires the process."""
+    client, command = server("close_stdout")
+    out = _bounded(lambda: client.call_stdio(command, "echo", {"text": "a"}, timeout=5))
+    assert out == "Error: No response from MCP server"
+    first = server.started[0]
+    assert command not in client._server_processes, "the process with a closed output stayed"
+    assert _wait_until(lambda: first.poll() is not None), "it was not stopped"
+    _bounded(lambda: client.call_stdio(command, "echo", {"text": "b"}, timeout=5))
+    assert len(server.started) == 2 and server.started[1].pid != first.pid
+
+
+class _BrokenInput(io.BytesIO):
+    def write(self, data):
+        raise BrokenPipeError("the server is gone")
+
+
+def test_a_request_that_could_not_be_written_reads_nothing_and_retires():
+    """A write that failed sent no request, so whatever the output still holds is not its
+    answer, and the pipe cannot be used again."""
+    rid = 4
+    answer = json.dumps({"jsonrpc": "2.0", "id": rid, "result": {"ok": True}}) + "\n"
+    process = _QuietProcess()
+    process.stdin = _BrokenInput()
+    process.stdout = io.BytesIO(answer.encode("utf-8"))
+    client = MCPClientTool()
+    assert client._json_rpc(process, "tools/call", {}, request_id=rid, timeout=5) is None
+    assert process.poll() is not None, "the process with a broken input was kept"
+    assert process.stdout.read() == answer.encode("utf-8"), "the output was read anyway"
+
+
+def test_a_request_whose_deadline_has_passed_writes_nothing():
+    """A handshake can use up the whole budget: the request after it is then not written, so
+    the tool does not run after its time is up."""
+    process = _QuietProcess()
+    client = MCPClientTool()
+    got = client._json_rpc(process, "tools/call", {}, request_id=9,
+                           deadline=time.monotonic() - 0.01, timeout=1)
+    assert got == {"jsonrpc": "2.0", "id": 9,
+                   "error": {"code": -32001, "message": "no answer within 1 s"}}
+    assert process.stdin.getvalue() == b"", "the request was written after its deadline"
+    assert process.poll() is not None
+
+
+def test_a_line_longer_than_the_limit_ends_the_request(server, monkeypatch):
+    """A line without end was held whole, growing the application by about 0.9 GB/s until
+    the deadline. The stub writes 4 MiB without a line feed and stops, so the memory a
+    reader without the limit would take is bounded here by those 4 MiB."""
+    monkeypatch.setattr(mcp_client, "_MAX_LINE", 1024 * 1024)
+    client, command = server("long_line")
+    out, took = _timed(lambda: client.call_stdio(command, "echo", {"text": "a"}, timeout=5))
+    assert out == ("MCP Error: the MCP server sent a line longer than 1 MiB (code: -32700)")
+    assert took < 2.5, f"the call took {took:.1f} s"
+    first = server.started[0]
+    assert command not in client._server_processes
+    assert _wait_until(lambda: first.poll() is not None), "the server was not stopped"
+
+
+def _open_descriptors():
+    """This process's open file descriptors, or None where psutil cannot count them."""
+    import psutil
+    try:
+        return psutil.Process().num_fds()
+    except (AttributeError, psutil.Error):
+        return None
+
+
+def test_a_retired_process_is_freed_without_a_garbage_collection(tmp_path, monkeypatch):
+    """The pipe kept on a process must not refer back to it: that cycle kept every retired
+    process and its two pipe descriptors until a full collection, which a large process
+    runs rarely (measured: 300 timed-out calls, 600 descriptors left open)."""
+    if " " in sys.executable or " " in str(tmp_path):
+        pytest.skip("the MCP client splits a server command on spaces")
+    script = tmp_path / "deadline_server.py"
+    shutil.copyfile(SERVER, script)
+    real_popen = subprocess.Popen
+    refs = []
+
+    class _Watched(real_popen):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            refs.append(weakref.ref(self))
+
+    monkeypatch.setattr(subprocess, "Popen", _Watched)
+    client = MCPClientTool()
+    command = f"{sys.executable} {script} silent"
+    before = _open_descriptors()
+    gc.collect()
+    gc.disable()
+    try:
+        for _ in range(5):
+            assert _bounded(lambda: client.call_stdio(command, "echo", {}, timeout=0.5)) == (
+                _timeout_text(0.5))
+        assert _wait_until(lambda: not client._stopping, seconds=10), "a stop never ended"
+        assert len(refs) == 5
+        assert _wait_until(lambda: all(ref() is None for ref in refs), seconds=5), (
+            f"{sum(ref() is not None for ref in refs)} retired process(es) still held")
+        after = _open_descriptors()
+        if before is not None:
+            assert after - before < 4, f"{after - before} descriptors left open"
+    finally:
+        gc.enable()
+        client.stop_all_servers()
+        for ref in refs:
+            process = ref()
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
 
 
 # ── the handshake, and retiring once ───────────────────────────────────────────────────────
@@ -325,7 +445,7 @@ def test_the_handshake_has_the_deadline_and_stops_once(server, monkeypatch):
     stops = _count_stops(monkeypatch)
     client, command = server("mute_init")
     out, took = _timed(lambda: client.call_stdio(command, "echo", {"text": "a"}, timeout=1))
-    assert out == "Error: Failed to initialize MCP server"
+    assert out == "Error: Failed to initialize MCP server (no answer within 1 s)"
     assert took < 2.5, f"the call took {took:.1f} s"
     process = server.started[0]
     assert _wait_until(lambda: process.poll() is not None), "the mute server kept running"

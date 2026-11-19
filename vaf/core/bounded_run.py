@@ -150,13 +150,24 @@ def tool_budget_seconds(tool, args: dict | None = None) -> float:
         declared = fn(dict(args or {})) if callable(fn) else getattr(tool, "timeout_seconds", None)
     except Exception:
         declared = None
+    return seconds_or_default(declared)
+
+
+def seconds_or_default(value: Any) -> float:
+    """``value`` as seconds when it is a positive finite number, else `default_timeout_seconds`.
+
+    For any wait whose length a caller may give: None, text that is not a number, zero, a
+    negative value, infinity and NaN all mean the default, because a deadline from infinity or
+    NaN is never reached and one from zero or less ends the wait before it starts. The
+    dispatcher reads a tool's declared budget with it (`tool_budget_seconds`), and so does the
+    stdio MCP client a caller's ``timeout=``, so the two agree."""
     try:
-        value = float(declared) if declared is not None else None
+        seconds = float(value) if value is not None else None
     except (TypeError, ValueError):
-        value = None
-    if value is None or not math.isfinite(value) or value <= 0:
+        seconds = None
+    if seconds is None or not math.isfinite(seconds) or seconds <= 0:
         return default_timeout_seconds()
-    return value
+    return seconds
 
 
 def is_self_supervised(tool) -> bool:

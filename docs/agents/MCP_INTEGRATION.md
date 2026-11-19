@@ -241,7 +241,7 @@ What the loop reads from a server's output:
 - JSON-RPC batches are not read; VAF never sends one.
 
 Every request has a deadline. `call_stdio(..., timeout=N)` and the stdio branch of
-`list_server_tools(..., timeout=N)` hold the server for N seconds at most; without a
+`list_server_tools(..., timeout=N)` give up on the server after N seconds; without a
 `timeout` (or with one that is not a positive finite number) N is `tool_timeout_seconds`,
 the dispatcher's budget for every MCP tool, so under the dispatcher the read and the caller
 give up together. The deadline is taken once the call holds the server's lock (the wait for
@@ -251,10 +251,17 @@ ends it too: the wait looks at the cancel flag of `bounded_run` every 0.25 s, wh
 `run_bounded` raises at its own timeout or on Stop, and discovery and the connection test
 raise for a listing they gave up on (`cancel_when`). At the deadline the process is stopped
 and dropped, the lock is free, and the next call starts a fresh process; the call answers
-`MCP Error: no answer within N s (code: -32001)`, which the shared result classifier reads as
-a failure. A caller that gave up gets "No response from MCP server", which nobody reads any
+`MCP Error: no answer within N s (code: -32001)`, or `Error: Failed to initialize MCP server
+(no answer within N s)` when the deadline passed during the handshake (only the deadline's
+own words are added there, never text the server wrote), and the shared result classifier
+reads both as a failure. A request whose deadline has already passed when it would be
+written (a slow handshake used it up) is not written, so the tool does not run after its
+time is up. A caller that gave up gets "No response from MCP server", which nobody reads any
 more. The same retirement follows a request whose caller gave up, since the stream may still
-receive the answer it no longer waits for. Measured before: an answer line that was not JSON
+receive the answer it no longer waits for, and the end of the server's output or a write
+that failed: that pipe cannot be used again (measured before: a server that closed its
+output and lived on failed every later call the same way, on the same process, until VAF
+restarted). Measured before: an answer line that was not JSON
 at all, a JSON scalar followed by silence, an answer holding a raw `\r`, a server whose
 stderr had filled up, and a 200 KB request to a server that had stopped reading its input
 each held the call, and every later call to that server, until VAF restarted.
@@ -266,8 +273,16 @@ non-blocking mode; the client uses neither, and a test keeps it that way. Named 
 
 - a descendant of the server that keeps the output pipe open after the stop (below) leaves
   one helper thread blocked on it until it lets go; the call and the lock are not held;
-- a line is held in memory whole, so the memory a single line takes is the server's to
-  decide, as before;
+- a line is read up to 64 MiB and held in memory whole; a longer one ends the request with
+  a -32700 error ("a line longer than 64 MiB") and retires the process, since the rest of
+  it is still on the stream. Measured before the limit: a server that wrote one line
+  without end grew the application by about 0.9 GB/s until the deadline. Decoding a line
+  takes about five to six times its size at peak, so the limit bounds that peak at about
+  400 MB, and 64 MiB still holds a 48 MB file returned as base64 in one result;
+- two bounded steps can run past the deadline: replacing a cached process that has exited
+  first stops what it left in its group (up to the 2 s grace and a SIGKILL), and the last
+  line read is decoded whole (about 2 s for 64 MiB of deeply nested JSON, measured at
+  0.033 s per MB);
 - a server that ends its lines with a bare `\r` (no line feed) is not read: the stdio
   transport delimits messages by a newline;
 - a call stopped at its deadline after it wrote may already have acted on the server; it is

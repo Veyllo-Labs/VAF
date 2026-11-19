@@ -63,6 +63,13 @@ MAX_ARCHIVE_LINKS = 512
 STALE_PARTIAL_SECONDS = 3600.0
 
 
+# Windows refuses to unlink a file whose read-only attribute is set (owner write missing in
+# its mode); a module constant rather than a check of os.name at the call, so a test can
+# play Windows without turning every Path into a WindowsPath.
+_WINDOWS = os.name == "nt"
+_REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+
+
 class DownloadIntegrityError(RuntimeError):
     """The downloaded bytes do not hash to the digest that was pinned for them."""
 
@@ -333,20 +340,89 @@ def refuse_escaping_links(root: str, what: str = "backend") -> None:
                     raise RuntimeError(f"the archive holds a link that leaves the {what} folder: {name!r} ({reason})")
 
 
+def _is_link_like(st: os.stat_result) -> bool:
+    """A symbolic link, or on Windows any reparse point (a directory junction lstat reports
+    as a folder): neither is entered nor changed by the removal."""
+    return stat.S_ISLNK(st.st_mode) or bool(getattr(st, "st_file_attributes", 0) & _REPARSE_POINT)
+
+
+def _make_removable(path: str) -> None:
+    """Give every real folder at and below `path` its owner's rwx back, and on Windows clear
+    the read-only attribute of a file no other name links to, so that a second rmtree can
+    remove what the first one skipped. Every entry is looked at with lstat: a link (or a
+    Windows reparse point) is neither changed nor entered, so nothing outside `path` is
+    touched and a link cycle cannot hold up the walk. A folder is changed BEFORE it is
+    listed, because listing an x-less folder fails. A file's mode is shared by all of its
+    hard links, so on POSIX no file is changed at all (unlinking needs only the folder's
+    bits there) and on Windows only one with a single link. Errors are swallowed: the
+    caller's final check decides."""
+    stack = [path]
+    while stack:
+        p = stack.pop()
+        try:
+            st = os.lstat(p)
+        except OSError:
+            continue
+        if _is_link_like(st):
+            continue
+        if stat.S_ISDIR(st.st_mode):
+            try:
+                os.chmod(p, stat.S_IMODE(st.st_mode) | stat.S_IRWXU)
+            except OSError:
+                pass
+            try:
+                with os.scandir(p) as entries:
+                    stack.extend(entry.path for entry in entries)
+            except OSError:
+                pass
+        elif _WINDOWS and stat.S_ISREG(st.st_mode) and st.st_nlink == 1 and not st.st_mode & stat.S_IWUSR:
+            try:
+                os.chmod(p, stat.S_IMODE(st.st_mode) | stat.S_IWUSR)
+            except OSError:
+                pass
+
+
 def remove_tree_or_link(path: str) -> None:
     """Remove `path` whatever it is: a link (to a folder or not) is unlinked, never
     followed, a folder is removed with everything in it, a file is unlinked. rmtree
     refuses a link, so a linked leftover would otherwise stay and block every later swap.
     OSError when anything of it is still there afterwards (rmtree skips what it cannot
-    remove): the next install must not unpack on top of debris."""
+    remove): the next install must not unpack on top of debris.
+
+    A folder that lost its owner's permissions is still removed: when the first rmtree
+    leaves something, every real folder of the tree gets its owner's rwx back (on Windows
+    a file's read-only attribute is cleared too) and rmtree runs once more
+    (_make_removable). An archive can cause that: a hard link member whose target is an
+    in-archive link to a folder makes tarfile apply the member's mode (0644) to that
+    folder through the link, and without x on it neither rmtree nor `rm -rf` gets inside,
+    so every later install failed on the leftover. Links are never followed and the parent
+    of `path` is never changed. Deliberate: a second pass rather than an onerror/onexc
+    handler, because rmtree has already given up on a folder it could not open when the
+    handler runs (a retry from it fails), and the handler's name and signature differ
+    between the supported Python versions. Named boundary: a real folder that is swapped
+    for a link between its lstat and its chmod is followed; only someone who can already
+    write to the folder being removed can do that."""
     if os.path.islink(path):
         os.unlink(path)
     elif os.path.isdir(path):
         shutil.rmtree(path, ignore_errors=True)
+        if os.path.lexists(path):
+            _make_removable(path)
+            shutil.rmtree(path, ignore_errors=True)
     elif os.path.lexists(path):
         os.unlink(path)
     if os.path.lexists(path):
         raise OSError(f"{path} could not be removed completely")
+
+
+def remove_quietly(path: str | os.PathLike) -> None:
+    """remove_tree_or_link where a failure must not end the caller (the staging folder of a
+    failed install): what stays is a leftover the next install removes first, and that
+    install stops with a message if it still cannot."""
+    try:
+        remove_tree_or_link(os.fspath(path))
+    except OSError:
+        pass
 
 
 def extract_archive(archive_path: str, into: str, *, program: str, what: str = "backend") -> None:

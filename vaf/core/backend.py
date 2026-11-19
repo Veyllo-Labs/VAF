@@ -8,7 +8,6 @@ import os
 import sys
 import platform
 import re
-import shutil
 import stat
 import subprocess
 import threading
@@ -1269,12 +1268,12 @@ class ServerManager:
             # The new build must start on this host before the old server is touched.
             staged_answered, staged = self._probe_build(staged_exe)
             if not staged_answered:
-                shutil.rmtree(staging, ignore_errors=True)
+                verified_download.remove_quietly(staging)
                 UI.error(f"The downloaded backend b{want} could not be asked for its build right now, so it "
                          "was not installed. Your current backend is unchanged. Start VAF again.")
                 return False
             if staged != want:
-                shutil.rmtree(staging, ignore_errors=True)
+                verified_download.remove_quietly(staging)
                 UI.error(f"The downloaded backend b{want} does not start on this computer (it reports "
                          f"build b{staged or '?'}), so it was not installed. Your current backend is unchanged.")
                 return False
@@ -1282,7 +1281,7 @@ class ServerManager:
             if self._llama_pid() is not None:
                 reason = self.hand_over_from_llama(port=port, reason="the backend is being replaced by the pinned build")
                 if reason:
-                    shutil.rmtree(staging, ignore_errors=True)
+                    verified_download.remove_quietly(staging)
                     UI.error(f"{reason.rstrip('.')}, so the new backend b{want} was not installed. Your current "
                              "backend is unchanged. Stop that process and start VAF again.")
                     return False
@@ -1300,13 +1299,13 @@ class ServerManager:
                         pass             # recovered at the start of the next attempt
                 raise
         except DownloadIntegrityError as e:
-            shutil.rmtree(staging, ignore_errors=True)
+            verified_download.remove_quietly(staging)
             UI.error(f"The download of the backend b{want} did not match its pinned checksum, so it was not "
                      "used and nothing was changed. Try again later; if it keeps happening, report it.")
             UI.event("System", f"Checksum details: {e}", style="dim")
             return False
         except Exception as e:
-            shutil.rmtree(staging, ignore_errors=True)
+            verified_download.remove_quietly(staging)
             UI.error(f"Backend download failed: {e}")
             return False
 

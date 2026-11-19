@@ -517,7 +517,7 @@ class SpeechManager:
                 except OSError as e:
                     raise _PiperSwapError(e) from e
             except _PiperSwapError as e:
-                self._remove_quietly(staging)
+                verified_download.remove_quietly(staging)
                 if had_piper:
                     UI.error("Piper could not be replaced right now (it may be in use); your current Piper is "
                              "unchanged and VAF tries again on its next start.")
@@ -526,7 +526,7 @@ class SpeechManager:
                 UI.event("System", f"Details: {e.__cause__}", style="dim")
                 return False
             except Exception as e:
-                self._remove_quietly(staging)
+                verified_download.remove_quietly(staging)
                 UI.error(download_problem("Piper", "Piper", e,
                                           "Your current Piper is unchanged." if had_piper else ""))
                 UI.event("System", f"Details: {e}", style="dim")
@@ -540,13 +540,6 @@ class SpeechManager:
             return True
         finally:
             lock.release()
-
-    @staticmethod
-    def _remove_quietly(path: Path) -> None:
-        try:
-            verified_download.remove_tree_or_link(str(path))
-        except OSError:
-            pass                          # a leftover the next install removes first
 
     # Mapping lang -> Piper model name (high/medium quality where available).
     # SSOT for _ensure_voice_model (download) and has_local_voice (the live

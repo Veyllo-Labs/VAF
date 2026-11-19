@@ -17,8 +17,12 @@ import io
 import os
 import random
 import re
+import shutil
+import stat
 import tarfile
+import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -70,14 +74,20 @@ def _snapshot(root: Path, skip: Path | None = None) -> dict:
 # ── the helpers live in one place ─────────────────────────────────────────────────
 
 def test_backend_keeps_no_archive_helper_of_its_own():
-    """The llama.cpp launcher uses the shared helpers and keeps no copy or alias.
-    MUTATION: put a private _extract_archive back into backend.py and this goes red."""
+    """The llama.cpp launcher uses the shared helpers and keeps no copy or alias, and the
+    staging folder of a failed install is removed through the shared removal (a raw rmtree
+    skips a folder without its owner's rights). MUTATIONS: put a private _extract_archive
+    back into backend.py, or one raw rmtree of the staging folder: each goes red."""
     src = (REPO / "vaf" / "core" / "backend.py").read_text(encoding="utf-8")
     for pattern in (r"def _?extract_archive\b", r"def _?refuse_escaping_links\b", r"def _?remove_tree_or_link\b",
                     r"def _?link_leaves_folder\b", r"^MAX_ARCHIVE_LINKS\s*=", r"_extract_archive\s*=",
                     r"_remove_tree_or_link\s*=", r"\.extractall\("):
         assert not re.search(pattern, src, re.MULTILINE), pattern
     assert "verified_download.extract_archive(" in src
+    assert "shutil.rmtree(" not in src, "the install removes its folders through verified_download"
+    assert "verified_download.remove_quietly(staging)" in src
+    speech_src = (REPO / "vaf" / "core" / "speech.py").read_text(encoding="utf-8")
+    assert "def _remove_quietly" not in speech_src and "verified_download.remove_quietly(" in speech_src
     from vaf.core import backend
     for name in ("_extract_archive", "_refuse_escaping_links", "_remove_tree_or_link"):
         assert not hasattr(backend.ServerManager, name), name
@@ -267,6 +277,259 @@ def test_the_lift_holds_its_invariants_on_random_archives(tmp_path):
     for draw in range(draws):
         program, entries, members = _draw_archive(rng)
         _check_draw(tmp_path, draw, program, entries, members)
+
+
+# ── the removal of a leftover ────────────────────────────────────────────────────
+
+POSIX_MODES = pytest.mark.skipif(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+                                 reason="folder modes are POSIX, and root ignores them")
+
+
+def _mode(p) -> int:
+    return stat.S_IMODE(os.lstat(p).st_mode)
+
+
+def _remove_bounded(path, seconds: float = 10.0):
+    """remove_tree_or_link in a thread, so a walk that never ends fails the test instead of
+    hanging the suite. Returns the exception it raised, or None."""
+    outcome = {}
+
+    def run():
+        try:
+            verified_download.remove_tree_or_link(str(path))
+            outcome["error"] = None
+        except BaseException as e:        # handed to the test, which decides
+            outcome["error"] = e
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(seconds)
+    assert not worker.is_alive(), f"the removal of {path} did not return within {seconds} s"
+    return outcome["error"]
+
+
+def _outside(p: Path) -> tuple:
+    st = os.lstat(p)
+    return stat.S_IMODE(st.st_mode), st.st_ino, (p.read_bytes() if stat.S_ISREG(st.st_mode) else None)
+
+
+@POSIX_MODES
+def test_a_folder_without_its_owner_bits_is_removed(tmp_path):
+    """A hard link member over an in-archive folder link makes tarfile chmod that folder to
+    the member's 0644; rmtree(ignore_errors) then left it behind and every later install
+    failed on the leftover. Real folders get their owner's rwx back, links are not followed.
+    MUTATIONS: drop the second pass (red: OSError); lstat replaced by stat in the walk (red:
+    the outside folder becomes 0o700)."""
+    parent = tmp_path / "bin"
+    parent.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep").write_bytes(b"keep")
+    sentinel = tmp_path / "sentinel"
+    sentinel.write_bytes(b"sentinel")
+    top = parent / "staging"
+    (top / "a" / "b").mkdir(parents=True)
+    (top / "a" / "b" / "f").write_bytes(b"f")
+    (top / "zero").mkdir()
+    (top / "zero" / "f").write_bytes(b"")
+    (top / "ro").mkdir()
+    (top / "ro" / "f").write_bytes(b"")
+    os.symlink(outside, top / "a" / "out")
+    os.link(sentinel, top / "ro" / "hard")
+    os.chmod(sentinel, 0o444)
+    os.chmod(outside, 0o500)
+    os.chmod(parent, 0o750)
+    before = {p: _outside(p) for p in (outside, outside / "keep", sentinel, parent)}
+    for p, mode in ((top / "a" / "b", 0o600), (top / "a", 0o644), (top / "zero", 0o000),
+                    (top / "ro", 0o555), (top, 0o600)):
+        os.chmod(p, mode)
+    try:
+        assert _remove_bounded(top) is None
+        assert not os.path.lexists(top)
+        assert {p: _outside(p) for p in before} == before, "nothing outside the folder changed"
+    finally:
+        os.chmod(outside, 0o700)
+
+
+@POSIX_MODES
+def test_what_cannot_be_removed_still_raises_and_the_parent_keeps_its_mode(tmp_path):
+    """The parent of the folder is never changed, so a parent without write still refuses,
+    and the caller hears about it. MUTATION: start the walk at the parent (red)."""
+    parent = tmp_path / "bin"
+    (parent / "staging" / "x").mkdir(parents=True)
+    os.chmod(parent / "staging" / "x", 0o000)
+    os.chmod(parent, 0o555)
+    try:
+        error = _remove_bounded(parent / "staging")
+        assert isinstance(error, OSError) and "could not be removed completely" in str(error)
+        assert _mode(parent) == 0o555
+    finally:
+        os.chmod(parent, 0o755)
+
+
+@POSIX_MODES
+def test_a_link_cycle_does_not_hold_up_the_removal(tmp_path):
+    """MUTATION: follow links in the walk (stat instead of lstat): two links back to the top
+    double the walk at every level and it never returns (red on the 10 s bound)."""
+    top = tmp_path / "staging"
+    (top / "a").mkdir(parents=True)
+    os.symlink("..", top / "a" / "l1")
+    os.symlink("..", top / "a" / "l2")
+    (top / "a" / "f").write_bytes(b"f")
+    os.chmod(top / "a", 0o600)
+    assert _remove_bounded(top) is None
+    assert not os.path.lexists(top)
+
+
+@pytest.fixture
+def windows_unlink(monkeypatch):
+    """Windows' rule on Linux: a file whose read-only attribute is set (no owner write in its
+    mode) cannot be unlinked. shutil is put on its path-based walk, which calls os.unlink."""
+    real_unlink = os.unlink
+
+    def unlink(path, *a, **k):
+        st = os.lstat(path, *a, **k)
+        if stat.S_ISREG(st.st_mode) and not st.st_mode & stat.S_IWUSR:
+            raise PermissionError(13, "Access is denied", str(path))
+        return real_unlink(path, *a, **k)
+
+    monkeypatch.setattr(shutil, "_use_fd_functions", False)
+    monkeypatch.setattr(verified_download, "_WINDOWS", True)
+    monkeypatch.setattr(os, "unlink", unlink)
+
+
+@pytest.mark.skipif(not hasattr(os, "link"), reason="hard links")
+def test_on_windows_a_read_only_file_is_made_removable(tmp_path, windows_unlink):
+    """Windows refuses to delete a read-only file, so the install's leftover stayed. Only a
+    file no other name links to is changed: a file's mode is shared by all its links.
+    MUTATIONS: skip regular files in the walk (red: the first case raises); drop the
+    st_nlink == 1 guard (red: the outside link gains write)."""
+    top = tmp_path / "staging"
+    top.mkdir()
+    (top / "ro.dll").write_bytes(b"read-only")
+    os.chmod(top / "ro.dll", 0o444)
+    assert _remove_bounded(top) is None
+    assert not os.path.lexists(top)
+
+    outside = tmp_path / "outside.dll"
+    outside.write_bytes(b"shared")
+    top.mkdir()
+    os.link(outside, top / "linked.dll")
+    os.chmod(outside, 0o444)
+    error = _remove_bounded(top)
+    assert isinstance(error, OSError)
+    assert _mode(outside) == 0o444, "the other name of the file kept its read-only bit"
+
+
+@POSIX_MODES
+def test_on_windows_a_junction_is_not_entered(tmp_path, monkeypatch):
+    """A directory junction is a reparse point lstat reports as a folder; it is neither
+    changed nor entered, like a link. Played here by a real folder whose lstat carries the
+    reparse attribute. MUTATION: drop the reparse check (red: the folder behind it is
+    changed and removed)."""
+    top = tmp_path / "staging"
+    behind = top / "junction" / "inner"
+    behind.mkdir(parents=True)
+    (behind / "f").write_bytes(b"f")
+    os.chmod(behind, 0o500)
+    real_lstat = os.lstat
+
+    def lstat(path, *a, **k):
+        st = real_lstat(path, *a, **k)
+        if not a and not k and os.fspath(path) == str(top / "junction"):
+            return SimpleNamespace(st_mode=st.st_mode, st_nlink=st.st_nlink, st_ino=st.st_ino,
+                                   st_file_attributes=0x400)
+        return st
+
+    monkeypatch.setattr(shutil, "_use_fd_functions", False)
+    monkeypatch.setattr(verified_download, "_WINDOWS", True)
+    monkeypatch.setattr(os, "lstat", lstat)
+    try:
+        error = _remove_bounded(top)
+        monkeypatch.setattr(os, "lstat", real_lstat)
+        assert isinstance(error, OSError)
+        assert _mode(behind) == 0o500, "nothing behind the junction was changed"
+    finally:
+        os.chmod(behind, 0o700)
+
+
+_FOLDER_MODES = (0o000, 0o100, 0o300, 0o400, 0o444, 0o500, 0o555, 0o600, 0o644, 0o700, 0o755)
+
+
+def _draw_tree(rng: random.Random, top: Path, out: Path, sentinel: Path, outfile: Path) -> list:
+    """A random leftover at `top`: 1 to 40 entries, at most 5 folders deep, of folders,
+    files (0o000, 0o444, 0o644), hard links to the outside sentinel, and symbolic links to
+    the outside folder, the outside file, a folder of the tree (cycles included) or nothing.
+    Every folder, the top included, then gets a drawn mode, bottom-up. Returns the draw."""
+    top.mkdir()
+    folders = [(top, 0)]
+    drawn = []
+    for i in range(rng.randint(1, 40)):
+        here, depth = rng.choice([f for f in folders if f[1] < 5])
+        p = here / f"e{i}"
+        kind = rng.choice(("folder", "file", "hard", "out-folder", "out-file", "inside", "missing"))
+        if kind == "folder":
+            p.mkdir()
+            folders.append((p, depth + 1))
+        elif kind == "file":
+            p.write_bytes(rng.randbytes(rng.randint(0, 8)))
+            os.chmod(p, rng.choice((0o000, 0o444, 0o644)))
+        elif kind == "hard":
+            os.link(sentinel, p)
+        elif kind == "out-folder":
+            os.symlink(out, p)
+        elif kind == "out-file":
+            os.symlink(outfile, p)
+        elif kind == "inside":
+            target = rng.choice(folders)[0]
+            os.symlink(os.path.relpath(target, here) if rng.random() < 0.5 else target, p)
+        else:
+            os.symlink(here / "nowhere", p)
+        drawn.append((p.relative_to(top).as_posix(), kind))
+    for folder, _ in sorted(folders, key=lambda f: -f[1]):
+        mode = rng.choice(_FOLDER_MODES)
+        os.chmod(folder, mode)
+        drawn.append((folder.relative_to(top.parent).as_posix(), oct(mode)))
+    return drawn
+
+
+@POSIX_MODES
+@pytest.mark.skipif(not hasattr(os, "link"), reason="hard links")
+def test_removal_holds_its_invariants_on_random_trees(tmp_path):
+    """Seeded fuzz of remove_tree_or_link (a removal that must stay inside its folder). For
+    every drawn tree the call returns, the folder is gone, and the outside folder, its file,
+    the outside file, the hard-linked sentinel and the parent keep mode, inode and bytes.
+    VAF_FUZZ_DRAWS raises the draw count outside the suite. MUTATIONS: drop the second pass
+    (red: a folder without x stays); follow links in the walk (red: the outside folder
+    gains write, or a cycle never returns)."""
+    rng = random.Random(405)
+    draws = int(os.environ.get("VAF_FUZZ_DRAWS", "200"))
+    for draw in range(draws):
+        base = tmp_path / f"r{draw}"
+        parent = base / "parent"
+        out = base / "out"
+        parent.mkdir(parents=True)
+        out.mkdir()
+        (out / "keep").write_bytes(b"keep")
+        sentinel = base / "sentinel"
+        sentinel.write_bytes(b"sentinel")
+        outfile = base / "outfile"
+        outfile.write_bytes(b"outfile")
+        os.chmod(outfile, 0o444)
+        top = parent / "staging"
+        drawn = _draw_tree(rng, top, out, sentinel, outfile)
+        os.chmod(sentinel, 0o444)
+        os.chmod(out, 0o500)
+        os.chmod(parent, 0o750)
+        watched = (out, out / "keep", sentinel, outfile, parent)
+        before = {p: _outside(p) for p in watched}
+        try:
+            error = _remove_bounded(top)
+            assert error is None, (draw, error, drawn)
+            assert not os.path.lexists(top), (draw, drawn)
+            assert {p: _outside(p) for p in watched} == before, (draw, drawn)
+        finally:
+            os.chmod(out, 0o700)
 
 
 # ── verified files ────────────────────────────────────────────────────────────────

@@ -962,13 +962,71 @@ def test_debris_a_leftover_removal_could_not_clear_stops_the_install(linux_insta
     staging = Path(m.bin_dir + ".staging")
     (staging / "stuck").mkdir(parents=True)
     (staging / "stuck" / "debris").write_bytes(b"left by a refused archive")
-    monkeypatch.setattr(backend.shutil, "rmtree", lambda path, ignore_errors=False, **k: None)
+    monkeypatch.setattr(verified_download.shutil, "rmtree", lambda path, ignore_errors=False, **k: None)
     errors = []
     monkeypatch.setattr(backend.UI, "error", lambda *a, **k: errors.append(" ".join(map(str, a))))
     _fake_get(monkeypatch, payload)
     assert m.ensure_server_exists() is False
     assert any("leftover" in e and "start VAF again" in e for e in errors), errors
     assert (staging / "stuck" / "debris").exists() and m.installed_build() == 10021
+
+
+def _archive_chmodding_a_folder(build: int) -> bytes:
+    """A release-shaped tar.gz with a folder `sub`, a link `l -> sub` and a hard link member
+    `h` whose target is `l`: tarfile materialises h as a link to sub and applies h's mode
+    (0644) through it, so sub ends up without x for its owner. Every link stays inside, so
+    the archive passes the containment checks."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        server = _VERSION_LINE.format(build=build).encode()
+        info = tarfile.TarInfo("build/bin/llama-server")
+        info.size = len(server)
+        tar.addfile(info, io.BytesIO(server))
+        info = tarfile.TarInfo("build/bin/sub")
+        info.type, info.mode = tarfile.DIRTYPE, 0o755
+        tar.addfile(info)
+        info = tarfile.TarInfo("build/bin/sub/x")
+        info.size = 1
+        tar.addfile(info, io.BytesIO(b"x"))
+        info = tarfile.TarInfo("build/bin/l")
+        info.type, info.linkname = tarfile.SYMTYPE, "sub"
+        tar.addfile(info)
+        info = tarfile.TarInfo("build/bin/h")
+        info.type, info.linkname, info.mode = tarfile.LNKTYPE, "build/bin/l", 0o644
+        tar.addfile(info)
+    return buf.getvalue()
+
+
+@pytest.mark.skipif(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+                    reason="folder modes are POSIX, and root ignores them")
+def test_a_folder_chmodded_through_an_archive_link_does_not_block_the_next_install(linux_install, monkeypatch, tmp_path):
+    """The archive leaves a staging folder without x; the staged server reports another build,
+    so the install removes its staging folder. A raw rmtree(ignore_errors) left it, and every
+    later install then failed on the leftover. MUTATIONS: drop the second pass of the removal
+    (red at start 2: the leftover message); a raw rmtree on the "does not start" path (red
+    after start 1: staging remains)."""
+    m, _ = linux_install
+    payload = _archive_chmodding_a_folder(10954)
+    probe = tmp_path / "probe"
+    probe.mkdir()
+    (probe / "a.tar.gz").write_bytes(payload)
+    verified_download.extract_archive(str(probe / "a.tar.gz"), str(probe), program="llama-server")
+    if os.lstat(probe / "sub").st_mode & 0o100:
+        pytest.skip("this Python's tarfile does not apply a hard link's mode through a folder link")
+    os.chmod(probe / "sub", 0o755)
+    errors = []
+    monkeypatch.setattr(backend.UI, "error", lambda *a, **k: errors.append(" ".join(map(str, a))))
+    _pin(monkeypatch, payload)
+    _fake_get(monkeypatch, payload)
+    assert m.ensure_server_exists() is False
+    assert any("does not start" in e for e in errors), errors
+    assert not os.path.lexists(m.bin_dir + ".staging"), "the staging folder was removed"
+
+    good = _archive_with_server(10955)
+    _pin(monkeypatch, good)
+    _fake_get(monkeypatch, good)
+    assert m.ensure_server_exists() is True, errors
+    assert m.installed_build() == 10955
 
 
 # ── the new build proves itself before the old one goes ──────────────────────────

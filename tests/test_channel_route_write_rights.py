@@ -16,8 +16,8 @@ wrote a guessed binding on a GET.
 THE GUARD:
 - discovery: every route function in `vaf/api/*_routes.py` that writes one of those sub-keys
   (a subscript store, `del`, `.pop` or `.setdefault` with the sub-key as a constant, an
-  `.update` whose dict literal or keyword names it, a dict literal naming it stored into a
-  subscript), or that names a lane function from the table's values, directly or through a
+  `.update` whose dict literal, keyword or `**{...}` names it, a dict literal naming it stored
+  into a subscript, annotated or not), or that names a lane function from the table's values, directly or through a
   helper in its module;
 - `RULES`, the declared rule per route. A writer missing from it, or a declared route that no
   longer writes, fails;
@@ -107,8 +107,11 @@ def _writes_directly(fn, keys, lanes) -> bool:
             targets = node.targets
         if any(isinstance(t, ast.Subscript) and _const_key(t) in keys for t in targets):
             return True
-        if (isinstance(node, ast.Assign) and _names_a_key(node.value, keys)
-                and any(isinstance(t, ast.Subscript) for t in node.targets)):
+        # A dict literal naming a sub-key, stored into a subscript (a whole block replaced);
+        # an annotated assignment counts when it has a value, a bare annotation stores nothing.
+        value = node.value if isinstance(node, (ast.Assign, ast.AnnAssign)) else None
+        if (value is not None and _names_a_key(value, keys)
+                and any(isinstance(t, ast.Subscript) for t in targets)):
             return True
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                 and node.func.attr in ("pop", "setdefault") and node.args
@@ -116,7 +119,8 @@ def _writes_directly(fn, keys, lanes) -> bool:
             return True
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "update"
                 and (any(_names_a_key(a, keys) for a in node.args)
-                     or any(kw.arg in keys for kw in node.keywords))):
+                     or any(kw.arg in keys if kw.arg is not None else _names_a_key(kw.value, keys)
+                            for kw in node.keywords))):
             return True
         if isinstance(node, ast.Name) and node.id in lanes and fn.name != node.id:
             return True
@@ -196,13 +200,23 @@ def test_the_scanner_reports_an_undeclared_writer():
         "@router.post('/b')\n"
         "async def block(request, cfg):\n"
         "    cfg['telegram_config'] = {'enabled': True, 'whitelist': []}\n"
+        "@router.post('/s')\n"
+        "async def splat(request, wc):\n"
+        "    wc.update(**{'owner_control': {}})\n"
+        "@router.post('/a')\n"
+        "async def annotated(request, cfg):\n"
+        "    cfg['telegram_config']: dict = {'whitelist': []}\n"
+        "@router.post('/n')\n"
+        "async def bare_annotation(request, cfg):\n"
+        "    cfg['telegram_config']: dict\n"
         "@router.get('/w')\n"
         "async def harmless(request):\n"
         "    out = {'whitelist': []}\n"
         "    out.update(count=1)\n"
         "    return {'whitelist': []}\n"
     )
-    assert writer_routes(synthetic) == ["also", "block", "keywords", "pops", "sneaky", "updates"]
+    assert writer_routes(synthetic) == ["also", "annotated", "block", "keywords", "pops", "sneaky", "splat",
+                                        "updates"]
 
 
 # -- the probes -------------------------------------------------------------------------------

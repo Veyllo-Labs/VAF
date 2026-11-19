@@ -520,8 +520,13 @@ def save_whatsapp_chat_jid(
         data = _load_endpoints()
         if user_scope_id is not None:
             data["whatsapp_by_scope"][str(user_scope_id)] = chat_jid
-        uname = (username or "").strip() or "admin"
-        data["whatsapp_by_username"][uname] = chat_jid
+        # The same rule as the reader: the name defaults to "admin" only for a caller without
+        # any scope. A scoped caller without a name wrote the "admin" key (measured: a
+        # non-admin's own number landed under the admin's name, which the legacy lookup then
+        # returned for the admin).
+        uname = (username or "").strip() or ("admin" if user_scope_id is None else "")
+        if uname:
+            data["whatsapp_by_username"][uname] = chat_jid
         _save_endpoints(data)
 
 
@@ -573,6 +578,14 @@ def get_whatsapp_chat_jid(
     number, which the earlier model used as the owner's chat. Dropping every JID that is not
     a registered number would remove both, and with no number registered proactive WhatsApp
     messages would then go to the web UI only. That trade is not made here.
+
+    Two kinds of wrong JID can also be stored from the time a scoped caller without a name was
+    read as "admin" (both writers now follow the scope): (a) `whatsapp_by_scope[<a non-admin's
+    scope>]` holding the admin's registered number, and (b) `whatsapp_by_username["admin"]`
+    holding a non-admin's number, which this lookup still returns to an admin whose scope key
+    was never written. Neither reaches another account's Node process (the send carries its
+    scope, `whatsapp_bridge._process_for`); a send to such a JID is refused by the reply check
+    unless that number may be answered. They are not repaired here.
     """
     with _ENDPOINTS_LOCK:
         data = _load_endpoints()

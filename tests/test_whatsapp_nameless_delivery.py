@@ -142,15 +142,94 @@ def test_a_nameless_notification_is_delivered_as_its_own_account(world, monkeypa
     assert (sent, channel) == (False, None), "Alice has no number of her own, so nothing goes out"
     assert _asked(world) == []
     assert mc.get_whatsapp_chat_jid(ALICE_SCOPE, "alice") is None
-    # Her own number registered: it goes to her number, through nobody else's process.
+    # Her own number registered: it is queued for her own account and number, with her scope,
+    # and nobody else's process takes it (she runs none).
     world_cfg = Config.get("whatsapp_config")
     world_cfg["whitelist"].append({"phone_number": "+4917000000002", "user_scope_id": ALICE_SCOPE, "vaf_username": "alice"})
-    mc.send_to_main_messenger(ALICE_SCOPE, None, "alice's private reminder")
+    assert mc.send_to_main_messenger(ALICE_SCOPE, None, "alice's private reminder") == (True, "whatsapp")
+    queued = list(wa._outgoing_queue.queue)
+    assert [(q[0], q[1], q[2], q[8]) for q in queued] == [
+        ("alice", "4917000000002@s.whatsapp.net", "alice's private reminder", ALICE_SCOPE)]
     _drain()
     assert _asked(world) == []
 
 
+def test_a_scoped_lookup_without_a_name_never_writes_the_admin_name_key(world):
+    """Her own number found by scope is saved under her scope only. MUTATION: the saver's
+    name defaults to "admin" again for a scoped caller."""
+    Config.get("whatsapp_config")["whitelist"].append(
+        {"phone_number": "+4917000000002", "user_scope_id": ALICE_SCOPE, "vaf_username": "alice"})
+    assert mc.get_whatsapp_chat_jid(ALICE_SCOPE, None) == "4917000000002@s.whatsapp.net"
+    stored = json.loads(mc._endpoints_path().read_text(encoding="utf-8"))
+    assert stored["whatsapp_by_username"] == {"admin": ADMIN_JID}
+    assert stored["whatsapp_by_scope"][ALICE_SCOPE] == "4917000000002@s.whatsapp.net"
+    assert mc.get_whatsapp_chat_jid(None, None) == ADMIN_JID
+
+
+def test_the_reply_check_of_a_confirmed_send_reads_the_requests_scope(world):
+    """A send under the default name for Alice's scope to Alice's own number: the check asks
+    about HER numbers (and the process step then refuses it, she runs none). MUTATION: call
+    `_is_reply_allowed` without the scope (it then reads the admin's numbers and refuses her
+    number as a stranger)."""
+    Config.get("whatsapp_config")["whitelist"].append(
+        {"phone_number": "+4917000000002", "user_scope_id": ALICE_SCOPE, "vaf_username": "alice"})
+    assert wa._is_reply_allowed("admin", "4917000000002@s.whatsapp.net", user_scope_id=ALICE_SCOPE) is True
+    wa._pending_sends.clear()
+    out = wa.send_whatsapp_with_confirmation("admin", "4917000000002@s.whatsapp.net", "hi", timeout=0.05,
+                                             user_scope_id=ALICE_SCOPE)
+    assert "Cannot send" not in out
+
+
+def test_the_send_tool_called_without_a_name_acts_as_its_scope(world, monkeypatch):
+    """MUTATION: `kwargs.get("username") or "admin"` in `SendWhatsAppTool.run`."""
+    from vaf.tools.send_whatsapp import SendWhatsAppTool
+    Config.get("whatsapp_config")["whitelist"].append(
+        {"phone_number": "+4917000000002", "user_scope_id": ALICE_SCOPE, "vaf_username": "alice"})
+    seen = []
+    monkeypatch.setattr(wa, "send_whatsapp_with_confirmation",
+                        lambda username, chat_jid, text, **k: seen.append((username, chat_jid, k.get("user_scope_id")))
+                        or "Message sent via WhatsApp.")
+    assert SendWhatsAppTool().run(message="hi", user_scope_id=ALICE_SCOPE) == "Message sent via WhatsApp."
+    assert seen == [("alice", "4917000000002@s.whatsapp.net", ALICE_SCOPE)]
+
+
 # -- the callers that named nobody -----------------------------------------------------------
+
+def _thinking(monkeypatch):
+    import vaf.core.thinking_mode as tm
+    monkeypatch.setattr(Platform, "vaf_dir", staticmethod(lambda: Platform.data_dir()))
+    return tm
+
+
+def test_the_thinking_nudge_without_a_name_goes_to_its_scope(world, monkeypatch):
+    """MUTATION: the nudge's name `w.get("username") or "admin"` again."""
+    import time as _time
+    tm = _thinking(monkeypatch)
+    monkeypatch.setattr(tm, "get_waiting_for_reply", lambda scope: {
+        "question_sent_at_ts": _time.time() - 35 * 60, "nudge_sent_at_ts": None, "channel": "whatsapp"})
+    monkeypatch.setattr(tm, "chase_is_active", lambda w: True)
+    monkeypatch.setattr("vaf.core.last_interaction.get_last_interaction", lambda scope: None)
+    seen = []
+    monkeypatch.setattr(tm, "_send_nudge", lambda scope, username, display_name, **k: seen.append((username, display_name)) or False)
+    assert tm._process_waiting_reply(ALICE_SCOPE) == "skip"
+    assert seen == [("alice", "alice")]
+
+
+def test_a_thinking_question_without_a_name_goes_to_its_scope(world, monkeypatch):
+    """MUTATION: `deliver_tracked_message` reads `username or <the local admin's name>` again."""
+    tm = _thinking(monkeypatch)
+    monkeypatch.setattr(tm, "run_has_open_request", lambda scope: False)
+    monkeypatch.setattr(tm, "_main_agent_busy", lambda scope: False, raising=False)
+    monkeypatch.setattr(tm, "_question_too_similar", lambda scope, msg: False)
+    monkeypatch.setattr(tm, "emit_message_to_web_ui", lambda scope, content, session_id=None: "sid-web")
+    seen = []
+    monkeypatch.setattr(mc, "send_to_main_messenger", lambda scope, uname, text, **k: seen.append(uname) or (True, "whatsapp"))
+    tm.set_proactive_mode(ALICE_SCOPE, "open")
+    assert tm.deliver_tracked_message(ALICE_SCOPE, "Soll ich das einrichten?")
+    assert seen == ["alice"]
+    assert tm.get_waiting_for_reply(ALICE_SCOPE)["username"] == "alice"
+
+
 
 def test_an_old_reminder_without_a_name_is_delivered_as_its_scope(world, monkeypatch):
     from vaf.core import reminders

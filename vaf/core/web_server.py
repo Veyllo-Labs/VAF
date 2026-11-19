@@ -6929,6 +6929,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                     await websocket.send_json({"type": "contact_reply_result", "ok": True, "decision": "approve", "replyId": reply_id})
                                 elif src == "whatsapp":
                                     from vaf.core.whatsapp_reply import send_whatsapp_reply
+                                    # Unreachable today: contact_reply_pending.store_pending has no
+                                    # caller. Its payload carries no scope; a writer wired up later
+                                    # must store the account's scope and pass it here as
+                                    # user_scope_id, which holds the send to that account's process
+                                    # (whatsapp_bridge._process_for) and its reply check.
                                     send_whatsapp_reply(payload.get("username") or "admin", str(payload["chat_id_or_jid"]), text)
                                     await websocket.send_json({"type": "contact_reply_result", "ok": True, "decision": "approve", "replyId": reply_id})
                                 else:

@@ -73,8 +73,11 @@ class SendWhatsAppTool(BaseTool):
         if not message:
             return "No message provided. Pass the message text (or caption for documents)."
 
-        username = kwargs.get("username") or "admin"
         user_scope_id = kwargs.get("user_scope_id")
+        # Dispatch injects the caller's name; a direct call without one is its scope's account,
+        # not the local admin's (`resolve_caller_username`).
+        from vaf.core.config import resolve_caller_username
+        username = resolve_caller_username(kwargs.get("username"), user_scope_id, allow_lookup=True)
 
         # GUARD: in a contact conversation (Front Office) this tool has one legitimate
         # recipient, the owner's registered number. The reply to the contact is delivered

@@ -1223,7 +1223,7 @@ def send_whatsapp_with_confirmation(
     # Voice/document need more time (TTS synthesis, file upload)
     if voice_path or document_path:
         timeout = max(timeout, 45.0)
-    if not allow_contact_send and not _is_reply_allowed(username, chat_jid):
+    if not allow_contact_send and not _is_reply_allowed(username, chat_jid, user_scope_id=user_scope_id):
         return (
             "WhatsApp: Cannot send - this number is neither the registered main-user number, "
             "a contact who can reach the assistant, nor an open conversation. "

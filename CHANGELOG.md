@@ -696,8 +696,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
     out.
   - A shell's `-c` script given as a tilde path where the command may set HOME, or as `~+`
     or a directory-stack entry (`HOME=/tmp/h bash -c ~/x.sh`, `source env.sh; bash -c
-    ~/x.sh`, `bash -c ~+/x.sh`, also inside `sh -c '...'`): write the path out
-    (`bash /home/me/x.sh`).
+    ~/x.sh`, `bash -c ~+/x.sh`, also inside `sh -c '...'`), also beside a word with braces
+    anywhere in the command (`mkdir -p out/{bin,lib} && bash -c ~/build.sh`), or under a
+    user name that starts with a digit (`bash -c ~2fa/x.sh`): write the path out
+    (`bash /home/me/x.sh`), or leave out the `-c` (`bash ~/build.sh`).
+  - An option word with a variable in it before more than 63 words (`x=c; bash -c$x w0 ...
+    w63`): write the option out.
+  - Text piped into a shell whose input is redirected from a variable (`echo '...' | bash <
+    "$f"`): leave out the pipe, the shell reads the file.
   - `... | base64 -d | sh`, `xxd -r -p | sh`, `... | rev | sh`: decode into a file, read it,
     then run it.
   - `powershell -EncodedCommand ...` (also `-enc`, `-e`, `-ec`): `-Command` with the text.

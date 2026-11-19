@@ -1178,63 +1178,64 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   it, or write its value in), or escape it (`\$P`, which an unquoted heredoc hands on as
   `$P`; `\\$P` expands); a quoted heredoc passes. A here-string written `$'...'` hands the
   shell its decoded text and expands nothing (`bash <<< $'set -e\nmake'` passes). Assignment
-  words before a program are
-  stepped over in every form bash takes (`a+=1 cmd`, `a[0]=1 cmd`, `a[${#a[@]}]=x`), and a
-  shell reads its long options first, with one dash or two (`-norc` and `--norc`, `-rcfile F`
-  and `-init-file F` with their value, also quoted to look like a redirection, `-rcfile '<'`;
-  `sh`, which may be dash, is read both ways, and so is every shell with its clusters taking
-  their values and not, as the check read them before, so no refusal of that reading is
-  lost; a long option with an expansion in it may be any of them, refused or its input
-  read), then its
-  options after `-c` too, and runs the first word that is none (`bash -c -e '...'`,
-  `sh -c - '...'`), `+c` being `-c` as well (`bash +c '...'` runs it), and so does an option
-  word with an expansion in it, a word that starts with one or a tilde word (`~`, `~+`,
-  `~-`, a variable's value), which may be either (`x=c; bash -$x -e '...'`,
-  `x=-c; bash "$x" '...'`, `HOME=-c; bash ~ '...'`), and such a word may also hold `o`
-  letters taking any number of values, so every later word is read as the script as well
-  (`x=o; bash -c$x pipefail '...'`); a cluster takes one following word as a value for each
-  `o` or `O` in it (`bash -ceo pipefail '...'`, and `bash -eo pipefail` has no script, so it
-  reads its input), an option word with an expansion in it may be `-s` as well, after a `c`
-  a word that starts with an expansion is the script itself (`bash -c -e "$x"`, refused as
-  opaque), and one with a tilde prefix (at its start, or after the `=` and each `:` of an
+  words before a program are stepped over in every form bash takes (`a+=1 cmd`, `a[0]=1
+  cmd`, `a[${#a[@]}]=x`), and a shell reads its long options first, with one dash or two
+  (`-norc` and `--norc`, `-rcfile F` and `-init-file F` with their value, also quoted to
+  look like a redirection, `-rcfile '<'`; `sh`, which may be dash, is read both ways, and so
+  is every shell with its clusters taking their values and not, as the check read them
+  before, so no refusal of that reading is lost; a long option with an expansion in it may
+  be any of them, refused or its input read), then its options after `-c` too, and runs the
+  first word that is none (`bash -c -e '...'`, `sh -c - '...'`), `+c` being `-c` as well
+  (`bash +c '...'` runs it), and so does an option word with an expansion in it, a word that
+  starts with one or a tilde word (`~`, `~+`, `~-`, a variable's value), which may be either
+  (`x=c; bash -$x -e '...'`, `x=-c; bash "$x" '...'`, `HOME=-c; bash ~ '...'`), and such a
+  word may also hold `o` letters taking any number of values, so every later word is read as
+  the script as well (`x=o; bash -c$x pipefail '...'`; more than 63 such later words are
+  more than one command may read, so the script is unknown, refused, a known over-refusal
+  that fails closed); a cluster takes one following word as a value for each `o` or `O` in
+  it (`bash -ceo pipefail '...'`, and `bash -eo pipefail` has no script, so it reads its
+  input), an option word with an expansion in it may be `-s` as well, after a `c` a word
+  that starts with an expansion is the script itself (`bash -c -e "$x"`, refused as opaque),
+  and one with a tilde prefix (at its start, or after the `=` and each `:` of an
   assignment-shaped word, `a=~`) runs a directory variable's value, refused when the text
   may set it: HOME when the text may give it a value as for a quoted script name below
-  (names in pieces, a loop's name, a brace-built name; in a text another command runs,
-  always), `~+`, `~-` and the directory stack (`~0`, `~+1`) always, since a `cd` sets them;
-  `bash -c ~/bin/tool.sh` in a text that sets nothing passes, while
-  `HOME=/tmp/h bash -c ~/x.sh`, `export PATH=$PATH:~/bin; bash -c ~/x.sh`,
-  `source env.sh; bash -c ~/x.sh`, `bash -c ~+/x.sh` and every tilde script in a text
-  another command runs (`sh -c 'bash -c ~/x.sh'`) are refused, known over-refusals that
-  fail closed; a word bash
-  brace-expands, its braces unquoted, nested too (`bash {-c,'...'}`, `{-s,{x}}`), makes the
-  script unknown, refused, also as the script itself, while a quoted script keeps its braces
-  as text (`bash -c 'for i in {1..3}; do ...; done'` passes; a brace word as a script file,
-  `bash {a,b}.sh`, is refused too, a known over-refusal that fails closed); a quoted script
-  that starts like a redirection is read as well (`bash -c -e '>x;cmd'`). A tilde word at the
+  (names in pieces, a loop's name, a brace-built name, so a brace word anywhere in the text,
+  quoted too, since `declare {HO,}ME=...` sets HOME; in a text another command runs,
+  always), `~+`, `~-` and the directory stack (`~0`, `~+1`, also `~2fa/x.sh`, a user name
+  that starts with a digit) always, since a `cd` sets them; `bash -c ~/bin/tool.sh` in a
+  text that sets nothing passes, while `HOME=/tmp/h bash -c ~/x.sh`, `export
+  PATH=$PATH:~/bin; bash -c ~/x.sh`, `source env.sh; bash -c ~/x.sh`, `mkdir -p
+  out/{bin,lib} && bash -c ~/build.sh`, `bash -c ~+/x.sh`, `bash -c ~2fa/x.sh` and every
+  tilde script in a text another command runs (`sh -c 'bash -c ~/x.sh'`) are refused, known
+  over-refusals that fail closed (`bash ~/build.sh` passes); a word bash brace-expands, its
+  braces unquoted, nested too (`bash {-c,'...'}`, `{-s,{x}}`), makes the script unknown,
+  refused, also as the script itself, while a quoted script keeps its braces as text (`bash
+  -c 'for i in {1..3}; do ...; done'` passes; a brace word as a script file, `bash
+  {a,b}.sh`, is refused too, a known over-refusal that fails closed); a quoted script that
+  starts like a redirection is read as well (`bash -c -e '>x;cmd'`). A tilde word at the
   script name reads the input too (`HOME=-s; ... | bash ~`), and so does a shell whose input
-  is redirected from itself (`<&0`, `</dev/stdin`, `</dev/fd/0`, `</proc/self/fd/0`: the pipe
-  still feeds it). An unquoted expansion as a shell's
-  script name may vanish, so the shell's input is read too (`bash $! <<< '...'`). A quoted
-  one is one word, never an option, only when it is exactly `"$NAME"` or `"${NAME}"` (empty
-  quotes add nothing, `''"$x"`) and the text can give NAME no value: NAME appears nowhere
-  else in the text, not even inside another word (`a=-s`, `read a`, `printf -va`,
-  `read -ax`, `for a in`), also with line continuations, `$''`, quotes and backslashes
-  taken out (`declare S''S=-s` assigns `SS`), bash does not assign it itself (`REPLY`,
-  `OPTARG`, `MAPFILE`, `_`, `BASH_...`), and the text assigns no name it does not spell
-  (`eval`, `source`, `.`, `alias`, `${!...}`, a brace expansion, `declare {S,Z}S=-s`, a name
-  given by
-  an expansion to `declare`, `read` or `printf -v`, also spelled with quotes, `de''clare`,
-  and a `printf` whose first word is an expansion that may be `-v`). So `bash "$S"`,
-  `bash "$SCRIPT" <<< "$INPUT"` and
-  `printf '%s\n' "$ans" | bash "$S"` pass, and everything else reads the input as well: an
-  operator (`"${x:---}"`), a substitution (`"$(echo -)"`), `$@`, literal text beside the
-  expansion (`"$x"-s`), every positional parameter (`"$1"`, `"$*"`, also `"$0"`, which
-  `BASH_ARGV0=` sets), and every quoted expansion in a text another command runs (`bash -c`,
-  `eval`, a heredoc), whose names and arguments come from outside it. At most 64 distinct
-  names are looked up in one text, each in a few passes over it; past that a quoted name
-  reads the input (fail closed). A
-  newline right after a `|`
-  continues the pipeline, as bash reads it.
+  is redirected from itself (`<&0`, `</dev/stdin`, `</dev/fd/0`, `</proc/self/fd/0`: the
+  pipe still feeds it) or from a target that holds an expansion, which may name the pipe as
+  well (`<&$z`, `< "$f"`: `echo '...' | bash < "$f"` reads the echoed text too, a known
+  over-refusal; `bash < "$f"` alone passes). An unquoted expansion as a shell's script name
+  may vanish, so the shell's input is read too (`bash $! <<< '...'`). A quoted one is one
+  word, never an option, only when it is exactly `"$NAME"` or `"${NAME}"` (empty quotes add
+  nothing, `''"$x"`) and the text can give NAME no value: NAME appears nowhere else in the
+  text, not even inside another word (`a=-s`, `read a`, `printf -va`, `read -ax`, `for a
+  in`), also with line continuations, `$''`, quotes and backslashes taken out (`declare
+  S''S=-s` assigns `SS`), bash does not assign it itself (`REPLY`, `OPTARG`, `MAPFILE`, `_`,
+  `BASH_...`), and the text assigns no name it does not spell (`eval`, `source`, `.`,
+  `alias`, `${!...}`, a brace expansion, `declare {S,Z}S=-s`, a name given by an expansion
+  to `declare`, `read` or `printf -v`, also spelled with quotes, `de''clare`, and a `printf`
+  whose first word is an expansion that may be `-v`). So `bash "$S"`, `bash "$SCRIPT" <<<
+  "$INPUT"` and `printf '%s\n' "$ans" | bash "$S"` pass, and everything else reads the input
+  as well: an operator (`"${x:---}"`), a substitution (`"$(echo -)"`), `$@`, literal text
+  beside the expansion (`"$x"-s`), every positional parameter (`"$1"`, `"$*"`, also `"$0"`,
+  which `BASH_ARGV0=` sets), and every quoted expansion in a text another command runs
+  (`bash -c`, `eval`, a heredoc), whose names and arguments come from outside it. At most 64
+  distinct names are looked up in one text, each in a few passes over it; past that a quoted
+  name reads the input (fail closed). A newline right after a `|` continues the pipeline, as
+  bash reads it.
 - **Bounds.** Every reading, the command itself included, spends one of
   `MAX_NESTED_COMMANDS` (64), so one command carries at most 63 nested readings, each
   reading counting as one (`$(( $(x) ))` is two), and a command nested more than
@@ -1414,17 +1415,17 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   `trap` or `env -S`, 723; the pipe copied to another descriptor and back, 420; a quoted
   word that looks like a redirection, 37; an alias, 6). On the readings before, these three
   generators and one more had found 3 001, 4 862, 7 261 and 9 627 twins; every class of them
-  is read and pinned or named below as a boundary. Two
-  tests guard what such runs cannot see: everyday shell invocations (brace expansion and
-  tilde paths in `-c` scripts, loops, globs, long options) pass, and one adversarial shape for
-  every scan the shell readings add, many distinct words after an option word included,
-  grows linearly in CPU time from 15 K to 120 K characters. No refusal of the reading
-  before this change was lost in
-  any of them (bash 5.3; the suite runs 1 600 draws). The classes the differential found on the way are each pinned in
+  is read and pinned or named below as a boundary. Two tests guard what such runs cannot
+  see: everyday shell invocations (brace expansion and tilde paths in `-c` scripts, loops,
+  globs, long options) pass, and one adversarial shape for every scan the shell readings
+  add, many distinct words after an option word and many distinct here-strings fed to a
+  shell included, grows linearly in CPU time from 15 K to 120 K characters. No refusal of
+  the reading before this change was lost in any of them (bash 5.3; the suite runs 1 600
+  draws). The classes the differential found on the way are each pinned in
   `tests/test_command_grammar_reading.py`, and every probe written while the reading was
   built and checked, every pinned row and every corpus row that ran the marker in bash, 3 368
   of them, is in `tests/fixtures/command_policy/never_again.json` and refused on every lane
-  (102 more belong to the named boundaries below and are kept apart under their names).
+  (105 more belong to the named boundaries below and are kept apart under their names).
 - **Named boundary: what it does not read.** cmd.exe's and PowerShell's own grammar (`%VAR%`
   as the program, the text `pwsh -Command` runs); dash's differences from bash, read as bash,
   the larger grammar; decompressors and other programs that write new text piped into a
@@ -1467,8 +1468,9 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   reading takes it for one (`echo ... | bash -rcfile '<'`, `bash -rcfile '<' -x"$e"x -c
   '...'`: the here-string form `bash -rcfile '<' <<< ...` is read); a tilde word or a
   directory variable run as code by `eval`, `trap` or `env -S` (`HOME='...'; eval ~/`,
-  `eval -- ~+/`, `trap ~/ EXIT`, `eval "$HOME/"`), the twins of `eval "$HOME"`, which is
-  refused; an alias with `expand_aliases` (named above) also when it stands for `bash -c`. A
+  `eval -- ~+/`, `trap ~/ EXIT`, `eval "$HOME/"`), or printed into a shell
+  (`HOME='...'; echo ~ | sh`, `bash <<< ~`, `printf %s ~ | sh`), the twins of
+  `eval "$HOME"` and `echo $HOME | sh`, which are refused; an alias with `expand_aliases` (named above) also when it stands for `bash -c`. A
   `case` statement inside a substitution stays refused as unreadable (see
   `case` above).
 - **Comments and heredocs in the other two readings.** Neither takes a `#` as a comment, so

@@ -3372,115 +3372,127 @@
  "boundaries": [
   {
    "command": "HOME+=';rm -fr / #'; builtin eval ~/",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "HOME+=';rm -r -f / #'\ntrap a=~ EXIT",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "HOME+=';rm -rf / #'\neval ~",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "HOME=';rm -r -f / #'; eval a=~",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "HOME=';rm -rf / #'; eval a=~",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "HOME='rm -fr / #'; env -S ~",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "HOME='rm -fr / #'; trap ~ EXIT",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "HOME='rm -r -f / #' && env -S ~/",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "HOME='rm -r -f / #'; trap ~/ EXIT",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "HOME='rm -rf / #' && eval -- ~",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "HOME='rm -rf / #' && eval ~",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "HOME='rm -rf / #'; builtin eval ~/",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "HOME='rm -rf / #'; command eval ~/",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "HOME='rm -rf / #'; eval \"$HOME/\"",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "HOME='rm -rf / #'; eval -- ~/",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "HOME='rm -rf / #'; eval ~",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "HOME='rm -rf / #'; eval ~/",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "HOME='rm -rf / #'; trap -- ~/ EXIT",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "HOME='rm -rf / #'; trap ~/ EXIT",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
+  },
+  {
+   "command": "HOME='rm -rf /'; bash <<< ~",
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
+  },
+  {
+   "command": "HOME='rm -rf /'; echo ~ | sh",
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "HOME='rm -rf /'; env -S ~",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
+  },
+  {
+   "command": "HOME='rm -rf /'; printf %s ~ | sh",
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "OLDPWD+='rm -rf / #' && env -S ~-/",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "PWD+=';rm -r -f / #'; trap ~+/ EXIT",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "PWD+=';rm -rf / #' && eval -- ~+/",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "PWD='rm -fr / #'\nbuiltin eval ~+",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "PWD='rm -r -f / #'\neval -- ~+/",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "PWD='rm -r -f / #'; eval -- ~+/",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "PWD='rm -rf / #'\nbuiltin eval ~+",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "PWD='rm -rf / #'; eval ~+",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "[[ -n $( ( echo 'rm -rf /' >&2 ) >/dev/null ) ]] 2>&1 | bash",
@@ -3500,19 +3512,19 @@
   },
   {
    "command": "declare H\\OME='rm -fr / #'\nenv -S ~",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "declare PWD='rm -r -f / #'\neval ~+",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "declare PWD='rm -rf / #' && eval ~+/",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "e=\ndeclare PWD='rm -rf / #'\neval ~+",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "e=\nshopt -s expand_aliases\nalias b_='bash -c'\nb_ 'rm -fr /'",
@@ -3688,23 +3700,23 @@
   },
   {
    "command": "export HO$''ME='rm -rf / #'; eval ~",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "export HOME=';rm -fr / #'; eval a=~",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "export PW\"\"D='rm -fr / #'; eval ~+/",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "export PWD='rm -fr / #'\nenv -S ~+/",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "export PWD='rm -rf / #'; eval ~+",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "f() { ( echo 'rm -rf /' >&2 ) >/dev/null; } 2>&1; f | bash",
@@ -3740,7 +3752,7 @@
   },
   {
    "command": "mkdir 'x;rm -rf ${HOME::1}'; cd 'x;rm -rf ${HOME::1}'; eval ~0",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "mkfifo p; bash p & echo 'rm -rf /' > p",
@@ -3748,15 +3760,15 @@
   },
   {
    "command": "readonly H\"\"OME='rm -fr / #'\neval ~/",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "readonly HOME='rm -fr / #'\neval ~/",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "readonly HO\\ME='rm -r -f / #'\neval ~",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   },
   {
    "command": "shopt -s expand_aliases\nalias b_='bash -c'\nb_ 'rm -fr /'",
@@ -3776,7 +3788,7 @@
   },
   {
    "command": "typeset HOME='rm -rf / #'\nenv -S ~",
-   "boundary": "a tilde word run as code by eval, trap or env -S"
+   "boundary": "a tilde word run as code by eval, trap or env -S, or printed into a shell"
   }
  ]
 }

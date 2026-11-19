@@ -2125,7 +2125,7 @@ _NAMED_BOUNDARIES = {
     "a named pipe's text",
     "a shell's input moved to another descriptor and back",
     "a quoted word that looks like a redirection where a reading takes it for one",
-    "a tilde word run as code by eval, trap or env -S",
+    "a tilde word run as code by eval, trap or env -S, or printed into a shell",
     "an alias with expand_aliases",
 }
 
@@ -2246,6 +2246,27 @@ def _plain_word(n):
     return "echo " + "a" * n
 
 
+def _b36(i):
+    digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+    word = ""
+    while True:
+        i, r = divmod(i, 36)
+        word = digits[r] + word
+        if not i:
+            return word
+
+
+def _filled(head, part, n):
+    """`head` followed by `part(0)`, `part(1)`, ... while the text stays within n characters:
+    the shortest distinct words, so the most of them fit."""
+    out, size, i = [head], len(head), 0
+    while size + len(part(i)) <= n:
+        out.append(part(i))
+        size += len(part(i))
+        i += 1
+    return "".join(out)
+
+
 # One adversarial shape for every pattern or scan the shell readings added: unclosed
 # delimiters, glued repeats, long runs of the pattern's own characters. A shape that is one
 # long word grows no faster than 1.25 times a plain word of the same length (shlex builds a
@@ -2293,6 +2314,10 @@ _COST_SHAPES = [
      lambda n: "bash ~ " + " ".join("w%d" % i for i in range(n // 7))),
     ("distinct words after a quoted expansion", False,
      lambda n: "bash \"$x\" " + " ".join("w%d" % i for i in range(n // 7))),
+    ("distinct here-strings", False,
+     lambda n: _filled("bash", lambda i: " <<<%s" % _b36(i), n)),
+    ("distinct ansi-c here-strings", False,
+     lambda n: _filled("bash", lambda i: " <<<$'%s'" % _b36(i), n)),
 ]
 
 
@@ -2306,7 +2331,10 @@ def test_the_shell_readings_scale_linearly(name, one_word, build):
     MUTATION: the brace test as a backtracking pattern - red (the brace rows);
     MUTATION: read printf's first word from each match to the word's end - red (glued printf);
     MUTATION: read the text for HOME at every tilde script - red (tilde paths after -c);
-    MUTATION: later-word candidates deduplicated in a list - red (the distinct-words rows)."""
+    MUTATION: the cap on later words removed and the candidates deduplicated in a list, both
+    reverted - red (distinct words after an expansion option); either alone stays green;
+    MUTATION: the here-strings of the shell readings joined with a list test - red (the
+    distinct here-strings rows)."""
     def took(text):
         assert len(text) <= cp._MAX_COMMAND_CHARS, (name, len(text))
         best = None

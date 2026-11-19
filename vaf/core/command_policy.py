@@ -2497,17 +2497,23 @@ def _read(command: str, *, profile: str, _depth: int, _budget: Optional[list],
             readings = _shell_readings(exe) if exe in _STDIN_SHELLS else ((False, True),)
             from_where, script_literals, from_pipe = _script_input(
                 exe, args, carried, sink_raws, script_name, *readings[0])
+            # Joined through a set: every reading returns every here-string again, so a
+            # membership test against the list grows with the square of their number.
+            seen_literals = set(script_literals)
+
+            def join_literals(more):
+                for t in more:
+                    if t not in seen_literals:
+                        seen_literals.add(t)
+                        script_literals.append(t)
             for long_options, cluster_values in readings[1:]:
                 where_other, literals_other, pipe_other = _script_input(
                     exe, args, carried, sink_raws, script_name, long_options, cluster_values)
                 from_where = from_where or where_other
-                script_literals = script_literals + [
-                    t for t in literals_other if t not in script_literals]
+                join_literals(literals_other)
                 from_pipe = from_pipe or pipe_other
             for alt in alternatives if exe_at >= 0 else ():
-                extra_literals = _script_input(exe, alt[exe_at + 1:], carried)[1]
-                script_literals = script_literals + [
-                    t for t in extra_literals if t not in script_literals]
+                join_literals(_script_input(exe, alt[exe_at + 1:], carried)[1])
             if from_where:
                 if "opaque_command" not in cats:
                     cats.append("opaque_command")

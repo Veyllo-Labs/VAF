@@ -25,6 +25,7 @@ import hashlib
 import io
 import os
 import re
+import stat
 import tarfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -565,6 +566,30 @@ def test_a_plain_file_at_the_install_folder_is_replaced_in_one_start(linux_insta
     assert m.ensure_server_exists() is True
     assert os.path.isdir(m.bin_dir) and m.installed_build() == 10955
     assert not os.path.lexists(m.bin_dir + ".previous")
+
+
+def test_on_windows_a_read_only_file_at_the_install_folder_leaves_no_leftover(linux_install, monkeypatch):
+    """Windows' rule played on Linux: a read-only file cannot be unlinked. The plain file at
+    bin/llama-cpp goes to .previous and, once the new build is verified, through the staging
+    name to its removal; a direct unlink left it there, and the next pin change failed on
+    the leftover. MUTATION: drop the retry at the removal's root (red: .staging stays)."""
+    real_unlink = os.unlink
+
+    def unlink(path, *a, **k):
+        st = os.lstat(path, *a, **k)
+        if stat.S_ISREG(st.st_mode) and not st.st_mode & stat.S_IWUSR:
+            raise PermissionError(13, "Access is denied", str(path))
+        return real_unlink(path, *a, **k)
+
+    m, payload = linux_install
+    Path(m.bin_root).mkdir()
+    Path(m.bin_dir).write_bytes(b"not a folder")
+    os.chmod(m.bin_dir, 0o444)
+    monkeypatch.setattr(verified_download, "_WINDOWS", True)
+    monkeypatch.setattr(os, "unlink", unlink)
+    _fake_get(monkeypatch, payload)
+    assert m.ensure_server_exists() is True and m.installed_build() == 10955
+    assert not os.path.lexists(m.bin_dir + ".previous") and not os.path.lexists(m.bin_dir + ".staging")
 
 
 def test_an_up_to_date_build_stops_nothing(linux_install, monkeypatch):

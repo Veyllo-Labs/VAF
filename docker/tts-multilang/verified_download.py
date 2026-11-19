@@ -399,9 +399,19 @@ def remove_tree_or_link(path: str) -> None:
     of `path` is never changed. Deliberate: a second pass rather than an onerror/onexc
     handler, because rmtree has already given up on a folder it could not open when the
     handler runs (a retry from it fails), and the handler's name and signature differ
-    between the supported Python versions. Named boundary: a real folder that is swapped
-    for a link between its lstat and its chmod is followed; only someone who can already
-    write to the folder being removed can do that."""
+    between the supported Python versions. A plain file at `path` is treated the same way:
+    when Windows refuses to unlink it for its read-only attribute and no other name links
+    to it, the attribute is cleared and it is unlinked again (a swap moves a plain file at
+    the install folder aside, and its leftover would block the next install).
+
+    Named boundary: any folder of the tree that is swapped for a link while the walk runs
+    is followed. Each entry is reached by its path through its parent's name and os.chmod
+    follows a link in the last part, so a link put in place of a folder after its lstat, or
+    of a parent after it was listed, redirects the chmod and the walk below it. Only
+    someone who can already write inside the folder being removed can do that, and the
+    installs that call this exclude such a writer. Closing it would need a walk by
+    directory handle (dir_fd), which Windows does not offer, and a chmod that does not
+    follow a link, which Linux does not offer."""
     if os.path.islink(path):
         os.unlink(path)
     elif os.path.isdir(path):
@@ -410,7 +420,11 @@ def remove_tree_or_link(path: str) -> None:
             _make_removable(path)
             shutil.rmtree(path, ignore_errors=True)
     elif os.path.lexists(path):
-        os.unlink(path)
+        try:
+            os.unlink(path)
+        except OSError:
+            _make_removable(path)         # a read-only file on Windows, if only one name links to it
+            os.unlink(path)
     if os.path.lexists(path):
         raise OSError(f"{path} could not be removed completely")
 

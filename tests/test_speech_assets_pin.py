@@ -421,6 +421,35 @@ def test_on_windows_a_read_only_file_is_made_removable(tmp_path, windows_unlink)
     assert _mode(outside) == 0o444, "the other name of the file kept its read-only bit"
 
 
+@pytest.mark.skipif(not hasattr(os, "link"), reason="hard links")
+def test_on_windows_a_read_only_file_at_the_root_is_removed(tmp_path, windows_unlink):
+    """The swap moves a plain file at bin/llama-cpp aside, and a later step removes it as
+    .previous or .staging; that removal unlinked it directly, which Windows refuses for a
+    read-only file, so the leftover blocked the next install. A file with a second name and
+    a link are never changed. MUTATIONS: drop the retry (red: the single-link file stays);
+    make the file writable whatever its link count (red: the other name gains write)."""
+    single = tmp_path / "llama-cpp.staging"
+    single.write_bytes(b"a read-only file where the folder belongs")
+    os.chmod(single, 0o444)
+    assert _remove_bounded(single) is None
+    assert not os.path.lexists(single)
+
+    outside = tmp_path / "elsewhere"
+    outside.write_bytes(b"shared")
+    shared = tmp_path / "llama-cpp.previous"
+    os.link(outside, shared)
+    os.chmod(outside, 0o444)
+    error = _remove_bounded(shared)
+    assert isinstance(error, OSError)
+    assert _mode(outside) == 0o444 and os.path.lexists(shared), "a file with another name is left alone"
+
+    if hasattr(os, "symlink"):
+        link = tmp_path / "linked"
+        os.symlink(outside, link)
+        assert _remove_bounded(link) is None
+        assert not os.path.lexists(link) and _mode(outside) == 0o444, "a link is unlinked, never followed"
+
+
 @POSIX_MODES
 def test_on_windows_a_junction_is_not_entered(tmp_path, monkeypatch):
     """A directory junction is a reparse point lstat reports as a folder; it is neither

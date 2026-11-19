@@ -139,8 +139,20 @@ def _record_fits(record: Dict[str, Any], cfg: Dict[str, Any]) -> bool:
     return same_origin(str(record.get("audience") or ""), str((cfg or {}).get("url") or ""))
 
 
-def signed_in(server: str, user_scope_id: Optional[str]) -> bool:
-    return _has_tokens(mcp_secrets.oauth_record(server, account_key(user_scope_id)))
+def signed_in(server: str, user_scope_id: Optional[str], cfg: Optional[Dict[str, Any]] = None) -> bool:
+    """Whether this account has a sign-in it can use at the server entry `cfg` (default: the
+    entry the manifest names now): tokens, made at that entry's origin (`_record_fits`). A
+    record made at another address does not count, so a yes here is a yes from `auth_for`."""
+    record = mcp_secrets.oauth_record(server, account_key(user_scope_id))
+    entry = cfg if cfg is not None else (_server_cfg(server) or {})
+    return _has_tokens(record) and _record_fits(record, entry)
+
+
+def usable_accounts(server: str, cfg: Dict[str, Any]) -> List[str]:
+    """The accounts with a sign-in they can use at the server entry `cfg`: tokens, made at its
+    origin. Their keys, never a token."""
+    return [account for account in mcp_secrets.oauth_accounts(server)
+            if _has_tokens(record := mcp_secrets.oauth_record(server, account)) and _record_fits(record, cfg)]
 
 
 # -- the SDK's storage and provider ----------------------------------------------------------
@@ -337,8 +349,7 @@ def auth_for(server: str, cfg: Dict[str, Any], user_scope_id: Optional[str]) -> 
 def discovery_auth(server: str, cfg: Dict[str, Any]) -> RemoteAuth:
     """A signed-in account to ask the server for its tool list with: the local admin's when
     it has signed in, else the first one that has (see the module docstring)."""
-    accounts = [a for a in mcp_secrets.oauth_accounts(server)
-                if _has_tokens(record := mcp_secrets.oauth_record(server, a)) and _record_fits(record, cfg)]
+    accounts = usable_accounts(server, cfg)
     if not accounts:
         raise McpSignInRequired(f"no account has signed in to the MCP server '{server}' yet: "
                                 "sign in under Settings > Connections > MCP services")

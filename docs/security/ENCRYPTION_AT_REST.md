@@ -100,12 +100,13 @@ THE MASTER KEY, per platform (secure_store_kek_backend = "auto"):
         +-- backup_identities_previous   the backup keys this machine held before a restore
         |                                replaced its keyring, so their backups still open
         +-- mcp_server.<name>.env        a local MCP server's environment (its API keys)
-        +-- mcp_server.<name>.token      a remote MCP server's access token,
+        +-- mcp_server.<name>.token      a remote MCP server's access token with the
+        |                                address it was stored for (sent only there),
         |                                vaf/core/mcp_secrets.py
         +-- mcp_server.<name>.oauth.<account>
         |                                one account's sign-in at a remote MCP server
-        |                                (tokens, expiry, the client it registered),
-        |                                vaf/core/mcp_oauth.py
+        |                                (tokens, expiry, the client it registered, the
+        |                                address it was made at), vaf/core/mcp_oauth.py
         +-- mcp_server.<name>.oauth_client_secret
                                          the secret of a client registered by hand
 ```

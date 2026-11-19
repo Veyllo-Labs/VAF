@@ -171,7 +171,12 @@ def stored_token(name: str, url: str) -> str:
     is a remote server without a sign-in per account. The entry is read BEFORE the token is read
     again: every save writes the ring before the manifest and always writes the stored format,
     so a bare token read after the entry means no save changed the token between the two reads,
-    and the entry is the one it was stored with. Never raises."""
+    and the entry is the one it was stored with. Never raises.
+
+    Named boundary: that holds while every process that saves runs this release or newer. An
+    older VAF still running (a web app not yet restarted after an update) saves a bare token,
+    and a reader here may then pair it with the entry before or after that save. Such a process
+    sends any token to the wrong address itself; the gap closes when it restarts."""
     from vaf.core.mcp_secrets import server_token_record
     target = str(url or "")
     token, audience = server_token_record(name)
@@ -757,10 +762,10 @@ def remove_server(name: str) -> bool:
 
 def servers_for_display(status: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """The server list the Settings page may see: every entry with its live status, the env
-    names without values, whether a token or a client secret is stored and how many accounts
-    signed in, never a secret."""
-    from vaf.core.mcp_oauth import uses_sign_in
-    from vaf.core.mcp_secrets import oauth_accounts, oauth_client_secret, oauth_record, redacted_env, server_token
+    names without values, whether a token this server would be sent with or a client secret is
+    stored and how many accounts can use their sign-in at it, never a secret."""
+    from vaf.core.mcp_oauth import usable_accounts, uses_sign_in
+    from vaf.core.mcp_secrets import oauth_client_secret, redacted_env
     servers = (load_mcp_manifest() or {}).get("servers", {}) or {}
     status = dict(status or {})
     out = []
@@ -769,8 +774,9 @@ def servers_for_display(status: Optional[Dict[str, Any]] = None) -> List[Dict[st
             continue
         st = status.get(name, {})
         per_account = uses_sign_in(cfg)
-        signed_in = sum(1 for account in oauth_accounts(name)
-                        if (oauth_record(name, account).get("tokens") or {})) if per_account else 0
+        # Counted as `auth_for` would use them: a sign-in made at another address is none.
+        signed_in = len(usable_accounts(name, cfg)) if per_account else 0
+        remote = str(cfg.get("transport", "stdio")) in REMOTE_TRANSPORTS
         out.append({
             "name": name,
             "command": cfg.get("command", ""),
@@ -779,7 +785,9 @@ def servers_for_display(status: Optional[Dict[str, Any]] = None) -> List[Dict[st
             "enabled": bool(cfg.get("enabled", True)),
             "permission_level": cfg.get("permission_level", "write"),
             "env": redacted_env(name, cfg),
-            "token_set": bool(server_token(name)) if str(cfg.get("transport", "stdio")) in REMOTE_TRANSPORTS and not per_account else False,
+            # A token stored for another address (the URL was moved by a hand edit) is never
+            # sent to this one, so it is not shown as set: the editor then asks for a token.
+            "token_set": bool(stored_token(name, str(cfg.get("url") or ""))) if remote and not per_account else False,
             "auth": "oauth" if per_account else "",
             "oauth_client_id": str(cfg.get("oauth_client_id") or "") if per_account else "",
             "oauth_client_secret_set": bool(oauth_client_secret(name)) if per_account else False,

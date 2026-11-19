@@ -191,15 +191,26 @@ with the URL the request goes to. That covers a tool loaded before the server mo
 that read the file before a save, and another VAF process such as a CLI chat, which keeps its
 tools for as long as it runs and takes no lock of this one: the token and its address are one
 key-ring value, so they are always read together. An entry moved to another host without a new
-token keeps none; the test button sends the stored token only to the saved host, so a typo or a
-new server under an old name never receives it. A hand edit of `mcp_servers.json` that moves the
-URL to another host needs the token entered again (or written into the file with it). Removing a
-server removes its secrets only once the file no longer lists it.
+token keeps none; the test button sends the stored token only to the origin it was stored for,
+so a typo or a new server under an old name never receives it. A hand edit of `mcp_servers.json`
+that moves the URL to another host needs the token entered again (or written into the file with
+it); until then the editor shows no stored token. Removing a server removes its secrets only once
+the file no longer lists it.
 
 A token stored by an older release, without its address, still goes to the origin the entry
-names, as before, until the next save of that server binds it to the saved address. Named
-boundary: an older release that reads a token stored this way sends the stored text as it is
-and gets a 401; entering the token again there repairs it.
+names, as before, until the next save of that server binds it to the saved address. A stored
+value that opens with `{` is always read as the new format: one that cannot be read as such is
+treated as damaged and sent nowhere, never as a bare token (a real token is opaque text, never a
+JSON object).
+
+Named boundaries:
+- The guarantee across processes holds while every process that saves runs this release or
+  newer. An older VAF still running, such as a web app not yet restarted after an update, saves
+  a bare token, which another process may pair with the entry from before or after that save.
+  That older process sends tokens to the wrong address on its own anyway; the gap closes when it
+  restarts.
+- An older release that reads a token stored this way sends the stored text as it is and gets a
+  401; entering the token again there repairs it.
 
 A server with a sign-in per account adds two kinds of entry: `mcp_server.<name>.oauth.<account>`
 (one account's tokens and registered client, see "Sign-in per account") and
@@ -367,13 +378,14 @@ remove a server through a form (name, transport, command or URL, an access token
 enabled, `permission_level`), or paste a standard `{ "mcpServers": { … } }` config block (the format
 used by Claude Desktop / Cursor: `command` + `args` + `env` for a local server, `url` + `type` +
 `headers` for a remote one, whose bearer token fills the token field) into the panel to auto-fill the
-form. The token field starts empty and says when a token is stored; leaving it empty keeps it.
+form. The token field starts empty and says when a token is stored for the server's address;
+leaving it empty keeps it.
 For a remote server the form also sets the sign-in: none or one token for everybody, or every
 account signing in on its own, with an optional hand-registered client (ID and a write-only
 secret) and the redirect address such a client needs. The editor's test of such a server runs as
 the tester's own account when it has signed in, never as another's, and reads a 401 from a server
 nobody signed in to yet as "reachable, every account has to sign in". The server card says how many
-accounts signed in.
+accounts signed in at the server's current address.
 Env values come back empty for the same reason, and an empty value keeps the stored one. Saving
 keeps the keys the form does not show (`tool_permissions`). The
 Advanced-tab row shows "N connected / M configured" at a glance. Saving writes `mcp_servers.json` and

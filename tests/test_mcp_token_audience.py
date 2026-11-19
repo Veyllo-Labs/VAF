@@ -317,6 +317,35 @@ def test_a_sign_in_of_another_origin_is_not_listed_or_used_for_discovery_or_the_
     assert out["connected"] is True and pool.sent == [(A, {})], (out, pool.sent)
 
 
+def test_signed_in_and_the_settings_count_only_a_sign_in_made_at_the_entry_origin(manifest):
+    """The yes of `signed_in` and the count on the Settings card are the ones `auth_for`
+    gives: a record made at another address is no sign-in for this entry."""
+    from vaf.core import mcp_oauth
+    manifest.write({"svc": {"transport": "http", "url": A, "auth": "oauth"}})
+    tokens = {"access_token": "X", "token_type": "Bearer"}
+    mcp_secrets.set_oauth_record("svc", "scope-here", {"tokens": tokens, "audience": A2})
+    mcp_secrets.set_oauth_record("svc", "scope-there", {"tokens": tokens, "audience": B})
+    mcp_secrets.set_oauth_record("svc", "scope-old", {"tokens": tokens})     # made before the field
+    assert mcp_oauth.signed_in("svc", "scope-here") is True
+    assert mcp_oauth.signed_in("svc", "scope-old") is True
+    assert mcp_oauth.signed_in("svc", "scope-there") is False
+    assert mcp_oauth.signed_in("svc", "scope-there", {"transport": "http", "url": B2, "auth": "oauth"}) is True
+    shown = {s["name"]: s for s in reg.servers_for_display({})}["svc"]
+    assert shown["accounts_signed_in"] == 2, shown
+
+
+def test_a_token_stored_for_another_address_is_not_shown_as_set(manifest):
+    """After a hand edit moved the URL, the stored token is never sent to the new address, so
+    the editor must not say "a token is stored, leave the field empty to keep it"."""
+    manifest.write({"svc": {"transport": "http", "url": A}})
+    for value, shown_set in ((json.dumps({"audience": A2, "token": "T"}), True),
+                             (json.dumps({"audience": B, "token": "T"}), False),
+                             ("BARE", True)):
+        data_keyring.set_data_secret(RING, value)
+        shown = {s["name"]: s for s in reg.servers_for_display({})}["svc"]
+        assert shown["token_set"] is shown_set, (value, shown)
+
+
 # -- fuzz: the stored format and the decision, against a model ---------------------------------
 
 _SEED = 0x397A

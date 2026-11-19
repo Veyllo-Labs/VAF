@@ -522,9 +522,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **An MCP server's access token no longer reaches the server's old address after it moves.**
   When an admin moved a remote MCP server to another host and gave it a new token, a tool
   loaded before the move, a running discovery or a CLI chat could still send the new token, or
-  an account's new sign-in, to the old host, in a CLI chat for as long as it ran. Each token
-  and sign-in is now stored with the address it belongs to and sent only there; a tool loaded
-  for the old address gets no token, or is asked to sign in, until the tools are reloaded.
+  an account's new sign-in, to the old host (in a CLI chat, for as long as the chat ran). Each
+  token and sign-in is now stored with the address it belongs to and sent only there; a tool
+  loaded for the old address gets no token, or is asked to sign in, until the tools are
+  reloaded.
 - **An account without admin rights no longer receives other accounts' WhatsApp data with
   its settings.** Its settings read carried the installation's whole WhatsApp block apart
   from the number list: which WhatsApp IDs belong to which phone numbers, the chats a person

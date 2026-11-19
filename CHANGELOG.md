@@ -74,6 +74,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **Nine voices that could never be downloaded now work.** Portuguese, Swedish, Bulgarian,
+  Kazakh, Greek, Luxembourgish, Dutch and Swahili for Piper on your computer (63 MB each,
+  Dutch 77 MB, Kazakh 128 MB), and Japanese in the speech container (77 MB). Portuguese on
+  your computer is now the Brazilian voice, the same one the speech container uses; no
+  European Portuguese voice can be downloaded that way. A voice install that fails in
+  Settings > Voice & Speech now says why on the language card.
 - **DeepSeek Auto costs are no longer overstated.** Calls made with DeepSeek Auto were
   priced as if the model were unknown ($15 / $75 per million tokens), more than ten times
   what DeepSeek charges. They are now priced at the model that answered (`deepseek-flash` or
@@ -520,15 +526,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   every connected GitHub login. The lists now change only through Connections, GitHub, and
   each account sees only its own.
 
-- **Piper, its voices and the voice models are checked before use.** VAF now downloads the
-  Piper program, the Piper voices (on your computer and in the speech container), the
-  speaker recognition models and the turn-end model only as the exact files recorded with
-  the release, and refuses anything that differs, without changing what was installed.
-  Piper is unpacked the same safe way as llama.cpp, into its own folder, and an existing
-  Piper whose program differs from the recorded one is replaced on its next use. Eight
-  languages whose voice could never be downloaded (Portuguese, Swedish, Bulgarian, Kazakh,
-  Greek, Luxembourgish, Dutch, Swahili) and Japanese in the speech container now get a
-  working voice.
+- **Speech downloads are checked before they are used.** VAF now checks the Piper speech
+  program, the Piper voices, the speaker recognition models and the model that notices when
+  you have finished speaking against known checksums before using them. A download that
+  does not match is thrown away and what you had stays as it was. A Piper you already have
+  is replaced once (26.5 MB) if it is not the version this release expects. Voices that the
+  speech container installed before this update are not checked again; remove and install a
+  language in Settings > Voice & Speech to get a checked copy.
 - **Commands nobody confirmed no longer reach a network share.** The host shell (`host_bash`)
   and `python_exec` now refuse a network share or Windows device path (`\\server\share`,
   `\\?\UNC\...`, `file://server/...`) in a coding agent run or a workflow step, where nobody

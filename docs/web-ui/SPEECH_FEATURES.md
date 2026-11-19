@@ -94,9 +94,18 @@ The container installs a voice on demand (Settings > Voice & Speech) from the ta
 
 ### Where Piper and its voices come from
 
-Every speech file VAF downloads is checked against a SHA-256 recorded with the release,
-in `vaf/core/speech_assets_pin.json` (written by `scripts/pin_speech_assets.py`, see
-[RELEASING.md](../setup/RELEASING.md)), before it is unpacked, loaded or run:
+Every file VAF itself fetches for Piper, the Piper voices, the speaker models and the
+turn-end model is checked against a SHA-256 and a size recorded with the release, in
+`vaf/core/speech_assets_pin.json` (written by `scripts/pin_speech_assets.py`, see
+[RELEASING.md](../setup/RELEASING.md)), before it is unpacked, loaded or run. Not covered:
+the speech-to-text weights (the in-process faster-whisper models and the Whisper weights
+inside the `vaf-stt` container, which openai-whisper itself checks), the speech container
+images and the `piper-tts` package inside the TTS image, and a local voice-call model.
+
+Each download writes its own partial file next to the destination and renames it into
+place only when that file's own bytes matched, so two downloads of the same file at once
+cannot mix their bytes; a download that sends more than the recorded size is stopped
+there.
 
 - **The Piper program** (`speech_tts_engine = piper`): the archive of Piper release
   `2023.11.14-2` for this computer. It is downloaded into `bin/piper.staging/`, unpacked
@@ -104,17 +113,25 @@ in `vaf/core/speech_assets_pin.json` (written by `scripts/pin_speech_assets.py`,
   checked again after the archive's `piper/` folder is lifted), and its `piper` program
   must have the recorded digest; only then is `bin/piper/` replaced as a whole folder. A
   download that does not match changes nothing. An installed Piper counts as installed only
-  when its program has the recorded digest (checked once per process), so a Piper of another
-  build is replaced on its next use. The install runs under a file lock (`bin/.piper.lock`);
+  when its program has the recorded digest (checked once per process) and no link in its
+  folder leads outside it, so a Piper of another build is replaced on its next use. Named
+  boundary: the libraries and `espeak-ng-data` next to a matching program are not compared
+  (the manifest holds no digest of the whole folder yet), so an install an earlier VAF
+  unpacked keeps its other files as they are. The install runs under a file lock (`bin/.piper.lock`);
   a second VAF process says it is waiting. On Apple Silicon the program of Piper's macOS
   arm64 archive is an x86_64 build (measured: both macOS archives hold the same program),
   so it runs through Rosetta 2.
 - **The Piper voices** (on the host, `models/voices/`): from one pinned commit of
   `rhasspy/piper-voices`, both the `.onnx` model and its `.onnx.json`. A voice already
   there with the recorded digest is kept, a truncated or different one is fetched again, and
-  bytes that do not match are never written under the voice's name.
-- **The speech container's voices**: the same commit, from `models.json`; a mismatch ends
-  the install with an error and leaves no file. Voices the container installed before this
+  bytes that do not match are never written under the voice's name. A voice whose download
+  did not match, or that the server refused, is not fetched again until VAF starts anew.
+  Portuguese (`pt`) is the Brazilian voice `pt_BR-faber-medium`: Piper's European
+  Portuguese voice has a non-ASCII name, which VAF's voice paths do not take.
+- **The speech container's voices**: the same commit, from `models.json`; both files of a
+  voice are staged and replace an installed pair only when both matched, a mismatch ends the
+  install with an error, and the language card in Settings shows that error. A second
+  install of a language that is downloading is answered with the running one. Voices the container installed before this
   check existed are not checked again; reinstalling a language fetches it verified.
 - **Speaker recognition** (`silero_vad.onnx`, the 3D-Speaker ERes2Net model) and the
   turn-end model (`smart-turn-v3.2-cpu.onnx`, pinned to a commit): the same check, in

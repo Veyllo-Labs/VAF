@@ -115,8 +115,9 @@ _models_lock = threading.Lock()
 def _ensure_models() -> bool:
     """Both model files with their pinned digests, downloaded when missing or different.
     Returns True when present. Serialized: the enroll_start prewarm thread and the first
-    round's VAD may call this concurrently - two writers on the same .part file would
-    corrupt the download."""
+    round's VAD may call this concurrently, and the lock keeps them from downloading the
+    same model twice (each download writes its own partial file, so two of them would
+    not mix their bytes, only waste the transfer)."""
     with _models_lock:
         return _ensure_models_locked()
 

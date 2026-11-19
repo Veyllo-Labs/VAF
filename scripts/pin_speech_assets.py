@@ -18,9 +18,7 @@ Where each digest comes from, and what is checked before it is written down:
    archives are downloaded (about 139 MB) and hashed here: trust on first use. An asset
    replaced after its upload (``updated_at`` more than 60 s after ``created_at``) or not
    uploaded by ``github-actions[bot]`` is refused; a digest the API does report must
-   match. A digest that differs from the one already committed for the same archive is
-   refused unless ``--accept-changed-digest`` is given (the same holds for the ERes2Net
-   model below): trust on first use means the first use, not every run. Each archive is opened with the installer's own ``extract_archive`` into a
+   match. Each archive is opened with the installer's own ``extract_archive`` into a
    temporary folder (unpacked, never run): every member must sit below one top folder
    ``piper/``, and the SHA-256 of the unpacked ``piper`` (``piper.exe``) program is
    recorded. The program's file header is printed so the architecture can be read off.
@@ -32,6 +30,11 @@ Where each digest comes from, and what is checked before it is written down:
 3. Models: Silero VAD from the digest GitHub reports for it; the ERes2Net speaker model
    has none, so it is downloaded (about 26.5 MB) and hashed under the same
    ``updated_at`` rule; Smart Turn from its LFS SHA-256 at the given revision.
+
+Trust on first use means the first use, not every run: any file whose URL is the same as
+in the committed manifest but whose digest (or program digest) differs is refused unless
+``--accept-changed-digest`` is given, whatever the digest was taken from; a committed
+manifest that exists but cannot be read stops the run too.
 
 Nothing downloaded is executed or imported. Downloads go to a temporary folder (under
 ``TMPDIR``) that is removed at the end.
@@ -73,9 +76,6 @@ MODELS = {
     "smart-turn-v3.2-cpu.onnx": ("huggingface", "pipecat-ai/smart-turn-v3", None),
 }
 REPLACED_AFTER_UPLOAD = 60.0       # seconds between created_at and updated_at
-# The files whose digest is recorded from the bytes (no published digest): trust on first
-# use, so a later run must not quietly record different bytes for them.
-TOFU_MODELS = ("3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx",)
 
 
 def _post_form(url: str, data) -> list:
@@ -270,7 +270,8 @@ def pin_voices(work: Path, revision: str) -> tuple[dict, dict]:
             sha, size = _download_hash(url, dest)
             data = dest.read_bytes()
             if _git_blob_id(data) != row.get("oid"):
-                raise SystemExit(f"{path}: git blob id {_git_blob_id(data)} differs from the published {row.get('oid')}")
+                raise SystemExit(f"{path}: git blob id {_git_blob_id(data)} differs from the published "
+                                 f"{row.get('oid')}")
             files[path] = {"sha256": sha, "size": size}
     total = sum(m["size"] for p, m in files.items())
     print(f"  {len(names)} voices, {len(files)} files, {total} bytes in all")
@@ -314,23 +315,31 @@ def pin_models(work: Path, smart_turn_revision: str | None) -> dict:
     return out
 
 
-def changed_digests(old: dict, piper: dict, models: dict) -> list[str]:
-    """The files pinned from their bytes (the Piper archives with their program, the
-    models in TOFU_MODELS) whose digest in this run differs from the committed manifest
-    `old`. A file new to the manifest is not a change."""
-    changes = []
-    old_piper = old.get("piper") or {}
-    old_assets = (old_piper.get("assets") or {}) if old_piper.get("tag") == piper["tag"] else {}
-    for name, meta in piper["assets"].items():
-        before = old_assets.get(name)
-        if before and (before.get("sha256") != meta["sha256"] or before.get("program_sha256") != meta["program_sha256"]):
-            changes.append(f"{name}: {before.get('sha256')} -> {meta['sha256']} "
-                           f"(program {before.get('program_sha256')} -> {meta['program_sha256']})")
-    for name in TOFU_MODELS:
-        before, now = (old.get("models") or {}).get(name), models.get(name)
-        if before and now and before.get("sha256") != now["sha256"]:
-            changes.append(f"{name}: {before.get('sha256')} -> {now['sha256']}")
-    return changes
+def _digests_by_url(manifest: dict) -> dict:
+    """{url: digests} for every file a manifest pins: the Piper archives (archive and
+    program digest), every voice file at its revision, every model."""
+    out = {}
+    piper = manifest.get("piper") or {}
+    for name, meta in (piper.get("assets") or {}).items():
+        url = f"https://github.com/{piper.get('repository')}/releases/download/{piper.get('tag')}/{name}"
+        out[url] = (meta.get("sha256"), meta.get("program_sha256"))
+    voices = manifest.get("piper_voices") or {}
+    for path, meta in (voices.get("files") or {}).items():
+        out[f"{HF}/{voices.get('repository')}/resolve/{voices.get('revision')}/{quote(path)}"] = (meta.get("sha256"),)
+    for meta in (manifest.get("models") or {}).values():
+        out[meta.get("url")] = (meta.get("sha256"),)
+    return out
+
+
+def changed_digests(old: dict, new: dict) -> list[str]:
+    """Every file whose URL is in both manifests and whose digest differs: the same
+    address now serves other bytes. No hand-kept list: this holds for the Piper archives
+    (also when only the program digest moved), the voices and every model, whichever
+    source the digest came from. A file at a new URL (a new tag or revision) is not a
+    change."""
+    before = _digests_by_url(old)
+    return [f"{url}: {before[url]} -> {now}" for url, now in _digests_by_url(new).items()
+            if url in before and before[url] != now]
 
 
 def _shown(path: Path) -> str:
@@ -341,10 +350,19 @@ def _shown(path: Path) -> str:
 
 
 def _committed_manifest() -> dict:
-    try:
-        return json.loads(speech_pin.PIN_PATH.read_bytes().decode("utf-8"))
-    except (OSError, ValueError):
+    """The committed manifest, or {} when there is none yet (a first run). One that exists
+    but cannot be read stops the run: comparing against nothing would accept every changed
+    digest."""
+    if not speech_pin.PIN_PATH.exists():
         return {}
+    try:
+        data = json.loads(speech_pin.PIN_PATH.read_bytes().decode("utf-8"))
+    except (OSError, ValueError) as e:
+        raise SystemExit(f"{_shown(speech_pin.PIN_PATH)} exists but cannot be read ({e}); restore it from git "
+                         "before pinning, so new digests can be compared with the committed ones.")
+    if not isinstance(data, dict):
+        raise SystemExit(f"{_shown(speech_pin.PIN_PATH)} is not a manifest; restore it from git before pinning.")
+    return data
 
 
 def main(argv: list[str]) -> int:
@@ -354,8 +372,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--download-dir", help="keep the downloads here and reuse them on a rerun "
                                                "(default: a temporary folder removed at the end)")
     parser.add_argument("--accept-changed-digest", action="store_true",
-                        help="record a new digest for a file already pinned from its bytes (a Piper archive, "
-                             "the ERes2Net model); refused otherwise")
+                        help="record a new digest for a file the committed manifest already pins at the same "
+                             "URL; refused otherwise")
     args = parser.parse_args(argv)
     old = _committed_manifest()
     with tempfile.TemporaryDirectory(prefix="vaf-speech-pin-") as tmp:
@@ -368,15 +386,15 @@ def main(argv: list[str]) -> int:
         models = pin_models(work, args.smart_turn_revision)
         print("Piper:")
         piper = pin_piper(work)
-    changes = changed_digests(old, piper, models)
+    manifest = {"recorded": date.today().isoformat(), "piper": piper, "piper_voices": voices, "models": models}
+    changes = changed_digests(old, manifest)
     if changes:
-        print("These files were pinned from their bytes, and the bytes are different now:")
+        print("These files are pinned at the same address, and their digest is different now:")
         for line in changes:
             print(f"  {line}")
         if not args.accept_changed_digest:
             raise SystemExit("Refusing to record the new digests. Find out why the published file changed; "
                              "only then rerun with --accept-changed-digest.")
-    manifest = {"recorded": date.today().isoformat(), "piper": piper, "piper_voices": voices, "models": models}
     speech_pin.PIN_PATH.write_bytes((json.dumps(manifest, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
     CONTAINER_TABLE.write_bytes((json.dumps(table, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
     speech_pin.load_speech_pin()          # what was written must load

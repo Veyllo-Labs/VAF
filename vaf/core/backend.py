@@ -611,7 +611,11 @@ def load_llama_pin() -> dict:
         raise RuntimeError(f"llama.cpp pin manifest at {PIN_PATH} is malformed")
     for name, meta in assets.items():
         digest = str((meta or {}).get("sha256") or "").lower()
-        if not LLAMA_ASSET_PATTERN.fullmatch(name) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        size = (meta or {}).get("size")
+        # The size caps the download (download_verified stops past it): an entry without
+        # one would switch that cap off unnoticed.
+        sized = isinstance(size, int) and not isinstance(size, bool) and size > 0
+        if not LLAMA_ASSET_PATTERN.fullmatch(name) or not re.fullmatch(r"[0-9a-f]{64}", digest) or not sized:
             raise RuntimeError(f"llama.cpp pin manifest: bad entry {name!r}")
     return data
 
@@ -1065,7 +1069,7 @@ class ServerManager:
 
         def entry(name):
             return {"name": name, "url": f"{base}/{name}", "sha256": pin["assets"][name]["sha256"],
-                    "size": pin["assets"][name].get("size")}
+                    "size": pin["assets"][name]["size"]}
 
         return {"tag": tag, "main": entry(main), "dep": entry(dep) if dep else None}
 
@@ -1249,7 +1253,7 @@ class ServerManager:
                     continue
                 UI.event("System", f"Downloading backend {part['name']} (b{want}, verifying SHA-256)...", style="warning")
                 downloaded.append(str(download_verified(part["url"], part["sha256"], os.path.join(staging, part["name"]),
-                                                        size=part.get("size"))))
+                                                        size=part["size"])))
             UI.event("System", "Extracting backend...", style="dim")
             for archive in downloaded:
                 verified_download.extract_archive(archive, staging, program=self.server_exe)

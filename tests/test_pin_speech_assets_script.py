@@ -32,44 +32,75 @@ def script(monkeypatch, tmp_path):
     return mod
 
 
-def _piper(sha, program):
-    return {"repository": "rhasspy/piper", "tag": "2023.11.14-2", "provenance": "test",
+def _piper(sha, program, tag="2023.11.14-2"):
+    return {"repository": "rhasspy/piper", "tag": tag, "provenance": "test",
             "assets": {"piper_linux_x86_64.tar.gz": {"sha256": sha, "size": 1, "program_sha256": program}}}
 
 
-def _models(eres):
+def _models(eres, silero=H["f"]):
     return {"3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx": {"url": "https://x/e", "sha256": eres, "size": 1},
-            "silero_vad.onnx": {"url": "https://x/s", "sha256": H["f"], "size": 1}}
+            "silero_vad.onnx": {"url": "https://x/s", "sha256": silero, "size": 1}}
 
 
-def test_a_changed_digest_of_a_file_pinned_from_its_bytes_is_reported(script):
-    old = {"piper": _piper(H["a"], H["b"]), "models": _models(H["c"])}
-    assert script.changed_digests(old, _piper(H["a"], H["b"]), _models(H["c"])) == []
-    assert len(script.changed_digests(old, _piper(H["d"], H["b"]), _models(H["c"]))) == 1
-    assert len(script.changed_digests(old, _piper(H["a"], H["d"]), _models(H["c"]))) == 1
-    assert len(script.changed_digests(old, _piper(H["a"], H["b"]), _models(H["d"]))) == 1
-    # A new release tag, a first run and a file new to the manifest are not changes.
-    moved = dict(_piper(H["d"], H["d"]), tag="2024.1.1")
-    assert script.changed_digests(old, moved, _models(H["c"])) == []
-    assert script.changed_digests({}, _piper(H["d"], H["d"]), _models(H["d"])) == []
+VOICE = "de/de_DE/thorsten/high/de_DE-thorsten-high.onnx"
+
+
+def _voices(sha, revision="0" * 40):
+    return {"repository": "rhasspy/piper-voices", "revision": revision,
+            "files": {VOICE: {"sha256": sha, "size": 1}, VOICE + ".json": {"sha256": H["e"], "size": 1}}}
+
+
+def _manifest(piper_sha=H["a"], program=H["b"], eres=H["c"], silero=H["f"], voice=H["e"], revision="0" * 40,
+              tag="2023.11.14-2"):
+    return {"recorded": "2026-01-01", "piper": _piper(piper_sha, program, tag),
+            "piper_voices": _voices(voice, revision), "models": _models(eres, silero)}
+
+
+def test_a_changed_digest_at_the_same_address_is_reported_for_every_kind_of_file(script):
+    """Any file whose URL is unchanged and whose digest moved, whichever source the digest
+    came from: a Piper archive, only its program, the ERes2Net model, Silero (GitHub's own
+    digest), a voice. MUTATIONS: compare only a hand-kept list of names (Silero and the
+    voice slip through), or ignore the program digest: red."""
+    old = _manifest()
+    assert script.changed_digests(old, _manifest()) == []
+    for changed in (dict(piper_sha=H["d"]), dict(program=H["d"]), dict(eres=H["d"]), dict(silero=H["d"]),
+                    dict(voice=H["d"])):
+        assert len(script.changed_digests(old, _manifest(**changed))) == 1, changed
+    # A new address (another tag or revision), a first run and a file new to the manifest
+    # are not changes.
+    assert script.changed_digests(old, _manifest(piper_sha=H["d"], program=H["d"], tag="2024.1.1")) == []
+    assert script.changed_digests(old, _manifest(voice=H["d"], revision="1" * 40)) == []
+    assert script.changed_digests({}, _manifest(piper_sha=H["d"])) == []
+
+
+def _fake_run(script, monkeypatch, new: dict):
+    monkeypatch.setattr(script, "_revision", lambda repo, rev: "0" * 40)
+    monkeypatch.setattr(script, "pin_voices", lambda work, rev: (new["piper_voices"], {"models": {}}))
+    monkeypatch.setattr(script, "pin_models", lambda work, rev: new["models"])
+    monkeypatch.setattr(script, "pin_piper", lambda work: new["piper"])
 
 
 def test_the_run_refuses_new_bytes_unless_told_to_accept_them(script, monkeypatch, tmp_path):
     """MUTATION: drop the refusal and the manifest is rewritten with the new digest."""
-    voices = {"repository": "rhasspy/piper-voices", "revision": "0" * 40,
-              "files": {"de/de_DE/thorsten/high/de_DE-thorsten-high.onnx": {"sha256": H["e"], "size": 1},
-                        "de/de_DE/thorsten/high/de_DE-thorsten-high.onnx.json": {"sha256": H["e"], "size": 1}}}
-    committed = {"recorded": "2026-01-01", "piper": _piper(H["a"], H["b"]), "piper_voices": voices,
-                 "models": _models(H["c"])}
+    committed = _manifest()
     script.speech_pin.PIN_PATH.write_text(json.dumps(committed), encoding="utf-8")
-    monkeypatch.setattr(script, "_revision", lambda repo, rev: "0" * 40)
-    monkeypatch.setattr(script, "pin_voices", lambda work, rev: (voices, {"models": {}}))
-    monkeypatch.setattr(script, "pin_models", lambda work, rev: _models(H["c"]))
-    monkeypatch.setattr(script, "pin_piper", lambda work: _piper(H["d"], H["b"]))
+    _fake_run(script, monkeypatch, _manifest(silero=H["d"]))
     with pytest.raises(SystemExit, match="accept-changed-digest"):
         script.main([])
     assert json.loads(script.speech_pin.PIN_PATH.read_text(encoding="utf-8")) == committed
     assert not script.CONTAINER_TABLE.exists()
     assert script.main(["--accept-changed-digest"]) == 0
     written = json.loads(script.speech_pin.PIN_PATH.read_text(encoding="utf-8"))
-    assert written["piper"]["assets"]["piper_linux_x86_64.tar.gz"]["sha256"] == H["d"]
+    assert written["models"]["silero_vad.onnx"]["sha256"] == H["d"]
+
+
+def test_a_committed_manifest_that_cannot_be_read_stops_the_run(script, monkeypatch, tmp_path):
+    """A truncated manifest read as "none yet" would accept every changed digest without
+    the flag. MUTATION: treat an unreadable manifest as a first run: red."""
+    script.speech_pin.PIN_PATH.write_text('{"piper": {"tag": "2023.11', encoding="utf-8")
+    _fake_run(script, monkeypatch, _manifest(piper_sha=H["d"]))
+    with pytest.raises(SystemExit, match="cannot be read"):
+        script.main([])
+    assert script.speech_pin.PIN_PATH.read_text(encoding="utf-8") == '{"piper": {"tag": "2023.11'
+    script.speech_pin.PIN_PATH.unlink()
+    assert script.main([]) == 0, "no manifest at all is a first run"

@@ -118,14 +118,50 @@ def download_error_message(name: str, error: Exception) -> str:
     import requests
 
     if isinstance(error, DownloadIntegrityError):
-        return (f"The download of the {name} voice did not match its expected checksum, so it was not "
-                "installed. Try again later.")
+        return f"The {name} voice did not match its expected checksum, so it was not installed. Try again later."
     if isinstance(error, (requests.ConnectionError, requests.Timeout)):
         return f"The {name} voice could not be downloaded: the download server could not be reached."
     if isinstance(error, requests.HTTPError):
         status = getattr(error.response, "status_code", None)
         return f"The {name} voice could not be downloaded: the download server answered with an error ({status})."
     return f"The {name} voice could not be installed. Try again later."
+
+
+def promote_pair(moves) -> None:
+    """Put each staged file in place of its installed one, all of them or none.
+
+    `moves` is a sequence of (staged, final, kept): every installed file is first renamed
+    to its kept name, then every staged file is renamed to its final name. When any step
+    fails, the files already promoted are removed and the kept ones are renamed back, so
+    the installed pair is exactly as it was; the error is raised. On success the kept
+    files are removed."""
+    kept = []
+    promoted = []
+    try:
+        for staged, final, keep in moves:
+            if final.exists():
+                os.replace(final, keep)
+                kept.append((keep, final))
+        for staged, final, keep in moves:
+            os.replace(staged, final)
+            promoted.append(final)
+    except Exception:
+        for final in promoted:
+            try:
+                final.unlink()
+            except OSError:
+                pass
+        for keep, final in kept:
+            try:
+                os.replace(keep, final)
+            except OSError:
+                pass
+        raise
+    for keep, _ in kept:
+        try:
+            keep.unlink()
+        except OSError:
+            pass
 
 
 def download_model(lang: str) -> bool:
@@ -135,14 +171,21 @@ def download_model(lang: str) -> bool:
     Both files are fetched under staged names next to the installed pair, each only as the
     bytes pinned for it (download_verified: its own partial file, renamed into place only
     once its content matched), and they replace the installed pair only when both
-    verified. A failure removes the staged files and leaves an installed pair as it was;
-    the status then says why (a checksum mismatch, or the download error)."""
+    verified, together (promote_pair: a failed rename puts the installed pair back). A
+    failure removes the staged files first and only then reports the error status, so a
+    retry the status allows never meets this attempt's cleanup; an installed pair stays as
+    it was, and the status says why (a checksum mismatch, the download error).
+
+    Named boundary: a process killed between the renames of promote_pair (a window of
+    microseconds) can leave the new model beside an older config, and the language then
+    counts as installed; removing and installing it again in Settings repairs it.
+    is_language_installed deliberately does not require the pinned digests: that would
+    count every voice installed before the digests existed as missing."""
     if lang not in AVAILABLE_MODELS:
         return False
 
     model_info = AVAILABLE_MODELS[lang]
     model_dir = MODELS_DIR / lang
-    model_dir.mkdir(parents=True, exist_ok=True)
 
     model_file = model_dir / f"{lang}.onnx"
     config_file = model_dir / f"{lang}.onnx.json"
@@ -154,6 +197,7 @@ def download_model(lang: str) -> bool:
         with download_lock:
             download_progress[lang] = {"status": "downloading", "progress": 0}
 
+        model_dir.mkdir(parents=True, exist_ok=True)
         total_size = model_info["model_size"]
 
         def on_progress(received: int) -> None:
@@ -168,8 +212,8 @@ def download_model(lang: str) -> bool:
 
         download_verified(model_info["config_url"], model_info["config_sha256"], staged_config,
                           size=model_info["config_size"], timeout=60)
-        os.replace(staged_model, model_file)
-        os.replace(staged_config, config_file)
+        promote_pair(((staged_model, model_file, model_dir / f".{lang}.onnx.previous"),
+                      (staged_config, config_file, model_dir / f".{lang}.onnx.json.previous")))
 
         # Update config
         config = load_config()
@@ -184,14 +228,14 @@ def download_model(lang: str) -> bool:
 
     except Exception as e:
         print(f"[TTS] Installing {lang} failed: {e}", flush=True)
-        with download_lock:
-            download_progress[lang] = {"status": "error", "error": download_error_message(model_info["name"], e),
-                                       "detail": str(e)}
         for staged in (staged_model, staged_config):
             try:
                 staged.unlink()
             except OSError:
                 pass
+        with download_lock:
+            download_progress[lang] = {"status": "error", "error": download_error_message(model_info["name"], e),
+                                       "detail": str(e)}
         return False
 
 
@@ -394,7 +438,15 @@ def install_language():
 
     # Start download in background thread
     def do_download():
-        download_model(lang)
+        try:
+            download_model(lang)
+        except Exception as e:
+            # Whatever download_model did not report itself must still end the
+            # "downloading" mark set above, or every later install would be refused.
+            with download_lock:
+                download_progress[lang] = {"status": "error", "detail": str(e),
+                                           "error": f"The {AVAILABLE_MODELS[lang]['name']} voice could not be "
+                                                    "installed. Try again later."}
 
     thread = threading.Thread(target=do_download, daemon=True)
     thread.start()

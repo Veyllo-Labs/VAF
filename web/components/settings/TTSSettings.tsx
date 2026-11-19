@@ -412,10 +412,18 @@ export default function TTSSettings({
 
                                 {expanded && (
                                     <div className="mt-2 grid grid-cols-2 gap-2">
-                                        {availableLanguages.map(lang => (
+                                        {availableLanguages.map(lang => {
+                                            const installError = lang.download_status?.status === 'error'
+                                                ? lang.download_status.error : undefined;
+                                            return (
                                             <div
                                                 key={lang.code}
-                                                className="flex items-center gap-2 p-2 bg-gray-50 rounded-xl border border-gray-200"
+                                                className={cn(
+                                                    "flex items-center gap-2 p-2 bg-gray-50 rounded-xl border border-gray-200",
+                                                    // On a phone a two-column card leaves the error
+                                                    // about eight characters: it takes the full row.
+                                                    installError && "max-md:col-span-2"
+                                                )}
                                             >
                                                 <div className="w-8 h-8 rounded-lg bg-gray-200 flex items-center justify-center text-xs font-bold text-gray-500">
                                                     {lang.code.toUpperCase()}
@@ -425,16 +433,17 @@ export default function TTSSettings({
                                                         {lang.name}
                                                     </div>
                                                     {/* A failed install says why, in the speech service's own
-                                                        words (one line, full text on hover); the Install button
-                                                        beside it is the retry. */}
-                                                    {lang.download_status?.status === 'error' && lang.download_status.error && (
+                                                        words: wrapped up to three lines (the cause comes last
+                                                        in every message), the full text on hover; the Install
+                                                        button beside it is the retry. */}
+                                                    {installError && (
                                                         <div
-                                                            className="flex items-center gap-1 text-xs text-red-600 min-w-0"
-                                                            title={lang.download_status.error}
+                                                            className="flex items-start gap-1 text-xs text-red-600 min-w-0"
+                                                            title={installError}
                                                             role="status"
                                                         >
-                                                            <AlertCircle className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
-                                                            <span className="truncate">{lang.download_status.error}</span>
+                                                            <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" aria-hidden="true" />
+                                                            <span className="line-clamp-3 break-words min-w-0">{installError}</span>
                                                         </div>
                                                     )}
                                                 </div>
@@ -455,7 +464,8 @@ export default function TTSSettings({
                                                     </button>
                                                 )}
                                             </div>
-                                        ))}
+                                            );
+                                        })}
                                     </div>
                                 )}
                             </div>

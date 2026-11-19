@@ -407,6 +407,53 @@ def test_a_replaced_file_with_the_old_time_is_hashed_again(monkeypatch, tmp_path
     assert not verified_download.has_pinned_digest(dest, _sha(good), 64)
 
 
+def test_a_partial_file_left_by_a_killed_download_is_swept(monkeypatch, tmp_path):
+    """A download killed hard leaves its own .<name>.<random>.part (up to the pinned size).
+    The next download of the same file removes the ones older than an hour and leaves a
+    fresh one (a download still running) and other files alone. MUTATION: drop the
+    sweep: red (the stale file stays)."""
+    import time as _time
+    good = b"g" * 64
+    dest = tmp_path / "voice.onnx"
+    stale = tmp_path / ".voice.onnx.k1ll3d.part"
+    fresh = tmp_path / ".voice.onnx.runn1ng.part"
+    other = tmp_path / ".other.onnx.k1ll3d.part"
+    for p in (stale, fresh, other):
+        p.write_bytes(b"x" * 10)
+    old = _time.time() - verified_download.STALE_PARTIAL_SECONDS - 60
+    os.utime(stale, (old, old))
+    os.utime(other, (old, old))
+    _fake_get(monkeypatch, good)
+    verified_download.download_verified("https://example.invalid/v", _sha(good), dest, size=len(good))
+    assert not stale.exists()
+    assert fresh.exists() and other.exists()
+    assert dest.read_bytes() == good
+
+
+def test_every_download_in_the_tree_passes_its_pinned_size():
+    """The size cap only works where a caller passes the size. Every call of
+    download_verified( and fetch_verified( outside the module itself, in vaf/ and the speech
+    container, names size=. MUTATION: drop size= at any one caller: red."""
+    calls = []
+    for path in list((REPO / "vaf").rglob("*.py")) + list((REPO / "docker").rglob("*.py")):
+        if path.name == "verified_download.py":
+            continue
+        src = path.read_text(encoding="utf-8", errors="replace")
+        for m in re.finditer(r"\b(download_verified|fetch_verified)\(", src):
+            if src[max(0, m.start() - 4):m.start()] == "def ":
+                continue
+            depth, i = 0, m.end() - 1
+            while True:
+                depth += {"(": 1, ")": -1}.get(src[i], 0)
+                if depth == 0:
+                    break
+                i += 1
+            call = src[m.start():i + 1]
+            calls.append(path.relative_to(REPO).as_posix())
+            assert re.search(r"\bsize=", call), f"{path.relative_to(REPO).as_posix()}: {call}"
+    assert len(calls) >= 7, calls       # llama, Piper, two voice files, speaker models, turn end, container x2
+
+
 def test_fetch_verified_replaces_a_truncated_file_and_never_a_good_one(monkeypatch, tmp_path):
     data = b"model bytes" * 100
     digest = hashlib.sha256(data).hexdigest()
@@ -710,6 +757,45 @@ def test_an_unreachable_server_is_said_in_one_line(speech, monkeypatch, tmp_path
     assert any("HTTPSConnectionPool" in e for e in speech.said["event"])
 
 
+@pytest.mark.skipif(os.name == "nt", reason="symlink privilege")
+def test_a_piper_folder_that_is_a_link_is_not_the_installed_piper(speech, monkeypatch, tmp_path):
+    """bin/piper itself a link to a folder elsewhere holding the pinned program: not this
+    install's own folder, so it is installed again (the link is moved aside and removed,
+    never followed). MUTATION: drop the link check on the folder: red (no download)."""
+    program = b"pinned piper"
+    archive = _piper_archive(speech, program)
+    _write_pin(monkeypatch, tmp_path, archive=archive, program=program)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / _program_name(speech)).write_bytes(program)
+    speech.bin_dir.parent.mkdir(parents=True)
+    os.symlink(elsewhere, speech.bin_dir)
+    calls = []
+    _get_by_url(monkeypatch, {ASSET: archive}, calls)
+    assert speech._check_piper() is True and len(calls) == 1
+    assert not os.path.islink(speech.bin_dir) and speech.bin_dir.is_dir()
+    assert (elsewhere / _program_name(speech)).read_bytes() == program, "the link's target is left alone"
+
+
+def test_a_first_install_never_says_the_current_piper_is_unchanged(speech, monkeypatch, tmp_path):
+    """With no Piper before, "Your current Piper is unchanged" is false; with one, it comes
+    before the report link, which ends the line. MUTATION: always append the sentence: red."""
+    program = b"pinned piper"
+    archive = _piper_archive(speech, program)
+    _write_pin(monkeypatch, tmp_path, archive=archive, program=program)
+    _get_by_url(monkeypatch, {ASSET: archive[:-3] + b"xyz"})
+    assert speech._check_piper() is False
+    assert speech.said["error"] and not any("unchanged" in e for e in speech.said["error"]), speech.said["error"]
+
+    speech.said["error"].clear()
+    speech._piper_checked = False
+    _old_install(speech)
+    assert speech._check_piper() is False
+    line = next(e for e in speech.said["error"] if "checksum" in e)
+    assert "Your current Piper is unchanged. If this keeps happening" in line, line
+    assert line.endswith("https://github.com/Veyllo-Labs/VAF/issues"), line
+
+
 def test_a_failed_swap_puts_the_old_piper_back(speech, monkeypatch, tmp_path):
     """The second rename (staging into bin/piper) fails: the old folder is renamed back.
     MUTATION: drop the rename-back and bin/piper is gone."""
@@ -839,6 +925,27 @@ def test_a_voice_that_failed_its_checksum_is_not_fetched_at_every_reply(speech, 
     assert other._ensure_voice_model("de") is None
     assert other._ensure_voice_model("de") is None
     assert len(calls) == 2, "a connection failure is retried at the next reply"
+
+
+@pytest.mark.parametrize("status,remembered", [(404, True), (403, True), (503, False), (500, False)])
+def test_only_a_refusal_is_remembered_never_a_server_error(speech, monkeypatch, tmp_path, status, remembered):
+    """The web app runs for days: one 503 from the voice host must not silence the voice
+    until a restart. A 4xx (and a checksum failure) is remembered for the process.
+    MUTATION: remember every HTTP error: red for 5xx."""
+    import requests
+    _voice_pin(monkeypatch, tmp_path)
+    calls = []
+
+    def answer(url, **kwargs):
+        calls.append(url)
+        r = requests.Response()
+        r.status_code = status
+        raise requests.HTTPError(f"{status} error", response=r)
+    monkeypatch.setattr("vaf.core.verified_download.requests.get", answer)
+    assert speech._ensure_voice_model("de") is None
+    assert speech._ensure_voice_model("de") is None
+    assert len(calls) == (1 if remembered else 2), calls
+    assert any(f"({status})" in e for e in speech.said["error"]), speech.said["error"]
 
 
 def test_voice_urls_name_the_pinned_revision(speech, monkeypatch, tmp_path):

@@ -186,7 +186,93 @@ def test_the_settings_card_shows_why_an_install_failed():
     the card now, with the full text on hover, and Install stays as the retry.
     MUTATION: remove the error line from the card: red."""
     src = (REPO / "web" / "components" / "settings" / "TTSSettings.tsx").read_text(encoding="utf-8")
-    card = src[src.index("{availableLanguages.map(lang => ("):src.index("{/* Auto-detect & Auto-speak */}")]
-    assert "lang.download_status?.status === 'error' && lang.download_status.error" in card
-    assert "{lang.download_status.error}</span>" in card and "title={lang.download_status.error}" in card
+    card = src[src.index("{availableLanguages.map(lang => {"):src.index("{/* Auto-detect & Auto-speak */}")]
+    assert "lang.download_status?.status === 'error'" in card and "lang.download_status.error : undefined" in card
+    assert "{installError}</span>" in card and "title={installError}" in card
     assert 'title="Install"' in card, "the Install button is the retry"
+    # The cause comes last in every message: the line wraps (three lines at most) instead
+    # of being cut to one, and on a phone the failed card takes the full row.
+    span = card[card.index("<span", card.index("title={installError}")):card.index("{installError}</span>")]
+    assert "truncate" not in span and "line-clamp-3" in span and "break-words" in span, span
+    assert 'installError && "max-md:col-span-2"' in card
+
+
+def test_a_failed_setup_does_not_leave_the_language_stuck_downloading(container, monkeypatch):
+    """/install marks the language as downloading before its thread starts; a folder that
+    cannot be made (here a file in its place) used to kill the thread before its error
+    handling, and the mark stayed until a restart. MUTATION: make the folder before the
+    try again: red (still "downloading", a second install is refused)."""
+    container.MODELS_DIR.mkdir(parents=True)
+    (container.MODELS_DIR / "de").write_bytes(b"not a folder")
+    assert container.download_model("de") is False, "the failed setup is reported, not raised"
+    assert container.download_progress["de"]["status"] == "error"
+    monkeypatch.setattr(container.threading, "Thread",
+                        lambda target, daemon=True: types.SimpleNamespace(start=target))
+    calls = []
+    _network(monkeypatch, container, {"onnx": MODEL, "onnx.json": CONFIG}, calls)
+    container.request.body = {"language": "de"}
+    container.install_language()
+    assert container.download_progress["de"]["status"] == "error", container.download_progress
+    assert container.install_language()["status"] == "downloading"
+    assert "already being downloaded" not in container.install_language().get("message", "")
+
+
+def test_a_failed_promotion_puts_the_installed_pair_back(container, monkeypatch):
+    """Both files verified, then the second rename fails: the new model must not stay next
+    to the old config (the language would count as installed and never be repaired).
+    MUTATION: promote with two plain renames: red."""
+    import os
+    d = container.MODELS_DIR / "de"
+    d.mkdir(parents=True)
+    (d / "de.onnx").write_bytes(b"installed model")
+    (d / "de.onnx.json").write_bytes(b"installed config")
+    real_replace = os.replace
+
+    def replace(src, dst):
+        if str(dst).endswith("de.onnx.json") and str(src).endswith(".incoming"):
+            raise PermissionError(13, "Permission denied")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", replace)
+    calls = []
+    _network(monkeypatch, container, {"onnx": MODEL, "onnx.json": CONFIG}, calls)
+    assert container.download_model("de") is False
+    assert (d / "de.onnx").read_bytes() == b"installed model"
+    assert (d / "de.onnx.json").read_bytes() == b"installed config"
+    assert sorted(p.name for p in d.iterdir()) == ["de.onnx", "de.onnx.json"]
+
+
+def test_the_staged_files_are_gone_before_the_error_allows_a_retry(container, monkeypatch):
+    """The error status is what lets a retry start; a retry writes the same staged names,
+    so this attempt's cleanup must be over by then. MUTATION: report the error before the
+    cleanup: red."""
+    import pathlib
+    seen = []
+    real_unlink = pathlib.Path.unlink
+
+    def unlink(self, *a, **k):
+        if self.name.endswith(".incoming"):
+            seen.append(container.download_progress.get("de", {}).get("status"))
+        return real_unlink(self, *a, **k)
+
+    monkeypatch.setattr(pathlib.Path, "unlink", unlink)
+    calls = []
+    _network(monkeypatch, container, {"onnx": MODEL, "onnx.json": CONFIG + b"x"}, calls)
+    assert container.download_model("de") is False
+    assert seen and all(status == "downloading" for status in seen), seen
+    assert container.download_progress["de"]["status"] == "error"
+
+
+def test_whatever_escapes_the_download_still_ends_the_downloading_mark(container, monkeypatch):
+    """The thread's own guard: an exception download_model did not report itself still
+    turns "downloading" into an error, so the language can be installed again.
+    MUTATION: drop the guard in do_download: red."""
+    def broken(lang):
+        raise RuntimeError("unexpected")
+    monkeypatch.setattr(container, "download_model", broken)
+    monkeypatch.setattr(container.threading, "Thread",
+                        lambda target, daemon=True: types.SimpleNamespace(start=target))
+    container.request.body = {"language": "de"}
+    container.install_language()
+    status = container.download_progress["de"]
+    assert status["status"] == "error" and "could not be installed" in status["error"], status

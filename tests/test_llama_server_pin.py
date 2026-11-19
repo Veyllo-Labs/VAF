@@ -111,6 +111,23 @@ def test_a_missing_or_malformed_manifest_is_refused(monkeypatch, tmp_path):
         backend.load_llama_pin()
 
 
+@pytest.mark.parametrize("size", [None, 0, -1, "12", True, 1.5], ids=["missing", "zero", "negative", "text",
+                                                                    "bool", "float"])
+def test_an_asset_without_a_positive_size_is_refused(monkeypatch, tmp_path, size):
+    """The size caps the download (download_verified stops past it); an entry without a
+    usable one would switch the cap off unnoticed. MUTATION: drop the size check: red."""
+    import json
+    meta = {"sha256": "a" * 64}
+    if size is not None:
+        meta["size"] = size
+    bad = tmp_path / "pin.json"
+    bad.write_text(json.dumps({"tag": "b10955", "assets": {"llama-b10955-bin-ubuntu-x64.tar.gz": meta}}),
+                   encoding="utf-8")
+    monkeypatch.setattr(backend, "PIN_PATH", bad)
+    with pytest.raises(RuntimeError, match="bad entry"):
+        backend.load_llama_pin()
+
+
 # ── picking ───────────────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("system,machine,vendor,expect", [

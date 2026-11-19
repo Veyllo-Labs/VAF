@@ -28,23 +28,31 @@ class _PiperSwapError(Exception):
     """Renaming the new Piper folder into place failed (on Windows: Piper is running)."""
 
 
-def download_problem(subject: str, object_: str, error: Exception) -> str:
+def download_problem(subject: str, object_: str, error: Exception, then: str = "") -> str:
     """One short line for the person about a failed speech download, by cause: `subject`
     starts the sentence ("The voice de_DE-thorsten-high"), `object_` names the same thing
-    inside one ("the voice ..."). The raw error is for a dim detail line, not this one."""
+    inside one ("the voice ..."), `then` is a sentence that follows the cause ("Your current
+    Piper is unchanged."). The report link always ends the line, so nothing runs into it.
+    The raw error is for a dim detail line, not this one."""
     import requests
     from vaf.core.verified_download import DownloadIntegrityError
 
+    after = f" {then}" if then else ""
     if isinstance(error, DownloadIntegrityError):
-        return (f"The download of {object_} did not match its expected checksum, so it was not used. "
+        return (f"The download of {object_} did not match its expected checksum, so it was not used.{after} "
                 f"If this keeps happening, report it at {REPORT_URL}")
     if isinstance(error, (requests.ConnectionError, requests.Timeout)):
         return (f"{subject} could not be downloaded: the download server could not be reached. Check the "
-                "connection and try again.")
+                f"connection and try again.{after}")
     if isinstance(error, requests.HTTPError):
-        status = getattr(getattr(error, "response", None), "status_code", None)
-        return f"{subject} could not be downloaded: the download server answered with an error ({status})."
-    return f"{subject} could not be installed."
+        return (f"{subject} could not be downloaded: the download server answered with an error "
+                f"({http_status(error)}).{after}")
+    return f"{subject} could not be installed.{after}"
+
+
+def http_status(error: Exception):
+    """The status code of a requests HTTPError, or None."""
+    return getattr(getattr(error, "response", None), "status_code", None)
 
 
 # How long a Piper install waits for another VAF process that is installing it (the
@@ -375,6 +383,8 @@ class SpeechManager:
 
     def _piper_is_pinned(self, entry: dict) -> bool:
         """The installed program has the pinned digest and no link in its folder leaves it."""
+        if os.path.islink(self.bin_dir):
+            return False                  # the folder itself must be this install's own, not a link
         if not verified_download.has_pinned_digest(self._get_piper_binary(), entry["program_sha256"]):
             return False
         try:
@@ -469,6 +479,7 @@ class SpeechManager:
         try:
             if self._piper_is_pinned(entry):
                 return True               # another process installed it while this one waited
+            had_piper = os.path.lexists(self._get_piper_binary())
             try:
                 for leftover in (staging, previous):
                     verified_download.remove_tree_or_link(str(leftover))
@@ -507,13 +518,17 @@ class SpeechManager:
                     raise _PiperSwapError(e) from e
             except _PiperSwapError as e:
                 self._remove_quietly(staging)
-                UI.error("Piper could not be replaced right now (it may be in use); your current Piper is "
-                         "unchanged and VAF tries again on its next start.")
+                if had_piper:
+                    UI.error("Piper could not be replaced right now (it may be in use); your current Piper is "
+                             "unchanged and VAF tries again on its next start.")
+                else:
+                    UI.error("Piper could not be put in place right now; VAF tries again on its next start.")
                 UI.event("System", f"Details: {e.__cause__}", style="dim")
                 return False
             except Exception as e:
                 self._remove_quietly(staging)
-                UI.error(download_problem("Piper", "Piper", e) + " Your current Piper is unchanged.")
+                UI.error(download_problem("Piper", "Piper", e,
+                                          "Your current Piper is unchanged." if had_piper else ""))
                 UI.event("System", f"Details: {e}", style="dim")
                 return False
             try:
@@ -641,7 +656,10 @@ class SpeechManager:
             return onnx_file
         except Exception as e:
             import requests
-            if isinstance(e, (DownloadIntegrityError, requests.HTTPError)):
+            # Remembered: a checksum failure and a refusal (4xx). A server error (5xx) or a
+            # connection that could not be made is transient and retried at the next reply.
+            status = http_status(e) if isinstance(e, requests.HTTPError) else None
+            if isinstance(e, DownloadIntegrityError) or (status is not None and 400 <= status < 500):
                 failed.add(model_name)
             UI.error(download_problem(f"The voice {model_name}", f"the voice {model_name}", e))
             UI.event("System", f"Details: {e}", style="dim")

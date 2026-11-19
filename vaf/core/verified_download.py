@@ -44,6 +44,7 @@ import stat
 import tarfile
 import tempfile
 import threading
+import time
 import zipfile
 from pathlib import Path
 from typing import Callable, Optional
@@ -55,6 +56,12 @@ import requests
 # unpacks, and a chain stored in reverse order makes that cost grow with the square of its
 # length (26 s at 4000 links), so more than this is refused before anything is unpacked.
 MAX_ARCHIVE_LINKS = 512
+
+
+# A partial file this much older than now belongs to a download that was killed (a running
+# one writes to it continuously and gives up after its read timeout), so the next download
+# of the same file removes it.
+STALE_PARTIAL_SECONDS = 3600.0
 
 
 class DownloadIntegrityError(RuntimeError):
@@ -98,6 +105,7 @@ def download_verified(
     limit = None if size is None else int(size)
     target = Path(dest)
     target.parent.mkdir(parents=True, exist_ok=True)
+    sweep_stale_partials(target)
     fd, partial_name = tempfile.mkstemp(dir=target.parent, prefix="." + target.name + ".", suffix=".part")
     partial = Path(partial_name)
     digest = hashlib.sha256()
@@ -134,6 +142,29 @@ def download_verified(
                 pass
 
 
+def sweep_stale_partials(target: str | os.PathLike) -> None:
+    """Remove the partial files of `target` (``.<name>.<random>.part`` next to it) that are
+    older than STALE_PARTIAL_SECONDS: what a download killed hard (power loss, SIGKILL) left
+    behind, since the finally of download_verified did not run. A link is removed, never
+    followed; a partial file of a download still running is never that old."""
+    target = Path(target)
+    prefix = "." + target.name + "."
+    cutoff = time.time() - STALE_PARTIAL_SECONDS
+    try:
+        entries = os.scandir(target.parent)
+    except OSError:
+        return
+    with entries:
+        for entry in entries:
+            if not (entry.name.startswith(prefix) and entry.name.endswith(".part")):
+                continue
+            try:
+                if entry.stat(follow_symlinks=False).st_mtime < cutoff:
+                    os.unlink(entry.path)
+            except OSError:
+                pass
+
+
 def file_sha256(path: str | os.PathLike, chunk_size: int = 1 << 20) -> str:
     """The SHA-256 of the file at ``path`` (hex), read in chunks. Deliberately its own
     helper rather than an import of the same loop elsewhere in vaf (backup, learn_ledger):
@@ -148,7 +179,8 @@ def file_sha256(path: str | os.PathLike, chunk_size: int = 1 << 20) -> str:
 
 # Files this process found to carry their pinned digest, keyed by what changes when the
 # file is replaced or rewritten (path, device and inode, size, modification and change
-# time; the change time cannot be set back by a program) and the digest it was compared
+# time; on POSIX the change time cannot be set back by a program, on Windows it is the
+# creation time and the device and inode carry the check) and the digest it was compared
 # with.
 _verified_files: set = set()
 _verified_lock = threading.Lock()

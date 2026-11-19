@@ -1050,6 +1050,10 @@ def contact_timeline(
                 if not store_exists(username, user_scope_id):
                     continue
                 row_user = message_channel_username(chan, username)
+                # A LID key reads its number's rows as well (`get_chat_messages` resolves it),
+                # so the same stored row can come back under two keys: one item per row, named
+                # by the key it is stored under.
+                seen_rows = set()
                 for key in keys:
                     rows = get_chat_messages(row_user, key, limit=per_source, user_scope_id=user_scope_id,
                                              channel=chan, before_ts=before_ts)
@@ -1062,7 +1066,11 @@ def contact_timeline(
                         # second stay two items (and two page keys); a row without one, which
                         # the store never produces, falls back to time and direction.
                         ident = str(row.get("message_id") or "").strip() or f"{float(row['ts']):.3f}:{direction}"
-                        items.append({"kind": "message", "id": f"{chan}:{key}:{ident}",
+                        stored_key = str(row.get("chat_id") or key)
+                        if (stored_key, ident, direction) in seen_rows:
+                            continue
+                        seen_rows.add((stored_key, ident, direction))
+                        items.append({"kind": "message", "id": f"{chan}:{stored_key}:{ident}",
                                       "ts": float(row["ts"]), "channel": chan, "direction": direction, "title": None,
                                       "body": str(row.get("body") or ""), "source": "agent" if direction == "out" else None,
                                       "ref": {"chat_id": row.get("chat_id") or key, "content_type": row.get("content_type") or "text"}})
@@ -1343,7 +1351,15 @@ def _lid_keys_for_digits(digit_keys: List[str], lid_map: Optional[Dict[str, Any]
     """The "<lid>@lid" jids whose mapped number is one of these canonical digit strings.
     Agent-sent messages to a LID-addressed account are stored under the raw lid jid, so a
     person's messages can sit under two keys; the persisted LID map joins them. Without a
-    `lid_map` the shared map is read (`whatsapp_lid_map(None)`)."""
+    `lid_map` the shared map is read (`whatsapp_lid_map(None)`).
+
+    NAMED BOUNDARY, cost: one canonicalisation per map entry, linear in the map. Measured over
+    a merged map: about 15 ms at 10,000 entries and 150 ms at 100,000 (the dict copy in
+    `whatsapp_lid_map` is 0.08 ms and 1.6 ms of that). It runs once per send in the serial,
+    network-bound sender thread; the suffix matcher it replaced did the same digit work per
+    entry. Real maps hold tens to low thousands of entries and an account's own map is capped
+    at 1000, so no index is kept; one keyed by canonical digits is the fix if a map ever
+    grows past that."""
     if lid_map is None:
         lid_map = whatsapp_lid_map(None)
     if not isinstance(lid_map, dict) or not lid_map:

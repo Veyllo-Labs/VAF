@@ -132,7 +132,7 @@ def test_a_non_admins_binding_never_gives_a_stranger_the_admins_owner_lane(cfg, 
     """P1. MUTATION: the non-admin branch writes `lid_to_e164` (the old line back): the admin's
     bridge answers the LID as the admin and saves it as the admin's endpoint."""
     out = _assign(ALICE)
-    assert out["status"] == "assigned" and "this account" in out["message"]
+    assert out["status"] == "assigned" and "your account only" in out["message"]
     wc = cfg["whatsapp_config"]
     assert "lid_to_e164" not in wc
     assert wc["lid_to_e164_by_scope"] == {ALICE_SCOPE: {LID: ADMIN_PHONE}}
@@ -499,3 +499,43 @@ def test_the_send_path_stays_fast_on_a_large_shared_map(cfg, monkeypatch):
     start = time.perf_counter()
     assert wa._preferred_lid_jid("admin", "4917000009999@s.whatsapp.net", "text") == "100000009999@lid"
     assert time.perf_counter() - start < 1.0
+
+
+# -- the other readers of the lane ------------------------------------------------------------
+
+def test_the_inbox_counts_an_own_binding_in_its_own_lane_only(cfg):
+    """MUTATION: `inbox._messenger_rows` reads `whatsapp_lid_map(None)`."""
+    from vaf.core import inbox
+    for who in ("alice", "bob"):
+        store.append_message(who, LID, "hi", direction="in", user_scope_id=SCOPES[who], ts=100.0)
+    _assign(ALICE, phone="+491700000077")
+
+    def mode(who):
+        rows = inbox.list_conversations(who, SCOPES[who], channels=["whatsapp"], include_done=True)["rows"]
+        return next(r["mode"] for r in rows if r["id"] == LID)
+
+    assert mode("alice") != "needs_assign"
+    assert mode("bob") == "needs_assign"
+
+
+def test_contact_history_reads_the_callers_own_bindings_once(cfg):
+    """MUTATION: drop the lane read from `contact_timeline` or `contact_activity_stats` (the
+    LID-addressed message disappears for Alice), or the timeline's per-row dedupe (her
+    number's message is listed twice: the LID key reads the number's rows too)."""
+    dana = {who: contacts_store.create_contact("Dana", who, user_scope_id=SCOPES[who],
+                                               whatsapp_phone="+491700000077") for who in ("alice", "bob")}
+    for who in ("alice", "bob"):
+        store.append_message(who, "+491700000077", "by number", direction="in", user_scope_id=SCOPES[who],
+                             ts=100.0, message_id=f"n-{who}")
+        store.append_message(who, LID, "to the lid", direction="out", user_scope_id=SCOPES[who], ts=200.0,
+                             message_id=f"l-{who}")
+    _assign(ALICE, phone="+491700000077")
+
+    def bodies(who):
+        items = contacts_store.contact_timeline(dana[who], who, SCOPES[who], kinds={"message"})["items"]
+        return sorted(i["body"] for i in items)
+
+    assert bodies("alice") == ["by number", "to the lid"]
+    assert bodies("bob") == ["by number"]
+    assert contacts_store.contact_activity_stats(dana["alice"], "alice", ALICE_SCOPE)["messages"] == 2
+    assert contacts_store.contact_activity_stats(dana["bob"], "bob", BOB_SCOPE)["messages"] == 1

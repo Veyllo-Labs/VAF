@@ -33,7 +33,7 @@ from vaf.auth.models import LocalUser, UserRole
 from vaf.auth.database import get_auth_db
 from vaf.auth.crypto import hash_password_async
 from vaf.auth import account_seal
-from vaf.core.config import get_local_admin_scope_id, is_admin_identity
+from vaf.core.config import get_local_admin_scope_id, get_local_admin_username, is_admin_identity
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +65,32 @@ def caller_is_admin(request: Request) -> bool:
     missing scope with the local admin's and would make a scope-less account an admin here."""
     user = _current_user(request)
     return is_admin_identity(user.get("role"), user.get("user_scope_id"))
+
+
+# What a sign-in that names no account is told: it has to sign in again, nothing else helps.
+UNLINKED_SIGN_IN = "This sign-in is not linked to an account. Sign out and sign in again."
+
+
+def request_account(request: Request) -> Dict[str, str]:
+    """The account a request acts for, as {"user_scope_id", "username"}, read strictly.
+
+    The tokenless desktop, which carries no identity on the request (the same case
+    `caller_is_admin` reads as the local admin), is the local admin. An authenticated request
+    must carry BOTH its scope and its name: one without either is refused (400,
+    `UNLINKED_SIGN_IN`). The lenient per-module readers (`get_current_vaf_user` in the channel
+    and contact routes) fill a missing scope or name with the local admin's, which is right
+    for nobody: a write through them lands on the admin's entries, a send goes out through
+    the admin's process, a read shows the admin's chats. One rule for the WhatsApp routes and
+    the Telegram pairing routes; it used to be two copies that disagreed (one accepted a scope
+    without a name and then read the caller as the local admin)."""
+    user = getattr(request.state, "user", None)
+    if not user or not isinstance(user, dict):
+        return {"user_scope_id": str(get_local_admin_scope_id()), "username": get_local_admin_username()}
+    scope = str(user.get("user_scope_id") or "").strip()
+    name = str(user.get("username") or "").strip()
+    if not scope or not name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=UNLINKED_SIGN_IN)
+    return {"user_scope_id": scope, "username": name}
 
 
 def require_admin(request: Request) -> Dict[str, Any]:

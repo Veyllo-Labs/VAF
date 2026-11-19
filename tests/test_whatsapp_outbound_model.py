@@ -1068,7 +1068,7 @@ def test_the_owner_origin_travels_through_both_send_paths(isolated, monkeypatch,
     out = wa.send_whatsapp_with_confirmation("alice", "491700000051@s.whatsapp.net", "hi",
                                              timeout=0.05, allow_contact_send=True, origin="owner")
     item = q.get_nowait()
-    assert len(item) == 8 and item[7] == "owner" and item[2] == "hi"
+    assert len(item) == 9 and item[7] == "owner" and item[2] == "hi"
     assert "No delivery confirmation" in out                    # nobody answered the fake process
     # the external path: the request file carries origin, and the dequeue hands it back
     monkeypatch.setattr(wa, "_outgoing_queue", None)

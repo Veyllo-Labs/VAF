@@ -202,6 +202,7 @@ class SendWhatsAppTool(BaseTool):
                 document_path=document_path,
                 timeout=45.0 if (voice_path or document_path) else 15.0,
                 allow_contact_send=allow_contact_send,
+                user_scope_id=user_scope_id,
             )
         except Exception as e:
             return f"Failed to send WhatsApp message: {e}"

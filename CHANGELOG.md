@@ -515,7 +515,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   nothing is guessed. A message is sent to a WhatsApp ID only when it was assigned to exactly
   that number, no longer to any number that merely ends the same way. An account without its
   own linked WhatsApp can no longer send, list chats or load history through another
-  account's linked number. Removing your own registered number no longer removes another
+  account's linked number, and reminders and notices meant for another account no longer go
+  out from the admin's number to the admin. Removing your own registered number no longer removes another
   account's entry for the same number. Assignments made before this update stay in place;
   the security log lists who made each one.
 - **An account without admin rights no longer receives other accounts' WhatsApp data with

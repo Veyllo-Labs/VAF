@@ -859,10 +859,14 @@ def _process_waiting_reply(user_scope_id: Optional[str]) -> str:
         end_reply_chase(user_scope_id)
         return "allow_run"
     if nudge_ts is None:
+        # A waiting entry without a name belongs to its scope, not to the local admin: the
+        # delivery picks the messenger and the process by this name.
+        from vaf.core.config import resolve_caller_username
+        nudge_name = resolve_caller_username(w.get("username"), user_scope_id, allow_lookup=True)
         if _send_nudge(
             user_scope_id,
-            w.get("username") or "admin",
-            w.get("display_name") or w.get("username") or "admin",
+            nudge_name,
+            w.get("display_name") or nudge_name,
             session_id=w.get("session_id"),
             channel=w.get("channel"),
         ):
@@ -1519,7 +1523,7 @@ def deliver_tracked_message(
     messenger is configured or the send fails. The text is ALWAYS an explicit caller argument —
     chain-of-thought is never scraped, so reasoning cannot leak. Returns the request dict with an extra
     `delivered` flag, or None if `message` was empty."""
-    from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
+    from vaf.core.config import get_local_admin_scope_id
     from vaf.core import thinking_requests as treq
 
     message = (message or "").strip()
@@ -1610,7 +1614,8 @@ def deliver_tracked_message(
             kind=get_message_kind(user_scope_id) or None,
         )
     _is_fyi = (req.get("kind") or "") == "relevance"
-    uname = (username or "").strip() or get_local_admin_username()
+    from vaf.core.config import resolve_caller_username
+    uname = resolve_caller_username(username, user_scope_id, allow_lookup=True)
     # Anchor the question to ONE web session: a follow-up reuses the original request's session; a new
     # question resolves the latest web session NOW. The nudge + later follow-up reuse this anchor (via the
     # waiting state / the request) instead of independently re-picking 'latest', so they stay in the same chat.

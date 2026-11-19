@@ -534,24 +534,28 @@ def get_whatsapp_chat_jid_from_whitelist(
     For proactive sends we need the user's WhatsApp JID - typically obtained when they first message us.
     Returns JID string if whitelist has phone_number for this user (we construct JID from it), or None.
     Note: We prefer persisted endpoints from actual message; this is fallback when user hasn't messaged yet.
+
+    With a scope, ONLY an entry of that scope counts. The name was a second key here, read in
+    the same pass, and a nameless caller's name defaulted to "admin": measured, a non-admin's
+    nameless notification resolved the admin's registered number (the admin's entry came
+    first), which `get_whatsapp_chat_jid` then saved as the non-admin's own endpoint. The name
+    is the key only for a caller without a scope (the legacy single-user lane).
     """
     whatsapp_config = Config.get("whatsapp_config") or {}
     if not isinstance(whatsapp_config, dict) or not whatsapp_config.get("whitelist"):
         return None
     whitelist = whatsapp_config.get("whitelist") or []
-    scope_str = str(user_scope_id) if user_scope_id is not None else None
+    scope_str = str(user_scope_id).strip() if user_scope_id is not None else ""
     vaf_username = (username or "").strip() or "admin"
     for entry in whitelist:
-        if not isinstance(entry, dict):
+        if not isinstance(entry, dict) or not entry.get("phone_number"):
             continue
-        if scope_str and str(entry.get("user_scope_id")) == scope_str:
-            phone = entry.get("phone_number")
-            if phone:
-                return whatsapp_send_jid(str(phone)) or None
-        if entry.get("vaf_username") == vaf_username:
-            phone = entry.get("phone_number")
-            if phone:
-                return whatsapp_send_jid(str(phone)) or None
+        if scope_str:
+            matches = str(entry.get("user_scope_id") or "").strip() == scope_str
+        else:
+            matches = entry.get("vaf_username") == vaf_username
+        if matches:
+            return whatsapp_send_jid(str(entry["phone_number"])) or None
     return None
 
 
@@ -576,8 +580,11 @@ def get_whatsapp_chat_jid(
             jid = data["whatsapp_by_scope"].get(str(user_scope_id))
             if jid:
                 return jid
-        uname = (username or "").strip() or "admin"
-        jid = data["whatsapp_by_username"].get(uname)
+        # The name is a key of its own only when it was given, or for a caller without any
+        # scope (the legacy single-user lane): a scoped caller without a name must not read
+        # the local admin's endpoint under the default name.
+        uname = (username or "").strip() or ("admin" if user_scope_id is None else "")
+        jid = data["whatsapp_by_username"].get(uname) if uname else None
         if jid:
             return jid
     jid = get_whatsapp_chat_jid_from_whitelist(user_scope_id, username)
@@ -864,11 +871,16 @@ def send_to_main_messenger(
     caption = ("\U0001F4CE " + _os.path.basename(attach)) if attach else ""
     if not text and not attach:
         return False, None
+    # One name for the whole delivery, resolved from the scope when none was given: a nameless
+    # caller is not the local admin (`resolve_caller_username`). Every lane below used to read
+    # `username or "admin"`, and a non-admin's nameless notification went out through the
+    # admin's WhatsApp process, to the admin's own number.
+    from vaf.core.config import resolve_caller_username
+    uname = resolve_caller_username(username, None if user_scope_id is None else str(user_scope_id),
+                                    allow_lookup=True)
 
     try:
-        conn = get_messaging_connections(
-            username=(username or "admin").strip() or "admin", user_scope_id=user_scope_id
-        )
+        conn = get_messaging_connections(username=uname, user_scope_id=user_scope_id)
         main = (conn.get("main_messenger") or "").strip().lower()
         if main == "telegram":
             chat_id = get_telegram_chat_id(user_scope_id, username)
@@ -886,22 +898,22 @@ def send_to_main_messenger(
                     delivered = bool(send_telegram_reply(chat_id, caption, file_path=attach))
                 if delivered:
                     if record:
-                        _record_outbound("telegram", str(chat_id), text or caption, username, user_scope_id, attach, kind=kind)
+                        _record_outbound("telegram", str(chat_id), text or caption, uname, user_scope_id, attach, kind=kind)
                     return True, "telegram"
         elif main == "whatsapp":
-            jid = get_whatsapp_chat_jid(user_scope_id, username)
+            jid = get_whatsapp_chat_jid(user_scope_id, uname)
             if jid:
                 from vaf.core.whatsapp_reply import send_whatsapp_reply
                 # send_whatsapp_reply returns False when the bridge is down (callback unset), so a dead
                 # bridge correctly degrades to (False, None) -> the caller falls back to the Web UI,
                 # instead of falsely reporting success and silently swallowing the message.
                 if text:
-                    delivered = bool(send_whatsapp_reply((username or "admin"), jid, text, user_scope_id=user_scope_id))
+                    delivered = bool(send_whatsapp_reply(uname, jid, text, user_scope_id=user_scope_id))
                     if delivered and attach:
                         try:
                             from vaf.api.whatsapp_bridge import send_whatsapp_with_confirmation
                             send_whatsapp_with_confirmation(
-                                (username or "admin"), jid, caption, document_path=attach
+                                uname, jid, caption, document_path=attach, user_scope_id=user_scope_id
                             )
                         except Exception:
                             pass
@@ -910,12 +922,12 @@ def send_to_main_messenger(
                     # outcome - only its three "... sent via WhatsApp." forms count as success.
                     from vaf.api.whatsapp_bridge import send_whatsapp_with_confirmation
                     _wa_result = send_whatsapp_with_confirmation(
-                        (username or "admin"), jid, caption, document_path=attach
+                        uname, jid, caption, document_path=attach, user_scope_id=user_scope_id
                     )
                     delivered = "sent via whatsapp" in str(_wa_result or "").lower()
                 if delivered:
                     if record:
-                        _record_outbound("whatsapp", str(jid), text or caption, username, user_scope_id, attach, kind=kind)
+                        _record_outbound("whatsapp", str(jid), text or caption, uname, user_scope_id, attach, kind=kind)
                     return True, "whatsapp"
         elif main == "discord":
             user_id = get_discord_user_id(user_scope_id, username)
@@ -935,7 +947,7 @@ def send_to_main_messenger(
                         delivered = bool(send_discord_dm(bot_token, user_id, caption, file_path=attach))
                     if delivered:
                         if record:
-                            _record_outbound("discord", str(user_id), text or caption, username, user_scope_id, attach, kind=kind)
+                            _record_outbound("discord", str(user_id), text or caption, uname, user_scope_id, attach, kind=kind)
                         return True, "discord"
         elif main == "veyllo_app":
             # Stored once with an outbox entry per device and sent to the connected ones; a
@@ -945,7 +957,7 @@ def send_to_main_messenger(
             if app_bridge.deliver(user_scope_id, username, text, attach):
                 if record:
                     _record_outbound("veyllo_app", app_devices.chat_key(user_scope_id),
-                                     text or caption, username, user_scope_id, attach, kind=kind)
+                                     text or caption, uname, user_scope_id, attach, kind=kind)
                 return True, "veyllo_app"
     except Exception:
         pass

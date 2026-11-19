@@ -387,7 +387,7 @@ def test_a_busy_whatsapp_voice_reply_goes_out_as_text_without_a_second_wait(monk
     monkeypatch.setitem(wa._voice_reply_pending, "tenant|123@s.whatsapp.net", "de")
     assert wa._enqueue_reply("tenant", "123@s.whatsapp.net", "Hallo!", user_scope_id="wa-scope-1")
     assert calls == ["de"]
-    assert out.get_nowait() == ("tenant", "123@s.whatsapp.net", "Hallo!", None)
+    assert out.get_nowait() == ("tenant", "123@s.whatsapp.net", "Hallo!", None, None, None, None, None, "wa-scope-1")
 
 
 def test_local_tts_counts_no_cloud_request(monkeypatch):

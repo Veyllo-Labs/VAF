@@ -319,13 +319,16 @@ def maybe_request_confirmation(
             pass
 
         from vaf.core import vocab
+        from vaf.core.config import resolve_caller_username
         q_key = "speaker_confirm_claim" if kind == "claim" else "speaker_confirm_question"
         question = vocab.pick(q_key, _lang(username),
                               score=score_result.get("score", "?"))
         rec = {
             "id": confirm_id,
             "scope_id": str(scope_id),
-            "username": username or "admin",
+            # The scope's own name when none was given: the delivery picks the messenger
+            # and the WhatsApp process by it, and the local admin's would be another account's.
+            "username": resolve_caller_username(username, str(scope_id), allow_lookup=True),
             "audio_path": str(audio_path),
             "score": score_result.get("score"),
             "session_id": session_id or "",

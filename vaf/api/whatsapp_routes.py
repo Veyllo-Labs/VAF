@@ -18,9 +18,9 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
+from vaf.core.config import Config
 from vaf.core.security_events import log_security_event
-from vaf.api.user_routes import caller_is_admin
+from vaf.api.user_routes import caller_is_admin, request_account
 from vaf.core.messaging_connections import channel_enabled_for_scope, whatsapp_inbound_to_agent, whatsapp_session_id
 
 logger = logging.getLogger("vaf.api.whatsapp")
@@ -58,30 +58,13 @@ def _normalize_chat_id(chat_id: str) -> str:
 
 
 def get_current_vaf_user(request: Request) -> Dict[str, str]:
-    """Return user_scope_id and username for the current request."""
-    user = getattr(request.state, "user", None)
-    if user and user.get("user_scope_id") and user.get("username"):
-        return {
-            "user_scope_id": str(user["user_scope_id"]),
-            "username": user.get("username", "admin"),
-        }
-    return {
-        "user_scope_id": get_local_admin_scope_id(),
-        "username": get_local_admin_username(),
-    }
-
-
-def _own_caller(request: Request) -> Dict[str, str]:
-    """The non-admin account a write is for, read strictly from the authenticated request.
-    `get_current_vaf_user` reads a signed-in account without a scope as the local admin,
-    which is right for a read and wrong for a write: the write would land on the admin's
-    entries (the same rule as `telegram_routes._pairing_caller`)."""
-    state_user = getattr(request.state, "user", None)
-    scope = str(state_user.get("user_scope_id") or "").strip() if isinstance(state_user, dict) else ""
-    name = str(state_user.get("username") or "").strip() if isinstance(state_user, dict) else ""
-    if not scope or not name:
-        raise HTTPException(status_code=400, detail="This account has no scope to change WhatsApp settings for.")
-    return {"user_scope_id": scope, "username": name}
+    """user_scope_id and username of the account the request acts for, strictly
+    (`user_routes.request_account`): the tokenless desktop is the local admin, and a signed-in
+    request without a scope or a name is refused. Every WhatsApp route acts on an account's
+    own linked number, auth folder or chats, so a lenient reader that filled the gap with the
+    local admin's identity would hand a stranger the admin's (the QR reset would even delete
+    the admin's login)."""
+    return request_account(request)
 
 
 class WhitelistAddRequest(BaseModel):
@@ -1196,7 +1179,7 @@ async def remove_whitelist_entry(request: Request, body: WhitelistAddRequest):
     if not phone:
         raise HTTPException(status_code=400, detail="phone_number required")
     is_admin = caller_is_admin(request)
-    user_info = get_current_vaf_user(request) if is_admin else _own_caller(request)
+    user_info = get_current_vaf_user(request)
     user_scope_id = user_info.get("user_scope_id")
     config = Config.load()
     wc = config.get("whatsapp_config") or {}
@@ -1242,9 +1225,8 @@ async def add_whitelist_entry(request: Request, body: WhitelistAddRequest):
         user_scope_id = body.user_scope_id or user_info["user_scope_id"]
     else:
         # Non-admin users may only create/update their own whitelist entry.
-        own = _own_caller(request)
-        vaf_username = own["username"]
-        user_scope_id = own["user_scope_id"]
+        vaf_username = user_info["username"]
+        user_scope_id = user_info["user_scope_id"]
 
     # The linked account is the agent's own number. Registering it as the main-user
     # number would recreate the "chat with yourself" model this bridge no longer supports.
@@ -1345,7 +1327,7 @@ async def assign_lid_to_number(request: Request, body: LidAssignRequest):
         who = get_current_vaf_user(request)
         scope = None
     else:
-        who = _own_caller(request)
+        who = get_current_vaf_user(request)
         scope = who["user_scope_id"]
     config = Config.load()
     wc = config.get("whatsapp_config") or {}
@@ -1380,7 +1362,8 @@ async def assign_lid_to_number(request: Request, body: LidAssignRequest):
     if scope is None:
         message = f"LID {lid_jid} assigned to {phone} for every account. The bridge will accept messages from this chat."
     else:
-        message = f"LID {lid_jid} assigned to {phone} for this account. Your bridge will accept messages from this chat."
+        message = (f"Chat {lid_jid} is assigned to {phone} for your account only. "
+                   "Your agent now treats its messages as coming from that number.")
     return {"status": "assigned", "message": message, "lid_jid": lid_jid, "phone_number": phone}
 
 
@@ -1540,7 +1523,7 @@ async def send_whatsapp_message(request: Request, body: SendRequest):
     user_info = get_current_vaf_user(request)
     result = await asyncio.to_thread(
         send_whatsapp_with_confirmation, user_info["username"], chat_jid, text,
-        allow_contact_send=True, origin="owner")
+        allow_contact_send=True, origin="owner", user_scope_id=user_info["user_scope_id"])
     if not str(result).startswith("Message sent"):
         raise HTTPException(status_code=502, detail=str(result))
     return {"ok": True, "chat_id": cid}

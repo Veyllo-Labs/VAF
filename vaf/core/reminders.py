@@ -157,7 +157,10 @@ def _deliver(entry: Dict[str, Any]) -> str:
     Messenger first (canonical router), Web UI notification as fallback -
     never silently dropped (same contract as automation results)."""
     scope = entry.get("user_scope_id")
-    username = entry.get("username") or "admin"
+    # An entry stored without a name is its scope's, not the local admin's: the delivery
+    # picks the messenger and the WhatsApp process by this name.
+    from vaf.core.config import resolve_caller_username
+    username = resolve_caller_username(entry.get("username"), scope, allow_lookup=True)
     message = str(entry.get("message") or "")
     try:
         from vaf.core.messaging_connections import send_to_main_messenger

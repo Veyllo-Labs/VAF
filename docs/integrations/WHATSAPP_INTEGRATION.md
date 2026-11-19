@@ -244,7 +244,12 @@ was started for the SAME scope (the same account under another spelling of its n
 otherwise none. Measured on the twelve hand copies it replaced, which took the only process
 whoever it belonged to: an account without a linked WhatsApp sent from the admin's agent
 number, listed the admin's chats and loaded their history. Such an account now gets "No
-WhatsApp process runs for this account" and an empty chat list.
+WhatsApp process runs for this account" and an empty chat list. A send that knows its scope
+(the reply lane, `send_whatsapp`, the dashboard's send; the queue item and the file-IPC request
+both carry it) is held to that scope even under the process's own name, and a notification
+that arrives without a name is delivered under its scope's account
+(`messaging_connections.send_to_main_messenger` resolves the name; the registered-number
+lookup with a scope matches that scope only).
 
 - **Self-chat (the linked account's own chat)**: A message in the linked account's "message yourself" chat is somebody typing on the agent's phone, not the owner talking to the agent. The bridge drops it before the store, the activity and the queue; a downloaded voice file is deleted. In logs you will see `SELF_CHAT dropped`. The Node decides `selfChat` by comparing the sender with the linked account (for `@lid` senders only after resolving the LID to a number).
 

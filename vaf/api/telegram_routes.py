@@ -18,7 +18,7 @@ from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel
 
 from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
-from vaf.api.user_routes import caller_is_admin, require_admin
+from vaf.api.user_routes import caller_is_admin, request_account, require_admin
 from vaf.core.channel_secrets import channel_secret, has_channel_secret
 from vaf.core.messaging_connections import channel_enabled_for_scope
 from vaf.core.security_events import log_security_event
@@ -205,16 +205,6 @@ async def whitelist_add(
     return {"status": "ok", "whitelist_count": len(whitelist)}
 
 
-def _pairing_caller(request: Request) -> Dict[str, str]:
-    """The account a pairing is for. Strict where `get_current_vaf_user` is lenient: a
-    signed-in account without a scope would otherwise be read as the local admin, and a
-    pairing is exactly what must never land on somebody else's account."""
-    state_user = getattr(request.state, "user", None)
-    if isinstance(state_user, dict) and not str(state_user.get("user_scope_id") or "").strip():
-        raise HTTPException(status_code=400, detail="This account has no scope to pair a Telegram account with.")
-    return get_current_vaf_user(request)
-
-
 @router.post("/pair")
 async def start_pairing(request: Request):
     """A one-time code that pairs the caller's OWN Telegram account with the running bot.
@@ -227,7 +217,7 @@ async def start_pairing(request: Request):
     from vaf.api.telegram_bridge import is_bridge_running
     from vaf.core.channel_pairing import PAIRING_TTL_SECONDS, issue_pairing_code
 
-    caller = _pairing_caller(request)
+    caller = request_account(request)
     telegram_config = Config.get("telegram_config") or {}
     if not isinstance(telegram_config, dict) or not telegram_config.get("verified") or not has_channel_secret("telegram"):
         raise HTTPException(status_code=409, detail="Telegram is not set up on this installation.")
@@ -249,7 +239,7 @@ async def pairing_status(request: Request):
     """Whether the caller's own Telegram account is paired, and whether a code is out."""
     from vaf.core.channel_pairing import pairing_pending
 
-    caller = _pairing_caller(request)
+    caller = request_account(request)
     scope = str(caller["user_scope_id"]).strip()
     telegram_config = Config.get("telegram_config") or {}
     whitelist = list(telegram_config.get("whitelist") or []) if isinstance(telegram_config, dict) else []

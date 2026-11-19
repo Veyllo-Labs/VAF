@@ -245,6 +245,7 @@ def _dequeue_external_send_request() -> Optional[Tuple[Any, ...]]:
                     str(data.get("document_path") or "").strip() or None,
                     response_path,
                     str(data.get("origin") or "").strip() or None,
+                    str(data.get("user_scope_id") or "").strip() or None,
                 )
             except Exception as e:
                 try:
@@ -871,11 +872,10 @@ def spawn_node_bridge(node: str, wa_js: Path, auth_dir: Path) -> subprocess.Pope
 
 def _account_scope(username: str) -> str:
     """The scope an account name stands for here: the one its running process was started
-    with, else the account directory's answer; an empty name is the local admin."""
+    with, else the account directory's answer, else "" (no account by that name)."""
     name = (username or "").strip()
     if not name:
-        from vaf.core.config import get_local_admin_scope_id
-        return str(get_local_admin_scope_id() or "").strip()
+        return ""
     known = _scope_by_user.get(name)
     if known:
         return str(known).strip()
@@ -883,25 +883,33 @@ def _account_scope(username: str) -> str:
     return str(scope_id_for_username(name) or "").strip()
 
 
-def _process_for(username: str) -> Tuple[Optional[str], Optional[subprocess.Popen]]:
+def _process_for(username: str, user_scope_id: Optional[str] = None
+                 ) -> Tuple[Optional[str], Optional[subprocess.Popen]]:
     """(name, process) of the Node process that acts for this account, or (None, None).
 
     The account's own live process first. Otherwise the only running process, but ONLY when
     it was started for the same scope (the same account under another spelling of its name).
-    Every lane that writes to a Node process asks here, and asks without holding
-    `_process_lock` (this takes it). Measured on the twelve hand copies this replaced, which
-    took the only process whoever it belonged to: an account without a linked WhatsApp sent
-    from another account's agent number, read its chat list and loaded its history."""
+    A request that carries its scope (`user_scope_id`, the reply lane's and the send lanes'
+    queue items) is held to it on BOTH steps: a process started for another scope is refused
+    even when its name matches, because a name can be a caller's default rather than the
+    account's own (measured: a non-admin's nameless notification arrived as "admin" and went
+    out through the admin's process). Every lane that writes to a Node process asks here, and
+    asks without holding `_process_lock` (this takes it). Measured on the twelve hand copies
+    this replaced, which took the only process whoever it belonged to: an account without a
+    linked WhatsApp sent from another account's agent number, read its chat list and loaded
+    its history."""
     name = (username or "").strip()
+    wanted = str(user_scope_id or "").strip()
     with _process_lock:
         own = _processes.get(name) if name else None
-        if own is not None and own.poll() is None:
+        own_scope = str(_scope_by_user.get(name) or "").strip() if own is not None else ""
+        if own is not None and own.poll() is None and (not wanted or own_scope == wanted):
             return name, own
         only_name, only = next(iter(_processes.items())) if len(_processes) == 1 else (None, None)
         only_scope = str(_scope_by_user.get(only_name) or "").strip() if only_name else ""
     if only is None or only.poll() is not None or not only_scope:
         return None, None
-    if _account_scope(name) != only_scope:
+    if (wanted or _account_scope(name)) != only_scope:
         return None, None
     return only_name, only
 
@@ -945,10 +953,11 @@ def _preferred_lid_jid(username: str, chat_jid: str, kind: str) -> str:
 
 
 def _sender_loop() -> None:
-    """Read (username, chat_jid, text, voice_path?, req_id?, document_path?, response_path?, origin?)
-    from the queue and write to that user's Node stdin. `origin` is "owner" when the person
-    sent the message from the dashboard; the stored row then carries OWNER_SENDER so the
-    reply window does not count it as the agent writing."""
+    """Read (username, chat_jid, text, voice_path?, req_id?, document_path?, response_path?, origin?,
+    user_scope_id?) from the queue and write to that user's Node stdin. `origin` is "owner" when
+    the person sent the message from the dashboard; the stored row then carries OWNER_SENDER so
+    the reply window does not count it as the agent writing. `user_scope_id` is the scope the
+    request was made for; only that scope's process takes it."""
     global _outgoing_queue, _processes
     while True:
         try:
@@ -965,13 +974,16 @@ def _sender_loop() -> None:
             document_path = item[5] if len(item) >= 6 else None
             response_path = item[6] if len(item) >= 7 else None
             origin = item[7] if len(item) >= 8 else None
+            # The scope the request was made for, when its lane knows it: the process must be
+            # that scope's (see _process_for).
+            item_scope = item[8] if len(item) >= 9 else None
             username, chat_jid, text = item[0], item[1], (item[2] or "")
             _register_external_response_path(req_id, response_path)
             if not username or not chat_jid:
                 continue
             if not voice_path and not text and not document_path:
                 continue
-            _, proc = _process_for(username)
+            _, proc = _process_for(username, item_scope)
             if not proc or proc.poll() is not None:
                 # Never another account's process: that would send from its agent number.
                 logger.warning("WhatsApp process for %s not running, dropped reply", username)
@@ -1180,7 +1192,8 @@ def _enqueue_reply(username: str, chat_jid: str, text: str, voice_path: Optional
         pass
     if _outgoing_queue is not None:
         try:
-            _outgoing_queue.put((username, chat_jid, text, voice_path))
+            _outgoing_queue.put((username, chat_jid, text, voice_path, None, None, None, None,
+                                 str(user_scope_id or "").strip() or None))
             return True
         except Exception:
             return False
@@ -1196,6 +1209,7 @@ def send_whatsapp_with_confirmation(
     timeout: float = 15.0,
     allow_contact_send: bool = False,
     origin: Optional[str] = None,
+    user_scope_id: Optional[str] = None,
 ) -> str:
     """
     Send a WhatsApp message (text, voice, or document) and wait for delivery confirmation from the Node bridge.
@@ -1203,6 +1217,8 @@ def send_whatsapp_with_confirmation(
     When allow_contact_send is True, the recipient may be any phone/JID (e.g. a contact); otherwise only whitelisted.
     origin="owner" marks a message the person sent from the dashboard: it is stored under
     OWNER_SENDER and opens no reply window (the agent did not write to that number).
+    user_scope_id, when given, is the scope the send is made for: only that scope's process
+    sends it (`_process_for`), on both the in-process and the file-IPC path.
     """
     # Voice/document need more time (TTS synthesis, file upload)
     if voice_path or document_path:
@@ -1213,7 +1229,8 @@ def send_whatsapp_with_confirmation(
             "a contact who can reach the assistant, nor an open conversation. "
             "Register the number in Settings → Connections → WhatsApp, or address a contact with to_phone."
         )
-    _, proc = _process_for(username)
+    scope = str(user_scope_id or "").strip() or None
+    _, proc = _process_for(username, scope)
     use_external_ipc = not proc or proc.poll() is not None
     if use_external_ipc:
         state = _read_bridge_state()
@@ -1244,6 +1261,7 @@ def send_whatsapp_with_confirmation(
                     "document_path": str(document_path or ""),
                     "response_path": str(response_path),
                     "origin": str(origin or ""),
+                    "user_scope_id": str(scope or ""),
                 },
             )
         except Exception as e:
@@ -1259,7 +1277,7 @@ def send_whatsapp_with_confirmation(
     with _pending_sends_lock:
         _pending_sends[req_id] = result_queue
     try:
-        _outgoing_queue.put((username, chat_jid, text or "", voice_path, req_id, document_path, None, origin))
+        _outgoing_queue.put((username, chat_jid, text or "", voice_path, req_id, document_path, None, origin, scope))
     except Exception as e:
         with _pending_sends_lock:
             _pending_sends.pop(req_id, None)

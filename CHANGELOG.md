@@ -490,13 +490,27 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
     migrations;
   - the timeouts (`api_timeout_*`, `tool_timeout_seconds`, `browser_timeout_seconds` and
     the other run-time bounds), the server mode, the upload scans and the security log
-    retention.
+    retention;
+  - who a workflow runs as (`workflow_identity_injection`: `legacy` ran every saved
+    workflow as the machine owner), the agent's guardrails the Security dashboard reports
+    (`plan_gate_enabled`, `proactive_reply_mutation_gate_enabled`,
+    `ask_first_drain_gate_enabled`) and the task overwrite guard, the skill threat rescan
+    and the cleanup ages (`gc_*`).
 
   A non-admin save now leaves all of them unchanged. `memory_db_owner_url`, which can hold
   the database owner's password, is no longer shown to non-admin accounts. Values already
-  stored are kept: check Settings, AI & Model if other people use this VAF. The warnings
-  that quote a stored model or provider now always stay one line in the terminal and the
-  backend log.
+  stored are kept: check Settings, AI & Model if other people use this VAF, and check
+  `veyllo_base_url` in `config.json` (no screen shows it; the default is
+  `https://api.veyllo.app/v1`). The warnings that quote a stored model or provider now
+  always stay one line in the terminal and the backend log.
+
+- **A settings save no longer removes mail accounts.** The page sends what it shows back,
+  and a non-admin's page shows only their own mail accounts: changing only the language
+  removed the admin's mail accounts and replaced every other account's. A hand-written save
+  could also point another account's mail server at a host of their choice, which then
+  received that account's mail password or sign-in. The mail account lists now change only
+  through the mail setup, and an account's channel switches only through its own toggles
+  and the pairings, never through a settings save.
 
 - **Commands nobody confirmed no longer reach a network share.** The host shell (`host_bash`)
   and `python_exec` now refuse a network share or Windows device path (`\\server\share`,

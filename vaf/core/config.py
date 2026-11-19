@@ -1255,6 +1255,10 @@ class Config:
         "backup_",
         # The vLLM engine: every key is a launch argument of the one local model server.
         "vllm_",
+        # The garbage collector: whether it runs, how often, and the age at which it deletes
+        # every account's session context directories and the dated logs (the timeline among
+        # them); `gc_max_age_hours` is that retention, for everyone.
+        "gc_",
     )
     GLOBAL_CONFIG_KEYS = frozenset([
         "provider", "model", "n_ctx", "gpu_layers", "n_parallel", "llama_cache_ram",
@@ -1456,6 +1460,24 @@ class Config:
         "memory_db_echo",
         "auto_install_gpu",
         "update_include_prereleases",
+        # Who a workflow runs as: `legacy` or `off` makes `identity_for_engine` return
+        # nothing, so a saved template runs as the machine owner whoever started it, and the
+        # per-step funnel (hard policy, the account's tool allowlist) is not built at all.
+        "workflow_identity_injection",
+        # The agent loop's guardrails, read for every account's turns: the Security
+        # dashboard reports the first three (`collect_guardrails_status`), and the task
+        # overwrite guard and its window bounce a replace of a task list with steps still
+        # pending until it is repeated inside the window.
+        # Switched off by one account, they are off for the admin too.
+        "plan_gate_enabled",
+        "plan_gate_max_blocks",
+        "proactive_reply_mutation_gate_enabled",
+        "ask_first_drain_gate_enabled",
+        "task_overwrite_guard_enabled",
+        "task_overwrite_confirm_window_seconds",
+        # The periodic threat rescan of the installed skills: 0 switches it off for the
+        # whole instance.
+        "skills_rescan_interval_hours",
     ])
 
     @classmethod
@@ -1578,12 +1600,19 @@ class Config:
           started. On a shared bot (Telegram) the global `enabled` IS the admin's switch: the
           bot, which they control and ride.
         - The local admin: unchanged.
+        - Every caller: `connection_enabled_by_scope` leaves the body; this step and the
+          pairings are its only writers.
 
         The two paths used to carry the non-admin half by hand, one copy each.
         """
         from vaf.core.channels import CHANNEL_ACCOUNTS
         scope_str = str(user_scope_id).strip() if user_scope_id else ""
         body = dict(body)
+        # Every account's own switches change only here (below, from the `enabled` a save
+        # carries) and in the pairings, never as a whole: a body's copy of the map is the
+        # page's view, written back by every save. Merged, it replaced the switch this step
+        # just wrote, and a non-admin's map turned another account's lanes on.
+        body.pop("connection_enabled_by_scope", None)
         scope_toggles: dict = {}
         if not is_admin:
             body_filtered, scope_toggles = cls.extract_connection_toggles_for_scope(body, scope_str or None)
@@ -1703,6 +1732,8 @@ class Config:
         user_toggles = by_scope.get(scope_str or "", {}) if scope_str else {}
         if not isinstance(user_toggles, dict):
             user_toggles = {}
+        # Only the account's own switches: the map is keyed by every account's scope.
+        out["connection_enabled_by_scope"] = {scope_str: user_toggles} if scope_str else {}
 
         # Telegram: do not expose full whitelist to non-admin; enabled = per-user toggle (default False for new user)
         tc = config.get("telegram_config") or {}

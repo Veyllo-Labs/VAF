@@ -6785,6 +6785,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # The cloud account lists change only through the cloud routes.
                         from vaf.cloud.base import without_cloud_account_keys
                         new_config = without_cloud_account_keys(new_config)
+                        # The mail account lists only through the mail routes.
+                        from vaf.core.email_accounts import without_mail_account_keys
+                        new_config = without_mail_account_keys(new_config)
                         new_config = Config.split_connection_toggles(
                             existing, new_config, str(user_scope_id) if user_scope_id else None, is_admin=is_admin)
                         # A changed sub-agent provider brings its gate along; the Settings

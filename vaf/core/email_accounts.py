@@ -58,6 +58,28 @@ def get_email_config(
     return ec if isinstance(ec, dict) else {"accounts": []}
 
 
+# The mail account lists: the local admin's, each account's by scope, and the legacy one by
+# username. They change only through `save_email_config` (the mail routes, the account
+# helpers below, the `label_mail` tool).
+MAIL_ACCOUNT_KEYS = ("email_config", "email_config_by_scope", "email_config_by_user")
+
+
+def without_mail_account_keys(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """A Settings save without the mail account lists. A save sends the whole page, and the
+    page holds a scoped VIEW of them (`Config.config_for_user`: a non-admin's has
+    `email_config` None, `email_config_by_user` empty and only their own scope), so merging
+    it wrote the view back: measured, a non-admin changing only the language set the local
+    admin's `email_config` to None and replaced every other account's entry; and a body
+    written by hand could point another account's IMAP or SMTP host at a server that then
+    received that account's stored password or token. An admin's page loaded before an
+    account was added would remove it the same way. Both save lanes pass this, for every
+    caller: the WebSocket ``save_config`` and ``PATCH /api/config`` (the model of
+    ``vaf.cloud.base.without_cloud_account_keys``)."""
+    if isinstance(payload, dict) and any(k in MAIL_ACCOUNT_KEYS for k in payload):
+        return {k: v for k, v in payload.items() if k not in MAIL_ACCOUNT_KEYS}
+    return payload
+
+
 def save_email_config(
     ec: Dict[str, Any],
     username: Optional[str] = None,

@@ -26,6 +26,7 @@ below hold each CLASS, so the next key of a class is admin-only or the suite is 
 Synthetic identities and a scratch config only.
 """
 import json
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -112,6 +113,40 @@ def test_controls_are_admin_only():
     assert open_keys == [], open_keys
 
 
+# Names of a key whose value can switch off an identity, a policy, a guard or a check, or
+# shorten what is kept for review: who a workflow runs as, a gate, a guard, an allowlist, a
+# bypass, a trusted list, an approval, a scan, a retention, the collector's age.
+_POLICY_NAME = re.compile(
+    r"identity_injection|policy|_gate_|_gate$|guard|unrestricted|allowlist|allow_|bypass"
+    r"|trusted|enforce|approval|threat_scan|scan_advisory|retention|rescan|^gc_")
+
+
+def test_every_identity_and_policy_switch_is_admin_only():
+    """A non-admin set `workflow_identity_injection` to `legacy` and every saved-template
+    workflow ran as the machine owner. MUTATIONS: drop the `workflow_identity_injection`
+    entry; drop the `gc_` prefix; drop `skills_rescan_interval_hours`."""
+    keys = [k for k in Config.DEFAULTS if _POLICY_NAME.search(k)]
+    assert {"workflow_identity_injection", "plan_gate_enabled", "gc_max_age_hours",
+            "skills_rescan_interval_hours", "task_overwrite_guard_enabled"} <= set(keys)
+    assert len(keys) >= 25, keys
+    open_keys = sorted(k for k in keys if not Config.is_global_config_key(k))
+    assert open_keys == [], f"a policy switch writable by any signed-in account: {open_keys}"
+
+
+def test_every_flag_the_security_dashboard_reports_is_admin_only():
+    """The dashboard calls them guardrails; one account switching one off switched it off
+    for every account. Read from the reporter's source, so a flag added there is held too.
+    MUTATION: drop the `ask_first_drain_gate_enabled` entry."""
+    import inspect
+
+    from vaf.api.security_routes import collect_guardrails_status
+
+    keys = re.findall(r"Config\.get\(\"([a-z0-9_]+)\"", inspect.getsource(collect_guardrails_status))
+    assert len(keys) >= 4, keys
+    open_keys = sorted(k for k in keys if not Config.is_global_config_key(k))
+    assert open_keys == [], f"a reported guardrail writable by any signed-in account: {open_keys}"
+
+
 # ── the save lanes, end to end ─────────────────────────────────────────────────
 
 @pytest.fixture
@@ -141,14 +176,18 @@ ADMIN_SET = {"veyllo_base_url": "https://api.veyllo.app/v1",
              "local_network_jwt_expiry_hours": 24,
              "api_timeout_read": 600.0, "browser_timeout_seconds": 1800,
              "server_mode": False, "security_log_retention_days": 14,
-             "upload_threat_scan_enabled": True, "tts_auto_speak": False}
+             "upload_threat_scan_enabled": True, "workflow_identity_injection": "declared",
+             "plan_gate_enabled": True, "gc_max_age_hours": 48,
+             "skills_rescan_interval_hours": 5, "tts_auto_speak": False}
 HOSTILE = {"veyllo_base_url": "http://192.0.2.10:8000/v1",
            "memory_db_url": "postgresql://x:x@192.0.2.10/vaf",
            "memory_db_owner_url": "postgresql://x:x@192.0.2.10/vaf",
            "config_format_version": 1,
            "api_timeout_read": 1.0, "browser_timeout_seconds": 1,
            "server_mode": True, "security_log_retention_days": 1,
-           "upload_threat_scan_enabled": False, "tts_auto_speak": True}
+           "upload_threat_scan_enabled": False, "workflow_identity_injection": "legacy",
+           "plan_gate_enabled": False, "gc_max_age_hours": 1,
+           "skills_rescan_interval_hours": 0, "tts_auto_speak": True}
 KEPT = [k for k in HOSTILE if k != "tts_auto_speak"]
 
 
@@ -205,6 +244,9 @@ def _assert_kept(stored):
     assert raw["tts_auto_speak"] is True
     # The migrations did not run again over the admin's settings.
     assert Config.load()["local_network_jwt_expiry_hours"] == 24
+    # Workflows still run as the account that started them.
+    from vaf.workflows.engine import _identity_is_declared
+    assert _identity_is_declared() is True
 
 
 def test_non_admin_patch_keeps_the_sensitive_keys(stored):

@@ -636,7 +636,13 @@ Every service call takes an explicit `user_scope_id`; `MailService` raises witho
 one and there is no silent fallback to the local admin. Account config resolves
 `email_config_by_scope[user_scope_id]` first and never falls back across scopes;
 `email_config` is the local admin's blob and `email_config_by_user` is a legacy
-layout that is never served from the engine store. Deletion is explicit: removing
+layout that is never served from the engine store. All three lists change only through
+the mail routes and the account helpers (`email_accounts.save_email_config`): both
+settings saves (`PATCH /api/config`, the WebSocket `save_config`) drop them for every
+caller (`email_accounts.without_mail_account_keys`). A save sends the page's scoped view
+back, so merging it set the local admin's `email_config` to None and replaced the other
+accounts' entries, and a hand-written body could point another account's IMAP or SMTP host
+at a server that then received its stored credential. Deletion is explicit: removing
 a mail account deletes its rows, blobs, FTS entries, queued ops and mail
 credentials - but a shared gmail/microsoft OAuth token is NEVER revoked, because
 the calendar sync resolves accounts by that provider; the entry survives with

@@ -174,17 +174,22 @@ def _cfg(**over) -> dict:
     (_cfg(phoneme_id_map={"a": 1}), False),
     (_cfg(inference={"phoneme_silence": {".": "long"}}), False),
     (_cfg(inference={"phoneme_silence": {".": 1}}), True),
+    (_cfg(inference={"phoneme_silence": {".": float("nan")}}), False),
+    (_cfg(inference={"noise_scale": float("inf")}), False),
+    (json.loads('{"phoneme_id_map": {"a": [1]}, "audio": {"rate": -Infinity}}'), False),
 ], ids=["espeak", "text", "no-type", "map-ok", "silence-ok", "vowel-cluster-key", "map-value", "map-key",
         "silence-key", "pinyin", "japanese", "empty-key", "lone-surrogate", "combining-mark", "map-value-not-list",
         "id-map-not-object", "id-not-a-number", "fractional-id", "bool-id", "ids-not-a-list", "silence-not-a-number",
-        "silence-int"])
+        "silence-int", "silence-nan", "infinity-elsewhere", "json-infinity"])
 def test_host_loadability_mirrors_piper_cpp(script, config, loads):
     """The 2023 Piper program aborts on a phoneme of more than one codepoint (in the id map,
     the phoneme map keys and values, the silence map) and reads every phoneme type but text
     as espeak; it converts each id to an integer and each silence to a float, which throws
     for a string. MUTATIONS: drop the phoneme_map value check (red: map-value), accept
     pinyin (red: pinyin), drop the id value check (red: id-not-a-number), drop the silence
-    value check (red: silence-not-a-number)."""
+    value check (red: silence-not-a-number), drop the finite check (red: silence-nan,
+    infinity-elsewhere, json-infinity: Python reads NaN and Infinity, Piper's parser
+    refuses the file)."""
     assert script.host_piper_can_load(config) is loads
 
 

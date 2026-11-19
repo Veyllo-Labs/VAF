@@ -57,6 +57,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import shutil
 import sys
 import tarfile
@@ -405,6 +406,18 @@ def _one_codepoint(text) -> bool:
     return len(text) == 1
 
 
+def _all_finite(value) -> bool:
+    """False when a NaN or an infinity sits anywhere in the parsed settings. Python's json
+    reads NaN and Infinity, nlohmann::json in the Piper program refuses the whole file."""
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, dict):
+        return all(_all_finite(v) for v in value.values())
+    if isinstance(value, list):
+        return all(_all_finite(v) for v in value)
+    return True
+
+
 def host_piper_can_load(config: dict) -> bool:
     """Whether the pinned Piper program (2023.11.14-2) can read a voice's ``.onnx.json``.
 
@@ -415,8 +428,9 @@ def host_piper_can_load(config: dict) -> bool:
     codepoint, or the program aborts. It also converts every id of ``phoneme_id_map`` to an
     integer and every value of ``phoneme_silence`` to a float, which throws for a string or
     a list; here an id must be an integer and a silence a number. Anything of another shape
-    fails closed (a bool or a fractional id included, which no voice uses)."""
-    if not isinstance(config, dict):
+    fails closed (a bool or a fractional id included, which no voice uses), and so does a
+    NaN or an infinity anywhere in the file, which its JSON parser refuses."""
+    if not isinstance(config, dict) or not _all_finite(config):
         return False
     if "phoneme_type" in config and config["phoneme_type"] not in ("espeak", "text"):
         return False

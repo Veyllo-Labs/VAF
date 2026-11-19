@@ -506,6 +506,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **WhatsApp: an account can no longer make a stranger your agent's owner, or send as your
+  agent's number.** Assigning a chat's hidden WhatsApp ID (LID) to a number used to apply to
+  every account. A non-admin could bind any ID to the admin's own number, so that sender was
+  answered as the admin, and the agent's messages to the admin went to that sender. Opening
+  the WhatsApp window could make such a binding by guessing. Now only an admin's assignment
+  applies to the whole installation. Anybody else's applies to their own chats only, and
+  nothing is guessed. A message is sent to a WhatsApp ID only when it was assigned to exactly
+  that number, no longer to any number that merely ends the same way. An account without its
+  own linked WhatsApp can no longer send, list chats or load history through another
+  account's linked number. Removing your own registered number no longer removes another
+  account's entry for the same number. Assignments made before this update stay in place;
+  the security log lists who made each one.
 - **An account without admin rights no longer receives other accounts' WhatsApp data with
   its settings.** Its settings read carried the installation's whole WhatsApp block apart
   from the number list: which WhatsApp IDs belong to which phone numbers, the chats a person

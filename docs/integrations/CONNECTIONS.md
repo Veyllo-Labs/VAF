@@ -484,7 +484,7 @@ The WhatsApp window (Settings → Connections → WhatsApp) is laid out like the
 ```
 
 - **`inbound_to_agent`** (default `true`): When `true`, incoming WhatsApp messages are enqueued and the agent replies (two-way chat). When `false`, WhatsApp is send-only: the bot can send you content (text, voice, documents), but incoming messages do **not** trigger the agent. The user stays reachable; only the direction "user → agent" is disabled. Off stops every sender, so an open Inbound switch answers nobody on WhatsApp while it is off, and the inbox rows and the WhatsApp window say so (`messaging_connections.whatsapp_inbound_to_agent` is the one reader of the key; `front_office_open("whatsapp")` folds it in).
-- **`whitelist`** and **`lid_to_e164`** change only through the dashboard's add, remove and LID-assign routes and the bridge; a settings save never changes them (`Config.ROUTE_OWNED_SUBKEYS`), so a Settings page left open while a number was removed cannot bring it back.
+- **`whitelist`**, **`lid_to_e164`** and **`lid_to_e164_by_scope`** change only through the dashboard's add, remove and LID-assign routes and the bridge; a settings save never changes them (`Config.ROUTE_OWNED_SUBKEYS`), so a Settings page left open while a number was removed cannot bring it back. `lid_to_e164` is the shared LID map every account's bridge reads: an admin's **Assign number** and the bridge (when WhatsApp itself supplies a LID's number) write it. Anybody else's assignment goes into `lid_to_e164_by_scope[<their scope>]`, read by their own lane only ([Who may bind a LID chat](WHATSAPP_INTEGRATION.md#who-may-bind-a-lid-chat)). A non-admin's whitelist remove takes only their own entry.
 
 ### Troubleshooting
 

@@ -528,7 +528,8 @@ def test_with_nothing_installed_the_default_language_is_installed_at_start(conta
 
 @pytest.fixture
 def two_languages(monkeypatch, tmp_path):
-    """The container with German and English, both pinned to the same fixture voice."""
+    """The container with German and English, both pinned to the same fixture voice, and
+    Japanese retired (so the start's retired-language step reads the settings too)."""
     row = {"locale": "de_DE", "voice": "thorsten", "quality": "medium",
            "model": {"path": "de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx",
                      "sha256": hashlib.sha256(MODEL).hexdigest(), "size": len(MODEL)},
@@ -536,7 +537,8 @@ def two_languages(monkeypatch, tmp_path):
                       "sha256": hashlib.sha256(CONFIG).hexdigest(), "size": len(CONFIG)}}
     table = tmp_path / "models.json"
     table.write_text(json.dumps({"source": "https://example.invalid/voices", "revision": "0" * 40,
-                                 "models": {"de": dict(row, name="German"), "en": dict(row, name="English")}}),
+                                 "models": {"de": dict(row, name="German"), "en": dict(row, name="English")},
+                                 "retired": ["ja"]}),
                      encoding="utf-8")
     app = _load_app(monkeypatch, table)
     monkeypatch.setattr(app, "MODELS_DIR", tmp_path / "models")

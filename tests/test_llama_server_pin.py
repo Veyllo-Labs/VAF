@@ -1197,3 +1197,157 @@ def test_a_verified_pinned_install_next_to_previous_stays_unchanged(linux_instal
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("no download")))
     assert m.ensure_server_exists() is True
     assert _tree(Path(m.bin_dir)) == before
+
+
+# ── a probe that could not run decides nothing ───────────────────────────────────
+
+def test_the_probe_tells_a_build_that_does_not_start_from_one_that_could_not_be_asked(linux_install, monkeypatch, tmp_path):
+    """A timeout or a process that could not be started says nothing about the binary;
+    a refusal to run it, or a run without a build number, says it does not start.
+    MUTATIONS: count a timeout, or a transient errno, as an answer and this goes red."""
+    import errno as _errno
+    import subprocess as _subprocess
+    m, _ = linux_install
+    exe = tmp_path / "llama-server"
+    _stub_server(exe, 10955)
+    outcomes = {
+        "timeout": _subprocess.TimeoutExpired([str(exe), "--version"], 20),
+        "no-memory": OSError(_errno.ENOMEM, "Cannot allocate memory"),
+        "busy": BlockingIOError(_errno.EAGAIN, "Resource temporarily unavailable"),
+        "not-a-program": OSError(_errno.ENOEXEC, "Exec format error"),
+    }
+    current = {"raise": None}
+
+    def version_output(self, path=None):
+        if current["raise"] is not None:
+            raise current["raise"]
+        return Path(path).read_text(encoding="utf-8")
+
+    monkeypatch.setattr(backend.ServerManager, "_version_output", version_output)
+    assert m._probe_build(str(exe)) == (True, 10955)
+    assert m._probe_build(str(tmp_path / "missing")) == (True, None)
+    for name, error in outcomes.items():
+        current["raise"] = error
+        expected = (True, None) if name == "not-a-program" else (False, None)
+        assert m._probe_build(str(exe)) == expected, name
+
+
+def _timeout_once(monkeypatch, m, target):
+    """The stub's version line, except one TimeoutExpired for `target`."""
+    import subprocess as _subprocess
+    state = {"left": 1}
+
+    def version_output(self, path=None):
+        path = path or self.server_path
+        if state["left"] and os.path.abspath(path) == os.path.abspath(target):
+            state["left"] -= 1
+            raise _subprocess.TimeoutExpired([path, "--version"], 20)
+        text = Path(path).read_text(encoding="utf-8")
+        if os.path.abspath(path) == os.path.abspath(m.server_path) and "10955-new" in text:
+            raise OSError("error while loading shared libraries: libvulkan.so.1")
+        return text
+
+    monkeypatch.setattr(backend.ServerManager, "_version_output", version_output)
+    return state
+
+
+def test_a_previous_build_that_could_not_be_asked_is_kept(linux_install, monkeypatch):
+    """bin/llama-cpp holds a build that does not start, .previous the old one, and the
+    probe of .previous times out once: both stay, the start fails with a message, and the
+    next start recovers .previous. MUTATION: take a probe that could not run as "does not
+    start" and .previous is deleted as a leftover."""
+    m, payload = linux_install
+    Path(m.bin_dir).mkdir(parents=True)
+    Path(m.server_path).write_text("10955-new " + _VERSION_LINE.format(build=10955), encoding="utf-8")
+    previous = Path(m.bin_dir + ".previous")
+    previous.mkdir(); _stub_server(previous / m.server_exe, 10021)
+    _timeout_once(monkeypatch, m, previous / m.server_exe)
+    errors = []
+    monkeypatch.setattr(backend.UI, "error", lambda *a, **k: errors.append(" ".join(map(str, a))))
+    _fake_get(monkeypatch, payload + b"tampered")
+    assert m.ensure_server_exists() is False
+    assert previous.is_dir() and (previous / m.server_exe).exists(), ".previous is kept"
+    assert any("both are kept" in e for e in errors), errors
+
+    assert m.ensure_server_exists() is False          # the refused download, after the recovery
+    assert m.installed_build() == 10021
+
+
+def test_a_pinned_install_is_not_swapped_out_on_one_timeout(linux_install, monkeypatch):
+    """The pinned build in bin/llama-cpp, a .previous beside it, and the probe of the
+    pinned build times out once: nothing is swapped. MUTATION: take that probe as "does
+    not start" and the older .previous replaces the pinned install."""
+    m, _ = linux_install
+    Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10955)
+    before = _tree(Path(m.bin_dir))
+    previous = Path(m.bin_dir + ".previous")
+    previous.mkdir(); _stub_server(previous / m.server_exe, 10021)
+    _timeout_once(monkeypatch, m, m.server_path)
+    monkeypatch.setattr("vaf.core.verified_download.requests.get",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no download")))
+    assert m.ensure_server_exists() is False
+    assert _tree(Path(m.bin_dir)) == before and previous.is_dir()
+    assert m.ensure_server_exists() is True
+    assert _tree(Path(m.bin_dir)) == before
+
+
+# ── one install at a time, across processes ──────────────────────────────────────
+
+def test_an_install_waits_for_another_process_and_gives_up_with_a_message(linux_install, monkeypatch):
+    """Another process holds the install lock: this start waits a bounded time, says why
+    it gives up, and downloads or renames nothing. MUTATION: drop the file lock and the
+    install runs next to the other one."""
+    from filelock import FileLock
+    m, payload = linux_install
+    Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10021)
+    before = _tree(Path(m.bin_dir))
+    monkeypatch.setattr(backend, "INSTALL_LOCK_TIMEOUT", 0.3)
+    errors = []
+    monkeypatch.setattr(backend.UI, "error", lambda *a, **k: errors.append(" ".join(map(str, a))))
+    monkeypatch.setattr("vaf.core.verified_download.requests.get",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no download while locked")))
+    other = FileLock(os.path.join(m.bin_root, ".llama-cpp.lock"))
+    other.acquire()
+    try:
+        assert m.ensure_server_exists() is False
+    finally:
+        other.release()
+    assert _tree(Path(m.bin_dir)) == before
+    assert any("Another VAF process" in e for e in errors), errors
+    _fake_get(monkeypatch, payload)
+    assert m.ensure_server_exists() is True and m.installed_build() == 10955
+
+
+def test_a_roll_back_that_cannot_rename_promises_nothing_it_does_not_do(linux_install, monkeypatch):
+    """The new build reports another number at its final place and bin/llama-cpp cannot
+    be renamed aside: the message says the previous backend could not be put back, not
+    that a later start or a hand step will (the next attempt treats .previous as a
+    leftover while bin/llama-cpp reports a build). MUTATION: restore the old promise."""
+    m, payload = linux_install
+    Path(m.bin_dir).mkdir(parents=True); _stub_server(m.server_path, 10021)
+
+    def version_output(self, path=None):
+        path = path or self.server_path
+        text = Path(path).read_text(encoding="utf-8")
+        if os.path.abspath(path) == os.path.abspath(m.server_path) and "10955" in text:
+            return _VERSION_LINE.format(build=10500)
+        return text
+
+    monkeypatch.setattr(backend.ServerManager, "_version_output", version_output)
+    real_rename = os.rename
+    state = {"swapped": False}
+
+    def rename(src, dst):
+        if os.path.abspath(dst) == os.path.abspath(m.bin_dir) and os.path.abspath(src) == os.path.abspath(m.bin_dir + ".staging"):
+            state["swapped"] = True
+        elif state["swapped"] and os.path.abspath(src) == os.path.abspath(m.bin_dir):
+            raise PermissionError(5, "Access is denied")
+        return real_rename(src, dst)
+
+    monkeypatch.setattr(backend.os, "rename", rename)
+    errors = []
+    monkeypatch.setattr(backend.UI, "error", lambda *a, **k: errors.append(" ".join(map(str, a))))
+    _fake_get(monkeypatch, payload)
+    assert m.ensure_server_exists() is False
+    assert any("could not be put back" in e for e in errors), errors
+    assert not any("next start" in e or "rename" in e for e in errors), errors

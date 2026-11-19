@@ -151,9 +151,9 @@ waiting for a stable `X.Y.Z`.
    local model on llama.cpp (provider `local`, `vaf engine llama`, local auto-start
    on): start VAF and send one chat, confirm that `vaf info` prints the pinned
    build "matches the pin" and that the running server answers a local request
-   (`curl -s 127.0.0.1:${LLAMA_SERVER_PORT:-8080}/v1/models` names the model; the
-   port is the one the local server listens on, `LLAMA_SERVER_PORT` or 8080), and
-   only then commit the manifest with the release. A start with vLLM as the engine
+   (`curl -s 127.0.0.1:8080/v1/models` names the model; 8080 is the port VAF
+   starts llama-server on, `LLAMA_SERVER_PORT` only changes where clients connect),
+   and only then commit the manifest with the release. A start with vLLM as the engine
    or with auto-start off never installs llama.cpp, so it checks nothing.
    The vLLM engine is pinned the same way, by version (`PIN` in
    `vaf/core/vllm_server.py`): bumping it is a release decision too. Edit `PIN`, run

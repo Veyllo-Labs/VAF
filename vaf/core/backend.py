@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
+import errno
 import json
 import logging
 import os
@@ -569,6 +570,12 @@ LLAMA_REPO_ID = 612354784          # what the provenance attestation must name
 # unpacks, and a chain stored in reverse order makes that cost grow with the square of its
 # length (26 s at 4000 links), so more than this is refused before anything is unpacked.
 MAX_ARCHIVE_LINKS = 512
+# The errors of a probe that say "no process could be started right now", not "this binary
+# does not run" (ServerManager._probe_build).
+_PROBE_TRANSIENT_ERRNOS = frozenset({errno.EAGAIN, errno.ENOMEM, errno.EINTR})
+# How long a start waits for another VAF process that is installing the backend (the
+# download of the Windows NVIDIA build alone is about 700 MB).
+INSTALL_LOCK_TIMEOUT = 1800.0
 # What a llama.cpp release archive puts at the top of its folder, on every platform: its
 # programs (llama-*, rpc-server, ggml-rpc-server), the ggml, llama and mtmd libraries with
 # their version links, the runtime libraries of the Windows CUDA, ROCm and SYCL builds and
@@ -989,13 +996,28 @@ class ServerManager:
         since llama.cpp took semver names and "version: 1.0.0 (build 12359, ...)" since
         v1.0.0; the build number is the part VAF pins. `path` reads another binary than
         server_path (`vaf info` names the build of a legacy install with it)."""
-        target = path or self.server_path
-        if not os.path.exists(target):
-            return None
+        return self._probe_build(path or self.server_path)[1]
+
+    def _probe_build(self, path: str):
+        """(answered, build) for the llama-server at `path`. answered is False when the
+        question could not be put at all: the probe timed out, the system could not start
+        a process right now (no memory, too many processes, interrupted), or failed in a
+        way nothing here knows. Those say nothing about the binary, so a decision that
+        would delete or replace a build must not be taken on them. Everything else
+        answers: no file, a file the system refuses to run (not a program, no
+        permission), and a program that ran and printed no build number (a missing
+        runtime library) all mean "this build does not start" (build None)."""
+        if not os.path.exists(path):
+            return True, None
         try:
-            return self.parse_build_number(self._version_output(target))
+            output = self._version_output(path)
+        except subprocess.TimeoutExpired:
+            return False, None
+        except OSError as e:
+            return (e.errno not in _PROBE_TRANSIENT_ERRNOS), None
         except Exception:
-            return None
+            return False, None
+        return True, self.parse_build_number(output)
 
     def _version_output(self, path: str | None = None) -> str:
         """What `llama-server --version` writes, both streams together.
@@ -1220,20 +1242,61 @@ class ServerManager:
         when the new folder cannot be put in place, the previous build is moved back, by
         renames only (_put_previous_back). A previous build that could not be moved back is
         recovered at the start of the next attempt, before anything else: when bin/llama-cpp
-        is missing, or holds a build that reports no number while .previous reports one."""
-        from vaf.core.verified_download import DownloadIntegrityError, download_verified
+        is missing, or holds a build that reports no number while .previous reports one.
+        When either of the two could not be asked (a probe that timed out or could not
+        start a process, _probe_build), both are kept and the start fails instead.
+
+        The whole of it runs under a file lock next to the folder (bin/.llama-cpp.lock), so
+        two VAF processes never install at once; a start waits up to INSTALL_LOCK_TIMEOUT
+        for another one's install."""
+        from filelock import FileLock, Timeout
 
         try:
             pin = load_llama_pin()
         except RuntimeError as e:
             UI.error(str(e))
             return False
+        # One install at a time across processes too (the tray and web app, `vaf chat` in a
+        # terminal): two of them interleaving their renames and recoveries could each undo
+        # the other's and leave no build. _ENSURE_LOCAL_LOCK covers the threads of one.
+        try:
+            os.makedirs(self.bin_root, exist_ok=True)
+            lock = FileLock(os.path.join(self.bin_root, ".llama-cpp.lock"))
+            lock.acquire(timeout=INSTALL_LOCK_TIMEOUT)
+        except Timeout:
+            UI.error(f"Another VAF process has been installing the backend for more than "
+                     f"{int(INSTALL_LOCK_TIMEOUT // 60)} minutes. Start VAF again once it has finished.")
+            return False
+        except OSError as e:
+            UI.error(f"The backend folder {self.bin_root} cannot be used ({e}).")
+            return False
+        try:
+            return self._ensure_server_exists_locked(pin, port)
+        finally:
+            lock.release()
+
+    def _ensure_server_exists_locked(self, pin: dict, port: int) -> bool:
+        """ensure_server_exists under the install lock (its docstring has the whole story)."""
+        from vaf.core.verified_download import DownloadIntegrityError, download_verified
+
         staging = self.bin_dir + ".staging"
         previous = self.bin_dir + ".previous"
-        if os.path.lexists(previous) and (
-                not os.path.lexists(self.bin_dir)
-                or (self.installed_build() is None
-                    and self.installed_build(os.path.join(previous, self.server_exe)) is not None)):
+        recover = False
+        if os.path.lexists(previous):
+            if not os.path.lexists(self.bin_dir):
+                recover = True
+            else:
+                current_answered, current = self._probe_build(self.server_path)
+                if current is None:
+                    previous_answered, earlier = self._probe_build(os.path.join(previous, self.server_exe))
+                    if not (current_answered and previous_answered):
+                        # One of the two could not be asked: deciding now could delete or
+                        # replace the only working build, so both stay as they are.
+                        UI.error(f"The installed backends in {self.bin_dir} and {previous} could not be "
+                                 "asked for their build right now; both are kept. Start VAF again.")
+                        return False
+                    recover = earlier is not None
+        if recover:
             # An earlier swap moved the old build aside and could not put it back (nothing in
             # bin/llama-cpp), or stopped with a build there that does not start (a crash after
             # the swap, a roll-back whose renames failed). .previous is then the only working
@@ -1345,8 +1408,9 @@ class ServerManager:
                 elif not os.path.lexists(self.bin_dir) or got is None:
                     restored = " The previous backend stays in llama-cpp.previous and is put back on the next start."
                 else:
-                    restored = (f" The previous backend stays in {previous}: remove {self.bin_dir}, rename "
-                                f"{previous} to it and start VAF again.")
+                    # bin/llama-cpp still holds the new build, which runs but reports another
+                    # number; the next attempt replaces it and treats .previous as a leftover.
+                    restored = " The previous backend could not be put back."
             UI.error(f"Backend installed but reports build b{got or '?'} instead of the pinned b{want}.{restored}")
             return False
         try:

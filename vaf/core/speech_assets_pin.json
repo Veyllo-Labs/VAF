@@ -1,0 +1,399 @@
+{
+  "recorded": "2026-11-19",
+  "piper": {
+    "repository": "rhasspy/piper",
+    "tag": "2023.11.14-2",
+    "provenance": "trust on first use from the archived (read-only) repository; GitHub publishes no digest for these assets. Each asset was uploaded by github-actions[bot] and never replaced (updated_at within 60 s of created_at); the archives were downloaded and hashed, the program digest read from the unpacked archive.",
+    "assets": {
+      "piper_linux_x86_64.tar.gz": {
+        "sha256": "a50cb45f355b7af1f6d758c1b360717877ba0a398cc8cbe6d2a7a3a26e225992",
+        "size": 26460462,
+        "program_sha256": "12672a94ca6716e5a8f335cfa68bf43bd9a33284960e3f9d16b85090bf7aab6b"
+      },
+      "piper_linux_aarch64.tar.gz": {
+        "sha256": "fea0fd2d87c54dbc7078d0f878289f404bd4d6eea6e7444a77835d1537ab88eb",
+        "size": 26004717,
+        "program_sha256": "0c44a6360a21367b5d03b8656c3e274f4de715f6533245d8c1f17c242631912b"
+      },
+      "piper_linux_armv7l.tar.gz": {
+        "sha256": "c6946fcd57c705ed1d4666ea880f80ba0bbbd14de62ecbdd13460baf3bac8e37",
+        "size": 25445955,
+        "program_sha256": "b336c53c8572904c48e55a0aae1978d185d3ca731751929fe4c7c102b3c70f26"
+      },
+      "piper_macos_aarch64.tar.gz": {
+        "sha256": "6b1eb03b3735946cb35216e063e7eebcc33a6bbf5dd96ec0217959bf1cdcb0cc",
+        "size": 19146957,
+        "program_sha256": "7274ed36ad98a29779af23637c39db775bb2e679a1881556d21caeef4de861ba"
+      },
+      "piper_macos_x64.tar.gz": {
+        "sha256": "ced85c0a3df13945b1e623b878a48fdc2854d5c485b4b67f62857cf551deaf8b",
+        "size": 19146927,
+        "program_sha256": "7274ed36ad98a29779af23637c39db775bb2e679a1881556d21caeef4de861ba"
+      },
+      "piper_windows_amd64.zip": {
+        "sha256": "f3c58906402b24f3a96d92145f58acba6d86c9b5db896d207f78dc80811efcea",
+        "size": 22477236,
+        "program_sha256": "96f3da3811151580073e40bb4dd20eb0fb8115f5f5f76e2fb54282b3edfa5c1f"
+      }
+    }
+  },
+  "piper_voices": {
+    "repository": "rhasspy/piper-voices",
+    "revision": "04ca88f5685ca5253c701af3687e155b113bd512",
+    "files": {
+      "ar/ar_JO/kareem/low/ar_JO-kareem-low.onnx": {
+        "sha256": "2887e9d68b125965c747e1371fa21e1cef19555ea98d0795a0d5d71188b13890",
+        "size": 63201294
+      },
+      "ar/ar_JO/kareem/low/ar_JO-kareem-low.onnx.json": {
+        "sha256": "da328e52896826135508f797c1c77b45b35117e967c71befc377d654f100f328",
+        "size": 5022
+      },
+      "bg/bg_BG/dimitar/medium/bg_BG-dimitar-medium.onnx": {
+        "sha256": "2305bc55def71c799fbfc866d15415f57a3465097b7bf9be41a14a26574ad6f3",
+        "size": 63221984
+      },
+      "bg/bg_BG/dimitar/medium/bg_BG-dimitar-medium.onnx.json": {
+        "sha256": "5e604812cfc68864643ae2b76bdfaea24142afb21f1830f099f2362a3280d514",
+        "size": 6107
+      },
+      "ca/ca_ES/upc_ona/medium/ca_ES-upc_ona-medium.onnx": {
+        "sha256": "fdb652db8c11a4475527346cf3241cb064d1ba393cf370f3f2ec09a872d118fd",
+        "size": 63201294
+      },
+      "ca/ca_ES/upc_ona/medium/ca_ES-upc_ona-medium.onnx.json": {
+        "sha256": "7f76acc9c06f4eda9e6aef2997b75782d97855aab48d4b401eb956a6e655eddc",
+        "size": 4875
+      },
+      "cs/cs_CZ/jirka/medium/cs_CZ-jirka-medium.onnx": {
+        "sha256": "9bc0b76bb8f26e1d542bf7ed2ce8a6c764605a5f6edcc7663bd637d0b684c5d9",
+        "size": 63221984
+      },
+      "cs/cs_CZ/jirka/medium/cs_CZ-jirka-medium.onnx.json": {
+        "sha256": "0f3e02a631b1c17b4d6bb2fda7f113d5d52788c6494884f4e376b4b6f50cea1e",
+        "size": 6154
+      },
+      "cy/cy_GB/gwryw_gogleddol/medium/cy_GB-gwryw_gogleddol-medium.onnx": {
+        "sha256": "a7d87df65e2c67ddee49829906ec51982fe123d418472731dab696f4dcefe8c6",
+        "size": 63511038
+      },
+      "cy/cy_GB/gwryw_gogleddol/medium/cy_GB-gwryw_gogleddol-medium.onnx.json": {
+        "sha256": "b31d2cfa51cd5709371a2346860b409b24eceec1a290235cb9299cff8a9c34c0",
+        "size": 4975
+      },
+      "da/da_DK/talesyntese/medium/da_DK-talesyntese-medium.onnx": {
+        "sha256": "b9271efd25f7b8494bbd28d48dd675c8c119daa284f3ee488008935f515f1241",
+        "size": 63201294
+      },
+      "da/da_DK/talesyntese/medium/da_DK-talesyntese-medium.onnx.json": {
+        "sha256": "89fe13bd251406cc0088570d103ea7ac35823211d8466faf913268ab8506f41b",
+        "size": 4878
+      },
+      "de/de_DE/thorsten/high/de_DE-thorsten-high.onnx": {
+        "sha256": "9df1c43c61149ef9b39e618e2b861fbe41e1fcea9390b2dac62e8761573ea4f1",
+        "size": 113895201
+      },
+      "de/de_DE/thorsten/high/de_DE-thorsten-high.onnx.json": {
+        "sha256": "6de734444e4c3f9e33b7ebe2746dbc19b71e85f613e79c65acf623200b99a76a",
+        "size": 4875
+      },
+      "de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx": {
+        "sha256": "fd270eb3d1ebf91d763f8a0f949b1b1bebdfefaea18c3aaf8577dd34536e064f",
+        "size": 63221984
+      },
+      "de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx.json": {
+        "sha256": "e5bb7410dcbbcc0be6f4544f6bc66612b315ab5cb3099ec44bb46d860bc7cca9",
+        "size": 6455
+      },
+      "el/el_GR/rapunzelina/medium/el_GR-rapunzelina-medium.onnx": {
+        "sha256": "3ca9fb3092215ee92edfc019b43feb0115ff4dfe638eb34474833ab1de840952",
+        "size": 62950044
+      },
+      "el/el_GR/rapunzelina/medium/el_GR-rapunzelina-medium.onnx.json": {
+        "sha256": "3a6182ec7c7550e14ef15e5d9badbb18f973a434086ac9658a1b10991fd192f8",
+        "size": 4973
+      },
+      "en/en_US/amy/medium/en_US-amy-medium.onnx": {
+        "sha256": "cf9ccdec59f05adee47173f6fb4d89e8b0c5f30c178748d2572fe4efd1d2724c",
+        "size": 63221984
+      },
+      "en/en_US/amy/medium/en_US-amy-medium.onnx.json": {
+        "sha256": "27490c2197e3e7b566b051fc0b1dae21200e72b44c209731419effdbbe0789e5",
+        "size": 6289
+      },
+      "en/en_US/lessac/high/en_US-lessac-high.onnx": {
+        "sha256": "4cabf7c3a638017137f34a1516522032d4fe3f38228a843cc9b764ddcbcd9e09",
+        "size": 113895201
+      },
+      "en/en_US/lessac/high/en_US-lessac-high.onnx.json": {
+        "sha256": "db42b97d9859f257bc1561b8ed980e7fb2398402050a74ddd6cbec931a92412f",
+        "size": 4883
+      },
+      "es/es_ES/carlfm/x_low/es_ES-carlfm-x_low.onnx": {
+        "sha256": "d69677323a907cd4963f42b29c20a98b5d6bfa7f3e64df339915e4650c00d125",
+        "size": 28130791
+      },
+      "es/es_ES/carlfm/x_low/es_ES-carlfm-x_low.onnx.json": {
+        "sha256": "d9bdfa9ff01eb2bc9e62e7d2593939d1e4c4d8eb7cf75f972731539d12399966",
+        "size": 4159
+      },
+      "es/es_ES/sharvard/medium/es_ES-sharvard-medium.onnx": {
+        "sha256": "234dc4cf0fdb53ccb76b9b2c4d7ef1330364762674c1b78c1b62d8608c528a54",
+        "size": 76753841
+      },
+      "es/es_ES/sharvard/medium/es_ES-sharvard-medium.onnx.json": {
+        "sha256": "c3d92a576c2fb5ac5120c9feeb6dd09e6577a564e20c75b91981ee1ceb441a90",
+        "size": 6160
+      },
+      "fa/fa_IR/amir/medium/fa_IR-amir-medium.onnx": {
+        "sha256": "fb815380d969ea372b0b21b0de14421f58fe481047e153e69685d079b6e1a9d1",
+        "size": 63531379
+      },
+      "fa/fa_IR/amir/medium/fa_IR-amir-medium.onnx.json": {
+        "sha256": "75f918a3bf0f57a9179abe725af529f2a5c79d6c899e2a84aec76c685d5dfb9a",
+        "size": 4958
+      },
+      "fi/fi_FI/harri/medium/fi_FI-harri-medium.onnx": {
+        "sha256": "315cd970fc5e3dbae98998cbe9926527196c0a3ebdc7e02e21bd9e7325fd085b",
+        "size": 63221984
+      },
+      "fi/fi_FI/harri/medium/fi_FI-harri-medium.onnx.json": {
+        "sha256": "716ad6fd8cadcdf2f926e76d6f5ce757a93a3fe55e78077319006ea27e60777f",
+        "size": 6079
+      },
+      "fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx": {
+        "sha256": "b1d946fd68d0347155fa59bce0a018924abbef3c1561181db45ca463d83963ef",
+        "size": 63221984
+      },
+      "fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx.json": {
+        "sha256": "3b3efdbcdcae930c40d8255527170ec5c87bf05e510b67f53d75fd028df40f43",
+        "size": 6369
+      },
+      "hu/hu_HU/anna/medium/hu_HU-anna-medium.onnx": {
+        "sha256": "134086669d0c0565672a4d9db812d8a8578d8dfc8f675a3f730456cf535bd1f2",
+        "size": 63221984
+      },
+      "hu/hu_HU/anna/medium/hu_HU-anna-medium.onnx.json": {
+        "sha256": "29471452aad97f5d6143c2fe346bf205cb0e42acdb7b6595413695d792efe5e5",
+        "size": 6106
+      },
+      "is/is_IS/bui/medium/is_IS-bui-medium.onnx": {
+        "sha256": "3a645b2d2850e4098f01f3765cece931836c03741e01a5cc514d09d39d37c05c",
+        "size": 76495465
+      },
+      "is/is_IS/bui/medium/is_IS-bui-medium.onnx.json": {
+        "sha256": "3cae728572fbb397713d047f2299247bb76b62639d9dfdcd65b26c578b8aba45",
+        "size": 4162
+      },
+      "it/it_IT/paola/medium/it_IT-paola-medium.onnx": {
+        "sha256": "f9b8658aa8c01f8280aa88488f6e7643a639b6225a81514c40440a01f6364a20",
+        "size": 63221984
+      },
+      "it/it_IT/paola/medium/it_IT-paola-medium.onnx.json": {
+        "sha256": "10e46e8534dd2d4051f1534ba6542f189f854454acea44a6d45ff464a83260fa",
+        "size": 6114
+      },
+      "it/it_IT/riccardo/x_low/it_IT-riccardo-x_low.onnx": {
+        "sha256": "1368de15f123275a7ef951c9e5e30be0f58a032daa14a0da44037443c1d1d21b",
+        "size": 28130791
+      },
+      "it/it_IT/riccardo/x_low/it_IT-riccardo-x_low.onnx.json": {
+        "sha256": "146ab9c634afe524e9fb7530f2510df7a42fb1db56b52658ca1fb3d98001a62a",
+        "size": 4161
+      },
+      "ja/ja_JP/hi_fi_captain/medium/ja_JP-hi_fi_captain-medium.onnx": {
+        "sha256": "03353b7ccece261223ad74de482eb7fcc7477214eae481e4202350529082258c",
+        "size": 76753841
+      },
+      "ja/ja_JP/hi_fi_captain/medium/ja_JP-hi_fi_captain-medium.onnx.json": {
+        "sha256": "e798dc33c968722517210bf9001330db7a0bf662dc55f68732663d1e46b3e3cb",
+        "size": 6057
+      },
+      "ka/ka_GE/natia/medium/ka_GE-natia-medium.onnx": {
+        "sha256": "04bdacf188fa24499885f9109b395fe8561a05ec2cd90d55453ec5beed7af460",
+        "size": 63201294
+      },
+      "ka/ka_GE/natia/medium/ka_GE-natia-medium.onnx.json": {
+        "sha256": "906436d0f8de79fcd65576470b10c7ea937c750f9b6b6dafc72a27cebd4a88f6",
+        "size": 4842
+      },
+      "kk/kk_KZ/issai/high/kk_KZ-issai-high.onnx": {
+        "sha256": "4dee767c893e8535da821447d12cb030e3569e11254c14030a1da5d8b2222c16",
+        "size": 127864258
+      },
+      "kk/kk_KZ/issai/high/kk_KZ-issai-high.onnx.json": {
+        "sha256": "eb145ac8712b87beda9f0266e95b98cad76acce89d4626cd8b1408234e9842f0",
+        "size": 4358
+      },
+      "lb/lb_LU/marylux/medium/lb_LU-marylux-medium.onnx": {
+        "sha256": "4147ecacdd98932951d0f956555542de358d3ccff708d4996e305c3ce287097a",
+        "size": 63201294
+      },
+      "lb/lb_LU/marylux/medium/lb_LU-marylux-medium.onnx.json": {
+        "sha256": "e5c5dec5433d33ff573e76fa567e80dcf636d05de5dcc817b273963f0733d742",
+        "size": 4979
+      },
+      "ne/ne_NP/google/medium/ne_NP-google-medium.onnx": {
+        "sha256": "e3ff3cbf97a7c01ebf29263c7fa1899ebed15e27a2d819b93dcfb86e10d39eaa",
+        "size": 76766385
+      },
+      "ne/ne_NP/google/medium/ne_NP-google-medium.onnx.json": {
+        "sha256": "8c3c364bd2ab369850ae0b5d97b9c7a37ea15fb2eb5b91f8fd10e7ffd85ae4eb",
+        "size": 5165
+      },
+      "nl/nl_NL/mls/medium/nl_NL-mls-medium.onnx": {
+        "sha256": "88312e0fbf505b87caf2373d94c1384892e86b1bf2ee482cf65dc8ba179cc7d3",
+        "size": 76584246
+      },
+      "nl/nl_NL/mls/medium/nl_NL-mls-medium.onnx.json": {
+        "sha256": "6ddb215d38f1392ab935ad45441b82ada1eeae0452a2d6849ed71ea4f2e0aa63",
+        "size": 5856
+      },
+      "no/no_NO/talesyntese/medium/no_NO-talesyntese-medium.onnx": {
+        "sha256": "f5f33d4e2a67cbef7cc5bab6d4b773a815e6a5cb02438509ea9b7493696f539f",
+        "size": 63221984
+      },
+      "no/no_NO/talesyntese/medium/no_NO-talesyntese-medium.onnx.json": {
+        "sha256": "373bcab7364e99f8ab9d4ffc79dfb7599171000e62c010d4354a3268bd2d404c",
+        "size": 6256
+      },
+      "pl/pl_PL/darkman/medium/pl_PL-darkman-medium.onnx": {
+        "sha256": "cf757ee307e3a7c23d5d8f69934deab51683d01c1c6be376d3e13146020f1530",
+        "size": 63221984
+      },
+      "pl/pl_PL/darkman/medium/pl_PL-darkman-medium.onnx.json": {
+        "sha256": "1208a7d257daba8d0a421e9f55ec8210db009d785cd4f7e0b0c9936b3168f1a0",
+        "size": 6133
+      },
+      "pl/pl_PL/gosia/medium/pl_PL-gosia-medium.onnx": {
+        "sha256": "d322ded1f1daffeab41bbacd43d6f62ac83a4a5d4d63a297aa39f345f506b358",
+        "size": 63221984
+      },
+      "pl/pl_PL/gosia/medium/pl_PL-gosia-medium.onnx.json": {
+        "sha256": "f0cc2f4f53d60274a79bf6ec9d8d17c02e188ae3c7cc170f6d308a97526c351b",
+        "size": 6131
+      },
+      "pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx": {
+        "sha256": "75e913eb463db0b6ac7ddf68d3e4c9ac19ace36dc3b710a81039b448352b8ffc",
+        "size": 63221984
+      },
+      "pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx.json": {
+        "sha256": "6b6801319e5a70aa4d75c63343515f55d1cd671ecd1ac511586bc16216812261",
+        "size": 6257
+      },
+      "ro/ro_RO/mihai/medium/ro_RO-mihai-medium.onnx": {
+        "sha256": "ac9e1be65c059279c53500f11e8c276657c7e48a2d33b733add35dbe75748e29",
+        "size": 63221984
+      },
+      "ro/ro_RO/mihai/medium/ro_RO-mihai-medium.onnx.json": {
+        "sha256": "676076b40563fd494fca394265b0a90f9a984f2949b89ed3c83447917b3e8f3a",
+        "size": 6164
+      },
+      "ru/ru_RU/irina/medium/ru_RU-irina-medium.onnx": {
+        "sha256": "8ff38212d23da300bbe3705c645e6e5b9475f0bfde01558eb17813e22acaaaaa",
+        "size": 63201294
+      },
+      "ru/ru_RU/irina/medium/ru_RU-irina-medium.onnx.json": {
+        "sha256": "c2ec28bb38e2b59e93b959b3e40348c1afebbd272f30fed5d41205d08e98a9d7",
+        "size": 4765
+      },
+      "ru/ru_RU/ruslan/medium/ru_RU-ruslan-medium.onnx": {
+        "sha256": "72a5f88e0b20928064eb45d88e1daa21f8af62d18613580d32cbb4aed48dcf7f",
+        "size": 63201294
+      },
+      "ru/ru_RU/ruslan/medium/ru_RU-ruslan-medium.onnx.json": {
+        "sha256": "706a4fb17bc304abd07809b552deae615e64dcbffbfbd09854ba37ca59e88117",
+        "size": 4882
+      },
+      "sk/sk_SK/lili/medium/sk_SK-lili-medium.onnx": {
+        "sha256": "5e157712483b66d99289e663ca5728bceb4b4e48d84d837c58796b2f9690de16",
+        "size": 63221984
+      },
+      "sk/sk_SK/lili/medium/sk_SK-lili-medium.onnx.json": {
+        "sha256": "3dd2ed090b681d8ddd9117c8413d9c8a5b56e6845b7bdcae8e2269447917e464",
+        "size": 6151
+      },
+      "sl/sl_SI/artur/medium/sl_SI-artur-medium.onnx": {
+        "sha256": "9222ed93ef425524ad4be0b083369af8ea8db18455576a6016b154192f4ed38c",
+        "size": 63200492
+      },
+      "sl/sl_SI/artur/medium/sl_SI-artur-medium.onnx.json": {
+        "sha256": "741283430f1fa2be5c61717c6f1fe795a7b9f537491927340dd12f90f3b3cc04",
+        "size": 4970
+      },
+      "sr/sr_RS/serbski_institut/medium/sr_RS-serbski_institut-medium.onnx": {
+        "sha256": "d7003890cf596e653f660a4fd97fd17f57f1eceb6d9727abad9cd76d2fda0d80",
+        "size": 76733615
+      },
+      "sr/sr_RS/serbski_institut/medium/sr_RS-serbski_institut-medium.onnx.json": {
+        "sha256": "39ad6531b46ac629c0bed10aa9205dd2431e2dab3808b8535808711db87c2bc0",
+        "size": 4999
+      },
+      "sv/sv_SE/nst/medium/sv_SE-nst-medium.onnx": {
+        "sha256": "df011f56825a59dd1efc080c38a65a1ef70407e60f63050e9246f43a3d7e471e",
+        "size": 63104526
+      },
+      "sv/sv_SE/nst/medium/sv_SE-nst-medium.onnx.json": {
+        "sha256": "d45dd74cbb4eca58694bf04a97e243044092476f28a55ae26424f0653086980a",
+        "size": 4157
+      },
+      "sw/sw_CD/lanfrica/medium/sw_CD-lanfrica-medium.onnx": {
+        "sha256": "24c66f055c046d9c6ca550178aecfec016259a5b9c64d4c56724efeeea4b2ed5",
+        "size": 63221984
+      },
+      "sw/sw_CD/lanfrica/medium/sw_CD-lanfrica-medium.onnx.json": {
+        "sha256": "ca83a8372a7ad5873de00ba3bc7c69110507355407a5faf3e192f5969fb174ad",
+        "size": 6135
+      },
+      "tr/tr_TR/dfki/medium/tr_TR-dfki-medium.onnx": {
+        "sha256": "2844717f524ab965d3fe86e60562cbb601d3e456836efcc2196cc3a14112a8fb",
+        "size": 63201294
+      },
+      "tr/tr_TR/dfki/medium/tr_TR-dfki-medium.onnx.json": {
+        "sha256": "13ebd7810f1b61b5027583cf3131a0a233b6ea81c38f2200ebc4ff41c3cca039",
+        "size": 4960
+      },
+      "uk/uk_UA/ukrainian_tts/medium/uk_UA-ukrainian_tts-medium.onnx": {
+        "sha256": "7920419ac5f6fd8b6450520f24b52ed5a319cb53dd018fbcd71c9e079cbac84f",
+        "size": 76735663
+      },
+      "uk/uk_UA/ukrainian_tts/medium/uk_UA-ukrainian_tts-medium.onnx.json": {
+        "sha256": "4e96e72917ca9b94edc77d6ccfee03a73f450ba2fc1ca93c2e562bc014e5aa55",
+        "size": 2002
+      },
+      "vi/vi_VN/vivos/x_low/vi_VN-vivos-x_low.onnx": {
+        "sha256": "6ab13374eb0862021a545befe7727aef59e16117f1c075aa9e0362237ecc98ae",
+        "size": 27789413
+      },
+      "vi/vi_VN/vivos/x_low/vi_VN-vivos-x_low.onnx.json": {
+        "sha256": "9dc373d69b0e4f39d864cb8ac9fe42cee49817a0f02d831e57a9ce6e944e234a",
+        "size": 5592
+      },
+      "zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx": {
+        "sha256": "9929917bf8cabb26fd528ea44d3a6699c11e87317a14765312420be230be0f3d",
+        "size": 63201294
+      },
+      "zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx.json": {
+        "sha256": "d521dc45504a8ccc99e325822b35946dd701840bfb07e3dbb31a40929ed6a82b",
+        "size": 4822
+      }
+    }
+  },
+  "models": {
+    "silero_vad.onnx": {
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
+      "sha256": "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6",
+      "size": 643854
+    },
+    "3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx": {
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx",
+      "sha256": "c59158379255ad66e161679cca6af8d52d51e389e3224ab7d7a7baae295c2db5",
+      "size": 26485263
+    },
+    "smart-turn-v3.2-cpu.onnx": {
+      "url": "https://huggingface.co/pipecat-ai/smart-turn-v3/resolve/f766f81d3cfdf7737ac64aad813d91bbfd56bf93/smart-turn-v3.2-cpu.onnx",
+      "sha256": "2bb026316b14a660486a75b1733cd3fbab8c2fd0314dc9af7be49f8cca967e4f",
+      "size": 8679182
+    }
+  }
+}

@@ -99,13 +99,27 @@ class TurnDetector:
 # only earns its ~30-60 ms once the per-turn timings show the endpoint is the
 # remaining cost, and turning it on is a config decision, not a code change.
 
-_SMART_TURN_MODEL = "smart-turn-v3.2-cpu.onnx"
-_SMART_TURN_URL = ("https://huggingface.co/pipecat-ai/smart-turn-v3/resolve/main/"
-                   + _SMART_TURN_MODEL)
+_SMART_TURN_MODEL = "smart-turn-v3.2-cpu.onnx"    # URL and digest: vaf/core/speech_assets_pin.json
 _SMART_TURN_WINDOW_S = 8       # the model judges the LAST 8 s, per its contract
 _SMART_TURN_THRESHOLD = 0.5    # sigmoid(complete) above this = the turn is over
 
 _judge_lock = None  # created lazily; module must import without threading cost
+
+
+def _smart_turn_model_path():
+    """The Smart Turn model next to the speaker models, with the SHA-256 pinned in
+    vaf/core/speech_assets_pin.json: kept when it already has it, otherwise downloaded and
+    verified (verified_download.fetch_verified). Raises when it is not pinned or the bytes
+    differ; the judge then fails open to the timer."""
+    from vaf.core import speaker_id as _sid
+    from vaf.core import speech_pin
+    from vaf.core.verified_download import fetch_verified
+
+    pinned = speech_pin.model(_SMART_TURN_MODEL)
+    if pinned is None:
+        raise RuntimeError(f"no pinned download for {_SMART_TURN_MODEL}")
+    return fetch_verified(pinned["url"], pinned["sha256"], _sid._models_dir() / _SMART_TURN_MODEL,
+                          size=pinned["size"], timeout=120)
 
 
 class SemanticTurnJudge:
@@ -113,8 +127,8 @@ class SemanticTurnJudge:
 
     ``complete(pcm16, sample_rate)`` returns True when the model says the speaker
     finished (or on ANY failure - a broken judge must degrade to the plain timer
-    verdict, never hold a turn hostage). Model file arrives via the same lazy
-    download/atomic-replace path speaker_id uses; features come from the Whisper
+    verdict, never hold a turn hostage). Model file arrives through the same verified
+    download speaker_id uses (_smart_turn_model_path); features come from the Whisper
     feature extractor of the transformers package (declared in the speech extra;
     the extractor runs without torch).
     """
@@ -130,22 +144,7 @@ class SemanticTurnJudge:
         if self._session is not None:
             return True
         try:
-            from pathlib import Path
-
-            from vaf.core import speaker_id as _sid
-
-            path = _sid._models_dir() / _SMART_TURN_MODEL
-            if not (path.exists() and path.stat().st_size > 1_000_000):
-                path.parent.mkdir(parents=True, exist_ok=True)
-                import requests
-
-                tmp = Path(str(path) + ".part")
-                with requests.get(_SMART_TURN_URL, stream=True, timeout=120) as r:
-                    r.raise_for_status()
-                    with open(tmp, "wb") as f:
-                        for chunk in r.iter_content(chunk_size=65536):
-                            f.write(chunk)
-                tmp.replace(path)
+            path = _smart_turn_model_path()
 
             import onnxruntime as ort
 

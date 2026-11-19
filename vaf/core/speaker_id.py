@@ -6,8 +6,8 @@
 Local lane on sherpa-onnx (Apache-2.0, onnxruntime-only, no torch): Silero VAD
 segments the audio, a 3D-Speaker ERes2Net model (Apache-2.0) produces 192-dim
 embeddings, and cosine similarity against the user's enrolled centroid decides
-the label. Models are plain ungated downloads (GitHub releases) following the
-Piper auto-download precedent in speech.py.
+the label. Models are plain ungated downloads (GitHub releases), checked against the
+SHA-256 pinned in vaf/core/speech_assets_pin.json like the Piper voices.
 
 Embeddings are computed over the CONCATENATED speech of a round/utterance,
 never averaged from short segments: measured on identical clips, per-segment
@@ -49,10 +49,8 @@ _ENROLL_MAX_ROUNDS = 15
 
 _VAD_MODEL = "silero_vad.onnx"
 _EMBED_MODEL = "3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx"
-_MODEL_URLS = {
-    _VAD_MODEL: "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
-    _EMBED_MODEL: "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx",
-}
+# Downloaded from the URLs and only as the bytes pinned in vaf/core/speech_assets_pin.json.
+_MODEL_NAMES = (_VAD_MODEL, _EMBED_MODEL)
 # A new round must not diverge wildly from the session's running mean:
 # below this cosine the round is rejected as "inconsistent_voice" (someone
 # else answered) and does not count. Deliberately loose - same-speaker
@@ -115,32 +113,32 @@ _models_lock = threading.Lock()
 
 
 def _ensure_models() -> bool:
-    """Download missing model files (Piper precedent). Returns True when present.
-    Serialized: the enroll_start prewarm thread and the first round's VAD may
-    call this concurrently - two writers on the same .part file would corrupt
-    the download."""
+    """Both model files with their pinned digests, downloaded when missing or different.
+    Returns True when present. Serialized: the enroll_start prewarm thread and the first
+    round's VAD may call this concurrently - two writers on the same .part file would
+    corrupt the download."""
     with _models_lock:
         return _ensure_models_locked()
 
 
 def _ensure_models_locked() -> bool:
+    """Each file through verified_download.fetch_verified with the digest and size pinned
+    in vaf/core/speech_assets_pin.json: a file already there with that digest is kept
+    (hashed once per process), anything else is replaced by verified bytes, and bytes that
+    hash differently are never written under the model's name. Any failure (no pin, a
+    mismatch, no network) is a warning and False: speaker identification is then
+    unavailable, as with a failed download before."""
     try:
-        import requests
+        from vaf.core import speech_pin
+        from vaf.core.verified_download import fetch_verified
         d = _models_dir()
         d.mkdir(parents=True, exist_ok=True)
-        for name, url in _MODEL_URLS.items():
-            path = d / name
-            if path.exists() and path.stat().st_size > 10000:
-                continue
-            _log.info("speaker_id: downloading %s", name)
-            with requests.get(url, stream=True, timeout=120) as r:
-                r.raise_for_status()
-                tmp = path.with_suffix(".part")
-                with open(tmp, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=1 << 16):
-                        f.write(chunk)
-                tmp.replace(path)
-        return all((d / n).exists() for n in _MODEL_URLS)
+        for name in _MODEL_NAMES:
+            pinned = speech_pin.model(name)
+            if pinned is None:
+                raise RuntimeError(f"no pinned download for {name}")
+            fetch_verified(pinned["url"], pinned["sha256"], d / name, size=pinned["size"], timeout=120)
+        return True
     except Exception as e:
         _log.warning("speaker_id: model download failed: %s", e)
         return False

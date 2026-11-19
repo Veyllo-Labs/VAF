@@ -13,14 +13,16 @@ import os
 import platform
 import subprocess
 import shutil
-import zipfile
-import tarfile
-import requests
 from pathlib import Path
 from typing import Optional
 
+from vaf.core import verified_download
 from vaf.core.config import Config
 from vaf.cli.ui import UI
+
+# How long a Piper install waits for another VAF process that is installing it (the
+# download is about 20-26 MB).
+PIPER_INSTALL_LOCK_TIMEOUT = 600.0
 
 # NO LOCAL TTS! pyttsx3/comtypes causes 1-4GB RAM explosion via Windows SAPI
 # All TTS must go through Docker (speech_tts_engine=docker or chatterbox)
@@ -177,7 +179,6 @@ class SpeechManager:
         self.media_dir = Path(__file__).parents[1] / "media"
         self.bin_dir = self.base_dir / "bin" / "piper"
         self.models_dir = self.base_dir / "models" / "voices"
-        self.bin_dir.mkdir(parents=True, exist_ok=True)
         self.models_dir.mkdir(parents=True, exist_ok=True)
 
         # Lazy: Only init LOCAL STT (microphone) for CLI mode
@@ -304,104 +305,179 @@ class SpeechManager:
             return self.bin_dir / "piper"
 
     def _check_piper(self) -> bool:
-        """Check if Piper is installed, try to install if missing."""
+        """Piper is installed as the pinned build, or it is installed now, or this is False.
+
+        The program bin/piper/piper[.exe] counts as installed only when it is a regular
+        file whose SHA-256 equals the pinned program digest of this platform's archive
+        (vaf/core/speech_assets_pin.json; hashed once per process). Missing, a link, or
+        another build: the pinned archive is downloaded, verified and swapped in whole
+        (_install_piper). Asked once per process, as before."""
         if self._piper_checked:
             return self._has_piper
-        
-        binary = self._get_piper_binary()
-        if binary.exists():
-            self._has_piper = True
-            self._piper_checked = True
-            return True
-            
-        # Attempt Auto-Install
-        UI.event("Speech", "Installing Piper TTS (Offline Neural Voice)...", style="warning")
+        self._has_piper = False
         try:
-            self._install_piper()
-            self._has_piper = binary.exists()
+            entry = self._pinned_piper()
+            if entry is not None:
+                binary = self._get_piper_binary()
+                if verified_download.has_pinned_digest(binary, entry["program_sha256"]):
+                    self._has_piper = True
+                else:
+                    if os.path.lexists(binary):
+                        UI.event("Speech", "The installed Piper differs from the pinned build: installing the "
+                                 "pinned one...", style="warning")
+                    else:
+                        UI.event("Speech", "Installing Piper TTS (Offline Neural Voice)...", style="warning")
+                    self._has_piper = self._install_piper(entry)
         except Exception as e:
             UI.error(f"Piper install failed: {e}")
             self._has_piper = False
-        
         self._piper_checked = True
         return self._has_piper
 
-    def _install_piper(self):
-        """Download and extract Piper binary from GitHub."""
+    def _piper_asset_name(self) -> str:
+        """The name of the Piper release archive for this computer. Exception for a
+        platform the Piper release has no archive for."""
         system = platform.system().lower()
         arch = platform.machine().lower()
-        
-        # Mapping to GitHub release assets (v1.2.0)
-        # url pattern: https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_windows_amd64.zip
-        base_url = "https://github.com/rhasspy/piper/releases/download/2023.11.14-2"
-        
-        asset = ""
         if system == "windows":
-            if "64" in arch: asset = "piper_windows_amd64.zip"
-            else: raise Exception("Windows 32-bit not supported by auto-installer")
-        elif system == "linux":
-            if "x86_64" in arch: asset = "piper_linux_x86_64.tar.gz"
-            elif "aarch64" in arch: asset = "piper_linux_aarch64.tar.gz" # Pi 64
-            elif "armv7" in arch: asset = "piper_linux_armv7l.tar.gz"   # Pi 32
-            else: raise Exception(f"Linux arch {arch} not supported")
-        elif system == "darwin":
-            # macOS: Robust architecture detection
-            # platform.machine() can return x86_64 even on M1/M2 if Python runs under Rosetta 2
-            # Use sysctl to get the REAL hardware architecture
-            is_arm = False
+            if "64" in arch:
+                return "piper_windows_amd64.zip"
+            raise Exception("Windows 32-bit not supported by auto-installer")
+        if system == "linux":
+            if "x86_64" in arch:
+                return "piper_linux_x86_64.tar.gz"
+            if "aarch64" in arch:
+                return "piper_linux_aarch64.tar.gz"   # Pi 64
+            if "armv7" in arch:
+                return "piper_linux_armv7l.tar.gz"    # Pi 32
+            raise Exception(f"Linux arch {arch} not supported")
+        if system == "darwin":
+            # platform.machine() can return x86_64 even on M1/M2 if Python runs under
+            # Rosetta 2, so the hardware is asked through sysctl.
             try:
-                import subprocess
-                result = subprocess.run(['sysctl', '-n', 'hw.optional.arm64'], 
-                                      capture_output=True, text=True, timeout=2)
+                result = subprocess.run(['sysctl', '-n', 'hw.optional.arm64'],
+                                        capture_output=True, text=True, timeout=2)
                 is_arm = result.returncode == 0 and result.stdout.strip() == '1'
-            except:
-                # Fallback: Check platform.machine()
+            except Exception:
                 is_arm = "arm64" in arch
-            
-            if is_arm:
-                asset = "piper_macos_aarch64.tar.gz"  # M1/M2/M3
-                UI.event("System", "Detected Apple Silicon (ARM64) - downloading ARM binary", style="dim")
-            else:
-                asset = "piper_macos_x64.tar.gz"  # Intel
-                UI.event("System", "Detected Intel Mac (x86_64) - downloading x64 binary", style="dim")
-        else:
-            raise Exception(f"OS {system} not supported")
+            return "piper_macos_aarch64.tar.gz" if is_arm else "piper_macos_x64.tar.gz"
+        raise Exception(f"OS {system} not supported")
 
+    def _pinned_piper(self) -> Optional[dict]:
+        """This platform's pinned Piper archive (speech_pin.piper_asset), or None after
+        saying why there is none: nothing unpinned is ever downloaded."""
+        from vaf.core import speech_pin
+        name = self._piper_asset_name()
+        entry = speech_pin.piper_asset(name)
+        if entry is None:
+            UI.error(f"No pinned Piper build for {name} in {speech_pin.PIN_PATH.name}; Piper stays uninstalled "
+                     "rather than downloading an unverified one.")
+        return entry
 
-        url = f"{base_url}/{asset}"
-        temp_zip = self.bin_dir / asset
-        
-        # Download
-        UI.event("Download", f"Fetching {asset}...", style="dim")
-        response = requests.get(url, stream=True)
-        response.raise_for_status()
-        with open(temp_zip, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-        
-        # Extract
-        UI.event("System", "Extracting...", style="dim")
-        if asset.endswith(".zip"):
-            with zipfile.ZipFile(temp_zip, 'r') as zip_ref:
-                zip_ref.extractall(self.bin_dir.parent) # Piper zip contains 'piper/' folder
-        else:
-            with tarfile.open(temp_zip, 'r:gz') as tar_ref:
-                tar_ref.extractall(self.bin_dir.parent)
-        
-        # Cleanup
+    def _install_piper(self, entry: dict) -> bool:
+        """Install the pinned Piper archive `entry` into bin/piper, swapping the folder whole.
+
+        Under a file lock next to it (bin/.piper.lock), so two VAF processes never install
+        at once; a process that finds the lock held says it waits, and once it holds the
+        lock it first checks whether the other one already installed the pinned build. The
+        archive is downloaded into bin/piper.staging only as the pinned bytes
+        (download_verified), unpacked there with the shared safe unpack (extract_archive:
+        data filter, link cap, every link checked after the lift), and its program must be
+        a regular file with the pinned program digest. Only then is bin/piper renamed to
+        bin/piper.previous and the staging folder renamed into its place; if that second
+        rename fails, the old folder is renamed back. bin/piper.previous is removed once the
+        new folder is in place. A failure before the swap leaves bin/piper exactly as it
+        was, and nothing else in bin/ (bin/llama-cpp, bin/vllm, files at its top) is ever
+        touched: every Piper of an earlier VAF lives entirely in bin/piper (the archive
+        has one top folder, piper/, and the pin script refuses anything else), so the whole
+        folder swap also removes whatever an earlier install left in it.
+
+        Named boundary: on Windows the rename of bin/piper fails while piper.exe speaks;
+        the install then keeps the old folder, says so, and the next process retries."""
+        from filelock import FileLock, Timeout
+        from vaf.core.verified_download import DownloadIntegrityError, download_verified
+
+        bin_root = self.bin_dir.parent
+        staging = bin_root / "piper.staging"
+        previous = bin_root / "piper.previous"
+        program = self._get_piper_binary().name
         try:
-            os.remove(temp_zip) 
-        except:
-            pass
-        
-        # Set executable permissions on Linux/Mac
-        if system != "windows":
-            binary = self._get_piper_binary()
-            if binary.exists():
-                st = os.stat(binary)
-                os.chmod(binary, st.st_mode | 0o111)
-        
-        UI.success("Piper TTS installed.")
+            bin_root.mkdir(parents=True, exist_ok=True)
+            lock = FileLock(str(bin_root / ".piper.lock"))
+            try:
+                lock.acquire(timeout=0)
+            except Timeout:
+                UI.event("Speech", "Waiting for another VAF process that is installing Piper...", style="warning")
+                lock.acquire(timeout=PIPER_INSTALL_LOCK_TIMEOUT)
+        except Timeout:
+            UI.error(f"Another VAF process has been installing Piper for more than "
+                     f"{int(PIPER_INSTALL_LOCK_TIMEOUT // 60)} minutes. Try again once it has finished.")
+            return False
+        except OSError as e:
+            UI.error(f"The Piper folder {bin_root} cannot be used ({e}).")
+            return False
+        try:
+            if verified_download.has_pinned_digest(self._get_piper_binary(), entry["program_sha256"]):
+                return True               # another process installed it while this one waited
+            try:
+                for leftover in (staging, previous):
+                    verified_download.remove_tree_or_link(str(leftover))
+                staging.mkdir(parents=True)
+            except OSError as e:
+                UI.error(f"Piper could not be installed: a leftover of an earlier install in {bin_root} "
+                         f"cannot be removed ({e}). Remove it and try again.")
+                return False
+            try:
+                size_mb = entry["size"] / 1_000_000
+                UI.event("Download", f"Downloading Piper {entry['name']} ({size_mb:.1f} MB, verifying SHA-256)...",
+                         style="warning")
+                archive = download_verified(entry["url"], entry["sha256"], staging / entry["name"], timeout=60)
+                UI.event("System", "Extracting Piper...", style="dim")
+                verified_download.extract_archive(str(archive), str(staging), program=program, what="Piper")
+                staged = staging / program
+                if not verified_download.has_pinned_digest(staged, entry["program_sha256"]):
+                    raise RuntimeError(f"the archive's {program} is not the pinned program")
+                if platform.system().lower() != "windows":
+                    os.chmod(staged, 0o755)
+                moved_aside = False
+                if os.path.lexists(self.bin_dir):
+                    os.rename(self.bin_dir, previous)
+                    moved_aside = True
+                try:
+                    os.rename(staging, self.bin_dir)
+                except OSError:
+                    if moved_aside:
+                        try:
+                            os.rename(previous, self.bin_dir)
+                        except OSError:
+                            pass          # the next install removes it as a leftover
+                    raise
+            except DownloadIntegrityError as e:
+                self._remove_quietly(staging)
+                UI.error("The download of Piper did not match its pinned checksum, so it was not used and "
+                         "nothing was changed. Try again later; if it keeps happening, report it.")
+                UI.event("System", f"Checksum details: {e}", style="dim")
+                return False
+            except Exception as e:
+                self._remove_quietly(staging)
+                UI.error(f"Piper install failed, the installed Piper is unchanged: {e}")
+                return False
+            try:
+                verified_download.remove_tree_or_link(str(previous))
+            except OSError as e:
+                UI.event("Speech", f"Piper is installed, but the replaced one could not be removed ({e}). "
+                         f"Remove {previous} by hand.", style="warning")
+            UI.success("Piper TTS installed and verified.")
+            return True
+        finally:
+            lock.release()
+
+    @staticmethod
+    def _remove_quietly(path: Path) -> None:
+        try:
+            verified_download.remove_tree_or_link(str(path))
+        except OSError:
+            pass                          # a leftover the next install removes first
 
     # Mapping lang -> Piper model name (high/medium quality where available).
     # SSOT for _ensure_voice_model (download) and has_local_voice (the live
@@ -414,7 +490,7 @@ class SpeechManager:
             "es": "es_ES-sharvard-medium",
             "zh": "zh_CN-huayan-medium",
             "it": "it_IT-paola-medium",
-            "pt": "pt_PT-tugao-medium",
+            "pt": "pt_BR-faber-medium",
             "ru": "ru_RU-ruslan-medium",
             
             # Nordic
@@ -422,7 +498,7 @@ class SpeechManager:
             "fi": "fi_FI-harri-medium",
             "is": "is_IS-bui-medium",
             "no": "no_NO-talesyntese-medium",
-            "sv": "sv_SE-talesyntese-medium",
+            "sv": "sv_SE-nst-medium",
             
             # Eastern Europe / Slavic
             "cs": "cs_CZ-jirka-medium",
@@ -433,24 +509,24 @@ class SpeechManager:
             "sl": "sl_SI-artur-medium",
             "sr": "sr_RS-serbski_institut-medium",
             "uk": "uk_UA-ukrainian_tts-medium",
-            "bg": "bg_BG-ls-medium",
+            "bg": "bg_BG-dimitar-medium",
             
             # Middle East / Asia
             "ar": "ar_JO-kareem-low",
             "fa": "fa_IR-amir-medium",
             "tr": "tr_TR-dfki-medium",
             "ka": "ka_GE-natia-medium",
-            "kk": "kk_KZ-iseke-medium",
+            "kk": "kk_KZ-issai-high",
             "ne": "ne_NP-google-medium",
             "vi": "vi_VN-vivos-x_low",
             
             # Others
             "ca": "ca_ES-upc_ona-medium",
             "cy": "cy_GB-gwryw_gogleddol-medium",
-            "el": "el_GR-rappcha-medium",
-            "lb": "lb_LU-mary-medium",
-            "nl": "nl_NL-rdh-medium",
-            "sw": "sw_CD-lanafrica-medium",
+            "el": "el_GR-rapunzelina-medium",
+            "lb": "lb_LU-marylux-medium",
+            "nl": "nl_NL-mls-medium",
+            "sw": "sw_CD-lanfrica-medium",
     }
 
     def _voice_model_name(self, short_lang: str) -> Optional[str]:
@@ -458,7 +534,18 @@ class SpeechManager:
         return self.PIPER_VOICES.get((short_lang or "")[:2].lower())
 
     def _ensure_voice_model(self, lang: str) -> Optional[Path]:
-        """Ensure the ONNX model for the language exists."""
+        """The pinned ONNX voice for the language, downloaded and verified when needed.
+
+        Both files of the voice (the .onnx model and its .onnx.json settings) come from
+        the one rhasspy/piper-voices commit pinned in vaf/core/speech_assets_pin.json, and
+        only as the bytes recorded there (fetch_verified): a file already there with the
+        pinned digest is kept (hashed once per process), a truncated or foreign one is
+        replaced by verified bytes, and bytes that hash differently are never written
+        under the voice's name. None, with the reason said, when the voice is not pinned or
+        could not be fetched."""
+        from vaf.core import speech_pin
+        from vaf.core.verified_download import DownloadIntegrityError, fetch_verified, has_pinned_digest
+
         # Handle 'auto' -> default to English
         if lang == "auto":
             lang = "en"
@@ -466,49 +553,33 @@ class SpeechManager:
         # Default to English if lang not supported
         short_lang = lang[:2].lower()
         model_name = self.PIPER_VOICES.get(short_lang, self.PIPER_VOICES["en"])
-        
+
         onnx_file = self.models_dir / f"{model_name}.onnx"
         json_file = self.models_dir / f"{model_name}.onnx.json"
-        
-        if onnx_file.exists() and json_file.exists():
-            return onnx_file
-            
-        # Download
-        UI.event("Download", f"Downloading voice: {model_name}...", style="warning")
         try:
-            # Hugging Face URLs for Piper Voices (rhasspy/piper-voices)
-            # Structure: lang_code/locale/voice_name/quality/file
-            # Example: de/de_DE/thorsten/high/de_DE-thorsten-high.onnx
-            
-            parts = model_name.split('-')
-            if len(parts) >= 3:
-                locale = parts[0]      # de_DE
-                voice_name = parts[1]  # thorsten
-                quality = parts[2]     # high
-                
-                base_url = f"https://huggingface.co/rhasspy/piper-voices/resolve/main/{short_lang}/{locale}/{voice_name}/{quality}/{model_name}.onnx"
-            else:
-                # Fallback for simpler names
-                base_url = f"https://huggingface.co/rhasspy/piper-voices/resolve/main/{short_lang}/{model_name}/{model_name}.onnx"
-            
-            # Download ONNX
-            r = requests.get(base_url, stream=True)
-            if r.status_code == 404:
-                UI.error(f"Voice not found at {base_url}")
-                return None
-            r.raise_for_status()
-            with open(onnx_file, 'wb') as f:
-                for chunk in r.iter_content(8192):
-                    f.write(chunk)
-            
-            # Download JSON
-            r = requests.get(base_url + ".json")
-            r.raise_for_status()
-            with open(json_file, 'wb') as f:
-                f.write(r.content)
-                
+            pinned = speech_pin.voice_files(model_name)
+        except RuntimeError as e:
+            UI.error(str(e))
+            return None
+        if pinned is None:
+            UI.error(f"No pinned download for the voice {model_name}; it is not downloaded unverified.")
+            return None
+        onnx, config = pinned
+        try:
+            if has_pinned_digest(onnx_file, onnx["sha256"], onnx["size"]) \
+                    and has_pinned_digest(json_file, config["sha256"], config["size"]):
+                return onnx_file
+            UI.event("Download", f"Downloading voice: {model_name} ({onnx['size'] / 1_000_000:.1f} MB, "
+                     "verifying SHA-256)...", style="warning")
+            fetch_verified(onnx["url"], onnx["sha256"], onnx_file, size=onnx["size"], timeout=60)
+            fetch_verified(config["url"], config["sha256"], json_file, size=config["size"], timeout=60)
             UI.success(f"Voice {model_name} ready.")
             return onnx_file
+        except DownloadIntegrityError as e:
+            UI.error(f"The download of the voice {model_name} did not match its pinned checksum, so it was "
+                     "not used. Try again later; if it keeps happening, report it.")
+            UI.event("System", f"Checksum details: {e}", style="dim")
+            return None
         except Exception as e:
             UI.error(f"Failed to download voice: {e}")
             return None

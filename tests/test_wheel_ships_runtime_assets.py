@@ -102,6 +102,9 @@ def test_the_built_wheel_carries_every_runtime_asset(tmp_path):
     assert any("vocab/data/capability_denial.json" in n for n in names)
     # The llama.cpp pin: without it an installed VAF may download nothing (backend.py).
     assert any(n.endswith("vaf/core/llama_server_pin.json") for n in names)
+    # The speech pin: without it Piper, every host voice and the speaker and turn-end
+    # models refuse to download (speech_pin.py).
+    assert any(n.endswith("vaf/core/speech_assets_pin.json") for n in names)
     # The hash-locked vLLM tree: without it the vLLM install refuses (vllm_server.py).
     assert any(n.endswith("vaf/core/vllm_requirements.lock") for n in names)
     assert any(n.endswith("vaf/core/vllm_requirements_rocm.lock") for n in names)

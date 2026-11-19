@@ -26,6 +26,9 @@ from flask import Flask, request, jsonify, Response, send_file
 from flask_cors import CORS
 import io
 import wave
+from urllib.parse import quote
+
+from verified_download import DownloadIntegrityError, download_verified
 
 app = Flask(__name__)
 CORS(app)
@@ -35,100 +38,31 @@ MODELS_DIR = Path(os.environ.get("TTS_MODELS_DIR", "/app/models"))
 CONFIG_FILE = Path(os.environ.get("TTS_CONFIG_FILE", "/app/config/tts_config.json"))
 DEFAULT_LANG = os.environ.get("TTS_DEFAULT_LANG", "de")
 
-# Piper voice models - curated list of high-quality voices
-AVAILABLE_MODELS = {
-    "de": {
-        "name": "German (Deutsch)",
-        "voice": "thorsten",
-        "quality": "medium",
-        "model_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx",
-        "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx.json"
-    },
-    "en": {
-        "name": "English",
-        "voice": "amy",
-        "quality": "medium",
-        "model_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/amy/medium/en_US-amy-medium.onnx",
-        "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/amy/medium/en_US-amy-medium.onnx.json"
-    },
-    "fr": {
-        "name": "French (Français)",
-        "voice": "siwis",
-        "quality": "medium",
-        "model_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx",
-        "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx.json"
-    },
-    "es": {
-        "name": "Spanish (Español)",
-        "voice": "carlfm",
-        "quality": "medium",
-        "model_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/es/es_ES/carlfm/x_low/es_ES-carlfm-x_low.onnx",
-        "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/es/es_ES/carlfm/x_low/es_ES-carlfm-x_low.onnx.json"
-    },
-    "it": {
-        "name": "Italian (Italiano)",
-        "voice": "riccardo",
-        "quality": "medium",
-        "model_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/it/it_IT/riccardo/x_low/it_IT-riccardo-x_low.onnx",
-        "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/it/it_IT/riccardo/x_low/it_IT-riccardo-x_low.onnx.json"
-    },
-    "nl": {
-        "name": "Dutch (Nederlands)",
-        "voice": "mls",
-        "quality": "medium",
-        "model_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/nl/nl_NL/mls/medium/nl_NL-mls-medium.onnx",
-        "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/nl/nl_NL/mls/medium/nl_NL-mls-medium.onnx.json"
-    },
-    "pl": {
-        "name": "Polish (Polski)",
-        "voice": "gosia",
-        "quality": "medium",
-        "model_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/pl/pl_PL/gosia/medium/pl_PL-gosia-medium.onnx",
-        "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/pl/pl_PL/gosia/medium/pl_PL-gosia-medium.onnx.json"
-    },
-    "pt": {
-        "name": "Portuguese (Português)",
-        "voice": "faber",
-        "quality": "medium",
-        "model_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx",
-        "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx.json"
-    },
-    "ru": {
-        "name": "Russian (Русский)",
-        "voice": "irina",
-        "quality": "medium",
-        "model_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ru/ru_RU/irina/medium/ru_RU-irina-medium.onnx",
-        "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ru/ru_RU/irina/medium/ru_RU-irina-medium.onnx.json"
-    },
-    "uk": {
-        "name": "Ukrainian (Українська)",
-        "voice": "ukrainian_tts",
-        "quality": "medium",
-        "model_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/uk/uk_UA/ukrainian_tts/medium/uk_UA-ukrainian_tts-medium.onnx",
-        "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/uk/uk_UA/ukrainian_tts/medium/uk_UA-ukrainian_tts-medium.onnx.json"
-    },
-    "zh": {
-        "name": "Chinese (中文)",
-        "voice": "huayan",
-        "quality": "medium",
-        "model_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx",
-        "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx.json"
-    },
-    "ja": {
-        "name": "Japanese (日本語)",
-        "voice": "kokoro",
-        "quality": "medium",
-        "model_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ja/ja_JP/kokoro/medium/ja_JP-kokoro-medium.onnx",
-        "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ja/ja_JP/kokoro/medium/ja_JP-kokoro-medium.onnx.json"
-    },
-    "tr": {
-        "name": "Turkish (Türkçe)",
-        "voice": "dfki",
-        "quality": "medium",
-        "model_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/tr/tr_TR/dfki/medium/tr_TR-dfki-medium.onnx",
-        "config_url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/tr/tr_TR/dfki/medium/tr_TR-dfki-medium.onnx.json"
-    }
-}
+# The voices this container may install, each pinned by SHA-256 at one commit of
+# rhasspy/piper-voices: models.json, written by scripts/pin_speech_assets.py in the VAF
+# repository from the same commit as the voices of the host. A voice is downloaded only
+# as the bytes recorded there (verified_download.py, a byte-identical copy of VAF's
+# vaf/core/verified_download.py: the build context holds no vaf package).
+MODELS_TABLE = Path(os.environ.get("TTS_MODELS_TABLE", Path(__file__).with_name("models.json")))
+
+
+def load_models_table(path: Path = MODELS_TABLE) -> Dict[str, Dict[str, Any]]:
+    """{lang: {name, voice, quality, model_url, model_sha256, model_size, config_url,
+    config_sha256, config_size}} from the pinned table."""
+    table = json.loads(Path(path).read_bytes().decode("utf-8"))
+    source, revision = table["source"].rstrip("/"), table["revision"]
+    out = {}
+    for lang, row in table["models"].items():
+        entry = {"name": row["name"], "voice": row["voice"], "quality": row["quality"]}
+        for part in ("model", "config"):
+            entry[f"{part}_url"] = f"{source}/resolve/{revision}/{quote(row[part]['path'])}"
+            entry[f"{part}_sha256"] = row[part]["sha256"]
+            entry[f"{part}_size"] = int(row[part]["size"])
+        out[lang] = entry
+    return out
+
+
+AVAILABLE_MODELS = load_models_table()
 
 # Track download progress
 download_progress: Dict[str, Dict[str, Any]] = {}
@@ -179,7 +113,10 @@ def is_language_installed(lang: str) -> bool:
 
 
 def download_model(lang: str) -> bool:
-    """Download a language model. Returns True on success."""
+    """Download a language model, verified against its pinned SHA-256. Returns True on
+    success. Bytes that hash differently are never written under the model's name (the
+    download goes to a .part file that is renamed only once it verified); the status then
+    says the download did not match its pinned checksum."""
     if lang not in AVAILABLE_MODELS:
         return False
 
@@ -195,31 +132,19 @@ def download_model(lang: str) -> bool:
         with download_lock:
             download_progress[lang] = {"status": "downloading", "progress": 0}
 
-        # Download model file
-        import requests
+        total_size = model_info["model_size"]
 
-        # Download ONNX model
-        response = requests.get(model_info["model_url"], stream=True)
-        response.raise_for_status()
-        total_size = int(response.headers.get('content-length', 0))
+        def on_progress(received: int) -> None:
+            with download_lock:
+                download_progress[lang]["progress"] = int(received / total_size * 90)
 
-        downloaded = 0
-        with open(model_file, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-                downloaded += len(chunk)
-                if total_size > 0:
-                    with download_lock:
-                        download_progress[lang]["progress"] = int(downloaded / total_size * 90)
+        download_verified(model_info["model_url"], model_info["model_sha256"], model_file,
+                          timeout=60, progress=on_progress)
 
-        # Download config file
         with download_lock:
             download_progress[lang]["progress"] = 95
 
-        response = requests.get(model_info["config_url"])
-        response.raise_for_status()
-        with open(config_file, 'wb') as f:
-            f.write(response.content)
+        download_verified(model_info["config_url"], model_info["config_sha256"], config_file, timeout=60)
 
         # Update config
         config = load_config()
@@ -233,8 +158,13 @@ def download_model(lang: str) -> bool:
         return True
 
     except Exception as e:
+        if isinstance(e, DownloadIntegrityError):
+            message = (f"The download of the {model_info['name']} voice did not match its pinned checksum, "
+                       "so it was not installed. Try again later.")
+        else:
+            message = str(e)
         with download_lock:
-            download_progress[lang] = {"status": "error", "error": str(e)}
+            download_progress[lang] = {"status": "error", "error": message}
         # Cleanup partial files
         if model_file.exists():
             model_file.unlink()

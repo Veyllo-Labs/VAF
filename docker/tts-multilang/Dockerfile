@@ -32,6 +32,7 @@ RUN mkdir -p /app/models /app/config
 
 # Copy application files
 COPY app.py /app/
+COPY verified_download.py /app/
 COPY models.json /app/
 
 # Environment variables

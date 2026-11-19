@@ -1630,7 +1630,10 @@ def test_the_speech_models_carry_their_licence():
     lambda p: p["models"].update({"m.onnx": {"url": "http://x", "sha256": "0" * 64, "size": 1, "licence": "MIT",
                                              "licence_source": "https://x"}}),
     lambda p: p["piper_voices"].pop("voices"),
-    lambda p: p["piper_voices"]["voices"].pop("de_DE-mls-medium"),
+    lambda p: p["piper_voices"].update(voices=["de_DE-mls-medium"]),
+    lambda p: p["piper_voices"]["files"].update({
+        "sv/sv_SE/nst/medium/sv_SE-nst-medium.onnx": {"sha256": "0" * 64, "size": 1},
+        "sv/sv_SE/nst/medium/sv_SE-nst-medium.onnx.json": {"sha256": "0" * 64, "size": 1}}),
     lambda p: p["piper_voices"]["voices"].update({"de-x": p["piper_voices"]["voices"]["de_DE-mls-medium"]}),
     lambda p: p["piper_voices"]["files"].pop(VOICE + ".json"),
     lambda p: p["piper_voices"]["voices"]["de_DE-mls-medium"].update(licence=" "),
@@ -1642,7 +1645,8 @@ def test_the_speech_models_carry_their_licence():
     lambda p: p["models"].update({"m.onnx": {"url": "https://x", "sha256": "0" * 64, "size": 1, "licence": "MIT",
                                              "licence_source": "http://x"}}),
 ], ids=["no-piper", "short-digest", "no-program-digest", "unknown-archive", "moving-revision",
-        "climbing-path", "zero-size", "plain-http", "no-voices", "onnx-without-row", "bad-voice-name",
+        "climbing-path", "zero-size", "plain-http", "no-voices", "voices-not-object", "onnx-without-row",
+        "bad-voice-name",
         "row-without-files", "empty-licence", "host-piper-string", "card-not-model-card", "card-digest",
         "model-without-licence", "licence-source-http"])
 def test_a_malformed_manifest_is_refused(monkeypatch, tmp_path, damage):

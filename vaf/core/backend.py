@@ -226,12 +226,8 @@ def stop_local_server(wait: float = 3.0) -> str:
 
 def _stop_llama_server(wait: float) -> str:
     mgr = ServerManager(skip_cleanup=True)
-    try:
-        with open(mgr.pid_file, "r", encoding="utf-8") as f:
-            pid = int(f.read().strip())
-    except (OSError, ValueError):
-        return ""
-    if not mgr._looks_like_llama_server(pid):
+    pid = mgr._llama_pid()
+    if pid is None:
         return ""
     mgr.stop_server(force_external=True)
     # A killed child of another process stays a zombie until that process reaps it; it
@@ -2230,7 +2226,9 @@ class ServerManager:
         """Stop the local model server. ``force_external`` also stops a server another
         process started (its pid file) - for llama.cpp and for the managed vLLM alike, so
         every unload, Tray Quit and the switch to the api profile release the GPU whichever
-        engine runs. Without it, only what this manager started is stopped."""
+        engine runs. Without it, only what this manager started is stopped. A pid is killed
+        only when _looks_like_llama_server confirms it; a stale record naming another
+        process is left alone (and removed)."""
         # WICHTIG: Prüfe zuerst PID-Datei, falls self.process nicht gesetzt ist
         # (z.B. wenn Server von anderem Prozess gestartet wurde)
         pid_to_kill = None
@@ -2255,23 +2253,21 @@ class ServerManager:
                     _park_abandoned_child(self.process)
 
             self.process = None
-        if os.path.exists(self.pid_file) and force_external:
+        if force_external:
             # ALSO check the pid file (no elif): after a model SWAP the live
             # server belongs to a throwaway ensure_local_model manager, and
             # THIS manager's self.process is a stale handle to the old, dead
             # process - the elif skipped the file and the real server
             # survived Tray Quit (live incident). The pid file always holds
             # the CURRENT server's pid (_save_pid on every spawn).
-            try:
-                with open(self.pid_file, 'r', encoding='utf-8') as f:
-                    _file_pid = int(f.read().strip())
-                if _file_pid != pid_to_kill and self._is_process_running(_file_pid):
-                    pid_to_kill = _file_pid
-            except (ValueError, FileNotFoundError):
-                pass
+            file_pid = self._llama_pid()
+            if file_pid is not None and file_pid != pid_to_kill:
+                pid_to_kill = file_pid
 
-        # Kill process by PID (wenn noch nicht beendet)
-        if pid_to_kill and self._is_process_running(pid_to_kill):
+        # Kill by pid only what is verified to be a llama server, right before the kill: the
+        # own child may be reaped by now and its pid reused, and a pid file left by a crash
+        # or a reboot can name any process.
+        if pid_to_kill and self._looks_like_llama_server(pid_to_kill):
             # Windows: Use taskkill (most reliable)
             if self.system == "Windows":
                 try:

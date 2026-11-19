@@ -13,6 +13,8 @@ GGUF and the main GGUF. These tests pin the safety contract:
 """
 import types
 
+import pytest
+
 import vaf.core.backend as backend
 
 
@@ -198,6 +200,7 @@ def test_stop_server_kills_swap_owned_server_too(monkeypatch, tmp_path):
 
     killed = []
     monkeypatch.setattr(mgr, "_is_process_running", lambda pid: pid == 222)
+    monkeypatch.setattr(mgr, "_looks_like_llama_server", lambda pid: pid == 222)
     # Force the Unix kill branch: on Windows stop_server uses taskkill via
     # subprocess and the os.kill recorder below never fires (CI failure on
     # the windows-latest runner).
@@ -206,4 +209,45 @@ def test_stop_server_kills_swap_owned_server_too(monkeypatch, tmp_path):
                         lambda pid, sig: killed.append((pid, sig)))
     mgr.stop_server(force_external=True)
     assert (222, 9) in killed          # the swap-owned live server dies
+    assert not (tmp_path / "server.pid").exists()
+
+
+@pytest.mark.parametrize("system", ["Linux", "Windows"])
+def test_a_reaped_child_whose_pid_was_reused_is_not_killed(monkeypatch, tmp_path, system):
+    """The own child is reaped by its wait, and its pid may already belong to another
+    process; a pid file can name any process after a crash or a reboot. Only a pid verified
+    as a llama server is killed, on the taskkill branch too. The pid file here names a real
+    llama server (333), so the recorders are shown to see the kill they guard against.
+    MUTATION: gate the kill on _is_process_running again (red: 111 killed)."""
+    import subprocess
+
+    mgr = backend.ServerManager(skip_cleanup=True)
+    mgr.pid_file = str(tmp_path / "server.pid")
+
+    class _ReapedProc:
+        pid = 111
+        def terminate(self): pass
+        def kill(self): pass
+        def wait(self, timeout=None): return 0
+
+    killed, ran = [], []
+    monkeypatch.setattr(mgr, "system", system)
+    monkeypatch.setattr(mgr, "_job_handle", None, raising=False)
+    monkeypatch.setattr(mgr, "_is_process_running", lambda pid: True)
+    monkeypatch.setattr(mgr, "_looks_like_llama_server", lambda pid: pid == 333)
+    monkeypatch.setattr(backend.os, "kill", lambda pid, sig: killed.append(pid))
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr(backend.subprocess, "run", lambda cmd, **k: ran.append(list(cmd)))
+
+    def targets():
+        return killed + [int(cmd[-1]) for cmd in ran if cmd[:1] == ["taskkill"]]
+
+    mgr.process = _ReapedProc()
+    mgr.stop_server(force_external=True, include_vllm=False)
+    assert 111 not in targets(), "a reused pid of the reaped child was killed"
+
+    (tmp_path / "server.pid").write_text("333")
+    mgr.process = _ReapedProc()
+    mgr.stop_server(force_external=True, include_vllm=False)
+    assert targets() == [333], targets()
     assert not (tmp_path / "server.pid").exists()

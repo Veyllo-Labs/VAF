@@ -678,6 +678,58 @@ def test_stop_local_server_leaves_alone_what_is_no_llama_server(pid_home):
         proc.wait()
 
 
+def test_the_pid_file_counts_only_when_it_names_a_llama_server(pid_home):
+    """_llama_pid is the one read of the pid file every stop, the handover and the install go
+    through. MUTATION: drop its identity check (red: the unrelated process is named)."""
+    from vaf.core.backend import ServerManager
+    other, server = _sleeper(), _sleeper("llama-server")
+    try:
+        pid_home.write_text(str(other.pid))
+        assert ServerManager(skip_cleanup=True)._llama_pid() is None
+        pid_home.write_text(str(server.pid))
+        assert ServerManager(skip_cleanup=True)._llama_pid() == server.pid
+        pid_home.write_text("not a pid")
+        assert ServerManager(skip_cleanup=True)._llama_pid() is None
+    finally:
+        for proc in (other, server):
+            proc.kill()
+            proc.wait()
+
+
+def test_stop_server_leaves_alone_what_is_no_llama_server(pid_home):
+    """Tray Quit, a model swap and the handover all go through stop_server(force_external=True),
+    which killed the pid its file named after checking only that it existed. MUTATIONS: gate
+    the kill on _is_process_running again, or read the pid file without the identity check:
+    red, the unrelated process dies."""
+    import time as _time
+
+    from vaf.core.backend import ServerManager
+    proc = _sleeper()
+    try:
+        pid_home.write_text(str(proc.pid))
+        ServerManager(skip_cleanup=True).stop_server(force_external=True)
+        _time.sleep(0.5)
+        assert proc.poll() is None, "an unrelated process was killed"
+        assert not pid_home.exists(), "the stale record is removed"
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_stop_server_stops_the_llama_server_its_pid_file_names(pid_home):
+    """MUTATION: drop the pid file from stop_server (red: the server survives Tray Quit)."""
+    from vaf.core.backend import ServerManager
+    proc = _sleeper("llama-server")
+    try:
+        pid_home.write_text(str(proc.pid))
+        ServerManager(skip_cleanup=True).stop_server(force_external=True)
+        assert proc.wait(5) is not None
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+
 def test_stop_local_server_says_when_the_server_is_still_running(pid_home, monkeypatch):
     """MUTATION: report every stop as done - red."""
     from vaf.core import backend

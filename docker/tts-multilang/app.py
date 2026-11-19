@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
 VAF TTS All-in-One Multi-Language Server
 =========================================
@@ -17,6 +20,8 @@ Endpoints:
 
 import os
 import json
+import re
+import stat
 import subprocess
 import hashlib
 import threading
@@ -29,7 +34,7 @@ import shutil
 import wave
 from urllib.parse import quote
 
-from verified_download import DownloadIntegrityError, download_verified
+from verified_download import DownloadIntegrityError, download_verified, has_pinned_digest
 
 app = Flask(__name__)
 CORS(app)
@@ -49,13 +54,14 @@ MODELS_TABLE = Path(os.environ.get("TTS_MODELS_TABLE", Path(__file__).with_name(
 
 
 def load_models_table(path: Path = MODELS_TABLE) -> Dict[str, Dict[str, Any]]:
-    """{lang: {name, voice, quality, model_url, model_sha256, model_size, config_url,
-    config_sha256, config_size}} from the pinned table."""
+    """{lang: {name, voice, quality, licence, model_url, model_sha256, model_size,
+    config_url, config_sha256, config_size}} from the pinned table."""
     table = json.loads(Path(path).read_bytes().decode("utf-8"))
     source, revision = table["source"].rstrip("/"), table["revision"]
     out = {}
     for lang, row in table["models"].items():
-        entry = {"name": row["name"], "voice": row["voice"], "quality": row["quality"]}
+        entry = {"name": row["name"], "voice": row["voice"], "quality": row["quality"],
+                 "licence": row.get("licence", "")}
         for part in ("model", "config"):
             entry[f"{part}_url"] = f"{source}/resolve/{revision}/{quote(row[part]['path'])}"
             entry[f"{part}_sha256"] = row[part]["sha256"]
@@ -64,7 +70,24 @@ def load_models_table(path: Path = MODELS_TABLE) -> Dict[str, Dict[str, Any]]:
     return out
 
 
+def load_retired_languages(path: Path = MODELS_TABLE) -> List[str]:
+    """The languages an earlier table held and this one drops ("retired"): their voices are
+    removed at start. A code that is not two or three lowercase letters, or that is still a
+    language of the table, is ignored with a log line, so the list can never name a folder
+    outside MODELS_DIR or an offered voice."""
+    table = json.loads(Path(path).read_bytes().decode("utf-8"))
+    out = []
+    for code in table.get("retired") or []:
+        if not isinstance(code, str) or not re.fullmatch(r"[a-z]{2,3}", code) or code in table["models"]:
+            print(f"[TTS] Ignoring the retired language {code!r}: not a language code, or still offered",
+                  flush=True)
+            continue
+        out.append(code)
+    return out
+
+
 AVAILABLE_MODELS = load_models_table()
+RETIRED_LANGUAGES = load_retired_languages()
 
 # Track download progress
 download_progress: Dict[str, Dict[str, Any]] = {}
@@ -95,23 +118,30 @@ def save_config(config: Dict[str, Any]) -> None:
 
 
 def get_model_path(lang: str) -> Optional[Path]:
-    """Get path to model file for a language."""
+    """The installed model of `lang`, or None unless the installed pair is the voice the
+    table pins: the model a regular file of the pinned size, the settings a regular file
+    with the pinned SHA-256 (hashed once per process). A voice of another build or another
+    speaker (an earlier VAF fetched other voices under the same language) is therefore not
+    installed and never synthesized. Named boundary: the 63 to 114 MB model is identified
+    by its size and its settings, not hashed again at every start."""
     if lang not in AVAILABLE_MODELS:
         return None
-    model_dir = MODELS_DIR / lang
-    model_file = model_dir / f"{lang}.onnx"
-    if model_file.exists():
-        return model_file
-    return None
+    info = AVAILABLE_MODELS[lang]
+    model_file = MODELS_DIR / lang / f"{lang}.onnx"
+    try:
+        st = os.lstat(model_file)
+    except OSError:
+        return None
+    if not stat.S_ISREG(st.st_mode) or st.st_size != info["model_size"]:
+        return None
+    if not has_pinned_digest(MODELS_DIR / lang / f"{lang}.onnx.json", info["config_sha256"], info["config_size"]):
+        return None
+    return model_file
 
 
 def is_language_installed(lang: str) -> bool:
-    """Check if a language model is installed."""
-    model_path = get_model_path(lang)
-    if model_path and model_path.exists():
-        config_path = model_path.with_suffix(".onnx.json")
-        return config_path.exists()
-    return False
+    """Whether the pinned voice of `lang` is installed (get_model_path)."""
+    return get_model_path(lang) is not None
 
 
 def download_error_message(name: str, error: Exception) -> str:
@@ -282,6 +312,69 @@ def download_model(lang: str) -> bool:
         return False
 
 
+def remove_retired_languages() -> None:
+    """At start: remove the installed voice of every retired language (and what an
+    interrupted install of it left), and take the language out of the settings. A default
+    language that was retired becomes DEFAULT_LANG. Removed in the order of /uninstall."""
+    config = load_config()
+    changed = False
+    for code in RETIRED_LANGUAGES:
+        final, staging, previous = swap_paths(code)
+        removed = False
+        for path in (previous, staging, final):
+            if os.path.lexists(path):
+                try:
+                    remove_path(path)
+                    removed = True
+                except OSError as e:
+                    print(f"[TTS] The voice of {code}, which this release no longer offers, could not be "
+                          f"removed: {e}", flush=True)
+        for key in ("installed_languages", "language_priority"):
+            if code in config.get(key, []):
+                config[key] = [c for c in config[key] if c != code]
+                changed = True
+        if config.get("default_language") == code:
+            config["default_language"] = DEFAULT_LANG
+            changed = True
+        if removed:
+            print(f"[TTS] Removed the voice of {code}: this release no longer offers that language.", flush=True)
+    if changed:
+        save_config(config)
+
+
+def _download_guarded(lang: str) -> None:
+    """download_model in a background thread: whatever it did not report itself still ends
+    the "downloading" mark, or every later install of the language would be refused."""
+    try:
+        download_model(lang)
+    except Exception as e:
+        with download_lock:
+            download_progress[lang] = {"status": "error", "detail": str(e),
+                                       "error": f"The {AVAILABLE_MODELS[lang]['name']} voice could not be "
+                                                "installed. Try again later."}
+
+
+def replace_unpinned_installs() -> List[str]:
+    """At start: install again every language whose folder is there but whose voice is not
+    the one the table pins (an earlier VAF installed another build or another speaker).
+    The languages are marked as downloading first, so the settings card shows the progress
+    and /install does not start a second download of them; one background thread fetches
+    them one after another, and the server answers meanwhile. Returns the languages."""
+    queued = []
+    for lang in AVAILABLE_MODELS:
+        if os.path.lexists(MODELS_DIR / lang) and not is_language_installed(lang):
+            with download_lock:
+                if (download_progress.get(lang) or {}).get("status") == "downloading":
+                    continue
+                download_progress[lang] = {"status": "downloading", "progress": 0}
+            print(f"[TTS] The installed voice of {lang} is not the one this release pins; installing it again.",
+                  flush=True)
+            queued.append(lang)
+    if queued:
+        threading.Thread(target=lambda: [_download_guarded(lang) for lang in queued], daemon=True).start()
+    return queued
+
+
 def detect_language(text: str) -> str:
     """Detect the language of the text."""
     try:
@@ -291,8 +384,7 @@ def detect_language(text: str) -> str:
         lang_map = {
             "de": "de", "en": "en", "fr": "fr", "es": "es",
             "it": "it", "nl": "nl", "pl": "pl", "pt": "pt",
-            "ru": "ru", "uk": "uk", "zh-cn": "zh", "zh-tw": "zh",
-            "ja": "ja"
+            "ru": "ru", "uk": "uk", "zh-cn": "zh", "zh-tw": "zh"
         }
         return lang_map.get(detected, DEFAULT_LANG)
     except Exception:
@@ -480,18 +572,7 @@ def install_language():
         download_progress[lang] = {"status": "downloading", "progress": 0}
 
     # Start download in background thread
-    def do_download():
-        try:
-            download_model(lang)
-        except Exception as e:
-            # Whatever download_model did not report itself must still end the
-            # "downloading" mark set above, or every later install would be refused.
-            with download_lock:
-                download_progress[lang] = {"status": "error", "detail": str(e),
-                                           "error": f"The {AVAILABLE_MODELS[lang]['name']} voice could not be "
-                                                    "installed. Try again later."}
-
-    thread = threading.Thread(target=do_download, daemon=True)
+    thread = threading.Thread(target=lambda: _download_guarded(lang), daemon=True)
     thread.start()
 
     return jsonify({
@@ -683,12 +764,16 @@ if __name__ == "__main__":
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-    # A voice an interrupted install kept aside is put back first.
+    # A voice an interrupted install kept aside is put back first; then the voices of
+    # languages this release no longer offers go, and an installed voice that is not the
+    # pinned one is installed again (in the background).
     recover_interrupted_installs()
+    remove_retired_languages()
+    replacing = replace_unpinned_installs()
 
     # Auto-install default language if nothing installed
     config = load_config()
-    if not config.get("installed_languages"):
+    if not config.get("installed_languages") and DEFAULT_LANG not in replacing:
         print(f"No languages installed. Installing default: {DEFAULT_LANG}")
         if download_model(DEFAULT_LANG):
             print(f"Successfully installed {DEFAULT_LANG}")

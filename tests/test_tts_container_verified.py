@@ -63,7 +63,8 @@ def container(monkeypatch, tmp_path):
                           "model": {"path": "de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx",
                                     "sha256": hashlib.sha256(MODEL).hexdigest(), "size": len(MODEL)},
                           "config": {"path": "de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx.json",
-                                     "sha256": hashlib.sha256(CONFIG).hexdigest(), "size": len(CONFIG)}}}}),
+                                     "sha256": hashlib.sha256(CONFIG).hexdigest(), "size": len(CONFIG)}}},
+        "retired": ["ja", "tr", "de", "../x", "J"]}),
         encoding="utf-8")
     app = _load_app(monkeypatch, table)
     monkeypatch.setattr(app, "MODELS_DIR", tmp_path / "models")
@@ -284,7 +285,7 @@ def test_a_failed_rename_back_keeps_the_old_voice_aside_and_the_next_install_res
     assert container.download_model("de") is False
     d = container.MODELS_DIR / "de"
     assert (d / "de.onnx").read_bytes() == b"installed model", "the kept voice is back, not overwritten"
-    assert container.is_language_installed("de")
+    assert (d / "de.onnx.json").read_bytes() == b"installed config"
     assert sorted(p.name for p in container.MODELS_DIR.iterdir()) == ["de"]
 
 
@@ -294,14 +295,16 @@ def test_a_voice_kept_aside_by_a_killed_install_is_back_at_start(container):
     recover at start: red."""
     kept = container.MODELS_DIR / ".de.previous"
     kept.mkdir(parents=True)
-    (kept / "de.onnx").write_bytes(b"installed model")
-    (kept / "de.onnx.json").write_bytes(b"installed config")
+    (kept / "de.onnx").write_bytes(MODEL)
+    (kept / "de.onnx.json").write_bytes(CONFIG)
     container.recover_interrupted_installs()
     assert container.is_language_installed("de")
     assert sorted(p.name for p in container.MODELS_DIR.iterdir()) == ["de"]
     src = (CONTAINER / "app.py").read_text(encoding="utf-8")
     main = src[src.index('if __name__ == "__main__":'):]
-    assert main.index("recover_interrupted_installs()") < main.index("download_model(DEFAULT_LANG)")
+    order = [main.index(step) for step in ("recover_interrupted_installs()", "remove_retired_languages()",
+                                            "replace_unpinned_installs()", "download_model(DEFAULT_LANG)")]
+    assert order == sorted(order), "recover, then retired languages, then unpinned voices, then the default"
 
 
 def test_a_stale_kept_voice_next_to_an_installed_one_is_removed(container, monkeypatch):
@@ -396,3 +399,96 @@ def test_whatever_escapes_the_download_still_ends_the_downloading_mark(container
     container.install_language()
     status = container.download_progress["de"]
     assert status["status"] == "error" and "could not be installed" in status["error"], status
+
+
+# ── voices this release no longer offers, and voices of another build ─────────────
+
+def _config(container) -> dict:
+    return json.loads(container.CONFIG_FILE.read_bytes())
+
+
+def test_only_plain_retired_codes_outside_the_table_are_used(container):
+    """A retired code names a folder below MODELS_DIR: "../x" or a language still offered
+    would remove something it must not. MUTATION: drop the code check: red."""
+    assert container.RETIRED_LANGUAGES == ["ja", "tr"]
+
+
+def test_a_retired_language_is_removed_at_start(container):
+    """Japanese left the table: its installed voice, what an interrupted install of it
+    left, and its place in the settings go at start; a default language that was Japanese
+    becomes the container's default. MUTATIONS: skip remove_retired_languages (red), leave
+    default_language (red)."""
+    for name in ("ja", ".ja.previous", ".ja.incoming"):
+        (container.MODELS_DIR / name).mkdir(parents=True)
+        (container.MODELS_DIR / name / "ja.onnx").write_bytes(b"retired voice")
+    d = _installed(container, model=MODEL, config=CONFIG)
+    container.save_config({"installed_languages": ["de", "ja"], "language_priority": ["ja", "de"],
+                           "auto_detect": True, "default_language": "ja"})
+    container.remove_retired_languages()
+    assert sorted(p.name for p in container.MODELS_DIR.iterdir()) == ["de"]
+    assert (d / "de.onnx").read_bytes() == MODEL
+    config = _config(container)
+    assert config["installed_languages"] == ["de"] and config["language_priority"] == ["de"]
+    assert config["default_language"] == container.DEFAULT_LANG
+
+
+def _immediate_threads(monkeypatch, container):
+    started = []
+
+    def thread(target, daemon=True):
+        started.append(target)
+        return types.SimpleNamespace(start=target)
+    monkeypatch.setattr(container.threading, "Thread", thread)
+    return started
+
+
+def test_an_installed_voice_of_another_build_is_not_installed_and_is_replaced(container, monkeypatch):
+    """An earlier VAF installed another build of the German voice: same name, other bytes.
+    It is not installed (the settings card offers it again and synthesis refuses it before
+    Piper loads anything), and the start installs the pinned one in one background thread.
+    MUTATIONS: is_language_installed back to "both files exist" (red), start without
+    replace_unpinned_installs (red: nothing replaced)."""
+    import sys as _sys
+    _installed(container, model=MODEL, config=b'{"audio": {"older": 1}}')
+    loaded = []
+    piper = types.ModuleType("piper")
+    piper.PiperVoice = types.SimpleNamespace(load=lambda *a: loaded.append(a))
+    monkeypatch.setitem(_sys.modules, "piper", piper)
+    assert not container.is_language_installed("de")
+    assert container.synthesize_speech("Hallo", "de") is None
+    assert loaded == []
+    assert [row["installed"] for row in container.list_languages()["languages"]] == [False]
+
+    started = _immediate_threads(monkeypatch, container)
+    calls = []
+    _network(monkeypatch, container, {"onnx": MODEL, "onnx.json": CONFIG}, calls)
+    assert container.replace_unpinned_installs() == ["de"]
+    assert len(started) == 1 and len(calls) == 2
+    assert container.is_language_installed("de")
+    assert container.download_progress["de"] == {"status": "completed", "progress": 100}
+
+
+def test_a_model_of_another_size_is_not_installed(container):
+    _installed(container, model=MODEL + b"x", config=CONFIG)
+    assert not container.is_language_installed("de")
+
+
+def test_while_a_voice_is_replaced_a_second_install_starts_nothing(container, monkeypatch):
+    """The replaced language is marked as downloading before its thread runs, so the card
+    shows it and a click on Install does not start a second download of the same files."""
+    _installed(container, model=MODEL, config=b"other")
+    monkeypatch.setattr(container.threading, "Thread",
+                        lambda target, daemon=True: types.SimpleNamespace(start=lambda: None))
+    assert container.replace_unpinned_installs() == ["de"]
+    container.request.body = {"language": "de"}
+    assert "already being downloaded" in container.install_language()["message"]
+
+
+def test_a_pinned_install_downloads_nothing_at_start(container, monkeypatch):
+    _installed(container, model=MODEL, config=CONFIG)
+    started = _immediate_threads(monkeypatch, container)
+    monkeypatch.setattr(sys.modules["verified_download"].requests, "get",
+                        lambda *a, **k: pytest.fail("a download started"))
+    assert container.replace_unpinned_installs() == []
+    assert started == []
+    assert container.is_language_installed("de")

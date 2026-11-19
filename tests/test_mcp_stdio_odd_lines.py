@@ -86,12 +86,38 @@ def test_the_digit_limit_fixture_works_on_a_python_without_the_limit(monkeypatch
         pass
 
 
-class _FakeProcess:
-    """stdin and stdout of a server process, as text buffers; records being retired."""
+class _FakeStdout:
+    """A server's output as a binary pipe: the lines, then the end of the stream, or with
+    `silent` a read that blocks until the process is stopped, as a quiet server's does."""
 
-    def __init__(self, lines):
-        self.stdin = io.StringIO()
-        self.stdout = io.StringIO("".join(line + "\n" for line in lines))
+    def __init__(self, data: bytes, silent: bool, stopped: threading.Event):
+        self._buffer = io.BytesIO(data)
+        self._silent = silent
+        self._stopped = stopped
+
+    def readline(self) -> bytes:
+        line = self._buffer.readline()
+        if not line and self._silent:
+            self._stopped.wait(30)
+        return line
+
+    def read(self) -> bytes:
+        return self._buffer.read()
+
+
+def _encoded(lines) -> bytes:
+    """Lines (text, or bytes for a line that is not UTF-8) as a server writes them."""
+    return b"".join((line if isinstance(line, bytes) else line.encode("utf-8")) + b"\n"
+                    for line in lines)
+
+
+class _FakeProcess:
+    """stdin and stdout of a server process, as binary pipes; records being retired."""
+
+    def __init__(self, lines, silent=False):
+        self.stdin = io.BytesIO()
+        self._stopped = threading.Event()
+        self.stdout = _FakeStdout(_encoded(lines), silent, self._stopped)
         self.retired = False
 
     def poll(self):
@@ -99,6 +125,7 @@ class _FakeProcess:
 
     def terminate(self):
         self.retired = True
+        self._stopped.set()
 
     kill = terminate
 
@@ -106,7 +133,7 @@ class _FakeProcess:
         return 0
 
     def remaining(self) -> str:
-        return self.stdout.read()
+        return self.stdout.read().decode("utf-8", errors="replace")
 
 
 def _answer(rid, result=None):
@@ -160,7 +187,7 @@ def _call_with_answer(response: dict) -> str:
     rid = 1  # the first id the fresh client hands out
     line = json.dumps({"jsonrpc": "2.0", "id": rid, **response})
     proc = _FakeProcess([line])
-    client._ensure_server = lambda command, env=None, on_process=None: proc
+    client._ensure_server = lambda command, env=None, **kwargs: proc
     return client.call_stdio("fake", "echo", {})
 
 
@@ -256,7 +283,7 @@ def test_a_call_whose_caller_gave_up_never_reaches_the_server():
     client = MCPClientTool()
     proc = _FakeProcess([json.dumps(_answer(1))])
     started = []
-    client._ensure_server = (lambda command, env=None, on_process=None:
+    client._ensure_server = (lambda command, env=None, **kwargs:
                              started.append(command) or proc)
     finished = threading.Event()
 
@@ -274,7 +301,7 @@ def test_a_call_whose_caller_gave_up_never_reaches_the_server():
         lock.release()
     assert str(out).startswith(TIMEOUT_PREFIX)
     assert finished.wait(10), "the abandoned call never returned"
-    assert started == [] and proc.stdin.getvalue() == "", "the abandoned call reached the server"
+    assert started == [] and proc.stdin.getvalue() == b"", "the abandoned call reached the server"
 
     # Outside a bounded worker nothing sets the flag: the call runs as before.
     assert client.call_stdio("fake", "echo", {}) == "{'ok': True}"
@@ -506,11 +533,9 @@ def _bounded(fn, seconds=10.0):
 
 def test_stub_server_with_a_stray_number_before_every_answer(stub, monkeypatch):
     client, command = stub("stray")
-    used = []
-    tools = _bounded(lambda: client.list_server_tools(command, on_process=used.append))
+    tools = _bounded(lambda: client.list_server_tools(command))
     assert [t["name"] for t in tools] == ["echo"]
     process = client._server_processes[command]
-    assert used == [process, None], "the listing did not report the process it used, then None"
     assert _bounded(lambda: client.call_stdio(command, "echo", {"text": "a"})) == "echoed: a"
     assert _bounded(lambda: client.call_stdio(command, "echo", {"text": "b"})) == "echoed: b"
     assert client._server_processes[command] is process, "a process that answered was replaced"
@@ -545,64 +570,49 @@ def test_unread_output_after_an_unreadable_line_does_not_reach_the_next_call(stu
     assert not stayed_cached, "the dirty process stayed cached"
 
 
-def _blocked_call(stub, client, command):
-    """Start a call on a silent server on a thread; returns once the server has the request.
-    The thread's result lands in the box; `used` holds what `on_process` was told."""
-    box, used = {}, []
-    thread = threading.Thread(
-        target=lambda: box.setdefault("out", client.call_stdio(
-            command, "echo", {"text": "a"}, on_process=used.append)),
-        daemon=True)
-    thread.start()
-    assert _wait_until((stub.dir / "silent.mark").exists), "the call never reached the server"
-    assert thread.is_alive(), "the call returned although the server never answered"
-    return thread, box, used
+def _silent_call(stub, client, command, seconds=1):
+    """A call on a silent server, which answers its tool call with a line that is not JSON
+    and then nothing: it ends at its deadline. Returns (answer, seconds taken, process)."""
+    began = time.monotonic()
+    out = _bounded(lambda: client.call_stdio(command, "echo", {"text": "a"}, timeout=seconds))
+    assert (stub.dir / "silent.mark").exists(), "the call never reached the server"
+    return out, time.monotonic() - began, stub.started[0]
 
 
-def test_stopping_a_silent_server_ends_the_call_that_waits_on_it(stub):
-    """A call blocked on a server that never answers holds the server's lock; `stop_server`
-    (without that lock, and at once) ends the read, the call returns, and the process exits.
-    `on_process` names the process the call used, and then None once it is done."""
+_TIMEOUT_ANSWER = "MCP Error: no answer within 1 s (code: -32001)"
+
+
+def test_a_deadline_on_a_silent_server_ends_the_call_and_stops_the_server(stub):
+    """A call on a server that never answers ends at its deadline, without any other caller
+    stopping the process, and the process it used is stopped and dropped."""
     client, command = stub("silent")
-    thread, box, used = _blocked_call(stub, client, command)
-    process = used[0]
-
-    assert _bounded(lambda: client.stop_server(command, process=process), seconds=1.0) is True
-    thread.join(10)
-    assert not thread.is_alive(), "stopping the server did not end the waiting call"
-    assert box["out"] == "Error: No response from MCP server"
-    assert used == [process, None]
+    out, took, process = _silent_call(stub, client, command)
+    assert out == _TIMEOUT_ANSWER and took < 2.5, (out, took)
     assert command not in client._server_processes
-    assert _wait_until(lambda: process.poll() is not None), "the stopped server kept running"
-    assert client.stop_server(command) is False
+    assert _wait_until(lambda: process.poll() is not None), "the server kept running"
 
 
-def test_stopping_a_server_that_ignores_sigterm_returns_at_once(stub):
-    """The stop runs in the background: SIGTERM, a grace, then SIGKILL. The caller does not
-    wait for it (it used to wait 5 s, then kill and wait again)."""
+def test_a_deadline_on_a_server_that_ignores_sigterm_returns_at_once(stub):
+    """The stop runs in the background: SIGTERM, a grace, then SIGKILL. The call does not
+    wait for it."""
     if os.name == "nt":
         pytest.skip("SIGTERM is a POSIX signal")
     client, command = stub("stubborn")
-    thread, box, used = _blocked_call(stub, client, command)
-    process = used[0]
-
-    started = time.monotonic()
-    assert _bounded(lambda: client.stop_server(command, process=process), seconds=1.0) is True
-    assert time.monotonic() - started < 0.5
+    out, took, process = _silent_call(stub, client, command)
+    assert out == _TIMEOUT_ANSWER
+    assert took < 1.5, f"the call waited for the stop: {took:.1f} s"
     assert _wait_until(lambda: process.poll() is not None), "SIGKILL never came"
-    thread.join(10)
-    assert box["out"] == "Error: No response from MCP server"
 
 
-def test_stop_server_leaves_a_replacement_alone(stub):
-    """With `process`, only that process, and only while it is the one cached: a call that
-    meanwhile runs on a replacement is not stopped by a caller holding the old handle."""
+def test_retiring_a_process_that_is_no_longer_cached_leaves_the_replacement_alone(stub):
+    """Retirement goes by identity: a stale handle never stops the process cached now."""
     client, command = stub("stray")
     assert _bounded(lambda: client.call_stdio(command, "echo", {"text": "a"})) == "echoed: a"
     current = client._server_processes[command]
-    stale = object()
+    stale = _FakeProcess([])
 
-    assert client.stop_server(command, process=stale) is False
+    client._retire(stale)
+    assert stale.retired
     assert client._server_processes[command] is current and current.poll() is None
     assert client._evict(stale) is False
     assert client._server_processes[command] is current
@@ -610,20 +620,26 @@ def test_stop_server_leaves_a_replacement_alone(stub):
 
 
 @pytest.mark.parametrize("how", ["wait", "leave"])
-def test_stopping_a_server_behind_a_launcher_ends_the_waiting_call(stub, how):
-    """A launcher whose child inherits the output pipe: the child keeps the read, and the
-    lock, alive after the launcher alone is stopped. The server leads its own process group,
-    so the stop reaches the child, also one the launcher left behind out of its tree."""
+def test_a_deadline_on_a_server_behind_a_launcher_stops_the_launchers_child(stub, how):
+    """A launcher whose child inherits the output pipe: the server leads its own process
+    group, so retiring it at the deadline reaches the child, also one the launcher left
+    behind out of its tree."""
     if os.name == "nt":
         pytest.skip("POSIX process groups; Windows stops the child tree only")
     client, command = stub("silent", how=how)
-    thread, box, used = _blocked_call(stub, client, command)
+    box = {}
+    began = time.monotonic()
+    calling = threading.Thread(target=lambda: box.setdefault("out", client.call_stdio(
+        command, "echo", {"text": "a"}, timeout=1.5)), daemon=True)
+    calling.start()
+    # The child is taken while the call still waits on it, so its identity can be checked.
+    assert _wait_until((stub.dir / "silent.mark").exists), "the call never reached the server"
     child = stub.child()
-
-    assert _bounded(lambda: client.stop_server(command), seconds=1.0) is True
-    thread.join(10)
-    assert not thread.is_alive(), "the launcher's child kept the call waiting"
-    assert box["out"] == "Error: No response from MCP server"
+    calling.join(10)
+    took = time.monotonic() - began
+    assert not calling.is_alive(), "the launcher's child kept the call waiting"
+    assert box["out"] == "MCP Error: no answer within 1.5 s (code: -32001)" and took < 3.0, (
+        box["out"], took)
     assert _wait_until(lambda: _gone(child)), "the launcher's child kept running"
 
 
@@ -648,7 +664,9 @@ def test_the_connection_test_stops_a_server_that_never_answers(stub, monkeypatch
     took = time.monotonic() - started
     assert status["connected"] is False and status["error"] == "timeout"
     assert took < 2.0, f"the connection test took {took:.1f} s"
-    assert command not in client._server_processes, "the silent server was left cached"
+    # The listing's own thread retires the process once it sees it was given up on.
+    assert _wait_until(lambda: command not in client._server_processes, seconds=1.0), (
+        "the silent server was left cached")
     assert len(stub.started) == 1
     assert _wait_until(lambda: stub.started[0].poll() is not None), "the server kept running"
 
@@ -659,7 +677,7 @@ def test_discovery_stops_a_server_that_never_answers(stub, monkeypatch):
 
     tools, status = reg.discover_mcp_tools(timeout_seconds=1)
     assert tools == {} and status["quiet"]["error"] == "timeout"
-    assert command not in client._server_processes
+    assert _wait_until(lambda: command not in client._server_processes, seconds=1.0)
     assert len(stub.started) == 1
     assert _wait_until(lambda: stub.started[0].poll() is not None), "the server kept running"
 
@@ -775,7 +793,7 @@ def test_a_stop_still_in_flight_is_finished_at_exit(stub):
     assert _bounded(lambda: client.call_stdio(command, "echo", {"text": "a"})) == "echoed: a"
     process = client._server_processes[command]
 
-    assert client.stop_server(command, process=process) is True
+    client._retire(process)
     assert command not in client._server_processes
     _bounded(client.stop_all_servers)
     assert process.poll() is not None, "the stop in flight was left to the frozen thread"
@@ -866,37 +884,6 @@ def test_the_agents_signal_shutdown_stops_the_servers_before_os_exit(monkeypatch
     assert order == ["stop", "os._exit"], order
 
 
-def test_abandon_holds_the_listing_until_the_stop_is_issued():
-    """The listing reports that it is done with its process under the server's lock; that
-    report must wait while `abandon` stops the process, so no other call starts on it."""
-    import vaf.core.mcp_registry as reg
-    listing = reg._Listing()
-    process = object()
-    listing.on_process(process)
-    stopping, release = threading.Event(), threading.Event()
-    seen = []
-
-    class _Client:
-        def stop_server(self, command, process=None):
-            seen.append(process)
-            stopping.set()
-            release.wait(10)
-            return True
-
-    giving_up = threading.Thread(target=listing.abandon, args=(_Client(), {"command": "x"}),
-                                 daemon=True)
-    giving_up.start()
-    assert stopping.wait(10)
-    done = threading.Thread(target=listing.on_process, args=(None,), daemon=True)
-    done.start()
-    done.join(0.3)
-    assert done.is_alive(), "the listing let go of its process before the stop was issued"
-    release.set()
-    giving_up.join(10)
-    done.join(10)
-    assert not done.is_alive() and seen == [process]
-
-
 def test_a_cold_start_whose_caller_gave_up_gets_no_handshake(stub):
     """The caller gave up before the fresh process was reported: no handshake I/O, and the
     process is not left running."""
@@ -924,20 +911,6 @@ def test_a_listing_whose_caller_gave_up_during_the_handshake_sends_no_listing(st
     with cancel_when(lambda: "initialize" in stub.requests()):
         assert client.list_server_tools(command) == []
     assert stub.requests() == ["initialize"], stub.requests()
-
-
-def test_a_failing_on_process_leaves_no_uninitialized_server_cached(stub):
-    client, command = stub("stray")
-
-    def broken(process):
-        if process is not None:
-            raise RuntimeError("observer broke")
-
-    assert _bounded(lambda: client.list_server_tools(command, on_process=broken)) == []
-    assert command not in client._server_processes, "a server without its handshake stayed"
-    assert _wait_until(lambda: stub.started[0].poll() is not None)
-    tools = _bounded(lambda: client.list_server_tools(command))
-    assert [t["name"] for t in tools] == ["echo"]
 
 
 def test_an_exited_server_is_retired_with_its_group_before_it_is_replaced(stub, monkeypatch):
@@ -1084,6 +1057,28 @@ def test_stub_server_with_a_deep_line_before_the_handshake_answer_is_dropped(stu
         assert command not in client._server_processes, "an uninitialized process stayed cached"
 
 
+def test_a_failed_handshake_stops_its_process_once(stub, monkeypatch):
+    """The unreadable handshake answer retires the process inside the reader, and the failed
+    handshake asks again: the second stop must not happen, since the first may already have
+    reaped the leader whose id names the group."""
+    import vaf.tools.mcp_client as mcp_client
+    stops = []
+    real = mcp_client._stop_process_tree
+
+    def counting(process, grace=mcp_client._STOP_GRACE):
+        stops.append(process)
+        return real(process, grace)
+
+    monkeypatch.setattr(mcp_client, "_stop_process_tree", counting)
+    client, command = stub("deep_all")
+    assert _bounded(lambda: client.call_stdio(command, "echo", {"text": "a"})) == (
+        "Error: Failed to initialize MCP server")
+    process = stub.started[0]
+    assert _wait_until(lambda: process.poll() is not None)
+    threading.Event().wait(0.3)  # a second stop, if one was issued, runs on its own thread
+    assert [p for p in stops if p is process] == [process], f"stopped {len(stops)} times"
+
+
 def test_stub_server_with_a_deep_banner_is_dropped(stub):
     client, command = stub("deep_banner")
     assert _bounded(lambda: client.list_server_tools(command)) == []
@@ -1197,7 +1192,7 @@ def test_a_start_is_registered_before_it_stops_counting_as_under_way(monkeypatch
 
     class _Fake:
         pid = 2_000_000_000
-        stdin = io.StringIO()
+        stdin = io.BytesIO()
 
         def poll(self):
             return None
@@ -1585,12 +1580,35 @@ def test_forgetting_a_server_can_hand_its_session_closes_back(monkeypatch):
 
 _FUZZ_SEED = 0x3CB72
 # Without an integer digit limit a long integer decodes, so that kind is drawn only with one.
+# `cr` is an answer with raw carriage returns between its tokens, `badbytes` a line that is
+# not UTF-8; `silence` (drawn only last) is a server that writes nothing more.
 _KINDS = ["blank", "text", "scalar", "array", "null", "notification", "other_id", "deep",
-          *(["digits"] if _HAS_DIGIT_LIMIT else []), "answer"]
+          *(["digits"] if _HAS_DIGIT_LIMIT else []), "answer", "cr", "badbytes"]
+# A draw that ends in silence, and the deadline its request then gets.
+_SILENCE_SHARE = 0.25
+_SILENCE_TIMEOUT = 0.05
+_TIMEOUT_CODE = -32001
+
+
+def _answer_message(rng: random.Random, rid: int) -> dict:
+    shape = rng.randrange(5)
+    if shape == 0:
+        body = {"result": {"content": [{"type": "text", "text": rng.choice(
+            ["t", ["a"], None, 3, {"k": 1}, "utf8 \u0150 ok"])}]}}
+    elif shape == 1:
+        body = {"result": rng.choice(["s", 1, None, ["content"], True])}
+    elif shape == 2:
+        body = {"error": rng.choice(["boom", 1, None, [1], {"code": 5, "message": "m"}])}
+    elif shape == 3:
+        body = {"result": {"content": rng.choice(["c", [], [1, "x"], None])}}
+    else:
+        body = {}
+    return {"jsonrpc": "2.0", "id": rid, **body}
 
 
 def _draw_lines(rng: random.Random, rid: int):
-    """Lines and their kinds, recorded at generation for the reference model."""
+    """Lines and their kinds, recorded at generation for the reference model. Any line may end
+    in a carriage return before its line feed, as a Windows server writes it."""
     out = []
     for _ in range(rng.randint(1, 25)):
         kind = rng.choice(_KINDS)
@@ -1617,53 +1635,53 @@ def _draw_lines(rng: random.Random, rid: int):
                 '{"a":' * depth + "1" + "}" * depth)
         elif kind == "digits":
             line = digit_line()
+        elif kind == "badbytes":
+            line = rng.choice([b"\xff\xfe log", b"\xc3\x28", b"\x80" + b"x" * 40,
+                               b"{\"id\": \xff}"])
+        elif kind == "cr":
+            line = json.dumps(_answer_message(rng, rid), separators=(",\r", ":\r"),
+                              ensure_ascii=rng.random() < 0.5)
         else:
-            shape = rng.randrange(5)
-            if shape == 0:
-                body = {"result": {"content": [{"type": "text", "text": rng.choice(
-                    ["t", ["a"], None, 3, {"k": 1}])}]}}
-            elif shape == 1:
-                body = {"result": rng.choice(["s", 1, None, ["content"], True])}
-            elif shape == 2:
-                body = {"error": rng.choice(["boom", 1, None, [1], {"code": 5, "message": "m"}])}
-            elif shape == 3:
-                body = {"result": {"content": rng.choice(["c", [], [1, "x"], None])}}
-            else:
-                body = {}
-            message = {"jsonrpc": "2.0", "id": rid, **body}
-            line = json.dumps(message)
+            line = json.dumps(_answer_message(rng, rid), ensure_ascii=rng.random() < 0.5)
+        if rng.random() < 0.15:
+            line += b"\r" if isinstance(line, bytes) else "\r"
         out.append((kind, line))
+    if rng.random() < _SILENCE_SHARE:
+        out.append(("silence", None))
     return out
 
 
 def _reference(drawn, rid):
-    """(expected, consumed) from the recorded kinds only; expected "PARSE" is the parse error."""
+    """(expected, consumed) from the recorded kinds only; expected "PARSE" is the parse error,
+    "TIMEOUT" the deadline's error."""
+    lines = [line for kind, line in drawn if kind != "silence"]
     for index, (kind, line) in enumerate(drawn[:20]):
+        if kind == "silence":
+            return "TIMEOUT", index
         consumed = index + 1
         if kind in ("deep", "digits"):
             return "PARSE", consumed
-        if kind == "answer":
+        if kind in ("answer", "cr"):
             return json.loads(line), consumed
-    if len(drawn) < 20:
-        return None, len(drawn)
-    return None, 20
+    return None, min(len(lines), 20)
 
 
-@pytest.mark.usefixtures("int_digit_limit")
-def test_mcp_line_fuzz():
-    draws = int(os.environ.get("VAF_MCP_LINES_FUZZ_DRAWS", "300"))
+def _fuzz_draws(draws: int):
     rng = random.Random(_FUZZ_SEED)
     mismatches = []
     for n in range(draws):
         rid = rng.randint(1, 10_000)
         drawn = _draw_lines(rng, rid)
-        lines = [line for _, line in drawn]
+        silent = drawn[-1][0] == "silence"
+        lines = [line for kind, line in drawn if kind != "silence"]
+        timeout = _SILENCE_TIMEOUT if silent else 5.0
         expected, consumed = _reference(drawn, rid)
-        rest = "".join(line + "\n" for line in lines[consumed:])
+        rest = _encoded(lines[consumed:]).decode("utf-8", errors="replace")
 
-        proc = _FakeProcess(lines)
+        proc = _FakeProcess(lines, silent=silent)
         try:
-            got = MCPClientTool()._json_rpc(proc, "tools/call", {}, request_id=rid)
+            got = MCPClientTool()._json_rpc(proc, "tools/call", {}, request_id=rid,
+                                            timeout=timeout)
         except Exception as exc:  # noqa: BLE001 - a raise is the mismatch being looked for
             mismatches.append((n, "raised", repr(exc)[:80]))
             continue
@@ -1671,22 +1689,36 @@ def test_mcp_line_fuzz():
             ok = (isinstance(got, dict) and got.get("id") == rid
                   and got.get("error", {}).get("code") == -32700
                   and str(got["error"].get("message", "")).startswith(PARSE_ERROR_PREFIX))
+        elif expected == "TIMEOUT":
+            ok = got == {"jsonrpc": "2.0", "id": rid, "error": {
+                "code": _TIMEOUT_CODE, "message": f"no answer within {timeout:g} s"}}
         else:
             ok = got == expected
-        # Only an unreadable line retires the process; every other outcome keeps it.
-        if not ok or proc.remaining() != rest or proc.retired != (expected == "PARSE"):
-            mismatches.append((n, [k for k, _ in drawn][:consumed], str(got)[:80]))
+        # Only an unreadable line or the deadline retires the process; every other outcome
+        # keeps it, and the lines after the ones the request read stay unread.
+        if (not ok or proc.remaining() != rest
+                or proc.retired != (expected in ("PARSE", "TIMEOUT"))):
+            mismatches.append((n, [k for k, _ in drawn][:consumed + 1], str(got)[:80]))
             continue
 
         client = MCPClientTool()
         client._request_ids = itertools.count(rid)  # the call's id is the one the lines answer
-        fake = _FakeProcess(lines)
-        client._ensure_server = lambda command, env=None, on_process=None, fake=fake: fake
+        fake = _FakeProcess(lines, silent=silent)
+        client._ensure_server = lambda command, env=None, fake=fake, **kwargs: fake
         try:
-            text = client.call_stdio("fake", "echo", {})
+            text = client.call_stdio("fake", "echo", {}, timeout=timeout)
         except Exception as exc:  # noqa: BLE001
             mismatches.append((n, "call_stdio raised", repr(exc)[:80]))
             continue
         if not isinstance(text, str):
             mismatches.append((n, "call_stdio type", type(text).__name__))
+    return mismatches
+
+
+@pytest.mark.usefixtures("int_digit_limit")
+def test_mcp_line_fuzz():
+    """The reader against a reference model built from the drawn kinds only. A draw that ends
+    in silence must end at its deadline; without one it would hang, and `_bounded` fails it."""
+    draws = int(os.environ.get("VAF_MCP_LINES_FUZZ_DRAWS", "300"))
+    mismatches = _bounded(lambda: _fuzz_draws(draws), seconds=max(60.0, draws * 0.2))
     assert not mismatches, f"{len(mismatches)} of {draws} draws differ: {mismatches[:5]}"

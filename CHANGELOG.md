@@ -74,6 +74,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **A local MCP server can no longer freeze its tools.** A call to a local MCP server now gives
+  up after the tool time limit (`tool_timeout_seconds`, 2 minutes by default), or when you
+  press Stop, and the next call starts the server afresh. Before, an answer the server garbled,
+  a server that went quiet, an answer containing a carriage return, or a server that had
+  written a lot of log output made the call wait forever and blocked every later call to that
+  server until VAF restarted. On Windows, answers with some non-English characters no longer
+  read as "no response".
 - **A llama.cpp or Piper install that was interrupted no longer blocks every later one.**
   Leftover folders that had lost their permissions are now removed (on Windows also a
   read-only file), a stray link or file where `bin/llama-cpp/` belongs is replaced instead

@@ -16,6 +16,16 @@ registered `mcp_<server>_<tool>` tools), so one request at a time runs per serve
 every request carries its own id. Before, all calls used the same id and nothing serialised
 them: two chats calling the same server at once could each read the other's answer.
 
+Every stdio request has a deadline (`call_stdio(timeout=...)`, `list_server_tools(timeout=...)`,
+by default the tool budget `tool_timeout_seconds`) that covers the start, the handshake, the
+write and the reads, and the caller's cancel flag ends it too (`run_bounded`'s budget or Stop,
+`cancel_when`). A request that misses it retires its server process, which frees the lock and
+the stream for the next call. Measured before: a non-JSON answer, a JSON scalar, an answer
+holding a raw ``\\r``, a server whose unread stderr had filled up, and a large request to a
+server that stopped reading each held the call, and the server's lock, forever. The pipes are
+read and written on helper threads (`_ServerPipe`), without `select`, so the same holds on a
+Windows pipe.
+
 The raw `mcp_call` starts only a server an administrator registered (`mcp_servers.json`,
 vaf/core/mcp_registry.py `registered_server`). Its arguments are the MODEL's, and it used to
 start whatever `server_command` said, on the host, as the user VAF runs as: measured, a regular
@@ -46,10 +56,14 @@ outside a coding run is still reached, under the instance destination policy and
 stored token.
 """
 
+import contextlib
 import itertools
 import json
 import subprocess
 import threading
+import time
+import types
+from concurrent.futures import Future, wait as _wait_futures
 
 from vaf.version import __version__
 import sys
@@ -64,6 +78,13 @@ from vaf.cli.ui import UI
 _STOP_GRACE = 2.0
 # Seconds `stop_all_servers` waits for server starts already under way.
 _LAUNCH_WAIT = 1.0
+# Seconds between two looks at the caller's cancel flag while a request waits on its server.
+_IO_POLL = 0.25
+# The JSON-RPC error code of a request that got no answer in time (the TypeScript SDK's
+# REQUEST_TIMEOUT; the Python SDK names the same value).
+_REQUEST_TIMEOUT = -32001
+# What `_await` saw.
+_DONE, _CANCELLED, _TIMED_OUT = "done", "cancelled", "timed out"
 
 # The words the MCP SDK's model (pydantic's lax bool) reads as false, in any case.
 _FALSE_WORDS = frozenset({"false", "f", "no", "n", "off", "0"})
@@ -116,6 +137,114 @@ def _stop_process_tree(process: subprocess.Popen, grace: float = _STOP_GRACE) ->
         process.wait(timeout=grace)
     except Exception:
         pass
+
+
+def _request_timeout(timeout: Any) -> float:
+    """``timeout`` in seconds, or the tool budget (``tool_timeout_seconds``) when it is None or
+    nonsense: not a number, not above zero, infinite or NaN, none of which would ever end the
+    wait. Read the way the dispatcher reads a tool's declared budget, so the two agree."""
+    from vaf.core.bounded_run import tool_budget_seconds
+    return tool_budget_seconds(types.SimpleNamespace(timeout_seconds=timeout))
+
+
+def _await(future: Future, deadline: float) -> str:
+    """Wait for ``future`` until the monotonic ``deadline``: `_DONE`, `_TIMED_OUT`, or
+    `_CANCELLED` once the caller's cancel flag is up (`bounded_run.cancel_requested`, set by
+    `run_bounded` at its budget or Stop, and by `cancel_when`). The flag is looked at every
+    `_IO_POLL` seconds, so a caller that gave up frees the server within that time."""
+    from vaf.core.bounded_run import cancel_requested
+    while True:
+        if future.done():
+            return _DONE
+        if cancel_requested():
+            return _CANCELLED
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return _TIMED_OUT
+        _wait_futures([future], timeout=min(_IO_POLL, left))
+
+
+class _ServerPipe:
+    """The stdin and stdout of one local server process, written and read on helper threads,
+    so the thread that owns a request can stop waiting at its deadline (`_await`).
+
+    Each operation runs on a daemon thread of its own (``vaf-mcp-pipe``) that ends when its
+    I/O ends, so no thread idles between requests. A blocking pipe read or write cannot be
+    bounded portably otherwise: `select` does not take a Windows anonymous pipe, and a
+    non-blocking pipe needs `fcntl` or `os.set_blocking`, which do not exist for one there
+    either. A thread and a future behave the same on both.
+
+    At most one read is in flight. A read whose wait gave up is not lost: the next
+    `next_line` hands out the same future until `take` collects its line, so a line is never
+    read twice or skipped. A failed write resolves to False, a failed read to the end of the
+    stream (``b""``). Kept on the process as ``_vaf_pipe`` (`_pipe_for`).
+
+    Named boundary: a descendant that keeps the output pipe open after the server was stopped
+    leaves the read thread blocked until it closes the pipe; neither the request nor the
+    server's lock waits for that thread."""
+
+    def __init__(self, process) -> None:
+        self._process = process
+        self._guard = threading.Lock()
+        self._reading: Optional[Future] = None
+
+    @staticmethod
+    def _start(work: Callable[[], Any], failed: Any) -> Future:
+        """``work()`` on a helper thread; its future resolves to the result, or to ``failed``
+        when the work raises or no thread could be started. Never raises."""
+        future: Future = Future()
+
+        def _run() -> None:
+            try:
+                value = work()
+            except Exception:
+                value = failed
+            future.set_result(value)
+
+        try:
+            threading.Thread(target=_run, name="vaf-mcp-pipe", daemon=True).start()
+        except Exception:
+            future.set_result(failed)
+        return future
+
+    def send(self, data: bytes) -> Future:
+        """Write ``data`` and flush it; resolves to True once written, False on failure."""
+        def _write() -> bool:
+            self._process.stdin.write(data)
+            self._process.stdin.flush()
+            return True
+
+        return self._start(_write, False)
+
+    def next_line(self) -> Future:
+        """The read of the next output line, ``b""`` at the end of the stream: the one still in
+        flight, or a new one."""
+        with self._guard:
+            if self._reading is None:
+                self._reading = self._start(lambda: self._process.stdout.readline(), b"")
+            return self._reading
+
+    def take(self, future: Future) -> Any:
+        """The line a finished `next_line` read; the next `next_line` reads a new one."""
+        with self._guard:
+            if self._reading is future:
+                self._reading = None
+        return future.result()
+
+
+_pipes_guard = threading.Lock()
+
+
+def _pipe_for(process) -> _ServerPipe:
+    """The `_ServerPipe` of ``process``, made on first use and kept on the process (as
+    ``_vaf_pgid`` is), so every request on it shares the one read in flight."""
+    with _pipes_guard:
+        pipe = getattr(process, "_vaf_pipe", None)
+        if pipe is None:
+            pipe = _ServerPipe(process)
+            with contextlib.suppress(AttributeError, TypeError):
+                process._vaf_pipe = pipe
+        return pipe
 
 
 class MCPClientTool(BaseTool):
@@ -329,23 +458,32 @@ class MCPClientTool(BaseTool):
             from vaf.core.mcp_remote import display_url
             return f"Error: MCP server at {display_url(server_url)}: {exc}"
     
-    def _ensure_server(self, server_command: str, env: Optional[Dict[str, str]] = None,
-                       on_process: Optional[Callable[[Any], None]] = None) -> Optional[subprocess.Popen]:
+    def _ensure_server(self, server_command: str, env: Optional[Dict[str, str]] = None, *,
+                       deadline: Optional[float] = None,
+                       timeout: Optional[float] = None) -> Optional[subprocess.Popen]:
         """Spawn (if needed) and initialize the stdio MCP server, cached by command. Returns the
         running process, or None on failure. Shared by mcp_call, discovery, and dynamic MCP tools.
         `env` (e.g. API tokens from the manifest) is merged onto os.environ for the child process.
-        `on_process` is told the process this call uses as soon as it has one (see
-        `stop_server`). Called under the server's lock.
+        Called under the server's lock.
+
+        ``deadline`` (monotonic) is the request's, set by the caller once it holds the lock, and
+        ``timeout`` the length it was set from (`_request_timeout`; without a deadline, one is
+        set from it here). The handshake and ``notifications/initialized`` wait for it at
+        most; a server that misses it is retired and None returned.
+
+        The pipes are binary and the output is decoded as UTF-8 (`_json_rpc`); stderr goes to
+        the null device, since nothing reads it and a server whose log filled the pipe (64 KB
+        on Linux) blocked on its next write and never answered again.
 
         The server leads its own process group (`processes.own_process_group`), so stopping it
         reaches what it started: a launcher (a shell script, a wrapper) whose child inherits
-        the output pipe keeps the read, and the server's lock, alive after the launcher alone
-        is gone. Measured: stopping only the launcher left the waiting call blocked."""
+        the output pipe keeps it open after the launcher alone is gone."""
+        timeout = _request_timeout(timeout)
+        if deadline is None:
+            deadline = time.monotonic() + timeout
         cache_key = server_command
         proc = self._server_processes.get(cache_key)
         if proc is not None and proc.poll() is None:
-            if on_process is not None:
-                on_process(proc)
             return proc
         if proc is not None:
             # The cached server has exited, but what it started may still run in its group (a
@@ -377,9 +515,9 @@ class MCPClientTool(BaseTool):
             popen_kwargs = {
                 "stdin": subprocess.PIPE,
                 "stdout": subprocess.PIPE,
-                "stderr": subprocess.PIPE,
-                "text": True,
-                "bufsize": 1,
+                # The stdio transport lets a server log to stderr and a client ignore it; a
+                # pipe nobody reads stops the server once it is full (docstring above).
+                "stderr": subprocess.DEVNULL,
                 # POSIX: start_new_session; Windows: a new process group, without a window.
                 **own_process_group(),
             }
@@ -418,35 +556,28 @@ class MCPClientTool(BaseTool):
                     self._stopping.discard(process)
         if process is None or closing:
             return None
-        if on_process is not None:
-            try:
-                on_process(process)
-            except BaseException:
-                # Not left cached without its handshake: the next call would skip it.
-                self._retire(process)
-                raise
-        # A caller that gave up while the server started (its deadline ran out before this
-        # call reported the process) gets no handshake: the fresh process is retired before
-        # any I/O, so nothing waits on a server nobody asked for any more.
+        # A caller that gave up while the server started gets no handshake: the fresh process
+        # is retired before any I/O, so nothing waits on a server nobody asked for any more.
         from vaf.core.bounded_run import cancel_requested
         if cancel_requested():
             self._retire(process)
             return None
-        # Initialize handshake.
+        # Initialize handshake. A server that misses the deadline, or whose caller gives up
+        # during it, is retired inside `_json_rpc`; the retirement below is then a no-op.
         init = self._json_rpc(process, "initialize", {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
             "clientInfo": {"name": "VAF", "version": __version__},
-        }, request_id=next(self._request_ids))
+        }, request_id=next(self._request_ids), deadline=deadline, timeout=timeout)
         if init is None or "error" in init:
             self._retire(process)
             return None
-        # Per the MCP spec, signal initialized (fire-and-forget notification).
-        try:
-            process.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
-            process.stdin.flush()
-        except Exception:
-            pass
+        # Per the MCP spec, signal initialized. A failed write is left to the request after
+        # it, as before; a write that is still blocked at the deadline retires the server.
+        note = (json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
+        if _await(_pipe_for(process).send(note.encode("utf-8")), deadline) != _DONE:
+            self._retire(process)
+            return None
         self._server_initialized[cache_key] = True
         return process
 
@@ -471,17 +602,26 @@ class MCPClientTool(BaseTool):
         where the thread is frozen before its SIGKILL. It enters `_stopping` and then leaves
         the cache, in one hold of `_state_lock`: another thread never looks between the
         two, and a signal handler on this thread, which can, finds it in both rather than in
-        neither (`stop_all_servers` stops it once). Never raises."""
-        if not _is_os_process(process):
+        neither (`stop_all_servers` stops it once).
+
+        A process is retired once (``_vaf_retired``, set under `_state_lock`): a request that
+        missed its deadline in the handshake retires it in `_json_rpc`, and the handshake's
+        own failure path then asks again. A second stop would signal a group whose leader
+        the first may have reaped, so its id may name another group by then. Never raises."""
+        with self._state_lock:
+            if getattr(process, "_vaf_retired", False):
+                return
+            with contextlib.suppress(AttributeError, TypeError):
+                process._vaf_retired = True
+            if _is_os_process(process):
+                self._stopping.add(process)
             self._evict(process)
+        if not _is_os_process(process):
             try:
                 process.terminate()
             except Exception:
                 pass
             return
-        with self._state_lock:
-            self._stopping.add(process)
-            self._evict(process)
 
         def _stop() -> None:
             try:
@@ -494,30 +634,6 @@ class MCPClientTool(BaseTool):
             threading.Thread(target=_stop, daemon=True, name="mcp-server-stop").start()
         except Exception:
             _stop()
-
-    def stop_server(self, server_command: str, process=None) -> bool:
-        """Stop the local server process cached for `server_command`; True when one was.
-
-        With `process`, only that process, and only while it is still the one cached for
-        the command: the processes are shared by every caller in VAF, so a caller whose
-        deadline ran out stops the process ITS call used (`on_process` of `call_stdio` and
-        `list_server_tools` reports it) and never a healthy call that another caller started
-        on a replacement. Without `process`, whatever is cached for the command.
-
-        Deliberately without the server's lock: the call to stop is the one a blocked read
-        holds it for. Returns at once; the process group is stopped in the background (see
-        `_retire`). On POSIX the whole group goes, so the read sees the end of its stream and
-        the blocked call returns an error, also behind a launcher whose child kept the pipe;
-        the next call starts a fresh process. On Windows the process and its child tree are
-        stopped (psutil, else `taskkill /T`); a grandchild that detached from the tree keeps
-        the pipe and the read waits on. Discovery and the connection test use this when their
-        deadline runs out."""
-        with self._state_lock:
-            cached = self._server_processes.get(server_command)
-            if cached is None or (process is not None and cached is not process):
-                return False
-        self._retire(cached)
-        return True
 
     def stop_all_servers(self) -> None:
         """Stop every local server this client started that may still run (at exit): the
@@ -561,32 +677,61 @@ class MCPClientTool(BaseTool):
                 self._stopping.discard(process)
 
     def _json_rpc(self, process: subprocess.Popen, method: str, params: Dict[str, Any],
-                  request_id: int, max_reads: int = 20) -> Optional[Dict[str, Any]]:
+                  request_id: int, max_reads: int = 20, *, deadline: Optional[float] = None,
+                  timeout: Optional[float] = None) -> Optional[Dict[str, Any]]:
         """Send a JSON-RPC request and return the response object matching request_id, skipping
         notifications / unrelated lines. Returns None on EOF or error (never raises).
+
+        The write and every read wait until the monotonic ``deadline`` at most (without one,
+        ``timeout`` seconds from now; `_request_timeout`), through the process's `_ServerPipe`.
+        At the deadline the process is retired and the answer is the error -32001, "no answer
+        within N s" with ``timeout`` as N. When the caller gives up first (its cancel flag,
+        `_await`), the process is retired and the answer is None. Retiring is what frees the
+        stream: the read or write left behind belongs to that process, and the next request
+        starts a fresh one. A write still blocked counts the same as a read: a server that
+        stopped reading its input held a large request's write forever.
+
+        The output is read as bytes, split only on ``b"\\n"`` and decoded as UTF-8, so a raw
+        ``\\r``, which JSON allows as whitespace, stays inside its line, and a ``\\r\\n`` ending
+        is stripped with the rest. Bytes that are not UTF-8 are replaced, so a log line of
+        them is skipped as text that is not JSON, never taken for an unreadable answer.
 
         A stdout line that is not JSON (log text) or is JSON but not an object (a stray
         ``print(1)``, a status string, a batch, which VAF never sends) is skipped: a JSON-RPC
         message is an object. A line that is JSON the decoder cannot read, nested deeper than
         it allows or holding an integer past Python's digit limit, may be the answer itself,
         so it ends the request with a parse error (-32700) instead: skipping it would leave
-        the reader waiting on ``readline`` for an answer that already came, with the
-        server's lock held. Such a line also retires the process (`_retire`), because the
-        stream may still hold output nobody can attribute. Callers hold the server's lock."""
+        the reader waiting for an answer that already came, until the deadline. Such a line
+        also retires the process (`_retire`), because the stream may still hold output nobody
+        can attribute. Callers hold the server's lock."""
+        timeout = _request_timeout(timeout)
+        if deadline is None:
+            deadline = time.monotonic() + timeout
+        pipe = _pipe_for(process)
         try:
             req = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
-            process.stdin.write(json.dumps(req) + "\n")
-            process.stdin.flush()
+            data = (json.dumps(req) + "\n").encode("utf-8")
         except Exception:
             return None
+        sent = pipe.send(data)
+        state = _await(sent, deadline)
+        if state != _DONE:
+            return self._gave_up(process, state, request_id, timeout)
+        if not sent.result():
+            return None
         for _ in range(max_reads):
-            try:
-                line = process.stdout.readline()
-            except Exception:
+            reading = pipe.next_line()
+            state = _await(reading, deadline)
+            if state != _DONE:
+                return self._gave_up(process, state, request_id, timeout)
+            raw = pipe.take(reading)
+            if not raw:
                 return None
-            if not line:
-                return None
-            line = line.strip()
+            if isinstance(raw, (bytes, bytearray)):
+                raw = bytes(raw).strip()
+                line = raw.decode("utf-8", errors="replace") if raw else ""
+            else:
+                line = str(raw).strip()
             if not line:
                 continue
             try:
@@ -611,19 +756,32 @@ class MCPClientTool(BaseTool):
             # Otherwise a notification or another response — keep reading.
         return None
 
+    def _gave_up(self, process, state: str, request_id: int,
+                 timeout: float) -> Optional[Dict[str, Any]]:
+        """A request that stopped waiting (`_await`): the process is retired, since its stream
+        still holds the write or read left behind; the answer is None for a caller that gave
+        up, and the error -32001 at the deadline (the remote lane's words)."""
+        self._retire(process)
+        if state == _CANCELLED:
+            return None
+        return {"jsonrpc": "2.0", "id": request_id,
+                "error": {"code": _REQUEST_TIMEOUT, "message": f"no answer within {timeout:g} s"}}
+
     def list_server_tools(self, server_command: str, transport: str = "stdio",
                           server_url: str = "", env: Optional[Dict[str, str]] = None,
                           headers: Optional[Dict[str, str]] = None, auth=None,
-                          egress=None,
-                          on_process: Optional[Callable[[Any], None]] = None) -> List[Dict[str, Any]]:
+                          egress=None, *, timeout: Optional[float] = None) -> List[Dict[str, Any]]:
         """Discover the tools a server offers via tools/list. Returns a list of tool dicts (each
         with name / description / inputSchema), or [] when the server has none or could not be
         asked. A remote server's reason is raised as RemoteMcpError for the caller to show.
 
-        A local listing whose caller gave up while it waited for the server's lock (the
-        cancel flag of `bounded_run`, also armed by `cancel_when`) returns [] without
-        starting or asking a server. `on_process` is told the process the listing uses once
-        it holds the lock, and None once it no longer does (see `stop_server`)."""
+        A local listing holds the server for ``timeout`` seconds at most (None: the tool budget,
+        ``tool_timeout_seconds``), counted from the moment it has the server's lock: the start,
+        the handshake and the listing included. At that deadline, or once its caller gives up
+        (the cancel flag of `bounded_run`, also armed by `cancel_when`), the process is retired
+        and the listing returns []. A listing whose caller gave up while it waited for the lock
+        returns [] without starting or asking a server. A remote listing keeps the remote
+        lane's own deadlines and ignores ``timeout``."""
         if transport in ("http", "sse"):
             if not server_url:
                 return []
@@ -633,23 +791,23 @@ class MCPClientTool(BaseTool):
         if transport != "stdio":
             return []
         from vaf.core.bounded_run import cancel_requested
+        timeout = _request_timeout(timeout)
         try:
             with self._lock_for(server_command):
+                deadline = time.monotonic() + timeout
                 if cancel_requested():
                     return []
-                try:
-                    process = self._ensure_server(server_command, env, on_process)
-                    if process is None:
-                        return []
-                    # Asked again once the server is up: the handshake can outlast the
-                    # caller's deadline, and then the listing is not sent.
-                    if cancel_requested():
-                        return []
-                    resp = self._json_rpc(process, "tools/list", {},
-                                          request_id=next(self._request_ids))
-                finally:
-                    if on_process is not None:
-                        on_process(None)
+                process = self._ensure_server(server_command, env, deadline=deadline,
+                                              timeout=timeout)
+                if process is None:
+                    return []
+                # Asked again once the server is up: the caller may have given up on a cold
+                # start, and then the listing is not sent.
+                if cancel_requested():
+                    return []
+                resp = self._json_rpc(process, "tools/list", {},
+                                      request_id=next(self._request_ids), deadline=deadline,
+                                      timeout=timeout)
             if not resp or "error" in resp or "result" not in resp:
                 return []
             tools = resp["result"].get("tools", [])
@@ -658,41 +816,44 @@ class MCPClientTool(BaseTool):
             return []
 
     def call_stdio(self, server_command: str, tool_name: str, arguments: Dict[str, Any],
-                   env: Optional[Dict[str, str]] = None,
-                   on_process: Optional[Callable[[Any], None]] = None) -> str:
+                   env: Optional[Dict[str, str]] = None, *,
+                   timeout: Optional[float] = None) -> str:
         """Call an MCP tool via stdio transport (JSON-RPC over stdin/stdout), starting
         `server_command` if it is not running yet. For code that chose the command itself (the
         registry runs a registered server's): a command from a model's arguments goes through
         `run`, which starts only a registered one.
 
         Returns the tool's text, or an ``Error:`` / ``MCP Error:`` line, and does not raise for
-        anything the server writes. It has no timeout of its own: an answer line that is not
-        JSON at all is skipped, and the read then waits for a line that may never come, so
-        run it under a deadline, as `ToolCaller` does for the registered tools. `on_process`
-        is told the process the call uses once it holds the server's lock, and None once it no
-        longer does: what a caller whose deadline ran out hands to `stop_server`."""
+        anything the server writes. It holds the server for ``timeout`` seconds at most (None,
+        or a value that is not a positive finite number: the tool budget,
+        ``tool_timeout_seconds``), counted from the moment it has the server's lock: a fresh
+        start, the handshake, the write and the reads included. At that deadline the process
+        is stopped and dropped, the lock is free, the next call starts a fresh process, and
+        this call answers ``MCP Error: no answer within N s (code: -32001)``. Under
+        `run_bounded` the caller's own timeout or Stop ends it the same way within `_IO_POLL`
+        seconds (its cancel flag)."""
         from vaf.core.bounded_run import cancel_requested
         cancelled = "Error: the MCP call was cancelled before it reached the server"
+        timeout = _request_timeout(timeout)
         with self._lock_for(server_command):
-            try:
-                # A caller that gave up while this call waited for the lock (run_bounded's
-                # timeout or stop) has already been told the call did not finish, so the call
-                # must not reach the server any more. Asked again once the server is up: a
-                # cold start (spawn and handshake) can outlast the caller's budget. A call
-                # that got past the second check before its caller gave up still writes.
-                if cancel_requested():
-                    return cancelled
-                process = self._ensure_server(server_command, env, on_process)
-                if process is None:
-                    return "Error: Failed to initialize MCP server"
-                if cancel_requested():
-                    return cancelled
-                response = self._json_rpc(process, "tools/call",
-                                          {"name": tool_name, "arguments": arguments or {}},
-                                          request_id=next(self._request_ids))
-            finally:
-                if on_process is not None:
-                    on_process(None)
+            # The time spent waiting for the lock is the caller's own; the server's starts now.
+            deadline = time.monotonic() + timeout
+            # A caller that gave up while this call waited for the lock (run_bounded's
+            # timeout or stop) has already been told the call did not finish, so the call
+            # must not reach the server any more. Asked again once the server is up: a
+            # cold start (spawn and handshake) can outlast the caller's budget. A call
+            # that got past the second check before its caller gave up still writes.
+            if cancel_requested():
+                return cancelled
+            process = self._ensure_server(server_command, env, deadline=deadline, timeout=timeout)
+            if process is None:
+                return "Error: Failed to initialize MCP server"
+            if cancel_requested():
+                return cancelled
+            response = self._json_rpc(process, "tools/call",
+                                      {"name": tool_name, "arguments": arguments or {}},
+                                      request_id=next(self._request_ids), deadline=deadline,
+                                      timeout=timeout)
         if response is None:
             return "Error: No response from MCP server"
         # The answer's shape is the server's: anything outside the specification's shapes

@@ -3117,54 +3117,36 @@ usable from an embedded engine too, documented in their own pages:
   `mcp_call` tool reaches only a server registered there
   (`vaf.core.mcp_registry.registered_server`), never a command from the model's
   arguments; code of your own that chose a command calls
-  `vaf.tools.mcp_client.get_mcp_client().call_stdio(...)`. It returns the tool's text
-  or an `Error:` / `MCP Error:` line and does not raise for anything the server writes;
-  it has no timeout of its own, so run it under `vaf.core.bounded_run.run_bounded`, as
-  `ToolCaller` does for the registered tools. A timeout there also sets the worker's
-  cancel flag (`bounded_run.cancel_requested()`), and that flag is what keeps a call
-  still queued for the server's lock, or still starting its server, from sending its
-  `tools/call` once it gets there. A deadline of your own that only stops waiting (a
-  `Future.result(timeout=...)`, a `Thread.join(timeout)`) sets no flag, and such a call
-  still writes later. Either way a timeout only stops your wait for a call already
-  reading: the read inside keeps the server's lock until the server answers or its
-  process is stopped, so later calls to that server wait too. To recover, pass
-  `on_process=` to `call_stdio` (it is told the process the call uses, and None once the
-  call is done with it), keep the last
-  process it was told per call, and hand that process to
-  `get_mcp_client().stop_server(command, process=...)`. That stops only this process,
-  and only while it is still the one cached for the command, because every caller in
-  the application shares it. Guard the handle with a lock of your own per call: take it
-  in your `on_process` callback, and hold it from reading the handle until
-  `stop_server` has returned. The callback reports None while the call still holds the
-  server's lock, so with that lock held no other call can start on the process before
-  your stop is issued (`mcp_registry._Listing` does exactly this). A call that timed out
-  before it got the lock reports no process, and a call that finished has reported None:
-  then do not call `stop_server` at all, since `process=None` means "whatever is cached",
-  which may be another call's healthy server. It takes no lock and returns
-  at once, and the stop runs in the background: SIGTERM to the server's process group,
-  SIGKILL 2 s later. On POSIX the server leads its own process group, so a launcher's
-  child that kept the output pipe goes with it, the blocked call returns an error, and
-  the next call starts a fresh process; a descendant that left the group (`setsid`, a
-  double fork into a session of its own) keeps the pipe and the call waiting. On
-  Windows the process and its child tree are stopped; a grandchild that detached from
-  the tree keeps the pipe open and the blocked call waiting. Do not retry a call that
-  writes after a timeout on your own: the server may already have acted. A call that
-  was still waiting for the lock, or for its server to start, when `run_bounded` gave
-  up on it does not send its `tools/call`; a cold start that was already in its
-  handshake when the caller gave up may still finish it (`initialize` and
-  `notifications/initialized` reach the server), and one that had not begun the
-  handshake is stopped. At exit the client stops its servers, the ones whose stop was
-  still in flight and the group of one whose own process had exited included, and starts
-  none from then on; a start still running after a 1 s wait kills its own server and its
+  `vaf.tools.mcp_client.get_mcp_client().call_stdio(command, tool, arguments, env,
+  timeout=...)`. It returns the tool's text, an `Error:` line or an `MCP Error:` line, never
+  raises for anything the server writes, and never holds the server longer than `timeout`
+  seconds (default `tool_timeout_seconds`; a value that is not a positive finite number
+  means the default), counted from the moment it has the server's lock: the start of a fresh
+  process, the handshake, the write and the reads all count. At that deadline the server
+  process is stopped and dropped, its lock is free for the next call, which starts a fresh
+  process, and the call answers `MCP Error: no answer within N s (code: -32001)`.
+  `list_server_tools(command, timeout=...)` does the same for a local listing and answers
+  `[]`. Under `vaf.core.bounded_run.run_bounded`, as `ToolCaller` runs the registered tools,
+  the caller's own timeout or Stop also ends the call within 0.25 s: it raises the worker's
+  cancel flag (`bounded_run.cancel_requested()`), which the call looks at while it waits,
+  and which also keeps a call still queued for the server's lock, or still starting its
+  server, from sending its `tools/call` once it gets there. A deadline of your own that only
+  stops waiting (a `Future.result(timeout=...)`, a `Thread.join(timeout)`) raises no flag:
+  pass that deadline as `timeout=` instead. The pipes are read and written on helper threads
+  rather than with `select`, so this holds on Windows pipes too. Do not retry a call that
+  timed out after it wrote on your own: the server may already have acted. A cold start
+  that was already in its handshake when the caller gave up is stopped there, and one that
+  had not begun the handshake is stopped before any I/O. At exit the client stops its
+  servers, the ones whose stop was still in flight and the group of one whose own process
+  had exited included, and starts none from then on; a start still running after a 1 s wait kills its own server and its
   group at once, without a grace, when it ends. A server that ignores the end of its stdin
   outlives a process that is killed or crashes, that leaves while such a start is still
   running, or whose signal handler interrupted that start on the same thread. If your
   process leaves through `os._exit`, call `vaf.tools.mcp_client.stop_shared_servers()`
-  first. Named boundary: the facade exports no MCP client
-  yet. These are reached by importing `vaf.tools.mcp_client`; measured, the
-  application has one caller of `call_stdio` (`mcp_registry.call_registered_tool`), and
-  `stop_server` serves two lanes (discovery and the connection test, through one call
-  site). See [MCP_INTEGRATION.md](agents/MCP_INTEGRATION.md).
+  first. Named boundary: the facade exports no MCP client yet. These are reached by
+  importing `vaf.tools.mcp_client`; measured, the application has one caller of
+  `call_stdio` (`mcp_registry.call_registered_tool`). See
+  [MCP_INTEGRATION.md](agents/MCP_INTEGRATION.md).
 - **Update-surviving local tools** - a `custom_tools/` folder in the platform
   data dir (managed via the Web UI, admin-only), see
   [vaf/tools/README.md](../vaf/tools/README.md). The agent's file tools cannot write it

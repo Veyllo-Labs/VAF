@@ -839,6 +839,8 @@ _THREAD_START_ALLOWLIST = {
             "it books under its own account (usage_context in _run)"),
     ("vaf/tools/mcp_client.py", "MCPClientTool._retire", "Thread"):
         (1, "stops a local MCP server's process group and reaps it; no model call"),
+    ("vaf/tools/mcp_client.py", "_ServerPipe._start", "Thread"):
+        (1, "reads or writes a local MCP server's pipe; no model call"),
     ("vaf/tools/research_agent.py", "ResearchAgentTool.run._run_research_loop", "Thread"):
         (1, "opens the finished report in a browser; no model call"),
     ("vaf/tools/research_agent.py", "ResearchAgentTool.run", "Thread"):

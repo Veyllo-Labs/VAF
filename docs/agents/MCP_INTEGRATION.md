@@ -197,6 +197,15 @@ flags and the warm-process cache to carry).
 
 What the loop reads from a server's output:
 
+- The output is read as bytes, split only at a line feed, and decoded as UTF-8. A raw `\r`
+  inside an answer is JSON whitespace and stays in its line, and a line ending in `\r\n` is
+  read like one ending in `\n`. Before, the pipe was read in text mode, which also ends a line
+  at a raw `\r` (an answer holding one was split into two lines that are not JSON, both
+  skipped) and decodes with the locale's code page (on a Windows host with cp1252, an answer
+  holding "Ő" read as no answer). Bytes that are not UTF-8 are replaced, so a log line of
+  them is skipped like other log text and never ends a request. The server's stderr goes to
+  the null device: nothing read it, and once 64 KB of log output had piled up in the pipe
+  over the process's life, the server blocked on its next log write and never answered again.
 - A line that is not JSON (log text) is skipped, as it always was. A line that is JSON but
   not an object (a stray `print(1)`, `null`, a status string such as `"server ready"`) is
   skipped too: a JSON-RPC message is an object. Before, such a value failed the call it was
@@ -222,54 +231,69 @@ What the loop reads from a server's output:
 - A call that waited for the server's lock, or for its server to start, after its caller gave
   up on it (the tool budget ran out, or the user pressed Stop) does not send its `tools/call`,
   so the tool does not run after its caller was told it did not finish. A server started for
-  it whose handshake had not begun is stopped before any I/O; one already in its handshake
-  may finish it (`initialize`, `notifications/initialized`). A call that got past the last
-  check before its caller gave up still sends its request. A listing (discovery, the
+  it whose handshake had not begun is stopped before any I/O; one already in its handshake is
+  stopped when the handshake's wait sees that the caller gave up (below). A call that got past
+  the last check before its caller gave up still sends its request. A listing (discovery, the
   connection test) is checked the same way, before its server starts and again before
   `tools/list`: a caller that gave up before either check keeps the listing from being
-  sent, and one that gave up after the last check still sees it sent, until the stop of
-  its process ends it.
+  sent, and one that gave up after the last check still sees it sent, and then ends like
+  any request whose caller gave up.
 - JSON-RPC batches are not read; VAF never sends one.
 
-Named boundaries, measured: three ways a call can wait on `readline` forever, holding the
-server's lock:
+Every request has a deadline. `call_stdio(..., timeout=N)` and the stdio branch of
+`list_server_tools(..., timeout=N)` hold the server for N seconds at most; without a
+`timeout` (or with one that is not a positive finite number) N is `tool_timeout_seconds`,
+the dispatcher's budget for every MCP tool, so under the dispatcher the read and the caller
+give up together. The deadline is taken once the call holds the server's lock (the wait for
+the lock is the caller's own) and covers the start of a fresh process, the handshake,
+`notifications/initialized`, the write of the request and every read. The caller giving up
+ends it too: the wait looks at the cancel flag of `bounded_run` every 0.25 s, which
+`run_bounded` raises at its own timeout or on Stop, and discovery and the connection test
+raise for a listing they gave up on (`cancel_when`). At the deadline the process is stopped
+and dropped, the lock is free, and the next call starts a fresh process; the call answers
+`MCP Error: no answer within N s (code: -32001)`, which the shared result classifier reads as
+a failure. A caller that gave up gets "No response from MCP server", which nobody reads any
+more. The same retirement follows a request whose caller gave up, since the stream may still
+receive the answer it no longer waits for. Measured before: an answer line that was not JSON
+at all, a JSON scalar followed by silence, an answer holding a raw `\r`, a server whose
+stderr had filled up, and a 200 KB request to a server that had stopped reading its input
+each held the call, and every later call to that server, until VAF restarted.
 
-- an answer line that is not JSON at all is skipped like log text, and the request then waits
-  for a line that never comes;
-- the server's stderr is a pipe nothing reads: once 64 KB of its log output has piled up over
-  the process's life, the server blocks on its next log write and never answers;
-- the pipe is read in text mode, which ends a line at a raw `\r`; JSON allows that character
-  as whitespace, so an answer holding one is split into two lines that are not JSON, both
-  skipped.
+The pipes are written and read on helper threads (one per write or line read, each ending
+with its I/O, named `vaf-mcp-pipe`), and the request waits for them with its deadline. That
+works the same on a Windows anonymous pipe, which `select` does not take and which has no
+non-blocking mode; the client uses neither, and a test keeps it that way. Named boundaries:
 
-The caller's tool budget bounds only how long the caller waits. It does not interrupt the
-blocked read or release the lock, so later calls to the same server wait behind it and can
-time out too, until the read ends or the server process is stopped.
+- a descendant of the server that keeps the output pipe open after the stop (below) leaves
+  one helper thread blocked on it until it lets go; the call and the lock are not held;
+- a line is held in memory whole, so the memory a single line takes is the server's to
+  decide, as before;
+- a server that ends its lines with a bare `\r` (no line feed) is not read: the stdio
+  transport delimits messages by a newline;
+- a call stopped at its deadline after it wrote may already have acted on the server; it is
+  not retried;
+- the remote lane keeps its own deadlines (a hard 120 s per call), which do not follow
+  `tool_timeout_seconds`.
 
-Stopping a server: `MCPClientTool.stop_server(command, process=...)` stops the process a call
-used (`on_process` of `call_stdio` and `list_server_tools` reports it), and only while that
-process is still the one cached for the command. The processes are shared by every caller,
-so a caller whose deadline ran out must not stop a healthy call another caller runs on a
-replacement; measured before this, a connection test that timed out while it was queued
-behind another account's call stopped that call. Discovery and the connection test stop a
-server that missed their deadline this way, and only a local one, and a listing they gave
-up on while it waited for the lock is cancelled instead. `stop_server` takes no lock and
-returns at once; the stop runs on a background thread: SIGTERM to the process group, SIGKILL
-2 s later, then the reaping (measured before this: a 1 s connection test took 6 s against a
-server that ignores SIGTERM). Every local server leads its own process group (POSIX
-`start_new_session`, a new process group on Windows), so on POSIX a launcher's child that
-inherited the output pipe and stayed in the group is stopped with it, and the blocked call
-then returns; a descendant that left the group (`setsid`, a double fork into a session of its
-own) keeps the pipe open and the call waiting. On Windows the process and its child tree are
-stopped (psutil, else `taskkill /T`); a grandchild that detached from that tree keeps the
-pipe open and the call waiting. A server whose cached process has exited has its group
-stopped, and waited for (bounded by the 2 s grace and a SIGKILL), before a fresh one replaces
-it: a child its launcher left behind is stopped then too, and the two never overlap on what
-the old one still holds (a port, a lock file). For the length of that stop the old process
-stays on the list the exit stops, so an exit in that window still stops its group. While a
-listing gives up, it holds its own lock until the stop is issued, and the listing reports that
-it is done with the process only while it still holds the server's lock, so no other call can
-start on that process first.
+Stopping a server: it is the thread that owns the request that retires the process, under the
+server's lock, so only the process that call was using is ever stopped. A listing still queued
+for the lock when its caller gave up starts and asks nothing once it gets the lock, and stops
+nothing (measured before the listings were cancelled this way: a connection test that timed
+out while it was queued behind another account's call stopped that call). Retirement returns
+at once; the stop runs on a background thread: SIGTERM to the process group, SIGKILL 2 s
+later, then the reaping (measured before this: a 1 s connection test took 6 s against a
+server that ignores SIGTERM). A process is retired once, however many failure paths reach it:
+a second stop could signal a group whose leader the first one had already reaped. Every local
+server leads its own process group (POSIX `start_new_session`, a new process group on
+Windows), so on POSIX a launcher's child that inherited the output pipe and stayed in the
+group is stopped with it; a descendant that left the group (`setsid`, a double fork into a
+session of its own) keeps running. On Windows the process and its child tree are stopped
+(psutil, else `taskkill /T`); a grandchild that detached from that tree keeps running. A
+server whose cached process has exited has its group stopped, and waited for (bounded by the
+2 s grace and a SIGKILL), before a fresh one replaces it: a child its launcher left behind is
+stopped then too, and the two never overlap on what the old one still holds (a port, a lock
+file). For the length of that stop the old process stays on the list the exit stops, so an
+exit in that window still stops its group.
 
 Being in their own group, the servers are out of reach of a terminal's Ctrl+C and hangup, so
 VAF stops them when it exits: at a normal exit (`atexit`), on the agent's signal shutdown,
@@ -290,12 +314,9 @@ of its stdin outlives a VAF that is killed (SIGKILL, an unhandled SIGTERM or SIG
 crashes, since nothing of VAF runs then; one that follows the stdio transport exits on that
 end of input.
 
-The loop has no read deadline of its own: a Windows pipe has no `select`, and a deadline needs
-a reader thread or a non-blocking read with its own design, which would also be the place to
-drain stderr.
-
-`tests/test_mcp_stdio_odd_lines.py` guards this against stub server processes and with a
-seeded fuzz of the reader against a reference model.
+`tests/test_mcp_stdio_odd_lines.py` and `tests/test_mcp_stdio_deadline.py` guard this
+against stub server processes, with the client's `select`-style calls made to fail as on a
+Windows pipe, and with a seeded fuzz of the reader against a reference model.
 
 Naming is `mcp_<server>_<tool>` (e.g. `mcp_filesystem_read_file`): unambiguous, no dotted names in
 LLM tool schemas, and the `mcp_` prefix marks it as external at a glance.

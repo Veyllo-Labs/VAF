@@ -133,7 +133,7 @@ Voices an earlier VAF downloaded and this release no longer offers are deleted f
 names (the `.onnx` and `.onnx.json` of each voice in `SpeechManager.RETIRED_VOICES`), never
 by a pattern; a folder or any other file there stays, a link is removed without touching what
 it points to, and VAF says how many voices it removed and how much space that freed (a link,
-or one name of a file that has another, frees nothing and is not counted). A file
+or one name of a file that has another, frees nothing and adds nothing to the space freed). A file
 that cannot be removed (in use on Windows) is tried again at the next start. The speech
 container removes the voices of the languages it no longer offers at its start (`retired`
 in its table: Japanese and Turkish, for which no voice with such a licence exists) and

@@ -66,7 +66,11 @@ PIPER_INSTALL_LOCK_TIMEOUT = 600.0
 def _language_label(code: str) -> str:
     """A language as a person reads it: its own name from the agent's table of native
     language names with the code ("Türkçe (tr)"), or the code alone when the table has no
-    name for it or cannot be loaded."""
+    name for it or cannot be loaded.
+
+    Deliberate: Agent.LANGUAGE_NAMES_NATIVE is the one table of language names in VAF and
+    is read here rather than copied; the lazy import costs a process that has not loaded
+    the agent yet about 0.06 s, once, on the first language without a voice."""
     try:
         from vaf.core.agent import Agent
         name = Agent.LANGUAGE_NAMES_NATIVE.get(code)

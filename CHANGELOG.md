@@ -456,7 +456,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ### Changed
 
 - **Speech voices whose licence forbids commercial use are no longer offered.** VAF now
-  offers only voices whose licence allows any use, and records each licence. Piper on your
+  offers only voices whose licence allows commercial use, and records each licence. Piper on your
   computer speaks English, German, French, Spanish, Italian, Icelandic, Swedish, Ukrainian,
   Kazakh, Greek and Dutch; the other languages are read by the English voice, and VAF says
   so once. English, German and French get another voice (114, 77 and 77 MB). The speech

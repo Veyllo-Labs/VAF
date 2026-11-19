@@ -92,8 +92,7 @@ def test_a_relay_contact_gets_no_learning_counter_in_the_telegram_pane(monkeypat
            "memory_compaction_interval": 15}
     monkeypatch.setattr(Config, "get", classmethod(lambda cls, key, default=None: cfg.get(key, default)))
     monkeypatch.setattr(routes, "caller_is_admin", lambda request: True)
-    monkeypatch.setattr(routes, "get_current_vaf_user", lambda request: {"user_scope_id": "s", "username": "alice"})
-    request = SimpleNamespace(state=SimpleNamespace(user={}))
+    request = SimpleNamespace(state=SimpleNamespace(user={"user_scope_id": "s", "username": "alice"}))
     owner = asyncio.run(routes.get_telegram_session_history("telegram_7", request))
     relay = asyncio.run(routes.get_telegram_session_history("telegram_9", request))
     assert "compaction_interval" in owner and owner["messages"] == []

@@ -80,7 +80,8 @@ def test_telegram_whitelist_and_relay_entries_are_recorded_once_per_change(confi
     from vaf.api import telegram_routes as routes
     monkeypatch.setattr(routes, "caller_is_admin", lambda request: True)
     events = _recorder(monkeypatch, routes)
-    # An owner pairing is written, and recorded, by the one writer (vaf/core/channel_pairing.py).
+    # An owner pairing and a relay entry are written, and recorded, by their one writer each
+    # (vaf/core/channel_pairing.py); the third argument stands in for the admin dependency.
     import vaf.core.security_events as security_events
     monkeypatch.setattr(security_events, "log_security_event", lambda kind, **f: events.append((kind, f)))
     me = {"user_scope_id": SCOPE, "username": "alice"}
@@ -89,8 +90,8 @@ def test_telegram_whitelist_and_relay_entries_are_recorded_once_per_change(confi
     asyncio.run(routes.whitelist_add(routes.WhitelistAddRequest(telegram_user_id="7"), _req(), me))
     asyncio.run(routes.whitelist_add(routes.WhitelistAddRequest(telegram_user_id="7", telegram_username="al"), _req(), me))  # same pairing
     asyncio.run(routes.whitelist_add(routes.WhitelistAddRequest(telegram_user_id="7"), _req("bob", bob["user_scope_id"]), bob))  # moved to bob
-    asyncio.run(routes.relay_whitelist_add(_req(), routes.RelayWhitelistAddRequest(telegram_user_id="9")))
-    asyncio.run(routes.relay_whitelist_add(_req(), routes.RelayWhitelistAddRequest(telegram_user_id="9")))  # same pairing
+    asyncio.run(routes.relay_whitelist_add(_req(), routes.RelayWhitelistAddRequest(telegram_user_id="9"), me))
+    asyncio.run(routes.relay_whitelist_add(_req(), routes.RelayWhitelistAddRequest(telegram_user_id="9"), me))  # same pairing
     asyncio.run(routes.relay_whitelist_remove(_req(), routes.WhitelistAddRequest(telegram_user_id="9")))
     asyncio.run(routes.relay_whitelist_remove(_req(), routes.WhitelistAddRequest(telegram_user_id="9")))  # already gone
 

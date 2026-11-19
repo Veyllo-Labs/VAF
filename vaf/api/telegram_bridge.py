@@ -263,18 +263,34 @@ def _resolve_telegram_user(telegram_user_id: str, sender: Any = None) -> Tuple[O
 
 def _pair_with_code(telegram_user_id: str, telegram_username: Optional[str], code: str) -> Optional[str]:
     """Pair the sender with the account that holds this code; the bot's answer, or None when
-    the code is not a live one (the caller then treats the message like any other)."""
-    from vaf.core.channel_pairing import pair_telegram_account, redeem_pairing_code
+    the code is not a live one (the caller then treats the message like any other).
+
+    An owner code links the sender's own Telegram account to the account that asked; a relay
+    code (`RELAY_PAIRING_CHANNEL`) makes the sender a relay contact of it, and the answer
+    names the account, so the person sees whom they chose."""
+    from vaf.core.channel_pairing import (RELAY_PAIRING_CHANNEL, pair_telegram_account, pair_telegram_relay,
+                                          redeem_pairing_code)
     who = redeem_pairing_code("telegram", code)
+    if who is not None:
+        scope, username = who
+        result = pair_telegram_account(telegram_user_id, telegram_username, user_scope_id=scope,
+                                       username=username, may_take_over=False, switch_on=True)
+        if result == "taken":
+            return ("This Telegram account is already paired with another VAF account. "
+                    "An admin can move it in Settings, Connections, Telegram.")
+        return f"Paired: this Telegram account now belongs to the VAF account {username}. Write here to reach your agent."
+    who = redeem_pairing_code(RELAY_PAIRING_CHANNEL, code)
     if who is None:
         return None
     scope, username = who
-    result = pair_telegram_account(telegram_user_id, telegram_username, user_scope_id=scope,
-                                   username=username, may_take_over=False, switch_on=True)
+    result = pair_telegram_relay(telegram_user_id, telegram_username, user_scope_id=scope, username=username,
+                                 may_take_over=False, paired_by="code", switch_on=True)
     if result == "taken":
-        return ("This Telegram account is already paired with another VAF account. "
+        return ("This Telegram account is already a relay contact of another VAF account. "
                 "An admin can move it in Settings, Connections, Telegram.")
-    return f"Paired: this Telegram account now belongs to the VAF account {username}. Write here to reach your agent."
+    if result == "owner":
+        return "This Telegram account is paired with a VAF account, so it cannot be a relay contact."
+    return f"Done: what you write here is now passed on to {username}."
 
 
 def _resolve_telegram_sender(telegram_user_id: str, sender: Any = None) -> Tuple[Optional[Dict[str, Any]], bool]:
@@ -1364,7 +1380,8 @@ def _run_bot():
             if user:
                 telegram_user_id = str(user.id)
                 chat_id = str(update.effective_chat.id if update.effective_chat else user.id)
-                # `/start <code>`: an account pairing its own Telegram (vaf/core/channel_pairing.py).
+                # `/start <code>`: an account pairing its own Telegram, or a person accepting an
+                # account's relay invite (vaf/core/channel_pairing.py).
                 # Only a live code gets an answer; anything else goes on as before.
                 private = bool(update.effective_chat and getattr(update.effective_chat, "type", "") == "private")
                 if private and context.args:

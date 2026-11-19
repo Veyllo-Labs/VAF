@@ -10,7 +10,8 @@ may do on it, measured on the code before this change:
   their agent answered it, their window read it. The verification routes ran a bot on any
   token, and their state is one per process.
 - `relay-whitelist-add` dropped an existing entry with the same id whoever owned it, so one
-  account could take another's relay contact.
+  account could take another's relay contact. It is an admin's now; every other account
+  invites a relay contact by a code the person sends to the bot.
 - `get_discord_user_id` returned the admin's Discord id for ANY identity, so another
   account's `send_discord` and `send_to_user` DMed the admin, and `read_discord_chat` read
   the admin's Discord conversation.
@@ -107,21 +108,21 @@ def test_the_verification_result_is_not_readable_by_another_account(config_file,
 
 # -- a relay contact belongs to the account that added it ----------------------------------
 
-def test_another_account_cannot_take_a_relay_contact_over(config_file):
+def test_another_account_cannot_take_a_relay_contact_over(config_file, monkeypatch):
+    from vaf.api import telegram_bridge as tb
+    from vaf.core import channel_pairing as cp
+    monkeypatch.setattr(cp, "_codes", {})
     alices = {"telegram_user_id": "777", "telegram_username": None,
-              "user_scope_id": ALICE["user_scope_id"], "vaf_username": "alice"}
+              "user_scope_id": ALICE["user_scope_id"], "vaf_username": "alice", "paired_by": "code"}
     config_file.seed(telegram_config={"relay_whitelist": [alices]})
     who = {"user": BOB}
     client = _client("telegram", who)
 
-    assert client.post("/api/telegram/relay-whitelist-add", json={"telegram_user_id": "777"}).status_code == 409
+    assert client.post("/api/telegram/relay-whitelist-add", json={"telegram_user_id": "777"}).status_code == 403
+    assert client.post("/api/telegram/relay-whitelist-add", json={"telegram_user_id": "888"}).status_code == 403
+    code = cp.issue_pairing_code(cp.RELAY_PAIRING_CHANNEL, BOB["user_scope_id"], "bob")
+    assert "already a relay contact of another VAF account" in tb._pair_with_code("777", None, code)
     assert config_file.on_disk()["telegram_config"]["relay_whitelist"] == [alices]
-
-    assert client.post("/api/telegram/relay-whitelist-add", json={"telegram_user_id": "888"}).status_code == 200
-    who["user"] = ALICE
-    assert client.post("/api/telegram/relay-whitelist-add", json={"telegram_user_id": "777"}).status_code == 200
-    owners = {e["telegram_user_id"]: e["vaf_username"] for e in config_file.on_disk()["telegram_config"]["relay_whitelist"]}
-    assert owners == {"777": "alice", "888": "bob"}
 
 
 # -- one answer to "is this an admin" ------------------------------------------------------

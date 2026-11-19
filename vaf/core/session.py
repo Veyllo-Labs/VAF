@@ -2098,11 +2098,12 @@ def session_access_allowed(
     `get_workflow_run_state` answers only for the session the connection is subscribed to,
     which the gate let it subscribe to; `_viewer_agent_workers` is a display filter that
     fails closed. `supervisor_routes._owned_session_ids` filters by the caller's own scoped
-    session list. Two channel routes are sound on their own terms: Telegram's history
-    route admits a non-admin only for a chat id on that account's own whitelist entries,
-    and Discord's is admin-only. The WhatsApp history route used to compare the id's
-    "whatsapp_<username>_" prefix, which another account's chats match when its name
-    extends the caller's; it calls this rule now.
+    session list. One channel route is sound on its own terms: Discord's history route is
+    admin-only. The WhatsApp and Telegram history routes call this rule. WhatsApp's used to
+    compare the id's "whatsapp_<username>_" prefix, which another account's chats match when
+    its name extends the caller's; Telegram's admitted a chat id on any of the account's
+    whitelist or relay entries, and a relay entry was the account's own claim, so one for
+    the admin's id opened the admin's conversation.
     """
     try:
         check_session_id(session_id)

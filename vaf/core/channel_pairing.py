@@ -22,18 +22,34 @@ protocol fixes for the one-time value in the QR, and asks ``pairing_code_state``
 spent code from one that never existed. A spent code is remembered only as its SHA-256 and
 only until its original expiry.
 
+A relay contact (`telegram_config.relay_whitelist`) is a person whose messages are passed on
+to an account, with a fixed reply and no agent. Its proof is the same code, on its own
+channel (`RELAY_PAIRING_CHANNEL`, so asking for one does not withdraw the account's owner
+code): the account hands the link to the person, and only the Telegram account that sends
+it becomes the contact. An id typed into a form proves nothing about who holds it, so the
+add by id is an admin's (`pair_telegram_relay(..., paired_by="admin")`), like the wizard's
+owner entry.
+
 NAMED BOUNDARY: first-party only, like the channel registry (`vaf/core/channels.py`): no
 facade export, no embedder has a shared bot of their own to pair on. Re-measure when one does.
 """
 from __future__ import annotations
 
 import hashlib
+import re
 import secrets
 import threading
 import time
 from typing import Any, Dict, Optional, Tuple
 
 PAIRING_TTL_SECONDS = 600
+# The channel a relay code is issued on: codes are kept per (channel, account), so a relay
+# code and the account's own pairing code live side by side.
+RELAY_PAIRING_CHANNEL = "telegram_relay"
+# A relay contact is a person: a Telegram user id is a positive number (a group chat's id is
+# negative), and 20 digits hold every 64-bit value.
+_RELAY_ID = re.compile(r"[0-9]{1,20}")
+RELAY_PAIRED_BY = ("code", "admin")
 
 _codes: Dict[str, Dict[str, Any]] = {}
 # sha256(code) -> (channel, original expiry) of a spent code, so a second use is "used".
@@ -173,3 +189,70 @@ def pair_telegram_account(telegram_user_id: str, telegram_username: Optional[str
         except Exception:
             pass
     return "paired" if new_pairing else "unchanged"
+
+
+
+def pair_telegram_relay(telegram_user_id: str, telegram_username: Optional[str], *,
+                        user_scope_id: str, username: str, may_take_over: bool, paired_by: str,
+                        switch_on: bool = False) -> str:
+    """Write one relay entry: messages from this Telegram account are passed on to that VAF
+    account. The one writer, for an admin's add by id and for a relay code the bot redeems.
+
+    Returns:
+    - "owner": the id is on the whitelist, anybody's owner pairing (the caller's own too).
+      Nothing is written: a paired Telegram account is reached as its owner, and as a relay
+      entry it would only make its conversation look like the relay account's.
+    - "taken": another account's relay contact, and `may_take_over` is False (only an admin
+      may move one).
+    - "unchanged": the same entry again.
+    - "paired": the entry is written, replacing an earlier one with this id.
+
+    `paired_by` ("code" or "admin") records how the id was proven, so an entry written before
+    this rule (it has none) stays recognisable. `switch_on` turns the account's own Telegram
+    switch on, as a pairing by code does. Raises ValueError for an id that is not a person's
+    Telegram id or a missing scope. Under the config lock from load to save.
+    """
+    from vaf.core.config import Config
+
+    tid = str(telegram_user_id or "").strip()
+    scope = str(user_scope_id or "").strip()
+    if not _RELAY_ID.fullmatch(tid) or not scope or paired_by not in RELAY_PAIRED_BY:
+        raise ValueError("a relay contact needs a Telegram user id, the account's scope and its proof")
+    entry = {"telegram_user_id": tid, "telegram_username": (telegram_username or "").strip() or None,
+             "user_scope_id": scope, "vaf_username": str(username or "").strip(), "paired_by": paired_by}
+    with Config._locked():
+        config = Config.load()
+        block = config.get("telegram_config")
+        block = block if isinstance(block, dict) else {}
+        if any(isinstance(e, dict) and str(e.get("telegram_user_id") or "").strip() == tid
+               for e in (block.get("whitelist") or [])):
+            return "owner"
+        relay = [e for e in (block.get("relay_whitelist") or []) if isinstance(e, dict)]
+        previous = next((e for e in relay if str(e.get("telegram_user_id") or "").strip() == tid), None)
+        if previous is not None and str(previous.get("user_scope_id") or "").strip() != scope and not may_take_over:
+            return "taken"
+        new_entry = previous is None or any(previous.get(k) != v for k, v in entry.items())
+        dirty = new_entry
+        if new_entry:
+            config["telegram_config"] = {**block, "relay_whitelist": [e for e in relay if e is not previous] + [entry]}
+        if switch_on:
+            by_scope = config.get("connection_enabled_by_scope")
+            by_scope = by_scope if isinstance(by_scope, dict) else {}
+            mine = by_scope.get(scope) if isinstance(by_scope.get(scope), dict) else {}
+            if mine.get("telegram") is not True:
+                config["connection_enabled_by_scope"] = {**by_scope, scope: {**mine, "telegram": True}}
+                dirty = True
+        if dirty:
+            Config.save(config)
+    # Access moved only when there was no entry or it was another account's; the same contact
+    # added again, or a new display name, records nothing.
+    moved = previous is None or (str(previous.get("user_scope_id") or ""), str(previous.get("vaf_username") or "")) \
+        != (entry["user_scope_id"], entry["vaf_username"])
+    if moved:
+        try:
+            from vaf.core.security_events import log_security_event
+            log_security_event("channel_paired", channel="telegram", username=entry["vaf_username"],
+                               path=tid, detail=f"relay {tid}")
+        except Exception:
+            pass
+    return "paired" if new_entry else "unchanged"

@@ -51,12 +51,14 @@ RULES = {
     "telegram_routes:whitelist_add": "admin",
     "telegram_routes:start_pairing": "cache",
     "telegram_routes:get_telegram_dashboard": "cache",
-    # `own` holds for the relay ENTRY (another account's entry is never replaced), not for
-    # the routing it causes. KNOWN OPEN DEFECT: the added id can still pre-empt another
-    # account's allowed contact on the shared bot, because `_resolve_telegram_sender` reads
-    # the relay list before the contact books. A fix needs proof of the id (a one-time code,
-    # as `/pair` has), not a check in this route; this probe does not cover it.
-    "telegram_routes:relay_whitelist_add": "own",
+    # The relay invite writes only the `bot_username` cache; the relay entry itself is written
+    # by the bot when the person sends the code (`telegram_bridge._pair_with_code`).
+    "telegram_routes:start_relay_pairing": "cache",
+    # admin: an id typed in proves nothing about who holds it; every other account invites
+    # the person by a one-time code they send to the bot (`relay-pair`), so the person chose
+    # the account. Open to every account, the add made another account's allowed contact its
+    # own relay contact (the bridge reads the relay list before the contact books).
+    "telegram_routes:relay_whitelist_add": "admin",
     "telegram_routes:relay_whitelist_remove": "own",
     "whatsapp_routes:add_whitelist_entry": "own",
     "whatsapp_routes:remove_whitelist_entry": "own",
@@ -296,11 +298,16 @@ PROBES = {
         "get", "/api/telegram/dashboard", None,
         200,
         lambda c: (_tg(c).get("bot_username"), _tg(c).get("whitelist"))),
+    "telegram_routes:start_relay_pairing": (
+        {"telegram_config": {"bot_username": "shared_vaf_bot", "whitelist": [TG_ADMIN]}},
+        "post", "/api/telegram/relay-pair", None,
+        409,
+        lambda c: (_tg(c).get("bot_username"), _tg(c).get("whitelist"))),
     "telegram_routes:relay_whitelist_add": (
         {"telegram_config": {"relay_whitelist": [TG_BOB_RELAY]}},
         "post", "/api/telegram/relay-whitelist-add", {"telegram_user_id": "777"},
-        409,
-        lambda c: [e for e in _tg(c).get("relay_whitelist") or [] if e.get("user_scope_id") != ALICE["user_scope_id"]]),
+        403,
+        lambda c: _tg(c).get("relay_whitelist")),
     "telegram_routes:relay_whitelist_remove": (
         {"telegram_config": {"relay_whitelist": [TG_BOB_RELAY]}},
         "post", "/api/telegram/relay-whitelist-remove", {"telegram_user_id": "777"},

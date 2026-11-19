@@ -268,7 +268,8 @@ def test_a_failed_rename_back_keeps_the_old_voice_aside_and_the_next_install_res
     _network(monkeypatch, container, {"onnx": MODEL, "onnx.json": CONFIG}, calls)
     assert container.download_model("de") is False
     status = container.download_progress["de"]
-    assert "could not be put back" in status["error"], status
+    assert "or the old one restored; install it again" in status["error"], status
+    assert len(status["error"]) <= 115, status["error"]
     assert "could not be put in place" in status["detail"], status
     assert "putting the installed one back failed" in status["detail"], status
     assert not container.is_language_installed("de")
@@ -328,6 +329,37 @@ def test_uninstall_removes_what_an_interrupted_install_left(container, monkeypat
     container.request.body = {"language": "de"}
     assert container.uninstall_language()["status"] == "uninstalled"
     assert list(container.MODELS_DIR.iterdir()) == []
+
+
+class _Killed(BaseException):
+    """The process ending at this point (not an error any handler would catch)."""
+
+
+def test_an_interrupted_uninstall_never_brings_an_older_voice_back(container, monkeypatch):
+    """Uninstall removes what an interrupted install kept aside first and the installed
+    folder last. Removed the other way round and cut short after the first removal, the
+    kept older voice would be all that is left, and the next start would install it.
+    MUTATION: remove the installed folder first again: red."""
+    _installed(container, model=b"current model", config=b"current config")
+    kept = container.MODELS_DIR / ".de.previous"
+    kept.mkdir()
+    (kept / "de.onnx").write_bytes(b"older model")
+    (kept / "de.onnx.json").write_bytes(b"older config")
+    real_remove = container.remove_path
+
+    def remove_then_die(path):
+        real_remove(path)
+        raise _Killed()
+
+    monkeypatch.setattr(container, "remove_path", remove_then_die)
+    container.request.body = {"language": "de"}
+    with pytest.raises(_Killed):
+        container.uninstall_language()
+    monkeypatch.setattr(container, "remove_path", real_remove)
+    container.recover_interrupted_installs()            # the next start
+    model = container.MODELS_DIR / "de" / "de.onnx"
+    assert not model.exists() or model.read_bytes() == b"current model", model.read_bytes()
+    assert not kept.exists()
 
 
 def test_the_staging_folder_is_gone_before_the_error_allows_a_retry(container, monkeypatch):

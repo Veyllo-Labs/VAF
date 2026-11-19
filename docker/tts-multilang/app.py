@@ -273,8 +273,8 @@ def download_model(lang: str) -> bool:
         except OSError:
             pass
         if isinstance(e, SwapRestoreError):
-            message = (f"The {model_info['name']} voice could not be installed, and the voice installed "
-                       "before could not be put back yet; installing the language again puts it back.")
+            message = (f"The {model_info['name']} voice could not be installed or the old one restored; "
+                       "install it again to restore it.")
         else:
             message = download_error_message(model_info["name"], e)
         with download_lock:
@@ -527,8 +527,11 @@ def uninstall_language():
     if lang not in AVAILABLE_MODELS:
         return jsonify({"error": f"Unknown language: {lang}"}), 400
 
-    # The installed folder and what an interrupted install of it may have left.
-    for path in swap_paths(lang):
+    # What an interrupted install left goes first, the installed folder last: a removal cut
+    # short after it took the installed folder would otherwise leave a kept older voice
+    # that the next start puts back.
+    final, staging, previous = swap_paths(lang)
+    for path in (previous, staging, final):
         if os.path.lexists(path):
             remove_path(path)
 

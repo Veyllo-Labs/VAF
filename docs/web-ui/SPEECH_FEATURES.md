@@ -145,8 +145,9 @@ readable by their owner only (mode 0600 on Linux and macOS).
   Named boundary: a container killed between the two renames of that swap, or a rename
   back that fails, leaves the language shown as not installed with its old voice whole in
   `.<lang>.previous`; the next start of the container, or the next install of that
-  language, puts it back before anything else. Removing a language also removes such a
-  kept voice.
+  language, puts it back before anything else. Removing a language removes such a kept
+  voice first and the installed folder last, so a removal cut short never leaves an older
+  voice for the next start to put back.
 - **Speaker recognition** (`silero_vad.onnx`, the 3D-Speaker ERes2Net model) and the
   turn-end model (`smart-turn-v3.2-cpu.onnx`, pinned to a commit): the same check, in
   `models/speaker/`.

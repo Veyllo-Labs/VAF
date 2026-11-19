@@ -447,11 +447,9 @@ def test_a_download_without_a_positive_pinned_size_is_refused(monkeypatch, tmp_p
     assert list(tmp_path.iterdir()) == []
 
 
-def test_a_stalled_download_whose_partial_was_swept_fails_closed(monkeypatch, tmp_path):
-    """Named boundary of the sweep: a transfer that wrote nothing for an hour can lose its
-    partial file to another download of the same file. It must then fail, never leave
-    unverified bytes at the destination. MUTATION: tolerate a missing partial at the
-    final rename (create it again and rename that): red."""
+def _stalled_download(monkeypatch, tmp_path):
+    """A download whose transfer stalls after its first chunk long enough for another
+    download of the same file to find its partial file stale and sweep it."""
     import time as _time
     good = b"g" * 4096
     dest = tmp_path / "voice.onnx"
@@ -471,9 +469,46 @@ def test_a_stalled_download_whose_partial_was_swept_fails_closed(monkeypatch, tm
         return R()
 
     monkeypatch.setattr("vaf.core.verified_download.requests.get", fake_get)
+    return good, dest
+
+
+def test_a_stalled_download_whose_partial_was_swept_fails_closed(monkeypatch, tmp_path):
+    """Named boundary of the sweep: a transfer that wrote nothing for an hour can lose its
+    partial file to another download of the same file. Where an open file can be removed
+    (Linux, macOS) it must then fail, never leave unverified bytes at the destination;
+    on Windows the open partial cannot be removed, so the transfer completes with the
+    pinned bytes (that branch is also simulated on every host, below).
+    MUTATION: tolerate a missing partial at the final rename (create it again and rename
+    that): red."""
+    good, dest = _stalled_download(monkeypatch, tmp_path)
+    if os.name == "nt":
+        assert verified_download.download_verified("https://example.invalid/v", _sha(good), dest,
+                                                   size=len(good)) == dest
+        assert dest.read_bytes() == good
+        return
     with pytest.raises(OSError):
         verified_download.download_verified("https://example.invalid/v", _sha(good), dest, size=len(good))
     assert not dest.exists() and list(tmp_path.iterdir()) == []
+
+
+def test_where_an_open_partial_cannot_be_removed_the_stalled_download_completes(monkeypatch, tmp_path):
+    """Windows' branch of the boundary, run on every host: removing the partial file a
+    download still holds open raises PermissionError (as Windows does for a file in use).
+    The sweep must leave it, and the download complete with the pinned bytes.
+    MUTATION: let the sweep's removal error escape: red."""
+    good, dest = _stalled_download(monkeypatch, tmp_path)
+    real_unlink = os.unlink
+
+    def unlink(path, *a, **k):
+        if str(path).endswith(".part") and os.path.basename(str(path)).startswith(".voice.onnx."):
+            raise PermissionError(13, "The process cannot access the file because it is being used")
+        return real_unlink(path, *a, **k)
+
+    monkeypatch.setattr(os, "unlink", unlink)
+    assert verified_download.download_verified("https://example.invalid/v", _sha(good), dest,
+                                               size=len(good)) == dest
+    assert dest.read_bytes() == good
+    assert [p.name for p in tmp_path.iterdir()] == ["voice.onnx"]
 
 
 def test_every_download_in_the_tree_passes_its_pinned_size():

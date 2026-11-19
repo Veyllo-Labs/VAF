@@ -171,8 +171,10 @@ waiting for a stable `X.Y.Z`.
    `--accept-changed-digest`, and compare the manifest diff against the previous pin
    before committing it. A committed manifest that exists but cannot be read stops the
    script before anything is fetched, and `--accept-changed-digest` does not get past it:
-   restore the manifest from git first (`git checkout -- vaf/core/speech_assets_pin.json`),
-   then run the script again, so the new digests are compared with the committed ones.
+   restore the committed manifest first
+   (`git restore --source=HEAD --staged --worktree vaf/core/speech_assets_pin.json`; this
+   discards any staged or unstaged change to the manifest), then run the script again, so
+   the new digests are compared with the committed ones.
    Then check it: `speech_tts_engine = piper` with text-to-speech on and `bin/piper/`
    moved away, start VAF and send one message, and confirm a spoken reply and no
    `bin/piper.staging` or `bin/piper.previous` afterwards.

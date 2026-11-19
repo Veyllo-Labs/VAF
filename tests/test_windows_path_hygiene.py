@@ -1660,6 +1660,23 @@ def _scope_nodes(scope):
             stack.extend(ast.iter_child_nodes(node))
 
 
+def _comprehension_walrus_names(comp) -> list:
+    """The names a comprehension's `:=` bind in the scope around it: through nested
+    comprehensions too, never inside a lambda's body, which is a scope of its own, but in a
+    lambda's defaults, which the comprehension evaluates."""
+    found = []
+    stack = [comp]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, ast.NamedExpr) and isinstance(node.target, ast.Name):
+            found.append(node.target.id)
+        if isinstance(node, ast.Lambda):
+            stack.extend(_scope_parts(node)[0])
+        else:
+            stack.extend(ast.iter_child_nodes(node))
+    return found
+
+
 def _declared(tree) -> set:
     """Names some scope declares `global` or `nonlocal`: any function may rebind them."""
     return {name for node in ast.walk(tree) if isinstance(node, (ast.Global, ast.Nonlocal))
@@ -1687,9 +1704,8 @@ def _bindings(scope, outer: dict, declared: set = frozenset()) -> dict:
             bind(node.name)
         elif isinstance(node, _COMPREHENSIONS):
             # `:=` in a comprehension binds in the scope around it (PEP 572)
-            for inner in ast.walk(node):
-                if isinstance(inner, ast.NamedExpr) and isinstance(inner.target, ast.Name):
-                    bind(inner.target.id)
+            for name in _comprehension_walrus_names(node):
+                bind(name)
         elif isinstance(node, ast.ExceptHandler) and node.name:
             bind(node.name)
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
@@ -1995,7 +2011,9 @@ def test_the_fd_redirection_scanner_resolves_only_a_single_plain_assignment():
     MUTATION: read a class body as part of the module - red (the method of the same name);
     MUTATION: give a method the class's names - red (the method row);
     MUTATION: a comprehension sees the class - red; a class header in the class - red;
-    MUTATION: a comprehension's `:=` bound inside it - red (the walrus row)."""
+    MUTATION: a comprehension's `:=` bound inside it - red (the walrus row);
+    MUTATION: walk into a lambda's body from a comprehension - red (the lambda body row);
+    MUTATION: stop at a lambda's defaults or at a nested comprehension - red (their rows)."""
     assert _fd_redirections(ast.parse(
         'cmd = "echo x"\n'
         'cmd += " >&12"\n'
@@ -2056,6 +2074,19 @@ def test_the_fd_redirection_scanner_resolves_only_a_single_plain_assignment():
         'script = "cat <&10"\n'
         '[(script := "true") for _ in range(1)]\n'
         'os.system(script)')) == []
+    # ... also from a nested comprehension and a lambda's default, never from a lambda's body
+    assert _fd_redirections(ast.parse(
+        'script = "cat <&10"\n'
+        '[[(script := "true") for _ in y] for y in range(1)]\n'
+        'os.system(script)')) == []
+    assert _fd_redirections(ast.parse(
+        'script = "cat <&10"\n'
+        '[(lambda a=(script := "true"): a) for _ in range(1)]\n'
+        'os.system(script)')) == []
+    assert _fd_redirections(ast.parse(
+        'script = "cat <&10"\n'
+        '[(lambda: (script := "true")) for _ in range(1)]\n'
+        'os.system(script)')) == [1]
     # a class's bases and a function's decorators are evaluated in the defining scope
     assert _fd_redirections(ast.parse(
         'script = "cat <&10"\n'

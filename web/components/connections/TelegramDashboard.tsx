@@ -69,6 +69,8 @@ interface RelayInvite {
     command: string;
     link: string | null;
     expiresIn: number;
+    /** The relay contacts listed when the invite was made: one not among them is the new one. */
+    knownIds: string[];
 }
 
 export default function TelegramDashboard({ isOpen, onClose, config, onConfigChange, initialChatId }: TelegramDashboardProps) {
@@ -84,13 +86,17 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
     const [relayError, setRelayError] = useState<string | null>(null);
     const [relayInvite, setRelayInvite] = useState<RelayInvite | null>(null);
     const [relayInviteCopied, setRelayInviteCopied] = useState(false);
+    // The invite ended (redeemed for nobody new, refused by the bot, or run out) and no
+    // contact was added: said once, instead of the box just turning back into the button.
+    const [relayInviteEnded, setRelayInviteEnded] = useState(false);
     const [note, setNote] = useState<string | null>(null);
     // The jump id waiting to be checked against the loaded sessions. A ref, consumed once,
     // so the check runs on the load that follows the jump and not on every later refresh
     // (a refresh would otherwise yank the selection back to the first chat).
     const jumpPendingRef = useRef<string | null>(null);
 
-    const fetchDashboard = useCallback(async () => {
+    /** Reloads the window; resolves to the relay contacts' ids as loaded, or null on a failure. */
+    const fetchDashboard = useCallback(async (): Promise<string[] | null> => {
         setLoading(true);
         setLoadFailed(false);
         try {
@@ -99,16 +105,17 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                 fetch(api('api/telegram/status'), { credentials: 'include' }).catch(() => null),
             ]);
             const json = await res.json();
-            if (!res.ok) { setLoadFailed(true); return; }
+            if (!res.ok) { setLoadFailed(true); return null; }
             const status = statusRes && statusRes.ok ? await statusRes.json().catch(() => ({})) : {};
             const sessions: TelegramSession[] = Array.isArray(json.sessions) ? json.sessions : [];
+            const relayList: WhitelistEntry[] = Array.isArray(json.relay_whitelist) ? json.relay_whitelist : [];
             setData({
                 bot_username: json.bot_username ?? null,
                 bot_link: json.bot_link ?? null,
                 sessions,
                 stats_4h: Array.isArray(json.stats_4h) ? json.stats_4h : [],
                 admin_whitelist: Array.isArray(json.admin_whitelist) ? json.admin_whitelist : [],
-                relay_whitelist: Array.isArray(json.relay_whitelist) ? json.relay_whitelist : [],
+                relay_whitelist: relayList,
                 running: status?.running === true,
                 can_add_by_id: json.can_add_by_id === true,
             });
@@ -121,8 +128,10 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                     setNote(t('jumpChatNotFound'));
                 }
             }
+            return relayList.map(e => String(e.telegram_user_id));
         } catch {
             setLoadFailed(true);
+            return null;
         } finally {
             setLoading(false);
         }
@@ -138,12 +147,15 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
     }, [initialChatId, isOpen]);
 
     useEffect(() => { if (isOpen) fetchDashboard(); }, [isOpen, fetchDashboard]);
-    // A closed window waits for nobody: the code runs out on the server on its own.
-    useEffect(() => { if (!isOpen) setRelayInvite(null); }, [isOpen]);
+    // A closed window stops waiting but leaves the link live: closing it is what one does after
+    // sending the link, and the person may open it later. Cancel is what takes a link back.
+    useEffect(() => { if (!isOpen) { setRelayInvite(null); setRelayInviteEnded(false); } }, [isOpen]);
 
     const startRelayInvite = async () => {
+        const relayContacts = data?.relay_whitelist;
         setRelayError(null);
         setRelayInviteCopied(false);
+        setRelayInviteEnded(false);
         try {
             const res = await fetch(api('api/telegram/relay-pair'), { method: 'POST', credentials: 'include' });
             const data = await res.json().catch(() => ({}));
@@ -151,7 +163,8 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                 setRelayError(data?.detail || t('relayInviteFailed'));
                 return;
             }
-            setRelayInvite({ command: data.command, link: data.link ?? null, expiresIn: Number(data.expires_in) || 600 });
+            setRelayInvite({ command: data.command, link: data.link ?? null, expiresIn: Number(data.expires_in) || 600,
+                knownIds: (relayContacts ?? []).map(e => String(e.telegram_user_id)) });
         } catch {
             setRelayError(t('relayInviteFailed'));
         }
@@ -165,6 +178,7 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
         const timer = setInterval(async () => {
             if (Date.now() - started > relayInvite.expiresIn * 1000) {
                 setRelayInvite(null);
+                setRelayInviteEnded(true);
                 return;
             }
             try {
@@ -172,12 +186,30 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                 const data = await res.json();
                 if (res.ok && data?.pending === false) {
                     setRelayInvite(null);
-                    fetchDashboard();
+                    const ids = await fetchDashboard();
+                    if (ids && !ids.some(id => !relayInvite.knownIds.includes(id))) setRelayInviteEnded(true);
                 }
             } catch { /* keep waiting */ }
         }, 3000);
         return () => clearInterval(timer);
     }, [relayInvite, fetchDashboard]);
+
+    // Cancel takes the link back on the server (DELETE api/telegram/relay-pair): a link sent to
+    // the wrong chat stops working at once instead of at the end of its lifetime.
+    const cancelRelayInvite = async () => {
+        setRelayError(null);
+        try {
+            const res = await fetch(api('api/telegram/relay-pair'), { method: 'DELETE', credentials: 'include' });
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                setRelayError(data?.detail || t('relayInviteCancelFailed'));
+                return;
+            }
+            setRelayInvite(null);
+        } catch {
+            setRelayError(t('relayInviteCancelFailed'));
+        }
+    };
 
     const copyRelayInvite = async () => {
         if (!relayInvite) return;
@@ -279,7 +311,9 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                 {(data?.relay_whitelist || []).map((e, i) => (
                     <KvRow key={i} left={label(e)} right={<>
                         {/* An admin's list holds every account's relay contacts: say whose each one is. */}
-                        {data?.can_add_by_id && e.vaf_username && <span>{e.vaf_username}</span>}
+                        {data?.can_add_by_id && e.vaf_username && (
+                            <span className="max-w-[7rem] truncate" title={e.vaf_username}>{t('relayAccount', { name: e.vaf_username })}</span>
+                        )}
                         <span>{e.telegram_user_id}</span>
                         <button type="button" title={t('remove')} onClick={() => { if (confirm(t('removeRelayConfirm'))) handleRelayRemove(e.telegram_user_id); }}
                             className="p-1 rounded hover:bg-red-100 text-gray-500 hover:text-red-600"><Trash2 className="w-3.5 h-3.5" /></button>
@@ -287,19 +321,22 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
                 ))}
                 {(!data?.relay_whitelist || data.relay_whitelist.length === 0) && <p className="text-[12.5px] text-gray-500 mb-2">{t('noneRelay')}</p>}
                 {!relayInvite ? (
-                    <button type="button" onClick={startRelayInvite} className={cn(BTN_PRIMARY, 'mb-2')}>{t('relayInvite')}</button>
+                    <>
+                        {relayInviteEnded && <p className="text-xs text-gray-600 mb-2">{t('relayInviteEnded')}</p>}
+                        <button type="button" onClick={startRelayInvite} className={cn(BTN_PRIMARY, 'mb-2')}>{t('relayInvite')}</button>
+                    </>
                 ) : (
                     <div className={cn(SFC_FILL, 'rounded-lg p-2.5 mb-2 space-y-2 text-[13px]')}>
                         <p className="text-gray-700">{t('relayInviteHint', { minutes: Math.round(relayInvite.expiresIn / 60) })}</p>
                         {relayInvite.link && (
                             <code className="block font-mono text-xs break-all select-all">{relayInvite.link}</code>
                         )}
-                        <code className="block font-mono text-xs break-all select-all text-gray-500">{relayInvite.command}</code>
+                        <code className="block font-mono text-xs break-all select-all text-gray-600">{relayInvite.command}</code>
                         <div className="flex flex-wrap items-center gap-2">
                             <button type="button" onClick={copyRelayInvite} className={BTN}>{relayInviteCopied ? t('relayInviteCopied') : t('relayInviteCopy')}</button>
-                            <button type="button" onClick={() => setRelayInvite(null)} className={BTN}>{tCommon('cancel')}</button>
+                            <button type="button" onClick={cancelRelayInvite} className={BTN}>{tCommon('cancel')}</button>
                         </div>
-                        <p className="text-xs text-gray-500">{t('relayInviteWaiting')}</p>
+                        <p className="text-xs text-gray-600">{t('relayInviteWaiting')}</p>
                     </div>
                 )}
                 {data?.can_add_by_id && (
@@ -331,7 +368,7 @@ export default function TelegramDashboard({ isOpen, onClose, config, onConfigCha
             chats={chats}
             loading={loading}
             loadFailed={loadFailed}
-            onRefresh={fetchDashboard}
+            onRefresh={async () => { await fetchDashboard(); }}
             historyUrl={(sid) => `api/telegram/session/${encodeURIComponent(sid)}/history`}
             selectedId={selectedChatId}
             onSelect={(id) => { setSelectedChatId(id); setNote(null); }}

@@ -1421,6 +1421,9 @@
       "relayInviteCopied": "Copied",
       "relayInviteFailed": "The invite link could not be created.",
       "relayInviteWaiting": "Waiting for the person to open the link in Telegram.",
+      "relayInviteEnded": "The invite ended and no contact was added. Create a new one.",
+      "relayInviteCancelFailed": "The invite could not be withdrawn. It stops working when its time runs out.",
+      "relayAccount": "to {name}",
       "cardActivityTitle": "Activity (last 7 days)",
       "jumpChatNotFound": "No chat is stored here for this contact."
     },

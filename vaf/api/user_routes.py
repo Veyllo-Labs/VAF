@@ -77,12 +77,13 @@ def request_account(request: Request) -> Dict[str, str]:
     The tokenless desktop, which carries no identity on the request (the same case
     `caller_is_admin` reads as the local admin), is the local admin. An authenticated request
     must carry BOTH its scope and its name: one without either is refused (400,
-    `UNLINKED_SIGN_IN`). The lenient per-module readers (`get_current_vaf_user` in the channel
-    and contact routes) fill a missing scope or name with the local admin's, which is right
-    for nobody: a write through them lands on the admin's entries, a send goes out through
-    the admin's process, a read shows the admin's chats. One rule for the WhatsApp routes and
-    the Telegram pairing routes; it used to be two copies that disagreed (one accepted a scope
-    without a name and then read the caller as the local admin)."""
+    `UNLINKED_SIGN_IN`). A lenient reader fills a missing scope or name with the local admin's,
+    which is right for nobody: a write through it lands on the admin's entries, a send goes
+    out through the admin's process, a read shows the admin's chats. One rule for every
+    WhatsApp and every Telegram route; the WhatsApp module's `get_current_vaf_user` delegates
+    here, the Telegram one is gone, and the contact routes still carry a lenient
+    `get_current_vaf_user` of their own. It used to be two copies that disagreed (one
+    accepted a scope without a name and then read the caller as the local admin)."""
     user = getattr(request.state, "user", None)
     if not user or not isinstance(user, dict):
         return {"user_scope_id": str(get_local_admin_scope_id()), "username": get_local_admin_username()}

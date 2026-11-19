@@ -1421,6 +1421,9 @@
       "relayInviteCopied": "已复制",
       "relayInviteFailed": "无法创建邀请链接。",
       "relayInviteWaiting": "正在等对方在 Telegram 中打开链接。",
+      "relayInviteEnded": "邀请已结束，没有添加联系人。请创建新的邀请。",
+      "relayInviteCancelFailed": "无法撤回邀请。它会在有效期结束后失效。",
+      "relayAccount": "转给 {name}",
       "cardActivityTitle": "活动（最近 7 天）",
       "jumpChatNotFound": "这里没有为这个联系人保存的聊天。"
     },

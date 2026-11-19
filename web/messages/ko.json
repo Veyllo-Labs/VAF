@@ -1421,6 +1421,9 @@
       "relayInviteCopied": "복사했어요",
       "relayInviteFailed": "초대 링크를 만들지 못했어요.",
       "relayInviteWaiting": "상대가 Telegram에서 링크를 열기를 기다리는 중이에요.",
+      "relayInviteEnded": "초대가 끝났고 연락처는 추가되지 않았어요. 새로 만들어 주세요.",
+      "relayInviteCancelFailed": "초대를 취소하지 못했어요. 유효 시간이 지나면 더 이상 쓸 수 없어요.",
+      "relayAccount": "{name}에게",
       "cardActivityTitle": "활동 (최근 7일)",
       "jumpChatNotFound": "이 연락처의 채팅이 여기에 저장되어 있지 않아요."
     },

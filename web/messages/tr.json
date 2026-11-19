@@ -1421,6 +1421,9 @@
       "relayInviteCopied": "Kopyalandı",
       "relayInviteFailed": "Davet bağlantısı oluşturulamadı.",
       "relayInviteWaiting": "Kişinin bağlantıyı Telegram'da açması bekleniyor.",
+      "relayInviteEnded": "Davet sona erdi ve kişi eklenmedi. Yeni bir davet oluştur.",
+      "relayInviteCancelFailed": "Davet geri alınamadı. Süresi dolunca çalışmayı bırakır.",
+      "relayAccount": "{name} hesabına",
       "cardActivityTitle": "Etkinlik (son 7 gün)",
       "jumpChatNotFound": "Bu kişi için burada kayıtlı bir sohbet yok."
     },

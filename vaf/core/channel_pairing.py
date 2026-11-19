@@ -146,7 +146,10 @@ def pair_telegram_account(telegram_user_id: str, telegram_username: Optional[str
     need not be verified yet: the wizard pairs before it saves the bot as set up, and a code
     is only issued for a running bot (`POST /api/telegram/pair`). `switch_on` also turns the account's own Telegram
     switch on (`connection_enabled_by_scope`), which a pairing by code does: asking for one
-    is the account saying it wants the lane. Under the config lock from load to save.
+    is the account saying it wants the lane. A relay entry with this id is removed in the
+    same write (recorded as `channel_unpaired`): a paired Telegram account is reached as its
+    owner, and the relay writer refuses the reverse order (`pair_telegram_relay`), so an id
+    is never on both lists. Under the config lock from load to save.
     """
     from vaf.core.config import Config
 
@@ -165,9 +168,16 @@ def pair_telegram_account(telegram_user_id: str, telegram_username: Optional[str
         if previous is not None and str(previous.get("user_scope_id") or "").strip() != scope and not may_take_over:
             return "taken"
         new_pairing = previous is None or any(previous.get(k) != v for k, v in entry.items())
-        dirty = new_pairing
-        if new_pairing:
-            config["telegram_config"] = {**block, "whitelist": [e for e in whitelist if e is not previous] + [entry]}
+        relay = [e for e in (block.get("relay_whitelist") or []) if isinstance(e, dict)]
+        unrelayed = [e for e in relay if str(e.get("telegram_user_id") or "").strip() == tid]
+        dirty = new_pairing or bool(unrelayed)
+        if dirty:
+            block = {**block}
+            if new_pairing:
+                block["whitelist"] = [e for e in whitelist if e is not previous] + [entry]
+            if unrelayed:
+                block["relay_whitelist"] = [e for e in relay if all(e is not u for u in unrelayed)]
+            config["telegram_config"] = block
         if switch_on:
             by_scope = config.get("connection_enabled_by_scope")
             by_scope = by_scope if isinstance(by_scope, dict) else {}
@@ -181,15 +191,17 @@ def pair_telegram_account(telegram_user_id: str, telegram_username: Optional[str
     # (same id for the same account) is not, and records nothing.
     moved = previous is None or (str(previous.get("user_scope_id") or ""), str(previous.get("vaf_username") or "")) \
         != (entry["user_scope_id"], entry["vaf_username"])
-    if moved:
-        try:
-            from vaf.core.security_events import log_security_event
+    try:
+        from vaf.core.security_events import log_security_event
+        for gone in unrelayed:
+            log_security_event("channel_unpaired", channel="telegram", username=str(gone.get("vaf_username") or ""),
+                               path=tid, detail=f"relay {tid}")
+        if moved:
             log_security_event("channel_paired", channel="telegram", username=entry["vaf_username"],
                                path=tid, detail=f"owner {tid}")
-        except Exception:
-            pass
+    except Exception:
+        pass
     return "paired" if new_pairing else "unchanged"
-
 
 
 def pair_telegram_relay(telegram_user_id: str, telegram_username: Optional[str], *,

@@ -53,7 +53,7 @@ OWNERS = [{"telegram_user_id": ADMIN_TG, "telegram_username": "boss", "user_scop
 BOB_RELAY = {"telegram_user_id": "777", "telegram_username": None, "user_scope_id": BOB_SCOPE,
              "vaf_username": "bob", "paired_by": "code"}
 
-RELAY_DONE = "Done: what you write here is now passed on to alice."
+RELAY_DONE = "Done: what you write here is now passed on to alice (VAF account). You will get a short fixed reply."
 RELAY_OWNER = "This Telegram account is paired with a VAF account, so it cannot be a relay contact."
 
 
@@ -420,10 +420,133 @@ def test_the_telegram_window_invites_by_code_and_offers_the_id_form_to_admins_on
     assert "can_add_by_id: json.can_add_by_id === true" in src
     form = src[src.index("{data?.can_add_by_id && ("):]
     assert "onClick={handleRelayAdd}" in form[:form.index("</div>")], "the id form sits inside the admin branch"
-    assert "{data?.can_add_by_id && e.vaf_username && <span>{e.vaf_username}</span>}" in src, \
-        "an admin sees whose relay contact each entry is"
+    row = src[src.index("{data?.can_add_by_id && e.vaf_username && ("):]
+    row = row[:row.index("</span>")]
+    assert "t('relayAccount', { name: e.vaf_username })" in row, "an admin sees whose relay contact each entry is"
+    assert 'className="max-w-[7rem] truncate" title={e.vaf_username}' in row, "a long account name stays in its row"
+    cancel = src[src.index("const cancelRelayInvite"):src.index("const copyRelayInvite")]
+    assert "api('api/telegram/relay-pair'), { method: 'DELETE'" in cancel, "Cancel takes the link back"
+    assert "setRelayInvite(null)" in cancel[cancel.index("method: 'DELETE'"):], "the box closes after the withdrawal"
+    assert "onClick={cancelRelayInvite}" in src
+    poll = src[src.index("// While the link is out"):src.index("const cancelRelayInvite")]
+    assert "!ids.some(id => !relayInvite.knownIds.includes(id))) setRelayInviteEnded(true)" in poll, \
+        "an invite that ended without a new contact says so"
+    assert "{relayInviteEnded && <p" in src and "t('relayInviteEnded')" in src
     invite = src[src.index("const startRelayInvite"):src.index("const handleRelayAdd")]
     assert "data?.detail || t('relayInviteFailed')" in invite
+
+
+# -- round 1: activity, owner order, withdrawal, bursts -----------------------------------------
+
+def test_a_legacy_relay_entry_shows_no_foreign_activity(world):
+    """A relay entry from before the proof rule can name the admin's own id; the activity
+    rows of that chat carry the admin's scope. MUTATION: filter the activity by the ids on
+    the caller's lists again -> the admin's row reaches Alice."""
+    now = 1_900_000_000
+    world.seed(telegram_config={
+        "relay_whitelist": [{"telegram_user_id": ADMIN_TG, "telegram_username": None,
+                             "user_scope_id": ALICE_SCOPE, "vaf_username": "alice"}],
+        "chat_activity": [{"chat_id": ADMIN_TG, "user_scope_id": ADMIN_SCOPE, "ts": now, "direction": "in"},
+                          {"chat_id": ALICE_TG, "user_scope_id": ALICE_SCOPE, "ts": now + 1, "direction": "in"},
+                          {"chat_id": "424242", "user_scope_id": None, "ts": now + 2, "direction": "in"}]})
+    who = {"user": ALICE}
+    client = _client(who)
+    mine = client.get("/api/telegram/dashboard").json()
+    assert [a["chat_id"] for a in mine["activity"]] == [ALICE_TG]
+    assert ADMIN_SCOPE not in json.dumps(mine)
+    who["user"] = ADMIN
+    assert len(client.get("/api/telegram/dashboard").json()["activity"]) == 3, "an admin sees every row"
+
+
+def test_an_owner_pairing_takes_its_id_off_the_relay_list(world, monkeypatch):
+    """Relay first, owner second: the id must not stay on both lists. MUTATION: drop the
+    relay removal from `pair_telegram_account` -> 999 stays Alice's relay contact."""
+    from vaf.api import telegram_bridge as tb
+    from vaf.core import channel_pairing as cp
+    relay_code = cp.issue_pairing_code(cp.RELAY_PAIRING_CHANNEL, ALICE_SCOPE, "alice")
+    assert tb._pair_with_code("999", None, relay_code) == RELAY_DONE
+    owner_code = cp.issue_pairing_code("telegram", BOB_SCOPE, "bob")
+    assert tb._pair_with_code("999", None, owner_code).startswith("Paired:")
+    assert world.relay() == []
+    assert [e["telegram_user_id"] for e in world.on_disk()["telegram_config"]["whitelist"]] == [ADMIN_TG, ALICE_TG, "999"]
+    assert [(k, f["username"], f["detail"]) for k, f in world.events] == [
+        ("channel_paired", "alice", "relay 999"), ("channel_unpaired", "alice", "relay 999"),
+        ("channel_paired", "bob", "owner 999")]
+
+
+def test_cancel_withdraws_the_relay_code(world, monkeypatch):
+    """MUTATION: `DELETE /relay-pair` withdraws nothing -> the link still makes a contact."""
+    from vaf.api import telegram_bridge as tb
+    _bot_running(monkeypatch)
+    client = _client({"user": ALICE})
+    owner = client.post("/api/telegram/pair").json()
+    relay = client.post("/api/telegram/relay-pair").json()
+    assert client.delete("/api/telegram/relay-pair").json() == {"withdrawn": True}
+    assert client.get("/api/telegram/relay-pair").json() == {"pending": False}
+    assert tb._pair_with_code("666", None, relay["code"]) is None
+    assert world.relay() == [] and world.events == []
+    assert client.delete("/api/telegram/relay-pair").json() == {"withdrawn": False}
+    assert client.get("/api/telegram/pair").json()["pending"] is True, "the owner code is not touched"
+    assert tb._pair_with_code("4242", None, owner["code"]).startswith("Paired:")
+
+
+def test_withdrawing_needs_an_account(world):
+    from vaf.api.user_routes import UNLINKED_SIGN_IN
+    for user in UNLINKED:
+        res = _client({"user": user}).delete("/api/telegram/relay-pair")
+        assert (res.status_code, res.json().get("detail")) == (400, UNLINKED_SIGN_IN)
+
+
+def _burst(scope, name, relay, contact, text):
+    return {"text": text, "task": None, "message_id": None, "user_scope_id": scope, "vaf_username": name,
+            "telegram_user_id": CONTACT_TG, "relay": relay, "from_contact": contact, "chat_label": "Carol"}
+
+
+def test_a_burst_never_changes_its_destination(monkeypatch):
+    """The admin's contact writes, redeems Alice's relay code, writes again within the
+    debounce window. MUTATION: let `_join_burst` ignore the destination -> the second
+    message joins the admin's burst and goes to the admin's agent."""
+    from vaf.api import telegram_bridge as tb
+    monkeypatch.setattr(tb, "_pending_by_chat", {})
+    first, displaced = tb._join_burst(CONTACT_TG, _burst(ADMIN_SCOPE, "admin", False, True, ""))
+    assert displaced is None
+    first["text"] = "for the admin's agent"
+    same, displaced = tb._join_burst(CONTACT_TG, _burst(ADMIN_SCOPE, "admin", False, True, ""))
+    assert same is first and displaced is None, "the same destination joins the burst"
+    second, displaced = tb._join_burst(CONTACT_TG, _burst(ALICE_SCOPE, "alice", True, False, ""))
+    assert displaced is first and displaced["text"] == "for the admin's agent"
+    assert displaced["user_scope_id"] == ADMIN_SCOPE and displaced["relay"] is False, "accepted messages keep theirs"
+    assert second is not first and second["text"] == ""
+    assert (second["user_scope_id"], second["vaf_username"], second["relay"], second["from_contact"]) == (
+        ALICE_SCOPE, "alice", True, False)
+    assert tb._pending_by_chat == {CONTACT_TG: second}
+
+
+def test_both_burst_handlers_split_on_a_new_destination():
+    """Source guard: text and voice join a burst only through `_join_burst` and send a
+    displaced one at once."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "vaf" / "api" / "telegram_bridge.py").read_text(encoding="utf-8")
+    for start, end in (("async def handle_message", "async def handle_edited_message"),
+                       ("async def handle_voice", "_DOCUMENT_EXTS")):
+        part = src[src.index(start):src.index(end)]
+        assert "rec, displaced = _join_burst(chat_id, {" in part, start
+        assert "_flush_displaced(displaced, chat_id)" in part, start
+        assert "not in _pending_by_chat" not in part, start
+
+
+def test_the_relay_removal_runs_under_the_config_lock():
+    """MUTATION: take the load-to-save span of `relay_whitelist_remove` out of the lock."""
+    import ast
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "vaf" / "api" / "telegram_routes.py").read_text(encoding="utf-8")
+    fn = next(n for n in ast.walk(ast.parse(src))
+              if isinstance(n, ast.AsyncFunctionDef) and n.name == "relay_whitelist_remove")
+    locked = [w for w in ast.walk(fn) if isinstance(w, ast.With)
+              and any("_locked" in ast.unparse(i.context_expr) for i in w.items)]
+    assert locked, "no config lock"
+    inside = {ast.unparse(c.func) for w in locked for c in ast.walk(w) if isinstance(c, ast.Call)}
+    assert {"Config.load", "Config.save"} <= inside
 
 
 # -- fuzz -------------------------------------------------------------------------------------
@@ -466,15 +589,17 @@ def config_in_memory(world, monkeypatch):
     def relay():
         return (state.get("telegram_config") or {}).get("relay_whitelist") or []
 
-    return SimpleNamespace(seed_telegram=seed_telegram, relay=relay)
+    return SimpleNamespace(seed_telegram=seed_telegram, relay=relay, state=lambda: state)
 
 
 def test_relay_writes_match_the_model(config_in_memory):
     """Random operation sequences over four accounts (one admin) and eight ids, some of them
-    owner pairings, against a reference model of the writer's and the remove route's rules.
-    Invariants after every step: the stored list equals the model; an id at most once; no
-    relay id is on the whitelist; a non-admin's operation leaves every other account's entry
-    as it was; every entry carries its proof; every id is a person's Telegram id."""
+    owner pairings, against a reference model of the relay writer's, the owner writer's and
+    the remove route's rules. Invariants after every step: both stored lists equal the model;
+    an id at most once; no relay id is on the whitelist, in either order of the writers; a
+    non-admin's operation leaves every other account's relay entry as it was, except the one
+    an owner pairing of that id replaces; every entry carries its proof; every id is a
+    person's Telegram id."""
     from vaf.core import channel_pairing as cp
     world = config_in_memory
     draws = int(os.environ.get("VAF_F425_FUZZ_DRAWS", "300"))
@@ -489,11 +614,22 @@ def test_relay_writes_match_the_model(config_in_memory):
         for step in range(rng.randint(1, 40)):
             caller = rng.choice(_ACCOUNTS)
             is_admin = caller["role"] == "admin"
-            op = rng.choice(["code", "admin", "remove", "junk"])
+            op = rng.choice(["code", "admin", "remove", "junk", "owner"])
             tid = _junk(rng) if op == "junk" else rng.choice(_IDS)
             disk_before = {e["telegram_user_id"]: e for e in relay}
             name = rng.choice([None, "tg_name"])
-            if op == "remove":
+            if op == "owner":
+                # The owner writer: a pairing code (no take-over) or an admin's wizard step.
+                result = cp.pair_telegram_account(tid, name, user_scope_id=caller["user_scope_id"],
+                                                  username=caller["username"], may_take_over=is_admin)
+                prev_owner = owners.get(tid)
+                if prev_owner is not None and prev_owner["user_scope_id"] != caller["user_scope_id"] and not is_admin:
+                    assert result == "taken", (draw, step, tid, result)
+                else:
+                    assert result in ("paired", "unchanged"), (draw, step, tid, result)
+                    owners[tid] = caller
+                    model.pop(tid, None)
+            elif op == "remove":
                 _remove(caller, tid)
                 key = tid.strip()
                 if key in model and (is_admin or model[key][0] == caller["user_scope_id"]):
@@ -524,6 +660,9 @@ def test_relay_writes_match_the_model(config_in_memory):
                         model[key] = new
                     assert result == want, (draw, step, tid, result, want)
             relay = world.relay()
+            stored_owners = {e["telegram_user_id"]: e["user_scope_id"]
+                             for e in (world.state()["telegram_config"].get("whitelist") or [])}
+            assert stored_owners == {k: a["user_scope_id"] for k, a in owners.items()}, (draw, step, op)
             ids = [e["telegram_user_id"] for e in relay]
             assert len(ids) == len(set(ids)), (draw, step)
             assert not set(ids) & set(owners), (draw, step)
@@ -532,5 +671,7 @@ def test_relay_writes_match_the_model(config_in_memory):
                     for e in relay} == model, (draw, step, op)
             if not caller["role"] == "admin":
                 after = {e["telegram_user_id"]: e for e in relay}
-                others = lambda m: {k: v for k, v in m.items() if v["user_scope_id"] != caller["user_scope_id"]}
+                replaced = {tid} if op == "owner" else set()
+                others = lambda m: {k: v for k, v in m.items()
+                                    if v["user_scope_id"] != caller["user_scope_id"] and k not in replaced}
                 assert others(after) == others(disk_before), (draw, step, op)

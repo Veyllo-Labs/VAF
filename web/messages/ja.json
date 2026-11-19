@@ -1421,6 +1421,9 @@
       "relayInviteCopied": "コピーしました",
       "relayInviteFailed": "招待リンクを作成できませんでした。",
       "relayInviteWaiting": "相手がTelegramでリンクを開くのを待っています。",
+      "relayInviteEnded": "招待は終了し、連絡先は追加されませんでした。新しい招待を作成してください。",
+      "relayInviteCancelFailed": "招待を取り消せませんでした。有効期間が過ぎると使えなくなります。",
+      "relayAccount": "{name}へ",
       "cardActivityTitle": "アクティビティ（過去7日間）",
       "jumpChatNotFound": "この連絡先のチャットはここに保存されていません。"
     },

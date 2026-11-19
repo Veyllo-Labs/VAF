@@ -1421,6 +1421,9 @@
       "relayInviteCopied": "Kopiert",
       "relayInviteFailed": "Der Einladungslink konnte nicht erstellt werden.",
       "relayInviteWaiting": "Wartet, bis die Person den Link in Telegram öffnet.",
+      "relayInviteEnded": "Die Einladung gilt nicht mehr, und es wurde kein Kontakt hinzugefügt. Erstell eine neue.",
+      "relayInviteCancelFailed": "Die Einladung konnte nicht zurückgezogen werden. Sie verfällt, wenn ihre Zeit abgelaufen ist.",
+      "relayAccount": "an {name}",
       "cardActivityTitle": "Aktivität (letzte 7 Tage)",
       "jumpChatNotFound": "Für diesen Kontakt ist hier kein Chat gespeichert."
     },

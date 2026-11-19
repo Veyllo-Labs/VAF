@@ -201,7 +201,7 @@ async def _pairing_offer(request: Request, channel: str) -> Dict[str, Any]:
     caller = request_account(request)
     telegram_config = Config.get("telegram_config") or {}
     if not isinstance(telegram_config, dict) or not telegram_config.get("verified") or not has_channel_secret("telegram"):
-        raise HTTPException(status_code=409, detail="Telegram is not set up on this installation.")
+        raise HTTPException(status_code=409, detail="Telegram is not set up on this installation. An admin sets it up in Settings, Connections, Telegram.")
     if not is_bridge_running():
         raise HTTPException(status_code=409, detail="The Telegram bot is not running. An admin switches it on in Settings, Connections.")
     code = issue_pairing_code(channel, caller["user_scope_id"], caller["username"])
@@ -254,6 +254,17 @@ async def start_relay_pairing(request: Request):
     code. The bot redeems it in `telegram_bridge._pair_with_code`."""
     from vaf.core.channel_pairing import RELAY_PAIRING_CHANNEL
     return await _pairing_offer(request, RELAY_PAIRING_CHANNEL)
+
+
+@router.delete("/relay-pair")
+async def withdraw_relay_pairing(request: Request):
+    """Withdraw the caller's live relay code, so the link stops working at once (the window's
+    Cancel). Without it the code stayed redeemable for the rest of its lifetime after the box
+    was closed: a link sent to the wrong chat could not be taken back. Only the caller's own
+    code on the relay channel; the account's owner pairing code is left alone."""
+    from vaf.core.channel_pairing import RELAY_PAIRING_CHANNEL, withdraw_pairing_code
+    caller = request_account(request)
+    return {"withdrawn": withdraw_pairing_code(RELAY_PAIRING_CHANNEL, caller["user_scope_id"])}
 
 
 @router.get("/relay-pair")
@@ -369,8 +380,13 @@ async def get_telegram_dashboard(request: Request):
     if is_admin:
         activity = activity_raw
     else:
-        my_chat_ids = {str(e.get("telegram_user_id") or "") for e in admin_whitelist + relay_whitelist}
-        activity = [a for a in activity_raw if str(a.get("chat_id") or "") in my_chat_ids]
+        # By the scope each row was written under (`telegram_bridge._append_chat_activity`), not
+        # by chat id: an id on the caller's relay list says nothing about who it belongs to (an
+        # entry written before relay contacts were proven can name the admin's own Telegram id),
+        # and a chat's rows carry its owner's scope. A row with no scope is nobody's to show.
+        mine = str(user_scope_id or "").strip()
+        activity = [a for a in activity_raw
+                    if isinstance(a, dict) and str(a.get("user_scope_id") or "").strip() == mine]
 
     # Sessions: one per chat (our bot only = whitelist + relay), then the message store's
     # rows: the count, the newest message and the person's own state (unread, waits, done)
@@ -633,26 +649,29 @@ async def relay_whitelist_remove(request: Request, body: WhitelistAddRequest):
     telegram_user_id = (body.telegram_user_id or "").strip()
     if not telegram_user_id:
         raise HTTPException(status_code=400, detail="telegram_user_id required")
-    config = Config.load()
-    telegram_config = config.get("telegram_config") or {}
-    if not isinstance(telegram_config, dict):
-        telegram_config = {}
-    before = len(telegram_config.get("relay_whitelist") or [])
-    relay_whitelist = []
-    for e in (telegram_config.get("relay_whitelist") or []):
-        if str(e.get("telegram_user_id") or "").strip() != telegram_user_id:
+    # Under the config lock from load to save, like the relay writer: a relay code the bot
+    # redeems in between would otherwise be lost when this stale copy is saved.
+    with Config._locked():
+        config = Config.load()
+        telegram_config = config.get("telegram_config") or {}
+        if not isinstance(telegram_config, dict):
+            telegram_config = {}
+        before = len(telegram_config.get("relay_whitelist") or [])
+        relay_whitelist = []
+        for e in (telegram_config.get("relay_whitelist") or []):
+            if str(e.get("telegram_user_id") or "").strip() != telegram_user_id:
+                relay_whitelist.append(e)
+                continue
+            if is_admin:
+                # Admin may remove any entry.
+                continue
+            if str(e.get("user_scope_id") or "").strip() == user_scope_id:
+                # Non-admin may remove only own relay entry.
+                continue
             relay_whitelist.append(e)
-            continue
-        if is_admin:
-            # Admin may remove any entry.
-            continue
-        if str(e.get("user_scope_id") or "").strip() == user_scope_id:
-            # Non-admin may remove only own relay entry.
-            continue
-        relay_whitelist.append(e)
-    telegram_config["relay_whitelist"] = relay_whitelist
-    config["telegram_config"] = telegram_config
-    Config.save(config)
+        telegram_config["relay_whitelist"] = relay_whitelist
+        config["telegram_config"] = telegram_config
+        Config.save(config)
     if len(relay_whitelist) < before:
         log_security_event("channel_unpaired", channel="telegram", username=str(current_user.get("username") or ""),
                            path=telegram_user_id, detail=f"relay {telegram_user_id}")

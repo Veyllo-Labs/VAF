@@ -48,7 +48,8 @@ def world(monkeypatch, tmp_path):
         "whatsapp_config": {"enabled": True, "inbound_to_agent": True, "reply_window_hours": WINDOW_H, "whitelist": []},
         "telegram_config": {"whitelist": [{"telegram_user_id": "7", "vaf_username": "alice", "user_scope_id": SCOPE}],
                             "relay_whitelist": [{"telegram_user_id": "11", "vaf_username": "alice", "user_scope_id": SCOPE}],
-                            "chat_activity": [{"chat_id": "11", "ts": int(NOW) - 900}]},
+                            # A row as the bridge writes it, with the scope it was accepted for.
+                            "chat_activity": [{"chat_id": "11", "user_scope_id": SCOPE, "ts": int(NOW) - 900}]},
         "discord_config": {"verified": True, "admin_user_id": "42", "admin_username": "adm", "enabled": True},
         "channel_ingress_policy": None,
     }

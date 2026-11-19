@@ -51,6 +51,28 @@ _outgoing_queue: Optional[queue.Queue] = None
 # Per-chat debounce: wait for follow-up messages, then enqueue combined text
 _pending_by_chat: Dict[str, Dict[str, Any]] = {}
 _pending_lock = threading.Lock()
+# Where a burst goes. A message whose sender now resolves elsewhere does not join the burst:
+# a relay code redeemed in the middle of one (the admin's contact becoming Alice's relay
+# contact) would otherwise send the words meant for Alice to the admin's agent, with tools.
+_BURST_DESTINATION = ("user_scope_id", "vaf_username", "telegram_user_id", "relay", "from_contact")
+
+
+def _join_burst(chat_id: str, fresh: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    """The pending burst a message of this chat joins, and the burst it displaced (or None).
+
+    `fresh` is the record a new burst starts with, built from the sender's resolution for
+    THIS message. A pending burst with another destination is taken out whole: the messages
+    already in it were accepted for that destination and keep it (the caller flushes it at
+    once), and this message starts a new burst. The caller holds `_pending_lock`."""
+    rec = _pending_by_chat.get(chat_id)
+    displaced = None
+    if rec is not None and any(rec.get(k) != fresh.get(k) for k in _BURST_DESTINATION):
+        displaced = _pending_by_chat.pop(chat_id)
+        rec = None
+    if rec is None:
+        rec = dict(fresh)
+        _pending_by_chat[chat_id] = rec
+    return rec, displaced
 
 # The person's recent text messages per chat session, in memory only: (time, chat id, message
 # id, text). When the agent stores a credential it read in one of them (store_credential,
@@ -290,7 +312,8 @@ def _pair_with_code(telegram_user_id: str, telegram_username: Optional[str], cod
                 "An admin can move it in Settings, Connections, Telegram.")
     if result == "owner":
         return "This Telegram account is paired with a VAF account, so it cannot be a relay contact."
-    return f"Done: what you write here is now passed on to {username}."
+    return (f"Done: what you write here is now passed on to {username} (VAF account). "
+            "You will get a short fixed reply.")
 
 
 def _resolve_telegram_sender(telegram_user_id: str, sender: Any = None) -> Tuple[Optional[Dict[str, Any]], bool]:
@@ -946,6 +969,19 @@ def _run_bot():
         await asyncio.sleep(debounce_seconds)
         with _pending_lock:
             pending = _pending_by_chat.pop(chat_id, None)
+        _flush_pending(chat_id, pending)
+
+    def _flush_displaced(displaced: Optional[Dict[str, Any]], chat_id: str) -> None:
+        """Send a burst that a message for another destination took out, now and to where its
+        messages were accepted for (`_join_burst`)."""
+        if displaced is None:
+            return
+        task = displaced.get("task")
+        if task is not None and not task.done():
+            task.cancel()
+        _flush_pending(chat_id, displaced)
+
+    def _flush_pending(chat_id: str, pending: Optional[Dict[str, Any]]) -> None:
         if not pending:
             return
         text = pending.get("text", "").strip()
@@ -1100,24 +1136,23 @@ def _run_bot():
         _remember_inbound(f"telegram_{telegram_user_id}", chat_id, update.message.message_id, msg_text)
 
         with _pending_lock:
-            if chat_id not in _pending_by_chat:
-                _pending_by_chat[chat_id] = {
-                    "text": "",
-                    "task": None,
-                    "message_id": None,
-                    "user_scope_id": user_scope_id,
-                    "vaf_username": vaf_username,
-                    "telegram_user_id": telegram_user_id,
-                    "relay": is_relay,
-                    "from_contact": bool(entry.get("from_contact")),
-                    "chat_label": _telegram_display_name(user),
-                }
-            rec = _pending_by_chat[chat_id]
+            rec, displaced = _join_burst(chat_id, {
+                "text": "",
+                "task": None,
+                "message_id": None,
+                "user_scope_id": user_scope_id,
+                "vaf_username": vaf_username,
+                "telegram_user_id": telegram_user_id,
+                "relay": is_relay,
+                "from_contact": bool(entry.get("from_contact")),
+                "chat_label": _telegram_display_name(user),
+            })
             rec["message_id"] = str(update.message.message_id)  # last message of the burst (edit-stable key)
             rec["text"] = (rec["text"] + " " + msg_text).strip() if rec["text"] else msg_text
             if rec.get("task") and not rec["task"].done():
                 rec["task"].cancel()
             rec["task"] = asyncio.create_task(_delayed_flush(chat_id))
+        _flush_displaced(displaced, chat_id)
 
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
@@ -1188,28 +1223,27 @@ def _run_bot():
 
         # Queue the transcribed text (with voice language for TTS reply)
         with _pending_lock:
-            if chat_id not in _pending_by_chat:
-                _pending_by_chat[chat_id] = {
-                    "text": "",
-                    "task": None,
-                    "message_id": None,
-                    "user_scope_id": user_scope_id,
-                    "vaf_username": vaf_username,
-                    "telegram_user_id": telegram_user_id,
-                    "relay": is_relay,
-                    # A burst that starts with a voice message is the same person as one that
-                    # starts with text: without this a contact ran with the owner's tools.
-                    "from_contact": bool(entry.get("from_contact")),
-                    "chat_label": _telegram_display_name(user),
-                    "voice_lang": detected_lang,  # Store detected language for TTS reply
-                }
-            rec = _pending_by_chat[chat_id]
+            rec, displaced = _join_burst(chat_id, {
+                "text": "",
+                "task": None,
+                "message_id": None,
+                "user_scope_id": user_scope_id,
+                "vaf_username": vaf_username,
+                "telegram_user_id": telegram_user_id,
+                "relay": is_relay,
+                # A burst that starts with a voice message is the same person as one that
+                # starts with text: without this a contact ran with the owner's tools.
+                "from_contact": bool(entry.get("from_contact")),
+                "chat_label": _telegram_display_name(user),
+                "voice_lang": detected_lang,  # Store detected language for TTS reply
+            })
             rec["message_id"] = str(update.message.message_id)  # last message of the burst (edit-stable key)
             rec["text"] = (rec["text"] + " " + text).strip() if rec["text"] else text
             rec["voice_lang"] = detected_lang  # Update language
             if rec.get("task") and not rec["task"].done():
                 rec["task"].cancel()
             rec["task"] = asyncio.create_task(_delayed_flush(chat_id))
+        _flush_displaced(displaced, chat_id)
 
     application.add_handler(
         MessageHandler(filters.VOICE, handle_voice)

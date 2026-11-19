@@ -484,6 +484,89 @@ def test_a_server_that_will_not_stop_aborts_the_swap(linux_install, monkeypatch)
                for e in errors), errors
 
 
+def _previous_next_to_another_build(m) -> None:
+    """A .previous that reports a build next to a bin/llama-cpp that is not the pinned one:
+    what a .previous left behind after a verified install looks like once the pin moves on."""
+    Path(m.bin_dir).mkdir(parents=True)
+    _stub_server(m.server_path, 10021)
+    Path(m.bin_dir + ".previous").mkdir()
+    _stub_server(os.path.join(m.bin_dir + ".previous", m.server_exe), 10954)
+
+
+def test_a_running_server_is_stopped_before_previous_is_put_back(linux_install, monkeypatch):
+    """The recovery renames bin/llama-cpp aside to put .previous back, at the top of a start,
+    while a server of this installation may still run from it; Windows refuses that rename
+    (_Swap plays it), so every start failed. MUTATION: drop the stop before the recovery (red:
+    the rename is refused and the start fails)."""
+    m, payload = linux_install
+    _previous_next_to_another_build(m)
+    swap = _Swap(m, monkeypatch)
+    _fake_get(monkeypatch, payload)
+    assert m.ensure_server_exists() is True
+    assert swap.order[0][0] == "stop" and "put back" in swap.order[0][1], swap.order
+    assert [s for s, _ in swap.order].count("stop") == 1, "the replacement finds nothing left to stop"
+    assert [s for s, _ in swap.order[1:]] == ["rename", "rename", "rename"], swap.order
+    assert m.installed_build() == 10955 and not os.path.lexists(m.bin_dir + ".previous")
+
+
+def test_a_server_that_will_not_stop_keeps_both_folders_for_the_recovery(linux_install, monkeypatch):
+    """MUTATION: ignore the stop's answer (red: the restore is tried, the rename refused, and
+    the start ends with another message)."""
+    m, payload = linux_install
+    _previous_next_to_another_build(m)
+    before = (_tree(Path(m.bin_dir)), _tree(Path(m.bin_dir + ".previous")))
+    errors = []
+    monkeypatch.setattr(backend.UI, "error", lambda *a, **k: errors.append(" ".join(map(str, a))))
+    swap = _Swap(m, monkeypatch, stop_reason="llama-server (PID 4242) did not stop.")
+    monkeypatch.setattr("vaf.core.verified_download.requests.get",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no download")))
+    assert m.ensure_server_exists() is False
+    assert [s for s, _ in swap.order] == ["stop"], swap.order
+    assert (_tree(Path(m.bin_dir)), _tree(Path(m.bin_dir + ".previous"))) == before
+    assert any("did not stop" in e and "was not put back" in e and m.bin_dir in e
+               and m.bin_dir + ".previous" in e and "Stop that process" in e for e in errors), errors
+
+
+def test_a_recovery_with_no_server_running_stops_nothing(linux_install, monkeypatch):
+    """MUTATION: stop before every recovery (red: a stop is called)."""
+    m, payload = linux_install
+    _previous_next_to_another_build(m)
+    swap = _Swap(m, monkeypatch)
+    swap.running = False
+    _fake_get(monkeypatch, payload)
+    assert m.ensure_server_exists() is True
+    assert "stop" not in [s for s, _ in swap.order], swap.order
+    assert m.installed_build() == 10955
+
+
+def test_a_dangling_link_at_the_install_folder_is_replaced_in_one_start(linux_install, monkeypatch, tmp_path):
+    """The swap moved bin/llama-cpp aside only when it was a folder, so a dangling link there
+    made the rename of staging fail with ENOTDIR at every start, each after a new download.
+    MUTATION: isdir instead of lexists (red: False)."""
+    if not _can_symlink(tmp_path):
+        pytest.skip("no symlink privilege")
+    m, payload = linux_install
+    Path(m.bin_root).mkdir()
+    target = tmp_path / "gone"
+    os.symlink(target, m.bin_dir)
+    _fake_get(monkeypatch, payload)
+    assert m.ensure_server_exists() is True
+    assert not os.path.islink(m.bin_dir) and m.installed_build() == 10955
+    assert not os.path.lexists(target), "nothing was created at the link's target"
+    assert not os.path.lexists(m.bin_dir + ".previous")
+
+
+def test_a_plain_file_at_the_install_folder_is_replaced_in_one_start(linux_install, monkeypatch):
+    """MUTATION: isdir instead of lexists (red: False)."""
+    m, payload = linux_install
+    Path(m.bin_root).mkdir()
+    Path(m.bin_dir).write_bytes(b"not a folder")
+    _fake_get(monkeypatch, payload)
+    assert m.ensure_server_exists() is True
+    assert os.path.isdir(m.bin_dir) and m.installed_build() == 10955
+    assert not os.path.lexists(m.bin_dir + ".previous")
+
+
 def test_an_up_to_date_build_stops_nothing(linux_install, monkeypatch):
     """MUTATION: stop the server before the version check and this goes red."""
     m, _ = linux_install

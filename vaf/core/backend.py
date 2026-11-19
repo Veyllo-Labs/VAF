@@ -1111,25 +1111,30 @@ class ServerManager:
         two VAF processes never install at once; a start that finds the lock held says it
         is waiting and waits up to INSTALL_LOCK_TIMEOUT for the other one's install.
 
-        Named boundaries, each needing a third independent failure before it matters, so
-        not handled further:
+        Whatever is at bin/llama-cpp is moved aside by the swap, a dangling link or a plain
+        file too, and the recovery stops a llama server of this installation that still runs
+        before it renames bin/llama-cpp aside to put .previous back (_recover_previous). A
+        leftover whose folders lost their permissions is removed all the same
+        (verified_download.remove_tree_or_link restores the owner's rights, never through a
+        link).
+
+        Named boundaries, each costing at most an older build for a while or a download, never
+        a build, so not handled further:
 
         1. A .previous that can be neither renamed nor removed after a verified install (a
-           warning said so) is taken for an unfinished swap once the pin moves on: it is put
-           back and the pinned build installed again. This repeats at every start until a
-           download succeeds; an older build runs meanwhile, nothing is lost.
+           warning said so): a file held open on Windows, or a file system that refuses (a
+           read-only mount, an immutable attribute). It is taken for an unfinished swap once
+           the pin moves on: it is put back and the pinned build installed again. This
+           repeats at every start until a download succeeds; an older build runs meanwhile,
+           nothing is lost.
         2. On Windows a sharing violation (EACCES) on the pinned binary in bin/llama-cpp
            still counts as "does not start": next to a .previous, the older build runs for
-           one start and the pinned one is installed again. The other side, an EACCES on
-           .previous, is handled: it counts as undecided, so .previous is never deleted on
-           it.
-        3. A hand-made state at bin/llama-cpp, a dangling link or a plain file, makes every
-           start download the verified asset again and fail its swap; the message names the
-           folder to remove.
-        4. A .previous left behind as in 1, and a later pin change: the recovery renames the
-           running install aside to put .previous back. Windows refuses to rename a folder
-           whose program runs, so that start fails with the hand step, at every start until
-           the server is stopped or .previous is removed by hand."""
+           one start and the pinned one is installed again; without one, the start fails and
+           the next one downloads again. No build is lost (a seeded fuzz of the install
+           with EACCES injected found none), and it is unmeasured on a Windows host; treating
+           it as undecided would trade that automatic reinstall for a hand step without
+           evidence that a scanner causes it. The other side, an EACCES on .previous, is
+           handled: it counts as undecided, so .previous is never deleted on it."""
         from filelock import FileLock, Timeout
 
         try:
@@ -1171,7 +1176,7 @@ class ServerManager:
         want = self.pinned_build(pin)
         if os.path.lexists(previous) and not os.path.lexists(self.bin_dir):
             # An earlier swap moved the old build aside and could not put it back.
-            if not self._recover_previous(staging, previous):
+            if not self._recover_previous(staging, previous, port):
                 return False
         # One probe of bin/llama-cpp per start; it is asked again only after a restore.
         current_answered, current = self._probe_build(self.server_path)
@@ -1199,7 +1204,7 @@ class ServerManager:
                 return False
             if earlier is not None:
                 # The new build does not start or reports another number; the old one does start.
-                if not self._recover_previous(staging, previous):
+                if not self._recover_previous(staging, previous, port):
                     return False
                 current_answered, current = self._probe_build(self.server_path)
         if not current_answered:
@@ -1282,7 +1287,10 @@ class ServerManager:
                              "backend is unchanged. Stop that process and start VAF again.")
                     return False
             moved_aside = False
-            if os.path.isdir(self.bin_dir):
+            # Whatever is there moves aside, a dangling link or a plain file too (a rename
+            # never follows a link): otherwise the rename of staging fails with ENOTDIR at
+            # every start, each after a fresh download.
+            if os.path.lexists(self.bin_dir):
                 os.rename(self.bin_dir, previous)
                 moved_aside = True
             try:
@@ -1329,9 +1337,20 @@ class ServerManager:
             self._remove_legacy_layout()
         return True
 
-    def _recover_previous(self, staging: str, previous: str) -> bool:
+    def _recover_previous(self, staging: str, previous: str, port: int) -> bool:
         """Put .previous back into bin/llama-cpp (_put_previous_back) and say so; False, with
-        the hand step, when it could not be done."""
+        the hand step, when it could not be done. A llama server of this installation that
+        still runs is stopped first (on `port`, the port the start serves) when something is
+        at bin/llama-cpp: the restore renames that folder aside, which Windows refuses while
+        its program runs (every start would fail), and elsewhere the old server would keep
+        answering from a folder this start renames away. A server that does not stop leaves
+        both folders as they are."""
+        if os.path.lexists(self.bin_dir) and self._llama_pid() is not None:
+            reason = self.hand_over_from_llama(port=port, reason="the previous backend is being put back")
+            if reason:
+                UI.error(f"{reason.rstrip('.')}, so the previous backend in {previous} was not put back; "
+                         f"{self.bin_dir} and {previous} are both kept. Stop that process and start VAF again.")
+                return False
         failure = self._put_previous_back(staging, previous)
         if failure:
             UI.error(f"The previous backend in {previous} could not be put back ({failure}). Remove "

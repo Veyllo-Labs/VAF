@@ -30,7 +30,8 @@ can read the voice's settings at all (that 2023 build refuses a phoneme of more 
 codepoint, and reads every phoneme type but ``text`` as espeak). Each model records its
 licence and where it was read. A licence outside the list is not a load error, which would
 take every other speech file down with it: ``voice_files`` and ``model`` answer None for
-that one entry, so it is never downloaded.
+that one entry, so it is never downloaded. A base outside ``CLEAN_BASES`` is refused by
+the loader (the pin script never writes one).
 
 Named boundary: nothing outside ``vaf/core`` calls this module (measured: 0 callers), and
 text-to-speech is the embedder's own (``docs/EMBEDDING.md``, "TTS is YOURS"), so the
@@ -138,6 +139,8 @@ def load_speech_pin() -> dict:
             raise _bad(f"voice {name} has no licence")
         if not isinstance(row.get("host_piper"), bool):
             raise _bad(f"voice {name} does not say whether the host Piper reads it")
+        if not isinstance(row.get("base"), str) or row["base"] not in CLEAN_BASES:
+            raise _bad(f"voice {name} was not trained from scratch or from a clean base")
         card = row.get("card")
         _check_file_entry(f"the card of {name}", card)
         if card.get("path") != path.rsplit("/", 1)[0] + "/MODEL_CARD":
@@ -159,11 +162,6 @@ def load_speech_pin() -> dict:
         if not str(meta.get("licence_source") or "").startswith("https://"):
             raise _bad(f"{name} does not say where its licence was read")
     return data
-
-
-def voice_licence_allowed(row: dict) -> bool:
-    """True when a voice row's licence is on the list and its base is a clean one."""
-    return row.get("licence") in ALLOWED_WEIGHT_LICENCES and row.get("base") in CLEAN_BASES
 
 
 def piper_asset(name: str) -> Optional[dict]:
@@ -192,15 +190,16 @@ def voice_path(model_name: str) -> Optional[str]:
 def voice_files(model_name: str) -> Optional[Tuple[dict, dict]]:
     """The pinned ``.onnx`` and ``.onnx.json`` of a voice for Piper on this computer, each
     ``{path, url, sha256, size}``. None when the voice is not in the manifest, when its
-    licence or base is not on the list, or when the pinned Piper cannot read it
-    (``host_piper``): such a voice is never downloaded."""
+    licence is not on the list, or when the pinned Piper cannot read it (``host_piper``):
+    such a voice is never downloaded. A base outside ``CLEAN_BASES`` never gets here: the
+    loader refuses the whole manifest, as only a broken release can carry one."""
     path = voice_path(model_name)
     if path is None:
         return None
     pin = load_speech_pin()
     voices = pin["piper_voices"]
     row = voices["voices"].get(model_name)
-    if row is None or not voice_licence_allowed(row) or row["host_piper"] is not True:
+    if row is None or row["licence"] not in ALLOWED_WEIGHT_LICENCES or row["host_piper"] is not True:
         return None
     out = []
     for p in (path, path + ".json"):

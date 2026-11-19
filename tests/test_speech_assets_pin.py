@@ -1355,13 +1355,13 @@ def test_the_english_fallback_is_fetched_from_the_english_folder():
     assert speech_pin.voice_path("simple") is None
 
 
-@pytest.mark.parametrize("row", [{"licence": "CC-BY-NC-SA-4.0"}, {"base": "en_US-lessac-high"}, {"host_piper": False}],
-                         ids=["non-commercial", "lessac-base", "host-cannot-read"])
+@pytest.mark.parametrize("row", [{"licence": "CC-BY-NC-SA-4.0"}, {"host_piper": False}],
+                         ids=["non-commercial", "host-cannot-read"])
 def test_a_voice_outside_the_licence_list_is_never_downloaded(speech, monkeypatch, tmp_path, row):
-    """A pinned voice whose licence is not on the list, which was fine-tuned from a base
-    that is not clean, or which the pinned Piper cannot read, has no download: nothing is
-    fetched or written, and the reason is said. MUTATIONS: drop the licence check in
-    voice_files (red: non-commercial), the base check (red: lessac-base), the host_piper
+    """A pinned voice whose licence is not on the list, or which the pinned Piper cannot
+    read, has no download: nothing is fetched or written, and the reason is said (a base
+    that is not clean is refused by the loader: test_a_malformed_manifest_is_refused).
+    MUTATIONS: drop the licence check in voice_files (red: non-commercial), the host_piper
     check (red: host-cannot-read)."""
     _write_pin(monkeypatch, tmp_path, voices={VOICE: ONNX, VOICE + ".json": CONFIG}, voice_row=row)
     _no_download(monkeypatch)
@@ -1378,14 +1378,16 @@ def test_a_voice_on_the_list_is_offered(monkeypatch, tmp_path):
 
 def _retired_folder(models: Path, outside: Path) -> dict:
     """models/voices/ as an earlier VAF left it: two retired voices (one of them only its
-    .onnx), a retired name that is a link to a file outside, a folder named like a retired
-    file, a current voice and files of the person's own."""
+    .onnx), a retired name that is a link to a file outside and one that is a second name
+    of a file outside (neither frees anything), a folder named like a retired file, a
+    current voice and files of the person's own."""
     (models / "en_US-lessac-high.onnx").write_bytes(b"x" * 2_000_000)
     (models / "en_US-lessac-high.onnx.json").write_bytes(b"{}")
     (models / "tr_TR-dfki-medium.onnx").write_bytes(b"y" * 1_000_000)
-    outside.write_bytes(b"not VAF's")
+    outside.write_bytes(b"not VAF's" * 1_000_000)
     if os.name != "nt":                   # a link needs a privilege on Windows
         (models / "de_DE-thorsten-high.onnx.json").symlink_to(outside)
+        os.link(outside, models / "fa_IR-amir-medium.onnx")
     (models / "fr_FR-siwis-medium.onnx").mkdir()
     (models / "fr_FR-siwis-medium.onnx" / "inside").write_bytes(b"kept")
     (models / "de_DE-mls-medium.onnx").write_bytes(b"current")
@@ -1402,18 +1404,20 @@ def test_retired_voices_are_removed_by_exact_name_once(speech, monkeypatch, tmp_
     that name, not the current voice, not any other file. Said once, with the space freed;
     a second call in the same process does nothing. MUTATIONS: remove by a pattern (*.onnx:
     red, notes.onnx and the current voice go), follow the link (red: the outside file goes),
-    no once-flag (red: two calls look twice)."""
+    no once-flag (red: two calls look twice), count a link or a hard link as freed space
+    (red: 12 MB), count voices by their .onnx only (red: 2 voices)."""
     outside = tmp_path / "outside.bin"
     keep = _retired_folder(speech.models_dir, outside)
     _write_pin(monkeypatch, tmp_path, voices={VOICE: b"current", VOICE + ".json": b"{}"})
     _no_download(monkeypatch)
     assert speech._ensure_voice_model("de") == speech.models_dir / "de_DE-mls-medium.onnx"
     assert {p.name for p in speech.models_dir.iterdir()} == keep
-    assert outside.read_bytes() == b"not VAF's"
+    assert outside.read_bytes() == b"not VAF's" * 1_000_000
     assert (speech.models_dir / "fr_FR-siwis-medium.onnx" / "inside").read_bytes() == b"kept"
     removed = [e for e in speech.said["event"] if "no longer offers" in e]
-    assert removed == ["Speech Removed 2 voices this VAF release no longer offers: their licence does not allow any use, "
-                       "or Piper on this computer cannot read them (3 MB freed)."], removed
+    voices = 2 if os.name == "nt" else 4
+    assert removed == [f"Speech Removed {voices} voices this VAF release no longer offers: their licence does not "
+                       "allow commercial use, or Piper on this computer cannot read them (3 MB freed)."], removed
 
     (speech.models_dir / "tr_TR-dfki-medium.onnx").write_bytes(b"again")
     looked = []
@@ -1452,18 +1456,20 @@ def test_the_retired_list_and_the_current_voices_are_disjoint():
 
 def test_a_language_without_a_voice_says_it_reads_in_english_once(speech, monkeypatch, tmp_path):
     """Turkish has no voice on the computer: the English voice reads it, and the person is
-    told once per language, not at every reply. MUTATIONS: delete the notice (red), say it
-    at every call (red)."""
+    told once per language, by its name, not at every reply; an empty language is not a
+    language to name. MUTATIONS: delete the notice (red), say it at every call (red), name
+    the code only (red), say it for an empty code (red)."""
     en = "en/en_US/ljspeech/high/en_US-ljspeech-high.onnx"
     _write_pin(monkeypatch, tmp_path, voices={en: ONNX, en + ".json": CONFIG})
     (speech.models_dir / "en_US-ljspeech-high.onnx").write_bytes(ONNX)
     (speech.models_dir / "en_US-ljspeech-high.onnx.json").write_bytes(CONFIG)
     _no_download(monkeypatch)
-    for lang in ("tr", "tr-TR", "tr", "ja", "en", "auto"):
+    for lang in ("tr", "tr-TR", "tr", "ja", "en", "auto", "", "xq"):
         assert speech._ensure_voice_model(lang) == speech.models_dir / "en_US-ljspeech-high.onnx"
     said = [e for e in speech.said["event"] if "the English voice reads it" in e]
-    assert said == ["Speech There is no voice for 'tr' in this VAF release; the English voice reads it.",
-                    "Speech There is no voice for 'ja' in this VAF release; the English voice reads it."], said
+    assert said == ["Speech There is no voice for Türkçe (tr) in this VAF release; the English voice reads it.",
+                    "Speech There is no voice for 日本語 (ja) in this VAF release; the English voice reads it.",
+                    "Speech There is no voice for 'xq' in this VAF release; the English voice reads it."], said
 
 
 # ── speaker and turn-end models ───────────────────────────────────────────────────
@@ -1638,6 +1644,8 @@ def test_the_speech_models_carry_their_licence():
     lambda p: p["piper_voices"]["files"].pop(VOICE + ".json"),
     lambda p: p["piper_voices"]["voices"]["de_DE-mls-medium"].update(licence=" "),
     lambda p: p["piper_voices"]["voices"]["de_DE-mls-medium"].update(host_piper="yes"),
+    lambda p: p["piper_voices"]["voices"]["de_DE-mls-medium"].update(base="en_US-lessac-high"),
+    lambda p: p["piper_voices"]["voices"]["de_DE-mls-medium"].update(base=["scratch"]),
     lambda p: p["piper_voices"]["voices"]["de_DE-mls-medium"]["card"].update(path="de/de_DE/mls/medium/README"),
     lambda p: p["piper_voices"]["voices"]["de_DE-mls-medium"]["card"].update(sha256="short"),
     lambda p: p["models"].update({"m.onnx": {"url": "https://x", "sha256": "0" * 64, "size": 1,
@@ -1646,9 +1654,8 @@ def test_the_speech_models_carry_their_licence():
                                              "licence_source": "http://x"}}),
 ], ids=["no-piper", "short-digest", "no-program-digest", "unknown-archive", "moving-revision",
         "climbing-path", "zero-size", "plain-http", "no-voices", "voices-not-object", "onnx-without-row",
-        "bad-voice-name",
-        "row-without-files", "empty-licence", "host-piper-string", "card-not-model-card", "card-digest",
-        "model-without-licence", "licence-source-http"])
+        "bad-voice-name", "row-without-files", "empty-licence", "host-piper-string", "lessac-base",
+        "base-not-a-string", "card-not-model-card", "card-digest", "model-without-licence", "licence-source-http"])
 def test_a_malformed_manifest_is_refused(monkeypatch, tmp_path, damage):
     import json
     _write_pin(monkeypatch, tmp_path)

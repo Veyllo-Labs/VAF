@@ -123,15 +123,17 @@ phonemes). The voices of the computer are therefore the ones both checks allow:
 | Greek (el) | `el_GR-rapunzelina-medium` | CC0-1.0 |
 | Dutch (nl) | `nl_NL-mls-medium` | CC-BY-4.0 |
 
-Any other language is read by the English voice, and VAF says so once per language ("There
-is no voice for 'tr' in this VAF release; the English voice reads it."). A speech
+Any other language is read by the English voice, and VAF says so once per language, by the
+language's own name ("There is no voice for Türkçe (tr) in this VAF release; the English
+voice reads it."). A speech
 recognition language is not affected: Whisper still understands every language it knows.
 
 Voices an earlier VAF downloaded and this release no longer offers are deleted from
 `models/voices/` the first time VAF prepares a Piper voice after the update, by their exact
 names (the `.onnx` and `.onnx.json` of each voice in `SpeechManager.RETIRED_VOICES`), never
 by a pattern; a folder or any other file there stays, a link is removed without touching what
-it points to, and VAF says how many voices it removed and how much space that freed. A file
+it points to, and VAF says how many voices it removed and how much space that freed (a link,
+or one name of a file that has another, frees nothing and is not counted). A file
 that cannot be removed (in use on Windows) is tried again at the next start. The speech
 container removes the voices of the languages it no longer offers at its start (`retired`
 in its table: Japanese and Turkish, for which no voice with such a licence exists) and

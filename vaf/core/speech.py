@@ -63,6 +63,18 @@ PIPER_INSTALL_LOCK_TIMEOUT = 600.0
 # NO LOCAL TTS! pyttsx3/comtypes causes 1-4GB RAM explosion via Windows SAPI
 # All TTS must go through Docker (speech_tts_engine=docker or chatterbox)
 
+def _language_label(code: str) -> str:
+    """A language as a person reads it: its own name from the agent's table of native
+    language names with the code ("Türkçe (tr)"), or the code alone when the table has no
+    name for it or cannot be loaded."""
+    try:
+        from vaf.core.agent import Agent
+        name = Agent.LANGUAGE_NAMES_NATIVE.get(code)
+    except Exception:
+        name = None
+    return f"{name} ({code})" if name else f"'{code}'"
+
+
 # LAZY IMPORT for speech_recognition (only needed for CLI local STT, not WebUI)
 HAS_STT = None
 _sr = None
@@ -584,13 +596,15 @@ class SpeechManager:
 
         Only the exact names ``<voice>.onnx`` and ``<voice>.onnx.json`` are looked at. A
         regular file or a link there is removed (a link itself, its target never touched);
-        a folder of that name and every other file stay. What was removed is said once.
-        A file that cannot be removed (in use on Windows) is said in a dim line, and the
-        next start of VAF tries again."""
+        a folder of that name and every other file stay. What was removed is said once:
+        the voices any of whose files went, and the space freed, which counts only regular
+        files with no other name (removing a link or one name of a hard-linked file frees
+        nothing). A file that cannot be removed (in use on Windows) is said in a dim line,
+        and the next start of VAF tries again."""
         if self.__dict__.get("_retired_swept"):
             return
         self._retired_swept = True
-        removed, freed, failed = 0, 0, []
+        removed, freed, failed = set(), 0, []
         for name in self.RETIRED_VOICES:
             for suffix in (".onnx", ".onnx.json"):
                 path = self.models_dir / f"{name}{suffix}"
@@ -605,12 +619,14 @@ class SpeechManager:
                 except OSError as e:
                     failed.append(f"{path.name}: {e}")
                     continue
-                removed += 1 if suffix == ".onnx" else 0
-                freed += st.st_size
+                removed.add(name)
+                if stat.S_ISREG(st.st_mode) and st.st_nlink == 1:
+                    freed += st.st_size
         if removed:
-            UI.event("Speech", f"Removed {removed} voice{'s' if removed != 1 else ''} this VAF release no longer "
-                               f"offers: their licence does not allow any use, or Piper on this computer cannot "
-                               f"read them ({freed / 1_000_000:.0f} MB freed).", style="dim")
+            count = len(removed)
+            UI.event("Speech", f"Removed {count} voice{'s' if count != 1 else ''} this VAF release no longer "
+                               f"offers: their licence does not allow commercial use, or Piper on this computer "
+                               f"cannot read them ({freed / 1_000_000:.0f} MB freed).", style="dim")
         if failed:
             UI.event("Speech", "Some voices this VAF release no longer offers could not be removed yet; the "
                                f"next start tries again ({'; '.join(failed[:3])}).", style="dim")
@@ -647,15 +663,15 @@ class SpeechManager:
 
         # A language without a voice is read by the English voice, and the person is told
         # so once per language (it used to happen silently).
-        short_lang = lang[:2].lower()
+        short_lang = (lang or "")[:2].lower()
         model_name = self.PIPER_VOICES.get(short_lang)
         if model_name is None:
             model_name = self.PIPER_VOICES["en"]
             told = self.__dict__.setdefault("_english_fallback_said", set())
-            if short_lang not in told:
+            if short_lang and short_lang not in told:
                 told.add(short_lang)
-                UI.event("Speech", f"There is no voice for '{short_lang}' in this VAF release; the English "
-                                   "voice reads it.", style="warning")
+                UI.event("Speech", f"There is no voice for {_language_label(short_lang)} in this VAF release; "
+                                   "the English voice reads it.", style="warning")
 
         onnx_file = self.models_dir / f"{model_name}.onnx"
         json_file = self.models_dir / f"{model_name}.onnx.json"

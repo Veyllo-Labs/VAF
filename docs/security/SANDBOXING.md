@@ -1427,52 +1427,48 @@ verdict carries its categories, which the confirmation dialog shows. In detail:
   of them, is in `tests/fixtures/command_policy/never_again.json` and refused on every lane
   (105 more belong to the named boundaries below and are kept apart under their names).
 - **Named boundary: what it does not read.** cmd.exe's and PowerShell's own grammar (`%VAR%`
-  as the program, the text `pwsh -Command` runs); dash's differences from bash, read as bash,
-  the larger grammar; decompressors and other programs that write new text piped into a
-  shell (`gunzip`, `tr`, `awk`); a script file an earlier command wrote and a later one runs;
-  a variable's value (the text cannot show it, so a variable is refused only as the program,
-  or after a protected root of a removal); extglob patterns; carriers it does not step over
-  (`flock`, `strace`, `chroot`, `busybox`, `runuser`), which hide the command they run, also
-  behind a substitution (`flock f $(true) cmd`), as their plain forms did before; a
-  descriptor named through a variable (`exec {fd}< ...; bash /dev/fd/$fd`); a coprocess's or a
-  named pipe's text; the file names `find` or `xargs` hand a command (`find . -exec sh -c 'cat
-  {}' \;`); the stdin shell of `sudo -s`, `su` or `at`; shell features that store command
-  text and run it later or elsewhere: `alias` with `expand_aliases`, `${x@P}`, `PS4` with
-  `set -x`, `PROMPT_COMMAND`, `BASH_ENV`, `mapfile`/`readarray -C`, `complete -C`, `bind -x`
-  (`trap`'s command is read); the output of other programs piped into a shell beyond those
-  named above, also text `sed` or `cut` changes on its way in; a function used as the shell
-  for its input (`f() { bash; }; echo ... | f`) or as what prints into one
-  (`f() { echo ...; }; f | bash`); a glob as a shell's script name, which `nullglob` can turn
-  into nothing (`bash *.q <<< ...`); extglob groups `!(...)`, `*(...)` and `?(...)` in an
-  array, refused as a syntax error or an expansion though bash runs them with extglob on,
-  and a command's extglob group with a `!` or a glob among its alternatives
-  (`ls !(*.tmp)`, `ls @(*.py|*.txt)` with extglob on), read as a negation or with its `|` as
-  a pipe, so a glob in it stands as a program name: refused, a known over-refusal (list the
-  globs: `ls *.py *.txt`); an
-  empty substitution or expansion glued to an option (`rm $()-rf /`, `rm $@-rf /`); a variable
-  or an empty substitution
-  before a `/` with no folder written in front of it (also `rm -rf ${ }/`): `rm -rf $X/`
-  passes, since the text cannot show that X is
-  empty, and only a variable after a written protected folder is refused (`~/.cache/$X`, not
-  `$HOME/.cache/$X`); and a glob
-  a file name turns into an option (`rm *` beside a file named `-rf`), both the state of the
-  machine rather than the text; a shell's own error messages fed into a shell (`cmd 2>&1 |
-  bash` hands on `command not found` lines that quote the command word), also what a
-  substitution writes to the standard error or to a descriptor of 3 or more inside `[[ ]]`
-  whose descriptor a redirection of that command sends into the pipe
-  (`[[ -n $( ( ... >&2 ) >/dev/null ) ]] 2>&1 | bash`,
-  `[[ -n $( ( ... >&3 ) >/dev/null 2>/dev/null ) ]] 3>&1 | bash`); a
-  shell's input moved to another descriptor and back (`... | bash 1>&0- 0<&1`), or copied
-  there and back (`... | bash 3<&0 <&3`, `3</dev/stdin <&3`), read as coming from a
-  descriptor this text does not open; a quoted word that looks like a redirection where a
-  reading takes it for one (`echo ... | bash -rcfile '<'`, `bash -rcfile '<' -x"$e"x -c
-  '...'`: the here-string form `bash -rcfile '<' <<< ...` is read); a tilde word or a
-  directory variable run as code by `eval`, `trap` or `env -S` (`HOME='...'; eval ~/`,
-  `eval -- ~+/`, `trap ~/ EXIT`, `eval "$HOME/"`), or printed into a shell
-  (`HOME='...'; echo ~ | sh`, `bash <<< ~`, `printf %s ~ | sh`), the twins of
-  `eval "$HOME"` and `echo $HOME | sh`, which are refused; an alias with `expand_aliases` (named above) also when it stands for `bash -c`. A
-  `case` statement inside a substitution stays refused as unreadable (see
-  `case` above).
+  as the program, the text `pwsh -Command` runs); dash's differences from bash, read as
+  bash, the larger grammar; decompressors and other programs that write new text piped into
+  a shell (`gunzip`, `tr`, `awk`); a script file an earlier command wrote and a later one
+  runs; a variable's value (the text cannot show it, so a variable is refused only as the
+  program, or after a protected root of a removal); extglob patterns; carriers it does not
+  step over (`flock`, `strace`, `chroot`, `busybox`, `runuser`), which hide the command they
+  run, also behind a substitution (`flock f $(true) cmd`), as their plain forms did before;
+  a descriptor named through a variable (`exec {fd}< ...; bash /dev/fd/$fd`); a coprocess's
+  or a named pipe's text; the file names `find` or `xargs` hand a command (`find . -exec sh
+  -c 'cat {}' \;`); the stdin shell of `sudo -s`, `su` or `at`; shell features that store
+  command text and run it later or elsewhere: `alias` with `expand_aliases`, `${x@P}`, `PS4`
+  with `set -x`, `PROMPT_COMMAND`, `BASH_ENV`, `mapfile`/`readarray -C`, `complete -C`,
+  `bind -x` (`trap`'s command is read); the output of other programs piped into a shell
+  beyond those named above, also text `sed` or `cut` changes on its way in; a function used
+  as the shell for its input (`f() { bash; }; echo ... | f`) or as what prints into one
+  (`f() { echo ...; }; f | bash`); a glob as a shell's script name, which `nullglob` can
+  turn into nothing (`bash *.q <<< ...`); extglob groups `!(...)`, `*(...)` and `?(...)` in
+  an array, refused as a syntax error or an expansion though bash runs them with extglob on,
+  and a command's extglob group with a `!` or a glob among its alternatives (`ls !(*.tmp)`,
+  `ls @(*.py|*.txt)` with extglob on), read as a negation or with its `|` as a pipe, so a
+  glob in it stands as a program name: refused, a known over-refusal (list the globs: `ls
+  *.py *.txt`); an empty substitution or expansion glued to an option (`rm $()-rf /`, `rm
+  $@-rf /`); a variable or an empty substitution before a `/` with no folder written in
+  front of it (also `rm -rf ${ }/`): `rm -rf $X/` passes, since the text cannot show that X
+  is empty, and only a variable after a written protected folder is refused (`~/.cache/$X`,
+  not `$HOME/.cache/$X`); and a glob a file name turns into an option (`rm *` beside a file
+  named `-rf`), both the state of the machine rather than the text; a shell's own error
+  messages fed into a shell (`cmd 2>&1 | bash` hands on `command not found` lines that quote
+  the command word), also what a substitution writes to the standard error or to a
+  descriptor of 3 or more inside `[[ ]]` whose descriptor a redirection of that command
+  sends into the pipe (`[[ -n $( ( ... >&2 ) >/dev/null ) ]] 2>&1 | bash`, `[[ -n $( ( ...
+  >&3 ) >/dev/null 2>/dev/null ) ]] 3>&1 | bash`); a shell's input moved to another
+  descriptor and back (`... | bash 1>&0- 0<&1`), or copied there and back (`... | bash 3<&0
+  <&3`, `3</dev/stdin <&3`), read as coming from a descriptor this text does not open; a
+  quoted word that looks like a redirection where a reading takes it for one (`echo ... |
+  bash -rcfile '<'`, `bash -rcfile '<' -x"$e"x -c '...'`: the here-string form `bash -rcfile
+  '<' <<< ...` is read); a tilde word or a directory variable run as code by `eval`, `trap`
+  or `env -S` (`HOME='...'; eval ~/`, `eval -- ~+/`, `trap ~/ EXIT`, `eval "$HOME/"`), or
+  printed into a shell (`HOME='...'; echo ~ | sh`, `bash <<< ~`, `printf %s ~ | sh`), the
+  twins of `eval "$HOME"` and `echo $HOME | sh`, which are refused; an alias with
+  `expand_aliases` (named above) also when it stands for `bash -c`. A `case` statement
+  inside a substitution stays refused as unreadable (see `case` above).
 - **Comments and heredocs in the other two readings.** Neither takes a `#` as a comment, so
   for them an apostrophe in a comment or a heredoc body opens a quote that swallows the later
   lines; the grammar reading reads those lines. The frozen reading reads every line of a

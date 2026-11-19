@@ -105,9 +105,12 @@ images and the `piper-tts` package inside the TTS image, and a local voice-call 
 Each download writes its own partial file next to the destination and renames it into
 place only when that file's own bytes matched, so two downloads of the same file at once
 cannot mix their bytes; a download that sends more than the recorded size is stopped
-there. A partial file a killed download left behind is removed by the next download of the
-same file once it is an hour old. Downloaded files are readable by their owner only (mode
-0600 on Linux and macOS).
+there. The size is required: a download without a positive pinned size is refused before
+anything is fetched. A partial file a killed download left behind is removed by the next
+download of the same file once nothing was written to it for an hour. Named boundary: a
+transfer that stalls for an hour can lose its partial file that way; that download then
+fails, and the destination still only ever receives verified bytes. Downloaded files are
+readable by their owner only (mode 0600 on Linux and macOS).
 
 - **The Piper program** (`speech_tts_engine = piper`): the archive of Piper release
   `2023.11.14-2` for this computer. It is downloaded into `bin/piper.staging/`, unpacked
@@ -133,14 +136,17 @@ same file once it is an hour old. Downloaded files are readable by their owner o
   Portuguese (`pt`) is the Brazilian voice `pt_BR-faber-medium`: Piper's European
   Portuguese voice has a non-ASCII name, which VAF's voice paths do not take.
 - **The speech container's voices**: the same commit, from `models.json`; both files of a
-  voice are staged and replace an installed pair only when both matched, a mismatch ends the
-  install with an error, and the language card in Settings shows that error (wrapped, up to
-  three lines; on a phone the card takes the full row). A second install of a language that
+  voice are staged in a folder of their own, which replaces the installed folder whole only
+  when both matched (so an installed pair is never a mix of two downloads); a mismatch ends
+  the install with an error, and the language card in Settings shows that error (wrapped,
+  up to three lines; below the `lg` width the card takes the full row). A second install of a language that
   is downloading is answered with the running one. Voices the container installed before
   this check existed are not checked again; reinstalling a language fetches it verified.
-  Named boundary: a container killed between the two renames that put a new pair in place
-  can leave the new model next to an older config; removing and installing the language
-  again repairs it.
+  Named boundary: a container killed between the two renames of that swap, or a rename
+  back that fails, leaves the language shown as not installed with its old voice whole in
+  `.<lang>.previous`; the next start of the container, or the next install of that
+  language, puts it back before anything else. Removing a language also removes such a
+  kept voice.
 - **Speaker recognition** (`silero_vad.onnx`, the 3D-Speaker ERes2Net model) and the
   turn-end model (`smart-turn-v3.2-cpu.onnx`, pinned to a commit): the same check, in
   `models/speaker/`.

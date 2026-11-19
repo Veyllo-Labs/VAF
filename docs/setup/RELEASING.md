@@ -166,10 +166,13 @@ waiting for a stable `X.Y.Z`.
    use from an archived (read-only) release; an asset updated after its upload is refused.
    So is a new digest for any file the committed manifest already pins at the same URL (a
    Piper archive or its program, a voice, any model, whichever source the digest came
-   from), and so is a committed manifest that exists but cannot be read: the script lists
-   the old and new digest and stops. Find
-   out why the published file changed before you rerun with `--accept-changed-digest`,
-   and compare the manifest diff against the previous pin before committing it.
+   from): the script lists each old and new digest, labeled (archive, program, file), and
+   stops. Find out why the published file changed before you rerun with
+   `--accept-changed-digest`, and compare the manifest diff against the previous pin
+   before committing it. A committed manifest that exists but cannot be read stops the
+   script before anything is fetched, and `--accept-changed-digest` does not get past it:
+   restore the manifest from git first (`git checkout -- vaf/core/speech_assets_pin.json`),
+   then run the script again, so the new digests are compared with the committed ones.
    Then check it: `speech_tts_engine = piper` with text-to-speech on and `bin/piper/`
    moved away, start VAF and send one message, and confirm a spoken reply and no
    `bin/piper.staging` or `bin/piper.previous` afterwards.

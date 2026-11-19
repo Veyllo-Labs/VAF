@@ -155,6 +155,7 @@ class Config:
         "api_model_openrouter": PROVIDER_MODELS["openrouter"]["default"],
 
         # Vision provider: who turns images into text (vaf/core/model_roles.py resolves it).
+        # Admin-only, like every `vision_` key (prefix in GLOBAL_CONFIG_KEY_PREFIXES).
         # Empty = the main provider when it can read images, else no vision at all: nothing
         # falls back to another vendor by itself. Example: primary = deepseek (no vision)
         # -> vision_provider = google / openai / anthropic.
@@ -175,7 +176,8 @@ class Config:
         # changing what the person chats with. Vision-capable lane model =
         # the run sees screenshots (use_vision auto); otherwise the run
         # degrades gracefully: vision_provider describes screenshots on
-        # demand, and with no vision at all it continues DOM-only.
+        # demand, and with no vision at all it continues DOM-only. Admin-only
+        # (`browser_agent_` prefix in GLOBAL_CONFIG_KEY_PREFIXES).
         "browser_agent_provider": "",
         "browser_agent_model": "",
         # Voice-agent LLM lane (live call first layer) - vision_provider pattern:
@@ -1119,8 +1121,9 @@ class Config:
 
     # (key, value digest, provider) resets already logged by this process: an
     # unwritable config is repaired again on every load, and the log should say so
-    # once. A digest, not the value: `browser_agent_model` is writable by any signed-in
-    # user, and a set of whole values grows by whatever size they choose to save.
+    # once. A digest, not the value: a lane model can still come from a hand edit of the
+    # file or an embedder's code, and a set of whole values grows by whatever size they
+    # choose to write.
     _lane_reset_logged: set = set()
     # Longest value the log line quotes; the rest is left out of its middle.
     _LANE_RESET_LOG_CHARS = 200
@@ -1197,6 +1200,10 @@ class Config:
 
     # Keys (and prefixes) that only admins can change. Non-admins can change user-scoped
     # settings (e.g. language, interface) but not backend/network/API config.
+    # Named boundary: the web saves (PATCH /api/config, the WebSocket `save_config`) ask this
+    # list; the terminal writers (`vaf models config`, `vaf settings`, the terminal app,
+    # `vaf setup`) consult it for no key, because they run as the OS account that owns the
+    # config file and could edit it directly.
     GLOBAL_CONFIG_KEY_PREFIXES = (
         "local_network_",
         "api_key_",
@@ -1217,6 +1224,14 @@ class Config:
         # Voice-agent LLM lane: redirecting the call's inference (or burning the
         # admin's API quota) must never be possible for a non-admin LAN user.
         "voice_agent_",
+        # Vision lane: which provider and model turn images into text, and every per-image
+        # and per-call budget of that lane (output bound, downscale edge, re-encode quality,
+        # inline image mode). They run on the instance's API key and every account reads them
+        # from the one config file, so a non-admin's choice would move everyone's lane.
+        # `vision_local_mmproj` is also a llama-server LAUNCH argument.
+        "vision_",
+        # Browser-agent LLM lane: its provider and model, the same reason.
+        "browser_agent_",
         "subagent_",
         "thinking_",
         "librarian_",
@@ -1317,9 +1332,6 @@ class Config:
         # The image-age budget decides how stale the browser ENGINE may run,
         # and a rebuild costs minutes of shared startup time: admin decisions.
         "browser_pool_strict", "browser_image_max_age_days",
-        # Local vision projector: a llama-server LAUNCH argument (code execution
-        # surface) - never user-writable.
-        "vision_local_mmproj",
         # Legacy STT toggle: enables the shared backend STT service for everyone
         # (soon a metered cloud lane), so it must not be user-writable. The
         # canonical speech_stt_enabled is already covered by the prefix list.

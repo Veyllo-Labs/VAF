@@ -451,8 +451,12 @@ def model_fits_provider(provider: str, model: str, config: Optional[dict] = None
     return not held
 
 
-# (source, provider, model) already reported by this process.
+# (source, provider digest, model digest) already reported by this process. Digests, not
+# the values: the model and the provider come from a stored config value or an embedder's
+# `config=`, and a set of whole values grows by whatever size they choose to write.
 _foreign_noted: set = set()
+# Longest model value or provider label the warning quotes; the rest is left out of its middle.
+_FOREIGN_SHOWN_CHARS = 200
 _foreign_lock = threading.Lock()
 
 # Where a person changes the value a source names, for the warning line.
@@ -473,19 +477,44 @@ def provider_label(provider: str) -> str:
     return cat.label if cat else (spec.label if spec else str(provider))
 
 
+def provider_label_line(provider: str) -> str:
+    """``provider_label`` for a line of text: one line and at most a few hundred
+    characters. An unknown provider is its own label, and that value is a stored setting
+    or an embedder's ``config=``: a line break in it would start a second line, and its
+    length is whatever was written."""
+    from vaf.core.security_events import one_line
+    from vaf.core.tool_dispatch import clip_middle
+
+    return one_line(clip_middle(provider_label(provider), _FOREIGN_SHOWN_CHARS,
+                                marker="... ({left_out} chars left out) ..."))
+
+
 def note_foreign_model(provider: str, model: str, source: str) -> bool:
     """Report once per process that ``model`` (read from ``source``) is not a
     ``provider`` model and is ignored. Returns True on the first sighting only.
 
     One terminal line and one backend log line: the value is dropped on every
-    call, and a line per call would bury the terminal the way the 400s did."""
-    key = (str(source), str(provider or "").lower(), str(model or ""))
+    call, and a line per call would bury the terminal the way the 400s did.
+
+    Both lines stay one line: the model is quoted with repr (a line break or an escape in
+    it reads as ``\\n`` / ``\\x1b``, so it cannot start a forged log line), and the label
+    is ``provider_label_line``."""
+    import hashlib
+
+    def digest(value: str) -> str:
+        return hashlib.sha256(value.encode("utf-8", "replace")).hexdigest()
+
+    key = (str(source), digest(str(provider or "").lower()), digest(str(model or "")))
     with _foreign_lock:
         if key in _foreign_noted:
             return False
         _foreign_noted.add(key)
-    label = provider_label(provider)
-    msg = (f"{source} '{model}' is not one of {label}'s models and is ignored; "
+    from vaf.core.tool_dispatch import clip_middle
+
+    label = provider_label_line(provider)
+    shown = clip_middle(str(model or ""), _FOREIGN_SHOWN_CHARS,
+                        marker="... ({left_out} chars left out) ...")
+    msg = (f"{source} {shown!r} is not one of {label}'s models and is ignored; "
            f"{label}'s own model is used instead.")
     if source in _FOREIGN_FIX:
         msg += " " + _FOREIGN_FIX[source]

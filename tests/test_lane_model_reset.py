@@ -331,8 +331,9 @@ def test_load_repairs_and_writes_back(stored, _quiet):
 
 
 def test_the_once_set_keeps_a_digest_and_the_log_a_clipped_value(stored, _quiet):
-    """`browser_agent_model` is writable by any signed-in user: neither the set that
-    keeps the log to one line nor the line may hold a value of their chosen size.
+    """A lane model can come from a hand edit of the file or an embedder's code: neither
+    the set that keeps the log to one line nor the line may hold a value of their chosen
+    size.
     MUTATIONS: key the set on the value; log the value unclipped."""
     for i in range(3):
         stored.write({"provider": "deepseek", "browser_agent_model": f"gpt-{i}-" + "x" * 100_000})

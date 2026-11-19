@@ -186,14 +186,20 @@ def _refusal(key: str, val, lane: str, current: dict) -> str:
 
 
 def _reset_notice(key: str, old, lane: str) -> str:
-    """What a provider change reset, what is used now, and how to choose another."""
+    """What a provider change reset, what is used now, and how to choose another.
+
+    One line whatever the stored values hold: the old value is quoted with repr, the label
+    is ``provider_label_line`` and the model used now has its control characters turned
+    into spaces. The terminal console already removes escape sequences, but it prints a
+    line break as one."""
     from vaf.core.model_roles import resolve_role
-    from vaf.core.provider_registry import provider_label
-    label = provider_label(lane)
+    from vaf.core.provider_registry import provider_label_line
+    from vaf.core.security_events import one_line
+    label = provider_label_line(lane)
     try:
         now = resolve_role(_LANE_ROLES[key], warn=False, explain=False, probe_local=False).model
     except Exception:
         now = None
-    used = f"{label}'s own model ({now})" if now else f"{label}'s own model"
-    return (f"{key} '{_shown(old)}' is not one of {label}'s models and was reset; {used} is "
+    used = f"{label}'s own model ({one_line(_shown(now))})" if now else f"{label}'s own model"
+    return (f"{key} {_shown(old)!r} is not one of {label}'s models and was reset; {used} is "
             f"used now. Choose another with: vaf models config {key} <model>")

@@ -284,15 +284,19 @@ the caller's own process for anybody else:
 - **`running`** in `GET /api/whatsapp/status` and `GET /api/whatsapp/dashboard` is the caller's
   own process (`has_process_for_user`, held to the caller's scope), so the dot, the banner and
   the Connections badge show that account's WhatsApp, not whether the bridge runs for somebody.
-  The banner over the chats says which case it is: switched off for this account, or switched
-  on but not running, in which case it names both ways out (start it, or link again if the
+  The banner over the chats shows while the account's connection is not running or its switch
+  is off, and says which case it is: switched off for this account, or switched on but not
+  running, in which case it names both ways out (start it, or link again if the
   session expired), because nothing in the status tells an expired session from a stopped
   process.
 - **The scope decides, not the name alone.** A non-admin's stop and restart name the caller's
   scope as well, so an ordinary account whose name equals another account's (one named like
   the local admin) stops nothing of that account's, and its restart stops nothing at all
   unless it could start again (`restart_account` checks first). A process that survives the
-  kill stays registered and the stop answers 500, so no second Node starts on its login. A
+  kill stays registered and the stop answers 500, so no second Node starts on its login; the
+  same holds at the whole bridge's shutdown, whose survivors stay registered for the next
+  start. A whole restart waits for the shutdown (both waits of every process, plus a margin)
+  and answers failure (500) when it overruns, instead of a success that started nothing. A
   Stop that arrives while a start that brought the bridge up still waits for its spawn cancels
   that spawn, and such a start answers only once its own spawn happened or failed.
 
@@ -300,7 +304,9 @@ Measured before: an ordinary account's Stop ended every account's process and it
 restarted all of them, while its Start answered "already running" and started nothing for it,
 so a newly linked account's process came up only with a restart of everybody's. Every spawn and
 every stop runs under one lock (`_spawn_lock`), the bridge's shutdown included, so one account
-never gets two Node processes on one login and no process outlives the bridge. Pinned by
+never gets two Node processes on one login, and no process outlives the bridge unless it
+survives the kill too (it then stays registered, so nothing starts next to it; after the
+bridge's shutdown it is not read until it ends). Pinned by
 `tests/test_whatsapp_account_process.py` (with a seeded fuzz of the lifecycle) and the
 `PROCESS_RULES` table in `tests/test_channel_route_write_rights.py`.
 
@@ -574,9 +580,9 @@ curl -X POST http://localhost:5002/synthesize \
 
 ## Troubleshooting
 
-### Bridge running, WhatsApp not connected (amber status)
+### Running, not connected to WhatsApp (amber status)
 
-The dashboard shows **Bridge running, WhatsApp not connected** when the Node process is alive but the Baileys socket has not reached `connection=open`. The Python bridge sends a **ping** to Node; Node replies with **pong** and `connected: true` only when `connectionState === "open"`. So amber means either the socket never opened or it closed.
+The dashboard shows **running · not connected to WhatsApp** when the account's Node process is alive but the Baileys socket has not reached `connection=open`. The Python bridge sends a **ping** to Node; Node replies with **pong** and `connected: true` only when `connectionState === "open"`. So amber means either the socket never opened or it closed.
 
 **Common causes:**
 

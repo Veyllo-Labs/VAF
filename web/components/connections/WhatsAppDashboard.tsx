@@ -721,13 +721,15 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
     const stateText = data?.connected ? t('stateConnected') : data?.running ? t('stateRunning') : t('stateStopped');
     const dot = data?.connected ? 'green' : data?.running ? 'amber' : 'gray';
 
-    const banner = data && !data.running ? (
+    // Also while switched off with the process still up (it stops on the next stop or restart).
+    const banner = data && (!data.running || !data.enabled) ? (
         <div className="px-5 py-2 bg-amber-50 border-b border-amber-200 text-amber-600 text-[13px] flex items-center gap-2 flex-wrap">
             <AlertTriangle className="w-4 h-4 flex-shrink-0" />
             {/* `running` is this account's own connection, and nothing in the payload says a
                 session expired: a linked account whose switch is off is told so, one whose
                 switch is on gets the neutral sentence that names both ways out. */}
-            <span className="flex-1 min-w-0">{!data.linked ? t('bridgeNotStartedDesc') : !data.enabled ? t('switchedOffDesc') : t('connectionNotRunningDesc')}</span>
+            {/* A floor for the text, so the buttons wrap below it instead of squeezing it. */}
+            <span className="flex-1 min-w-[14rem]">{!data.linked ? t('bridgeNotStartedDesc') : !data.enabled ? t('switchedOffDesc') : t('connectionNotRunningDesc')}</span>
             {restartError && <span className="text-red-600">{restartError}</span>}
             <button type="button" onClick={handleRestartBridge} disabled={restarting}
                 className="px-2 py-1 rounded-md border border-amber-200 hover:bg-amber-100 disabled:opacity-50">{restarting ? t('starting') : t('startBridge')}</button>
@@ -911,7 +913,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         <>
             <SettingsCard title={t('cardAgentTitle')} desc={t('cardAgentDesc')}>
                 <KvRow
-                    left={<><span className={cn('w-2 h-2 rounded-full', dot === 'green' ? 'bg-[#3fbf5f]' : dot === 'amber' ? 'bg-[#e0a030]' : 'bg-gray-400')} />{data?.linked_phone || t('notLinked')}</>}
+                    left={<><span className={cn('w-2 h-2 rounded-full shrink-0', dot === 'green' ? 'bg-[#3fbf5f]' : dot === 'amber' ? 'bg-[#e0a030]' : 'bg-gray-400')} />{data?.linked_phone || t('notLinked')}</>}
                     right={stateText}
                 />
                 <div className="flex gap-2 flex-wrap">

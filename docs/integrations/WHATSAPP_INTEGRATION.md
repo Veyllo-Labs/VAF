@@ -399,7 +399,8 @@ the caller's own process for anybody else:
   characters such as a zero-width space, a decomposed accent, and more than 255 bytes.
   WhatsApp linked under such a name stays in its folder after the account is deleted, and its
   Re-link answers "This account's name cannot be used as a folder name, so its WhatsApp login
-  cannot be removed here. Ask whoever runs this server to remove it by hand." A login is also
+  cannot be removed here. The folder this name opens may belong to another account; ask
+  whoever runs this server to check it before removing anything." A login is also
   kept when the account directory answers nothing at deletion: an unreachable account store,
   or a desktop install whose owner has no account row of its own, where deleting the last
   ordinary account leaves the directory empty. The admin sees nothing on screen in either

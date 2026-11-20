@@ -61,8 +61,9 @@ LINK_NODE_SURVIVED = ("The phone is linked, but the setup process did not stop. 
                       "or ask whoever runs this server to restart it, then start WhatsApp.")
 LINK_ACCOUNT_ENDED = "WhatsApp setup stopped: this account was deactivated or deleted."
 LOGIN_NAME_NOT_A_FOLDER = ("This account's name cannot be used as a folder name, so its WhatsApp "
-                           "login cannot be removed here. Ask whoever runs this server to remove "
-                           "it by hand.")
+                           "login cannot be removed here. The folder this name opens may belong to "
+                           "another account; ask whoever runs this server to check it before "
+                           "removing anything.")
 FLOW_BUSY = "WhatsApp setup is still busy for this account. Try again in a few seconds."
 # How long a start or reset waits for the account's transition already running. Ending a
 # link Node that resists can take TERMINATE_WAIT twice; the requests behind it answer

@@ -431,6 +431,9 @@ def test_reset_of_a_path_shaped_name_removes_nothing(world, protected):
     app.include_router(routes.router)
     res = TestClient(app).post("/api/whatsapp/qr/reset")
     assert res.status_code == 500 and res.json()["detail"] == routes.LOGIN_NAME_NOT_A_FOLDER, res.text
+    # The folder such a name opens can be another account's: the answer never advises removing it.
+    assert "by hand" not in routes.LOGIN_NAME_NOT_A_FOLDER
+    assert "may belong to another account" in routes.LOGIN_NAME_NOT_A_FOLDER
     assert (protected["owner"] / "creds.json").is_file()
 
 

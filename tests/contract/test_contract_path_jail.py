@@ -154,8 +154,11 @@ def test_a_drive_in_a_later_part_is_refused_before_anything_resolves(tmp_path, m
 def test_a_path_longer_than_any_file_system_opens_is_named_as_text():
     assert vaf.is_overlong_path("a" * 4096) is False
     assert vaf.is_overlong_path("a" * 4097) is True
-    # Whitespace at the ends is not part of the path, as in contained_path.
-    assert vaf.is_overlong_path(" " * 10 + "a" * 4096 + " ") is False
+    # Every character counts, whitespace at the ends included: a caller resolves the text it
+    # was given, and a leading pad is one long first component that resolving copies again
+    # for every later part.
+    assert vaf.is_overlong_path(" " * 10 + "a" * 4087) is True
+    assert vaf.is_overlong_path(" " * 10 + "a" * 4086) is False
     assert vaf.is_overlong_path("") is False and vaf.is_overlong_path(None) is False
 
 

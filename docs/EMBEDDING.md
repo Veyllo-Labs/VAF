@@ -3398,7 +3398,9 @@ Stable public surface (safe to build on):
   opens it, because on Windows that already contacts the share. A relative fragment through
   `vaf.contained_path` needs no extra question; it refuses every rooted fragment.
 - `vaf.is_overlong_path(spelled) -> bool` - True when a path text is longer than 4096
-  characters, whitespace at its ends not counted. No Linux or macOS system call opens such a
+  characters, every character counted, whitespace at the ends included: ask it about the
+  exact text you go on to resolve, because a leading pad in front of a path under the cap
+  is one long first component that resolving copies again for every later part. No Linux or macOS system call opens such a
   path (PATH_MAX is 4096 bytes on Linux and 1024 on macOS, and every character is at least
   one byte), and answering anything about it costs time that grows with the square of its
   length: CPython's `Path.resolve()` rebuilds the path string once per component, and
@@ -3429,12 +3431,15 @@ Stable public surface (safe to build on):
   relative text and joined onto your root. A drive in a later part (`a/Z:/x`, `sub/b:x`)
   is refused too, as text: on Windows joining it replaces the path with a drive-relative
   one (`Z:x`) whose resolve probes that drive. On POSIX this refuses the rare name whose
-  second character is a colon. A fragment longer than 4096 characters ("path is too long")
+  second character is a colon. A fragment longer than 4096 characters once its ends'
+  whitespace is stripped ("path is too long")
   and a name longer than 255 ("name is too long") are refused before anything else, as
   text (see `vaf.is_overlong_path`), and the containment comparison is linear in the
   path's length, so the cost of an answer is bounded by the text. With `must_exist=True`,
   a path the OS cannot even look at (too long for it once joined to the root, no
-  permission) is `PathEscape("folder not found")`, never a raw `OSError`.
+  permission) is `PathEscape("folder not found")`, never a raw `OSError`; without it, a
+  path the OS refuses to resolve at all (Windows past MAX_PATH without long-path support)
+  is `PathEscape("path cannot be resolved")`.
 - `vaf.code_audit(root, *, scope=, base=, paths=, include_untracked=, profile=, ask=,
   checks=, max_files=, remember=, batch_chars=, progress=, parallel=, should_stop=,
   verify_steps=, linked_worktree=, expect_folder=)` /

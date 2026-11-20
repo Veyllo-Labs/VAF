@@ -172,7 +172,7 @@ def is_remote_path(spelled: str) -> bool:
 
 def is_overlong_path(spelled) -> bool:
     """True if a path text is longer than any file system opens (`PATH_CHARS_MAX` characters,
-    the ends' whitespace not counted), whatever the host.
+    every character counted), whatever the host.
 
     Ask it first, before anything resolves, stats or compares the path, `is_remote_path`
     included. Both of CPython's ways to answer a containment question grow with the square of
@@ -183,8 +183,12 @@ def is_overlong_path(spelled) -> bool:
     every other request while it waits. Such a path opens nowhere anyway: Linux refuses more
     than 4096 bytes, macOS more than 1024, with ENAMETOOLONG.
 
-    Lexical and constant-time for a text whose ends carry no whitespace (``strip`` then
-    returns the very same string); it touches no disk.
+    Lexical and constant-time; it touches no disk. The raw length is measured, whitespace at
+    the ends included, because the callers resolve the text they were given and not a
+    stripped copy of it: a leading pad of N spaces in front of a path just under the cap is
+    one long first component, which realpath copies again for every later part (measured
+    14 s for a 10 MB pad on a save route before this counted it). A caller that strips the
+    text before it uses it (`contained_path`) asks about the stripped text.
 
     Asked first by: `contained_path` (so the workspace routes, the room folder routes and
     every other caller of it), `jail_allows`, the file tools' screen ``is_safe_path`` and the
@@ -208,7 +212,7 @@ def is_overlong_path(spelled) -> bool:
     where a path is at most 4096 characters (``jail_allows`` measured 0.14 s at 4 KB). They
     are candidates for `_within` if a profile ever shows them.
     """
-    return len(str(spelled or "").strip()) > PATH_CHARS_MAX
+    return len(str(spelled or "")) > PATH_CHARS_MAX
 
 
 def _within(target: Path, root: Path) -> bool:
@@ -221,11 +225,16 @@ def _within(target: Path, root: Path) -> bool:
     Comparing that one keeps pathlib's own equality, which a string prefix test would not:
     it compares case-exact where Windows folds case, and ``root + sep`` refuses everything
     below an anchor root (``/``, ``C:\\``, ``\\\\srv\\share\\``) that already ends in one.
+
+    The parent at index ``i`` has ``len(target.parts) - 1 - i`` parts, so when ``depth``
+    exceeds the number of parents no parent has as many parts as ``root`` and the answer is
+    False: an anchored target against a root with no parts at all (``Path(".")``), which
+    the membership test answered False and an unbounded index would raise on.
     """
     if target == root:
         return True
     depth = len(target.parts) - len(root.parts)
-    return depth > 0 and target.parents[depth - 1] == root
+    return 0 < depth <= len(target.parents) and target.parents[depth - 1] == root
 
 
 def contained_path(root, relative: str = "", *, must_exist: bool = False) -> Path:
@@ -249,9 +258,12 @@ def contained_path(root, relative: str = "", *, must_exist: bool = False) -> Pat
     ``must_exist=True`` additionally requires the resolved path to be an
     existing directory - the shape a listing or a browse needs. A path the OS
     cannot even look at (too long for it, no permission) is "folder not found"
-    as well, never a raw `OSError`: it is not a folder a listing can use.
+    as well, never a raw `OSError`: it is not a folder a listing can use. Without
+    ``must_exist``, a path the OS refuses to resolve at all (on Windows, past
+    MAX_PATH without long-path support) is ``PathEscape("path cannot be resolved")``.
 
-    A fragment longer than `PATH_CHARS_MAX` characters is refused with "path is
+    A fragment longer than `PATH_CHARS_MAX` characters (whitespace at its ends
+    stripped first, as for every check here) is refused with "path is
     too long" before anything else, the separator and upward-walk checks
     included: no file system opens it, and resolving and comparing it would
     cost time that grows with the square of its length (see `is_overlong_path`).
@@ -286,8 +298,18 @@ def contained_path(root, relative: str = "", *, must_exist: bool = False) -> Pat
     if any(len(p) >= 2 and p[1] == ":" for p in parts):
         raise PathEscape("path must not name a drive")
 
-    root_resolved = Path(root).resolve()
-    target = root_resolved.joinpath(*parts).resolve() if parts else root_resolved
+    try:
+        root_resolved = Path(root).resolve()
+        target = root_resolved.joinpath(*parts).resolve() if parts else root_resolved
+    except OSError:
+        # A non-strict resolve still raises an error it does not expect: on Windows
+        # ntpath.realpath re-raises winerror 206 (ERROR_FILENAME_EXCED_RANGE, a path past
+        # MAX_PATH without long-path support), which is outside its allow list. No folder a
+        # listing can use, and no target a write can be told about, so a refusal instead of
+        # a raw OSError that a route would answer with a 500.
+        if must_exist:
+            raise PathEscape("folder not found")
+        raise PathEscape("path cannot be resolved")
     if not _within(target, root_resolved):
         raise PathEscape("path must stay inside the root")
     if must_exist:

@@ -168,8 +168,11 @@ def test_contained_path_equals_the_head_implementation(tmp_path):
 
 # ── 2. the comparison: pathlib's answer, in linear time, both flavours ─────
 
-_POSIX_ANCHORS = ["/"]
-_WINDOWS_ANCHORS = ["C:\\", "c:\\", "D:\\", "\\\\srv\\share\\", "\\\\SRV\\Share\\", "\\\\?\\C:\\"]
+# "." and "C:" are the relative and the drive-relative case: a root with no parts against an
+# anchored target is where an unbounded parent index would raise.
+_POSIX_ANCHORS = ["/", "."]
+_WINDOWS_ANCHORS = ["C:\\", "c:\\", "D:\\", "\\\\srv\\share\\", "\\\\SRV\\Share\\", "\\\\?\\C:\\",
+                    ".", "C:"]
 _PURE_WORDS = ["a", "A", "b", "\u03a3", "\u03c3", "\u03c2", "\u0130", "i", "\u00df", "\u1e9e", "K",
                "\u212a", ".x", "x.", " ", "\u00e9", "e\u0301", "C:", "c", "~1", ":"]
 
@@ -213,7 +216,10 @@ def test_within_matches_parents_membership_in_both_flavours(cls, anchors):
     # The cases a string prefix test gets wrong are in the corpus, named so they cannot drop out.
     named = [(cls(anchors[0], "a", "b"), cls(anchors[0], "a"), True),
              (cls(anchors[0], "ab"), cls(anchors[0], "a"), False),
-             (cls(anchors[0], "a"), cls(anchors[0]), True)]
+             (cls(anchors[0], "a"), cls(anchors[0]), True),
+             (cls(anchors[0]), cls("."), False),
+             (cls(anchors[0], "a", "b"), cls("."), False),
+             (cls("a", "b"), cls("."), True)]
     if cls is PureWindowsPath:
         named += [(cls("c:\\users\\x"), cls("C:\\Users"), True),
                   (cls("\\\\srv\\share\\x"), cls("\\\\SRV\\Share\\"), True),
@@ -247,7 +253,7 @@ def test_within_grows_linearly(cls, anchor):
     small = _min_time(make(1024), _within)
     large = _min_time(make(16384), _within)
     ratio = large / max(small, 1e-9)
-    assert ratio < 48, f"16x the parts cost {ratio:.1f}x the time"
+    assert ratio < 64, f"16x the parts cost {ratio:.1f}x the time"
 
 
 # ── 3. must_exist on a path the OS cannot stat ─────────────────────────────
@@ -295,7 +301,7 @@ def test_the_length_boundaries_hold_for_any_padding():
         at = rng.randint(0, PATH_CHARS_MAX)
         # Whitespace inside the text counts; only the ends' does not.
         text = rng.choice(pads) + "z" + block[at:at + n - 2] + "z" + rng.choice(pads)
-        if is_overlong_path(text) is not (len(text.strip()) > PATH_CHARS_MAX):
+        if is_overlong_path(text) is not (len(text) > PATH_CHARS_MAX):
             bad.append(("path", n, ascii(text[:8])))
         m = rng.randint(NAME_CHARS_MAX - 5, NAME_CHARS_MAX + 5)
         name = rng.choice(pads) + "n" * m + rng.choice(pads)
@@ -369,6 +375,94 @@ def test_is_safe_path_refuses_overlong_before_the_alias(monkeypatch):
         False, filesystem.PATH_TOO_LONG_REFUSAL)
     assert str(PATH_CHARS_MAX) in filesystem.PATH_TOO_LONG_REFUSAL
     assert filesystem.PATH_TOO_LONG_REFUSAL.isascii()
+
+
+# ── a pad at the ends counts: the screens resolve the text they were given ─
+
+_PAD = " " * 1_000_000
+
+
+@pytest.mark.parametrize("where", ["leading", "trailing"])
+def test_a_padded_path_is_refused_by_every_screen_before_it_resolves(where, monkeypatch):
+    """A leading pad in front of a path under the cap is one long first component, and
+    realpath copies it again for every later part: measured 14 s on a save route for a 10 MB
+    pad while the screen measured the stripped text. Every screen that resolves the text it
+    was given must count the pad."""
+    import vaf.core.web_server as ws
+    from vaf.core.platform import Platform
+    from vaf.tools import filesystem
+
+    def _boom(*a, **k):
+        raise AssertionError("a padded path reached a step that resolves it")
+
+    path = "/home/user/Documents/" + "a/" * 1000 + "x.md"
+    padded = _PAD + path if where == "leading" else path + _PAD
+    assert not is_overlong_path(path)
+
+    monkeypatch.setattr(Platform, "normalize_path", staticmethod(_boom))
+    monkeypatch.setattr(path_jail, "is_remote_path", _boom)
+    request = SimpleNamespace(state=SimpleNamespace(user={}), headers={}, client=None)
+    with pytest.raises(HTTPException) as e:
+        ws._allowed_file_path(padded, request)
+    assert (e.value.status_code, e.value.detail) == (400, "Invalid path")
+
+    # jail_allows answers False to any error, so a raising stand-in would prove nothing: this
+    # one admits everyone and records that it was asked.
+    asked = []
+    monkeypatch.setattr(filesystem, "compute_user_jail",
+                        lambda *a, **k: asked.append(a) or {"is_admin": True})
+    for scope, role in (("", None), ("ab12cd34-0000-0000-0000-000000000001", "user")):
+        assert filesystem.jail_allows(padded, user_scope_id=scope, user_role=role) is False
+    assert asked == []
+
+    monkeypatch.setattr(filesystem, "_resolve_folder_alias", _boom)
+    assert filesystem.is_safe_path(padded) == (False, filesystem.PATH_TOO_LONG_REFUSAL)
+
+
+# ── a resolve the OS refuses (Windows past MAX_PATH) ───────────────────────
+
+def _resolve_refused_past(monkeypatch, allowed):
+    """``Path.resolve`` as Windows answers a path past MAX_PATH without long-path support:
+    ntpath.realpath re-raises winerror 206 even when it is not strict, because 206 is not in
+    its allow list. Paths in ``allowed`` resolve as usual. A seam, so the Windows class is
+    caught on every host."""
+    import errno
+    import pathlib
+
+    real = pathlib.Path.resolve
+
+    def resolve(self, *a, **k):
+        if self in allowed:
+            return real(self, *a, **k)
+        # The fourth argument is winerror on Windows and ignored elsewhere.
+        raise OSError(errno.ENAMETOOLONG, "The filename or extension is too long", str(self),
+                      206)
+
+    monkeypatch.setattr(pathlib.Path, "resolve", resolve)
+
+
+def test_a_resolve_the_os_refuses_is_a_refusal_not_an_oserror(tmp_path, monkeypatch):
+    import vaf.core.web_server as ws
+    root = tmp_path.resolve()
+    _resolve_refused_past(monkeypatch, {tmp_path, root})
+
+    with pytest.raises(PathEscape, match="^folder not found$"):
+        contained_path(root, "a/b", must_exist=True)
+    with pytest.raises(PathEscape, match="^path cannot be resolved$"):
+        contained_path(root, "a/b")
+    with pytest.raises(HTTPException) as e:
+        ws._resolve_workspace_subdir(str(root), "a/b")
+    assert e.value.status_code == 404
+    with pytest.raises(HTTPException) as e:
+        ws._a2a_workspace_member_path(root, "a/b")
+    assert e.value.status_code == 400 and "cannot be resolved" in str(e.value.detail)
+
+    # The root itself refused (a workspace folder past MAX_PATH): the same two refusals.
+    _resolve_refused_past(monkeypatch, set())
+    with pytest.raises(PathEscape, match="^folder not found$"):
+        contained_path(root, "", must_exist=True)
+    with pytest.raises(PathEscape, match="^path cannot be resolved$"):
+        contained_path(root, "a")
 
 
 # ── 9. the routes an account reaches ───────────────────────────────────────

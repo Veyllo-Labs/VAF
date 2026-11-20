@@ -1684,3 +1684,65 @@ def test_decision_interleavings_fuzz(store, workspaces, monkeypatch):
     draws = int(os.environ.get("VAF_FUZZ_DRAWS", "12"))
     bad = _decision_fuzz(workspaces, store, monkeypatch, draws)
     assert bad == [], bad[:5]
+
+
+class _SlowFilelock:
+    """Stands in for the `filelock` module on its first import: the attribute read waits,
+    which is the window in which a second thread asks for the lock class."""
+
+    def __init__(self, real):
+        self._real = real
+
+    def __getattr__(self, name):
+        import time
+
+        time.sleep(0.03)
+        return getattr(self._real, name)
+
+
+def _first_probe(monkeypatch):
+    """The process state before anything asked for the lock class, with a slow import."""
+    import sys
+
+    import filelock
+
+    import vaf.core.secure_store as secure_store
+
+    monkeypatch.setattr(secure_store, "_FILELOCK_CLS", None)
+    monkeypatch.setattr(secure_store, "_FILELOCK_PROBED", False)
+    monkeypatch.setitem(sys.modules, "filelock", _SlowFilelock(filelock))
+    return secure_store, filelock
+
+
+def test_the_first_lock_class_is_the_same_for_every_thread(monkeypatch):
+    """Found by the decision fuzz (the first draw of a fresh process): the accessor set its
+    "probed" flag before the class, so a thread asking during the first import got None and
+    took the in-process fallback while the first one took the file lock, two locks that do
+    not exclude each other. MUTATION: set `_FILELOCK_PROBED` before `_FILELOCK_CLS` again."""
+    secure_store, filelock = _first_probe(monkeypatch)
+    out = _race([secure_store._get_filelock_cls] * 4)
+    assert out == [filelock.FileLock] * 4, out
+
+
+def test_the_first_decisions_of_a_process_share_one_lock(store, workspaces, monkeypatch):
+    """The fuzz mismatch as a fixed row: three approvals as the first decisions of a
+    process, while the lock class is still being imported; the action takes long enough
+    that the decisions overlap when they hold different locks (measured: two answered
+    True, and the second applied the claimed create again). MUTATION: as above."""
+    import time
+
+    _first_probe(monkeypatch)
+    ws = workspaces
+    real_apply = ws.tw._apply_automation_action
+
+    def slow_apply(*a, **kw):
+        time.sleep(0.4)
+        return real_apply(*a, **kw)
+
+    monkeypatch.setattr(ws.tw, "_apply_automation_action", slow_apply)
+    hid = _create_handoff(ws, "first of the process")
+    before = _a_tasks(store)
+    out = _race([lambda: ws.tw.approve_handoff(TENANT_A, ws.task_a, hid)] * 3)
+    assert out.count(True) == 1, out
+    assert all(isinstance(o, ws.tw.HandoffAlreadyDecided) for o in out if o is not True), out
+    assert len(_a_tasks(store) - before) == 1

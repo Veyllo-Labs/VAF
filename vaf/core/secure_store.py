@@ -62,6 +62,7 @@ _pp_lock = threading.Lock()
 # Lazily probed cross-process lock implementation.
 _FILELOCK_CLS = None
 _FILELOCK_PROBED = False
+_FILELOCK_PROBE_LOCK = threading.Lock()
 
 # Cached keyring-availability flag (availability is global, not per service).
 _KEYRING_AVAILABLE: Optional[bool] = None
@@ -243,15 +244,22 @@ def keyring_available() -> bool:
 # ---------------------------------------------------------------------------
 
 def _get_filelock_cls():
+    """`filelock.FileLock`, or None when the package cannot be imported; the same answer
+    for every thread. The flag is set only after the class, under a lock: setting it first
+    let a thread that asked during the first import read None and take its fallback while
+    the first thread took the file lock, two locks that do not exclude each other."""
     global _FILELOCK_CLS, _FILELOCK_PROBED
-    if not _FILELOCK_PROBED:
-        _FILELOCK_PROBED = True
-        try:
-            from filelock import FileLock
-            _FILELOCK_CLS = FileLock
-        except Exception as e:  # pragma: no cover - only when dependency missing
-            logger.warning("filelock unavailable; cross-process locking disabled: %s", e)
-            _FILELOCK_CLS = None
+    if _FILELOCK_PROBED:
+        return _FILELOCK_CLS
+    with _FILELOCK_PROBE_LOCK:
+        if not _FILELOCK_PROBED:
+            try:
+                from filelock import FileLock
+                _FILELOCK_CLS = FileLock
+            except Exception as e:  # pragma: no cover - only when dependency missing
+                logger.warning("filelock unavailable; cross-process locking disabled: %s", e)
+                _FILELOCK_CLS = None
+            _FILELOCK_PROBED = True
     return _FILELOCK_CLS
 
 

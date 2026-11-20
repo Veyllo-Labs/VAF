@@ -24,7 +24,7 @@ MUTATIONS, each turns the named test red:
   -> test_a_stale_manager_keeps_the_other_lanes_field, test_two_processes_lose_no_field,
      test_concurrent_writers_fuzz;
 - `_store_lock` -> `contextlib.nullcontext()` -> test_two_threads_inside_the_read_modify_write_lose_nothing,
-  test_a_lock_held_by_another_process_makes_update_wait_then_busy;
+  test_a_lock_held_by_another_process_makes_update_wait_then_busy, test_a_hit_runs_only_once_its_cursor_is_on_disk;
 - the filelock `Timeout` not mapped -> test_a_lock_held_by_another_process_makes_update_wait_then_busy,
   test_busy_store_answers_without_a_path;
 - the stamp sites back to `_stamp_successful_run(task); self._save_task(task)`
@@ -33,8 +33,16 @@ MUTATIONS, each turns the named test red:
   -> test_update_after_delete_does_not_resurrect, test_a_run_stamp_after_trash_does_not_resurrect;
 - drop the destination check of `restore_from_trash` -> test_restore_never_overwrites_a_live_task;
 - `_fire_room_triggers` back to `self._save_task(task)` -> test_the_cursor_lands_on_the_current_record,
-  test_a_changed_trigger_room_gets_no_old_cursor, test_only_create_and_mutate_record_save_whole_tasks;
-- drop the room comparison of `_cursor_patch` -> test_a_changed_trigger_room_gets_no_old_cursor;
+  test_a_changed_trigger_rule_gets_no_old_cursor, test_only_create_and_mutate_record_save_whole_tasks;
+- `_cursor_patch` compares only kind and room again -> test_a_changed_trigger_rule_gets_no_old_cursor[match];
+- run the hit when its cursor write failed (or drop the pending hit)
+  -> test_a_hit_runs_only_once_its_cursor_is_on_disk;
+- publish the cache after the store lock in `_mutate_record` or in `_delete`
+  -> test_a_delete_between_an_update_and_its_cache_keeps_the_task_gone,
+     test_a_create_between_a_delete_and_its_cache_stays_listed;
+- drop the incarnation check in `_mutate_record` or in `_delete`, or let `create` keep the
+  given incarnation -> test_a_run_of_a_deleted_task_leaves_the_task_recreated_under_its_id_alone;
+- let `update` apply `incarnation` -> test_update_ignores_identity_and_property_keys;
 - filter the update keys with `hasattr` again -> test_update_ignores_identity_and_property_keys;
 - refresh the scheduler inside the store lock -> test_the_store_lock_is_a_leaf,
   test_no_deadlock_between_handoff_scheduler_and_updates;
@@ -121,22 +129,35 @@ def test_a_stale_manager_keeps_the_other_lanes_field(one, first, second):
 
 def _race_inside_the_write(d: Path, monkeypatch):
     """Thread 1 reads the record and pauses 0.3 s before it writes; thread 2 updates another
-    field during that pause. Returns (record, finish times, errors)."""
+    field during that pause. Returns (record, the reads and writes of the task file in the
+    order they happened, errors). Both are logged inside the store lock, so their order is
+    the lock's order and not the threads' finishing order (the work `update` does after the
+    lock, the mirror and the scheduler refresh, may finish in either order)."""
+    import vaf.core.data_files as data_files
+
     m1 = AutomationManager(storage_dir=str(d))
     m2 = AutomationManager(storage_dir=str(d))
     real_read = auto_mod._read_task_record
+    real_write = data_files.write_json_atomic
     first_read = threading.Event()
+    order = []
 
     def slow_read(path):
         record = real_read(path)
+        order.append(("read", threading.current_thread().name))
         if threading.current_thread().name == "rmw-1":
             first_read.set()
             time.sleep(0.3)
         return record
 
+    def logged_write(path, *a, **kw):
+        order.append(("write", threading.current_thread().name))
+        return real_write(path, *a, **kw)
+
     monkeypatch.setattr(auto_mod, "_read_task_record", slow_read)
+    monkeypatch.setattr(data_files, "write_json_atomic", logged_write)
     barrier = threading.Barrier(2)
-    done, errors = {}, []
+    errors = []
 
     def one_():
         try:
@@ -144,7 +165,6 @@ def _race_inside_the_write(d: Path, monkeypatch):
             m1.update(TID, name="by-1")
         except Exception as e:  # noqa: BLE001 - reported by the caller
             errors.append(repr(e))
-        done["1"] = time.monotonic()
 
     def two_():
         try:
@@ -153,31 +173,34 @@ def _race_inside_the_write(d: Path, monkeypatch):
             m2.update(TID, time="07:30")
         except Exception as e:  # noqa: BLE001 - reported by the caller
             errors.append(repr(e))
-        done["2"] = time.monotonic()
 
     threads = [threading.Thread(target=one_, name="rmw-1", daemon=True),
                threading.Thread(target=two_, name="rmw-2", daemon=True)]
     for t in threads:
         t.start()
     assert _join_all(threads, 10) == []
-    return _disk(d), done, errors
+    return _disk(d), [step for step in order if step[1].startswith("rmw-")], errors
+
+
+# The second writer reads only after the first one wrote: one read-modify-write at a time.
+_SERIAL = [("read", "rmw-1"), ("write", "rmw-1"), ("read", "rmw-2"), ("write", "rmw-2")]
 
 
 def test_two_threads_inside_the_read_modify_write_lose_nothing(one, monkeypatch):
-    record, done, errors = _race_inside_the_write(one, monkeypatch)
+    record, order, errors = _race_inside_the_write(one, monkeypatch)
     assert errors == []
     assert record["name"] == "by-1" and record["time"] == "07:30", record
-    assert done["2"] >= done["1"], "the second writer did not wait for the first"
+    assert order == _SERIAL, order
 
 
 def test_without_filelock_threads_still_serialize(one, monkeypatch):
     import vaf.core.secure_store as secure_store
 
     monkeypatch.setattr(secure_store, "_get_filelock_cls", lambda: None)
-    record, done, errors = _race_inside_the_write(one, monkeypatch)
+    record, order, errors = _race_inside_the_write(one, monkeypatch)
     assert errors == []
     assert record["name"] == "by-1" and record["time"] == "07:30", record
-    assert done["2"] >= done["1"]
+    assert order == _SERIAL, order
 
 
 # ── AC3: two processes ───────────────────────────────────────────────────────
@@ -240,6 +263,30 @@ def _child(tmp_path: Path, *args, stdin=None) -> subprocess.Popen:
                             text=True, encoding="utf-8")
 
 
+class _Lines:
+    """A child's stdout, read by a daemon thread, so a marker is awaited with a deadline and
+    a child that stalls without printing never blocks the test before its cleanup."""
+
+    def __init__(self, proc: subprocess.Popen):
+        import queue
+
+        self._queue = queue.Queue()
+        self._empty = queue.Empty
+        threading.Thread(target=self._pump, args=(proc.stdout,), daemon=True).start()
+
+    def _pump(self, stream):
+        for line in stream:
+            self._queue.put(line.strip())
+        self._queue.put(None)
+
+    def expect(self, marker: str, seconds: float = 30.0) -> None:
+        try:
+            line = self._queue.get(timeout=seconds)
+        except self._empty:
+            raise AssertionError(f"no {marker!r} from the child within {seconds} s") from None
+        assert line == marker, f"expected {marker!r}, got {line!r}"
+
+
 def test_two_processes_lose_no_field(store, tmp_path):
     """Two processes, each a fresh manager per round with a pause between loading and
     writing, each owning one field of three tasks. Each round checks that its own last
@@ -279,8 +326,8 @@ def test_a_lock_held_by_another_process_makes_update_wait_then_busy(one, tmp_pat
     mgr = AutomationManager(storage_dir=str(one))       # loaded before the child's write
     proc = _child(tmp_path, "hold", str(one), TID, stdin=subprocess.PIPE)
     try:
-        line = proc.stdout.readline()
-        assert line.strip() == "held", proc.stderr.read()[-2000:] if not line else line
+        lines = _Lines(proc)
+        lines.expect("held")
 
         monkeypatch.setattr(auto_mod, "_STORE_LOCK_TIMEOUT_S", 0.2)
         with pytest.raises(AutomationStoreBusy) as busy:
@@ -304,7 +351,7 @@ def test_a_lock_held_by_another_process_makes_update_wait_then_busy(one, tmp_pat
         proc.stdin.flush()
         waiter.join(10)
         assert box.get("task") is not None and box["waited"] >= 0.5, box
-        assert proc.stdout.readline().strip() == "released"
+        lines.expect("released")
         proc.wait(10)
     finally:
         if proc.poll() is None:
@@ -430,6 +477,149 @@ def test_restore_never_overwrites_a_live_task(one):
     assert (one / "trash" / f"{TID}.json").exists()
 
 
+def _pause_after_release(monkeypatch, thread_name: str, released: threading.Event):
+    """Every store lock taken by `thread_name` signals `released` right after it lets go,
+    then pauses 0.3 s: the window between the lock and anything done after it."""
+    real = auto_mod._acquire_store_lock
+
+    def acquire(directory):
+        release = real(directory)
+        if threading.current_thread().name != thread_name:
+            return release
+
+        def release_then_pause():
+            release()
+            released.set()
+            time.sleep(0.3)
+        return release_then_pause
+
+    monkeypatch.setattr(auto_mod, "_acquire_store_lock", acquire)
+
+
+def _in_threads(*named):
+    errors = []
+
+    def run(fn):
+        try:
+            fn()
+        except Exception as e:  # noqa: BLE001 - reported by the caller
+            errors.append(repr(e))
+
+    threads = [threading.Thread(target=run, args=(fn,), name=name, daemon=True)
+               for name, fn in named]
+    for t in threads:
+        t.start()
+    assert _join_all(threads, 10) == []
+    return errors
+
+
+def test_a_delete_between_an_update_and_its_cache_keeps_the_task_gone(one, monkeypatch):
+    """One manager: an update writes and lets the lock go; a delete runs in that moment.
+    The update's task must not come back into `get()`, the delete removed it from disk."""
+    mgr = AutomationManager(storage_dir=str(one))
+    released = threading.Event()
+    _pause_after_release(monkeypatch, "updater", released)
+
+    def delete():
+        assert released.wait(5)
+        assert mgr.delete(TID, permanent=True)
+
+    errors = _in_threads(("updater", lambda: mgr.update(TID, name="x")), ("deleter", delete))
+    assert errors == []
+    assert not (one / f"{TID}.json").exists()
+    assert mgr.get(TID) is None and TID not in [t.id for t in mgr.list()], \
+        "the deleted task is back in the manager"
+
+
+def test_a_create_between_a_delete_and_its_cache_stays_listed(one, monkeypatch):
+    """The other order: a delete removes the file and lets the lock go; the same id is
+    created on the same manager in that moment. The created task stays in `get()`."""
+    mgr = AutomationManager(storage_dir=str(one))
+    released = threading.Event()
+    _pause_after_release(monkeypatch, "deleter", released)
+
+    def create():
+        assert released.wait(5)
+        mgr.create(AutomationTask(id=TID, name="again", time="08:00"))
+
+    errors = _in_threads(("deleter", lambda: mgr.delete(TID, permanent=True)),
+                         ("creator", create))
+    assert errors == []
+    assert _disk(one)["name"] == "again"
+    assert mgr.get(TID) is not None and mgr.get(TID).name == "again"
+
+
+def test_an_incarnation_follows_edits_and_the_trash(one, monkeypatch):
+    """Set once at create, kept by an update, by the trash and by a restore: a run stamp of
+    the task it was loaded as still lands."""
+    monkeypatch.setattr(auto_mod, "_resolve_username", lambda scope: "alice")
+    incarnation = _disk(one)["incarnation"]
+    assert isinstance(incarnation, str) and len(incarnation) == 12
+    scheduler = AutomationManager(storage_dir=str(one))
+    running = scheduler.get(TID)
+    lane = AutomationManager(storage_dir=str(one))
+    lane.update(TID, name="edited", enabled=False)
+    assert lane.move_to_trash(TID) and lane.restore_from_trash(TID)
+    assert _disk(one)["incarnation"] == incarnation
+    assert scheduler._record_successful_run(running) is not None
+    record = _disk(one)
+    assert record["last_run"] and record["name"] == "edited" and record["enabled"] is False
+
+
+def test_a_record_without_an_incarnation_still_loads_and_takes_its_stamp(one, monkeypatch):
+    """A file written before the field existed: no incarnation on disk, None when loaded,
+    and two Nones are the same task, so its run is stamped as it always was."""
+    monkeypatch.setattr(auto_mod, "_resolve_username", lambda scope: "alice")
+    path = one / f"{TID}.json"
+    legacy = json.loads(path.read_text(encoding="utf-8"))
+    del legacy["incarnation"]
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+    scheduler = AutomationManager(storage_dir=str(one))
+    running = scheduler.get(TID)
+    assert running.incarnation is None
+    assert AutomationManager(storage_dir=str(one)).update(TID, name="edited").incarnation is None
+    assert scheduler._record_successful_run(running) is not None
+    record = _disk(one)
+    assert record["last_run"] and "incarnation" in record and record["incarnation"] is None
+
+
+def test_a_run_of_a_deleted_task_leaves_the_task_recreated_under_its_id_alone(
+        store, workspaces, monkeypatch):
+    """A claimed create whose decision could not be saved leaves its task and its claim; the
+    task runs, is deleted while it runs, and the next approve creates the planned id again.
+    The old run ends: its stamp, and for a one-time task its removal, must not land on the
+    new task, which has not run (measured before the fix: stamped, shown as done today)."""
+    ws, tw = workspaces, workspaces.tw
+    monkeypatch.setattr(auto_mod, "_resolve_username", lambda scope: "alice")
+    hid = tw.create_handoff(TENANT_A, ws.task_a, "Create", "c", automation_action={
+        "operation": "create", "prompt": "write the report", "time": "15:30",
+        "frequency": "once"})["id"]
+    real_save, failed = tw._save_decision, []
+
+    def save_fails_once_approved(hpath, handoff):
+        if handoff.get("status") == "approved" and not failed:
+            failed.append(1)
+            raise tw.HandoffNotSaved("handoff decision not saved")
+        return real_save(hpath, handoff)
+
+    monkeypatch.setattr(tw, "_save_decision", save_fails_once_approved)
+    with pytest.raises(tw.HandoffNotSaved):
+        tw.approve_handoff(TENANT_A, ws.task_a, hid)
+    planned = _record(ws, hid)["claim"]["automation_id"]
+    path = store / TENANT_A / f"{planned}.json"
+    scheduler = AutomationManager()
+    running = scheduler.get(planned)                     # the run fires
+    assert AutomationManager(user_scope_id=TENANT_A).delete(planned, permanent=True)
+    assert tw.approve_handoff(TENANT_A, ws.task_a, hid)  # creates the planned id again
+    replacement = path.read_bytes()
+    assert json.loads(replacement)["incarnation"] != running.incarnation
+
+    assert scheduler._record_successful_run(running) is None
+    assert scheduler._remove_spent_once(running) is False
+    assert path.read_bytes() == replacement, "the old run wrote onto the new task"
+    assert json.loads(replacement)["last_run"] is None
+
+
 # ── AC7: the trigger cursor lands on the current record ─────────────────────
 
 _TRIGGER = {"kind": "room_message", "room_id": "room-1", "match": "go"}
@@ -473,21 +663,64 @@ def test_the_cursor_lands_on_the_current_record(event_task):
     assert record["trigger"] == dict(_TRIGGER, cursor=42)
 
 
-def test_a_changed_trigger_room_gets_no_old_cursor(event_task):
+@pytest.mark.parametrize("changed", [{"room_id": "room-2"}, {"match": "stop"}],
+                         ids=["room", "match"])
+def test_a_changed_trigger_rule_gets_no_old_cursor(event_task, changed):
+    """The hit matched the old rule; the edited rule was never asked about those frames.
+    No cursor is written into it and the run does not start."""
     scheduler, watch = _scheduler_with_a_hit(event_task, 42)
-    moved = dict(_TRIGGER, room_id="room-2")
+    moved = dict(_TRIGGER, **changed)
     AutomationManager(storage_dir=str(event_task)).update("e7e00001", trigger=moved)
-    _fire(scheduler, watch)
+    started = []
+    scheduler._trigger_watch = watch
+    scheduler._run_scheduled_task = lambda task, *, trigger=None: started.append(task.id)
+    assert scheduler._fire_room_triggers() == 0
+    assert started == []
     assert _disk(event_task, "e7e00001")["trigger"] == moved
+
+
+def test_a_hit_runs_only_once_its_cursor_is_on_disk(event_task, monkeypatch):
+    """The store is busy when the hit comes: no run starts and the cursor on disk stays.
+    The watch does not report those frames again (it moved its own cursor), so the hit is
+    held; the next tick commits it and only then runs it."""
+    from vaf.core.automation_triggers import TriggerHit
+
+    scheduler = AutomationManager(storage_dir=str(event_task))
+    reported = []
+
+    class _Once:
+        def tick(self, tasks):
+            if reported:
+                return []
+            reported.append(1)
+            return [TriggerHit(t, ["frame-41", "frame-42"], 42, {}) for t in tasks
+                    if t.id == "e7e00001"]
+
+    started = []
+    scheduler._trigger_watch = _Once()
+    scheduler._run_scheduled_task = lambda task, *, trigger=None: started.append(trigger)
+    import vaf.core.automation_triggers as triggers
+    monkeypatch.setattr(triggers, "trigger_context", lambda t, frames, labels: list(frames))
+    monkeypatch.setattr(auto_mod, "_STORE_LOCK_TIMEOUT_S", 0.2)
+    with _Held(event_task):
+        assert scheduler._fire_room_triggers() == 0
+    assert started == []
+    assert "cursor" not in _disk(event_task, "e7e00001")["trigger"]
+    assert scheduler._fire_room_triggers() == 1
+    assert started == [["frame-41", "frame-42"]]
+    assert _disk(event_task, "e7e00001")["trigger"] == dict(_TRIGGER, cursor=42)
+    assert scheduler._fire_room_triggers() == 0, "a committed hit ran twice"
 
 
 # ── AC8: identity and property keys are never applied ───────────────────────
 
 def test_update_ignores_identity_and_property_keys(one):
     mgr = AutomationManager(storage_dir=str(one))
+    incarnation = _disk(one)["incarnation"]
     task = mgr.update(TID, id="0ther001", user_scope_id="ab12cd34-0000-4000-8000-0000000000f1",
-                      next_run_label="soon", name="kept")
+                      incarnation="f0f0f0f0f0f0", next_run_label="soon", name="kept")
     assert task is not None and task.id == TID and task.user_scope_id is None
+    assert task.incarnation == incarnation and _disk(one)["incarnation"] == incarnation
     assert sorted(p.name for p in one.glob("*.json")) == [f"{TID}.json"]
     assert not [p for p in one.iterdir() if p.is_dir() and p.name != "trash"]
     record = _disk(one)
@@ -574,7 +807,11 @@ _NOT_UNDER_THE_STORE_LOCK = {"refresh_scheduler_from_disk", "ensure_scheduler_st
 
 def test_the_store_lock_is_a_leaf():
     """No body that holds the store lock reaches a call that takes another lock, directly
-    or through a function of this module it calls."""
+    or through a function of this module it calls (resolved by bare name).
+
+    It does NOT see a callable handed in as a value: the `change` that `_mutate_record` runs
+    under the lock is a lambda or `_cursor_patch` at every call site today, each a dict
+    update, but a new caller passing a function that takes a lock would pass this guard."""
     tree = ast.parse(_AUTOMATION_PY.read_text(encoding="utf-8"))
     functions = _functions(tree)
     locked = [node for node in ast.walk(tree) if isinstance(node, ast.With)
@@ -728,7 +965,8 @@ def _fuzz_draw(d: Path, seed: int) -> list:
     scheduler = AutomationManager(storage_dir=str(d))
     captured = scheduler.get(TID)
     expect_cursor = [None]
-    stamped = [False]
+    # The task is never deleted in a draw, so every planned stamp must land.
+    stamp_planned = any(op == "stamp" for op, _pause in sched_ops)
     errors = []
     barrier = threading.Barrier(writers + 1)
 
@@ -748,7 +986,8 @@ def _fuzz_draw(d: Path, seed: int) -> list:
             for n, (op, pause) in enumerate(sched_ops, 1):
                 time.sleep(pause)
                 if op == "stamp":
-                    stamped[0] = scheduler._record_successful_run(captured) is not None
+                    if scheduler._record_successful_run(captured) is None:
+                        errors.append(f"scheduler: stamp {n} was not written")
                 else:
                     scheduler._mutate_record(captured, auto_mod._cursor_patch(dict(trigger, cursor=n)))
                     expect_cursor[0] = n
@@ -770,8 +1009,10 @@ def _fuzz_draw(d: Path, seed: int) -> list:
             want = _fuzz_value(f, w, len(plans[w]) - 1)
             if record.get(f) != want:
                 bad.append(f"{f}: {record.get(f)!r} != {want!r}")
-    if stamped[0] and not record.get("last_run"):
+    if stamp_planned and not record.get("last_run"):
         bad.append("the run stamp is lost")
+    if not stamp_planned and record.get("last_run"):
+        bad.append("a stamp nobody made")
     want_trigger = dict(trigger) if expect_cursor[0] is None else dict(trigger, cursor=expect_cursor[0])
     if record.get("trigger") != want_trigger:
         bad.append(f"trigger {record.get('trigger')!r} != {want_trigger!r}")

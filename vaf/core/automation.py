@@ -174,6 +174,14 @@ class AutomationTask:
     # Read only through vaf.core.automation_triggers.read_trigger, never trusted raw.
     trigger: Optional[Dict[str, Any]] = None
 
+    # Which task this is beyond its id: set by `AutomationManager.create`, never changed by an
+    # update, and carried into the trash and back with the file. An id can be given to a NEW
+    # task while a run of the old one is still going (a retried approval creates its planned
+    # id again after the first task was deleted), and a run's bookkeeping must not land on
+    # that new task. None on a record written before the field existed: two Nones are taken
+    # for the same task, as every write treated them before.
+    incarnation: Optional[str] = None
+
     def __post_init__(self):
         # The data-model boundary: every constructor and every file loaded through
         # from_dict pass here, so a record written before the coercion (a day of "15")
@@ -185,6 +193,8 @@ class AutomationTask:
         self.day = fields.get("day")
         self.weekday = fields.get("weekday")
         self.enabled = fields["enabled"] if self.enabled is not None else False
+        if self.incarnation is not None and not isinstance(self.incarnation, str):
+            self.incarnation = str(self.incarnation)
 
     def to_dict(self) -> Dict:
         """Convert to dict, excluding next_run (calculated dynamically)."""
@@ -734,18 +744,31 @@ def _stamp_successful_run(task: AutomationTask) -> None:
     task.last_completed_local_date = user_now(_resolve_username(task.user_scope_id)).date().isoformat()
 
 
+def _trigger_rule(trigger: Any) -> Optional[Dict[str, Any]]:
+    """A trigger without its cursor: the rule a hit was matched against."""
+    if not isinstance(trigger, dict):
+        return None
+    return {key: value for key, value in trigger.items() if key != "cursor"}
+
+
 def _cursor_patch(fired: Dict[str, Any]) -> Callable[[Dict[str, Any]], bool]:
     """The change that writes a fired trigger's cursor onto a task record: only when the
-    record's trigger still has the fired one's kind and room (False, nothing to write,
-    otherwise). A cursor is a position in ONE room; written into a trigger that now watches
-    another room it would skip that room's frames up to an unrelated number."""
+    record's trigger is still the rule that fired, every field but the cursor alike (False,
+    nothing to write, otherwise). A cursor belongs to the rule whose frames it consumed: in a
+    trigger that now watches another room it would skip that room's frames up to an
+    unrelated number, and a rule whose text or emoji changed was never asked about them.
+    `patch.applied` says afterwards whether the cursor was written into the record."""
+    rule = _trigger_rule(fired)
+
     def patch(record: Dict[str, Any]) -> bool:
         current = record.get("trigger")
-        if not isinstance(current, dict) or current.get("kind") != fired.get("kind") \
-                or current.get("room_id") != fired.get("room_id"):
+        if _trigger_rule(current) != rule:
             return False
         record["trigger"] = dict(current, cursor=fired.get("cursor"))
+        patch.applied = True
         return True
+
+    patch.applied = False
     return patch
 
 
@@ -790,8 +813,9 @@ def _read_task_record(path: Path) -> Optional[Dict[str, Any]]:
 
 # Every write of a task file holds the lock of the directory it lives in,
 # `<dir>/.automations.lock` (neither `_task_files` nor the slot count reads it). One lock per
-# directory, not per task: a holder keeps it for well under a millisecond (0.33 ms median for
-# lock, read, change and atomic write of a 4 KB task, measured), so two tasks of one account
+# directory, not per task: a holder keeps it for well under a millisecond for a task of a few
+# KB (0.33 ms median for lock, read, change and atomic write of a 4 KB task, measured), and
+# about 5 ms more per MB of task file (1 MB 5 ms, 64 MB 311 ms), so two tasks of one account
 # never wait on each other for long, create, delete, restore and the trash move need no per-id
 # bookkeeping, and a filelock that leaves its file behind leaves one per directory rather than
 # one per task id ever written. Different accounts are different directories.
@@ -833,6 +857,9 @@ def _acquire_store_lock(directory: Path) -> Callable[[], None]:
     from filelock import Timeout
 
     try:
+        # A missing directory is created even for a lane that only reads or removes (a late run
+        # stamp for an account whose folder is gone): an empty folder holds no task for any
+        # loader, and one lock path for every lane leaves no lockless branch to reason about.
         directory.mkdir(parents=True, exist_ok=True)
         lock = lock_cls(str(directory / _STORE_LOCK_NAME), timeout=timeout)
         lock.acquire()
@@ -1258,29 +1285,54 @@ class AutomationManager:
         """Run every event-driven task whose room said something matching since the
         last tick. Returns how many were started.
 
-        The cursor is persisted BEFORE the run, so a restart in the middle of one
+        The cursor is on disk BEFORE the run starts, so a restart in the middle of one
         cannot fire the same frames twice; a run that then fails is a run that
         failed, recorded in the run log like any other. The per-task run lock in
         run_task keeps a trigger that fires again while the previous run is still
         going from overlapping it.
+
+        A hit whose cursor cannot be written (the store busy past its timeout, or not
+        writable) is not run: it stays pending in this process and is committed first on
+        the next tick, joined with any newer frames of the same task, and run only once its
+        cursor is on disk. The watch has already moved its own cursor past those frames, so
+        the pending hit is the only place they are still held. A hit whose task is gone,
+        was created anew under the same id, or watches another rule by now is dropped: its
+        frames matched a rule that no longer exists.
         """
-        from vaf.core.automation_triggers import RoomTriggerWatch, trigger_context
+        from vaf.core.automation_triggers import RoomTriggerWatch, TriggerHit, trigger_context
 
         watch = getattr(self, "_trigger_watch", None)
         if watch is None:
             watch = self._trigger_watch = RoomTriggerWatch()
-        fired = 0
+        pending = getattr(self, "_pending_trigger_hits", None)
+        if pending is None:
+            pending = self._pending_trigger_hits = {}
+        hits: Dict[str, Any] = dict(pending)
         for hit in watch.tick(self.list(enabled_only=True)):
+            earlier = hits.get(hit.task.id)
+            if earlier is not None:
+                hit = TriggerHit(hit.task, list(earlier.frames) + list(hit.frames),
+                                 hit.newest, {**earlier.labels, **hit.labels})
+            hits[hit.task.id] = hit
+        fired = 0
+        for task_id, hit in hits.items():
             task = hit.task
             task.trigger = dict(task.trigger or {}, cursor=int(hit.newest))
+            patch = _cursor_patch(task.trigger)
             try:
-                # Onto the current record, and only while it still watches the same room: the
+                # Onto the current record, and only while it still watches the same rule: the
                 # scheduler's copy is as old as its last refresh, and writing it back put back a
-                # prompt or a trigger edited since. The watch's own cursor (per process) still
-                # keeps these frames from firing twice here.
-                self._mutate_record(task, _cursor_patch(task.trigger))
-            except Exception:
-                pass
+                # prompt or a trigger edited since.
+                current = self._mutate_record(task, patch, same_incarnation=True)
+            except Exception as e:
+                pending[task_id] = hit
+                self._log_scheduler_event(f"TRIGGER_PENDING task_id={task_id} error={e!r}")
+                continue
+            pending.pop(task_id, None)
+            if current is None or not patch.applied:
+                self._log_scheduler_event(
+                    f"TRIGGER_DROPPED task_id={task_id} reason='task or rule changed'")
+                continue
             self._log_scheduler_event(
                 f"TRIGGER_EVENT task_id={task.id} name={task.name!r} frames={len(hit.frames)}"
             )
@@ -1536,7 +1588,8 @@ vaf automation delete <id>   # Delete task
             release()
 
     def _mutate_record(self, task: AutomationTask,
-                       change: Callable[[Dict[str, Any]], Optional[bool]]) -> Optional[AutomationTask]:
+                       change: Callable[[Dict[str, Any]], Optional[bool]], *,
+                       same_incarnation: bool = False) -> Optional[AutomationTask]:
         """Apply `change` to the task's record AS IT IS ON DISK NOW, under the store lock,
         and write it; the task built from the written record (also put into the cache).
 
@@ -1549,7 +1602,15 @@ vaf automation delete <id>   # Delete task
         None when the file is gone or is not this task's record (deleted, moved to the
         trash, unreadable): nothing is written, so a deleted task is never brought back and
         a file this code cannot read is never overwritten. `change` returning False means
-        "nothing to write": the current record is returned unwritten."""
+        "nothing to write": the current record is returned unwritten.
+
+        `same_incarnation`: write only onto the very task `task` was loaded as (its
+        `incarnation`), for the bookkeeping of something that task started (a run, a
+        trigger hit). None, with nothing written, when the id now names a task created anew.
+
+        The cache is changed inside the lock, in the order the file changes: published after
+        it, an update could put a task back into `get()` that a delete on the same manager
+        removed in between."""
         path = self._path_for_task(task)
         tasks = getattr(self, "tasks", None)
         if tasks is None:
@@ -1559,30 +1620,41 @@ vaf automation delete <id>   # Delete task
             if record is None or str(record.get("id")).strip() != str(task.id):
                 tasks.pop(task.id, None)
                 return None
+            if same_incarnation and record.get("incarnation") != task.incarnation:
+                tasks[task.id] = self._task_from_record(record, task, path)
+                return None
             write = change(record) is not False
-            fresh = AutomationTask.from_dict(record)
-            # The record keeps its path: the scope comes from where the task lives, as
-            # `_load_tasks` stamps it on a file that does not carry one.
-            fresh.user_scope_id = (task.user_scope_id or fresh.user_scope_id
-                                   or getattr(self, "user_scope_id", None))
-            if self._path_for_task(fresh) != path:
-                fresh.user_scope_id = task.user_scope_id
+            fresh = self._task_from_record(record, task, path)
             if write:
                 self._save_task(fresh)
-        tasks[fresh.id] = fresh
+            tasks[fresh.id] = fresh
+        return fresh
+
+    def _task_from_record(self, record: Dict[str, Any], task: AutomationTask,
+                          path: Path) -> AutomationTask:
+        """The task a record read from `path` is. It keeps its path: the scope comes from
+        where the task lives, as `_load_tasks` stamps it on a file that does not carry one."""
+        fresh = AutomationTask.from_dict(record)
+        fresh.user_scope_id = (task.user_scope_id or fresh.user_scope_id
+                               or getattr(self, "user_scope_id", None))
+        if self._path_for_task(fresh) != path:
+            fresh.user_scope_id = task.user_scope_id
         return fresh
 
     def _record_successful_run(self, task: AutomationTask) -> Optional[AutomationTask]:
         """Stamp a successful run on the captured `task` (its mirror and labels read it) and
         write ONLY the two run fields onto the current record. A time, switch, prompt or name
         changed while the run went keeps its change, and a task deleted or moved to the trash
-        during its run stays gone. A bookkeeping write must not fail the automation: an error
-        (a busy or unwritable store) is logged, as `append_run_log` does."""
+        during its run stays gone. Written only onto the task that ran (`same_incarnation`):
+        a task created anew under the same id meanwhile has not run, and the stamp would show
+        it as done today. A bookkeeping write must not fail the automation: an error (a busy
+        or unwritable store) is logged, as `append_run_log` does."""
         _stamp_successful_run(task)
         stamp = {"last_run": task.last_run,
                  "last_completed_local_date": task.last_completed_local_date}
         try:
-            return self._mutate_record(task, lambda record: record.update(stamp))
+            return self._mutate_record(task, lambda record: record.update(stamp),
+                                       same_incarnation=True)
         except Exception as e:
             append_domain_log("backend", f"[AUTOMATION] run of {task.id} not recorded: {e!r}")
             return None
@@ -1620,10 +1692,14 @@ vaf automation delete <id>   # Delete task
             pass
     
     def create(self, task: AutomationTask) -> AutomationTask:
-        """Create a new automation task."""
+        """Create a new automation task. It gets a new `incarnation`, also when its id was
+        carried by a task before (a retried approval creates its planned id again)."""
         # next_run is calculated dynamically - no need to store it
-        self.tasks[task.id] = task
-        self._save_task(task)
+        task.incarnation = uuid.uuid4().hex[:12]
+        path = self._path_for_task(task)
+        with self._store_lock(path.parent):
+            self._save_task(task)
+            self.tasks[task.id] = task
         self._sync_workspace_automation_state(task, event="automation_created")
 
         # Arm the new task with the running scheduler immediately (no restart needed). The web/agent
@@ -1754,10 +1830,11 @@ vaf automation delete <id>   # Delete task
         # The schedule fields are coerced here (every update lane, the WebSocket, the agent's
         # tool, an approved handoff and the CLI, reaches the store through this call). Only
         # stored fields are applied, never the identity: an `id` or `user_scope_id` would
-        # move the file, and a property name is not a field.
+        # move the file, an `incarnation` would make a run's stamp miss its own task, and a
+        # property name is not a field.
         fields = AutomationTask.__dataclass_fields__
         changes = {key: value for key, value in coerce_schedule_fields(kwargs).items()
-                   if key in fields and key not in ("id", "user_scope_id")}
+                   if key in fields and key not in ("id", "user_scope_id", "incarnation")}
         task = self._mutate_record(cached, lambda record: record.update(changes))
         if task is None:
             return None
@@ -1774,16 +1851,32 @@ vaf automation delete <id>   # Delete task
     
     def delete(self, task_id: str, permanent: bool = False) -> bool:
         """Delete a task (moves to trash by default, or permanently if specified)."""
-        if task_id not in self.tasks:
+        task = self.tasks.get(task_id)
+        if task is None:
             return False
-        
-        task = self.tasks[task_id]
+        return self._delete(task, permanent=permanent)
+
+    def _remove_spent_once(self, task: AutomationTask) -> bool:
+        """Remove a one-time task its run consumed, and only that task: one created anew under
+        the same id while the run went (a retried approval creates its planned id again) has
+        not run and stays. False when nothing was removed."""
+        return self._delete(task, permanent=True, only_this_incarnation=True)
+
+    def _delete(self, task: AutomationTask, *, permanent: bool,
+                only_this_incarnation: bool = False) -> bool:
+        task_id = task.id
         filepath = self._path_for_task(task)
         trash_path = self.trash_dir / f"{task_id}.json"
 
         # Under the store lock: a change that took the lock first is written before the file
         # goes, and one that comes after finds no file and writes nothing (`_mutate_record`).
+        # The cache follows the file inside the lock, in the same order.
         with self._store_lock(filepath.parent):
+            if only_this_incarnation:
+                record = _read_task_record(filepath)
+                if record is None or str(record.get("id")).strip() != str(task_id) \
+                        or record.get("incarnation") != task.incarnation:
+                    return False
             if filepath.exists():
                 if permanent:
                     # Permanent deletion
@@ -1807,8 +1900,8 @@ vaf automation delete <id>   # Delete task
                         shutil.move(str(_log_src), str(_run_log_path(trash_path)))
                 except OSError as _e:
                     append_domain_log("backend", f"[AUTOMATION] run log not moved for {task_id}: {_e}")
+            self.tasks.pop(task_id, None)
 
-        self.tasks.pop(task_id, None)
         try:
             task.enabled = False
             self._sync_workspace_automation_state(task, event="automation_deleted")
@@ -1850,9 +1943,8 @@ vaf automation delete <id>   # Delete task
                         shutil.move(str(_log_trash), str(_run_log_path(filepath)))
                     except OSError as _e:
                         append_domain_log("backend", f"[AUTOMATION] run log not restored for {task_id}: {_e}")
-
-            # Add back to tasks
-            self.tasks[task_id] = task
+                # Back into the cache inside the lock, in the order the file changed.
+                self.tasks[task_id] = task
             return True
         except Exception:
             return False
@@ -2280,7 +2372,7 @@ vaf automation delete <id>   # Delete task
                     # Delete ONCE tasks here too (early-return path would skip the
                     # ONCE-delete block further below).
                     if task.frequency == Frequency.ONCE:
-                        self.delete(task.id, permanent=True)
+                        self._remove_spent_once(task)
                     # Build a short, friendly bot summary instead of the raw technical report.
                     # final_output is the LAST step's result string - only treat it as a saved
                     # file when it actually IS one, otherwise the Web UI printed tool chatter
@@ -2613,9 +2705,7 @@ vaf automation delete <id>   # Delete task
             self._record_successful_run(task)
 
             # If frequency is ONCE, delete after run
-            if task.frequency == Frequency.ONCE:
-                # Use permanent=True because it's a planned one-time run, not a manual deletion
-                self.delete(task.id, permanent=True)
+            if task.frequency == Frequency.ONCE and self._remove_spent_once(task):
                 append_domain_log_always("backend", f"Automation '{task.name}' ({task.id}) frequency is 'once' - deleted after run.")
 
             prompt_delivered_in_run = _delivered_via_agent_history(getattr(agent, "history", None))
@@ -2657,13 +2747,14 @@ vaf automation delete <id>   # Delete task
             # finally only kicks in when the run errored out before reaching them —
             # otherwise the file lingers and the scheduler re-registers and re-runs
             # it on the next refresh/restart (showing up as "next run tomorrow").
-            if task.frequency == Frequency.ONCE and task.id in self.tasks:
+            # Only the task that ran: one created anew under its id meanwhile stays.
+            if task.frequency == Frequency.ONCE:
                 try:
-                    self.delete(task.id, permanent=True)
-                    append_domain_log_always(
-                        "backend",
-                        f"Automation '{task.name}' ({task.id}) frequency is 'once' - removed after run attempt.",
-                    )
+                    if self._remove_spent_once(task):
+                        append_domain_log_always(
+                            "backend",
+                            f"Automation '{task.name}' ({task.id}) frequency is 'once' - removed after run attempt.",
+                        )
                 except Exception:
                     pass
 

@@ -85,7 +85,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   automation in the app while the agent, an approved proposal, the terminal or a second window
   changed another field of it could put the other field back; a run that ended put back a time
   or switch changed while it ran, and brought back an automation deleted during it. Each change
-  is now written onto the automation as it is at that moment, one at a time.
+  is now written onto the automation as it is at that moment, one at a time, and a run that ends
+  never marks an automation created again under the same id as done. A room-triggered run starts
+  only once the position it read up to is saved, so a restart does not run it twice.
 - **WhatsApp: an account that is not an admin can no longer stop or restart WhatsApp for
   everybody.** Starting, restarting and switching WhatsApp off now act on that account's own
   connection, and an expired session stops only the connection it belongs to. While WhatsApp is

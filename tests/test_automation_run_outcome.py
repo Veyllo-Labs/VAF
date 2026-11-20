@@ -26,14 +26,25 @@ import pytest
 
 from vaf.core import automation
 from vaf.core.agent import Agent
-from vaf.core.automation import (NO_ANSWER_NOTE, AutomationManager, AutomationTask, RunOutcome,
-                                 _prompt_outcome, load_run_log)
+from vaf.core.automation import (AutomationManager, AutomationTask, RunOutcome, _prompt_outcome,
+                                 load_run_log)
 from vaf.core.session import TurnRound, TurnStatus
 
 TID = "0c0e0001"
 FAILED_TURN = TurnStatus(failed=True)
 ANSWERED_TWICE = TurnStatus(rounds=(TurnRound(1, (), True), TurnRound(2, (), True)))
 TOOL_ROUND = TurnStatus(rounds=(TurnRound(1, ("call-1",), False),))
+
+# What the person reads, written out here and not taken from the module, so the wording is pinned.
+NEXT = {"daily": "Sie läuft zum nächsten Termin wieder.",
+        "once": "Diese einmalige Automation ist damit verbraucht.",
+        "on_event": "Sie läuft beim nächsten passenden Ereignis wieder."}
+NO_ANSWER = "Das Modell hat keine Antwort geliefert. Prüfe die Verbindung zum Anbieter."
+
+
+def _failed(reason, frequency="daily"):
+    head = f"Der Lauf ist fehlgeschlagen: {reason}" if reason else NO_ANSWER
+    return f"{head}\n\n{NEXT[frequency]}"
 
 
 # ── the scratch world ────────────────────────────────────────────────────────
@@ -193,7 +204,7 @@ def test_failed_workflow_is_not_done(env, frequency):
     manager, task = _task(env, frequency, workflow_steps=STEPS)
     out = manager.run_task(task, new_terminal=False)
     assert out.startswith("# Workflow Failed") and "write refused" in out
-    assert _pushed(env) == [("error", out)]
+    assert _pushed(env) == [("error", f"{out.rstrip()}\n\n{NEXT[frequency]}")]
     assert env.synced == ["error"]
     assert list(env.out.iterdir()) == [], "a failed workflow's report became an output file"
     _assert_not_done(env, frequency)
@@ -238,7 +249,11 @@ def test_timed_out_prompt_is_not_done(env, frequency):
     out = manager.run_task(task, new_terminal=False)
     [(status, text)] = _pushed(env)
     assert status == "error" and text == out
-    assert "Zeitlimit überschritten" in text and "'report'" in text
+    assert text == (
+        "Zeitlimit überschritten: Die Automation 'report' war nach 600 s Zeitlimit und 300 s "
+        "Nachfrist noch nicht fertig. Es gibt kein Teilergebnis. Der Lauf kann im Hintergrund "
+        "noch weiterarbeiten, aber was er dann noch tut, wird nicht gemeldet. Kürze den Auftrag "
+        f"oder erhöhe das Zeitlimit (automation_run_timeout_seconds).\n\n{NEXT[frequency]}")
     assert "meldet er sich selbst" not in text and not text.startswith("Error:")
     assert "Half a sent" not in text, "a partial stream was delivered"
     assert list(env.out.iterdir()) == []
@@ -252,7 +267,7 @@ def test_a_turn_finished_in_the_grace_is_judged_like_any_turn(env):
     _time_out(env, finish_in_grace=True)
     manager, task = _task(env)
     manager.run_task(task, new_terminal=False)
-    assert _pushed(env) == [("error", "[Error] backend down")]
+    assert _pushed(env) == [("error", _failed("[Error] backend down"))]
     _assert_not_done(env, "daily")
 
 
@@ -262,9 +277,9 @@ API_ERROR = "[API Error from groq: 500]"
 
 
 @pytest.mark.parametrize("returns, chunks, shown", [
-    pytest.param("[Error] backend down", [], "[Error] backend down", id="unstreamed"),
-    pytest.param(API_ERROR, [API_ERROR], API_ERROR, id="streamed"),
-    pytest.param("", [], NO_ANSWER_NOTE, id="empty"),
+    pytest.param("[Error] backend down", [], _failed("[Error] backend down"), id="unstreamed"),
+    pytest.param(API_ERROR, [API_ERROR], _failed(API_ERROR), id="streamed"),
+    pytest.param("", [], _failed(""), id="empty"),
 ])
 def test_failed_turn_is_failed(env, returns, chunks, shown):
     """MUTATION: drop the `returned_turn_copy` meta check, judging from the stream again."""
@@ -284,7 +299,7 @@ def test_system_log_only_is_failed(env):
     _prompt_agent(env, returns="[SYSTEM_LOG_ONLY]API returned empty response after retries.")
     manager, task = _task(env)
     manager.run_task(task, new_terminal=False)
-    assert _pushed(env) == [("error", "API returned empty response after retries.")]
+    assert _pushed(env) == [("error", _failed("API returned empty response after retries."))]
     _assert_not_done(env, "daily")
 
 
@@ -326,8 +341,8 @@ def test_a_raising_turn_runs_once(env):
     manager, task = _task(env)
     out = manager.run_task(task, new_terminal=False)
     assert seen["calls"] == 1, "a failed turn was started a second time"
-    assert out == "Error: provider exploded"
-    assert _pushed(env) == [("error", "Error: provider exploded")]
+    assert out == _failed("Error: provider exploded")
+    assert _pushed(env) == [("error", _failed("Error: provider exploded"))]
     assert seen["shutdowns"] >= 1, "the agent of a failed turn was not shut down"
     _assert_not_done(env, "daily")
 
@@ -379,7 +394,7 @@ def test_room_triggered_failed_turn_is_not_done(env):
                      trigger={"room_id": "room-t", "frames": [], "text": "deploy it"})
     assert seen["calls"] == 1, "the frames of a failed run were run again"
     assert bound == [("bind", "binding"), ("end",)]
-    assert _pushed(env) == [("error", "[Error] backend down")]
+    assert _pushed(env) == [("error", _failed("[Error] backend down", "on_event"))]
     record = _record(env)
     assert record["last_run"] is None and record["trigger"] == stored_trigger
     assert _log(env) == ["error"]
@@ -391,18 +406,22 @@ def test_room_triggered_failed_turn_is_not_done(env):
     ("failed", False), ("timed_out", False), ("ok", True), ("paused", True), (None, False),
 ])
 def test_cli_run_holds_the_window_on_failure(monkeypatch, status, success):
-    """MUTATIONS: `ok = True` whatever the outcome; never call `on_outcome`. `None` is a run
-    that ended without an outcome (skipped, locked, revoked)."""
+    """The window is held with "the output above is the log", so the reason is printed into
+    it, as written. MUTATIONS: `ok = True` whatever the outcome; never call `on_outcome`; drop
+    the reason print. `None` is a run that ended without an outcome (skipped, locked, revoked),
+    whose reason is what run_task answered."""
     from typer.testing import CliRunner
     import vaf.cli.autoclose as autoclose
 
     task = SimpleNamespace(id=TID, name="report")
+    reason = f"[i]reason of {status}[/i]: Der Lauf ist fehlgeschlagen"
+    answered = "[LOCK] Automation 'report' (0c0e0001) is already running. Skipping."
 
     def run_task(t, callback=None, new_terminal=True, trigger=None, *, on_outcome=None):
         assert new_terminal is False
         if status is not None and on_outcome is not None:
-            on_outcome(RunOutcome(status, "text"))
-        return "text"
+            on_outcome(RunOutcome(status, reason))
+        return answered if status is None else reason
 
     finished = []
     monkeypatch.setattr(automation, "get_manager",
@@ -411,6 +430,11 @@ def test_cli_run_holds_the_window_on_failure(monkeypatch, status, success):
     result = CliRunner().invoke(automation.automation_app, ["run", TID])
     assert result.exception is None, result.output
     assert finished == [{"success": success}]
+    shown = answered if status is None else reason
+    if success:
+        assert shown not in result.output, "a completed run printed a failure reason"
+    else:
+        assert shown in result.output, result.output
 
 
 def test_run_task_hands_its_outcome_to_the_caller_once(env):
@@ -427,13 +451,160 @@ def test_run_task_hands_its_outcome_to_the_caller_once(env):
         raise RuntimeError("the caller's own bug")
 
     manager.run_task(task, new_terminal=False, on_outcome=hook)
-    assert seen == [("failed", "[Error] backend down", ["error"])]
-    assert _pushed(env) == [("error", "[Error] backend down")]
+    assert seen == [("failed", _failed("[Error] backend down"), ["error"])]
+    assert _pushed(env) == [("error", _failed("[Error] backend down"))]
 
     env.monkeypatch.setattr(LockManager, "acquire", lambda lock_id: False)
     later = []
     out = manager.run_task(task, new_terminal=False, on_outcome=later.append)
     assert out.startswith("[LOCK]") and later == []
+
+
+# ── what a delegation acknowledgement delivers ───────────────────────────────
+
+@pytest.mark.parametrize("returns, shown", [
+    pytest.param("[ASYNC_ACK]<think>Translate: secret plan</think>Le helper travaille [Task: t1].",
+                 "Le helper travaille [Task: t1].", id="closed-think"),
+    pytest.param("[ASYNC_ACK]<think>secret plan, never closed", "Completed", id="unclosed-think"),
+    pytest.param('[ASYNC_ACK]Le helper travaille. {"name": "web_search", "arguments": '
+                 '{"query": "secret plan"}}', "Le helper travaille.", id="leaked-tool-call"),
+])
+def test_a_delegation_acknowledgement_is_cleaned(env, returns, shown):
+    """The acknowledgement of a delegation can be the model's own translation, from a call that
+    keeps its marked reasoning; it reaches chat, notification and messenger only cleaned.
+    MUTATION: hand `_prompt_outcome` no cleaner."""
+    _prompt_agent(env, returns=returns, turn=TOOL_ROUND)
+    manager, task = _task(env)
+    manager.run_task(task, new_terminal=False)
+    assert _pushed(env) == [("success", shown)]
+    assert "secret plan" not in _pushed(env)[0][1]
+
+
+# ── a one-time task fires once, whatever its outcome ─────────────────────────
+
+def test_a_failed_one_time_run_is_never_run_again(env):
+    """A one-time run that may have acted and then failed is not stamped; when both attempts
+    to remove it fail too (a busy store), its mark of consumption, written before it ran, still
+    keeps it from being armed or run again at a refresh. MUTATIONS: drop the
+    `_mark_once_consumed` call; leave `consumed_at` out of `_once_already_ran`; let `update`
+    clear it."""
+    from vaf.core.automation import AutomationStoreBusy
+
+    _prompt_agent(env, returns="[Error] backend down", turn=FAILED_TURN)
+    manager, task = _task(env, "once")
+
+    def busy(self, *a, **k):
+        raise AutomationStoreBusy("automation store is busy")
+
+    env.monkeypatch.setattr(AutomationManager, "_delete", busy)
+    manager.run_task(task, new_terminal=False)
+    record = _record(env)
+    assert record is not None, "the busy store let the removal through"
+    assert record["last_run"] is None and record["consumed_at"], record
+
+    later = AutomationManager(storage_dir=str(env.store))         # a refresh or a restart
+    assert later.update(TID, consumed_at=None, description="edited") is not None
+    again = later.get(TID)
+    assert again.consumed_at, "an update cleared the run's mark"
+    later._schedule_task(again)
+    assert TID not in later._clock_jobs, "a consumed one-time task was armed again"
+    assert later._clock_record_verdict(again)[:2] == ("drop", "once already ran")
+
+
+def test_the_mark_of_consumption_is_coerced_at_the_boundary():
+    """Any value a file holds marks the task as consumed (fails closed); none does not."""
+    for value in ("2026-11-20T06:00:00", 1, True, "x"):
+        assert AutomationTask(frequency="once", consumed_at=value).consumed_at
+    for value in (None, "", False):
+        assert AutomationTask(frequency="once", consumed_at=value).consumed_at is None
+
+
+# ── access taken away while the caller's callback ran ────────────────────────
+
+def test_access_taken_away_during_the_callback_stops_the_delivery(env):
+    """MUTATION: drop the check after `on_outcome`."""
+    import vaf.core.revocation as revocation
+    revoked = {"now": False}
+    env.monkeypatch.setattr(revocation, "is_revoked", lambda scope: revoked["now"])
+    _prompt_agent(env, returns="Fertig.", turn=ANSWERED_TWICE)
+    manager, task = _task(env)
+    out = manager.run_task(task, new_terminal=False,
+                           on_outcome=lambda outcome: revoked.update(now=True))
+    assert out.startswith("[REVOKED]")
+    assert env.pushed == [] and env.synced == []
+
+
+# ── a turn that raises inside the grace window ───────────────────────────────
+
+def test_a_turn_that_raises_in_the_grace_is_failed(env):
+    """The bounded run timed out, and the abandoned turn then raised inside the grace window:
+    the run is failed with that exception, not a completion. MUTATIONS: drop
+    `_turn_error = _chat_done["error"]`; set `done` only after a turn that returned."""
+    from vaf.core import bounded_run
+
+    def bounded(fn, *, timeout, stop_check=None, poll=0.5, label="tool"):
+        try:
+            fn()
+        except Exception:
+            pass
+        return f"{bounded_run.TIMEOUT_PREFIX} ran past {timeout}s"
+
+    env.monkeypatch.setattr(bounded_run, "run_bounded", bounded)
+    env.monkeypatch.setattr(automation, "_wait_for_abandoned_run",
+                            lambda chat_done, **k: bool(chat_done.get("done")))
+    _prompt_agent(env, raises=RuntimeError("boom in grace"))
+    manager, task = _task(env)
+    manager.run_task(task, new_terminal=False)
+    assert _pushed(env) == [("error", _failed("Error: boom in grace"))]
+    _assert_not_done(env, "daily")
+
+
+def test_a_turn_that_raises_in_the_grace_is_failed_at_runtime(env):
+    """The same with the real bounded run and grace wait, shortened: a 1 s limit, a 3 s grace,
+    a turn that raises after 1.5 s."""
+    import time as _time
+    from vaf.core.config import Config
+
+    real_get, real_wait = Config.get, automation._wait_for_abandoned_run
+    env.monkeypatch.setattr(Config, "get", classmethod(
+        lambda cls, key, default=None: 1 if key == "automation_run_timeout_seconds"
+        else real_get(key, default)))
+    env.monkeypatch.setattr(automation, "_wait_for_abandoned_run",
+                            lambda chat_done, **k: real_wait(chat_done, grace_seconds=3, poll=0.1))
+    import vaf.core.agent as agent_mod
+    seen = _prompt_agent(env)
+    stub = agent_mod.Agent
+
+    def late_raise(self, prompt, stream_callback=None, **k):
+        seen["calls"] += 1
+        _time.sleep(1.5)
+        raise RuntimeError("provider exploded late")
+
+    env.monkeypatch.setattr(stub, "chat_step", late_raise)
+    manager, task = _task(env)
+    started = _time.monotonic()
+    manager.run_task(task, new_terminal=False)
+    assert _time.monotonic() - started < 3.0, "the grace was waited out for a turn that ended"
+    assert seen["calls"] == 1
+    assert _pushed(env) == [("error", _failed("Error: provider exploded late"))]
+    _assert_not_done(env, "daily")
+
+
+# ── any other exception in the run ───────────────────────────────────────────
+
+def test_an_output_file_that_cannot_be_written_fails_the_run(env):
+    """The turn answered, then writing its output file raised: the run is failed, with the
+    exception, and not stamped. MUTATION: keep the outcome already decided in the handler."""
+    blocker = env.out / "not-a-folder"
+    blocker.write_text("x", encoding="utf-8")
+    _prompt_agent(env, returns="Fertig.", turn=ANSWERED_TWICE)
+    manager, task = _task(env)
+    manager.update(TID, output_path=str(blocker))
+    manager.run_task(manager.get(TID), new_terminal=False)
+    [(status, text)] = _pushed(env)
+    assert status == "error" and text.startswith("Der Lauf ist fehlgeschlagen: Error: "), text
+    assert text.endswith(NEXT["daily"])
+    _assert_not_done(env, "daily")
 
 
 # ── AC12: decided once ───────────────────────────────────────────────────────
@@ -514,7 +685,11 @@ def test_run_outcome_coerces_at_the_boundary():
 _BLANKS = ("", " ", "\n", "  \n", "\t ")
 _BODIES = ("", "Fertig.", "Error: steht im Text.", "[Error] backend down",
            "[API Error from x: 500]", "Siehe [ASYNC_ACK] im Text.",
-           "Zitat: [SYSTEM_LOG_ONLY] mitten drin.", "Zeile eins\nZeile zwei", "   ")
+           "Zitat: [SYSTEM_LOG_ONLY] mitten drin.", "Zeile eins\nZeile zwei", "   ",
+           "<think>Übersetze: geheimer Plan</think>Le helper travaille.",
+           "<think>nie geschlossen, geheimer Plan", "</think>Rest",
+           'Text. {"name": "web_search", "arguments": {"q": 1}}')
+_FREQUENCIES = ("daily", "once", "on_event")
 _HEADS = ("", "[ASYNC_ACK]", "[SYSTEM_LOG_ONLY]", "[Error] ", "[API Error from x: 503] ")
 
 
@@ -529,22 +704,33 @@ def _draw(rng):
     rounds = tuple(TurnRound(i + 1, ("c",) if rng.random() < 0.5 else (), rng.random() < 0.4)
                    for i in range(rng.randint(0, 3)))
     turn = TurnStatus(failed=rng.random() < 0.25, rounds=rounds)
-    return answer, turn, rng.random() < 0.15
+    return answer, turn, rng.random() < 0.15, rng.choice(_FREQUENCIES)
 
 
-def _reference(answer, turn, timed_out):
+class _Cleaner:
+    """The agent's own reasoning cleaner, as `run_task` hands it over."""
+    _sanitize_response = Agent._sanitize_response
+
+    def __call__(self, text):
+        return Agent._clean_reasoning(self, text)
+
+
+CLEAN = _Cleaner()
+
+
+def _reference(answer, turn, timed_out, frequency):
     """The rule, written apart from the code: timeout first, then a failed turn or a
-    `[SYSTEM_LOG_ONLY]` head is failed, everything else ok. An answered turn (an answering
-    round or an `[ASYNC_ACK]` head) with text delivers its text without the head; the rest
-    delivers the stream."""
+    `[SYSTEM_LOG_ONLY]` head is failed, everything else ok. The text after a control head is
+    cleaned of marked reasoning and leaked tool calls. An answered turn (an answering round or
+    an `[ASYNC_ACK]` head) with text left delivers it; the rest delivers the stream."""
     if timed_out:
         return "timed_out", "NOTE"
     text = "" if answer is None else answer
     lead = text.lstrip()
     head = next((m for m in ("[ASYNC_ACK]", "[SYSTEM_LOG_ONLY]") if lead.startswith(m)), "")
-    rest = lead[len(head):].strip() if head else text.strip()
+    rest = CLEAN(lead[len(head):] if head else text).strip()
     if turn.failed or head == "[SYSTEM_LOG_ONLY]":
-        return "failed", rest or NO_ANSWER_NOTE
+        return "failed", _failed(rest, frequency)
     if (any(r.answer for r in turn.rounds) or head == "[ASYNC_ACK]") and rest:
         return "ok", rest
     return "ok", "STREAM"
@@ -556,18 +742,25 @@ def test_prompt_outcome_fuzz():
     draws = int(os.environ.get("VAF_FUZZ_DRAWS", "400"))
     mismatches = []
     for n in range(draws):
-        answer, turn, timed_out = _draw(rng)
+        answer, turn, timed_out, frequency = _draw(rng)
         streamed = []
 
         def stream():
             streamed.append(1)
             return "STREAM"
 
-        outcome = _prompt_outcome(answer, turn, stream, timed_out=timed_out, timeout_note="NOTE")
-        want = _reference(answer, turn, timed_out)
+        outcome = _prompt_outcome(answer, turn, stream, timed_out=timed_out, timeout_note="NOTE",
+                                  frequency=frequency, clean=CLEAN)
+        want = _reference(answer, turn, timed_out, frequency)
         if (outcome.status, outcome.text) != want:
             mismatches.append((n, answer, turn, timed_out, (outcome.status, outcome.text), want))
         assert outcome.completed == (outcome.status in ("ok", "paused"))
         if streamed:
             assert outcome.status == "ok", "a status other than ok came from the stream path"
+        else:
+            # Nothing the turn returned reaches the person with reasoning or a leaked tool
+            # call left in it: the delivered text is what the cleaner would leave of it.
+            assert CLEAN(outcome.text) == outcome.text, (n, answer, outcome.text)
+        for secret in ("geheimer Plan", "Übersetze", '"web_search"'):
+            assert secret not in outcome.text, (n, answer, outcome.text)
     assert mismatches == [], mismatches[:5]

@@ -312,13 +312,15 @@ def test_a_deleted_task_does_not_run(store, monkeypatch, how):
     ({"id": "other001"}, "task gone"),
     ({"frequency": "once", "last_run": "2026-01-01T10:00:00"}, "once already ran"),
     ({"frequency": "once", "last_completed_local_date": "2026-01-01"}, "once already ran"),
+    ({"frequency": "once", "consumed_at": "2026-01-01T10:00:00"}, "once already ran"),
 ], ids=["disabled", "created-anew", "on-event", "unknown-frequency", "other-id",
-        "once-ran", "once-completed"])
+        "once-ran", "once-completed", "once-consumed"])
 def test_a_task_changed_on_disk_does_not_run(store, monkeypatch, change, reason):
     """Switched off, replaced by a task created anew under the id, turned into an event task
     or into a frequency this version does not arm (written by a newer one), or the file now
-    holding another task, or a one-time task that has already run (its removal after the
-    run failed), each written behind the scheduler (another process): not run, job
+    holding another task, or a one-time task that has already run or was consumed by a run
+    that failed (its removal after the run failed), each written behind the scheduler
+    (another process): not run, job
     dropped. MUTATION: drop that one condition from `_clock_record_verdict` (one per
     parameter); for the unknown frequency, compare with `on_event` only."""
     sched, stop = _armed_scheduler(monkeypatch)

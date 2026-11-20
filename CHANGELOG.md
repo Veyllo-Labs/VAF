@@ -91,10 +91,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   done.** A workflow automation with a failed step, a prompt automation whose model call failed or
   came back empty, and one stopped by its time limit were recorded as successful runs: chat and
   notifications showed them as done, and the automation counted as finished for the day. They now
-  show as failed, with the reason, and the next scheduled run happens as usual; a one-time
-  automation is still used up by its run. A run that gave several answers now delivers all of them
-  instead of only the last, a model call that fails is no longer started a second time without a
-  time limit, and `vaf automation run` keeps its window open after a failed run.
+  show as failed, with the error the run reported (or a note that the model gave no answer, or
+  that the time limit was reached and what to change), and say what happens next: a recurring
+  automation runs again at its next time, a one-time automation is used up by its run and never
+  runs a second time.
+- **Automations: a run that gave several answers delivers all of them, and `vaf automation run`
+  keeps its window open after a failed run.** Before, only the last answer arrived, and the
+  window closed as if the run had succeeded; it now shows why the run did not finish.
 - **Automations: a restored automation is scheduled again right away, and a deleted one stops.** An
   automation brought back from the trash only ran again after VAF restarted or another
   automation was created or changed, and one deleted in the app or by the agent, or deleted or

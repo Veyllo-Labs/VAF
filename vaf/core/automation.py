@@ -158,6 +158,10 @@ class AutomationTask:
     # Local calendar day (YYYY-MM-DD) when the task last completed successfully; persisted in JSON
     # so "Done (today)" survives app restarts until the calendar advances.
     last_completed_local_date: Optional[str] = None
+    # When a ONE-TIME task's run started (ISO timestamp): written onto the record before the run
+    # executes, whatever its outcome, so a task whose removal after the run failed is never armed
+    # or run again (`_once_already_ran`). Bookkeeping of the run only: an update never sets it.
+    consumed_at: Optional[str] = None
     # next_run is now calculated dynamically - no longer stored
     # Kept for backwards compatibility when loading old files
     next_run: Optional[str] = None
@@ -195,6 +199,10 @@ class AutomationTask:
         self.weekday = fields.get("weekday")
         self.enabled = fields["enabled"] if self.enabled is not None else False
         self.incarnation = _incarnation(self.incarnation)
+        # Any value a file holds marks the task as consumed (fails closed: a hand-edited or
+        # foreign value never makes a one-time task run again); none, empty or False does not.
+        self.consumed_at = (None if self.consumed_at in (None, "", False)
+                            else str(self.consumed_at))
         # A scope names a directory and an account, so it is text or nothing. A number, a
         # list or a bool (a record edited by hand or by another program) made every path of
         # the task raise, and the clock tried it again on every tick. None is "no scope of
@@ -436,7 +444,8 @@ _TIMEOUT_GRACE_SECONDS = 300.0
 def _wait_for_abandoned_run(chat_done: dict, grace_seconds: float = _TIMEOUT_GRACE_SECONDS,
                             poll: float = 2.0) -> bool:
     """Wait up to ``grace_seconds`` for the abandoned prompt-run worker to set its
-    completion flag (the worker sets chat_done['done'] after chat_step returns).
+    completion flag (the worker sets chat_done['done'] when chat_step ends, also when it
+    raises; the exception is then in chat_done['error']).
     True = the run finished; treat it as a normal completion. Never raises."""
     try:
         deadline = time.monotonic() + max(0.0, float(grace_seconds))
@@ -762,8 +771,44 @@ def _revoked_run_note(task) -> str:
 RUN_STATUSES = ("ok", "paused", "failed", "timed_out")
 _COMPLETED_STATUSES = frozenset({"ok", "paused"})
 
-# What a failed turn delivers when it left no text of its own.
-NO_ANSWER_NOTE = "Die Automation hat keine Antwort erhalten."
+# What the person reads about a run that did not complete. German literals, like the rest of
+# this module's delivery texts: the backend has no message catalogue (named boundary in
+# docs/platform/AUTOMATIONS.md).
+# A failed run's own reason (a provider's failure, an exception) is raw text, so it gets a lead.
+FAILED_LEAD = "Der Lauf ist fehlgeschlagen: "
+# A failed turn that left no text of its own.
+NO_ANSWER_NOTE = "Das Modell hat keine Antwort geliefert. Prüfe die Verbindung zum Anbieter."
+
+
+def _next_run_hint(frequency) -> str:
+    """What happens after a run that did not complete: a one-time task is used up by it (it is
+    never retried), every other task runs again at its next slot or event."""
+    if frequency == Frequency.ONCE:
+        return "Diese einmalige Automation ist damit verbraucht."
+    if frequency == Frequency.ON_EVENT:
+        return "Sie läuft beim nächsten passenden Ereignis wieder."
+    return "Sie läuft zum nächsten Termin wieder."
+
+
+def _failure_text(reason, frequency) -> str:
+    """A failed run's text: its reason behind `FAILED_LEAD` (or `NO_ANSWER_NOTE` when it has
+    none), then what happens next."""
+    reason = str(reason or "").strip()
+    head = f"{FAILED_LEAD}{reason}" if reason else NO_ANSWER_NOTE
+    return f"{head}\n\n{_next_run_hint(frequency)}"
+
+
+def _timeout_note(name, frequency, limit_seconds) -> str:
+    """The text of a prompt run abandoned after its time limit and the grace window. It
+    promises no later delivery, because none happens: after the grace the abandoned worker's
+    stream goes to a buffer nobody reads, while the worker itself may still act."""
+    return (
+        f"Zeitlimit überschritten: Die Automation '{name}' war nach {int(limit_seconds)} s "
+        f"Zeitlimit und {int(_TIMEOUT_GRACE_SECONDS)} s Nachfrist noch nicht fertig. Es gibt "
+        f"kein Teilergebnis. Der Lauf kann im Hintergrund noch weiterarbeiten, aber was er dann "
+        f"noch tut, wird nicht gemeldet. Kürze den Auftrag oder erhöhe das Zeitlimit "
+        f"(automation_run_timeout_seconds).\n\n{_next_run_hint(frequency)}"
+    )
 
 
 @dataclass(frozen=True)
@@ -809,7 +854,8 @@ class RunOutcome:
 
 
 def _prompt_outcome(answer, turn, stream_text: Callable[[], str], *, timed_out: bool,
-                    timeout_note: str = "") -> RunOutcome:
+                    timeout_note: str = "", frequency=None,
+                    clean: Optional[Callable[[str], str]] = None) -> RunOutcome:
     """The outcome of a prompt run, from what the turn RETURNED and how it ended.
 
     `answer` is `chat_step`'s return value, `turn` the agent's `last_turn` read right after it
@@ -819,6 +865,10 @@ def _prompt_outcome(answer, turn, stream_text: Callable[[], str], *, timed_out: 
     `failed`, with the turn's own text, or `NO_ANSWER_NOTE` when it has none. A turn whose
     rounds answered, or that acknowledged a delegation (`[ASYNC_ACK]`), delivers its return
     value: every answer of the turn, joined by the engine, without the control head.
+    `clean` is the agent's reasoning cleaner (`Agent._clean_reasoning`), applied to that copy:
+    a delegation's acknowledgement can be a model's own translation, from a call that keeps
+    its marked reasoning. A cleaner that raises leaves no text, never the uncleaned one. A
+    failed run's text is `_failure_text` (with what happens next for `frequency`).
 
     Only a turn that neither failed nor answered (a turn closed by a tool, a status line)
     delivers `stream_text()`, the cleaned stream with its history fallback; that path is
@@ -830,10 +880,19 @@ def _prompt_outcome(answer, turn, stream_text: Callable[[], str], *, timed_out: 
     from vaf.markers import ASYNC_ACK
     if not isinstance(turn, TurnStatus):
         turn = TurnStatus()
-    copy, meta = returned_turn_copy(answer, turn)
+
+    def cleaned(text: str) -> str:
+        if clean is None:
+            return text
+        try:
+            return clean(text) or ""
+        except Exception:
+            return ""
+
+    copy, meta = returned_turn_copy(answer, turn, cleaned)
     text = copy.strip()
     if isinstance(meta, dict) and meta.get(FAILED_TURN_KEY):
-        return RunOutcome("failed", text or NO_ANSWER_NOTE)
+        return RunOutcome("failed", _failure_text(text, frequency))
     answered = any(r.answer for r in turn.rounds) or split_control_head(answer)[0] == ASYNC_ACK
     if answered and text:
         return RunOutcome("ok", text)
@@ -848,6 +907,14 @@ def _stamp_successful_run(task: AutomationTask) -> None:
     # "local date" = the OWNER's calendar day (their timezone), so daily "done today" checks
     # match the user's day, not the server's.
     task.last_completed_local_date = user_now(_resolve_username(task.user_scope_id)).date().isoformat()
+
+
+def _once_already_ran(task: "AutomationTask") -> bool:
+    """A one-time task that has fired: its run started (`consumed_at`) or completed (`last_run`,
+    `last_completed_local_date`). The scheduler never arms one again and the clock never runs
+    one again, whatever its run's outcome was (einmalig = einmalig)."""
+    return task.frequency == Frequency.ONCE and bool(
+        task.last_run or task.last_completed_local_date or task.consumed_at)
 
 
 def _incarnation(value: Any) -> Optional[str]:
@@ -2055,11 +2122,13 @@ vaf automation delete <id>   # Delete task
         # The schedule fields are coerced here (every update lane, the WebSocket, the agent's
         # tool, an approved handoff and the CLI, reaches the store through this call). Only
         # stored fields are applied, never the identity: an `id` or `user_scope_id` would
-        # move the file, an `incarnation` would make a run's stamp miss its own task, and a
-        # property name is not a field.
+        # move the file, an `incarnation` would make a run's stamp miss its own task, a
+        # `consumed_at` is the run's own mark that a one-time task fired, and a property name
+        # is not a field.
         fields = AutomationTask.__dataclass_fields__
         changes = {key: value for key, value in coerce_schedule_fields(kwargs).items()
-                   if key in fields and key not in ("id", "user_scope_id", "incarnation")}
+                   if key in fields
+                   and key not in ("id", "user_scope_id", "incarnation", "consumed_at")}
         def apply(record: Dict[str, Any]) -> None:
             stored = record.get("trigger")
             record.update(changes)
@@ -2087,6 +2156,25 @@ vaf automation delete <id>   # Delete task
         if task is None:
             return False
         return self._delete(task, permanent=permanent)
+
+    def _mark_once_consumed(self, task: AutomationTask) -> Optional[AutomationTask]:
+        """Write `consumed_at` onto the record of the one-time task whose run starts, and only
+        that task's (`same_incarnation`), under the store lock (`_mutate_record`); the captured
+        `task` carries it too. A refresh or a restart then never arms the task again and the
+        clock never runs it again (`_once_already_ran`), also when its run fails and its removal
+        after the run fails as well.
+
+        Never raises: a store that is busy or cannot be written must not stop the run it was
+        scheduled for. The failure is logged; the run's removal after it is then the only
+        guard left (the named boundary in docs/platform/AUTOMATIONS.md)."""
+        stamp = datetime.now().isoformat()
+        task.consumed_at = stamp
+        try:
+            return self._mutate_record(task, lambda record: record.update({"consumed_at": stamp}),
+                                       same_incarnation=True)
+        except Exception as e:
+            append_domain_log("backend", f"[AUTOMATION] one-time {task.id} not marked consumed: {e!r}")
+            return None
 
     def _remove_spent_once(self, task: AutomationTask) -> bool:
         """Remove a one-time task its run consumed, and only that task: one created anew under
@@ -2440,6 +2528,12 @@ vaf automation delete <id>   # Delete task
         # every exit, so the room and conversation it set do not outlive the run.
         _room_bound_agent = None
 
+        # einmalig = einmalig: a one-time task is consumed when its run STARTS, on disk, before
+        # anything executes. A run that acted (sent a message) and then failed is not stamped,
+        # so without this mark only its removal stood between it and a second run.
+        if task.frequency == Frequency.ONCE:
+            self._mark_once_consumed(task)
+
         try:
             # ... (Rest of the method logic) ...
 
@@ -2625,7 +2719,9 @@ vaf automation delete <id>   # Delete task
                     for i, step_result in enumerate(step_results, 1):
                         status_icon = "✅" if step_result["status"] == "success" else "❌"
                         result += f"{status_icon} Step {i}: {step_result['tool']} - {step_result['status']}\n"
-                    outcome = RunOutcome("failed", result)
+                    outcome = RunOutcome(
+                        "failed", f"{result.rstrip()}\n\n{_next_run_hint(task.frequency)}",
+                        report=result)
 
                 agent.shutdown()
             else:
@@ -2809,19 +2905,17 @@ vaf automation delete <id>   # Delete task
                     return text
 
                 if _turn_error is not None:
-                    outcome = RunOutcome("failed", f"Error: {_turn_error}")
+                    outcome = RunOutcome(
+                        "failed", _failure_text(f"Error: {_turn_error}", task.frequency))
                 else:
                     outcome = _prompt_outcome(
                         _chat_done["answer"],
                         None if prompt_timeout_unresolved else agent.last_turn,
                         _stream_result,
                         timed_out=prompt_timeout_unresolved,
-                        timeout_note=(
-                            f"Zeitlimit überschritten: Die Automation '{task.name}' war nach "
-                            f"{int(_auto_to)}s und der Nachfrist noch nicht fertig. Es gibt kein "
-                            f"Teilergebnis, und was der Lauf danach noch erledigt, wird nicht als "
-                            f"Ergebnis zugestellt."
-                        ),
+                        timeout_note=_timeout_note(task.name, task.frequency, _auto_to),
+                        frequency=task.frequency,
+                        clean=agent._clean_reasoning,
                     )
                 # A send tool of this run already reached the user: no second messenger push.
                 delivered_in_run = _delivered_via_agent_history(getattr(agent, "history", None))
@@ -2991,7 +3085,7 @@ vaf automation delete <id>   # Delete task
             agent.shutdown()
 
         except Exception as e:
-            outcome = RunOutcome("failed", f"Error: {e}")
+            outcome = RunOutcome("failed", _failure_text(f"Error: {e}", task.frequency))
             UI.error(f"Automation failed: {e}")
         finally:
             if _room_bound_agent is not None:
@@ -3054,7 +3148,7 @@ vaf automation delete <id>   # Delete task
         if outcome is None:
             # Every lane decides its outcome; a run that reaches here without one did not
             # complete, and it never counts as done.
-            outcome = RunOutcome("failed", NO_ANSWER_NOTE)
+            outcome = RunOutcome("failed", _failure_text("", task.frequency))
 
         # The one place both halves of an outcome are recorded, for both lanes: `last_run`
         # records only the completed runs, so without this an errored run leaves no trace.
@@ -3073,6 +3167,10 @@ vaf automation delete <id>   # Delete task
                 on_outcome(outcome)
             except Exception:
                 pass
+            # The callback ran the caller's code, and access may have been taken away while it
+            # ran: asked again, so nothing is delivered to an account without access.
+            if is_revoked(task.user_scope_id):
+                return _revoked_run_note(task)
 
         # Deliver result to user via Web UI chat + messenger.
         # Only one delivery path - no duplicate notification + chat message.
@@ -3218,13 +3316,13 @@ vaf automation delete <id>   # Delete task
             )
             return
 
-        if task.frequency == Frequency.ONCE and (task.last_run or task.last_completed_local_date):
+        if _once_already_ran(task):
             # einmalig = einmalig: never re-arm a one-time task that has already
             # fired. Guards against a lingering file being re-registered after a
             # restart or scheduler refresh, which would otherwise run it again.
             self._log_scheduler_event(
                 f"REGISTER_SKIPPED task_id={task.id} name={task.name!r} "
-                f"reason='once already ran' last_run={task.last_run}"
+                f"reason='once already ran' last_run={task.last_run} consumed_at={task.consumed_at}"
             )
             try:
                 self.delete(task.id, permanent=True)
@@ -3348,8 +3446,7 @@ vaf automation delete <id>   # Delete task
             return "drop", "disabled", None
         if current.frequency not in _CLOCK_FREQUENCIES:
             return "drop", "no longer a clock task", None
-        if current.frequency == Frequency.ONCE and (current.last_run
-                                                    or current.last_completed_local_date):
+        if _once_already_ran(current):
             return "drop", "once already ran", None
         return "run", "", current
 
@@ -3930,13 +4027,22 @@ def run_automation(
     ok = True
     try:
         # Don't open ANOTHER terminal - we may already be running inside one.
-        manager.run_task(task, callback=print_output, new_terminal=False,
-                         on_outcome=outcomes.append)
+        returned = manager.run_task(task, callback=print_output, new_terminal=False,
+                                    on_outcome=outcomes.append)
     except Exception as exc:
         ok = False
         console.print(f"\n[red]Automation failed: {escape_markup(exc)}[/red]")
+    completed = ok and bool(outcomes) and outcomes[0].completed
+    if ok and not completed:
+        # The window is held with "the output above is the log", so the reason must be in
+        # it: the outcome's text (a failure, the timeout note), or what run_task answered for
+        # a run that never started (skipped, locked, its account's access taken away). The
+        # stream printed above may hold none of it. Plain text, never markup.
+        reason = outcomes[0].text if outcomes else str(returned or "")
+        console.print("\n")
+        console.print(reason, style="red", markup=False, emoji=False)
     console.print("\n")
-    finish_terminal(success=ok and bool(outcomes) and outcomes[0].completed)
+    finish_terminal(success=completed)
 
 
 @automation_app.command("delete")

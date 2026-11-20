@@ -19,6 +19,7 @@ import uuid
 import subprocess
 import threading
 import time
+import copy
 from contextlib import contextmanager
 from pathlib import Path
 from datetime import date, datetime, timedelta
@@ -757,24 +758,58 @@ def _trigger_rule(trigger: Any) -> Optional[Dict[str, Any]]:
     return {key: value for key, value in trigger.items() if key != "cursor"}
 
 
+def _frame_lamport(frame: Any) -> Optional[int]:
+    """A room frame's position, or None for an object that carries none."""
+    try:
+        value = getattr(frame, "lamport", None)
+        return None if value is None else int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _stored_cursor(trigger: Any) -> int:
+    """The cursor a stored trigger carries, 0 for none or one that is not a number."""
+    try:
+        return int((trigger or {}).get("cursor") or 0)
+    except (TypeError, ValueError, AttributeError):
+        return 0
+
+
 def _cursor_patch(fired: Dict[str, Any]) -> Callable[[Dict[str, Any]], bool]:
-    """The change that writes a fired trigger's cursor onto a task record: only when the
-    record's trigger is still the rule that fired, every field but the cursor alike (False,
-    nothing to write, otherwise). A cursor belongs to the rule whose frames it consumed: in a
-    trigger that now watches another room it would skip that room's frames up to an
-    unrelated number, and a rule whose text or emoji changed was never asked about them.
-    `patch.applied` says afterwards whether the cursor was written into the record."""
+    """The change that writes a fired trigger's cursor onto a task record, and only when the
+    record is still the event task whose rule fired and has not read this far already
+    (False, nothing to write, otherwise):
+
+    - its frequency is still `on_event`: a task changed to a clock schedule keeps its old
+      trigger dict, and must not start with room context;
+    - its trigger is still the rule that fired, every field but the cursor alike: a cursor
+      belongs to the rule whose frames it consumed, and a rule watching another room, or
+      with another text or emoji, was never asked about them;
+    - its stored cursor is below the hit's newest frame: never back, so a writer that read
+      further first (another process) is not overwritten and its frames do not run twice.
+
+    Afterwards `patch.applied` says whether the cursor was written, `patch.stored` is the
+    cursor the record carried, and `patch.reason` names why nothing was written."""
     rule = _trigger_rule(fired)
+    newest = _stored_cursor(fired)
 
     def patch(record: Dict[str, Any]) -> bool:
         current = record.get("trigger")
-        if _trigger_rule(current) != rule:
+        if str(record.get("frequency") or "") != Frequency.ON_EVENT.value:
+            patch.reason = "no longer an event task"
             return False
-        record["trigger"] = dict(current, cursor=fired.get("cursor"))
+        if _trigger_rule(current) != rule:
+            patch.reason = "rule changed"
+            return False
+        patch.stored = _stored_cursor(current)
+        if patch.stored >= newest:
+            patch.reason = "already read this far"
+            return False
+        record["trigger"] = dict(current, cursor=newest)
         patch.applied = True
         return True
 
-    patch.applied = False
+    patch.applied, patch.stored, patch.reason = False, 0, "task gone or created anew"
     return patch
 
 
@@ -803,14 +838,24 @@ def _task_files(directory: Path) -> List[Path]:
         return []
 
 
-def _read_task_record(path: Path) -> Optional[Dict[str, Any]]:
+def _read_task_record(path: Path, strict: bool = False) -> Optional[Dict[str, Any]]:
     """A task file's record, or None when the file is not one. A record without an id is refused:
     AutomationTask would invent one per load, and a task whose id changes can never be found to
-    be edited or deleted."""
+    be edited or deleted.
+
+    `strict`: a file that is there but cannot be read (an `OSError` other than a missing file)
+    raises instead of answering None, for a caller that must not take a passing read failure
+    for a deleted task."""
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-    except (OSError, ValueError):
+    except FileNotFoundError:
+        return None
+    except OSError:
+        if strict:
+            raise
+        return None
+    except ValueError:
         return None
     if not isinstance(data, dict) or not str(data.get("id") or "").strip():
         return None
@@ -1291,75 +1336,79 @@ class AutomationManager:
         """Run every event-driven task whose room said something matching since the
         last tick. Returns how many were started.
 
-        The cursor is on disk BEFORE the run starts, so a restart in the middle of one
-        cannot fire the same frames twice; a run that then fails is a run that
-        failed, recorded in the run log like any other. The per-task run lock in
-        run_task keeps a trigger that fires again while the previous run is still
-        going from overlapping it.
+        A hit runs only after its cursor is on disk, so a restart in the middle of a run
+        cannot fire the same frames twice; a run that then fails is a run that failed,
+        recorded in the run log like any other. The per-task run lock in run_task keeps a
+        trigger that fires again while the previous run is still going from overlapping it.
 
-        A hit whose cursor cannot be written (the store busy past its timeout, or not
-        writable) is not run: it stays pending in this process and is committed first on
-        the next tick, joined with any newer frames of the same task, and run only once its
-        cursor is on disk. The watch has already moved its own cursor past those frames, so
-        the pending hit is the only place they are still held. A hit whose task is gone,
-        was created anew under the same id, or watches another rule by now is dropped: its
-        frames matched a rule that no longer exists. A hit whose task is switched off by now
-        is dropped too (its cursor is written). The run gets the task as it is on disk when
-        the cursor is committed, never the scheduler's older copy.
+        The cursor is committed onto the record as it is on disk, under the store lock
+        (`_cursor_patch`), which is also where the hit is judged against the task as it
+        is now: a task gone or created anew under the id, no longer an event task, watching
+        another rule, or already read this far (another process) gets nothing written and
+        no run; a task switched off gets its cursor written and no run. The run gets the
+        task as it is on disk, never the scheduler's older copy, and only the frames past
+        the cursor the record carried.
+
+        When the commit cannot be made (the store busy past its timeout, not writable, the
+        file not readable), nothing is held in memory: the watch is rewound to where the
+        hit's read started (`RoomTriggerWatch.rewind`), so the next tick reports the same
+        frames again and judges them afresh (membership, rule, the task as it is by then).
+        Once one store directory is busy in a tick, its other hits are rewound without a
+        second wait, so a busy store costs one timeout per tick, not one per hit. Each
+        hit's run is started on its own: one that fails to start does not touch the others.
         """
-        from vaf.core.automation_triggers import RoomTriggerWatch, TriggerHit, trigger_context
+        from vaf.core.automation_triggers import RoomTriggerWatch, trigger_context
 
         watch = getattr(self, "_trigger_watch", None)
         if watch is None:
             watch = self._trigger_watch = RoomTriggerWatch()
-        # Oldest first. A newer hit joins a held one only when both were matched by the same
-        # task and the same rule; frames matched by a rule that has since changed, or by a
-        # task deleted and created anew under the id, stay a hit of their own and are dropped
-        # by the commit below rather than run under the new rule (whose context may name
-        # another room and tell the run to answer there).
-        hits: List[Any] = list(getattr(self, "_pending_trigger_hits", None) or [])
-        for hit in watch.tick(self.list(enabled_only=True)):
-            for i, earlier in enumerate(hits):
-                if earlier.task.id == hit.task.id \
-                        and earlier.task.incarnation == hit.task.incarnation \
-                        and _trigger_rule(earlier.task.trigger) == _trigger_rule(hit.task.trigger):
-                    hits[i] = TriggerHit(hit.task, list(earlier.frames) + list(hit.frames),
-                                         hit.newest, {**earlier.labels, **hit.labels})
-                    break
-            else:
-                hits.append(hit)
-        pending: List[Any] = []
+
+        def rewind(hit, why: str) -> None:
+            self._log_scheduler_event(f"TRIGGER_REWOUND task_id={hit.task.id} reason={why!r}")
+            back = getattr(watch, "rewind", None)
+            if back is not None:
+                back(hit.task.id, getattr(hit, "since", None))
+
+        busy = set()
         fired = 0
-        for hit in hits:
+        for hit in watch.tick(self.list(enabled_only=True)):
             task = hit.task
-            task.trigger = dict(task.trigger or {}, cursor=int(hit.newest))
-            patch = _cursor_patch(task.trigger)
+            directory = str(self._path_for_task(task).parent)
+            if directory in busy:
+                rewind(hit, "store busy")
+                continue
+            # The scheduler's copy is not changed here: the record on disk decides.
+            patch = _cursor_patch(dict(task.trigger or {}, cursor=int(hit.newest)))
             try:
-                # Onto the current record, and only while it still watches the same rule: the
-                # scheduler's copy is as old as its last refresh, and writing it back put back a
-                # prompt or a trigger edited since.
-                current = self._mutate_record(task, patch, same_incarnation=True)
+                current = self._mutate_record(task, patch, same_incarnation=True, strict=True)
+            except AutomationStoreBusy:
+                busy.add(directory)
+                rewind(hit, "store busy")
+                continue
             except Exception as e:
-                pending.append(hit)
-                self._log_scheduler_event(f"TRIGGER_PENDING task_id={task.id} error={e!r}")
+                rewind(hit, f"not committed: {e!r}")
                 continue
             if current is None or not patch.applied:
                 self._log_scheduler_event(
-                    f"TRIGGER_DROPPED task_id={task.id} reason='task or rule changed'")
+                    f"TRIGGER_DROPPED task_id={task.id} reason={patch.reason!r}")
                 continue
             if not current.enabled:
-                # Switched off while the hit was held: the cursor is written, nothing runs.
                 self._log_scheduler_event(f"TRIGGER_DROPPED task_id={task.id} reason='disabled'")
                 continue
-            # The task as it is on disk now, with the cursor just written: the scheduler's
-            # copy may carry a prompt edited since its last refresh.
-            self._log_scheduler_event(
-                f"TRIGGER_EVENT task_id={current.id} name={current.name!r} frames={len(hit.frames)}"
-            )
-            self._run_scheduled_task(current, trigger=trigger_context(current.trigger, hit.frames,
-                                                                      hit.labels))
-            fired += 1
-        self._pending_trigger_hits = pending
+            frames = [f for f in hit.frames if _frame_lamport(f) is None
+                      or _frame_lamport(f) > patch.stored]
+            if not frames:
+                continue
+            try:
+                self._log_scheduler_event(
+                    f"TRIGGER_EVENT task_id={current.id} name={current.name!r} frames={len(frames)}")
+                self._run_scheduled_task(current, trigger=trigger_context(current.trigger, frames,
+                                                                          hit.labels))
+                fired += 1
+            except Exception as e:
+                # The cursor is committed, so these frames are consumed: a run that cannot
+                # start is a run that failed, and the other hits go on.
+                self._log_scheduler_event(f"TRIGGER_RUN_NOT_STARTED task_id={current.id} error={e!r}")
         return fired
 
     def _create_readme(self):
@@ -1610,7 +1659,8 @@ vaf automation delete <id>   # Delete task
 
     def _mutate_record(self, task: AutomationTask,
                        change: Callable[[Dict[str, Any]], Optional[bool]], *,
-                       same_incarnation: bool = False) -> Optional[AutomationTask]:
+                       same_incarnation: bool = False,
+                       strict: bool = False) -> Optional[AutomationTask]:
         """Apply `change` to the task's record AS IT IS ON DISK NOW, under the store lock,
         and write it; the task built from the written record (also put into the cache).
 
@@ -1629,6 +1679,9 @@ vaf automation delete <id>   # Delete task
         `incarnation`), for the bookkeeping of something that task started (a run, a
         trigger hit). None, with nothing written, when the id now names a task created anew.
 
+        `strict`: a file that is there but cannot be read raises `OSError` instead of being
+        taken for a task that is gone.
+
         The cache is changed inside the lock, in the order the file changes: published after
         it, an update could put a task back into `get()` that a delete on the same manager
         removed in between."""
@@ -1637,7 +1690,7 @@ vaf automation delete <id>   # Delete task
         if tasks is None:
             tasks = {}
         with self._store_lock(path.parent):
-            record = _read_task_record(path)
+            record = _read_task_record(path, strict=strict)
             if record is None or str(record.get("id")).strip() != str(task.id):
                 tasks.pop(task.id, None)
                 return None
@@ -1713,9 +1766,13 @@ vaf automation delete <id>   # Delete task
             pass
     
     def create(self, task: AutomationTask) -> AutomationTask:
-        """Create a new automation task. It gets a new `incarnation`, also when its id was
-        carried by a task before (a retried approval creates its planned id again)."""
+        """Create a new automation task: a copy of `task` with a new `incarnation`, also when
+        its id was carried by a task before (a retried approval creates its planned id
+        again). Returns the copy, the task as stored. The caller's object is left as it is:
+        it may be one a run already holds (a task from `get()` reused for its replacement),
+        and that run must still know it as the task it was."""
         # next_run is calculated dynamically - no need to store it
+        task = copy.deepcopy(task)
         task.incarnation = uuid.uuid4().hex[:12]
         path = self._path_for_task(task)
         with self._store_lock(path.parent):
@@ -1880,8 +1937,17 @@ vaf automation delete <id>   # Delete task
     def _remove_spent_once(self, task: AutomationTask) -> bool:
         """Remove a one-time task its run consumed, and only that task: one created anew under
         the same id while the run went (a retried approval creates its planned id again) has
-        not run and stays. False when nothing was removed."""
-        return self._delete(task, permanent=True, only_this_incarnation=True)
+        not run and stays. False when nothing was removed.
+
+        Never raises: it is the bookkeeping after a run, and a store that is busy or cannot be
+        written must not turn a run that did its work into an error (or skip the agent's
+        shutdown after it). The failure is logged; the task then stays on disk, the named
+        boundary in docs/platform/AUTOMATIONS.md."""
+        try:
+            return self._delete(task, permanent=True, only_this_incarnation=True)
+        except Exception as e:
+            append_domain_log("backend", f"[AUTOMATION] spent one-time {task.id} not removed: {e!r}")
+            return False
 
     def _delete(self, task: AutomationTask, *, permanent: bool,
                 only_this_incarnation: bool = False) -> bool:

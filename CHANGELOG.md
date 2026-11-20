@@ -20,6 +20,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   characters). Ask it first, before `vaf.is_remote_path`, for a path that comes from outside.
   `vaf.contained_path`, `vaf.safe_entry_name` and `vaf.jail_allows` already apply the limit
   themselves.
+- **`vaf.RoomTriggerWatch.rewind(task_id, cursor=None)` and `hit.since`**: when a hit's
+  `newest` cannot be persisted, hand `hit.since` back with `rewind` and the next tick reports
+  the same frames again, instead of moving past them. The watch also keeps each position
+  bound to the room it counts in and to the task's `incarnation`, so a trigger moved to another
+  room, or a task created anew under an id, starts at that room's newest frame.
 - **`vaf.strip_think_blocks(text, greedy=False)`**: the rule VAF uses to remove a model's
   marked reasoning (`<think>`, `<thinking>`, `<redacted_reasoning>`), for applications that
   store or forward a stream.

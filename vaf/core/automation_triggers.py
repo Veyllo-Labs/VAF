@@ -41,7 +41,7 @@ beside the reminders; an embedder with a scheduler of their own calls it the sam
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, NamedTuple, Optional
+from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Tuple
 
 # The frequency value of a triggered automation. A string here rather than the enum,
 # because the enum lives in automation.py and this module must not import it at load.
@@ -55,11 +55,14 @@ MATCH_WIDTH = 200
 
 
 class TriggerHit(NamedTuple):
-    """One task that is due, and why."""
+    """One task that is due, and why. `since` is the cursor the read started from (the
+    frames are the ones after it): hand it to `RoomTriggerWatch.rewind` when `newest`
+    cannot be persisted, and the next tick reports the same frames again."""
     task: Any
     frames: List[Any]
     newest: int
     labels: Dict[str, str]
+    since: Optional[int] = None
 
 
 def read_trigger(value: Any) -> Optional[Dict[str, Any]]:
@@ -160,14 +163,36 @@ def matching_frames(trigger: Any, frames: Iterable[Any], *,
 class RoomTriggerWatch:
     """The "is it due" decision for event-driven automations, asked once per tick.
 
-    Holds one cursor per task for the life of the process. Stateless otherwise: every
+    Holds one cursor per task for the life of the process, bound to the room it counts
+    in and to the task it was read for (its ``incarnation``, when it has one): positions
+    count per room, and a task created anew under an id is not the old task, so a cursor
+    whose room or task changed is set again as on first sight. Stateless otherwise: every
     tick opens the rooms the enabled triggered tasks name and reads what arrived since
-    the cursor. The caller runs the hits and persists ``newest`` as ``trigger.cursor``.
+    the cursor. The caller persists ``newest`` as ``trigger.cursor`` and then runs the
+    hit; a hit whose cursor could not be persisted is handed back with ``rewind``.
     """
 
     def __init__(self, *, base=None) -> None:
         self._base = base
-        self._cursors: Dict[str, int] = {}
+        # task id -> (room id, incarnation, cursor)
+        self._cursors: Dict[str, Tuple[str, Any, int]] = {}
+
+    def rewind(self, task_id: str, cursor: Optional[int] = None) -> None:
+        """Move one task's cursor back, so the next tick reads from there again: to
+        ``cursor`` (a hit's ``since``), or, with None, to what the task carries, as on the
+        first sight in a process (its persisted ``trigger.cursor``, else the room as it
+        stands then). For a hit whose ``newest`` could not be persisted: the tick has
+        already moved past its frames, and without this they would be reported to nobody
+        until a restart replays them from the persisted cursor. The next report runs every
+        check again (membership, rule, the task as it is by then). The position stays bound
+        to the room and the task it was read for: if either has changed by the next tick,
+        the cursor is set again as on first sight, never carried into another room's count
+        or to a task created anew under the id."""
+        held = self._cursors.get(task_id)
+        if cursor is None or held is None:
+            self._cursors.pop(task_id, None)
+        else:
+            self._cursors[task_id] = (held[0], held[1], int(cursor))
 
     def tick(self, tasks: Iterable[Any]) -> List[TriggerHit]:
         from vaf.core.a2a.room import Room, derive_peer_id, participant_key
@@ -193,19 +218,21 @@ class RoomTriggerWatch:
             keys = {lane: participant_key(lane, scope) for lane in ("cli", "agent")}
             if not any(room.identity_for(key) is not None for key in keys.values()):
                 continue
-            cursor = self._cursors.get(task.id)
+            bound = (read["room_id"], getattr(task, "incarnation", None))
+            held = self._cursors.get(task.id)
+            cursor = held[2] if held is not None and held[:2] == bound else None
             if cursor is None:
                 # First sight in this process: the persisted position after a fire, or
                 # the room as it stands now. Never zero. Remembered at once, hit or
                 # not: recomputing "now" on every quiet tick would walk the cursor
                 # past everything that arrives and the trigger would never fire.
                 cursor = int(read.get("cursor") or 0) or room.store.highest_lamport()
-                self._cursors[task.id] = cursor
+                self._cursors[task.id] = bound + (cursor,)
             frames = room.store.read_since(cursor)
             if not frames:
                 continue
             newest = int(frames[-1].lamport)
-            self._cursors[task.id] = newest
+            self._cursors[task.id] = bound + (newest,)
             own_agent = derive_peer_id(keys["agent"], room.room_id)
             matched = matching_frames(read, frames, exclude_senders={own_agent})
             if matched:
@@ -213,7 +240,7 @@ class RoomTriggerWatch:
                     labels = room.labels()
                 except Exception:
                     labels = {}
-                hits.append(TriggerHit(task, matched, newest, labels))
+                hits.append(TriggerHit(task, matched, newest, labels, cursor))
         return hits
 
 

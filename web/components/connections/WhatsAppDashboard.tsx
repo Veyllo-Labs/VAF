@@ -724,7 +724,10 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
     const banner = data && !data.running ? (
         <div className="px-5 py-2 bg-amber-50 border-b border-amber-200 text-amber-600 text-[13px] flex items-center gap-2 flex-wrap">
             <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-            <span className="flex-1 min-w-0">{data.linked ? t('sessionExpired') : t('bridgeNotStartedDesc')}</span>
+            {/* `running` is this account's own connection, and nothing in the payload says a
+                session expired: a linked account whose switch is off is told so, one whose
+                switch is on gets the neutral sentence that names both ways out. */}
+            <span className="flex-1 min-w-0">{!data.linked ? t('bridgeNotStartedDesc') : !data.enabled ? t('switchedOffDesc') : t('connectionNotRunningDesc')}</span>
             {restartError && <span className="text-red-600">{restartError}</span>}
             <button type="button" onClick={handleRestartBridge} disabled={restarting}
                 className="px-2 py-1 rounded-md border border-amber-200 hover:bg-amber-100 disabled:opacity-50">{restarting ? t('starting') : t('startBridge')}</button>

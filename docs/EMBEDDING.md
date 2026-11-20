@@ -2590,11 +2590,14 @@ resolver is read as an empty directory rather than a refusal, because what is bu
 it either finds somebody - to invite, or the account a messenger number is registered for -
 where "nobody found" is already the safe outcome (the invitation or the registration is
 refused, an entry already stored is left alone), or asks whether an account still stands,
-where "nobody known" keeps the open default. Names are compared case-insensitively; an
-inactive account is listed but never resolved for an invitation or a registration; nothing
-is cached here. Unregistered means no directory: `Room.invite_account` still works with a scope you resolved yourself, and
-the name-based lanes (`vaf a2a invite --account`, the agent's `room_invite` with
-`account`) answer "no such account" for every name but the owner's.
+where "nobody known" keeps the open default. The exact name decides; a case-insensitive
+match counts only when exactly one account has it, so two accounts whose names differ only
+by case folding ("Straße" and "strasse") are each reached by their exact name and neither by
+a third spelling. An inactive account is listed but never resolved for an invitation or a
+registration; nothing is cached here. Unregistered means no directory:
+`Room.invite_account` still works with a scope you resolved yourself, and the name-based
+lanes (`vaf a2a invite --account`, the agent's `room_invite` with `account`) answer "no
+such account" for every name but the owner's.
 
 The directory is also how work that starts WITHOUT a token in hand - a queued turn, a
 scheduled automation - learns whether its account still stands: an account the directory

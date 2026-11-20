@@ -19,8 +19,14 @@ new name's folder (`set_aside_login`, to `whatsapp.previous-<UTC time>` beside i
 `linked_usernames` never reads). Measured before: a new account named like a deleted one ran
 the deleted account's linked WhatsApp as its own agent number, with its `linked_phone`.
 
-Named boundary: the folder is not re-keyed by scope. That would move every existing login on
-disk; the name is kept to one account instead (`user_admin.username_taken`).
+Named boundaries: the folder is not re-keyed by scope. That would move every existing login on
+disk; the name is kept to one account instead (`user_admin.username_taken`). And an account
+name is not checked for its shape when the account is created (`validate_username` checks the
+length only), so `get_whatsapp_auth_dir` of a name such as "alice/", "./admin" or ".." opens
+another account's folder or one outside `users/`. Everything that REMOVES a login therefore
+first asks whether the name is one folder name (`is_one_folder_name`) and removes nothing
+otherwise: measured before, deleting an account named "admin/" removed the owner's login and
+one named ".." removed `APP_DIR/whatsapp`.
 """
 import json
 import logging
@@ -57,13 +63,30 @@ def get_whatsapp_avatar_dir(username: str) -> Path:
     return Config.APP_DIR / "users" / username / "whatsapp_avatars"
 
 
+def is_one_folder_name(username: str) -> bool:
+    """Whether `users/<username>` is exactly one entry under `users/` that opens only itself on
+    Linux, Windows and macOS (`path_jail.portable_entry_name` leaves it unchanged): no
+    separator, no `.` or `..`, no trailing dot, composed Unicode. Only such a name's login may
+    be removed: "alice/" opens alice's folder, "admin/" the owner's, ".." one outside `users/`."""
+    from vaf.core.path_jail import portable_entry_name
+    try:
+        return portable_entry_name(username) == username
+    except ValueError:      # PathEscape
+        return False
+
+
 def remove_login(username: str, *, avatars: bool = False) -> bool:
     """Remove this account's WhatsApp login folder and, with `avatars`, its picture cache.
     A link in their place is unlinked, never followed (`verified_download.remove_tree_or_link`).
-    True when neither is there afterwards; False (logged) when something of them is left.
-    The caller makes sure no Node runs on the folder (`whatsapp_bridge.login_in_use`): a
-    running one would write a new login into the path."""
+    True when neither is there afterwards; False (logged) when something of them is left, and
+    when the name is not one folder name (`is_one_folder_name`), in which case nothing is
+    removed. The caller makes sure no Node runs on the folder (`whatsapp_bridge.login_in_use`):
+    a running one would write a new login into the path."""
     from vaf.core.verified_download import remove_tree_or_link
+    if not is_one_folder_name(username):
+        logger.warning("WhatsApp: the login of %r was not removed, the name is not one folder "
+                       "name and could open another folder", username)
+        return False
     targets = [get_whatsapp_auth_dir(username)]
     if avatars:
         targets.append(get_whatsapp_avatar_dir(username))
@@ -82,14 +105,15 @@ def logins_named_like(username: str) -> List[Path]:
     account folder name has the same `path_jail.portable_name_key` as `username`: the
     folders Windows or macOS may open as this name's, and the ones the bridge resolves to it
     by a casefolded match (`config.account_for_username`). Sorted; empty when there is no
-    `users` folder."""
+    `users` folder. Any other error listing it (no permission) propagates: an empty answer
+    would let an account be created next to a login nobody looked at."""
     from vaf.core.path_jail import portable_name_key
     key = portable_name_key(str(username or "").strip())
     if not key:
         return []
     try:
         entries = sorted((Config.APP_DIR / "users").iterdir())
-    except OSError:
+    except FileNotFoundError:
         return []
     out = []
     for entry in entries:

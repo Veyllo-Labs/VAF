@@ -180,7 +180,7 @@ def _run_flow(monkeypatch, name, scope, lines):
     from vaf.core import node_runtime
     monkeypatch.setattr(node_runtime, "find", lambda name: "node")
     flow = object()
-    routes._qr_flows[routes._flow_key(scope)] = flow
+    routes._qr_flows[wa._scope_key(scope)] = flow
     routes._run_qr_login(name, scope, flow)
     return node
 
@@ -386,3 +386,122 @@ def test_fuzz_never_two_nodes_on_one_login(world, monkeypatch, tmp_path):
     assert refusals == [], refusals[:5]
     spawned += len(_FuzzNode.nodes)
     assert spawned > rounds, "the fuzz spawned almost nothing; it is broken"
+
+
+# -- review round: the link flow under failure and concurrency ---------------------------------
+
+def test_connected_is_not_reported_while_the_link_node_survives(world, monkeypatch):
+    """The link Node survives its terminate and kill: the poll says so, and the handle stays
+    for the next start or reset. MUTATION: publish `connected` whatever the terminate answered
+    - red."""
+    monkeypatch.setattr(wa, "_terminate", lambda proc: False)
+    node = _run_flow(monkeypatch, "alice", ALICE_SCOPE,
+                     [{"type": "connected", "selfJid": "491700000099:7@s.whatsapp.net"}])
+    assert _client(ALICE).get("/api/whatsapp/qr").json() == {"status": "error", "error": routes.LINK_NODE_SURVIVED}
+    assert routes._qr_procs.get(ALICE_SCOPE) is node
+
+
+def test_an_ended_flow_keeps_a_surviving_nodes_handle(world):
+    """The token goes at once; the handle only once the Node's exit is confirmed, so the next
+    try ends it. MUTATION: drop the handle before the terminate - red."""
+    node = FakeNode(["node"], survive=True)
+    routes._qr_flows[ALICE_SCOPE] = object()
+    routes._qr_procs[ALICE_SCOPE] = node
+    assert routes._end_link_flow(ALICE_SCOPE) is False
+    assert ALICE_SCOPE not in routes._qr_flows and routes._qr_procs.get(ALICE_SCOPE) is node
+    node.survive = False
+    assert routes._end_link_flow(ALICE_SCOPE) is True
+    assert node.returncode is not None and ALICE_SCOPE not in routes._qr_procs
+
+
+def test_two_starts_at_once_leave_no_orphan(world, monkeypatch):
+    """Both starts end the old flow before either installs its token; the first flow's Node is
+    up by the time the second looks at the login. The second must end it, not report the login
+    in use and leave it running flowless. MUTATION: drop the account's `_flow_lock` from
+    `_begin_link_flow` - red."""
+    import vaf.core.node_runtime as node_runtime
+    monkeypatch.setattr(node_runtime, "find", lambda name: "node")
+    monkeypatch.setattr(wa, "ensure_bridge_deps", lambda *a, **k: (True, ""))
+    _folder("alice")
+    spawned = []
+
+    def spawn(node, wa_js, auth_dir):
+        proc = QRNode([{"type": "qr", "qr": f"CODE-{len(spawned) + 1}"}])
+        proc.poll = lambda p=proc: p.returncode
+        proc.stdout = iter(proc.stdout)      # the Node keeps running after its code
+        proc._vaf_login = wa._login_identity(auth_dir)
+        with wa._spawned_nodes_lock:
+            wa._spawned_nodes.append(proc)
+        spawned.append(proc)
+        return proc
+    monkeypatch.setattr(wa, "spawn_node_bridge", spawn)
+    real_end, real_in_use = routes._end_link_flow, wa.login_in_use
+    ends = []
+
+    def end(scope):
+        ends.append(1)
+        if len(ends) == 1:      # the first start waits for the second, if the second can enter
+            deadline = time.monotonic() + 0.3
+            while len(ends) < 2 and time.monotonic() < deadline:
+                time.sleep(0.005)
+        return real_end(scope)
+    looks = []
+
+    def in_use(folder):
+        looks.append(1)
+        if len(looks) == 2:     # the second start looks once the first flow's Node is up
+            deadline = time.monotonic() + 1.0
+            while not spawned and time.monotonic() < deadline:
+                time.sleep(0.005)
+            time.sleep(0.05)
+        return real_in_use(folder)
+    monkeypatch.setattr(routes, "_end_link_flow", end)
+    monkeypatch.setattr(wa, "login_in_use", in_use)
+    threads = [threading.Thread(target=routes._begin_link_flow, args=("alice", ALICE_SCOPE)) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and _client(ALICE).get("/api/whatsapp/qr").json().get("status") != "qr":
+        time.sleep(0.02)
+    assert _client(ALICE).get("/api/whatsapp/qr").json()["status"] == "qr"
+    live = [p for p in spawned if p.returncode is None]
+    assert live == [routes._qr_procs.get(ALICE_SCOPE)], "a link Node runs that no flow owns"
+
+
+def test_a_link_of_a_revoked_account_spawns_nothing(world, monkeypatch):
+    """The flow passed `/qr/start` before the account was deactivated; it reaches its spawn
+    after. MUTATION: drop the `_account_may_start` check before the link spawn - red."""
+    from vaf.core import revocation
+    revocation.revoke_account(ALICE_SCOPE)
+    try:
+        spawned = []
+        monkeypatch.setattr(wa, "spawn_node_bridge", lambda *a, **k: spawned.append(a) or QRNode([]))
+        monkeypatch.setattr(wa, "ensure_bridge_deps", lambda *a, **k: (True, ""))
+        from vaf.core import node_runtime
+        monkeypatch.setattr(node_runtime, "find", lambda name: "node")
+        flow = object()
+        routes._qr_flows[ALICE_SCOPE] = flow
+        routes._run_qr_login("alice", ALICE_SCOPE, flow)
+        assert spawned == [] and ALICE_SCOPE not in routes._qr_procs
+    finally:
+        revocation.restore_account(ALICE_SCOPE)
+
+
+# -- review round: one scope key, and lanes that cannot forget their scope ---------------------
+
+def test_the_routes_and_the_bridge_share_one_scope_key():
+    assert routes._scope_key is wa._scope_key
+    assert not hasattr(routes, "_flow_key")
+    assert wa._scope_key(" AB12CD34-0000 ") == "ab12cd34-0000" and wa._scope_key(None) == ""
+
+
+@pytest.mark.parametrize("lane", ["get_whatsapp_chats", "sync_whatsapp_chats", "get_lid_mappings",
+                                  "get_contact_names", "get_avatar", "get_connection_status"])
+def test_the_lane_wrappers_require_a_scope(lane):
+    """A caller that forgets the scope fails loudly instead of reading nothing or a cache.
+    MUTATION: give `user_scope_id` a default again - red."""
+    import inspect
+    param = inspect.signature(getattr(wa, lane)).parameters["user_scope_id"]
+    assert param.kind is inspect.Parameter.KEYWORD_ONLY and param.default is inspect.Parameter.empty

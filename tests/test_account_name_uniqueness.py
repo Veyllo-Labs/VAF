@@ -94,7 +94,8 @@ def test_names_one_folder_may_open_are_taken(h, first, second):
     with pytest.raises(UserAdminError) as refused:
         _create(h, second)
     assert refused.value.code == "username_taken" and refused.value.http_status == 409
-    assert "letter case or Unicode form" in refused.value.message
+    assert "capitals, accents or similar letters" in refused.value.message
+    assert refused.value.message.endswith("Choose another user name.")
     assert _names(h) == [first]
 
 
@@ -121,6 +122,7 @@ def test_owner_names_are_reserved(h, name):
     with pytest.raises(UserAdminError) as refused:
         _create(h, name)
     assert refused.value.code == "username_reserved" and refused.value.http_status == 409
+    assert refused.value.message.endswith("Choose another user name.")
     assert _names(h) == []
 
 

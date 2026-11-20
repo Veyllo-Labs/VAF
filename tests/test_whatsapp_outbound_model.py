@@ -907,7 +907,9 @@ def test_named_numbers_from_the_node_name_the_chats_and_fill_the_contact_book(is
     assert [c["name"] for c in cs.list_contacts("alice", user_scope_id=SCOPE)] == ["Dana New"]
     # Without a running bridge the getter answers from the last event.
     monkeypatch.setattr(wa, "is_bridge_running", lambda: False)
-    assert wa.get_contact_names("alice")["491700000042"]["source"] == "addressbook"
+    assert wa.get_contact_names("alice", user_scope_id=SCOPE)["491700000042"]["source"] == "addressbook"
+    # ...and only to the scope whose process wrote them: a name can pass to a new account.
+    assert wa.get_contact_names("alice", user_scope_id="ab12cd34-0000-4000-8000-0000000000b9") == {}
 
 
 def test_status_updates_and_newsletters_are_not_rejected_senders(isolated, monkeypatch):

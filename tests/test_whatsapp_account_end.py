@@ -22,6 +22,7 @@ import io
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 
@@ -329,7 +330,8 @@ def test_a_new_account_does_not_inherit_a_leftover_login(creating, monkeypatch, 
     moved = sorted(old.parent.glob("whatsapp.previous-*"))
     assert len(moved) == 1 and (moved[0] / "creds.json").is_file()
     assert not (old.parent / "whatsapp_avatars").exists()
-    assert any("was moved to whatsapp.previous-" in r.getMessage() for r in caplog.records)
+    assert any(f"was moved to users/{left_under}/whatsapp.previous-" in r.getMessage()
+               for r in caplog.records)
 
 
 def test_an_unmovable_leftover_refuses_the_account(creating, monkeypatch):
@@ -365,3 +367,222 @@ def test_the_first_admin_keeps_its_folder(creating):
     _create(creating, "dora", role="admin", first_admin=True)
     assert (folder / "creds.json").is_file()
     assert not list(folder.parent.glob("whatsapp.previous-*"))
+
+
+# -- review round: names shaped like paths ------------------------------------------------------
+
+def _folder(path):
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "creds.json").write_text("{}", encoding="utf-8")
+    return path
+
+
+def _identity(path):
+    st = os.stat(path)
+    return st.st_dev, st.st_ino
+
+
+@pytest.fixture
+def protected(world):
+    """Alice's login, the owner's ("admin") login and a `whatsapp` folder outside `users/`; the
+    directory lists alice beside the account being deleted."""
+    folders = {"alice": _folder(Config.APP_DIR / "users" / "alice" / "whatsapp"),
+               "owner": _folder(Config.APP_DIR / "users" / "admin" / "whatsapp"),
+               "outside": _folder(Config.APP_DIR / "whatsapp")}
+    return folders
+
+
+@pytest.mark.parametrize("name", ["alice/", "./alice", "alice/.", "admin/", "./admin", "..", "alice.",
+                                  "../users/alice"])
+def test_a_path_shaped_name_removes_no_other_folder(world, protected, name):
+    """An account name is not checked for its shape at creation, and `users/<name>/whatsapp` of
+    these opens alice's, the owner's or a folder outside `users/`. MUTATION: drop the
+    one-folder-name check in `forget_account_login` and `remove_login` - red."""
+    world.rows.append({"username": name, "user_scope_id": "ab12cd34-0000-4000-8000-0000000000e1", "active": True})
+    before = {k: _identity(v) for k, v in protected.items()}
+    assert wa.forget_account_login(name, "ab12cd34-0000-4000-8000-0000000000e1") is False
+    assert {k: _identity(v) for k, v in protected.items()} == before
+    assert all((v / "creds.json").is_file() for v in protected.values())
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a folder link needs a privilege on Windows")
+def test_a_folder_linked_to_another_accounts_is_kept(world, protected):
+    """`users/bobby` is a link to alice's account folder: "bobby" is one folder name, its key is
+    not alice's, and its login is alice's. MUTATION: compare only names that share a key -
+    red."""
+    os.symlink(Config.APP_DIR / "users" / "alice", Config.APP_DIR / "users" / "bobby", target_is_directory=True)
+    world.rows.append({"username": "bobby", "user_scope_id": "ab12cd34-0000-4000-8000-0000000000e2", "active": True})
+    assert wa.forget_account_login("bobby", "ab12cd34-0000-4000-8000-0000000000e2") is False
+    assert (protected["alice"] / "creds.json").is_file()
+
+
+def test_reset_of_a_path_shaped_name_removes_nothing(world, protected):
+    """`/qr/reset` signed in as "admin/" (an ordinary account) answers 500 and the owner's login
+    stays. MUTATION: drop the check in `remove_login` - red."""
+    from fastapi import FastAPI
+    from starlette.testclient import TestClient
+
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def signed_in(request, call_next):
+        request.state.user = {"username": "admin/", "role": "user", "user_scope_id": "ab12cd34-0000-4000-8000-0000000000e3"}
+        return await call_next(request)
+    app.include_router(routes.router)
+    res = TestClient(app).post("/api/whatsapp/qr/reset")
+    assert res.status_code == 500 and res.json()["detail"] == routes.LOGIN_NOT_REMOVED, res.text
+    assert (protected["owner"] / "creds.json").is_file()
+
+
+_PARTS = ["alice", "admin", "carol", ".", "..", "", "users", "whatsapp", "x"]
+
+
+def _draw_path_name(rng):
+    name = "/".join(rng.choice(_PARTS) for _ in range(rng.randint(1, 4)))
+    if rng.random() < 0.2:
+        name += rng.choice(["/", ".", " ", "/."])
+    return name.strip() or "x"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the oracle reads inodes and builds folder links")
+def test_fuzz_deletion_never_reaches_another_folder(world, monkeypatch, tmp_path):
+    """Seeded: names built from path parts, deleted with the real `forget_account_login`.
+    Oracle, the kernel: no protected folder (alice's and the owner's logins, carol's link to
+    alice's folder, `whatsapp` folders outside `users/`) loses its inode, and the login of a
+    plain name of its own is removed. `VAF_FUZZ_DRAWS` raises the draw count."""
+    import random
+    draws = int(os.environ.get("VAF_FUZZ_DRAWS", "300"))
+    rng = random.Random(453_011)
+    users = Config.APP_DIR / "users"
+    mismatches = []
+    for draw in range(draws):
+        shutil.rmtree(Config.APP_DIR, ignore_errors=True)
+        protected = [_folder(users / "alice" / "whatsapp"), _folder(users / "admin" / "whatsapp"),
+                     _folder(Config.APP_DIR / "whatsapp"), _folder(Config.APP_DIR / "users" / "whatsapp"),
+                     _folder(Config.APP_DIR.parent / "whatsapp")]
+        os.symlink(users / "alice", users / "carol", target_is_directory=True)
+        ids = {str(p): _identity(p) for p in protected}
+        name = _draw_path_name(rng)
+        scope = f"ab12cd34-0000-4000-8000-{draw:012x}"
+        world.rows[:] = [{"username": "alice", "user_scope_id": ALICE_SCOPE, "active": True},
+                         {"username": "carol", "user_scope_id": BOB_SCOPE, "active": True},
+                         {"username": name, "user_scope_id": scope, "active": True}]
+        own = None
+        from vaf.core.whatsapp_auth import is_one_folder_name
+        if is_one_folder_name(name) and not (users / name).exists():
+            own = _folder(users / name / "whatsapp")
+        wa.forget_account_login(name, scope)
+        lost = [p for p, ident in ids.items() if not os.path.isdir(p) or _identity(p) != ident]
+        if lost:
+            mismatches.append((draw, name, "lost", lost))
+        if own is not None and own.exists():
+            mismatches.append((draw, name, "own login kept"))
+    shutil.rmtree(Config.APP_DIR.parent / "whatsapp", ignore_errors=True)
+    assert not mismatches, mismatches[:10]
+
+
+# -- review round: cached answers belong to their scope ----------------------------------------
+
+def _cache_as(name, scope):
+    """What a process registered under `name` for `scope` caches through its events."""
+    wa._dispatch_bridge_event(name, scope, "chats", {"chats": [{"jid": "491700000042@s.whatsapp.net"}]})
+    wa._dispatch_bridge_event(name, scope, "lid_mappings", {"mappings": [{"lid": "1@lid", "e164": "+491700000042"}]})
+    wa._dispatch_bridge_event(name, scope, "contacts", {"contacts": [
+        {"jid": "491700000042@s.whatsapp.net", "e164": "+491700000042", "name": "Old friend", "source": "addressbook"}]})
+
+
+@pytest.fixture
+def quiet_events(world, monkeypatch):
+    monkeypatch.setattr(wa, "_sync_contacts_from_chats", lambda *a, **k: {})
+    import vaf.core.contacts_store as cs
+    monkeypatch.setattr(cs, "sync_channel_contacts", lambda *a, **k: {})
+    for name in ("_chat_lists_owner", "_lid_mappings_owner", "_contact_names_owner"):
+        monkeypatch.setattr(wa, name, {})
+
+
+@pytest.mark.parametrize("bridge", ["down", "running, no process answers"])
+def test_a_new_account_never_reads_a_deleted_accounts_cache(world, quiet_events, monkeypatch, bridge):
+    """The old "bob" wrote the caches; the new "bob" asks with its own scope. MUTATION: `_owned`
+    ignores the owner - red."""
+    new_bob = "ab12cd34-0000-4000-8000-0000000000b9"
+    _cache_as("bob", BOB_SCOPE)
+    monkeypatch.setattr(wa, "is_bridge_running", lambda: bridge != "down")
+    for scope, expect in ((new_bob, False), (BOB_SCOPE, True)):
+        chats = wa.get_whatsapp_chats("bob", wait_timeout=0.01, user_scope_id=scope)
+        lids = wa.get_lid_mappings("bob", wait_timeout=0.01, user_scope_id=scope)
+        names = wa.get_contact_names("bob", wait_timeout=0.01, user_scope_id=scope)
+        assert bool(chats) is expect and bool(lids) is expect and bool(names) is expect, (scope, chats, lids, names)
+    # The reply lane's LID lookup reads the same cache through `_owned`.
+    assert wa._jid_to_chat_id("bob", "1@lid", new_bob) == ""
+    assert wa._jid_to_chat_id("bob", "1@lid", BOB_SCOPE) == "+491700000042"
+
+
+def test_deletion_drops_the_caches_even_when_the_login_is_kept(world, quiet_events):
+    """A Node that survived its kill keeps the folder, and the caches go anyway. MUTATION: drop
+    them only after the early returns - red."""
+    _cache_as("bob", BOB_SCOPE)
+    wa._connection_status["bob"] = True
+    _live_node_on(_login("bob"))
+    assert wa.forget_account_login("bob", BOB_SCOPE) is False
+    for cache in (wa._chat_lists, wa._lid_mappings, wa._contact_names, wa._connection_status):
+        assert "bob" not in cache
+
+
+def test_another_accounts_cache_under_the_same_name_is_kept(world, quiet_events):
+    """An ordinary account named "admin" (created before the name was reserved) is deleted
+    while the local admin, also "admin", runs: the caches under "admin" are the local admin's.
+    MUTATION: drop every cache under the name, whoever wrote it - red."""
+    _cache_as("admin", ADMIN_SCOPE)
+    wa._connection_status["admin"] = True
+    wa.forget_account_login("admin", BOB_SCOPE)
+    assert wa._chat_lists.get("admin") and wa._lid_mappings.get("admin") and wa._contact_names.get("admin")
+    assert wa._connection_status.get("admin") is True
+
+
+# -- review round: a start under way does not outlive the revocation ---------------------------
+
+@pytest.mark.parametrize("how", ["deactivated", "deleted"])
+def test_a_start_under_way_spawns_nothing_for_a_revoked_account(world, monkeypatch, how):
+    """The listener ran while nothing was registered yet; the start that had passed its checks
+    spawns now. MUTATION: drop the `_account_may_start` check in `_spawn_account` - red."""
+    monkeypatch.setattr(wa, "_bridge_stop", __import__("threading").Event())
+    monkeypatch.setattr(wa, "_spawns_open", True)
+    spawned = []
+    monkeypatch.setattr(wa, "_run_user_process", lambda name, auth_dir: spawned.append(name) or FakeProc())
+    monkeypatch.setattr(wa, "_write_bridge_state", lambda running: None)
+    monkeypatch.setattr(wa, "_read_user_process", lambda *a, **k: None)
+    monkeypatch.setattr(wa, "_forward_bridge_stderr", lambda *a, **k: None)
+    if how == "deactivated":
+        world.rows[0]["active"] = False
+    else:
+        del world.rows[0]
+    revocation.revoke_account(ALICE_SCOPE)
+    with wa._spawn_lock:
+        assert wa._spawn_account(ALICE_SCOPE, "alice", _login("alice")) is False
+    assert spawned == [] and "alice" not in wa._processes
+    assert wa._start_into_running((ALICE_SCOPE, "alice", _login("alice"))) == (False, wa.NOT_STARTABLE)
+    with wa._spawn_lock:
+        assert wa._spawn_account(BOB_SCOPE, "bob", _login("bob")) is True, "an active account still starts"
+    assert spawned == ["bob"]
+
+
+# -- review round: a users folder that cannot be listed ----------------------------------------
+
+def test_an_unlistable_users_folder_refuses_the_account(creating, monkeypatch):
+    """Listing `users` fails (no permission): the account is refused instead of created next to
+    a login nobody looked at. MUTATION: answer no logins on every OSError - red."""
+    _login("carol")
+    import vaf.core.whatsapp_auth as auth
+    real = auth.Path.iterdir
+
+    def refuse(self):
+        if self.name == "users":
+            raise PermissionError(13, "Permission denied", str(self))
+        return real(self)
+    monkeypatch.setattr(auth.Path, "iterdir", refuse)
+    with pytest.raises(UserAdminError) as refused:
+        _create(creating, "carol")
+    assert refused.value.code == "login_leftover"
+    assert "check the folder permissions" in refused.value.message
+    with Session(creating.engine) as s:
+        assert s.execute(select(LocalUser)).first() is None

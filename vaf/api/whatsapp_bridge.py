@@ -40,6 +40,9 @@ registered and alive, and a new account created under a deleted account's name r
 login. NAMED BOUNDARY: the revocation does not tell a deletion from a deactivation, so the
 delete route calls `forget_account_login` itself; one consumer (this login) needs the
 difference, and a second store that must forget at deletion makes it a flag on the listener.
+Six such stores are measured and filed (the account workspace, contacts, mail sync, channel
+messages, the Front Office profile and the cloud folders, all keyed by the name under
+`users/<name>/` and kept at deletion): building their removal is the trigger for that flag.
 
 One Node per login folder. `spawn_node_bridge`, the one place Node starts (the account's
 process and the QR link alike), refuses a second live Node on a folder one already runs on,
@@ -193,6 +196,12 @@ _self_phone: Dict[str, str] = {}
 _chat_lists: Dict[str, List[Dict[str, Any]]] = {}
 _chat_list_events: Dict[str, threading.Event] = {}
 _chat_lists_lock = threading.Lock()
+# The scope of the process that wrote each name's chat list, LID mappings and contact names
+# (guarded by that cache's lock). The caches are keyed by the process's NAME, and a name can
+# pass to a new account: a cached answer goes only to the scope that wrote it (`_owned`).
+_chat_lists_owner: Dict[str, str] = {}
+_lid_mappings_owner: Dict[str, str] = {}
+_contact_names_owner: Dict[str, str] = {}
 
 # LID→E.164 from Node (Baileys lidMapping), so UI can show "this LID = this number" when WhatsApp resolved it
 _lid_mappings: Dict[str, List[Dict[str, str]]] = {}
@@ -1400,15 +1409,16 @@ def _jid_to_chat_id(username: str, chat_jid: str, user_scope_id: Optional[str] =
     if not jid:
         return ""
     if jid.endswith("@lid"):
+        scope = str(user_scope_id or "").strip()
         try:
             from vaf.core.contacts_store import whatsapp_lid_map
-            scope = str(user_scope_id or "").strip() or _account_scope(username)
+            scope = scope or _account_scope(username)
             mapped = str(whatsapp_lid_map(scope or None).get(jid) or "").strip()
         except Exception:
             mapped = ""
         if not mapped:
             with _lid_mappings_lock:
-                for m in _lid_mappings.get((username or "").strip() or "admin", []):
+                for m in _owned(_lid_mappings, _lid_mappings_owner, (username or "").strip() or "admin", scope, []):
                     if m.get("lid") == jid and (m.get("e164") or "").strip():
                         mapped = m["e164"].strip()
                         break
@@ -2411,6 +2421,7 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
         if isinstance(chats, list):
             with _chat_lists_lock:
                 _chat_lists[username] = chats
+                _chat_lists_owner[username] = str(user_scope_id or "")
             ev = _chat_list_events.get(username)
             if ev:
                 ev.set()
@@ -2428,6 +2439,7 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
                     names[digits] = {"name": name, "source": str(c.get("source") or ""), "e164": _to_e164_display(str(c.get("e164") or ""))}
             with _contact_names_lock:
                 _contact_names[username] = names
+                _contact_names_owner[username] = str(user_scope_id or "")
                 ev = _contact_names_events.get(username)
                 if ev:
                     ev.set()
@@ -2446,6 +2458,7 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
         if isinstance(mappings, list):
             with _lid_mappings_lock:
                 _lid_mappings[username] = [{"lid": str(m.get("lid", "")), "e164": str(m.get("e164", "")).strip() or ""} for m in mappings if m.get("lid")]
+                _lid_mappings_owner[username] = str(user_scope_id or "")
             ev = _lid_mappings_events.get(username)
             if ev:
                 ev.set()
@@ -2570,6 +2583,9 @@ def _spawn_account(user_scope_id: str, username: str, auth_dir: Path) -> bool:
         return False
     if _registered_alive(username):
         return True
+    if not _account_may_start(user_scope_id):
+        logger.warning("WhatsApp: %s not started, the account was deactivated or deleted", username)
+        return False
     proc = _run_user_process(username, auth_dir)
     if not proc:
         return False
@@ -2906,6 +2922,8 @@ def _start_into_running(entry: Tuple[str, str, Path]) -> Tuple[bool, str]:
             return False, PREVIOUS_NOT_ENDED
         if _registered_alive(username):
             return True, ACCOUNT_ALREADY_RUNNING
+        if not _account_may_start(user_scope_id):
+            return False, NOT_STARTABLE
         if _spawn_account(user_scope_id, username, auth_dir):
             logger.info("WhatsApp: process started for %s", username)
             return True, ACCOUNT_STARTED
@@ -3051,7 +3069,33 @@ def start_missing_accounts() -> List[str]:
 
 
 def _scope_key(user_scope_id: Any) -> str:
+    """A scope as this module and the WhatsApp routes compare it: stripped, lowercased, and ""
+    for none. Deliberately not `trust._scope_key` and its siblings in vaf/core, which read a
+    missing scope as the owner's ("default"): here a missing scope is no account at all."""
     return str(user_scope_id or "").strip().lower()
+
+
+def _owned(cache: Dict[str, Any], owners: Dict[str, str], name: str, user_scope_id: Any, empty: Any) -> Any:
+    """`cache[name]` when the process that wrote it was started for `user_scope_id`, else
+    `empty`. The caller holds the cache's lock. Measured before: with a deleted "bob"'s chat
+    list still cached under "bob", a new account "bob" read it through every lane's fallback
+    (the bridge down, or no process of its own answering)."""
+    want = _scope_key(user_scope_id)
+    if not want or _scope_key(owners.get(name)) != want:
+        return empty
+    return cache.get(name, empty)
+
+
+def _account_may_start(user_scope_id: Any) -> bool:
+    """Whether a Node may start for this account now: not revoked in this process and still
+    standing (`revocation.account_stands`: active in the account directory). Asked right before
+    every spawn, under the lock the spawn holds: a start that passed its own checks before a
+    deactivation or deletion landed would otherwise spawn after the revocation listener had
+    already stopped everything (measured: `_spawn_account` after `revoke_account` answered True
+    and registered the process)."""
+    from vaf.core import revocation
+    scope = str(user_scope_id or "").strip()
+    return not revocation.is_revoked(scope) and revocation.account_stands(scope)
 
 
 def _registrations_of(user_scope_id: Any) -> List[Tuple[str, str]]:
@@ -3105,22 +3149,29 @@ def register_revocation_listener() -> None:
     revocation.add_revocation_listener(_on_account_revoked)
 
 
-def _forget_cached(names) -> None:
-    """Drop what the bridge cached under these names: the chat list, LID mappings, contact
-    names, own number, connection state and the contact-sync throttle."""
+def _forget_cached(names, user_scope_id: Any, *, keep_unowned: bool = False) -> None:
+    """Drop what the bridge cached under these names for this scope: the chat list, LID
+    mappings and contact names this scope's process wrote (an entry another scope wrote stays,
+    it is that account's), and, unless `keep_unowned` (another account carries exactly one of
+    these names), the connection state, own number and contact-sync throttle, which record no
+    scope."""
     names = [n for n in names if n]
-    with _chat_lists_lock:
-        for n in names:
-            _chat_lists.pop(n, None)
-            _chat_list_events.pop(n, None)
-    with _lid_mappings_lock:
-        for n in names:
-            _lid_mappings.pop(n, None)
-            _lid_mappings_events.pop(n, None)
-    with _contact_names_lock:
-        for n in names:
-            _contact_names.pop(n, None)
-            _contact_names_events.pop(n, None)
+    gone = _scope_key(user_scope_id)
+
+    def mine(owners: Dict[str, str], n: str) -> bool:
+        return n not in owners or _scope_key(owners.get(n)) == gone
+    for lock, cache, owners, events in (
+            (_chat_lists_lock, _chat_lists, _chat_lists_owner, _chat_list_events),
+            (_lid_mappings_lock, _lid_mappings, _lid_mappings_owner, _lid_mappings_events),
+            (_contact_names_lock, _contact_names, _contact_names_owner, _contact_names_events)):
+        with lock:
+            for n in names:
+                if mine(owners, n):
+                    cache.pop(n, None)
+                    owners.pop(n, None)
+                    events.pop(n, None)
+    if keep_unowned:
+        return
     with _connection_lock:
         for n in names:
             _connection_status.pop(n, None)
@@ -3130,34 +3181,37 @@ def _forget_cached(names) -> None:
         _contact_sync_last.pop(n, None)
 
 
-def _folder_of_another_account(username: str, user_scope_id: Any) -> Optional[str]:
-    """The name of another account (the local admin included) whose login folder is this
-    name's folder on this file system, or None. Only names with the same
-    `path_jail.portable_name_key` can be: the same name under another scope (an ordinary
-    account named like a local admin that has no row of its own), or a twin created before
-    names were compared that way ("Straße" next to "strasse"), which only a case-insensitive
-    file system makes one folder. Removing such a folder would remove the other account's
-    login."""
+def _other_account_names(user_scope_id: Any) -> List[str]:
+    """Every account name but this scope's: the local admin's from the config and the account
+    directory's. Empty names are left out."""
     from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
-    from vaf.core.path_jail import portable_name_key
-    name = (username or "").strip()
-    key, gone = portable_name_key(name), _scope_key(user_scope_id)
-    others = []
+    gone = _scope_key(user_scope_id)
+    names: List[str] = []
     try:
         if _scope_key(get_local_admin_scope_id()) != gone:
-            others.append(str(get_local_admin_username() or "").strip())
+            names.append(str(get_local_admin_username() or "").strip())
     except Exception:
         pass
     try:
         from vaf.core.tool_dispatch import resolve_account_directory
-        others += [str(r.get("username") or "").strip() for r in resolve_account_directory()
-                   if _scope_key(r.get("user_scope_id")) != gone]
+        names += [str(r.get("username") or "").strip() for r in resolve_account_directory()
+                  if _scope_key(r.get("user_scope_id")) != gone]
     except Exception:
         pass
+    return [n for n in names if n]
+
+
+def _folder_of_another_account(username: str, user_scope_id: Any) -> Optional[str]:
+    """The name of another account (the local admin included) whose login folder is this
+    name's folder on this file system, or None. Asked of EVERY other account by the kernel
+    (`os.path.samefile`), not only of names that look alike: the same name under another scope
+    (an ordinary account named like a local admin that has no row of its own), a twin from
+    before names were compared by `portable_name_key` on a case-insensitive file system, and
+    any spelling the kernel resolves to the same folder. Removing such a folder would remove
+    the other account's login. Accounts are counted in tens."""
+    name = (username or "").strip()
     mine = get_whatsapp_auth_dir(name)
-    for other in others:
-        if not other or portable_name_key(other) != key:
-            continue
+    for other in _other_account_names(user_scope_id):
         try:
             if os.path.samefile(get_whatsapp_auth_dir(other), mine):
                 return other
@@ -3172,17 +3226,25 @@ def forget_account_login(username: str, user_scope_id: Any) -> bool:
     connection state are dropped, and its login and picture cache are removed
     (`whatsapp_auth.remove_login`). True when the login is gone.
 
-    Nothing is removed (False, a warning) while a Node still runs on the folder (one that
-    survived its kill writes into it) or when the folder is another account's too (a
-    case-insensitive file system and a name twin from before names were compared by
-    `portable_name_key`). Such a folder is moved aside when the name is used again
+    The caches go first, whatever happens to the folder: this scope's entries always, the
+    unscoped ones unless another account carries exactly this name. Then nothing is removed
+    (False, a warning) when the name is not one folder name (`whatsapp_auth.is_one_folder_name`:
+    "admin/" or ".." would open another account's folder or one outside `users/`), while a
+    Node still runs on the folder (one that survived its kill writes into it), or when the
+    folder is another account's too. Such a folder is moved aside when the name is used again
     (`user_admin.create_local_user`)."""
+    from vaf.core.whatsapp_auth import is_one_folder_name, remove_login
     name = (username or "").strip()
     if not name:
         return False
     names = {n for n, _ in _registrations_of(user_scope_id)} | {name}
     if stop_scope(user_scope_id) is False:
         logger.error("WhatsApp: the process of the deleted account %s did not end", name)
+    _forget_cached(names, user_scope_id, keep_unowned=name in _other_account_names(user_scope_id))
+    if not is_one_folder_name(name):
+        logger.warning("WhatsApp: the login of the deleted account %r is kept, the name is not "
+                       "one folder name and could open another folder", name)
+        return False
     folder = get_whatsapp_auth_dir(name)
     if login_in_use(folder):
         logger.warning("WhatsApp: the login of the deleted account %s is kept, a process still "
@@ -3193,8 +3255,6 @@ def forget_account_login(username: str, user_scope_id: Any) -> bool:
         logger.warning("WhatsApp: the login of the deleted account %s is kept, it is the folder "
                        "of the account %s on this file system", name, other)
         return False
-    _forget_cached(names)
-    from vaf.core.whatsapp_auth import remove_login
     return remove_login(name, avatars=True)
 
 
@@ -3247,16 +3307,16 @@ def _request_sync_chats(username: str, user_scope_id: Optional[str]) -> Optional
 
 
 def get_whatsapp_chats(username: str, force_refresh: bool = False, wait_timeout: float = 3.0, *,
-                       user_scope_id: Optional[str] = None) -> List[Dict[str, Any]]:
+                       user_scope_id: Optional[str]) -> List[Dict[str, Any]]:
     """Return the list of all WhatsApp chats. Requests from the account's own process
     (`user_scope_id`) when it runs, else the last list stored under this name."""
     if not is_bridge_running():
         with _chat_lists_lock:
-            return list(_chat_lists.get(username, []))
+            return list(_owned(_chat_lists, _chat_lists_owner, username, user_scope_id, []))
     used_username = _request_chats(username, user_scope_id)
     if not used_username:
         with _chat_lists_lock:
-            return list(_chat_lists.get(username, []))
+            return list(_owned(_chat_lists, _chat_lists_owner, username, user_scope_id, []))
     with _chat_lists_lock:
         if used_username not in _chat_list_events:
             _chat_list_events[used_username] = threading.Event()
@@ -3264,19 +3324,19 @@ def get_whatsapp_chats(username: str, force_refresh: bool = False, wait_timeout:
         ev.clear()
     ev.wait(timeout=wait_timeout)
     with _chat_lists_lock:
-        return list(_chat_lists.get(used_username, []))
+        return list(_owned(_chat_lists, _chat_lists_owner, used_username, user_scope_id, []))
 
 
 def sync_whatsapp_chats(username: str, wait_timeout: float = 25.0, *,
-                        user_scope_id: Optional[str] = None) -> List[Dict[str, Any]]:
+                        user_scope_id: Optional[str]) -> List[Dict[str, Any]]:
     """Request full chat list sync from WhatsApp (Node calls Baileys fetchMessageHistory), then return the updated list. Use when the left-side list is incomplete."""
     if not is_bridge_running():
         with _chat_lists_lock:
-            return list(_chat_lists.get(username, []))
+            return list(_owned(_chat_lists, _chat_lists_owner, username, user_scope_id, []))
     used_username = _request_sync_chats(username, user_scope_id)
     if not used_username:
         with _chat_lists_lock:
-            return list(_chat_lists.get(username, []))
+            return list(_owned(_chat_lists, _chat_lists_owner, username, user_scope_id, []))
     with _chat_lists_lock:
         if used_username not in _chat_list_events:
             _chat_list_events[used_username] = threading.Event()
@@ -3284,7 +3344,7 @@ def sync_whatsapp_chats(username: str, wait_timeout: float = 25.0, *,
         ev.clear()
     ev.wait(timeout=wait_timeout)
     with _chat_lists_lock:
-        return list(_chat_lists.get(used_username, []))
+        return list(_owned(_chat_lists, _chat_lists_owner, used_username, user_scope_id, []))
 
 
 def fetch_older_messages(
@@ -3387,7 +3447,7 @@ def _avatar_key(chat_jid: str) -> str:
 
 
 def get_avatar(username: str, chat_jid: str, wait_timeout: float = 8.0, *,
-               user_scope_id: Optional[str] = None) -> Optional[Tuple[bytes, str]]:
+               user_scope_id: Optional[str]) -> Optional[Tuple[bytes, str]]:
     """The profile picture of a chat as (bytes, mime), or None when the person shows none
     (privacy setting, no picture, or the bridge is down), asked of the account's own process
     (`user_scope_id`; without one, None).
@@ -3574,17 +3634,17 @@ def _request_contacts(username: str, user_scope_id: Optional[str]) -> Optional[s
 
 
 def get_contact_names(username: str, wait_timeout: float = 2.5, *,
-                      user_scope_id: Optional[str] = None) -> Dict[str, Dict[str, str]]:
+                      user_scope_id: Optional[str]) -> Dict[str, Dict[str, str]]:
     """Phone digits -> {name, source, e164} as WhatsApp shows them (address book, business
     name or push name), from the Node's contact store. The last answer when the bridge is
     down or slow; empty when it never answered."""
     if not is_bridge_running():
         with _contact_names_lock:
-            return dict(_contact_names.get(username, {}))
+            return dict(_owned(_contact_names, _contact_names_owner, username, user_scope_id, {}))
     used = _request_contacts(username, user_scope_id)
     if not used:
         with _contact_names_lock:
-            return dict(_contact_names.get(username, {}))
+            return dict(_owned(_contact_names, _contact_names_owner, username, user_scope_id, {}))
     with _contact_names_lock:
         if used not in _contact_names_events:
             _contact_names_events[used] = threading.Event()
@@ -3592,19 +3652,19 @@ def get_contact_names(username: str, wait_timeout: float = 2.5, *,
         ev.clear()
     ev.wait(timeout=wait_timeout)
     with _contact_names_lock:
-        return dict(_contact_names.get(used, {}))
+        return dict(_owned(_contact_names, _contact_names_owner, used, user_scope_id, {}))
 
 
 def get_lid_mappings(username: str, wait_timeout: float = 2.5, *,
-                     user_scope_id: Optional[str] = None) -> List[Dict[str, str]]:
+                     user_scope_id: Optional[str]) -> List[Dict[str, str]]:
     """Return LID→E.164 known by Node (Baileys). Requests from bridge when running. Empty if not available."""
     if not is_bridge_running():
         with _lid_mappings_lock:
-            return list(_lid_mappings.get(username, []))
+            return list(_owned(_lid_mappings, _lid_mappings_owner, username, user_scope_id, []))
     used_username = _request_lid_mappings(username, user_scope_id)
     if not used_username:
         with _lid_mappings_lock:
-            return list(_lid_mappings.get(username, []))
+            return list(_owned(_lid_mappings, _lid_mappings_owner, username, user_scope_id, []))
     with _lid_mappings_lock:
         if used_username not in _lid_mappings_events:
             _lid_mappings_events[used_username] = threading.Event()
@@ -3612,11 +3672,11 @@ def get_lid_mappings(username: str, wait_timeout: float = 2.5, *,
         ev.clear()
     ev.wait(timeout=wait_timeout)
     with _lid_mappings_lock:
-        return list(_lid_mappings.get(used_username, []))
+        return list(_owned(_lid_mappings, _lid_mappings_owner, used_username, user_scope_id, []))
 
 
 def get_connection_status(username: str, wait_timeout: float = 5.0, *,
-                          user_scope_id: Optional[str] = None) -> bool:
+                          user_scope_id: Optional[str]) -> bool:
     """Check if the account's WhatsApp socket is connected (Node has currentSock): ping/pong
     with the process started for `user_scope_id`. Timeout 5s so read loop can be busy (e.g. transcribing)."""
     if not is_bridge_running():

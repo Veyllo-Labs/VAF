@@ -199,23 +199,25 @@ async def create_local_user(
         from vaf.core.config import is_local_admin_name
         if is_local_admin_name(cleaned):
             raise UserAdminError("username_reserved",
-                                 "This user name is reserved for this machine's owner", 409)
+                                 "This user name is reserved for this machine's owner. "
+                                 "Choose another user name.", 409)
     if await username_taken(db, cleaned):
         raise UserAdminError(
             "username_taken",
-            "Username already taken (names that differ only in letter case or Unicode form "
-            "count as the same)", 409)
+            "This user name is already taken; names that differ only in capitals, accents or "
+            "similar letters count as the same. Choose another user name.", 409)
     if not first_admin:
         try:
             from vaf.core.whatsapp_auth import set_aside_login
             for moved in set_aside_login(cleaned):
-                logger.warning("A WhatsApp login left under the user name %r was moved to %s",
-                               cleaned, moved.name)
+                logger.warning("A WhatsApp login left under the user name %r was moved to "
+                               "users/%s/%s", cleaned, moved.parent.name, moved.name)
         except OSError as e:
             raise UserAdminError(
                 "login_leftover",
-                "A WhatsApp login left under this user name could not be moved aside: "
-                f"{describe_error(e)}", 500) from e
+                "A WhatsApp login left under this user name could not be moved aside "
+                f"({describe_error(e)}). Choose another user name, or ask whoever runs this "
+                "server to check the folder permissions.", 500) from e
 
     password_hash = await hash_password_async(password)
     user = LocalUser(

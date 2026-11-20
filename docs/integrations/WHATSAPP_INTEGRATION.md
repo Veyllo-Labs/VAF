@@ -363,8 +363,29 @@ the caller's own process for anybody else:
   end) and removes the login only when no process runs on it any more (409 otherwise); it stops
   nobody else's process. The link flow is keyed by the account's scope, never its name: a flow
   replaced by a new `/qr/start` or ended by a revocation spawns nothing and writes nothing
-  afterwards, and `connected` is reported only after the link Node ended, so the account's own
-  start that follows does not find it still on the login.
+  afterwards, and `connected` is reported only after the link Node's exit is confirmed, so
+  the account's own start that follows does not find it still on the login; a link Node that
+  survives its terminate and kill is reported instead ("The phone is linked, but the setup
+  process did not stop. Restart VAF, then start WhatsApp."), and its handle is kept, so the
+  next start or reset ends it again. Each account's start and reset run as one transition
+  under a lock of their own (end the old flow, look at the login, install the new flow or
+  stop and remove): two starts at once can no longer leave a Node running whose flow the
+  other replaced. Every spawn, the account's process and the link alike, is refused for an
+  account that was deactivated or deleted meanwhile (`_account_may_start`, asked under the
+  lock the spawn holds), so a start already under way when the revocation landed starts
+  nothing.
+- **Cached answers belong to their scope.** The chat list, the LID mappings and the contact
+  names the bridge keeps for a lane that gets no fresh answer (the bridge down, or no process
+  of the account's own answering) are keyed by the process name and record the scope of the
+  process that wrote them; a cached answer goes only to that scope. Measured before: with a
+  deleted "bob"'s chat list still cached, a new account "bob" read it. A deletion drops the
+  deleted scope's entries before anything else.
+- **Deletion removes only one folder.** An account name is not checked for its shape when the
+  account is created, so `users/<name>/whatsapp` of a name such as `admin/`, `./alice` or `..`
+  opens another account's login or a folder outside `users/`. Deletion and `/qr/reset`
+  remove nothing for such a name (`whatsapp_auth.is_one_folder_name`), and deletion keeps a
+  folder that the kernel resolves to any other account's (`os.path.samefile`, asked of every
+  account). Measured before: deleting an account named `admin/` removed the owner's login.
 - **Named boundary: the Telegram and Discord bridges were not measured.** Each keeps one
   module-level stop (an Event or a flag) and one sender loop, the pattern that let a WhatsApp
   sender loop outlive its run. Neither has a request folder with several consumers, so the
@@ -713,7 +734,7 @@ Best practice: if the bot does not reply, check that you see `[Python] got type=
 - **QR or terminal issues:** Stderr of the Node process (including `connection.update` events) is logged to `whatsapp_qr_<date>.log`. After scanning, WhatsApp may disconnect with 515/516; the bridge then reconnects with stored credentials. If "logging in" stays stuck, check network/firewall.
 - **Session expired:** When an account's process needs a new QR but cannot show it, VAF stops that account's process and nobody else's. For the local admin it also turns the global `enabled` off, which is that account's own switch; another account's own switch stays on, so a later restart of the whole bridge starts its process again, which asks for a QR and stops again. Use Reset and scan a new QR code.
 - **"WhatsApp is running on this account's login":** the setup was started while this account's WhatsApp runs, or while an earlier link has not ended. Stop WhatsApp first, or use Re-link in the WhatsApp window, which stops it before it shows a new code.
-- **A login moved aside:** creating an ordinary account under a name an earlier account used (one deleted before deletion removed its login, or a row removed outside VAF) moves the login it left to `users/<folder>/whatsapp.previous-<UTC time>` before the account exists, logged at WARNING with the account's name, so the new account starts unlinked. A name that differs only in letter case or Unicode form counts as the same name here. If you created the same person again and want the old link back: with VAF stopped, remove the new account's `whatsapp` folder if one exists and rename the moved folder back to `whatsapp`. The first admin keeps its folder (the owner set up again after a lost database).
+- **A login moved aside:** when you create an ordinary account under a name that an earlier account used, and that account's WhatsApp login is still on disk, VAF moves the old login aside before the new account exists, so the new account starts unlinked. It goes to `~/.vaf/users/<name>/whatsapp.previous-<UTC time>`, for example `~/.vaf/users/carol/whatsapp.previous-20261120T101500Z` (a `-2`, `-3` is added when that name is taken). A name that differs only in capitals, accents or similar letters counts as the same name, so the folder can be under another spelling (`Carol`). The admin who creates the account sees nothing on screen; the server log has a WARNING line "A WhatsApp login left under the user name ... was moved to users/...", and `~/.vaf/users/*/whatsapp.previous-*` lists every moved login. Restore one only if the new account is the same person: the old login gives the account that WhatsApp number and its chats. To restore, stop VAF, remove the new account's `whatsapp` folder if one exists, and rename the moved folder back to `whatsapp`. The first admin keeps its folder (the owner set up again after a lost database).
 - **Repeated `GET /api/whatsapp/qr` in the server log:** This endpoint is polled by the WhatsApp setup wizard (every ~1.5s before a QR is shown, ~2.5s after) to detect when the QR appears and when your phone finishes linking. Polling runs **only while the setup wizard is open** and stops when you close it. Seeing it continuously means the wizard is open in a browser tab; close it to stop the polling.
 
 ### Voice: STT Fails (Incoming Voice Not Transcribed)

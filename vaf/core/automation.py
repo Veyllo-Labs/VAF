@@ -193,8 +193,7 @@ class AutomationTask:
         self.day = fields.get("day")
         self.weekday = fields.get("weekday")
         self.enabled = fields["enabled"] if self.enabled is not None else False
-        if self.incarnation is not None and not isinstance(self.incarnation, str):
-            self.incarnation = str(self.incarnation)
+        self.incarnation = _incarnation(self.incarnation)
 
     def to_dict(self) -> Dict:
         """Convert to dict, excluding next_run (calculated dynamically)."""
@@ -742,6 +741,13 @@ def _stamp_successful_run(task: AutomationTask) -> None:
     # "local date" = the OWNER's calendar day (their timezone), so daily "done today" checks
     # match the user's day, not the server's.
     task.last_completed_local_date = user_now(_resolve_username(task.user_scope_id)).date().isoformat()
+
+
+def _incarnation(value: Any) -> Optional[str]:
+    """An incarnation as the task carries it: text, or None for none. The one reading for a
+    loaded task and for a record compared against it, so a value a file holds as a number
+    (written by hand or by another program) still names its own task."""
+    return None if value is None else str(value)
 
 
 def _trigger_rule(trigger: Any) -> Optional[Dict[str, Any]]:
@@ -1297,25 +1303,34 @@ class AutomationManager:
         cursor is on disk. The watch has already moved its own cursor past those frames, so
         the pending hit is the only place they are still held. A hit whose task is gone,
         was created anew under the same id, or watches another rule by now is dropped: its
-        frames matched a rule that no longer exists.
+        frames matched a rule that no longer exists. A hit whose task is switched off by now
+        is dropped too (its cursor is written). The run gets the task as it is on disk when
+        the cursor is committed, never the scheduler's older copy.
         """
         from vaf.core.automation_triggers import RoomTriggerWatch, TriggerHit, trigger_context
 
         watch = getattr(self, "_trigger_watch", None)
         if watch is None:
             watch = self._trigger_watch = RoomTriggerWatch()
-        pending = getattr(self, "_pending_trigger_hits", None)
-        if pending is None:
-            pending = self._pending_trigger_hits = {}
-        hits: Dict[str, Any] = dict(pending)
+        # Oldest first. A newer hit joins a held one only when both were matched by the same
+        # task and the same rule; frames matched by a rule that has since changed, or by a
+        # task deleted and created anew under the id, stay a hit of their own and are dropped
+        # by the commit below rather than run under the new rule (whose context may name
+        # another room and tell the run to answer there).
+        hits: List[Any] = list(getattr(self, "_pending_trigger_hits", None) or [])
         for hit in watch.tick(self.list(enabled_only=True)):
-            earlier = hits.get(hit.task.id)
-            if earlier is not None:
-                hit = TriggerHit(hit.task, list(earlier.frames) + list(hit.frames),
-                                 hit.newest, {**earlier.labels, **hit.labels})
-            hits[hit.task.id] = hit
+            for i, earlier in enumerate(hits):
+                if earlier.task.id == hit.task.id \
+                        and earlier.task.incarnation == hit.task.incarnation \
+                        and _trigger_rule(earlier.task.trigger) == _trigger_rule(hit.task.trigger):
+                    hits[i] = TriggerHit(hit.task, list(earlier.frames) + list(hit.frames),
+                                         hit.newest, {**earlier.labels, **hit.labels})
+                    break
+            else:
+                hits.append(hit)
+        pending: List[Any] = []
         fired = 0
-        for task_id, hit in hits.items():
+        for hit in hits:
             task = hit.task
             task.trigger = dict(task.trigger or {}, cursor=int(hit.newest))
             patch = _cursor_patch(task.trigger)
@@ -1325,20 +1340,26 @@ class AutomationManager:
                 # prompt or a trigger edited since.
                 current = self._mutate_record(task, patch, same_incarnation=True)
             except Exception as e:
-                pending[task_id] = hit
-                self._log_scheduler_event(f"TRIGGER_PENDING task_id={task_id} error={e!r}")
+                pending.append(hit)
+                self._log_scheduler_event(f"TRIGGER_PENDING task_id={task.id} error={e!r}")
                 continue
-            pending.pop(task_id, None)
             if current is None or not patch.applied:
                 self._log_scheduler_event(
-                    f"TRIGGER_DROPPED task_id={task_id} reason='task or rule changed'")
+                    f"TRIGGER_DROPPED task_id={task.id} reason='task or rule changed'")
                 continue
+            if not current.enabled:
+                # Switched off while the hit was held: the cursor is written, nothing runs.
+                self._log_scheduler_event(f"TRIGGER_DROPPED task_id={task.id} reason='disabled'")
+                continue
+            # The task as it is on disk now, with the cursor just written: the scheduler's
+            # copy may carry a prompt edited since its last refresh.
             self._log_scheduler_event(
-                f"TRIGGER_EVENT task_id={task.id} name={task.name!r} frames={len(hit.frames)}"
+                f"TRIGGER_EVENT task_id={current.id} name={current.name!r} frames={len(hit.frames)}"
             )
-            self._run_scheduled_task(task, trigger=trigger_context(task.trigger, hit.frames,
-                                                                   hit.labels))
+            self._run_scheduled_task(current, trigger=trigger_context(current.trigger, hit.frames,
+                                                                      hit.labels))
             fired += 1
+        self._pending_trigger_hits = pending
         return fired
 
     def _create_readme(self):
@@ -1620,7 +1641,7 @@ vaf automation delete <id>   # Delete task
             if record is None or str(record.get("id")).strip() != str(task.id):
                 tasks.pop(task.id, None)
                 return None
-            if same_incarnation and record.get("incarnation") != task.incarnation:
+            if same_incarnation and _incarnation(record.get("incarnation")) != task.incarnation:
                 tasks[task.id] = self._task_from_record(record, task, path)
                 return None
             write = change(record) is not False
@@ -1875,7 +1896,7 @@ vaf automation delete <id>   # Delete task
             if only_this_incarnation:
                 record = _read_task_record(filepath)
                 if record is None or str(record.get("id")).strip() != str(task_id) \
-                        or record.get("incarnation") != task.incarnation:
+                        or _incarnation(record.get("incarnation")) != task.incarnation:
                     return False
             if filepath.exists():
                 if permanent:

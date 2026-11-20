@@ -43,6 +43,18 @@ MUTATIONS, each turns the named test red:
 - drop the incarnation check in `_mutate_record` or in `_delete`, or let `create` keep the
   given incarnation -> test_a_run_of_a_deleted_task_leaves_the_task_recreated_under_its_id_alone;
 - let `update` apply `incarnation` -> test_update_ignores_identity_and_property_keys;
+- let `create` keep a given incarnation -> test_an_incarnation_follows_edits_and_the_trash;
+- compare the record's incarnation raw (not through `_incarnation`), in `_mutate_record` or
+  in `_delete` -> test_a_number_as_the_incarnation_still_names_its_own_task;
+- write the trigger cursor without `same_incarnation`
+  -> test_a_hit_of_a_deleted_task_misses_its_successor_with_the_same_rule;
+- join a held hit to a newer one without comparing the incarnation, or the rule
+  -> test_a_held_hit_is_never_joined_to_a_changed_rule[recreated-same-rule], [match], [room],
+     test_pending_trigger_hits_fuzz;
+- run a held hit of a task switched off meanwhile -> test_a_held_hit_of_a_task_switched_off_meanwhile_does_not_run,
+  test_pending_trigger_hits_fuzz;
+- run the scheduler's copy instead of the record just written
+  -> test_a_hit_runs_the_task_as_it_is_on_disk, test_pending_trigger_hits_fuzz;
 - filter the update keys with `hasattr` again -> test_update_ignores_identity_and_property_keys;
 - refresh the scheduler inside the store lock -> test_the_store_lock_is_a_leaf,
   test_no_deadlock_between_handoff_scheduler_and_updates;
@@ -270,9 +282,19 @@ class _Lines:
     def __init__(self, proc: subprocess.Popen):
         import queue
 
+        self._proc = proc
         self._queue = queue.Queue()
         self._empty = queue.Empty
         threading.Thread(target=self._pump, args=(proc.stdout,), daemon=True).start()
+
+    def _stderr_tail(self) -> str:
+        """Ends the child and returns the end of what it wrote to stderr."""
+        if self._proc.poll() is None:
+            self._proc.kill()
+        try:
+            return (self._proc.communicate(timeout=10)[1] or "")[-2000:]
+        except (subprocess.TimeoutExpired, ValueError, OSError):
+            return ""
 
     def _pump(self, stream):
         for line in stream:
@@ -283,8 +305,10 @@ class _Lines:
         try:
             line = self._queue.get(timeout=seconds)
         except self._empty:
-            raise AssertionError(f"no {marker!r} from the child within {seconds} s") from None
-        assert line == marker, f"expected {marker!r}, got {line!r}"
+            raise AssertionError(f"no {marker!r} from the child within {seconds} s; stderr: "
+                                 f"{self._stderr_tail()}") from None
+        if line != marker:
+            raise AssertionError(f"expected {marker!r}, got {line!r}; stderr: {self._stderr_tail()}")
 
 
 def test_two_processes_lose_no_field(store, tmp_path):
@@ -555,6 +579,10 @@ def test_an_incarnation_follows_edits_and_the_trash(one, monkeypatch):
     monkeypatch.setattr(auto_mod, "_resolve_username", lambda scope: "alice")
     incarnation = _disk(one)["incarnation"]
     assert isinstance(incarnation, str) and len(incarnation) == 12
+    given = AutomationTask(id="5707e002", name="given", incarnation="given0000000")
+    AutomationManager(storage_dir=str(one)).create(given)
+    assert given.incarnation != "given0000000" and len(given.incarnation) == 12
+    assert _disk(one, "5707e002")["incarnation"] == given.incarnation
     scheduler = AutomationManager(storage_dir=str(one))
     running = scheduler.get(TID)
     lane = AutomationManager(storage_dir=str(one))
@@ -581,6 +609,29 @@ def test_a_record_without_an_incarnation_still_loads_and_takes_its_stamp(one, mo
     assert scheduler._record_successful_run(running) is not None
     record = _disk(one)
     assert record["last_run"] and "incarnation" in record and record["incarnation"] is None
+
+
+def test_a_number_as_the_incarnation_still_names_its_own_task(one, monkeypatch):
+    """A file holding its incarnation as a number (written by hand or by another program):
+    the loaded task reads it as text, and its own run stamp and its one-time removal still
+    find it, so a spent one-time task is not armed again on every refresh."""
+    monkeypatch.setattr(auto_mod, "_resolve_username", lambda scope: "alice")
+    path = one / f"{TID}.json"
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record.update(incarnation=12345, frequency="once")
+    path.write_text(json.dumps(record), encoding="utf-8")
+    scheduler = AutomationManager(storage_dir=str(one))
+    running = scheduler.get(TID)
+    assert running.incarnation == "12345"
+    assert scheduler._record_successful_run(running) is not None
+    assert _disk(one)["last_run"]
+    # The stamp wrote the record back with the incarnation as text; the removal is asked
+    # about a number on disk too.
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record["incarnation"] = 12345
+    path.write_text(json.dumps(record), encoding="utf-8")
+    assert scheduler._remove_spent_once(running) is True
+    assert not path.exists()
 
 
 def test_a_run_of_a_deleted_task_leaves_the_task_recreated_under_its_id_alone(
@@ -710,6 +761,224 @@ def test_a_hit_runs_only_once_its_cursor_is_on_disk(event_task, monkeypatch):
     assert started == [["frame-41", "frame-42"]]
     assert _disk(event_task, "e7e00001")["trigger"] == dict(_TRIGGER, cursor=42)
     assert scheduler._fire_room_triggers() == 0, "a committed hit ran twice"
+
+
+EID = "e7e00001"
+
+
+class _Ticks:
+    """A watch whose n-th tick reports the n-th entry of `reports` ((frames, newest) or
+    None) for the event task among the tasks it is handed, and nothing after."""
+
+    def __init__(self, *reports):
+        self.reports = list(reports)
+
+    def tick(self, tasks):
+        from vaf.core.automation_triggers import TriggerHit
+
+        report = self.reports.pop(0) if self.reports else None
+        if report is None:
+            return []
+        frames, newest = report
+        return [TriggerHit(t, list(frames), newest, {}) for t in tasks if t.id == EID]
+
+
+def _wired(scheduler, watch, monkeypatch):
+    """Runs are recorded as (the task handed to the run, the frames it was told about)."""
+    import vaf.core.automation_triggers as triggers
+
+    started = []
+    scheduler._trigger_watch = watch
+    scheduler._run_scheduled_task = lambda task, *, trigger=None: started.append((task, trigger))
+    monkeypatch.setattr(triggers, "trigger_context", lambda t, frames, labels: list(frames))
+    return started
+
+
+def _busy_tick(scheduler, directory, monkeypatch):
+    monkeypatch.setattr(auto_mod, "_STORE_LOCK_TIMEOUT_S", 0.2)
+    with _Held(directory):
+        assert scheduler._fire_room_triggers() == 0
+    monkeypatch.setattr(auto_mod, "_STORE_LOCK_TIMEOUT_S", 5.0)
+
+
+_ROOM_2 = dict(_TRIGGER, room_id="room-2")
+
+
+def _change_match(d):
+    AutomationManager(storage_dir=str(d)).update(EID, trigger=dict(_TRIGGER, match="deploy prod"))
+    return dict(_TRIGGER, match="deploy prod")
+
+
+def _change_room(d):
+    AutomationManager(storage_dir=str(d)).update(EID, trigger=dict(_ROOM_2))
+    return dict(_ROOM_2)
+
+
+def _recreate_in_room_2(d):
+    editor = AutomationManager(storage_dir=str(d))
+    assert editor.delete(EID, permanent=True)
+    editor.create(AutomationTask(id=EID, name="anew", prompt="p-new", frequency="on_event",
+                                 time="", trigger=dict(_ROOM_2)))
+    return dict(_ROOM_2)
+
+
+def _recreate_same_rule(d):
+    editor = AutomationManager(storage_dir=str(d))
+    assert editor.delete(EID, permanent=True)
+    editor.create(AutomationTask(id=EID, name="anew", prompt="p-new", frequency="on_event",
+                                 time="", trigger=dict(_TRIGGER)))
+    return dict(_TRIGGER)
+
+
+@pytest.mark.parametrize("change", [_change_match, _change_room, _recreate_in_room_2,
+                                    _recreate_same_rule],
+                         ids=["match", "room", "recreated", "recreated-same-rule"])
+def test_a_held_hit_is_never_joined_to_a_changed_rule(event_task, monkeypatch, change):
+    """Frames f41 and f42 matched room-1/"go" and are held (the store was busy). The rule
+    changes, or the task is created anew watching room-2, and the next tick reports f43
+    for the new rule. Only f43 runs: the held frames go to no run, and room-1's words never
+    reach a run told to answer in room-2."""
+    scheduler = AutomationManager(storage_dir=str(event_task))
+    started = _wired(scheduler, _Ticks((["f41", "f42"], 42), (["f43"], 43)), monkeypatch)
+    _busy_tick(scheduler, event_task, monkeypatch)
+    rule = change(event_task)
+    scheduler.reload_tasks()
+    assert scheduler._fire_room_triggers() == 1
+    assert [frames for _task, frames in started] == [["f43"]]
+    assert _disk(event_task, EID)["trigger"] == dict(rule, cursor=43)
+
+
+def test_a_held_hit_of_a_task_switched_off_meanwhile_does_not_run(event_task, monkeypatch):
+    """Held, then switched off with a new prompt: the next tick starts nothing (neither
+    the off task nor the old prompt)."""
+    scheduler = AutomationManager(storage_dir=str(event_task))
+    started = _wired(scheduler, _Ticks((["f41", "f42"], 42)), monkeypatch)
+    _busy_tick(scheduler, event_task, monkeypatch)
+    AutomationManager(storage_dir=str(event_task)).update(EID, enabled=False, prompt="NEW")
+    scheduler.reload_tasks()
+    assert scheduler._fire_room_triggers() == 0
+    assert started == []
+    assert scheduler._pending_trigger_hits == []
+    record = _disk(event_task, EID)
+    assert record["enabled"] is False and record["prompt"] == "NEW"
+
+
+def test_a_hit_runs_the_task_as_it_is_on_disk(event_task, monkeypatch):
+    """The scheduler has not refreshed since the prompt was edited: the run gets the edited
+    prompt, never the scheduler's older copy."""
+    scheduler = AutomationManager(storage_dir=str(event_task))
+    started = _wired(scheduler, _Ticks((["f41"], 41)), monkeypatch)
+    AutomationManager(storage_dir=str(event_task)).update(EID, prompt="EDITED")
+    assert scheduler._fire_room_triggers() == 1
+    (task, frames), = started
+    assert task.prompt == "EDITED" and frames == ["f41"]
+    assert task.trigger == dict(_TRIGGER, cursor=41)
+
+
+def test_a_hit_of_a_deleted_task_misses_its_successor_with_the_same_rule(event_task, monkeypatch):
+    """Deleted and created anew under the id with an IDENTICAL rule: the old task's hit
+    writes no cursor into the new task and starts no run."""
+    scheduler = AutomationManager(storage_dir=str(event_task))     # holds the old task
+    started = _wired(scheduler, _Ticks((["f41", "f42"], 42)), monkeypatch)
+    editor = AutomationManager(storage_dir=str(event_task))
+    assert editor.delete(EID, permanent=True)
+    editor.create(AutomationTask(id=EID, name="anew", prompt="p-new", frequency="on_event",
+                                 time="", trigger=dict(_TRIGGER)))
+    assert scheduler._fire_room_triggers() == 0
+    assert started == []
+    assert _disk(event_task, EID)["trigger"] == _TRIGGER
+
+
+def test_pending_trigger_hits_fuzz(event_task, monkeypatch):
+    """Seeded single-thread schedules over one event task: frames said, ticks with the store
+    busy or free, rule changes, recreates under the id, switches, prompt edits and scheduler
+    refreshes. Oracle, at every run: the task is enabled on disk, the run carries the disk's
+    prompt, incarnation and rule, every frame it gets was matched by that same incarnation
+    and rule, and no frame runs twice. `VAF_FUZZ_DRAWS` raises the draw count."""
+    import vaf.core.automation_triggers as triggers
+    from vaf.core.automation_triggers import TriggerHit
+
+    rules = [dict(_TRIGGER), dict(_TRIGGER, match="stop"), dict(_ROOM_2)]
+    real_acquire = auto_mod._acquire_store_lock
+    busy = [False]
+
+    def acquire(directory):
+        if busy[0]:
+            raise AutomationStoreBusy("automation store is busy")
+        return real_acquire(directory)
+
+    monkeypatch.setattr(auto_mod, "_acquire_store_lock", acquire)
+    monkeypatch.setattr(triggers, "trigger_context", lambda t, frames, labels: list(frames))
+    draws = int(os.environ.get("VAF_FUZZ_DRAWS", "25"))
+    for i in range(draws):
+        seed = 4600 + i
+        rng = random.Random(seed)
+        d = event_task.parent / f"pending-{i}"
+        AutomationManager(storage_dir=str(d)).create(AutomationTask(
+            id=EID, name="n", prompt="p0", frequency="on_event", time="", trigger=dict(rules[0])))
+        scheduler = AutomationManager(storage_dir=str(d))
+        said, matched_by, ran, bad = [], {}, [], []
+        counter = [0]
+
+        class _Watch:
+            def tick(self, tasks):
+                frames, said[:] = list(said), []
+                hits = []
+                for t in tasks:
+                    if t.id == EID and frames:
+                        for f in frames:
+                            matched_by[f] = (t.incarnation, auto_mod._trigger_rule(t.trigger))
+                        hits.append(TriggerHit(t, frames, counter[0], {}))
+                return hits
+
+        def run(task, *, trigger=None):
+            record = _disk(d, EID)
+            key = (task.incarnation, auto_mod._trigger_rule(task.trigger))
+            if not record.get("enabled"):
+                bad.append("ran while switched off")
+            if record.get("prompt") != task.prompt:
+                bad.append(f"ran prompt {task.prompt!r}, disk has {record.get('prompt')!r}")
+            if (record.get("incarnation"), auto_mod._trigger_rule(record.get("trigger"))) != key:
+                bad.append("ran a task that is not the one on disk")
+            for f in trigger:
+                if matched_by.get(f) != key:
+                    bad.append(f"frame {f} matched {matched_by.get(f)}, ran under {key}")
+                if f in ran:
+                    bad.append(f"frame {f} ran twice")
+                ran.append(f)
+
+        scheduler._trigger_watch = _Watch()
+        scheduler._run_scheduled_task = run
+        for step in range(rng.randint(10, 40)):
+            op = rng.choice(("say", "say", "tick", "tick", "busy", "rule", "recreate",
+                             "off", "on", "prompt", "reload"))
+            editor = AutomationManager(storage_dir=str(d))
+            if op == "say":
+                counter[0] += 1
+                said.append(f"f{counter[0]}")
+            elif op in ("tick", "busy"):
+                busy[0] = op == "busy"
+                try:
+                    scheduler._fire_room_triggers()
+                finally:
+                    busy[0] = False
+            elif op == "rule":
+                editor.update(EID, trigger=dict(rng.choice(rules)))
+            elif op == "recreate":
+                editor.delete(EID, permanent=True)
+                editor.create(AutomationTask(id=EID, name="anew", prompt=f"p{step}",
+                                             frequency="on_event", time="",
+                                             trigger=dict(rng.choice(rules))))
+            elif op in ("off", "on"):
+                editor.update(EID, enabled=op == "on")
+            elif op == "prompt":
+                editor.update(EID, prompt=f"p{step}")
+            else:
+                scheduler.reload_tasks()
+        scheduler._fire_room_triggers()
+        if scheduler._pending_trigger_hits:
+            bad.append("a hit is still held with the store free")
+        assert bad == [], f"seed {seed}: {bad}"
 
 
 # ── AC8: identity and property keys are never applied ───────────────────────

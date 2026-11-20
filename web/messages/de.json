@@ -1329,7 +1329,7 @@
       "ownerNone": "Keine registriert: der Agent sendet nur nach außen und kann dich auf WhatsApp nicht erreichen.",
       "remove": "Entfernen",
       "removeOwnerConfirm": "Diese Nummer entfernen? Der Agent kann dich dann auf WhatsApp nicht mehr erreichen.",
-      "ownerUserPlaceholder": "VAF-Benutzer (leer lassen für deine eigene Nummer)",
+      "ownerUserPlaceholder": "Benutzer (leer: du selbst)",
       "ownerUnknownAccount": "Es gibt kein aktives Konto mit dem Benutzernamen {name}. Prüf die genaue Schreibweise.",
       "ownerDraftCleared": "Du kannst keine Nummer mehr für ein anderes Konto registrieren, deshalb wurde die Eingabe geleert.",
       "register": "Registrieren",

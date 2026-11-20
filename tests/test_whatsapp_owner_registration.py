@@ -777,6 +777,41 @@ def test_an_admin_names_a_casefold_twin_exactly_or_not_at_all(world, order, type
 
 
 @pytest.mark.parametrize("order", ["listed", "reversed"])
+def test_an_inactive_exact_name_never_falls_through_to_its_active_twin(world, order):
+    """An inactive "Weiß" next to an active "weiss": what was typed is the inactive account,
+    and its twin is not what was meant. Two rules answer None here (an inactive exact match
+    is None, and an inactive row still counts towards an ambiguous casefold match), so
+    either one alone is redundant. MUTATION: read active accounts only (both rules then see
+    nothing but "weiss", and the number goes to the twin)."""
+    from vaf.core.config import account_for_username
+    world.rows[:] = _ordered([{"username": "Weiß", "user_scope_id": INA, "active": False, "role": "user"},
+                              {"username": "weiss", "user_scope_id": WEISS, "active": True, "role": "user"}],
+                             order)
+    assert account_for_username("Weiß") is None
+    assert account_for_username("weiss") == (WEISS, "weiss")
+    world.whitelist(DANA_E)
+    assert _add(DANA, N, name="Weiß")[0] == 404
+    assert world.wl() == [DANA_E] and world.events == []
+
+
+def test_the_local_admins_exact_name_comes_from_the_config(world):
+    """The local admin "Straße" is not in the directory (the store is down, or lists her
+    under another row), an ordinary "strasse" is: her exact name is still hers, from the
+    config. MUTATION: drop the config branch (both names then match by casefold and the
+    lookup answers nobody)."""
+    from vaf.core.config import account_for_username
+    world.state["local_admin_username"] = "Straße"
+    world.rows[:] = [r for r in world.rows if r["username"] not in ("admin",)] + [
+        {"username": "strasse", "user_scope_id": S_ASCII, "active": True, "role": "user"}]
+    assert account_for_username("Straße") == (ADM, "Straße")
+    assert account_for_username("strasse") == (S_ASCII, "strasse")
+    # A second admin registering for her by that name files it under her scope.
+    world.whitelist()
+    status, out = _add((EVE, "eve", "admin"), N, name="Straße")
+    assert status == 200 and world.wl() == [_e(N, ADM, "Straße")]
+
+
+@pytest.mark.parametrize("order", ["listed", "reversed"])
 def test_an_admin_whose_name_has_a_casefold_twin_registers_for_the_twin(world, order):
     """The local admin "Straße" registering for the ordinary account "strasse" used to count as
     naming herself (a casefold comparison) and replaced her own entry. MUTATION: decide the

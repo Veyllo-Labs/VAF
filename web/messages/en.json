@@ -1329,7 +1329,7 @@
       "ownerNone": "None registered: the agent is outbound only and cannot reach you on WhatsApp.",
       "remove": "Remove",
       "removeOwnerConfirm": "Remove this number? The agent can then no longer reach you on WhatsApp.",
-      "ownerUserPlaceholder": "VAF user (leave empty for your own number)",
+      "ownerUserPlaceholder": "User name (empty: you)",
       "ownerUnknownAccount": "There is no active account with the user name {name}. Check the exact spelling.",
       "ownerDraftCleared": "You can no longer register a number for another account, so the entry was cleared.",
       "register": "Register",

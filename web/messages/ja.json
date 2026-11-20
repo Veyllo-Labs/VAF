@@ -1329,7 +1329,7 @@
       "ownerNone": "未登録です。エージェントは送信専用で、WhatsAppで連絡を受け取れません。",
       "remove": "削除",
       "removeOwnerConfirm": "この番号を削除しますか？エージェントはWhatsAppで連絡できなくなります。",
-      "ownerUserPlaceholder": "VAFユーザー（自分の番号なら空欄のまま）",
+      "ownerUserPlaceholder": "ユーザー（空欄なら自分）",
       "ownerUnknownAccount": "ユーザー名が{name}の有効なアカウントはありません。正確な綴りを確認してください。",
       "ownerDraftCleared": "他のアカウントの番号はもう登録できないため、入力内容を消去しました。",
       "register": "登録",

@@ -1329,7 +1329,7 @@
       "ownerNone": "Kayıtlı numara yok: ajan yalnızca giden mesaj atar ve sana WhatsApp üzerinden ulaşamaz.",
       "remove": "Kaldır",
       "removeOwnerConfirm": "Bu numara kaldırılsın mı? Ajan artık sana WhatsApp üzerinden ulaşamaz.",
-      "ownerUserPlaceholder": "VAF kullanıcısı (kendi numaran için boş bırak)",
+      "ownerUserPlaceholder": "Kullanıcı (boş: kendin)",
       "ownerUnknownAccount": "{name} kullanıcı adına sahip etkin bir hesap yok. Tam yazılışını kontrol et.",
       "ownerDraftCleared": "Artık başka bir hesap için numara kaydedemezsin, bu yüzden giriş temizlendi.",
       "register": "Kaydet",

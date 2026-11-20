@@ -925,11 +925,11 @@ def _process_for(username: str, user_scope_id: Optional[str] = None
     when one account has it, so an account named "Straße" next to an admin named "strasse"
     is its own account here, not the admin's spelling. A spelling neither of them is
     exactly, matched by both only by casefold, resolves to nobody and gets no process.
-    Passing the scope from those lanes would remove the name from the decision entirely. Every send lane carries a scope: `_enqueue_reply`,
-    `send_whatsapp_with_confirmation` and the sender loop convert a scopeless request with
-    `config.messenger_lane_identity` (the local admin's, or refused) before they get here.
-    Refusing a scopeless request in here would cut every ordinary account off its own chat
-    list."""
+    Passing the scope from those lanes would remove the name from the decision entirely.
+    Every send lane carries a scope: `_enqueue_reply`, `send_whatsapp_with_confirmation` and
+    the sender loop convert a scopeless request with `config.messenger_lane_identity` (the
+    local admin's, or refused) before they get here. Refusing a scopeless request in here
+    would cut every ordinary account off its own chat list."""
     name = (username or "").strip()
     wanted = str(user_scope_id or "").strip()
     with _process_lock:

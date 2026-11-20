@@ -19,6 +19,8 @@ import { Phone, UserPlus, Trash2, AlertTriangle, BookUser, Sparkles, Loader2 } f
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { Switch, switchWord } from '@/components/ui/Switch';
 import { cn } from '@/lib/utils';
+import { refusalText } from '@/lib/apiRefusal';
+import { restartNoticeResolved } from '@/lib/whatsappRestartNotice';
 import MessagesChart from './MessagesChart';
 import ChannelDashboardShell, { BADGE_CLS, BTN, BTN_PRIMARY, FIELD, INPUT, SFC_CHROME, SFC_FILL, ComposeBox, KvRow, SettingsCard, ShellChat, fmtUntil } from './ChannelDashboardShell';
 
@@ -101,6 +103,9 @@ interface DashboardData {
     front_office_contacts: Array<{ name: string | null; phone_number: string }>;
     connected: boolean;
     running: boolean;
+    /** An admin's view: {account: its own process runs} over the accounts that are linked and
+     *  switched on; null for everybody else. */
+    running_by_account: Record<string, boolean> | null;
     enabled: boolean;
     log_path: string | null;
     composer_enabled: boolean;
@@ -131,8 +136,10 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
     const [restarting, setRestarting] = useState(false);
     const [restartError, setRestartError] = useState<string | null>(null);
     // An admin's restart that skipped accounts: shown outside the stopped banner, which the
-    // refresh after the restart may hide, until the next restart.
+    // refresh after the restart may hide, until the next restart or until every account it
+    // names runs again (`restartNoticeNames`, checked against `running_by_account`).
     const [restartNotice, setRestartNotice] = useState<string | null>(null);
+    const [restartNoticeNames, setRestartNoticeNames] = useState<string[]>([]);
     const [assignPhone, setAssignPhone] = useState('');
     const [note, setNote] = useState<string | null>(null);
     const [addingContact, setAddingContact] = useState(false);
@@ -181,13 +188,18 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
     // (a refresh would otherwise yank the selection back to the first chat).
     const jumpPendingRef = useRef<string | null>(null);
 
-    const fetchDashboard = useCallback(async () => {
-        setLoading(true);
-        setLoadFailed(false);
+    // `quiet`: a background re-check (the restart notice's), which shows no loading state, no
+    // load failure, and leaves the reply window field alone while somebody may be typing in it.
+    const fetchDashboard = useCallback(async (opts?: { quiet?: boolean }) => {
+        const quiet = opts?.quiet === true;
+        if (!quiet) {
+            setLoading(true);
+            setLoadFailed(false);
+        }
         try {
             const res = await fetch(api('api/whatsapp/dashboard'), { credentials: 'include' });
             const json = await res.json();
-            if (!res.ok) { setLoadFailed(true); return; }
+            if (!res.ok) { if (!quiet) setLoadFailed(true); return; }
             const sessions: WhatsAppSession[] = Array.isArray(json?.sessions) ? json.sessions : [];
             setData({
                 linked: json?.linked === true,
@@ -201,11 +213,12 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                 front_office_contacts: Array.isArray(json?.front_office_contacts) ? json.front_office_contacts : [],
                 connected: json?.connected === true,
                 running: json?.running === true,
+                running_by_account: json?.running_by_account && typeof json.running_by_account === 'object' ? json.running_by_account : null,
                 enabled: json?.enabled === true,
                 log_path: json?.log_path || null,
                 composer_enabled: json?.composer_enabled !== false,
             });
-            if (typeof json?.reply_window_hours === 'number') setWindowInput(String(json.reply_window_hours));
+            if (!quiet && typeof json?.reply_window_hours === 'number') setWindowInput(String(json.reply_window_hours));
             setSelectedChatId(prev => prev ?? (sessions[0]?.chat_id ?? null));
             const pendingJump = jumpPendingRef.current;
             if (pendingJump) {
@@ -216,9 +229,9 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                 }
             }
         } catch {
-            setLoadFailed(true);
+            if (!quiet) setLoadFailed(true);
         } finally {
-            setLoading(false);
+            if (!quiet) setLoading(false);
         }
     }, [t]);
 
@@ -252,6 +265,30 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
 
     useEffect(() => { if (isOpen) fetchDashboard(); }, [isOpen, config?.whatsapp_config, fetchDashboard]);
 
+    // The restart notice goes away by itself once every account it names runs again (or is
+    // no longer linked and switched on); while it stands and the window is open, the
+    // dashboard is re-read quietly every minute to find out.
+    useEffect(() => {
+        if (restartNotice && restartNoticeResolved(restartNoticeNames, data?.running_by_account ?? null)) {
+            setRestartNotice(null);
+            setRestartNoticeNames([]);
+        }
+    }, [data, restartNotice, restartNoticeNames]);
+    useEffect(() => {
+        if (!isOpen || !restartNotice) return;
+        const timer = setInterval(() => { fetchDashboard({ quiet: true }); }, 60000);
+        return () => clearInterval(timer);
+    }, [isOpen, restartNotice, fetchDashboard]);
+
+    // This account's own connection, switched on: the switch route starts it (and nobody
+    // else's); with the switch already on it changes no switch.
+    const startOwn = () => fetch(api('api/whatsapp/switch'), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: true }),
+        credentials: 'include',
+    });
+
     const handleRefresh = async () => {
         await fetchDashboard();
         try {
@@ -259,14 +296,38 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
             const json = await res.json();
             if (!res.ok) return;
             if (json.connected) {
-                await fetch(api('api/whatsapp/sync-chats'), { method: 'POST', credentials: 'include' });
+                const sync = await fetch(api('api/whatsapp/sync-chats'), { method: 'POST', credentials: 'include' });
+                const refused = refusalText(sync.ok, await sync.json().catch(() => null), t('refreshFailed'));
+                if (refused !== null) setNote(refused);
                 await fetchDashboard();
             } else if (!json.running && json.enabled) {
-                await fetch(api('api/whatsapp/start'), { method: 'POST', credentials: 'include' });
+                const start = await startOwn();
+                const refused = refusalText(start.ok, await start.json().catch(() => null), t('refreshFailed'));
+                if (refused !== null) setNote(refused);
                 await new Promise(r => setTimeout(r, 2000));
                 await fetchDashboard();
             }
-        } catch { /* the first fetch already reported */ }
+        } catch {
+            setNote(t('refreshFailed'));
+        }
+    };
+
+    // The stopped banner's Start: this account's own WhatsApp, switch on first. The gear's
+    // Restart stays `handleRestartBridge`, which for an admin restarts every account's.
+    const handleStartOwn = async () => {
+        setRestarting(true);
+        setRestartError(null);
+        try {
+            const res = await startOwn();
+            const refused = refusalText(res.ok, await res.json().catch(() => null), t('startFailed'));
+            if (refused !== null) setRestartError(refused);
+            else if (config?.whatsapp_config?.enabled !== true) onConfigChange('whatsapp_config', { ...(config?.whatsapp_config || {}), enabled: true });
+            await fetchDashboard();
+        } catch {
+            setRestartError(t('startFailed'));
+        } finally {
+            setRestarting(false);
+        }
     };
 
     const saveWhatsAppConfig = async (patch: Record<string, unknown>) => {
@@ -286,6 +347,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         setRestarting(true);
         setRestartError(null);
         setRestartNotice(null);
+        setRestartNoticeNames([]);
         try {
             await saveWhatsAppConfig({ enabled: true });
             const res = await fetch(api('api/whatsapp/restart'), { method: 'POST', credentials: 'include' });
@@ -295,7 +357,10 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
             await fetchDashboard();
             // An admin's restart that skipped an account whose previous process has not ended.
             const notStarted: string[] = Array.isArray(json?.not_started) ? json.not_started : [];
-            if (notStarted.length) setRestartNotice(t('restartNotForAccounts', { names: notStarted.join(', ') }));
+            if (notStarted.length) {
+                setRestartNotice(t('restartNotForAccounts', { names: notStarted.join(', ') }));
+                setRestartNoticeNames(notStarted);
+            }
         } catch (e) {
             setRestartError(e instanceof Error ? e.message : String(e));
         } finally {
@@ -738,7 +803,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
             {/* A floor for the text, so the buttons wrap below it instead of squeezing it. */}
             <span className="flex-1 min-w-[14rem]">{!data.linked ? t('bridgeNotStartedDesc') : !data.enabled ? t('switchedOffDesc') : t('connectionNotRunningDesc')}</span>
             {restartError && <span className="flex-1 min-w-[14rem] break-words text-red-600">{restartError}</span>}
-            <button type="button" onClick={handleRestartBridge} disabled={restarting}
+            <button type="button" onClick={handleStartOwn} disabled={restarting}
                 className="px-2 py-1 rounded-md border border-amber-200 hover:bg-amber-100 disabled:opacity-50">{restarting ? t('starting') : t('startBridge')}</button>
             {data.linked && <button type="button" onClick={handleRelink} className="px-2 py-1 rounded-md hover:bg-amber-100">{t('relinkOpensSetup')}</button>}
         </div>

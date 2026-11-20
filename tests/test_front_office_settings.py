@@ -359,7 +359,10 @@ def test_the_card_sits_under_contacts_and_is_special_cased_everywhere_contacts_i
     assert "role?: string" in source, "the card is the admin's: the panel needs the role"
     assert "currentUser?.role === 'admin'" in source
     assert "api('api/front-office')" in source, "the status line reads the state"
-    assert "method: 'PUT'" not in source[source.index("fetchFrontOffice"):source.index("const getAppsByCategory")], "the card writes nothing; the switch is in the window"
+    # The card writes nothing; the switch is in the window. Its one call is the status read.
+    assert source.count("api('api/front-office") == 1, "the card writes nothing; the switch is in the window"
+    reader = source[source.index("const fetchFrontOffice"):source.index("\n    };\n", source.index("const fetchFrontOffice"))]
+    assert "api('api/front-office')" in reader and "method:" not in reader
     assert "ConfirmDialog" not in source
 
 

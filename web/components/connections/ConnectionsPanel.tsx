@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
+import { refusalText } from '@/lib/apiRefusal';
 import McpSignIns from './McpSignIns';
 
 /** GitHub logo (official mark) as black SVG for Connections. */
@@ -493,6 +494,9 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
      *  (POST/GET api/telegram/pair; vaf/core/channel_pairing.py). */
     const [telegramPairing, setTelegramPairing] = useState<{ code: string; command: string; link: string | null; botUsername: string | null; expiresIn: number } | null>(null);
     const [telegramPairError, setTelegramPairError] = useState<string | null>(null);
+    // Why the WhatsApp switch did not do what was asked (the server's reason, or a fallback);
+    // cleared on the next toggle.
+    const [whatsappSwitchError, setWhatsappSwitchError] = useState<string | null>(null);
     /** Cloud accounts from API (source of truth; config can be stale after OAuth) */
     const [cloudAccountsFromApi, setCloudAccountsFromApi] = useState<any[]>([]);
     /** Email accounts from API (source of truth; config only has legacy email_config, not email_config_by_user) */
@@ -568,7 +572,10 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
         }
     };
 
-    const checkConnectionStatus = async () => {
+    /** Re-reads every card's status; answers WhatsApp's stored switch for this account
+     *  (`enabled` of `/api/whatsapp/status`), null when it could not be read. */
+    const checkConnectionStatus = async (): Promise<{ whatsappEnabled: boolean | null }> => {
+        let whatsappEnabled: boolean | null = null;
         if (config.discord_config?.verified) {
             setConnectionStatus(prev => ({ ...prev, discord: 'checking' }));
             try {
@@ -607,6 +614,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
         try {
             const res = await fetch(api('api/whatsapp/status'), { credentials: 'include' });
             const status = await res.json();
+            if (res.ok && typeof status?.enabled === 'boolean') whatsappEnabled = status.enabled;
             setWhatsappInfo({ linked_phone: status.linked_phone || null, owner_number: status.owner_number || null });
             setConnectionStatus(prev => ({
                 ...prev,
@@ -632,6 +640,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
         await fetchCalendarStatus();
         await fetchGitHubStatus();
         await fetchFrontOffice();
+        return { whatsappEnabled };
     };
 
     const startTelegramPairing = async () => {
@@ -726,25 +735,32 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
             }
         }
         if (appId === 'whatsapp') {
+            // This account's own switch and own connection, for admins too: one call writes
+            // the switch and then starts or stops this account's WhatsApp and nobody else's.
             const currentConfig = config.whatsapp_config || {};
             onConfigChange('whatsapp_config', { ...currentConfig, enabled });
+            setWhatsappSwitchError(null);
+            let refused: string | null = null;
             try {
-                // Persist enabled so backend has correct state (start checks it; stop avoids auto-start on restart)
-                await fetch(api('api/config'), {
-                    method: 'PATCH',
+                const res = await fetch(api('api/whatsapp/switch'), {
+                    method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ whatsapp_config: { ...currentConfig, enabled } }),
+                    body: JSON.stringify({ enabled }),
                     credentials: 'include',
                 });
-                if (enabled) {
-                    await fetch(api('api/whatsapp/start'), { method: 'POST', credentials: 'include' });
-                } else {
-                    await fetch(api('api/whatsapp/stop'), { method: 'POST', credentials: 'include' });
+                const json = await res.json().catch(() => null);
+                refused = refusalText(res.ok, json, t('whatsappSwitchFailed'));
+                if (refused === null) {
+                    onConfigChange('whatsapp_config', { ...currentConfig, enabled: typeof json?.enabled === 'boolean' ? json.enabled : enabled });
                 }
-                setConnectionStatus(prev => ({ ...prev, whatsapp: enabled ? 'connected' : 'disconnected' }));
-                await checkConnectionStatus();
-            } catch (e) {
-                console.error('Failed to toggle WhatsApp:', e);
+            } catch {
+                refused = t('whatsappSwitchFailed');
+            }
+            if (refused !== null) setWhatsappSwitchError(refused);
+            const { whatsappEnabled } = await checkConnectionStatus();
+            // After a refusal the switch shows what is stored, whatever was asked.
+            if (refused !== null && whatsappEnabled !== null) {
+                onConfigChange('whatsapp_config', { ...currentConfig, enabled: whatsappEnabled });
             }
         }
     };
@@ -784,7 +800,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
         }
         if (appId === 'whatsapp') {
             try {
-                await fetch(api('api/whatsapp/stop'), { method: 'POST', credentials: 'include' });
+                // The reset stops this account's own process first, and nobody else's.
                 await fetch(api('api/whatsapp/qr/reset'), { method: 'POST', credentials: 'include' });
             } catch (e) {
                 console.error('Failed to disconnect WhatsApp:', e);
@@ -1143,6 +1159,9 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                             ? `VAF reaches you at ${whatsappInfo.owner_number}, and you can chat with it from there.`
                                                             : 'Outbound only: register your own number in the dashboard to be reachable.'}
                                                     </p>
+                                                )}
+                                                {app.id === 'whatsapp' && whatsappSwitchError && (
+                                                    <p className="text-xs text-red-600 mt-1 break-words" role="alert">{whatsappSwitchError}</p>
                                                 )}
                                                 {app.id === 'front_office' && (
                                                     <p className="text-xs text-gray-600 mt-1">

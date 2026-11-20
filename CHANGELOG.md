@@ -587,7 +587,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   WhatsApp setup refuses to start while the login is in use, telling you to use Re-link or
   stop WhatsApp first. Re-link and setup also answer "still busy, try again in a few
   seconds" while the previous attempt is still ending, and Re-link refuses for an account
-  whose name cannot be used as a folder name, which an admin then removes by hand.
+  whose name cannot be used as a folder name. Such a name can open another account's folder
+  (for `admin/` the owner's), so before removing a login by hand an admin checks with
+  `realpath` that it is no other account's folder and leaves it in place otherwise (see the
+  WhatsApp integration guide).
 - **WhatsApp: the server's log path is shown to admins only.** The settings in the WhatsApp
   window used to show every account the full path of the log on the server.
 - **Error messages no longer show the server's folders.** When the server failed to read or

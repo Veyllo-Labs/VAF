@@ -404,8 +404,15 @@ the caller's own process for anybody else:
   or a desktop install whose owner has no account row of its own, where deleting the last
   ordinary account leaves the directory empty. The admin sees nothing on screen in either
   case; the server log has a WARNING ("the login of the deleted account ... is kept, the
-  account directory could not be read"). Remove the folder `~/.vaf/users/<name>/whatsapp` by
-  hand, or leave it: it is moved aside when the name is used again.
+  account directory could not be read"). You can leave such a login: it is moved aside when
+  the name is used again.
+  Before you remove a kept login by hand, check whose it is: (1) resolve the folder's real
+  path, for example `realpath ~/.vaf/users/<name>/whatsapp`; (2) compare it with the real path
+  of every other account's login folder (`realpath ~/.vaf/users/*/whatsapp`, the owner's
+  included); (3) remove it only if it is no other account's folder; (4) otherwise, or if you
+  cannot tell, leave it where it is. A name shaped like a path opens another account's
+  folder: for `admin/` the folder is the owner's login, for `./alice` it is alice's, and that
+  folder is theirs, not the deleted account's, so leave it alone.
 - **Named boundary: the Telegram and Discord bridges were not measured.** Each keeps one
   module-level stop (an Event or a flag) and one sender loop, the pattern that let a WhatsApp
   sender loop outlive its run. Neither has a request folder with several consumers, so the

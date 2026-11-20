@@ -72,7 +72,7 @@ def test_whatsapp_owner_numbers_and_lid_bindings_are_recorded_once_per_change(co
 
     assert [(k, f["channel"], f["username"], f["path"], f["detail"]) for k, f in events] == [
         ("channel_paired", "whatsapp", "alice", "+491700000042", "owner +491700000042 for alice"),
-        ("channel_unpaired", "whatsapp", "alice", "+491700000042", "owner +491700000042"),
+        ("channel_unpaired", "whatsapp", "alice", "+491700000042", "owner +491700000042 for alice"),
         ("channel_paired", "whatsapp", "alice", "+491700000043", "owner +491700000043 for alice"),
         ("channel_unpaired", "whatsapp", "alice", "+491700000043", "owner +491700000043"),
         ("channel_paired", "whatsapp", "alice", "12345@lid", "lid 12345@lid as +491700000042"),

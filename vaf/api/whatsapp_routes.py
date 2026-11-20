@@ -1223,9 +1223,10 @@ async def add_whitelist_entry(request: Request, body: WhitelistAddRequest):
 
     Whose number it is: the caller's own account, unless an admin names another one by its
     user name. That name is looked up in the account directory (`config.account_for_username`,
-    off the event loop: the directory is a database query) and the entry is filed under THAT
-    account's scope; an unknown or inactive name is refused (404), and a `user_scope_id` that
-    is not the named account's is refused (400). An account that is not an admin may name
+    off the event loop: the directory is a database query; the exact name decides, a
+    casefolded match only when one account has it) and the entry is filed under THAT
+    account's scope; an unknown, inactive or ambiguous name is refused (404), and a
+    `user_scope_id` that is not the named account's is refused (400). An account that is not an admin may name
     nobody else, by name or by scope (403); it used to get its own entry silently. The entry
     is written by `channel_pairing.pair_whatsapp_number`, which changes only the target
     account's entry, found by scope: an older version filed a number an admin registered for
@@ -1240,18 +1241,23 @@ async def add_whitelist_entry(request: Request, body: WhitelistAddRequest):
     own_name = str(user_info["username"]).strip()
     name = (body.vaf_username or "").strip()
     scope_in = (body.user_scope_id or "").strip()
-    names_another = bool(name) and name.casefold() != own_name.casefold()
     if not caller_is_admin(request):
-        if names_another or (scope_in and scope_in != own_scope):
+        # Casefolded: any spelling of the caller's own name only ever selects the caller's own
+        # scope, so no directory lookup is needed (and none tells a non-admin who exists).
+        if (name and name.casefold() != own_name.casefold()) or (scope_in and scope_in != own_scope):
             raise HTTPException(status_code=403, detail="You can only register your own number.")
         target_scope, target_name = own_scope, own_name
-    elif not names_another:
+    elif not name or name == own_name:
         target_scope, target_name = own_scope, own_name
     else:
+        # Every other spelling is looked up, the caller's own in another case too: an admin
+        # named "Straße" next to an account named "strasse" registers for that account, not
+        # for herself.
         from vaf.core.config import account_for_username
         account = await asyncio.to_thread(account_for_username, name)
         if account is None:
-            raise HTTPException(status_code=404, detail=f"There is no active VAF account called '{name}'.")
+            raise HTTPException(status_code=404, detail=f"There is no active VAF account called '{name}'. "
+                                                        "Type the account's exact user name.")
         target_scope, target_name = account
     if scope_in and scope_in != target_scope:
         raise HTTPException(status_code=400, detail=f"user_scope_id does not belong to {target_name}.")

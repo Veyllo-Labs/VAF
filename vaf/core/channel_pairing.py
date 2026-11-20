@@ -346,7 +346,7 @@ def pair_whatsapp_number(phone_number: str, *, user_scope_id: str, username: str
         who = str(changed_by or "")
         if old_phone and old_phone != phone:
             log_security_event("channel_unpaired", channel="whatsapp", username=who, path=old_phone,
-                               detail=f"owner {old_phone}")
+                               detail=f"owner {old_phone} for {name}")
         log_security_event("channel_paired", channel="whatsapp", username=who, path=phone,
                            detail=f"owner {phone} for {name}")
     except Exception:
@@ -371,19 +371,25 @@ def refile_whatsapp_owner_numbers() -> List[Dict[str, str]]:
     An entry is moved when all of these hold: it has a scope S, a name N and a number; N is
     not the ambiguous "admin" (the admin's legacy alias, and also an ordinary account's name
     while the admin is named otherwise); N resolves to an active account T
-    (`config.scope_id_for_username`) and T is not S; and S is an admin's
-    (`config.is_admin_account`), since only an admin's route call wrote that shape. When T
-    already has an entry with the same number (`phone_digits_canonical`), the misfiled one is
-    removed instead of becoming a duplicate. Each move is `channel_unpaired` for S's account
-    and `channel_paired` for N; a removal is `channel_unpaired` only. A moved entry no longer
-    matches, so a second pass changes nothing and records nothing.
+    (`config.account_for_username`: the exact name decides, a casefolded match only when one
+    account has it) and T is not S; S is an admin's (`config.is_admin_account`), since only
+    an admin's route call wrote that shape; and N is not, casefolded, the name of S's own
+    account. The last rule holds whatever the lookup answers: with casefold twins such as
+    "Weiß" and "weiss" the admin's own entry cannot be told from one registered for the
+    twin, and the directory lists accounts in no fixed order. When T already holds the same
+    number (`phone_digits_canonical`), the misfiled entry is removed instead of becoming a
+    duplicate; an entry that is itself about to move does not count as held. Each move is
+    `channel_unpaired` for S's account plus `channel_paired` for T, both naming the other
+    side; a removal is `channel_unpaired` only, naming T. A moved entry no longer matches, so
+    a second pass changes nothing and records nothing.
 
-    Cost: one `scope_id_for_username` per distinct name and one `is_admin_account` per
-    distinct scope in a pass, and none when no scoped entry carries a name. The directory
-    behind them is a database query, which is why this runs at the bridge start, off the
-    event loop, and not on every read: every lane with an effect (a proactive send, the reply
-    check) needs a running bridge. An empty directory (nothing registered, a store that is
-    down) resolves no name, so nothing moves.
+    Cost: one `account_for_username` per distinct name, one `is_admin_account` per distinct
+    scope and one directory read for the account names in a pass, and none when no scoped
+    entry carries a name; under the lock, one canonical number per entry, so the pass is
+    linear in the entries. The directory is a database query, which is why this runs at the
+    bridge start, off the event loop, and not on every read: every lane with an effect (a
+    proactive send, the reply check) needs a running bridge. An empty directory (nothing
+    registered, a store that is down) resolves no name, so nothing moves; that is logged.
 
     Named boundaries:
     - A deleted account whose name was later given to a new account: an entry an admin
@@ -392,7 +398,15 @@ def refile_whatsapp_owner_numbers() -> List[Dict[str, str]]:
       name. The `channel_paired` event names it, and an admin removes it.
     - Not moved: an entry under a non-admin's scope with another account's name (a hand edit
       of unknown intent), an entry under the scope of an account that is no longer an admin,
-      and an entry under the ambiguous name "admin".
+      an entry under the ambiguous name "admin", one whose name matches two accounts only by
+      casefold, and one whose name casefold-matches the account it is filed under.
+    - A settings save racing this pass can undo a move. The save (`config_routes.patch_config`,
+      the WebSocket settings save in `web_server.py`) reads the config outside the lock and
+      writes back the whitelist it read, so a move made in between returns to its old place
+      while the log says "moved"; the next bridge start moves it again and logs it again. No
+      number is lost or filed anywhere new. `whatsapp_bridge._drop_self_number_from_whitelist`
+      writes without the lock too. Both are every out-of-request writer's race, not this
+      pass's, and are not closed here.
     """
     try:
         return _refile_whatsapp_owner_numbers()
@@ -401,9 +415,24 @@ def refile_whatsapp_owner_numbers() -> List[Dict[str, str]]:
         return []
 
 
+def _account_names() -> Dict[str, str]:
+    """scope -> account name, from the directory and the local admin's config: whose scope an
+    entry is filed under, read once per refile pass."""
+    from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
+    from vaf.core.tool_dispatch import resolve_account_directory
+
+    names = {row["user_scope_id"]: row["username"] for row in resolve_account_directory()}
+    admin_scope = str(get_local_admin_scope_id() or "").strip()
+    if admin_scope:
+        names[admin_scope] = get_local_admin_username()
+    return names
+
+
 def _refile_whatsapp_owner_numbers() -> List[Dict[str, str]]:
-    from vaf.core.config import (Config, get_local_admin_username, is_admin_account, resolve_caller_username,
-                                 scope_id_for_username)
+    from collections import deque
+
+    from vaf.core.config import (Config, account_for_username, get_local_admin_username, is_admin_account,
+                                 resolve_caller_username)
     from vaf.core.contacts_store import phone_digits_canonical
 
     _block, whitelist = _whatsapp_whitelist(Config.load())
@@ -411,82 +440,103 @@ def _refile_whatsapp_owner_numbers() -> List[Dict[str, str]]:
     if not named:
         return []
     admin_name = get_local_admin_username().strip().casefold()
-    targets: Dict[str, Optional[str]] = {}
+    # Keyed by the name as stored, stripped: the exact name decides the lookup, so "Weiß" and
+    # "WEISS" are two questions.
+    targets: Dict[str, Optional[Tuple[str, str]]] = {}
     admins: Dict[str, bool] = {}
-    candidates: List[Tuple[Tuple[str, str, str], str]] = []
+    owners: Optional[Dict[str, str]] = None
+    candidates: List[Tuple[Tuple[str, str, str], Tuple[str, str]]] = []
     for key in named:
         _phone, scope, name = key
-        folded = name.casefold()
-        if folded == "admin" and admin_name != "admin":
+        if name.casefold() == "admin" and admin_name != "admin":
             continue
-        if folded not in targets:
-            targets[folded] = str(scope_id_for_username(name) or "").strip() or None
-        target = targets[folded]
-        if not target or target == scope:
+        if name not in targets:
+            targets[name] = account_for_username(name)
+        target = targets[name]
+        if target is None or target[0] == scope:
             continue
         if scope not in admins:
             admins[scope] = is_admin_account(scope)
-        if admins[scope]:
-            candidates.append((key, target))
+        if not admins[scope]:
+            continue
+        if owners is None:
+            owners = _account_names()
+        # A name that is, casefolded, the account the entry is filed under stays with that
+        # account, whatever the lookup says: with twins such as "Weiß" and "weiss" the admin's
+        # own entry cannot be told from one registered for the twin.
+        if name.casefold() == str(owners.get(scope) or "").casefold():
+            continue
+        candidates.append((key, target))
+    if targets and not any(targets.values()):
+        logger.info("WhatsApp: no owner-number name resolved in the account directory; nothing corrected")
     if not candidates:
         return []
 
-    def same_number(a: str, b: str) -> bool:
-        ca, cb = phone_digits_canonical(a), phone_digits_canonical(b)
-        return ca == cb if ca and cb else a.strip() == b.strip()
+    def number(entry: Dict[str, Any]) -> str:
+        raw = str(entry.get("phone_number") or "")
+        return phone_digits_canonical(raw) or "raw:" + raw.strip()
 
     changes: List[Dict[str, str]] = []
     with Config._locked():
         config = Config.load()
         block, whitelist = _whatsapp_whitelist(config)
+        positions: Dict[Tuple[str, str, str], Any] = {}
+        for i, e in enumerate(whitelist):
+            if isinstance(e, dict):
+                positions.setdefault(_whatsapp_entry_key(e), deque()).append(i)
         # First every move, then the duplicates: an entry that is about to move away is not a
         # number its scope holds (two entries of one number, each filed under the other
         # account, would otherwise remove the first and move the second, and the first
         # account would lose the number).
-        moves: List[Tuple[int, Dict[str, str]]] = []
-        for key, target in candidates:
+        moves: List[Tuple[int, Dict[str, str], str]] = []
+        for key, (target, target_name) in candidates:
             # The entry as it was read; one changed since is somebody's newer write.
-            index = next((i for i, e in enumerate(whitelist) if isinstance(e, dict) and _whatsapp_entry_key(e) == key
-                          and all(i != m for m, _c in moves)), None)
-            if index is None:
+            slots = positions.get(key)
+            if not slots:
                 continue
+            index = slots.popleft()
             phone, scope, name = key
             moves.append((index, {"phone_number": phone, "vaf_username": name, "from_scope": scope,
-                                  "to_scope": target}))
+                                  "to_scope": target}, target_name))
             whitelist[index] = {**whitelist[index], "user_scope_id": target}
-        moved = {index for index, _c in moves}
-        kept: set = set()
-        dropped: set = set()
-        for index, change in moves:
-            # Held already: by an entry that stays where it was, or by a move kept earlier in
-            # this pass.
-            held = any((i not in moved or i in kept) and isinstance(e, dict)
-                       and str(e.get("user_scope_id") or "").strip() == change["to_scope"]
-                       and same_number(str(e.get("phone_number") or ""), change["phone_number"])
-                       for i, e in enumerate(whitelist))
-            (dropped if held else kept).add(index)
-            changes.append({"action": "removed" if held else "moved", **change})
+        moved = {index for index, _c, _n in moves}
+        # Held: by an entry that stays where it is, or by a move kept earlier in this pass.
+        # One canonical number per entry, so the pass stays linear in the entries.
+        held = {(str(e.get("user_scope_id") or "").strip(), number(e))
+                for i, e in enumerate(whitelist) if isinstance(e, dict) and i not in moved}
+        dropped = set()
+        to_names: List[str] = []
+        for index, change, target_name in moves:
+            pair = (change["to_scope"], number(whitelist[index]))
+            if pair in held:
+                dropped.add(index)
+            held.add(pair)
+            changes.append({"action": "removed" if index in dropped else "moved", **change})
+            to_names.append(target_name)
         whitelist = [e for i, e in enumerate(whitelist) if i not in dropped]
         if changes:
             config["whatsapp_config"] = {**block, "whitelist": whitelist}
             Config.save(config)
 
     from vaf.core.security_events import log_security_event
-    filed_under: Dict[str, str] = {}
-    for change in changes:
-        scope, name, phone = change["from_scope"], change["vaf_username"], change["phone_number"]
-        if scope not in filed_under:
-            filed_under[scope] = resolve_caller_username(None, scope, allow_lookup=True)
+    owners = owners or {}
+    for change, to_name in zip(changes, to_names):
+        scope, phone = change["from_scope"], change["phone_number"]
+        filed_under = owners.get(scope) or resolve_caller_username(None, scope)
         logger.warning("WhatsApp: an owner number registered for %r was filed under the account %r; %s",
-                       name, filed_under[scope],
+                       to_name, filed_under,
                        "moved to its own account" if change["action"] == "moved" else "removed as a duplicate")
         try:
-            log_security_event("channel_unpaired", channel="whatsapp", username=filed_under[scope], path=phone,
-                               detail=f"owner {phone}, registered for {name} under this account; "
-                                      "corrected at WhatsApp start")
             if change["action"] == "moved":
-                log_security_event("channel_paired", channel="whatsapp", username=name, path=phone,
-                                   detail=f"owner {phone} for {name}, moved from the account it was filed under")
+                log_security_event("channel_unpaired", channel="whatsapp", username=filed_under, path=phone,
+                                   detail=f"owner {phone} for {to_name}, filed under {filed_under}'s account; "
+                                          "moved at WhatsApp start")
+                log_security_event("channel_paired", channel="whatsapp", username=to_name, path=phone,
+                                   detail=f"owner {phone} for {to_name}, moved from {filed_under}'s entry")
+            else:
+                log_security_event("channel_unpaired", channel="whatsapp", username=filed_under, path=phone,
+                                   detail=f"owner {phone} removed from {filed_under}'s entries: {to_name} "
+                                          "already has this number")
         except Exception:
             pass
     return changes

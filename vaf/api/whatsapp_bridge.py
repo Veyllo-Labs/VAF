@@ -920,12 +920,12 @@ def _process_for(username: str, user_scope_id: Optional[str] = None
     Named boundary: a request without a scope is settled by its name alone. Only the read and
     sync lanes ask that way (the chat list, history, avatars, names, LID mappings, the
     connection check), with the signed-in account's own name (`user_routes.request_account`
-    refuses a sign-in without a scope or a name). That is not proof for every name: the
-    account directory refuses a duplicate name with `lower()`, while the account directory's
-    lookup by name casefolds (`scope_id_for_username`), so an account named "Straße" next to an
-    admin named "strasse" is read here as the admin's spelling and gets the admin's process
-    when it is the only one running. Not closed here; passing the scope from those lanes is
-    the fix. Every send lane carries a scope: `_enqueue_reply`,
+    refuses a sign-in without a scope or a name). The name resolves through
+    `scope_id_for_username`, where the exact name decides and a casefolded match counts only
+    when one account has it, so an account named "Straße" next to an admin named "strasse"
+    is its own account here, not the admin's spelling. A spelling neither of them is
+    exactly, matched by both only by casefold, resolves to nobody and gets no process.
+    Passing the scope from those lanes would remove the name from the decision entirely. Every send lane carries a scope: `_enqueue_reply`,
     `send_whatsapp_with_confirmation` and the sender loop convert a scopeless request with
     `config.messenger_lane_identity` (the local admin's, or refused) before they get here.
     Refusing a scopeless request in here would cut every ordinary account off its own chat

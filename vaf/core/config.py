@@ -2449,10 +2449,13 @@ def is_local_admin_name(name: Optional[str], admin_name: Optional[str] = None) -
     whitelist entry reads it once and passes it in: asked per entry, a read with 1,000
     entries without a scope took 544 ms instead of 6.6 ms, quadratic in the entries.
 
-    Named boundary: the casefolded comparison is wider than the account directory's own
+    Named boundary: the casefolded comparison is wider than the account store's own
     uniqueness check, which compares `lower()` and lets an admin create "Straße" next to
-    "strasse". Such a name is an admin name here only on a request or an entry without a
-    scope, which VAF does not write for an account; it is not closed here."""
+    "strasse". Here it decides only a request or an entry WITHOUT a scope, which VAF does not
+    write for an account; it is not closed here. Where VAF writes or moves a SCOPED entry by
+    a name (the WhatsApp owner-number route and its refile at the bridge start), the name goes
+    through `account_for_username` instead: the exact name decides, and a casefolded match
+    counts only when exactly one account has it."""
     low = str(name or "").strip().casefold()
     admin = get_local_admin_username() if admin_name is None else admin_name
     return low in ("", "admin") or low == str(admin or "").strip().casefold()
@@ -2573,8 +2576,9 @@ def scope_id_for_username(username: str) -> Optional[str]:
     admin resolves from the config without a lookup, like the forward direction;
     anybody else is found in the account directory the application registered
     (`set_account_directory_resolver`) - never by reading an auth store from here,
-    which is the import the resolver exists to keep out of the framework. Names are
-    compared case-insensitively.
+    which is the import the resolver exists to keep out of the framework. The exact
+    name decides first; a case-insensitive match counts only when exactly one account
+    has it (`account_for_username`).
 
     Never invents: a name that matches no account answers None, and the caller says
     so, because inviting a synthetic scope would admit nobody and tell the inviter it
@@ -2588,29 +2592,47 @@ def scope_id_for_username(username: str) -> Optional[str]:
 def account_for_username(username: str) -> Optional[Tuple[str, str]]:
     """`(scope, name as the account stores it)` for an account NAME, or None: the one lookup
     `scope_id_for_username` answers with, for a caller that also writes the name down (a
-    WhatsApp number registered for "ALICE" is filed under "alice"). Same rules: casefolded,
-    the local admin from the config, everybody else from the directory, active accounts
-    only, never raises."""
+    WhatsApp number registered for "ALICE" is filed under "alice"). Never raises.
+
+    The exact name (stripped) decides first: the local admin's from the config without a
+    lookup, everybody else from the directory. Without an exact match, a casefolded match
+    counts only when exactly ONE account has it. The account store keeps names unique with
+    `lower()` only, so "Straße" and "strasse" (or "Weiß" and "weiss") can both exist, and the
+    directory lists accounts in no fixed order: taking the first casefolded match filed a
+    number under whichever twin came first. An ambiguous name, an inactive account (an exact
+    match included: its twin is not what was typed) and an unknown name are None.
+    """
     name = str(username or "").strip()
     if not name:
         return None
+    admin_name = admin_scope = ""
     try:
         admin_name = str(get_local_admin_username() or "").strip()
-        if name.casefold() == admin_name.casefold():
-            admin = str(get_local_admin_scope_id() or "").strip()
-            if admin:
-                return admin, admin_name
+        admin_scope = str(get_local_admin_scope_id() or "").strip()
     except Exception:
         pass
+    if admin_scope and name == admin_name:
+        return admin_scope, admin_name
     try:
         from vaf.core.tool_dispatch import resolve_account_directory
-        wanted = name.casefold()
-        for row in resolve_account_directory():
-            if row["username"].casefold() == wanted and row.get("active", True):
-                return row["user_scope_id"], row["username"]
+        rows = resolve_account_directory()
     except Exception:
+        rows = []
+    exact = [row for row in rows if row["username"] == name]
+    if exact:
+        row = exact[0]
+        return (row["user_scope_id"], row["username"]) if row.get("active", True) else None
+    wanted = name.casefold()
+    found: Dict[str, Tuple[str, bool]] = {}
+    if admin_scope and admin_name.casefold() == wanted:
+        found[admin_scope] = (admin_name, True)
+    for row in rows:
+        if row["username"].casefold() == wanted:
+            found.setdefault(row["user_scope_id"], (row["username"], bool(row.get("active", True))))
+    if len(found) != 1:
         return None
-    return None
+    scope, (stored, active) = next(iter(found.items()))
+    return (scope, stored) if active else None
 
 
 def config_reader(config: Optional[Mapping] = None) -> Callable[..., Any]:

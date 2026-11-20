@@ -1875,8 +1875,10 @@ _MISTYPED = [
     {"operation": "create", "prompt": "p", "name": ["a"]},
     {"operation": "create", "prompt": "p", "frequency": "weekly", "weekday": 3},
     {"operation": "update", "task_id": 7, "name": "x"},
+    # Raises nowhere: the update would store a number where the scheduler reads a time.
+    {"operation": "update", "task_id": A_ID, "time": 5},
 ]
-_MISTYPED_IDS = ["prompt", "name", "weekday", "update-task-id"]
+_MISTYPED_IDS = ["prompt", "name", "weekday", "update-task-id", "update-time"]
 
 
 def _with_action(ws, action, *, claim=None) -> str:
@@ -1896,8 +1898,9 @@ def _with_action(ws, action, *, claim=None) -> str:
 def test_a_mistyped_action_is_decided_and_never_sticks(store, workspaces, action):
     """An action with a field of the wrong type raised on every approve and, once claimed,
     on every reject too: the handoff stayed pending for good. It is now approved with the
-    result "invalid automation action" and never claimed. MUTATION: drop the type check
-    before the claim in `_approve_locked` (the approve raises `AttributeError`)."""
+    result "invalid automation action" and never claimed, and an update with a mistyped field
+    is not applied (it raised nowhere and stored a number as the time). MUTATION: drop the
+    type check before the claim in `_approve_locked`."""
     ws = workspaces
     hid = _with_action(ws, action)
     before = _snapshot(store)
@@ -1979,19 +1982,27 @@ def test_the_websocket_loop_is_free_while_a_decision_waits(store, workspaces, mo
     ws = workspaces
     hid = _create_handoff(ws)
     monkeypatch.setattr(ws.tw, "_DECISION_LOCK_TIMEOUT_S", 1.5)
-    held, done = threading.Event(), threading.Event()
+    held, done, deciding = threading.Event(), threading.Event(), threading.Event()
 
     def hold():
         with ws.tw._decision_lock(TENANT_A):
             held.set()
             done.wait(20)
 
+    real_approve = ws.tw.approve_handoff
+
+    def approve(*a, **kw):
+        deciding.set()
+        return real_approve(*a, **kw)
+
+    monkeypatch.setattr(ws.tw, "approve_handoff", approve)
     holder = threading.Thread(target=hold, daemon=True)
     holder.start()
     waited = []
 
     def probe(session):
-        time.sleep(0.3)   # the approve frame is in, its decision waits for the lock
+        assert deciding.wait(10)   # the decision has started and waits for the lock
+        time.sleep(0.1)
         started = time.monotonic()
         session.portal.call(anyio.sleep, 0)
         waited.append(time.monotonic() - started)
@@ -2086,7 +2097,7 @@ def test_a_lock_file_error_is_not_answered_as_missing(store, workspaces, monkeyp
     hid = _create_handoff(ws)
 
     class Unopenable:
-        def __init__(self, path, timeout):
+        def __init__(self, path):
             self.path = path
 
         def acquire(self):
@@ -2095,7 +2106,16 @@ def test_a_lock_file_error_is_not_answered_as_missing(store, workspaces, monkeyp
         def release(self):
             pass
 
-    monkeypatch.setattr(secure_store, "_get_filelock_cls", lambda: Unopenable)
+    real_cls = secure_store._get_filelock_cls()
+
+    def lock_for(path, timeout=-1, **kw):
+        # Only the decision lock fails: the handshake's own stores lock through the same
+        # accessor, and a fake for them closes the socket before the command is read.
+        if Path(path).name == "handoff.lock":
+            return Unopenable(path)
+        return real_cls(path, timeout=timeout, **kw)
+
+    monkeypatch.setattr(secure_store, "_get_filelock_cls", lambda: lock_for)
     replies = _ws(monkeypatch, role="user", scope=TENANT_A, frames=[
         _handoff("approve", ws.task_a, hid), _handoff("reject", ws.task_a, hid)])
     for reply in replies:

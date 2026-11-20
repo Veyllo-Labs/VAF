@@ -942,6 +942,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                     <button type="button" onClick={handleReloadNames} disabled={namesBusy || !data?.connected} className={BTN}>{namesBusy ? t('reloadingNames') : t('reloadNames')}</button>
                 </div>
                 {restartError && <p className="mt-2 text-xs text-red-600 break-words">{restartError}</p>}
+                {/* The settings overlay covers the banner, so this is the one copy in sight there. */}
                 {restartNotice && <p className="mt-2 text-xs text-red-600 break-words">{restartNotice}</p>}
                 {namesMsg && <p className="mt-2 text-xs text-gray-500">{namesMsg}</p>}
             </SettingsCard>

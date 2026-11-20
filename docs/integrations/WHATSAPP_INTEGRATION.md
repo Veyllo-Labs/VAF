@@ -299,14 +299,16 @@ the caller's own process for anybody else:
   readers drop the next line they see. One that survives the kill as well stays registered
   and the stop answers 500, so no second Node starts on its login; that holds for a failed
   account stop exactly as for the bridge's shutdown. Such a survivor gets no lane write, a
-  send for its account answers "The previous WhatsApp process of this account has not ended
-  yet. Try again shortly.", and a start of that account answers 500 with the same text until
+  send for its account answers "The previous WhatsApp connection of this account has not
+  ended yet. Try again shortly.", and a start of that account answers 500 with the same text until
   it has ended; so does a start under a name whose live process was started for another
   scope (an account that reuses a deleted account's name). An expiry line (`qr`) stops only
   the process that wrote it, and only while that process is still the account's registration,
   so a line an old process's reader was already dispatching cannot end the replacement a
   restart brought up. An admin's Restart WhatsApp names the accounts its new run skipped for
-  that reason, from the spawn decisions themselves (`not_started` in the answer; the window
+  that reason, from the spawn decisions themselves, waiting for the new run's spawn phase at
+  most `RESTART_REPORT_WAIT` (15 s) and naming nobody after that; the reconnect worker's
+  restart does not wait for them (`not_started` in the answer; the window
   shows "WhatsApp restarted, but not for ...", with the next step: Restart WhatsApp again in
   a minute, since a survivor that has ended blocks nothing, or restart VAF if it never ends,
   which drops its registration). A send while no bridge runs answers at once that the bridge
@@ -321,7 +323,9 @@ the caller's own process for anybody else:
   is set, the reply callback goes, every registered process is retired and terminated, and the
   state file says not running. A send its sender loop takes after the run's stop (one queued
   ahead of the shutdown's end marker) is not written; it answers "WhatsApp is stopping; try
-  again in a few seconds.", because the next run's process must not get a second writer. If
+  again in a few seconds.", because the next run's process must not get a second writer.
+  Named boundary: an agent reply queued at that instant (`_enqueue_reply`, which carries no
+  request id) has nobody waiting for an answer, so it is dropped and logged. If
   the bridge thread cannot even be started, the start is rolled back the same way. A failed
   bridge thread therefore stops its run's processes and
   loops and is reported as not running; it stays down until a Start or a VAF restart (the

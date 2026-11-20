@@ -89,7 +89,7 @@ START_FAILED = ("Failed to start WhatsApp. Ensure Node.js is installed and npm i
                 "in vaf/whatsapp_node.")
 START_CANCELLED = "WhatsApp was stopped for this account before it had started."
 STOP_FAILED = "WhatsApp did not stop for this account; try again."
-PREVIOUS_NOT_ENDED = "The previous WhatsApp process of this account has not ended yet. Try again shortly."
+PREVIOUS_NOT_ENDED = "The previous WhatsApp connection of this account has not ended yet. Try again shortly."
 SHUTDOWN_OVERRAN = "The old WhatsApp process did not stop in time; try again."
 ACCOUNT_STARTED = "WhatsApp started for this account."
 ACCOUNT_ALREADY_RUNNING = "WhatsApp already runs for this account."
@@ -1848,7 +1848,6 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
         # here would be a fourth hand copy of the per-account switch writer.
         from vaf.core.config import is_local_admin_lane
         own_switch = is_local_admin_lane(user_scope_id)
-        stopped: Optional[bool] = None
         try:
             with _spawn_lock:
                 # The line's own process only: a reader can pass its retirement check and be
@@ -1868,11 +1867,10 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
                         wc["enabled"] = False
                         cfg["whatsapp_config"] = wc
                         Config.save(cfg)
-                stopped = _stop_account_held(username, user_scope_id)
+                if _stop_account_held(username, user_scope_id):
+                    _account_stopped(username)
         except Exception as e:
             logger.exception("Failed to stop WhatsApp on session expiry: %s", e)
-        if stopped:
-            _account_stopped(username)
     elif typ == "connected":
         with _connection_lock:
             _connection_status[username] = True
@@ -2623,7 +2621,9 @@ def _run_bridge_until_stopped(only: Optional[str], stop: threading.Event,
                 if pending is not None:
                     pending.resolve(False, START_FAILED)
                 raise
-            if blocked:
+            if blocked and not ok:
+                # Not when the previous process ended between the check and the spawn: then
+                # the account did start.
                 outcome.skipped.append(username)
                 logger.error("WhatsApp: %s not started, its previous process has not ended", username)
             if pending is not None:
@@ -2726,14 +2726,12 @@ def start_bridge(only: Optional[str] = None) -> bool:
             _bridge_thread.start()
         except Exception:
             # The run is published (running on disk, spawns open) but has no bridge thread to
-            # end it: ended here instead, so no send waits on it and no start on its spawn.
+            # end it: ended here instead, through the same end as every run, so no send waits
+            # on it, no start waits on its spawn, and a process a start into it registered
+            # meanwhile is retired and terminated rather than left without readers.
             logger.exception("WhatsApp bridge could not start its threads")
-            with _spawn_lock:
-                _spawns_open = False
-                _resolve_pending(START_FAILED)
-                run_stop.set()
-                run_outcome.settled.set()
-                _write_bridge_state(False)
+            _end_run(run_stop, requested=False)
+            run_outcome.settled.set()
             _bridge_thread = None
             return False
         # Periodic chat list sync (default every 10 min) so bot has latest chats
@@ -2776,7 +2774,7 @@ def _restarted_text(not_started: List[str]) -> str:
     if not not_started:
         return ""
     return (f"WhatsApp restarted, but not for {', '.join(not_started)}: the previous connection has "
-            "not ended yet. Try Restart WhatsApp again in a minute. If it still fails, restart VAF.")
+            "not ended yet. Press Restart WhatsApp again in a minute. If it still fails, restart VAF.")
 
 
 def restart_bridge_result(report: bool = True) -> Tuple[bool, str, List[str]]:
@@ -2902,8 +2900,10 @@ def stop_account(username: str, user_scope_id: Optional[str] = None) -> Optional
     account's (an ordinary account named like the local admin), its scope cannot."""
     with _spawn_lock:
         stopped = _stop_account_held(username, user_scope_id)
-    if stopped:
-        _account_stopped(username)
+        if stopped:
+            # Still under the lock: once it is released a replacement can start and report
+            # `connected`, which a later reset here would overwrite.
+            _account_stopped(username)
     return stopped
 
 
@@ -2915,7 +2915,7 @@ def _is_registration(username: str, proc: Any) -> bool:
 
 def _stop_account_held(username: str, user_scope_id: Optional[str] = None) -> Optional[bool]:
     """`stop_account`'s work; the caller holds `_spawn_lock` and, on True, calls
-    `_account_stopped`."""
+    `_account_stopped` before it releases it."""
     name = (username or "").strip()
     wanted = str(user_scope_id or "").strip()
     pending = _pending_starts.get(name)
@@ -2949,6 +2949,8 @@ def _stop_account_held(username: str, user_scope_id: Optional[str] = None) -> Op
 
 
 def _account_stopped(username: str) -> None:
+    """The stopped account's connection reads as down. Caller holds `_spawn_lock`
+    (`_connection_lock` is a leaf: nothing takes another lock while holding it)."""
     name = (username or "").strip()
     with _connection_lock:
         _connection_status[name] = False

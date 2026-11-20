@@ -904,6 +904,9 @@ def _survivor_after_restart(world):
     procs = _bridge_with(world, "admin", "alice")
     assert wa.restart_bridge() is True
     assert world.wait_for(lambda: world.names().count("admin") == 2 and world.live("admin"))
+    # The new run has decided about Alice too: a survivor ended before that would be spawned
+    # by the run itself rather than by the test's own start.
+    assert wa._run_outcome.settled.wait(timeout=3)
     return procs["alice"]
 
 
@@ -1262,7 +1265,7 @@ def test_an_admin_restart_names_the_accounts_it_could_not_start(world):
         ok, message, not_started = wa.restart_bridge_result()
         assert ok is True and not_started == ["alice"]
         assert message == ("WhatsApp restarted, but not for alice: the previous connection has not ended yet. "
-                           "Try Restart WhatsApp again in a minute. If it still fails, restart VAF.")
+                           "Press Restart WhatsApp again in a minute. If it still fails, restart VAF.")
         res = _client(ADMIN).post("/api/whatsapp/restart")
         assert res.status_code == 200, res.text
         assert res.json()["not_started"] == ["alice"] and res.json()["message"] == message
@@ -1599,6 +1602,139 @@ def test_a_survivor_alone_is_not_the_fallback_process(world, monkeypatch):
         survivor.returncode = -9
 
 
+def test_a_rolled_back_start_ends_a_process_a_start_into_it_registered(world, monkeypatch):
+    """A start into the running bridge that was waiting for the spawn lock lands in the new run
+    after its spawns opened and before its bridge thread failed to start: the rollback ends
+    that process like every run's end, rather than leaving it registered without readers.
+    MUTATION: the rollback only closes spawns and sets the stop."""
+    world.link("admin")
+    world.link("alice")
+    world.own_switch(ALICE_SCOPE, True)
+    entry = wa._runnable_account("alice", ALICE_SCOPE)
+    real_start = threading.Thread.start
+    landed = []
+
+    def start(self):
+        if getattr(self, "_target", None) is wa._run_bridge:
+            landed.append(wa._start_into_running(entry))
+            raise RuntimeError("can't start new thread")
+        return real_start(self)
+    monkeypatch.setattr(threading.Thread, "start", start)
+    assert wa.start_bridge() is False
+    monkeypatch.setattr(threading.Thread, "start", real_start)
+    assert landed == [(True, wa.ACCOUNT_STARTED)]
+    (alice,) = world.spawned
+    assert wa._is_retired(alice) and alice.returncode is not None
+    assert wa._processes == {} and world.states[-1] is False
+
+
+def test_a_stop_resets_the_connection_before_a_replacement_can_report(world, monkeypatch):
+    """The stop marks the account's connection down before it releases the spawn lock, so a
+    replacement that starts and reports `connected` right after is not marked down by the
+    stop that came first. MUTATION: reset the connection after the lock is released."""
+    procs = _bridge_with(world, "admin", "alice")
+    real_reset = wa._account_stopped
+    replacement = {}
+
+    def start_and_connect():
+        replacement["start"] = wa.start_account("alice", ALICE_SCOPE)
+        wa._dispatch_bridge_event("alice", ALICE_SCOPE, "connected", {"selfJid": "491700000001@s.whatsapp.net"})
+
+    def reset_with_a_replacement_racing(username):
+        racer = threading.Thread(target=start_and_connect)
+        racer.start()
+        racer.join(timeout=0.3)     # blocks on the spawn lock while the stop holds it
+        replacement["racer"] = racer
+        real_reset(username)
+    monkeypatch.setattr(wa, "_account_stopped", reset_with_a_replacement_racing)
+    assert wa.stop_account("alice", ALICE_SCOPE) is True
+    replacement["racer"].join(timeout=5)
+    assert replacement["start"] == (True, wa.ACCOUNT_STARTED)
+    assert wa._processes["alice"] is not procs["alice"]
+    assert wa._connection_status["alice"] is True
+
+
+def test_an_account_whose_previous_process_ends_at_the_spawn_is_not_named_skipped(world, monkeypatch):
+    """Alice's survivor ends between the spawn gate's check and the spawn: she starts, and the
+    restart does not name her. MUTATION: record the skip from the check alone."""
+    world.proc_class["alice"] = Unkillable
+    procs = _bridge_with(world, "admin", "alice")
+    survivor = procs["alice"]
+    world.proc_class.clear()
+    real_blocked = wa._blocked_by_previous
+
+    def blocked_then_ends(username, user_scope_id):
+        answer = real_blocked(username, user_scope_id)
+        if username == "alice" and threading.current_thread() is wa._bridge_thread:
+            survivor.returncode = -9
+        return answer
+    monkeypatch.setattr(wa, "_blocked_by_previous", blocked_then_ends)
+    try:
+        assert wa.restart_bridge_result() == (True, "", [])
+        assert world.live("alice") and wa._processes["alice"] is not survivor
+    finally:
+        survivor.returncode = -9
+
+
+def test_an_expiry_line_holds_the_spawn_lock_from_its_check_to_its_stop(world, monkeypatch):
+    """Alice's restart that arrives right after the expiry handler found her process still
+    registered waits for the handler: it then starts her afresh, and the old line does not
+    end the new process. MUTATION: the registration check before the lock."""
+    procs = _bridge_with(world, "admin", "alice")
+    real_check = wa._is_registration
+    restart = {}
+
+    def check_then_restart(username, proc):
+        answer = real_check(username, proc)
+        racer = threading.Thread(target=lambda: restart.__setitem__(
+            "answer", wa.restart_account("alice", ALICE_SCOPE)))
+        racer.start()
+        racer.join(timeout=0.3)
+        restart["racer"] = racer
+        return answer
+    monkeypatch.setattr(wa, "_is_registration", check_then_restart)
+    wa._dispatch_bridge_event("alice", ALICE_SCOPE, "qr", {}, proc=procs["alice"])
+    restart["racer"].join(timeout=5)
+    assert restart["answer"] == (True, wa.ACCOUNT_STARTED)
+    new = wa._processes.get("alice")
+    assert new is not None and new is not procs["alice"] and new.returncode is None
+
+
+def test_an_expiry_line_of_a_survivor_changes_nothing(world, monkeypatch):
+    """The admin's process outlived the restart's kill: its own late `qr` is a retired
+    process's line, so the admin's switch stays on. MUTATION: drop the retirement clause of
+    the registration check."""
+    world.proc_class["admin"] = Unkillable
+    procs = _bridge_with(world, "admin")
+    survivor = procs["admin"]
+    try:
+        assert wa.restart_bridge() is True
+        assert wa._processes.get("admin") is survivor and wa._is_retired(survivor)
+        wa._dispatch_bridge_event("admin", ADMIN_SCOPE, "qr", {}, proc=survivor)
+        assert world.cfg()["whatsapp_config"]["enabled"] is True
+    finally:
+        survivor.returncode = -9
+
+
+def test_the_reconnect_restart_does_not_wait_for_the_spawn_report(world, monkeypatch):
+    """`restart_bridge` (the reconnect worker's) answers once the new run is up, without
+    waiting for its spawn phase, which an admin's restart waits for to name skipped accounts.
+    MUTATION: `restart_bridge` asks for the report."""
+    _bridge_with(world, "admin")
+    monkeypatch.setattr(wa, "RESTART_REPORT_WAIT", 2.0)
+    release = threading.Event()
+    monkeypatch.setattr("vaf.core.channel_pairing.refile_whatsapp_owner_numbers",
+                        lambda: release.wait(timeout=5) and [])
+    try:
+        began = time.monotonic()
+        assert wa.restart_bridge() is True
+        assert time.monotonic() - began < 1.0
+        assert not wa._run_outcome.settled.is_set()
+    finally:
+        release.set()
+    assert wa._run_outcome.settled.wait(timeout=3)
+
+
 # -- Fuzz: the spawn gate -------------------------------------------------------------------------
 
 FUZZ_ACCOUNTS = ("admin", "alice", "bob")
@@ -1713,7 +1849,8 @@ def test_spawn_gate_fuzz(world, monkeypatch):
     five. Oracle: no second live process for one account at any spawn, the registry's two maps
     in step after every operation, nothing registered or alive after the final stop, every
     run's loops ended and its stop set, the last state write False, and no process terminated
-    before it was retired. A START_FAILED counts only in a schedule without a failure.
+    before it was retired. A START_FAILED counts unless an injected failure of a bridge thread
+    fired while that start waited (`crash["fired"]` before and after it).
     `VAF_FUZZ_DRAWS` raises the draw count outside the suite."""
     crash = {"armed": False, "fired": 0}
     real_users, real_blocked = wa._get_users_to_run, wa._blocked_by_previous

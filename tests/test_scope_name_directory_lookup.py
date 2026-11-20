@@ -219,6 +219,16 @@ REFUSED = {
     # MUTATION: drop the check for the characters Windows refuses.
     "windows_forbidden": (_rows(("a:b", S_A), ("what?", S_B)),
                           {S_A: _synthetic(S_A), S_B: _synthetic(S_B)}),
+    # A Windows 8.3 short name opens the long-named folder. MUTATION: drop the `~` + digit
+    # check in `portable_entry_name`.
+    "short_name_twin": (_rows(("alexander", S_A), ("ALEXAN~1", S_B)),
+                        {S_A: "alexander", S_B: _synthetic(S_B)}),
+    # Over 255 UTF-8 bytes in 86 characters. MUTATION: drop the byte limit.
+    "too_many_bytes": (_rows(("\u4e00" * 86, S_A)), {S_A: _synthetic(S_A)}),
+    # Two spellings HFS+ treats as one name that differ after one NFC and a casefold.
+    # MUTATION: drop the second NFC in `portable_name_key`.
+    "greek_twins": (_rows(("\u0390", S_A), ("\u03aa\u0301", S_B)),
+                    {S_A: _synthetic(S_A), S_B: _synthetic(S_B)}),
     # MUTATION: drop the `scope_` prefix check (UNLISTED's synthetic name is taken).
     "synthetic_prefix": (_rows((_synthetic(UNLISTED), S_A), ("Scope_1234abcd", S_B)),
                          {S_A: _synthetic(S_A), S_B: _synthetic(S_B)}),
@@ -263,6 +273,51 @@ def test_the_owners_name_in_another_unicode_form_is_refused(store, monkeypatch):
     assert _resolve_username_for_scope(S_A) == _synthetic(S_A)
 
 
+def test_the_owners_short_name_is_refused(store, monkeypatch):
+    """An owner name of nine or more characters has a Windows 8.3 alias that opens the
+    owner's folder. MUTATION: drop the `~` + digit check in `portable_entry_name`."""
+    from vaf.core.thinking_mode import _resolve_username_for_scope
+
+    _owner_named(monkeypatch, "ownername")
+    monkeypatch.setattr(tool_dispatch, "_account_directory_resolver",
+                        lambda: _rows(("OWNERN~1", S_A)))
+    assert _resolve_username_for_scope(S_A) == _synthetic(S_A)
+
+
+def test_the_owners_name_in_a_spelling_hfs_folds_is_refused(store, monkeypatch):
+    """The owner "\u0390" and a tenant "\u03aa\u0301" are one folder on HFS+.
+    MUTATION: drop the second NFC in `portable_name_key`."""
+    from vaf.core.thinking_mode import _resolve_username_for_scope
+
+    _owner_named(monkeypatch, "\u0390")
+    monkeypatch.setattr(tool_dispatch, "_account_directory_resolver",
+                        lambda: _rows(("\u03aa\u0301", S_A)))
+    assert _resolve_username_for_scope(S_A) == _synthetic(S_A)
+
+
+def test_the_name_key_keeps_distinct_names_apart():
+    from vaf.core.path_jail import portable_name_key
+
+    assert portable_name_key("\u0390") == portable_name_key("\u03aa\u0301")
+    assert portable_name_key("Stra\u00dfe") == portable_name_key("STRASSE")
+    keys = {portable_name_key(n) for n in ("alice", "alicia", "al1ce", "caf\u00e9", "cafe",
+                                           "\u03b9", "\u0390", "jos\u00e9", "jose")}
+    assert len(keys) == 9
+
+
+def test_the_first_row_under_an_exact_name_wins(store, monkeypatch):
+    """Two rows with the identical name under different scopes: the reverse lookup answers
+    the first in the directory's order, as it did before the index. MUTATION: let the last
+    row win in `AccountDirectoryIndex.first_by_name`."""
+    from vaf.core.config import account_for_username
+
+    monkeypatch.setattr(tool_dispatch, "_account_directory_resolver",
+                        lambda: _rows(("alice", S_A), ("alice", S_B), ("alice", S_C)))
+    assert account_for_username("alice") == (S_A, "alice")
+    with account_directory_once():
+        assert account_for_username("alice") == (S_A, "alice")
+
+
 def test_many_rows_under_one_name_stay_cheap(store, monkeypatch):
     """An embedder directory may list thousands of accounts under one casefolded name. The
     forward lookup decides from the distinct scopes per name in the index, and the reverse
@@ -305,7 +360,8 @@ def test_a_name_one_account_alone_carries_is_kept(store, monkeypatch):
 
 
 @pytest.mark.parametrize("name", ["alice", "bob.smith", "caf\u00e9", "console", "comx",
-                                  "lpt10", "a b", "\u00e9t\u00e9.2026"])
+                                  "lpt10", "a b", "\u00e9t\u00e9.2026", "a~b", "~home",
+                                  "\u4e00" * 85])
 def test_a_portable_name_is_kept_as_it_is(name):
     from vaf.core.path_jail import portable_entry_name
 
@@ -316,7 +372,8 @@ def test_a_portable_name_is_kept_as_it_is(name):
                                   "nul", "AUX", "prn.x", "COM0", "com9.log", "LPT1",
                                   "COM\u00b2", "lpt\u00b3", "alice\u200b", "\ufeffx",
                                   "a\u202eb", "a:b", "a<b", "a|b", "a?", "a*", 'a"b',
-                                  "a/b", "..", ".hidden"])
+                                  "a/b", "..", ".hidden", "LONGNA~1", "ALEXAN~1.TXT",
+                                  "x~9y", "\u4e00" * 86])
 def test_a_name_one_platform_reads_differently_is_refused(name):
     from vaf.core.path_jail import PathEscape, portable_entry_name
 

@@ -121,8 +121,9 @@ PARTICIPANT_LANES = ("agent", "cli", "remote")
 
 
 def fold_name(name: Any) -> str:
-    """A name as names are compared: NFC-normalised and case-folded ("Straße" == "STRASSE",
-    a precomposed "ë" == "e" + combining diaeresis): `path_jail.portable_name_key`."""
+    """A name as names are compared: NFC-normalised, case-folded and NFC-normalised again
+    ("Straße" == "STRASSE", a precomposed "ë" == "e" + combining diaeresis, "ΐ" == "Ϊ́"):
+    `path_jail.portable_name_key`."""
     from vaf.core.path_jail import portable_name_key
     return portable_name_key(str(name or "").strip())
 

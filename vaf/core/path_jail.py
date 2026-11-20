@@ -364,7 +364,6 @@ def safe_entry_name(name: str, *, allow_hidden: bool = False) -> str:
     return raw
 
 
-
 # Windows device names. A file or folder named one of these, with or without an extension
 # ("CON.txt"), opens the device instead; the superscript digits count as digits there.
 _WINDOWS_DEVICES = frozenset(
@@ -372,6 +371,7 @@ _WINDOWS_DEVICES = frozenset(
     + [f"{dev}{digit}" for dev in ("com", "lpt") for digit in "0123456789\u00b9\u00b2\u00b3"])
 # Characters Windows refuses in a file name (the separators are refused already).
 _WINDOWS_FORBIDDEN = frozenset('<>:"|?*')
+_ASCII_DIGITS = frozenset("0123456789")
 
 
 def portable_entry_name(name: str, *, allow_hidden: bool = False) -> str:
@@ -385,14 +385,29 @@ def portable_entry_name(name: str, *, allow_hidden: bool = False) -> str:
     Unicode form, so only the composed form (NFC) is taken: a decomposed "josé" is the
     same folder as the composed one there and a different one on Linux. Format characters
     (Unicode category Cf: zero-width spaces, byte-order marks, direction overrides) are
-    refused too: they make a name that looks like another one.
+    refused too: they make a name that looks like another one. A `~` followed by a digit is
+    refused because it is the shape of a Windows 8.3 short name: "ALEXAN~1" can open the
+    folder "alexander", and with short names enabled any long name has such an alias. Only
+    that shape, not every `~`: an alias always carries the digit, and "a~b" is no alias.
+    A name over 255 UTF-8 bytes is refused: Linux and macOS count bytes, and 255 characters
+    can be four times as many. Windows counts UTF-16 code units, never more than the UTF-8
+    bytes of the same name, so the byte limit covers it.
 
     Two portable names can still be one folder on a case-insensitive file system; compare
-    them with `portable_name_key`. Named boundary: not on the facade. Its one caller is the
-    account name a directory gives a scope (`config.account_name_for_scope`); VAF's own
-    account store does not apply it when an account is created (docs/security/USER_ISOLATION.md).
+    them with `portable_name_key`.
+
+    Named boundaries:
+    - Not on the facade. Its one caller is the account name a directory gives a scope
+      (`config.account_name_for_scope`); VAF's own account store does not apply it when an
+      account is created (docs/security/USER_ISOLATION.md).
+    - Default-ignorable characters that are not format characters (U+034F, the Hangul
+      fillers U+115F, U+1160, U+3164 and U+FFA0, the variation selectors) are kept. They
+      only make two names LOOK alike: each such name is its own folder on every file
+      system, so no account opens another's.
     """
     raw = safe_entry_name(name, allow_hidden=allow_hidden)
+    if len(raw.encode("utf-8")) > NAME_CHARS_MAX:
+        raise PathEscape("name is too long")
     if raw.endswith("."):
         raise PathEscape("name must not end with a dot")
     if not unicodedata.is_normalized("NFC", raw):
@@ -403,15 +418,20 @@ def portable_entry_name(name: str, *, allow_hidden: bool = False) -> str:
         raise PathEscape("name must not contain a character Windows refuses")
     if raw.split(".", 1)[0].rstrip(" ").casefold() in _WINDOWS_DEVICES:
         raise PathEscape("name must not be a device name")
+    if any(ch == "~" and raw[i + 1:i + 2] in _ASCII_DIGITS for i, ch in enumerate(raw)):
+        raise PathEscape("name must not have the shape of a Windows short name")
     return raw
 
 
 def portable_name_key(name: str) -> str:
     """The key two names share exactly when a case-insensitive, Unicode-normalizing file
-    system (Windows, macOS) may open them as one folder: NFC, then casefolded. Wider than
-    either file system's own folding, never narrower, so a comparison on it errs toward
-    "the same"."""
-    return unicodedata.normalize("NFC", str(name or "")).casefold()
+    system (Windows, macOS) may open them as one folder: NFC, casefolded, NFC again.
+    Casefolding can leave a composable sequence ("ΐ" folds to iota, diaeresis, acute, while
+    "Ϊ́" folds to the precomposed iota with diaeresis and an acute), so the second NFC makes
+    two spellings HFS+ treats as one name share the key. Wider than either file system's
+    own folding, never narrower, so a comparison on it errs toward "the same"."""
+    return unicodedata.normalize(
+        "NFC", unicodedata.normalize("NFC", str(name or "")).casefold())
 
 
 def walk_without_links(root, skip=(), *, onerror=None):

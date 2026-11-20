@@ -1205,13 +1205,13 @@ class AccountDirectoryIndex:
     ``rows`` in the resolver's order; ``by_scope`` keyed on the scope lower-cased (the UUID
     column compares without case) and ``by_name`` on the name casefolded, each to the rows
     that carry it, in the same order; ``first_by_name`` gives the first row under each exact
-    name; ``scopes_by_key`` maps a name's
-    ``path_jail.portable_name_key`` (NFC, casefolded: one folder on Windows and macOS) to
-    the distinct scopes, lower-cased, that carry it, so a twin check is one lookup however
-    many rows share the name. Everything is read-only, so a caller cannot change
-    what the next lookup in the same block sees. Built once per block: a listing asks it
-    once per task, and a scan of the whole directory per lookup made a listing quadratic
-    (measured: 10,000 accounts and 3,000 lookups, 4.6 s).
+    name; ``scopes_by_key`` maps a name's ``path_jail.portable_name_key`` (NFC, casefolded,
+    NFC again: one folder on Windows and macOS) to the distinct scopes, lower-cased, that
+    carry it, so a twin check is one lookup however many rows share the name. Everything
+    is read-only, so a caller cannot change what the next lookup in the same block sees.
+    Built once per block: a listing asks it once per task, and a scan of the whole
+    directory per lookup made a listing quadratic (measured: 10,000 accounts and 3,000
+    lookups, 4.6 s).
     """
 
     __slots__ = ("rows", "by_scope", "by_name", "first_by_name", "scopes_by_key")

@@ -2621,10 +2621,13 @@ account's time zone) and a thinking run. A scope the directory does not list get
 synthetic name of its own, `scope_` and the first eight hex digits, and so does a scope
 whose name another account could have: a name that does not open only itself on Linux,
 Windows and macOS (a separator, a trailing dot, a decomposed accent, a zero-width or other
-format character, a Windows device name such as `CON`), that is "admin" or the machine
+format character, a Windows device name such as `CON`, the shape of a Windows 8.3 short
+name such as `ALEXAN~1`, more than 255 UTF-8 bytes), that is "admin" or the machine
 owner's name (any case or Unicode form), that starts with `scope_`, or that more than one
 scope carries (compared casefolded and in one Unicode form). The name becomes the per-user
-folder, so two scopes never get one folder. If asking your backend is expensive,
+folder, so two scopes never get one folder. That check (`vaf.core.path_jail.portable_entry_name`)
+is not on the facade: its one caller is this lookup, so there is nothing for you to call;
+VAF's own account store is the second user it is waiting for. If asking your backend is expensive,
 or it can be down, cache or remember that inside your resolver, as VAF's own does for
 its auth store (30 seconds after a failed connect).
 

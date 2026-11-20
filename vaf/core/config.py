@@ -2661,13 +2661,13 @@ def account_name_for_scope(user_scope_id: Optional[str]) -> Optional[str]:
     directory row is taken only when ALL of these hold, and None answers otherwise:
     - it is one entry name that opens only itself on Linux, Windows and macOS
       (`path_jail.portable_entry_name`: no separator, not `.` or `..`, no trailing dot, no
-      control or format character, composed Unicode, no Windows device name), unchanged
-      by that check;
+      control or format character, composed Unicode, no Windows device name or 8.3
+      short-name shape, at most 255 UTF-8 bytes), unchanged by that check;
     - it is not the local admin's (`is_local_admin_name`: the literal "admin" or the
       owner's name, casefolded; and not the owner's name by `portable_name_key`), and does
       not carry the synthetic names' `scope_` prefix;
     - exactly one scope in the directory carries it, compared by `portable_name_key` (NFC,
-      casefolded), and that scope is this one: two scopes never get names that one of
+      casefolded, NFC again), and that scope is this one: two scopes never get names that one of
       those file systems opens as one folder.
     VAF's auth store keeps names unique only by `lower()`, so for its own accounts these
     decide its odd rows; a directory an embedder registers is bound by none of it. The

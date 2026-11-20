@@ -3255,10 +3255,21 @@ vaf automation delete <id>   # Delete task
             except Exception as e:
                 # One job never stops the others: it gives up this slot like a skip.
                 self._log_scheduler_event(f"CLOCK_JOB_FAILED task_id={task_id} error={e!r}")
+                failed = None
                 with self._clock_lock:
                     # Still due: not claimed yet, so its slot is not taken twice.
                     if self._clock_jobs.get(task_id) is job and job.due <= now:
-                        self._claim(job, task_id, now)
+                        try:
+                            self._claim(job, task_id, now)
+                        except Exception as again:
+                            # Its next slot cannot be found either: the job ends (fails
+                            # closed) rather than stay due and fail on every tick, ahead of
+                            # every job due after it. A refresh or restart arms it again.
+                            del self._clock_jobs[task_id]
+                            failed = again
+                if failed is not None:
+                    self._log_scheduler_event(
+                        f"CLOCK_DROPPED task_id={task_id} reason='no next slot' error={failed!r}")
 
     def _claim(self, job: _ClockJob, task_id: Any, now: datetime) -> None:
         """Take a due job's slot: record the claim, then set its next slot, or end the job

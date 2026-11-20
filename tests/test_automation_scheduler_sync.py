@@ -448,6 +448,32 @@ def test_one_job_that_raises_does_not_stop_the_others(store, monkeypatch):
         stop.set()
 
 
+def test_a_job_with_no_next_slot_is_disarmed_and_the_others_run(store, monkeypatch):
+    """A job whose next slot cannot be computed fails in its claim, and again when the
+    failure is handled: it is disarmed (fails closed) instead of staying due and failing on
+    every tick ahead of the jobs due after it, and the other account's task still runs.
+    MUTATION: handle the failed job with a second claim outside a try."""
+    real = AutomationTask.calculate_next_run
+
+    def next_run(self, after=None):
+        if after is not None and self.id == CLOCK_ID:
+            raise OverflowError("no next slot")
+        return real(self, after=after)
+
+    sched, stop = _armed_scheduler(monkeypatch)
+    try:
+        due = sched._clock_jobs[CLOCK_ID].due
+        sched._clock_jobs[OTHER_ID].due = due + timedelta(seconds=1)  # handled after it
+        monkeypatch.setattr(AutomationTask, "calculate_next_run", next_run)
+        sched._run_due_clock_jobs(now=due + timedelta(seconds=5))
+        assert sched.ran == [OTHER_ID]
+        assert CLOCK_ID not in sched._clock_jobs
+        assert any(m.startswith(f"CLOCK_DROPPED task_id={CLOCK_ID} reason='no next slot'")
+                   for m in store["logs"]), store["logs"]
+    finally:
+        stop.set()
+
+
 def test_a_path_that_cannot_be_built_skips_one_slot(store, monkeypatch):
     """The verdict answers skip when even the task's path cannot be built, as for a record
     it cannot read. MUTATION: build the path before the verdict's try."""

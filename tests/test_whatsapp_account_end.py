@@ -625,3 +625,12 @@ def test_a_directory_that_answers_nothing_keeps_the_login(world, protected, capl
     assert (protected["alice"] / "creds.json").is_file()
     assert wa._connection_status.get("bobby") is True, "state no scope is recorded for is kept too"
     assert any("could not be read" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize("name", ["..", "admin/", "./alice"])
+def test_remove_login_itself_refuses_a_path_shaped_name(world, protected, name):
+    """Every caller asks first, and `remove_login` asks again: a new caller cannot skip it.
+    MUTATION: drop the check in `remove_login` - red."""
+    from vaf.core.whatsapp_auth import remove_login
+    assert remove_login(name, avatars=True) is False
+    assert all((v / "creds.json").is_file() for v in protected.values())

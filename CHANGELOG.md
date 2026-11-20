@@ -87,12 +87,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
-- **Automations: a restored automation runs again right away, and a deleted one stops.** An
+- **Automations: a restored automation is scheduled again right away, and a deleted one stops.** An
   automation brought back from the trash only ran again after VAF restarted or another
   automation was created or changed, and one deleted in the app or by the agent, or deleted or
   switched off in the terminal while the app ran, still ran at its next time, every day, until
   then. A restore now schedules it at once, and an automation runs only while it is still saved
-  and switched on.
+  and switched on. An automation that was due in the same half minute as another automation
+  was created, changed or restored no longer moves to its next time without running.
 - **Automations: the list no longer waits on an account store that cannot be reached.** The
   account behind each automation (its time zone decides the next run) is now read once per
   listing from the account directory, and a store that could not be reached is not asked again

@@ -338,6 +338,19 @@ class AutomationTask:
         return next_time
 
 
+def _same_clock_rule(old: AutomationTask, new: AutomationTask) -> bool:
+    """Whether two copies of a task fire at the same slots: the same task (its incarnation)
+    with the same schedule fields and owner (whose time zone the slots are counted in)."""
+    return all(getattr(old, name) == getattr(new, name)
+               for name in ("incarnation", "user_scope_id", "frequency", "time", "weekday", "day"))
+
+
+# The frequencies the clock arms (`_schedule_task`) and runs (`_clock_record_verdict`): one
+# set, so a record whose frequency the arming refuses is never run from an older copy either.
+_CLOCK_FREQUENCIES = (Frequency.HOURLY, Frequency.DAILY, Frequency.WEEKLY,
+                      Frequency.MONTHLY, Frequency.ONCE)
+
+
 @dataclass
 class _ClockJob:
     """A clock task the running scheduler has armed: when it is due next (naive server-local,
@@ -3058,8 +3071,7 @@ vaf automation delete <id>   # Delete task
             )
             return
 
-        if task.frequency not in (Frequency.HOURLY, Frequency.DAILY, Frequency.WEEKLY,
-                                  Frequency.MONTHLY, Frequency.ONCE):
+        if task.frequency not in _CLOCK_FREQUENCIES:
             self._log_scheduler_event(
                 f"REGISTER_SKIPPED task_id={task.id} name={task.name!r} reason='unsupported frequency {task.frequency}'"
             )
@@ -3100,9 +3112,38 @@ vaf automation delete <id>   # Delete task
             f"next={due:%Y-%m-%d %H:%M}"
         )
 
-    def _clock_record_verdict(self, task: AutomationTask) -> Tuple[str, str]:
+    def _pending_clock_jobs(self) -> Dict[str, _ClockJob]:
+        """The armed jobs whose slot has come but that the tick has not reached yet (it
+        comes every 30 seconds)."""
+        now = datetime.now()
+        with self._clock_lock:
+            return {task_id: job for task_id, job in self._clock_jobs.items() if job.due <= now}
+
+    def _keep_pending_slots(self, pending: Dict[str, _ClockJob]) -> None:
+        """After a refresh re-armed every task from disk: give a pending slot back to each
+        task whose record still has the same incarnation and the same clock rule.
+
+        A refresh arms every task at its next run counted from now, and every create, update
+        and restore of ANY task refreshes. Measured before this: a daily task due seconds
+        before another account's task was updated, created or restored, and not yet reached
+        by the tick, was moved to the next day and did not run that day. A task whose rule
+        changed is armed by its new rule, and one that is gone or switched off stays
+        unarmed (only a job the refresh armed again gets its slot back)."""
+        kept = []
+        with self._clock_lock:
+            for task_id, old in pending.items():
+                job = self._clock_jobs.get(task_id)
+                if job is not None and _same_clock_rule(old.task, job.task) and old.due < job.due:
+                    job.due = old.due
+                    kept.append(task_id)
+        for task_id in kept:
+            self._log_scheduler_event(f"KEPT_DUE task_id={task_id} reason='slot pending at refresh'")
+
+    def _clock_record_verdict(self, task: AutomationTask
+                              ) -> Tuple[str, str, Optional[AutomationTask]]:
         """Whether a due clock job may run, judged against the task's record on disk now:
-        ("run", ""), ("drop", reason) or ("skip", reason).
+        ("run", "", the task as it is on disk), ("drop", reason, None) or
+        ("skip", reason, None).
 
         The scheduler holds its own copy of every task, and every lane deletes, moves to the
         trash or switches off through a manager of its own (another process too: the
@@ -3111,59 +3152,72 @@ vaf automation delete <id>   # Delete task
         next time, and was armed again for the day after, until a refresh or restart.
 
         - drop: the file is gone or names another task, the id now names a task created anew
-          (another `incarnation`), the task is switched off, or it is no longer a clock task;
+          (another `incarnation`), the task is switched off, or it is no longer a clock task
+          (an event task, or a frequency `_schedule_task` does not arm);
         - skip: the file is there but cannot be read as a record (a manual edit half
-          written), so this one slot is not run and the task is not taken for deleted.
+          written), so this one slot is not run and the task is not taken for deleted;
+        - run: the task to run is the record on disk (its scope from where it lives, as the
+          trigger lane's run has it), not the scheduler's older copy.
 
         Read without the store lock: every write is a temp file put in place, so a read sees a
-        whole record. The run itself still gets the scheduler's copy (a prompt or time edited
-        in another process arrives at the next refresh)."""
+        whole record."""
+        path = self._path_for_task(task)
         try:
-            record = _read_task_record(self._path_for_task(task), strict=True)
+            record = _read_task_record(path, strict=True)
             if record is None or str(record.get("id")).strip() != str(task.id):
-                return "drop", "task gone"
+                return "drop", "task gone", None
             if _incarnation(record.get("incarnation")) != task.incarnation:
-                return "drop", "created anew"
-            current = AutomationTask.from_dict(record)
+                return "drop", "created anew", None
+            current = self._task_from_record(record, task, path)
         except Exception:
-            return "skip", "record unreadable"
+            return "skip", "record unreadable", None
         if not current.enabled:
-            return "drop", "disabled"
-        if current.frequency == Frequency.ON_EVENT:
-            return "drop", "no longer a clock task"
-        return "run", ""
+            return "drop", "disabled", None
+        if current.frequency not in _CLOCK_FREQUENCIES:
+            return "drop", "no longer a clock task", None
+        return "run", "", current
 
     def _run_due_clock_jobs(self, now: Optional[datetime] = None) -> None:
         """Run every armed clock task that is due, then arm it for its next run (a one-time
-        task ends). Called on the scheduler loop's tick; `now` is naive server-local."""
+        task ends). Called on the scheduler loop's tick; `now` is naive server-local.
+
+        A job is claimed before its run starts: under `_clock_lock` it must still be the job
+        registered for its id (a refresh during the tick replaces every job, and the job it
+        put there is the one that counts), and its next slot is set in the same step. So a
+        replaced job never starts a run, and a refresh that comes after the claim sees the
+        slot already taken and cannot hand it out a second time."""
         now = now or datetime.now()
         with self._clock_lock:
             due = [job for job in self._clock_jobs.values() if job.due <= now]
         for job in sorted(due, key=lambda j: j.due):
-            verdict, reason = self._clock_record_verdict(job.task)
-            if verdict == "drop":
-                with self._clock_lock:
-                    if self._clock_jobs.get(job.task.id) is job:
-                        del self._clock_jobs[job.task.id]
-                self._log_scheduler_event(f"CLOCK_DROPPED task_id={job.task.id} reason={reason!r}")
-                continue
-            if verdict == "skip":
-                self._log_scheduler_event(f"CLOCK_SKIPPED task_id={job.task.id} reason={reason!r}")
-            else:
-                try:
-                    self._run_scheduled_task(job.task)
-                except Exception as e:
-                    self._log_scheduler_event(f"RUN_FAILED task_id={job.task.id} error={e!r}")
+            verdict, reason, current = self._clock_record_verdict(job.task)
             with self._clock_lock:
                 if self._clock_jobs.get(job.task.id) is not job:
                     continue  # a refresh re-armed or removed it meanwhile
-                # Counted from the later of the tick and the end of the run: a run that
-                # outlasts its interval skips the missed slot instead of firing at once again.
-                nxt = None if job.once else job.task.calculate_next_run(after=max(now, datetime.now()))
+                if verdict == "run":
+                    # The record on disk is the task from here on: its next slot is counted
+                    # from its own rule, and the next run is its own again.
+                    job.task = current
+                    job.once = current.frequency == Frequency.ONCE
+                if verdict == "drop":
+                    nxt = None
+                else:
+                    # Counted from the tick. The run starts in a thread of its own; a run
+                    # still going when its next slot comes is refused by the task's run lock.
+                    nxt = None if job.once else job.task.calculate_next_run(after=max(now, datetime.now()))
                 if nxt is None:
                     del self._clock_jobs[job.task.id]
                 else:
                     job.due = nxt
+            if verdict == "drop":
+                self._log_scheduler_event(f"CLOCK_DROPPED task_id={job.task.id} reason={reason!r}")
+            elif verdict == "skip":
+                self._log_scheduler_event(f"CLOCK_SKIPPED task_id={job.task.id} reason={reason!r}")
+            else:
+                try:
+                    self._run_scheduled_task(current)
+                except Exception as e:
+                    self._log_scheduler_event(f"RUN_FAILED task_id={job.task.id} error={e!r}")
 
 
 class AutomationAccess:
@@ -3512,11 +3566,13 @@ def refresh_scheduler_from_disk(origin: str = "unknown") -> bool:
 
         from vaf.core.tool_dispatch import account_directory_once
         _scheduler_manager._log_scheduler_event(f"REFRESH_START origin={origin!r}")
+        pending = _scheduler_manager._pending_clock_jobs()
         _scheduler_manager.reload_tasks()
         _scheduler_manager._clear_clock_jobs()
         with account_directory_once():
             for task in _scheduler_manager.list(enabled_only=True):
                 _scheduler_manager._schedule_task(task)
+            _scheduler_manager._keep_pending_slots(pending)
             _scheduler_manager._log_scheduler_event(
                 f"REFRESH_DONE origin={origin!r} task_count={len(_scheduler_manager.list(enabled_only=True))}"
             )

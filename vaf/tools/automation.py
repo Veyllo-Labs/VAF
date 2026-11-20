@@ -13,6 +13,7 @@ from vaf.core.automation import (
     AutomationClarifier,
     AutomationManager,
     AutomationTask,
+    _once_already_ran,
     format_daily_calendar_status,
 )
 
@@ -1402,10 +1403,16 @@ Use this when user wants to recover a previously deleted automation."""
             # it: the root trash holds whatever the global store deleted, whoever it
             # belonged to.
             access = AutomationAccess(kwargs.get("user_scope_id"), kwargs.get("user_role"))
-            manager = next((mgr for mgr, t in access.trash() if t.id == task_id), None)
-            
+            manager, trashed = next(((mgr, t) for mgr, t in access.trash() if t.id == task_id),
+                                    (None, None))
+
             if manager is None:
                 return f"Error: Automation with ID '{task_id}' not found in trash."
+            if _once_already_ran(trashed):
+                # restore_from_trash refuses it too: restored, it would be deleted for good.
+                return (f"Error: '{trashed.name}' ({task_id}) is a one-time automation that has "
+                        f"already run, so it is not restored. Create it again if it should run "
+                        f"once more.")
             
             # Restore from trash
             success = manager.restore_from_trash(task_id)

@@ -200,9 +200,11 @@ class AutomationTask:
         self.enabled = fields["enabled"] if self.enabled is not None else False
         self.incarnation = _incarnation(self.incarnation)
         # Any value a file holds marks the task as consumed (fails closed: a hand-edited or
-        # foreign value never makes a one-time task run again); none, empty or False does not.
-        self.consumed_at = (None if self.consumed_at in (None, "", False)
-                            else str(self.consumed_at))
+        # foreign value never makes a one-time task run again, a 0 included); only none, an
+        # empty text or False does not. Compared by identity: `0 in (None, "", False)` is True.
+        value = self.consumed_at
+        self.consumed_at = (None if value is None or value is False or value == ""
+                            else str(value))
         # A scope names a directory and an account, so it is text or nothing. A number, a
         # list or a bool (a record edited by hand or by another program) made every path of
         # the task raise, and the clock tried it again on every tick. None is "no scope of
@@ -777,17 +779,17 @@ _COMPLETED_STATUSES = frozenset({"ok", "paused"})
 # A failed run's own reason (a provider's failure, an exception) is raw text, so it gets a lead.
 FAILED_LEAD = "Der Lauf ist fehlgeschlagen: "
 # A failed turn that left no text of its own.
-NO_ANSWER_NOTE = "Das Modell hat keine Antwort geliefert. Prüfe die Verbindung zum Anbieter."
+NO_ANSWER_NOTE = "Das Modell hat keine Antwort geliefert. Prüfe das Modell und seine Verbindung."
 
 
 def _next_run_hint(frequency) -> str:
     """What happens after a run that did not complete: a one-time task is used up by it (it is
     never retried), every other task runs again at its next slot or event."""
     if frequency == Frequency.ONCE:
-        return "Diese einmalige Automation ist damit verbraucht."
+        return "Diese einmalige Automation ist damit verbraucht. Lege sie bei Bedarf neu an."
     if frequency == Frequency.ON_EVENT:
-        return "Sie läuft beim nächsten passenden Ereignis wieder."
-    return "Sie läuft zum nächsten Termin wieder."
+        return "Die Automation läuft beim nächsten passenden Ereignis wieder."
+    return "Die Automation läuft zum nächsten Termin wieder."
 
 
 def _failure_text(reason, frequency) -> str:
@@ -807,7 +809,8 @@ def _timeout_note(name, frequency, limit_seconds) -> str:
         f"Zeitlimit und {int(_TIMEOUT_GRACE_SECONDS)} s Nachfrist noch nicht fertig. Es gibt "
         f"kein Teilergebnis. Der Lauf kann im Hintergrund noch weiterarbeiten, aber was er dann "
         f"noch tut, wird nicht gemeldet. Kürze den Auftrag oder erhöhe das Zeitlimit "
-        f"(automation_run_timeout_seconds).\n\n{_next_run_hint(frequency)}"
+        f"(Einstellung automation_run_timeout_seconds, nur für Admins).\n\n"
+        f"{_next_run_hint(frequency)}"
     )
 
 
@@ -2157,6 +2160,25 @@ vaf automation delete <id>   # Delete task
             return False
         return self._delete(task, permanent=permanent)
 
+    def _once_spent_on_disk(self, task: AutomationTask) -> bool:
+        """Whether `task` is a one-time task that has fired already (`_once_already_ran`), by
+        its record as it is on disk now when that record is still this task's (same id and
+        `incarnation`), and by the captured copy otherwise. Never raises: an unreadable record
+        leaves the copy's answer."""
+        if task.frequency != Frequency.ONCE:
+            return False
+        if _once_already_ran(task):
+            return True
+        try:
+            record = _read_task_record(self._path_for_task(task))
+            if (record is None or str(record.get("id")).strip() != str(task.id)
+                    or _incarnation(record.get("incarnation")) != task.incarnation):
+                return False
+            current = AutomationTask.from_dict(record)
+        except Exception:
+            return False
+        return bool(current.last_run or current.last_completed_local_date or current.consumed_at)
+
     def _mark_once_consumed(self, task: AutomationTask) -> Optional[AutomationTask]:
         """Write `consumed_at` onto the record of the one-time task whose run starts, and only
         that task's (`same_incarnation`), under the store lock (`_mutate_record`); the captured
@@ -2243,7 +2265,9 @@ vaf automation delete <id>   # Delete task
         return self.delete(task_id, permanent=False)
     
     def restore_from_trash(self, task_id: str) -> bool:
-        """Restore a task from trash."""
+        """Restore a task from trash. False, with the task left in the trash, when there is none,
+        a live task holds the id, or it is a one-time task that has already run
+        (`_once_already_ran`)."""
         trash_path = self.trash_dir / f"{task_id}.json"
         if not trash_path.exists():
             return False
@@ -2253,7 +2277,14 @@ vaf automation delete <id>   # Delete task
             with open(trash_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             task = AutomationTask.from_dict(data)
-            
+            if _once_already_ran(task):
+                # A one-time task that fired (moved to the trash while its run went, so the
+                # trash copy carries its mark): restored, the scheduler would delete it at once
+                # and for good, and the restore would have reported a task that is gone.
+                append_domain_log("backend", f"[AUTOMATION] {task_id} not restored: a one-time "
+                                             f"automation that has already run stays in the trash")
+                return False
+
             # Move back to storage (user scope dir if task has user_scope_id)
             filepath = self._path_for_task(task)
             filepath.parent.mkdir(parents=True, exist_ok=True)
@@ -2452,6 +2483,17 @@ vaf automation delete <id>   # Delete task
         lock_id = f"automation_{task.id}"
         if not LockManager.acquire(lock_id):
             msg = f"[LOCK] Automation '{task.name}' ({task.id}) is already running. Skipping."
+            append_domain_log_always("backend", msg)
+            return msg
+        # einmalig = einmalig, also for a run started by hand (`vaf automation run`, the agent's
+        # immediate run): a one-time task that has fired already, as its record says NOW (its
+        # run may have marked it since this copy was loaded, and its removal may have failed),
+        # does not run again. Asked under the run lock, so a run going at this moment has
+        # either marked it or is refused above.
+        if self._once_spent_on_disk(task):
+            LockManager.release(lock_id)
+            msg = (f"[SKIPPED] Automation '{task.name}' ({task.id}): this one-time automation "
+                   f"has already run.")
             append_domain_log_always("backend", msg)
             return msg
 
@@ -4032,13 +4074,18 @@ def run_automation(
     except Exception as exc:
         ok = False
         console.print(f"\n[red]Automation failed: {escape_markup(exc)}[/red]")
-    completed = ok and bool(outcomes) and outcomes[0].completed
+    # Access taken away after the outcome was decided: the run delivered nothing and answered
+    # with its revoked note, so a completed outcome does not make it a success.
+    from vaf.core.revocation import is_revoked
+    revoked = ok and is_revoked(getattr(task, "user_scope_id", None))
+    completed = ok and not revoked and bool(outcomes) and outcomes[0].completed
     if ok and not completed:
         # The window is held with "the output above is the log", so the reason must be in
         # it: the outcome's text (a failure, the timeout note), or what run_task answered for
-        # a run that never started (skipped, locked, its account's access taken away). The
-        # stream printed above may hold none of it. Plain text, never markup.
-        reason = outcomes[0].text if outcomes else str(returned or "")
+        # a run that never started or delivered nothing (skipped, locked, already run, its
+        # account's access taken away). The stream printed above may hold none of it. Plain
+        # text, never markup.
+        reason = outcomes[0].text if (outcomes and not revoked) else str(returned or "")
         console.print("\n")
         console.print(reason, style="red", markup=False, emoji=False)
     console.print("\n")

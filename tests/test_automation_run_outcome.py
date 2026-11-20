@@ -36,10 +36,10 @@ ANSWERED_TWICE = TurnStatus(rounds=(TurnRound(1, (), True), TurnRound(2, (), Tru
 TOOL_ROUND = TurnStatus(rounds=(TurnRound(1, ("call-1",), False),))
 
 # What the person reads, written out here and not taken from the module, so the wording is pinned.
-NEXT = {"daily": "Sie läuft zum nächsten Termin wieder.",
-        "once": "Diese einmalige Automation ist damit verbraucht.",
-        "on_event": "Sie läuft beim nächsten passenden Ereignis wieder."}
-NO_ANSWER = "Das Modell hat keine Antwort geliefert. Prüfe die Verbindung zum Anbieter."
+NEXT = {"daily": "Die Automation läuft zum nächsten Termin wieder.",
+        "once": "Diese einmalige Automation ist damit verbraucht. Lege sie bei Bedarf neu an.",
+        "on_event": "Die Automation läuft beim nächsten passenden Ereignis wieder."}
+NO_ANSWER = "Das Modell hat keine Antwort geliefert. Prüfe das Modell und seine Verbindung."
 
 
 def _failed(reason, frequency="daily"):
@@ -107,7 +107,7 @@ def _assert_not_done(env, frequency):
     assert _log(env) == ["error"]
 
 
-def _prompt_agent(env, *, returns=None, chunks=(), turn=TurnStatus(), raises=None):
+def _prompt_agent(env, *, returns=None, chunks=(), turn=TurnStatus(), raises=None, during=None):
     """Installs a stub `Agent` for the prompt lane; returns its call record."""
     import vaf.core.agent as agent_mod
     seen = {"calls": 0, "shutdowns": 0}
@@ -135,6 +135,8 @@ def _prompt_agent(env, *, returns=None, chunks=(), turn=TurnStatus(), raises=Non
 
         def chat_step(self, prompt, stream_callback=None, **k):
             seen["calls"] += 1
+            if during is not None:
+                during()
             self.history.append({"role": "user", "content": prompt})
             for chunk in chunks:
                 if stream_callback:
@@ -253,7 +255,8 @@ def test_timed_out_prompt_is_not_done(env, frequency):
         "Zeitlimit überschritten: Die Automation 'report' war nach 600 s Zeitlimit und 300 s "
         "Nachfrist noch nicht fertig. Es gibt kein Teilergebnis. Der Lauf kann im Hintergrund "
         "noch weiterarbeiten, aber was er dann noch tut, wird nicht gemeldet. Kürze den Auftrag "
-        f"oder erhöhe das Zeitlimit (automation_run_timeout_seconds).\n\n{NEXT[frequency]}")
+        "oder erhöhe das Zeitlimit (Einstellung automation_run_timeout_seconds, nur für Admins)."
+        f"\n\n{NEXT[frequency]}")
     assert "meldet er sich selbst" not in text and not text.startswith("Error:")
     assert "Half a sent" not in text, "a partial stream was delivered"
     assert list(env.out.iterdir()) == []
@@ -437,6 +440,33 @@ def test_cli_run_holds_the_window_on_failure(monkeypatch, status, success):
         assert shown in result.output, result.output
 
 
+def test_cli_run_is_no_success_when_access_was_taken_away_after_the_outcome(monkeypatch):
+    """The outcome was decided `ok`, then access was taken away and the run delivered nothing:
+    the window is held with the revoked note. MUTATION: drop the revocation check in the CLI."""
+    from typer.testing import CliRunner
+    import vaf.cli.autoclose as autoclose
+    import vaf.core.revocation as revocation
+
+    revoked = {"now": False}
+    monkeypatch.setattr(revocation, "is_revoked", lambda scope: revoked["now"])
+    task = SimpleNamespace(id=TID, name="report", user_scope_id="ab12cd34-0000-4000-8000-0000000000b1")
+    note = "[REVOKED] Automation 'report' (0c0e0001) stopped: nothing is delivered."
+
+    def run_task(t, callback=None, new_terminal=True, trigger=None, *, on_outcome=None):
+        on_outcome(RunOutcome("ok", "Fertig."))
+        revoked["now"] = True
+        return note
+
+    finished = []
+    monkeypatch.setattr(automation, "get_manager",
+                        lambda: SimpleNamespace(get=lambda tid: task, run_task=run_task))
+    monkeypatch.setattr(autoclose, "finish_terminal", lambda **k: finished.append(k))
+    result = CliRunner().invoke(automation.automation_app, ["run", TID])
+    assert result.exception is None, result.output
+    assert finished == [{"success": False}]
+    assert note in result.output and "Fertig." not in result.output.split("Running", 1)[1]
+
+
 def test_run_task_hands_its_outcome_to_the_caller_once(env):
     """The real run_task calls `on_outcome` once with the decided outcome, after the run log, and
     a callback that raises does not cost the delivery; a run that never started has none.
@@ -480,6 +510,24 @@ def test_a_delegation_acknowledgement_is_cleaned(env, returns, shown):
     assert "secret plan" not in _pushed(env)[0][1]
 
 
+@pytest.mark.parametrize("answer, turn, status", [
+    pytest.param("[ASYNC_ACK]<think>secret plan</think>Le helper travaille.", TOOL_ROUND, "ok",
+                 id="ack"),
+    pytest.param("Antwort.<think>secret plan</think>", ANSWERED_TWICE, "ok", id="answered"),
+    pytest.param("[Error] <think>secret plan</think>", FAILED_TURN, "failed", id="failed"),
+])
+def test_a_cleaner_that_raises_leaves_no_text(answer, turn, status):
+    """Never the uncleaned copy. MUTATION: return the text when the cleaner raises."""
+    def boom(text):
+        raise RuntimeError("cleaner failed")
+
+    outcome = _prompt_outcome(answer, turn, lambda: "", timed_out=False, frequency="daily",
+                              clean=boom)
+    assert outcome.status == status and "secret plan" not in outcome.text
+    if status == "failed":
+        assert outcome.text == _failed("")
+
+
 # ── a one-time task fires once, whatever its outcome ─────────────────────────
 
 def test_a_failed_one_time_run_is_never_run_again(env):
@@ -512,11 +560,101 @@ def test_a_failed_one_time_run_is_never_run_again(env):
 
 
 def test_the_mark_of_consumption_is_coerced_at_the_boundary():
-    """Any value a file holds marks the task as consumed (fails closed); none does not."""
-    for value in ("2026-11-20T06:00:00", 1, True, "x"):
+    """Any value a file holds marks the task as consumed (fails closed), a 0 included; none,
+    an empty text or False does not. MUTATION: compare by equality (`0 == False`)."""
+    for value in ("2026-11-20T06:00:00", 1, True, "x", 0, 0.0, "0", []):
         assert AutomationTask(frequency="once", consumed_at=value).consumed_at
     for value in (None, "", False):
         assert AutomationTask(frequency="once", consumed_at=value).consumed_at is None
+
+
+def test_the_mark_is_on_disk_before_the_run_executes(env):
+    """A run killed mid-turn (a crash, a restart) must already have marked its one-time task.
+    MUTATION: write the mark after the run."""
+    marks = []
+    _prompt_agent(env, returns="Fertig.", turn=ANSWERED_TWICE,
+                  during=lambda: marks.append((_record(env) or {}).get("consumed_at")))
+    manager, task = _task(env, "once")
+    manager.run_task(task, new_terminal=False)
+    assert len(marks) == 1 and marks[0], "the turn started on an unmarked one-time task"
+
+
+def test_the_mark_lands_only_on_the_task_that_fired(env):
+    """A task created anew under the id (a retried approval) has not run: the old run's mark
+    must not make the scheduler delete it unrun. MUTATION: drop `same_incarnation=True`."""
+    manager, old = _task(env, "once")
+    assert manager.delete(TID, permanent=True)
+    AutomationManager(storage_dir=str(env.store)).create(AutomationTask(
+        id=TID, name="report again", prompt="Write it.", frequency="once", time="06:00"))
+    assert manager._mark_once_consumed(old) is None
+    assert _record(env)["name"] == "report again" and _record(env).get("consumed_at") is None
+
+
+def test_a_mark_that_cannot_be_written_does_not_stop_the_run(env):
+    """MUTATION: let `_mark_once_consumed` raise instead of logging."""
+    seen = _prompt_agent(env, returns="Fertig.", turn=ANSWERED_TWICE)
+    manager, task = _task(env, "once")
+
+    def broken(self, *a, **k):
+        raise OSError("store not writable")
+
+    env.monkeypatch.setattr(AutomationManager, "_mutate_record", broken)
+    out = manager.run_task(task, new_terminal=False)
+    assert seen["calls"] == 1 and out == "Fertig."
+    assert _pushed(env) == [("success", "Fertig.")]
+
+
+@pytest.mark.parametrize("status", ["unconsumed", "consumed"])
+def test_a_manual_run_of_a_consumed_one_time_task_is_refused(env, status):
+    """`vaf automation run` loads the record again; one whose removal failed after its run
+    carries the mark and must not run a second time. MUTATION: drop the check under the lock."""
+    from typer.testing import CliRunner
+    import vaf.cli.autoclose as autoclose
+
+    seen = _prompt_agent(env, returns="Fertig.", turn=ANSWERED_TWICE)
+    manager, task = _task(env, "once")
+    if status == "consumed":
+        manager._mark_once_consumed(task)
+    finished = []
+    env.monkeypatch.setattr(automation, "get_manager",
+                            lambda: AutomationManager(storage_dir=str(env.store)))
+    env.monkeypatch.setattr(autoclose, "finish_terminal", lambda **k: finished.append(k))
+    result = CliRunner().invoke(automation.automation_app, ["run", TID])
+    assert result.exception is None, result.output
+    if status == "consumed":
+        assert seen["calls"] == 0, "a consumed one-time task ran again"
+        assert finished == [{"success": False}] and _pushed(env) == []
+        assert "this one-time automation has already run" in " ".join(result.output.split())
+    else:
+        assert seen["calls"] == 1 and finished == [{"success": True}]
+
+
+def test_a_consumed_one_time_task_is_not_restored(env, monkeypatch):
+    """Moved to the trash while its run went, it carries the mark; restored, the scheduler would
+    delete it for good while the restore reported it active. MUTATION: drop the check in
+    `restore_from_trash`; separately, in the tool."""
+    from vaf.tools.automation import RestoreAutomationTool
+
+    manager, task = _task(env, "once")
+    manager._mark_once_consumed(task)
+    assert manager.delete(TID)                                   # into the trash
+    assert manager.restore_from_trash(TID) is False
+    assert (manager.trash_dir / f"{TID}.json").exists() and _record(env) is None
+
+    trashed = AutomationTask.from_dict(
+        json.loads((manager.trash_dir / f"{TID}.json").read_text(encoding="utf-8")))
+
+    class _Access:                     # the caller's trash: this one task
+        def __init__(self, *a, **k):
+            pass
+
+        def trash(self):
+            return [(manager, trashed)]
+
+    monkeypatch.setattr("vaf.tools.automation.AutomationAccess", _Access)
+    answer = RestoreAutomationTool().run(task_id=TID)
+    assert answer.startswith("Error:") and "already run" in answer, answer
+    assert (manager.trash_dir / f"{TID}.json").exists()
 
 
 # ── access taken away while the caller's callback ran ────────────────────────
@@ -718,6 +856,10 @@ class _Cleaner:
 CLEAN = _Cleaner()
 
 
+def _raising_cleaner(text):
+    raise RuntimeError("cleaner failed")
+
+
 def _reference(answer, turn, timed_out, frequency):
     """The rule, written apart from the code: timeout first, then a failed turn or a
     `[SYSTEM_LOG_ONLY]` head is failed, everything else ok. The text after a control head is
@@ -763,4 +905,10 @@ def test_prompt_outcome_fuzz():
             assert CLEAN(outcome.text) == outcome.text, (n, answer, outcome.text)
         for secret in ("geheimer Plan", "Übersetze", '"web_search"'):
             assert secret not in outcome.text, (n, answer, outcome.text)
+        # I7: a cleaner that raises lets none of it through either.
+        raised = _prompt_outcome(answer, turn, stream, timed_out=timed_out, timeout_note="NOTE",
+                                 frequency=frequency, clean=_raising_cleaner)
+        assert raised.status == outcome.status, (n, answer)
+        for secret in ("geheimer Plan", "Übersetze", '"web_search"', "<think>"):
+            assert secret not in raised.text, (n, answer, raised.text)
     assert mismatches == [], mismatches[:5]

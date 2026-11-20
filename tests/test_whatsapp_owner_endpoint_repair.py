@@ -648,8 +648,10 @@ def test_the_local_admins_note_leaves_through_her_own_process(world, monkeypatch
     ordinary account named "admin", both WhatsApp processes running. The lane is the local
     admin's under her own scope and name (`messenger_lane_identity`), so the note goes from her
     own process to her own registered number, whatever Inbound says, and the other account's
-    process writes nothing. MUTATION: drop the conversion in `send_to_main_messenger` -> the
-    note goes through the other account's process -> red."""
+    process writes nothing. The conversion is layered (`send_to_main_messenger`, the reader,
+    both bridge entries and the sender loop each apply it), so dropping one alone stays green
+    here; tests/test_whatsapp_scopeless_lane.py pins each layer. MUTATION: drop every
+    conversion -> the note goes through the other account's process -> red."""
     from vaf.api import whatsapp_bridge as wa
     from vaf.core import whatsapp_reply
     from vaf.core.channel_ingress_policy import set_front_office

@@ -960,6 +960,11 @@ class Config:
     # race between processes (precedent: vaf/core/secure_store.py).
 
     _filelock = None  # lazy singleton; filelock is reentrant per (instance, thread)
+    # Guards the singleton's creation. Two first users at once each made a FileLock and the
+    # later assignment replaced the earlier, so the thread holding the first one blocked on
+    # its own flock in a nested _locked() (Config.save) until the timeout, and both went on
+    # unlocked (measured: 10 s waits, then a lost update; tests/test_config_lock_first_use.py).
+    _filelock_init = threading.Lock()
 
     @classmethod
     @contextmanager
@@ -970,9 +975,11 @@ class Config:
         lk = None
         try:
             if cls._filelock is None:
-                from filelock import FileLock
-                cls.APP_DIR.mkdir(parents=True, exist_ok=True)
-                cls._filelock = FileLock(str(cls.CONFIG_FILE) + ".lock")
+                with cls._filelock_init:
+                    if cls._filelock is None:
+                        from filelock import FileLock
+                        cls.APP_DIR.mkdir(parents=True, exist_ok=True)
+                        cls._filelock = FileLock(str(cls.CONFIG_FILE) + ".lock")
             lk = cls._filelock
             lk.acquire(timeout=10)
         except Exception:

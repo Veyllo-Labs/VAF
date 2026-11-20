@@ -294,9 +294,16 @@ the caller's own process for anybody else:
   the local admin) stops nothing of that account's, and its restart stops nothing at all
   unless it could start again (`restart_account` checks first). A process that survives the
   kill stays registered and the stop answers 500, so no second Node starts on its login; the
-  same holds at the whole bridge's shutdown, whose survivors stay registered for the next
-  start. A whole restart waits for the shutdown (both waits of every process, plus a margin)
-  and answers failure (500) when it overruns, instead of a success that started nothing. A
+  same holds at the whole bridge's shutdown, whose survivors stay registered. A survivor's
+  readers stop at the next line they see, without acting on it, no lane sends through it, and
+  a start of that account answers 500 "The previous WhatsApp process of this account has not
+  ended yet" until it has ended; so does a start under a name whose live process was started
+  for another scope (an account that reuses a deleted account's name). A send while no bridge
+  runs answers at once that the bridge is not running. A whole restart waits for the shutdown
+  (both waits of every process still registered or still being terminated, plus a margin) and
+  answers failure (500, "The old WhatsApp process did not stop in time; try again.") when it
+  overruns, instead of a success that started nothing. If the bridge thread itself fails, every
+  start waiting on it is answered and cleared, so the next start brings that account up. A
   Stop that arrives while a start that brought the bridge up still waits for its spawn cancels
   that spawn, and such a start answers only once its own spawn happened or failed.
 
@@ -306,7 +313,7 @@ so a newly linked account's process came up only with a restart of everybody's. 
 every stop runs under one lock (`_spawn_lock`), the bridge's shutdown included, so one account
 never gets two Node processes on one login, and no process outlives the bridge unless it
 survives the kill too (it then stays registered, so nothing starts next to it; after the
-bridge's shutdown it is not read until it ends). Pinned by
+bridge's shutdown nothing it writes is acted on and its account cannot start until it ends). Pinned by
 `tests/test_whatsapp_account_process.py` (with a seeded fuzz of the lifecycle) and the
 `PROCESS_RULES` table in `tests/test_channel_route_write_rights.py`.
 

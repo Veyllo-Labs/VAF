@@ -419,7 +419,8 @@ def _withheld(exc) -> str:
         status = getattr(response, "status_code", None) if response is not None else None
     except Exception:
         status = None
-    if type(status) is int:
+    # Three digits, as HTTP has them: an int of more than 4300 digits does not even format.
+    if type(status) is int and 100 <= status <= 999:
         return f"{name} (HTTP {status})"
     return f"{name} (details in the server log)"
 
@@ -463,11 +464,12 @@ def describe_error(exc: BaseException, *, log: bool = True) -> str:
 
     The withheld text is ``"<ClassName> (details in the server log)"``, or
     ``"<ClassName> (HTTP <code>)"`` when the error carries a ``response`` with an integer
-    ``status_code`` (``requests``' and ``huggingface_hub``'s HTTP errors are OSErrors): a
-    refused login, a gated download and a missing file stay told apart without the URL. With
-    ``log`` true the full ``str(exc)`` (its first `_LOGGED_CHARS` characters) goes to this
-    module's logger at WARNING, so the detail stays on the server. ``log=False`` is for a
-    caller that logs the exception itself. Nothing is logged when nothing was withheld.
+    ``status_code`` from 100 to 999 (``requests``' and ``huggingface_hub``'s HTTP errors are
+    OSErrors): a refused login, a gated download and a missing file stay told apart without
+    the URL. With ``log`` true the full ``str(exc)`` (its first `_LOGGED_CHARS` characters)
+    goes to this module's logger at WARNING, so the detail stays on the server.
+    ``log=False`` is for a caller that logs the exception itself. Nothing is logged when
+    nothing was withheld.
 
     Never raises an `Exception`, whatever the exception class does: a ``str()`` that raises
     or returns a ``str`` subclass, a class whose ``__name__`` raises, a logging handler or

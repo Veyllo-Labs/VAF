@@ -249,6 +249,9 @@ def _http_error(status):
     (_http_error(401), "HTTPError (HTTP 401)"),
     (_http_error(True), "HTTPError" + _WITHHELD_SUFFIX),
     (_http_error("401"), "HTTPError" + _WITHHELD_SUFFIX),
+    (_http_error(99), "HTTPError" + _WITHHELD_SUFFIX),
+    (_http_error(1000), "HTTPError" + _WITHHELD_SUFFIX),
+    (_http_error(10 ** 5000), "HTTPError" + _WITHHELD_SUFFIX),
     # (c) a file name without an errno: withheld, a strerror beside it too
     (OSError(None, None, b"/home/user/x"), "OSError" + _WITHHELD_SUFFIX),
     (OSError(None, "cannot read /home/user/x", "/home/user/x"), "OSError" + _WITHHELD_SUFFIX),

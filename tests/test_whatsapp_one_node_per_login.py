@@ -439,12 +439,14 @@ def test_two_starts_at_once_leave_no_orphan(world, monkeypatch):
     ends = []
 
     def end(scope):
+        # Each start finishes ending the old flow, then waits for the other to have done the
+        # same if it can (it cannot while the first holds the account's lock).
+        result = real_end(scope)
         ends.append(1)
-        if len(ends) == 1:      # the first start waits for the second, if the second can enter
-            deadline = time.monotonic() + 0.3
-            while len(ends) < 2 and time.monotonic() < deadline:
-                time.sleep(0.005)
-        return real_end(scope)
+        deadline = time.monotonic() + 0.3
+        while len(ends) < 2 and time.monotonic() < deadline:
+            time.sleep(0.005)
+        return result
     looks = []
 
     def in_use(folder):

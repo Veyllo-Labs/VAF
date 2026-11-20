@@ -373,10 +373,12 @@ the caller's own process for anybody else:
   other replaced, and a start cannot spawn a link Node while a reset removes the login. A
   start or reset that finds the account's transition still running after 2 s (a link Node
   that resists its end) answers 409 "WhatsApp setup is still busy for this account. Try again
-  in a few seconds." instead of waiting. Every spawn, the account's process and the link alike, is refused for an
-  account that was deactivated or deleted meanwhile (`_account_may_start`, asked under the
-  lock the spawn holds), so a start already under way when the revocation landed starts
-  nothing.
+  in a few seconds." instead of waiting. Every spawn, the account's process and the link
+  alike, is refused for an account that was deactivated or deleted meanwhile, so a start
+  already under way when the revocation landed starts nothing: the account's process asks
+  `_account_may_start` (not revoked, still standing) under `_spawn_lock`; the link reads
+  `account_stands` (a store read) before its `_qr_lock`, which `/qr` takes on the event loop,
+  and asks only the in-memory `is_revoked` mark under it.
 - **Cached answers belong to their scope.** The chat list, the LID mappings and the contact
   names the bridge keeps for a lane that gets no fresh answer (the bridge down, or no process
   of the account's own answering) are keyed by the process name and record the scope of the
@@ -390,10 +392,20 @@ the caller's own process for anybody else:
   folder that the kernel resolves to any other account's (`os.path.samefile`, asked of every
   account), and the whole login when the account directory gives no answer to ask it by.
   Measured before: deleting an account named `admin/` removed the owner's login. For admins:
-  do not create account names with `/`, `\`, a trailing dot or a leading `.`; WhatsApp linked
-  under such a name stays in its folder after the account is deleted, and its Re-link answers
-  "This account's name cannot be used as a folder name, so its WhatsApp login cannot be
-  removed here. Ask whoever runs this server to remove it by hand."
+  give every account a name that is one plain folder name on Linux, Windows and macOS
+  (`path_jail.portable_entry_name`). Refused, for example: a `/` or `\`, `.` or `..`, a
+  leading or trailing dot, a trailing space, `con` or `com1` (Windows device names), `a:b`
+  or `a*b` (characters Windows refuses), `a~1` (the shape of a Windows short name), invisible
+  characters such as a zero-width space, a decomposed accent, and more than 255 bytes.
+  WhatsApp linked under such a name stays in its folder after the account is deleted, and its
+  Re-link answers "This account's name cannot be used as a folder name, so its WhatsApp login
+  cannot be removed here. Ask whoever runs this server to remove it by hand." A login is also
+  kept when the account directory answers nothing at deletion: an unreachable account store,
+  or a desktop install whose owner has no account row of its own, where deleting the last
+  ordinary account leaves the directory empty. The admin sees nothing on screen in either
+  case; the server log has a WARNING ("the login of the deleted account ... is kept, the
+  account directory could not be read"). Remove the folder `~/.vaf/users/<name>/whatsapp` by
+  hand, or leave it: it is moved aside when the name is used again.
 - **Named boundary: the Telegram and Discord bridges were not measured.** Each keeps one
   module-level stop (an Event or a flag) and one sender loop, the pattern that let a WhatsApp
   sender loop outlive its run. Neither has a request folder with several consumers, so the

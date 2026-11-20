@@ -585,7 +585,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **WhatsApp: Re-link no longer runs two connections on one login.** Re-link now stops your
   own WhatsApp first and removes nothing while a connection still runs on the login, and
   WhatsApp setup refuses to start while the login is in use, telling you to use Re-link or
-  stop WhatsApp first.
+  stop WhatsApp first. Re-link and setup also answer "still busy, try again in a few
+  seconds" while the previous attempt is still ending, and Re-link refuses for an account
+  whose name cannot be used as a folder name, which an admin then removes by hand.
 - **WhatsApp: the server's log path is shown to admins only.** The settings in the WhatsApp
   window used to show every account the full path of the log on the server.
 - **Error messages no longer show the server's folders.** When the server failed to read or

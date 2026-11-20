@@ -573,3 +573,26 @@ def test_a_busy_account_transition_answers_at_once(world, monkeypatch, route):
     assert elapsed < 2.0, elapsed
     assert res.status_code == 409 and res.json()["detail"] == routes.FLOW_BUSY, res.text
     assert (folder / "creds.json").is_file() and started == []
+
+
+def test_a_revocation_between_the_store_read_and_the_lock_spawns_nothing(world, monkeypatch):
+    """The account still stands when the store is read (before `_qr_lock`); the revocation mark
+    lands right after, and no listener ends the flow (a revocation whose listener did not get
+    to the token yet). Only the in-memory mark asked under the lock refuses the spawn.
+    MUTATION: drop `or revocation.is_revoked(scope)` under the lock - red."""
+    from vaf.core import revocation
+    spawned = _link_world(monkeypatch, lambda: [{"username": "alice", "user_scope_id": ALICE_SCOPE, "active": True}])
+    monkeypatch.setattr(revocation, "_listeners", [])
+
+    def stands_then_revoked(scope):
+        with revocation._lock:
+            revocation._revoked.add(str(scope).strip())
+        return True
+    monkeypatch.setattr(revocation, "account_stands", stands_then_revoked)
+    flow = object()
+    routes._qr_flows[ALICE_SCOPE] = flow
+    try:
+        routes._run_qr_login("alice", ALICE_SCOPE, flow)
+    finally:
+        revocation.restore_account(ALICE_SCOPE)
+    assert spawned == [] and routes._qr_state[ALICE_SCOPE]["error"] == routes.LINK_ACCOUNT_ENDED

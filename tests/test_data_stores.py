@@ -72,6 +72,7 @@ def test_the_rows_are_well_formed():
     ("data", "provider_keys.enc", ds.KEY),
     ("data", "provider_keys.key.json", ds.KEY),
     ("app", "users/alice/whatsapp/creds.json", ds.RECREATABLE),
+    ("app", "users/alice/whatsapp.previous-20261120T101500Z/creds.json", ds.RECREATABLE),
     ("app", "users/alice/soul.md", ds.DATA),
     ("app", "config.json.pre-keyring.bak", ds.NEVER),
     ("projects", "ab12cd34/web_chat-1/notes.md", ds.DATA),

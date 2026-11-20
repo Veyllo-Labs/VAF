@@ -26,6 +26,10 @@ class _Result:
     def scalar_one_or_none(self):
         return self._value
 
+    def scalars(self):
+        values = self._value
+        return type("S", (), {"all": staticmethod(lambda: list(values))})
+
 
 class FakeDb:
     """Just enough session: rows in a list, queries answered from it.
@@ -42,11 +46,14 @@ class FakeDb:
         self._next = None
 
     # user_admin asks exactly two questions: "is there an active admin" and
-    # "is this username taken". They are told apart by the lower() in the
-    # duplicate check - NOT by looking for "role", which appears in every
-    # statement because it is one of the selected columns.
+    # "which names are taken". They are told apart by the shape of the select:
+    # the name list selects the username column alone and has no WHERE - NOT by
+    # looking for "role", which appears in every statement of the whole row.
     async def execute(self, statement, *_a, **_k):
-        if "lower(" in str(statement).lower():
+        sql = str(statement).lower()
+        if "where" not in sql and "role" not in sql:
+            return _Result([r.username for r in self.rows])
+        if "lower(" in sql:
             wanted = (self._next or "").lower()
             return _Result(next((r for r in self.rows
                                  if r.username.lower() == wanted), None))

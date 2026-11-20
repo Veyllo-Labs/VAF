@@ -36,6 +36,17 @@ forced change of an older password. A missing list file logs ERROR once and skip
 check, the length still applies: a packaging error must not block every password change,
 and tests/test_wheel_ships_runtime_assets.py catches the error before a release.
 
+ONE NAME, ONE ACCOUNT. A new name is refused when an existing account's name, "admin" or
+the local admin's name has the same `path_jail.portable_name_key` (NFC, casefolded, NFC
+again): the per-account folder `users/<name>/` and the WhatsApp login inside it are keyed by
+the name, and Windows and macOS open "Straße" and "strasse", or a composed and a decomposed
+"josé", as one folder. Only the first admin may carry "admin" or the owner's name. Before an
+ordinary account exists, a WhatsApp login an earlier account left under its name is moved
+aside (`whatsapp_auth.set_aside_login`): the bridge runs every linked folder whose name
+resolves to an active account. Named boundary: accounts created before this rule keep their
+names and still sign in (login compares `lower()`), twins included; only a NEW name that
+collides with one of them is refused.
+
 THE FIRST-RUN SETUP CODE. While no admin exists, a browser that is not on this
 machine must bring the code `vaf setup code` shows in a terminal on it
 (`first_run_setup_code`, `setup_code_matches`, checked by `create_first_admin`).
@@ -130,16 +141,21 @@ def validate_password(password: str) -> None:
 
 
 async def username_taken(db, username: str) -> bool:
-    """Case-insensitive, always.
+    """Whether an account already has this name, by `path_jail.portable_name_key`: names
+    that differ only in letter case or Unicode form count as the same.
 
-    A case-sensitive check let "Alice" and "alice" coexist while every lookup
-    that matters - login, and `is_local_admin_account` - compares lowercased.
-    Two rows, one of them unreachable.
+    A case-sensitive check let "Alice" and "alice" coexist while every lookup that matters -
+    login, and `is_local_admin_account` - compares lowercased. The `lower()` that replaced it
+    folds ASCII only (SQLite's, and the comparison neither store makes in one Unicode form),
+    so "Straße" next to "strasse", "ſam" next to "sam" and a decomposed "josé" next to the
+    composed one were all accepted, and each pair is one `users/<name>/` folder on Windows
+    or macOS. Compared in Python over every stored name, since neither SQLite nor PostgreSQL
+    computes NFC plus casefold; accounts are counted in tens.
     """
-    result = await db.execute(
-        select(LocalUser).where(func.lower(LocalUser.username) == username.lower())
-    )
-    return result.scalar_one_or_none() is not None
+    from vaf.core.path_jail import portable_name_key
+    key = portable_name_key(username)
+    result = await db.execute(select(LocalUser.username))
+    return any(portable_name_key(name) == key for name in result.scalars().all())
 
 
 async def active_admin(db) -> Optional[LocalUser]:
@@ -158,8 +174,16 @@ async def create_local_user(
     role: str = "user",
     permissions: Optional[Dict[str, Any]] = None,
     requires_2fa_setup: bool = True,
+    first_admin: bool = False,
 ) -> LocalUser:
     """Insert one account. Validation, hashing and the keyring mirror included.
+
+    Any account but the first admin (`first_admin`, only `create_first_admin` passes it) is
+    refused a name `config.is_local_admin_name` holds ("admin" or the owner's name, in any
+    case or Unicode form), and gets a fresh WhatsApp: a login left under its name is moved
+    aside before the row exists, so no bridge start in between resolves the name to the new
+    account while the old login is in place. The first admin keeps its folder: the owner set
+    up again after a lost database is the same person.
 
     The mirror runs AFTER the commit, which is a deliberate change from the
     order bootstrap used. Mirroring first meant a failed insert could leave the
@@ -171,8 +195,27 @@ async def create_local_user(
     """
     cleaned = validate_username(username)
     validate_password(password)
+    if not first_admin:
+        from vaf.core.config import is_local_admin_name
+        if is_local_admin_name(cleaned):
+            raise UserAdminError("username_reserved",
+                                 "This user name is reserved for this machine's owner", 409)
     if await username_taken(db, cleaned):
-        raise UserAdminError("username_taken", "Username already taken", 409)
+        raise UserAdminError(
+            "username_taken",
+            "Username already taken (names that differ only in letter case or Unicode form "
+            "count as the same)", 409)
+    if not first_admin:
+        try:
+            from vaf.core.whatsapp_auth import set_aside_login
+            for moved in set_aside_login(cleaned):
+                logger.warning("A WhatsApp login left under the user name %r was moved to %s",
+                               cleaned, moved.name)
+        except OSError as e:
+            raise UserAdminError(
+                "login_leftover",
+                "A WhatsApp login left under this user name could not be moved aside: "
+                f"{describe_error(e)}", 500) from e
 
     password_hash = await hash_password_async(password)
     user = LocalUser(
@@ -392,6 +435,7 @@ async def create_first_admin(
         password=password,
         role="admin",
         requires_2fa_setup=True,
+        first_admin=True,
     )
 
     try:

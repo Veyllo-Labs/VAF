@@ -2438,27 +2438,35 @@ def is_local_admin_lane(user_scope_id: Optional[Any]) -> bool:
 
 
 def is_local_admin_name(name: Optional[str], admin_name: Optional[str] = None) -> bool:
-    """Whether a name on a messenger lane stands for the local admin: empty, the literal
-    "admin" (what the Discord bridge enqueues and what a lane without a name has always been
-    read as), or the local admin's own name; stripped and compared casefolded. The one copy
-    of this set; the WhatsApp endpoint reader, its whitelist attribution and its name-key
-    rule all ask here.
+    """Whether a name stands for the local admin: empty, the literal "admin" (what the Discord
+    bridge enqueues and what a lane without a name has always been read as), or the local
+    admin's own name; stripped, and compared casefolded and by `path_jail.portable_name_key`
+    (NFC, casefolded, NFC again), so "ADMIN", a decomposed spelling of the owner's name and
+    "Straße" for an owner named "strasse" all count. The one copy of this set: the WhatsApp
+    endpoint reader, its whitelist attribution and its name-key rule ask here, so does
+    `account_name_for_scope` before it hands a scope a folder name, and account creation
+    refuses every such name for anybody but the first admin (`user_admin.create_local_user`).
 
     `admin_name` is the local admin's name when the caller has already read it. Reading it
     (`get_local_admin_username`) loads the config file, so a caller that asks once per
     whitelist entry reads it once and passes it in: asked per entry, a read with 1,000
     entries without a scope took 544 ms instead of 6.6 ms, quadratic in the entries.
 
-    Named boundary: the casefolded comparison is wider than the account store's own
-    uniqueness check, which compares `lower()` and lets an admin create "Straße" next to
-    "strasse". Here it decides only a request or an entry WITHOUT a scope, which VAF does not
-    write for an account; it is not closed here. Where VAF writes or moves a SCOPED entry by
-    a name (the WhatsApp owner-number route and its refile at the bridge start), the name goes
-    through `account_for_username` instead: the exact name decides, and a casefolded match
-    counts only when exactly one account has it."""
-    low = str(name or "").strip().casefold()
-    admin = get_local_admin_username() if admin_name is None else admin_name
-    return low in ("", "admin") or low == str(admin or "").strip().casefold()
+    Named boundary: an account created before the account store compared names this way can
+    carry such a name ("Straße" next to an owner "strasse", or an ordinary account literally
+    named "admin"). Here it decides only a request or an entry WITHOUT a scope, which VAF does
+    not write for an account. Where VAF writes or moves a SCOPED entry by a name (the WhatsApp
+    owner-number route and its refile at the bridge start), the name goes through
+    `account_for_username` instead: the exact name decides, and a casefolded match counts only
+    when exactly one account has it."""
+    from vaf.core.path_jail import portable_name_key
+    raw = str(name or "").strip()
+    admin = str((get_local_admin_username() if admin_name is None else admin_name) or "").strip()
+    low = raw.casefold()
+    if low in ("", "admin") or low == admin.casefold():
+        return True
+    key = portable_name_key(raw)
+    return key == "admin" or (bool(admin) and key == portable_name_key(admin))
 
 
 def messenger_lane_identity(
@@ -2599,10 +2607,10 @@ def account_for_username(username: str) -> Optional[Tuple[str, str]]:
 
     The exact name (stripped) decides first: the local admin's from the config without a
     lookup, everybody else from the directory. Without an exact match, a casefolded match
-    counts only when exactly ONE account has it. The account store keeps names unique with
-    `lower()` only, so "Straße" and "strasse" (or "Weiß" and "weiss") can both exist, and the
-    directory lists accounts in no fixed order: taking the first casefolded match filed a
-    number under whichever twin came first. An ambiguous name, an inactive account (an exact
+    counts only when exactly ONE account has it. The account store used to keep names unique
+    with `lower()` only, so "Straße" and "strasse" (or "Weiß" and "weiss") created before it
+    compared casefolded can both exist, and the directory lists accounts in no fixed order:
+    taking the first casefolded match filed a number under whichever twin came first. An ambiguous name, an inactive account (an exact
     match included: its twin is not what was typed) and an unknown name are None.
     """
     name = str(username or "").strip()
@@ -2664,13 +2672,15 @@ def account_name_for_scope(user_scope_id: Optional[str]) -> Optional[str]:
       control or format character, composed Unicode, no Windows device name or 8.3
       short-name shape, at most 255 UTF-8 bytes), unchanged by that check;
     - it is not the local admin's (`is_local_admin_name`: the literal "admin" or the
-      owner's name, casefolded; and not the owner's name by `portable_name_key`), and does
-      not carry the synthetic names' `scope_` prefix;
+      owner's name, casefolded or by `portable_name_key`), and does not carry the synthetic
+      names' `scope_` prefix;
     - exactly one scope in the directory carries it, compared by `portable_name_key` (NFC,
       casefolded, NFC again), and that scope is this one: two scopes never get names that one of
       those file systems opens as one folder.
-    VAF's auth store keeps names unique only by `lower()`, so for its own accounts these
-    decide its odd rows; a directory an embedder registers is bound by none of it. The
+    VAF's auth store refuses a new name whose `portable_name_key` another account or the
+    owner already has (`user_admin.username_taken`); rows created before it compared that
+    way can still collide, and for those these decide. A directory an embedder registers is
+    bound by none of it. The
     scope compares stripped and case-insensitively, as the UUID column did; `active` is
     not asked (whether a deactivated account may run is `revocation.account_stands`'s
     question). The owner's scope answers the owner's name from the config without a
@@ -2703,8 +2713,7 @@ def account_name_for_scope(user_scope_id: Optional[str]) -> Optional[str]:
         if portable_entry_name(name) != name:
             return None
         key = portable_name_key(name)
-        if (key.startswith("scope_") or is_local_admin_name(name, admin_name)
-                or key == portable_name_key(admin_name)):
+        if key.startswith("scope_") or is_local_admin_name(name, admin_name):
             return None
         if index.scopes_by_key.get(key) != frozenset([scope.lower()]):
             return None

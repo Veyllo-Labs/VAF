@@ -217,19 +217,20 @@ def resolve_scope_identity(scope: Any, *, role: Optional[str] = None) -> Identit
       thinking lane, and in the facade. It has one home now, and this module is a consumer
       of it, not a fifth copy.
     - ``allow_lookup=True`` is deliberate HERE and must stay off on the per-dispatch path.
-      It is an uncached database round trip (and, inside a running event loop, a thread
-      with a ten-second join). One per run is affordable; one per tool call is not. Callers
-      cache the Identity for the life of the run - see the facade, where ``run()``
-      re-asserts on every turn and an uncached resolve would spend a fresh ``asyncio.run``
-      against a pooled engine bound to a closed loop, silently degrading a real account
-      name into the synthetic bucket somewhere around turn two.
+      It is one read of the account directory the application registered
+      (``set_account_directory_resolver``); VAF's resolver asks its auth store for it. One
+      per run is affordable; one per tool call is not. Callers cache the Identity for the
+      life of the run - see the facade, where ``run()`` re-asserts on every turn, and a
+      resolver that asks a store from a fresh ``asyncio.run`` against a pooled engine
+      bound to a closed loop can fail there, silently degrading a real account name into
+      the synthetic bucket somewhere around turn two.
     - A WHITESPACE-ONLY scope is a corrupt value, not an absent one, and resolves to the
       isolated ``"scope_unknown"`` bucket. The shared resolver strips first, so ``"   "``
       would otherwise take its no-scope branch and answer with the OWNER's name - a
       fail-toward-admin transition, reachable from a hand-edited or restored task file, and
       precisely the direction the cross-user-leak rule exists to forbid.
     - The scope itself is returned unchanged, ``None`` included. Only the NAME is resolved.
-    - The database-backed helper stays where it lives and is reached through the shared
+    - The directory-backed helper stays where it lives and is reached through the shared
       resolver, which imports it LATE. A module-scope import here would both create an
       import cycle and silently un-test the never-"admin" guarantee: the facade's test
       proves it by monkeypatching that module attribute and making it raise, which only

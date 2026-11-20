@@ -982,8 +982,20 @@ class ListAutomationsTool(BaseTool):
     }
     
     def run(self, **kwargs) -> str:
+        from vaf.core.tool_dispatch import account_directory_once
         try:
-            tasks = AutomationAccess(kwargs.get("user_scope_id"), kwargs.get("user_role")).list()
+            access = AutomationAccess(kwargs.get("user_scope_id"), kwargs.get("user_role"))
+        except Exception as e:
+            return f"Error listing automations: {e}"
+        # The sort, each task's next run and today's line name the task's account from one
+        # directory read.
+        with account_directory_once():
+            return self._listing(access)
+
+    @staticmethod
+    def _listing(access: AutomationAccess) -> str:
+        try:
+            tasks = access.list()
             
             if not tasks:
                 return "No automations configured yet. Use `create_automation` to create one."

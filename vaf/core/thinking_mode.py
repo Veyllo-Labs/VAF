@@ -51,61 +51,38 @@ def _key(user_scope_id: Any) -> str:
 
 
 def _resolve_username_for_scope(user_scope_id: Any) -> Optional[str]:
-    """Resolve the real account username for a user_scope_id from the local_users store.
+    """Resolve the real account username for a user_scope_id from the account directory.
 
     SECURITY: a non-admin thinking run must NEVER be given the literal username "admin".
     The username drives username-keyed file stores (UserWorkspace -> ~/.vaf/users/<username>/
     user_identity.json, contacts, mail, calendar). Handing a non-admin the string "admin"
     injects the ADMIN's personal identity/profile (name, preferences, dos/donts, timezone)
     into that user's thinking context (system_prompt.py <user_context> block + RAG query seed)
-    — a cross-user data leak. Returns the real username when the scope maps to a local account,
-    a synthetic per-scope username (scope_<8hex>) when the scope is unknown, and None on error
-    so callers can decide a safe fallback. NEVER returns "admin" for a non-admin scope.
+    - a cross-user data leak. Returns the real username when the scope maps to an account, a
+    synthetic per-scope username (scope_<8hex>) when the scope is unknown, and None for an
+    empty scope so callers can decide a safe fallback. NEVER returns the machine owner's name
+    for another scope.
+
+    The accounts are the ones the application registered
+    (`tool_dispatch.set_account_directory_resolver`; VAF registers its `local_users` table),
+    never the auth store read from here: that import made the framework reach into the
+    harness, and an embedder that runs no such store got a refused connect per lookup. The
+    scopes compare stripped and case-insensitively, as the UUID column did. `active` is not
+    asked: whether a deactivated account may still run is `revocation.account_stands`'s
+    question. VAF's resolver remembers a store it could not reach for 30 seconds
+    (`permissions._store_down`), and a listing reads the directory once
+    (`account_directory_once`).
     """
     if not user_scope_id:
         return None
+    wanted = str(user_scope_id).strip().lower()
     try:
-        import asyncio
-        from sqlalchemy import select
-        from vaf.auth.models import LocalUser
-        from vaf.auth.database import get_auth_db
-
-        async def _lookup() -> Optional[str]:
-            async with get_auth_db() as db:
-                res = await db.execute(
-                    select(LocalUser.username).where(
-                        LocalUser.user_scope_id == str(user_scope_id)
-                    )
-                )
-                row = res.first()
-                return row[0] if row else None
-
-        try:
-            asyncio.get_running_loop()
-            running = True
-        except RuntimeError:
-            running = False
-
-        username: Optional[str] = None
-        if running:
-            # Already inside an event loop (rare for the thinking thread) — run in a side thread.
-            result_box: List[Optional[str]] = [None]
-
-            def _run_in_thread() -> None:
-                try:
-                    result_box[0] = asyncio.run(_lookup())
-                except Exception:
-                    result_box[0] = None
-
-            t = threading.Thread(target=_run_in_thread, daemon=True)
-            t.start()
-            t.join(timeout=10)
-            username = result_box[0]
-        else:
-            username = asyncio.run(_lookup())
-
-        if username and str(username).strip():
-            return str(username).strip()
+        from vaf.core.tool_dispatch import resolve_account_directory
+        for row in resolve_account_directory():
+            if row["user_scope_id"].strip().lower() == wanted:
+                if not _is_owner_name_for_other_scope(row["username"], wanted):
+                    return row["username"]
+                break
     except Exception as e:
         logger.debug("scope->username lookup failed for %s: %s", user_scope_id, e)
 
@@ -117,45 +94,33 @@ def _resolve_username_for_scope(user_scope_id: Any) -> Optional[str]:
         return None
 
 
+def _is_owner_name_for_other_scope(username: str, scope: str) -> bool:
+    """True when a directory row gives a scope that is not the machine owner's the owner's
+    name. The auth store keeps names unique, so it never did; a directory an embedder
+    registers is not bound by that, and the owner's name opens the owner's files. Compared
+    case-insensitively: a case-insensitive file system opens the same folder."""
+    try:
+        from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
+        owner_name = str(get_local_admin_username() or "").strip().casefold()
+        owner_scope = str(get_local_admin_scope_id() or "").strip().lower()
+    except Exception:
+        return False
+    return bool(owner_name) and username.strip().casefold() == owner_name and scope != owner_scope
+
+
 def _registered_scope_ids() -> set:
-    """Return the set of user_scope_id strings for REGISTERED local accounts (local_users).
+    """Return the set of user_scope_id strings for REGISTERED accounts (the account directory).
 
     Used to distinguish an infrequent-but-real LAN user from a stale orphan web-session UUID in the
     dead-session cap: a registered account is a real user and must not be dropped just for being idle
-    past the cap, whereas an unknown orphan UUID should be. Returns an empty set on any error (the
-    caller then falls back to the previous admin-vs-nonadmin behaviour, never crashing the scheduler).
+    past the cap, whereas an unknown orphan UUID should be. Returns an empty set on any error and
+    for an empty directory (the caller then falls back to the previous admin-vs-nonadmin behaviour,
+    never crashing the scheduler). Read from the directory the application registered, like the
+    name lookup above, so an unreachable store is not asked again for 30 seconds.
     """
     try:
-        import asyncio
-        from sqlalchemy import select
-        from vaf.auth.models import LocalUser
-        from vaf.auth.database import get_auth_db
-
-        async def _lookup() -> set:
-            async with get_auth_db() as db:
-                res = await db.execute(select(LocalUser.user_scope_id))
-                return {str(r[0]).strip() for r in res.all() if r[0]}
-
-        try:
-            asyncio.get_running_loop()
-            running = True
-        except RuntimeError:
-            running = False
-
-        if running:
-            box: List[set] = [set()]
-
-            def _run_in_thread() -> None:
-                try:
-                    box[0] = asyncio.run(_lookup())
-                except Exception:
-                    box[0] = set()
-
-            t = threading.Thread(target=_run_in_thread, daemon=True)
-            t.start()
-            t.join(timeout=10)
-            return box[0]
-        return asyncio.run(_lookup())
+        from vaf.core.tool_dispatch import resolve_account_directory
+        return {row["user_scope_id"] for row in resolve_account_directory()}
     except Exception as e:
         logger.debug("registered-scope lookup failed: %s", e)
         return set()

@@ -513,6 +513,17 @@ def _automation_wire(task) -> Dict[str, Any]:
     }
 
 
+def _automations_listing(access) -> List[Dict[str, Any]]:
+    """Every automation `access` (an `AutomationAccess`) sees, as the browser reads it. Run
+    off the event loop: the next run of a task is read in its account's time zone, and the
+    account name comes from the account directory, which the harness's resolver answers
+    from the auth store. One directory read serves the sort and every row
+    (`account_directory_once`)."""
+    from vaf.core.tool_dispatch import account_directory_once
+    with account_directory_once():
+        return [_automation_wire(task) for task in access.list()]
+
+
 async def _send_room_transcript(websocket, room, user_scope_id: Optional[str],
                                 ack: str = "") -> None:
     """The room as the browser reads it, from the store, every time.
@@ -8886,11 +8897,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         from vaf.core.automation import AutomationAccess
                         user_scope_id = manager.get_connection_user(websocket) if manager else None
                         stored_role = manager.get_connection_user_role(websocket) if manager else None
-                        tasks = AutomationAccess(user_scope_id, stored_role).list()
-                        automations_list = [
-                            _automation_wire(task)
-                            for task in tasks
-                        ]
+                        access = AutomationAccess(user_scope_id, stored_role)
+                        automations_list = await asyncio.get_running_loop().run_in_executor(
+                            None, _automations_listing, access)
                         await websocket.send_json({
                             "type": "automations_list",
                             "automations": automations_list

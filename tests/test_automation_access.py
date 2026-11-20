@@ -64,11 +64,11 @@ def store(tmp_path, monkeypatch):
     owner's scope is pinned to LOCAL; nothing reaches the thinking workspace.
 
     A tenant task's next run reads its account's time zone, and the account name behind a
-    scope is an auth-store lookup (`_resolve_username_for_scope`) on every sort of every
-    listing. These tests are about who sees which task, not about that lookup, so it answers
-    what it answers for an unknown account (`scope_<8 hex>`) without dialing the store: a
-    refused local connect costs about two seconds on Windows, and a listing here sorts
-    dozens of tenant tasks."""
+    scope comes from the account directory (`_resolve_username_for_scope`), which in a process
+    that registered VAF's resolver asks the auth store. These tests are about who sees which
+    task, not about that lookup, so it answers what it answers for an unknown account
+    (`scope_<8 hex>`) without asking any directory; the lookup itself is pinned in
+    tests/test_scope_name_directory_lookup.py."""
     import vaf.core.config as config_mod
     import vaf.core.thinking_mode as thinking_mode
     import vaf.core.thinking_workspace as tw

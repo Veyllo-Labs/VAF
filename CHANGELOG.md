@@ -87,6 +87,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **Automations: the list no longer waits on an account store that cannot be reached.** The
+  account behind each automation (its time zone decides the next run) is now read once per
+  listing from the account directory, and a store that could not be reached is not asked again
+  for 30 seconds; before, every listing asked it again for every task, about two seconds each
+  on Windows, and the app's automations window waited for it. While the store is down a
+  tenant's next run shows in server time, as it did before. An account directory registered
+  with `set_account_directory_resolver` now also names the account behind a scope for
+  scheduled work and for `user_scope`.
 - **Automations: two changes made at the same moment no longer undo each other.** Changing an
   automation in the app while the agent, an approved proposal, the terminal or a second window
   changed another field of it could put the other field back; a run that ended put back a time

@@ -388,8 +388,9 @@ def _resolve_username(user_scope_id: Optional[str]) -> str:
     and wrong in the dispatcher that every tool call actually passes through - a rule that
     existed twice and still failed where it mattered. It lives in
     ``config.resolve_caller_username`` now, so the assigner and the workflow engine answer the
-    same question the same way. Automations may pay for the account lookup: one per task is
-    affordable, one per tool call is not.
+    same question the same way. Automations may pay for the account lookup: one read of the
+    account directory per listing (the listings open `account_directory_once`), one per tool
+    call would not be.
     """
     from vaf.core.config import resolve_caller_username
     return resolve_caller_username(None, user_scope_id, allow_lookup=True)
@@ -2111,7 +2112,10 @@ vaf automation delete <id>   # Delete task
         return self.tasks.get(task_id)
     
     def list(self, enabled_only: bool = False) -> List[AutomationTask]:
-        """List all tasks."""
+        """List all tasks, next run first. The sort names the account behind every task
+        (its time zone decides the next run) from ONE read of the account directory; a
+        caller that reads each task's next run again opens the same block around both."""
+        from vaf.core.tool_dispatch import account_directory_once
         tasks = list(self.tasks.values())
         if enabled_only:
             tasks = [t for t in tasks if t.enabled]
@@ -2120,7 +2124,8 @@ vaf automation delete <id>   # Delete task
         def _key(task: AutomationTask):
             when = task.next_run_datetime
             return (when is None, when or datetime.min)
-        return sorted(tasks, key=_key)
+        with account_directory_once():
+            return sorted(tasks, key=_key)
     
     def _get_last_run_time(self) -> Optional[datetime]:
         """Get the timestamp of the last automation run."""
@@ -2971,10 +2976,15 @@ vaf automation delete <id>   # Delete task
         # A start arms every task afresh.
         self._clock_lock = getattr(self, "_clock_lock", None) or threading.Lock()
         self._clock_jobs = {}
-        enabled_tasks = self.list(enabled_only=True)
-        self._log_scheduler_event(
-            f"START task_count={len(enabled_tasks)} storage_dir={str(self.storage_dir)!r}"
-        )
+        from vaf.core.tool_dispatch import account_directory_once
+        with account_directory_once():
+            enabled_tasks = self.list(enabled_only=True)
+            self._log_scheduler_event(
+                f"START task_count={len(enabled_tasks)} storage_dir={str(self.storage_dir)!r}"
+            )
+            # Arm every task from the same directory read the sort used.
+            for task in enabled_tasks:
+                self._schedule_task(task)
         
         def scheduler_loop():
             self._log_scheduler_event("LOOP_STARTED")
@@ -3005,10 +3015,6 @@ vaf automation delete <id>   # Delete task
                     pass
                 time.sleep(30)  # Check every 30 seconds
             self._log_scheduler_event("LOOP_STOPPED")
-        
-        # Schedule all enabled tasks
-        for task in enabled_tasks:
-            self._schedule_task(task)
         
         self._scheduler_thread = threading.Thread(target=scheduler_loop, daemon=True)
         self._scheduler_thread.start()
@@ -3244,8 +3250,10 @@ def get_next_automation_run_utc(user_scope_id: Optional[str]) -> Optional[dateti
     The set is `AutomationAccess(user_scope_id).list()`, the one the automation list shows:
     for the machine owner the root tasks and its own scope, for anyone else its own scope.
     """
-    tasks = AutomationAccess(user_scope_id).list(enabled_only=True)
-    upcoming = [when for when in (t.next_run_datetime for t in tasks) if when is not None]
+    from vaf.core.tool_dispatch import account_directory_once
+    with account_directory_once():
+        tasks = AutomationAccess(user_scope_id).list(enabled_only=True)
+        upcoming = [when for when in (t.next_run_datetime for t in tasks) if when is not None]
     return min(upcoming) if upcoming else None
 
 
@@ -3446,14 +3454,16 @@ def refresh_scheduler_from_disk(origin: str = "unknown") -> bool:
         if not (_scheduler_manager._running and thread_alive):
             return False
 
+        from vaf.core.tool_dispatch import account_directory_once
         _scheduler_manager._log_scheduler_event(f"REFRESH_START origin={origin!r}")
         _scheduler_manager.reload_tasks()
         _scheduler_manager._clear_clock_jobs()
-        for task in _scheduler_manager.list(enabled_only=True):
-            _scheduler_manager._schedule_task(task)
-        _scheduler_manager._log_scheduler_event(
-            f"REFRESH_DONE origin={origin!r} task_count={len(_scheduler_manager.list(enabled_only=True))}"
-        )
+        with account_directory_once():
+            for task in _scheduler_manager.list(enabled_only=True):
+                _scheduler_manager._schedule_task(task)
+            _scheduler_manager._log_scheduler_event(
+                f"REFRESH_DONE origin={origin!r} task_count={len(_scheduler_manager.list(enabled_only=True))}"
+            )
         return True
 
 
@@ -3464,36 +3474,40 @@ def list_automations():
     from rich.table import Table
     from rich.text import Text
     
+    from vaf.core.tool_dispatch import account_directory_once
+
     console = TerminalConsole()
     manager = get_manager()
-    tasks = manager.list()
-    
-    if not tasks:
-        console.print("[yellow]No automations configured.[/yellow]")
-        console.print("\n[dim]Create one with: vaf automation create[/dim]")
-        return
-    
-    table = Table(title="⚡ Scheduled Automations", show_header=True)
-    table.add_column("ID", style="cyan")
-    table.add_column("Name")
-    table.add_column("Frequency")
-    table.add_column("Time")
-    table.add_column("Next Run")
-    table.add_column("Status")
-    
-    for task in tasks:
-        status = "[green]●[/green] Active" if task.enabled else "[red]○[/red] Disabled"
-        next_run = task.next_run_label
-        
-        table.add_row(
-            task.id,
-            Text(task.name[:20]),
-            task.frequency,
-            task.time or task.schedule_label,
-            next_run,
-            status
-        )
-    
+    # The sort and every row's next run name the task's account from one directory read.
+    with account_directory_once():
+        tasks = manager.list()
+
+        if not tasks:
+            console.print("[yellow]No automations configured.[/yellow]")
+            console.print("\n[dim]Create one with: vaf automation create[/dim]")
+            return
+
+        table = Table(title="⚡ Scheduled Automations", show_header=True)
+        table.add_column("ID", style="cyan")
+        table.add_column("Name")
+        table.add_column("Frequency")
+        table.add_column("Time")
+        table.add_column("Next Run")
+        table.add_column("Status")
+
+        for task in tasks:
+            status = "[green]●[/green] Active" if task.enabled else "[red]○[/red] Disabled"
+            next_run = task.next_run_label
+
+            table.add_row(
+                task.id,
+                Text(task.name[:20]),
+                task.frequency,
+                task.time or task.schedule_label,
+                next_run,
+                status
+            )
+
     console.print(table)
 
 

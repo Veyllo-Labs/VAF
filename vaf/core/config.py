@@ -2542,10 +2542,13 @@ def resolve_caller_username(
     not do was make the DISPATCHER agree, because it had its own naive answer - which is how a
     rule that existed twice still failed at the one place every tool passes through.
 
-    `allow_lookup` costs a database round trip (and sometimes a thread) with no cache, so it is
-    off by default and must stay off on the per-dispatch path. Without it a tenant addresses a
-    stable, isolated bucket of their own rather than their real account name - safe, and still
-    better than the shared literal, which pooled every nameless tenant into ONE bucket.
+    `allow_lookup` costs one read of the account directory the application registered
+    (`tool_dispatch.set_account_directory_resolver`; VAF's resolver asks its auth store and
+    does not ask a store it could not reach again for 30 seconds), shared only inside an
+    `account_directory_once()` block, so it is off by default and must stay off on the
+    per-dispatch path. Without it a tenant addresses a stable, isolated bucket of their own
+    rather than their real account name - safe, and still better than the shared literal,
+    which pooled every nameless tenant into ONE bucket.
     """
     given = str(username or "").strip()
     if given:

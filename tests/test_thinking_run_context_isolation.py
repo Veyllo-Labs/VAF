@@ -817,10 +817,6 @@ def test_no_process_writes_the_background_run_into_its_own_environment():
 # a thread of its own goes through `vaf.core.bounded_run.run_on_worker` (or its wrappers
 # `call_with_deadline` / `run_coroutine_on_new_loop`) and does not appear here.
 _THREAD_START_ALLOWLIST = {
-    ("vaf/core/thinking_mode.py", "_resolve_username_for_scope", "Thread"):
-        (1, "username lookup in the account store; no model call"),
-    ("vaf/core/thinking_mode.py", "_registered_scope_ids", "Thread"):
-        (1, "account id lookup; no model call"),
     ("vaf/core/thinking_mode.py", "maybe_start_thinking_for_user", "Thread"):
         (1, "starts a run whose target runs the pass in a context of its own; an empty start is the point"),
     ("vaf/core/thinking_mode.py", "start_thinking_mode_background", "Thread"):

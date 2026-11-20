@@ -12,7 +12,8 @@ again after the pause at the latest, and every caller gets exactly what an unrea
 service gives it in the meantime.
 
 Users: the auth store (vaf/auth/permissions.py, the account directory and the permission
-row) and the local API (vaf/core/web_interface.py, the push fallback; the terminal app's
+row; the directory also names the account behind a scope for scheduled work, so an automation
+listing and a thinking pass ask it too) and the local API (vaf/core/web_interface.py, the push fallback; the terminal app's
 heartbeat reports into the same instance).
 
 Named boundary: not on the public facade (vaf/__init__.py). Both users are VAF's own

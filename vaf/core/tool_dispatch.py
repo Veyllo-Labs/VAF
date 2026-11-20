@@ -1169,6 +1169,9 @@ def set_account_directory_resolver(resolver) -> None:
     only when exactly one account has it (``config.account_for_username``). Never cached
     here - a directory that changes when an account is created should show the account
     on the next look, and a resolver that finds lookups expensive caches inside itself.
+    The one exception is a call that reads it for many tasks at once (an automation
+    listing names the account behind every task): inside ``account_directory_once()``
+    the first read is shared, and that block never outlives the one call that opened it.
 
     Process-wide; the last registration wins and ``None`` deregisters. See
     docs/EMBEDDING.md.
@@ -1182,6 +1185,42 @@ def get_account_directory_resolver():
     return _account_directory_resolver
 
 
+# One directory read shared by everything one call asks it. An automation listing names the
+# account behind every task to read that account's time zone, several times per task (the
+# sort, the next run on the wire, today's status line): measured, a listing of six tenant
+# tasks read the directory 18 times, and against an unreachable store each read was a
+# refused connect (about two seconds each on Windows). A context variable, so two threads
+# or two WebSocket connections never share a read.
+class _DirectoryOnce:
+    __slots__ = ("rows",)
+
+    def __init__(self) -> None:
+        self.rows = None
+
+
+_directory_once_ctx = _contextvars.ContextVar("vaf_account_directory_once", default=None)
+
+
+@_contextmanager
+def account_directory_once():
+    """Internal: inside this block ``resolve_account_directory()`` reads the resolver once.
+
+    The first read is kept, an empty one included (nothing registered, a resolver that
+    raised, a store that is down), and every later read in the block gets a copy of it. A
+    nested block shares the outer read. Outside any block every read asks the resolver,
+    as before. For a call that walks many tasks, not for a cache across calls: an account
+    created while the block runs is seen by the next call.
+    """
+    if _directory_once_ctx.get() is not None:
+        yield
+        return
+    token = _directory_once_ctx.set(_DirectoryOnce())
+    try:
+        yield
+    finally:
+        _directory_once_ctx.reset(token)
+
+
 def resolve_account_directory() -> list:
     """Internal: every account the registered resolver names, normalized.
 
@@ -1189,6 +1228,16 @@ def resolve_account_directory() -> list:
     the resolver raised. Rows without a name or a scope are dropped: a row that cannot
     be addressed cannot be invited, and one that cannot be scoped cannot be admitted.
     """
+    held = _directory_once_ctx.get()
+    if held is not None and held.rows is not None:
+        return [dict(row) for row in held.rows]
+    out = _read_account_directory()
+    if held is not None:
+        held.rows = [dict(row) for row in out]
+    return out
+
+
+def _read_account_directory() -> list:
     fn = _account_directory_resolver          # local capture: a mid-call detach is safe
     if fn is None:
         return []

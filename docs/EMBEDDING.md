@@ -1364,7 +1364,9 @@ What it does, and the trust model:
   otherwise - a bad scope fails loudly instead of silently operating on the
   machine owner's data.
 - Scope and username travel together: VAF resolves the account username for
-  the scope itself (a synthetic per-scope name when unknown) and never
+  the scope from the account directory you register
+  (`set_account_directory_resolver`, below), a synthetic per-scope name when
+  the directory does not list the scope or none is registered, and never
   falls back to the admin identity. The identity is bound before the system
   prompt is built and re-asserted on every `run()`.
 - Memory, reminders, per-user files (speaker profiles, browser sessions,
@@ -2600,7 +2602,9 @@ where "nobody known" keeps the open default. The exact name decides; a case-inse
 match counts only when exactly one account has it, so two accounts whose names differ only
 by case folding ("Straße" and "strasse") are each reached by their exact name and neither by
 a third spelling. An inactive account is listed but never resolved for an invitation or a
-registration; nothing is cached here. Unregistered means no directory:
+registration. Nothing is cached across calls: a call that names the account behind many
+scopes at once (an automation listing) reads the directory once and shares that read only
+until it returns. Unregistered means no directory:
 `Room.invite_account` still works with a scope you resolved yourself, and the name-based
 lanes (`vaf a2a invite --account`, the agent's `room_invite` with `account`) answer "no
 such account" for every name but the owner's.
@@ -2610,6 +2614,14 @@ scheduled automation - learns whether its account still stands: an account the d
 lists as inactive, or no longer lists at all, starts nothing (see the next section). An
 empty directory - nothing registered, or a resolver that raised - knows nobody and stops
 nobody, the same open default as an unreachable store.
+
+It also NAMES the account behind a scope when work starts with a scope and no name: the
+identity `user_scope` binds, a scheduled automation (whose next run is read in that
+account's time zone) and a thinking run. A scope the directory does not list gets a
+synthetic name of its own, `scope_` and the first eight hex digits; a row that gives
+another scope the machine owner's name is ignored. If asking your backend is expensive,
+or it can be down, cache or remember that inside your resolver, as VAF's own does for
+its auth store (30 seconds after a failed connect).
 
 Runnable demonstration: part 6 of
 [examples/07_tool_caller_and_authorizer.py](../examples/07_tool_caller_and_authorizer.py).

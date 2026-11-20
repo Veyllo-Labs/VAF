@@ -253,8 +253,11 @@ def test_within_grows_linearly(cls, anchor):
 # ── 3. must_exist on a path the OS cannot stat ─────────────────────────────
 
 def test_must_exist_answers_not_found_for_a_path_the_os_cannot_stat(tmp_path):
-    fragment = "a/" * 2000   # 4000 characters: under the cap, past PATH_MAX once joined
+    # 4095 characters: under the cap, and past Linux's PATH_MAX once joined to any root (a
+    # shorter fragment under a short root stays below it, and stat then answers ENOENT).
+    fragment = "a/" * 2047 + "a"
     assert not is_overlong_path(fragment)
+    assert len(str(tmp_path.resolve())) + 1 + len(fragment) > PATH_CHARS_MAX
     with pytest.raises(PathEscape, match="^folder not found$"):
         contained_path(tmp_path, fragment, must_exist=True)
     import vaf.core.web_server as ws

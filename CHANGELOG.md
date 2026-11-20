@@ -573,6 +573,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **WhatsApp: a new account can no longer take over a deleted account's WhatsApp.** An
+  account created with the name of a deleted account used to run the deleted account's linked
+  WhatsApp as its own agent number and see its chats. Deleting an account now stops its
+  WhatsApp and removes its login; a login left behind by an earlier version is moved aside when
+  the name is used again (`whatsapp.previous-...` in that account's folder).
+- **WhatsApp stops when an account is deactivated.** Its connection used to keep running.
+- **Account names that differ only in letter case or Unicode form count as the same.**
+  "Straße" can no longer be created next to "strasse", and "admin" and the owner's name are
+  reserved for the owner. Existing accounts are not changed.
+- **WhatsApp: Re-link no longer runs two connections on one login**, and setup refuses to
+  start while the login is in use. The WhatsApp window shows the server's log path to admins
+  only.
 - **Error messages no longer show the server's folders.** When the server failed to read or
   write a file, some error messages showed the full folder path on the server, including the
   home folder and the account's folder name. That happened for a file name that is too long

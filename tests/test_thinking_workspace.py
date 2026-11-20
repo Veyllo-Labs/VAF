@@ -90,7 +90,7 @@ def test_approve_handoff_triggers_automation_action(monkeypatch, tmp_path):
     )
     called = {"ok": False}
 
-    def _fake_apply(user_scope_id, action):
+    def _fake_apply(user_scope_id, action, **_kw):
         called["ok"] = True
         return {"ok": True, "operation": "create", "task_id": "auto1234"}
 
@@ -126,3 +126,21 @@ def test_sync_automation_status_to_workspace(monkeypatch, tmp_path):
     assert task is not None
     assert task.get("automation", {}).get("id") == "a1b2c3d4"
 
+
+def test_save_json_never_truncates(monkeypatch, tmp_path):
+    """A value that does not encode (a lone surrogate, which arrives as a valid `\\ud800`
+    JSON escape) used to empty the file: the write truncated it before encoding. Now the
+    save raises and the old bytes stay. MUTATION: `_save_json` back to
+    `path.write_text(json.dumps(...))`."""
+    path = tmp_path / "h.json"
+    tw._save_json(path, {"a": 1})
+    before = path.read_bytes()
+    try:
+        tw._save_json(path, {"a": "x\ud800"})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("an unencodable value was saved")
+    assert path.read_bytes() == before
+    assert tw._load_json(path, None) == {"a": 1}
+    assert not [p.name for p in tmp_path.iterdir() if p.name != "h.json"], "a temp file stayed"

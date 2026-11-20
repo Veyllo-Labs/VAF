@@ -109,10 +109,10 @@ def _snapshot(root: Path) -> dict:
 
 # ── a real /ws connection ─────────────────────────────────────────────────────
 
-def _ws(monkeypatch, *, role, scope, frames):
+def _ws(monkeypatch, *, role, scope, frames, seen=None):
     """Send `frames` ([(frame, reply_type), ...]) over one real `/ws` connection opened with a
     signed token; the replies in order. `role=None` signs no role claim (the machine owner's
-    tokenless identity carries none)."""
+    tokenless identity carries none). `seen`, a list, receives every message read."""
     import jwt
     from starlette.testclient import TestClient
 
@@ -133,6 +133,8 @@ def _ws(monkeypatch, *, role, scope, frames):
                     ws.send_text(json.dumps(frame))
                     for _ in range(200):
                         msg = ws.receive_json()
+                        if seen is not None:
+                            seen.append(msg)
                         if msg.get("type") == want:
                             box["replies"].append(msg)
                             break
@@ -937,12 +939,13 @@ def workspaces(store, tmp_path, monkeypatch):
     data = tmp_path / "data"
     data.mkdir()
     monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: data))
+    real_notify = un.append_notification
     monkeypatch.setattr(un, "append_notification", lambda *a, **kw: None)
     task_a = tw.create_task(TENANT_A, "A task", "test")["id"]
     task_b = tw.create_task(TENANT_B, "B task", "test")["id"]
     handoff_b = tw.create_handoff(TENANT_B, task_b, "B handoff", "content")["id"]
     return SimpleNamespace(root=data / "workspaces", task_a=task_a, task_b=task_b,
-                           handoff_b=handoff_b, tw=tw)
+                           handoff_b=handoff_b, tw=tw, real_notify=real_notify)
 
 
 def _walk_to(ws, task_id: str, target: Path) -> str:
@@ -1247,3 +1250,437 @@ def test_workspace_tools_quote_no_server_path(store, workspaces):
         assert str(ws.root) not in out and "Errno" not in out and TENANT_A not in out, out
     assert "File name too long" in outs[-2], outs[-2]
     assert ws.tw.describe_os_error(FileNotFoundError("Task not found")) == "Task not found"
+
+
+# ── one decision at a time, and a claimed approval is finished, never repeated ──
+# Measured before: two threads approving one handoff with a create action made two
+# automations in 30 of 30 trials; an `approved` save that failed after the action left the
+# handoff pending and the retry created a second automation; a lone surrogate in a reject
+# reason emptied the handoff file and the account's notification list.
+
+class _Crash(BaseException):
+    """A process dying at that point: nothing after it runs, no `except Exception` sees it."""
+
+
+def _create_handoff(ws, prompt="once"):
+    return ws.tw.create_handoff(TENANT_A, ws.task_a, "Create", "c", automation_action={
+        "operation": "create", "prompt": prompt, "time": "15:30"})["id"]
+
+
+def _a_tasks(store) -> set:
+    return {p.stem for p in (store / TENANT_A).glob("*.json")}
+
+
+def _record(ws, hid) -> dict:
+    path = ws.root / TENANT_A / "tasks" / ws.task_a / "handoff" / f"{hid}.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _count_creates(monkeypatch) -> list:
+    """Record every `AutomationManager.create` (the real one still runs)."""
+    calls = []
+    real = AutomationManager.create
+
+    def counting(self, task):
+        calls.append(task.id)
+        return real(self, task)
+
+    monkeypatch.setattr(AutomationManager, "create", counting)
+    return calls
+
+
+def _race(fns) -> list:
+    """Run the callables at the same instant (a barrier); each one's result or exception."""
+    barrier = threading.Barrier(len(fns))
+    out = [None] * len(fns)
+
+    def run(i, fn):
+        barrier.wait()
+        try:
+            out[i] = fn()
+        except BaseException as e:  # noqa: BLE001 - the outcome is what is compared
+            out[i] = e
+
+    threads = [threading.Thread(target=run, args=(i, fn)) for i, fn in enumerate(fns)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    assert not any(t.is_alive() for t in threads), "a decision hung"
+    return out
+
+
+@pytest.mark.parametrize("lock", ["filelock", "no_filelock"])
+def test_two_threads_approve_once(store, workspaces, monkeypatch, lock):
+    """Two approvals of one handoff at the same instant (the tray's two listeners, two
+    sockets) both passed the pending check and both applied the action. MUTATION: replace
+    `_decision_lock` with `contextlib.nullcontext()`; for `no_filelock`, make the
+    in-process fallback a no-op."""
+    import vaf.core.secure_store as secure_store
+
+    ws = workspaces
+    if lock == "no_filelock":
+        monkeypatch.setattr(secure_store, "_get_filelock_cls", lambda: None)
+    for trial in range(10):
+        hid = _create_handoff(ws, f"trial {trial}")
+        before = _a_tasks(store)
+        out = _race([lambda: ws.tw.approve_handoff(TENANT_A, ws.task_a, hid)] * 2)
+        assert sorted(type(o).__name__ for o in out) == ["HandoffAlreadyDecided", "bool"], out
+        assert True in out, out
+        assert len(_a_tasks(store) - before) == 1, (trial, _a_tasks(store) - before)
+        assert _record(ws, hid)["status"] == "approved"
+
+
+def test_a_failed_save_after_the_action_is_finished_once(store, workspaces, monkeypatch):
+    """The `approved` save fails after the automation was created: the answer is "not
+    saved", the claim stays on the pending record, and the retry finishes it with the same
+    task instead of creating another. MUTATIONS: drop the `mgr.get(planned_id)` check in
+    `_apply_automation_action` (the retry creates again); keep the claim in memory only,
+    without its save before the action (the retry claims a new id and creates a second)."""
+    ws = workspaces
+    hid = _create_handoff(ws)
+    before = _a_tasks(store)
+    creates = _count_creates(monkeypatch)
+    real_save = ws.tw._save_json
+    failed = []
+
+    def save(path, value):
+        if not failed and isinstance(value, dict) and value.get("status") == "approved":
+            failed.append(path)
+            raise OSError(28, "No space left on device", str(path))
+        return real_save(path, value)
+
+    monkeypatch.setattr(ws.tw, "_save_json", save)
+    with pytest.raises(ws.tw.HandoffNotSaved) as err:
+        ws.tw.approve_handoff(TENANT_A, ws.task_a, hid)
+    assert str(ws.root) not in str(err.value) and "Errno" not in str(err.value)
+    record = _record(ws, hid)
+    assert record["status"] == "pending"
+    planned = record["claim"]["automation_id"]
+    assert _a_tasks(store) - before == {planned}
+    assert ws.tw.approve_handoff(TENANT_A, ws.task_a, hid) is True
+    assert _a_tasks(store) - before == {planned}
+    assert creates == [planned], creates
+    record = _record(ws, hid)
+    assert record["status"] == "approved" and "claim" not in record
+    assert record["automation_action_result"] == {"ok": True, "operation": "create",
+                                                  "task_id": planned}
+
+
+def test_a_crash_after_the_claim_creates_once(store, workspaces, monkeypatch):
+    """A crash between the claim and the action: nothing was created, and the retry creates
+    exactly one task, with the claimed id. MUTATION: create without `planned_id` (a fresh
+    random id)."""
+    ws = workspaces
+    hid = _create_handoff(ws)
+    before = _a_tasks(store)
+    real_apply = ws.tw._apply_automation_action
+    fired = []
+
+    def apply_once(*a, **kw):
+        if not fired:
+            fired.append(1)
+            raise _Crash()
+        return real_apply(*a, **kw)
+
+    monkeypatch.setattr(ws.tw, "_apply_automation_action", apply_once)
+    with pytest.raises(_Crash):
+        ws.tw.approve_handoff(TENANT_A, ws.task_a, hid)
+    record = _record(ws, hid)
+    assert record["status"] == "pending" and _a_tasks(store) == before
+    planned = record["claim"]["automation_id"]
+    assert ws.tw._CLAIM_ID.fullmatch(planned)
+    assert ws.tw.approve_handoff(TENANT_A, ws.task_a, hid) is True
+    assert _a_tasks(store) - before == {planned}
+    assert _record(ws, hid)["status"] == "approved"
+
+
+def test_a_crash_after_the_create_is_not_repeated(store, workspaces, monkeypatch):
+    """A crash after the task was stored and before the decision was saved: the retry
+    reports that task and does not create it again (a second create would overwrite the
+    task's state, such as its last run). MUTATION: drop the `mgr.get(planned_id)` check."""
+    ws = workspaces
+    hid = _create_handoff(ws)
+    before = _a_tasks(store)
+    calls = []
+    real = AutomationManager.create
+
+    def create_then_crash(self, task):
+        calls.append(task.id)
+        made = real(self, task)
+        if len(calls) == 1:
+            raise _Crash()
+        return made
+
+    monkeypatch.setattr(AutomationManager, "create", create_then_crash)
+    with pytest.raises(_Crash):
+        ws.tw.approve_handoff(TENANT_A, ws.task_a, hid)
+    assert len(_a_tasks(store) - before) == 1
+    assert _record(ws, hid)["status"] == "pending"
+    assert ws.tw.approve_handoff(TENANT_A, ws.task_a, hid) is True
+    assert len(_a_tasks(store) - before) == 1 and len(calls) == 1, calls
+    record = _record(ws, hid)
+    assert record["status"] == "approved" and "claim" not in record
+    assert record["automation_action_result"]["task_id"] == calls[0]
+
+
+_HOLD_THE_LOCK = (
+    "import sys, time\n"
+    "from pathlib import Path\n"
+    "import vaf.core.config as config\n"
+    "config.get_local_admin_scope_id = lambda: sys.argv[3]\n"
+    "from vaf.core.platform import Platform\n"
+    "Platform.data_dir = staticmethod(lambda: Path(sys.argv[1]))\n"
+    "import vaf.core.thinking_workspace as tw\n"
+    "with tw._decision_lock(sys.argv[2]):\n"
+    "    print('held', flush=True)\n"
+    "    time.sleep(60)\n"
+)
+
+
+def test_a_killed_lock_holder_does_not_block(store, workspaces, monkeypatch):
+    """A process that dies while it holds the decision lock must not block the account's
+    next decision: the kernel releases the lock with the process. The child takes the lock
+    through the module's own `_decision_lock`. MUTATION: an `O_CREAT|O_EXCL` marker removed
+    only on a clean exit (it survives the kill, and the approve answers busy)."""
+    import subprocess
+    import sys
+
+    ws = workspaces
+    hid = _create_handoff(ws)
+    monkeypatch.setattr(ws.tw, "_DECISION_LOCK_TIMEOUT_S", 1.0)
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _HOLD_THE_LOCK, str(ws.root.parent), TENANT_A, LOCAL],
+        stdout=subprocess.PIPE, cwd=str(_REPO), text=True)
+    try:
+        assert proc.stdout.readline().strip() == "held"
+        with pytest.raises(ws.tw.HandoffBusy):
+            ws.tw.approve_handoff(TENANT_A, ws.task_a, hid)
+        proc.kill()
+        proc.wait(10)
+        # True, not `HandoffBusy`: acquired within the timeout, so the dead holder's lock
+        # was released with it.
+        assert ws.tw.approve_handoff(TENANT_A, ws.task_a, hid) is True
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(10)
+        proc.stdout.close()
+    assert _record(ws, hid)["status"] == "approved"
+
+
+def test_a_busy_decision_answers_busy(store, workspaces, monkeypatch):
+    """While another decision of the account holds the lock past the timeout, the approve
+    answers "handoff is being decided" and applies nothing. MUTATION: answer `HandoffBusy`
+    with "handoff already decided" in the WebSocket branch."""
+    ws = workspaces
+    hid = _create_handoff(ws)
+    before = _a_tasks(store)
+    monkeypatch.setattr(ws.tw, "_DECISION_LOCK_TIMEOUT_S", 0.2)
+    held, done = threading.Event(), threading.Event()
+
+    def hold():
+        with ws.tw._decision_lock(TENANT_A):
+            held.set()
+            done.wait(20)
+
+    holder = threading.Thread(target=hold, daemon=True)
+    holder.start()
+    try:
+        assert held.wait(10)
+        replies = _ws(monkeypatch, role="user", scope=TENANT_A, frames=[
+            _handoff("approve", ws.task_a, hid), _handoff("reject", ws.task_a, hid)])
+    finally:
+        done.set()
+        holder.join(10)
+    for reply in replies:
+        assert reply["ok"] is False and reply["error"] == "handoff is being decided", reply
+    assert _a_tasks(store) == before and _record(ws, hid)["status"] == "pending"
+
+
+def test_a_reject_after_a_claimed_approval_finishes_it(store, workspaces, monkeypatch):
+    """An approval claimed before a crash is the decision: a reject finishes it (the
+    automation may already exist) and answers "already decided", never stores `rejected`.
+    MUTATION: let `reject_handoff` ignore the claim."""
+    ws = workspaces
+    hid = _create_handoff(ws)
+    before = _a_tasks(store)
+    real_apply = ws.tw._apply_automation_action
+    fired = []
+
+    def apply_once(*a, **kw):
+        if not fired:
+            fired.append(1)
+            raise _Crash()
+        return real_apply(*a, **kw)
+
+    monkeypatch.setattr(ws.tw, "_apply_automation_action", apply_once)
+    with pytest.raises(_Crash):
+        ws.tw.approve_handoff(TENANT_A, ws.task_a, hid)
+    planned = _record(ws, hid)["claim"]["automation_id"]
+    with pytest.raises(ws.tw.HandoffAlreadyDecided):
+        ws.tw.reject_handoff(TENANT_A, ws.task_a, hid, reason="changed my mind")
+    record = _record(ws, hid)
+    assert record["status"] == "approved" and "claim" not in record, record
+    assert _a_tasks(store) - before == {planned}
+
+
+def test_a_forged_claim_id_is_not_used_as_a_name(store, workspaces, monkeypatch):
+    """A claim this module did not write (an id that is not 8 hex) is replaced, never used
+    as an automation file name. MUTATION: accept any string in `_valid_claim`."""
+    ws = workspaces
+    hid = _create_handoff(ws)
+    path = ws.root / TENANT_A / "tasks" / ws.task_a / "handoff" / f"{hid}.json"
+    record = _record(ws, hid)
+    record["claim"] = {"decision": "approve", "automation_id": f"../{TENANT_B}/{B_ID}"}
+    path.write_text(json.dumps(record), encoding="utf-8")
+    b_before = _path(store, B_ID).read_bytes()
+    before = _a_tasks(store)
+    assert ws.tw.approve_handoff(TENANT_A, ws.task_a, hid) is True
+    made = _a_tasks(store) - before
+    assert len(made) == 1 and ws.tw._CLAIM_ID.fullmatch(next(iter(made))), made
+    assert _path(store, B_ID).read_bytes() == b_before
+
+
+def test_a_lone_surrogate_reason_keeps_the_handoff_and_notifications(store, workspaces,
+                                                                     monkeypatch):
+    """A reject reason with a lone surrogate (a valid JSON escape) emptied the handoff file
+    and cut off the account's notification file, which then read as empty and was
+    overwritten. MUTATION: drop the reason coercion in `reject_handoff` and in the
+    WebSocket branch (the reject answers not saved and stays pending)."""
+    import vaf.core.user_notifications as un
+
+    ws = workspaces
+    monkeypatch.setattr(un, "append_notification", ws.real_notify)
+    un.append_notification(TENANT_A, kind="system", title="one", summary="first")
+    un.append_notification(TENANT_A, kind="system", title="two", summary="second")
+    rid = ws.tw.create_handoff(TENANT_A, ws.task_a, "Reject me", "c")["id"]
+    frame = {"type": "reject_thinking_workspace_handoff", "task_id": ws.task_a,
+             "handoff_id": rid, "reason": "x\ud800"}
+    replies = _ws(monkeypatch, role="user", scope=TENANT_A,
+                  frames=[(frame, "thinking_workspace_handoff_result")])
+    assert replies[0]["ok"] is True and replies[0]["error"] is None, replies[0]
+    record = _record(ws, rid)
+    assert record["status"] == "rejected" and record["rejected_reason"] == "x?", record
+    titles = [n["title"] for n in un.get_notifications(TENANT_A, limit=10)]
+    assert {"one", "two", "Workspace handoff rejected"} <= set(titles), titles
+
+
+def test_append_notification_never_truncates(store, workspaces):
+    """MUTATION: `append_notification` back to `open(path, "w")` + `json.dump`."""
+    import vaf.core.user_notifications as un
+
+    notify = workspaces.real_notify
+    notify(TENANT_A, kind="system", title="one", summary="first")
+    notify(TENANT_A, kind="system", title="two", summary="second")
+    path = un._file_path(TENANT_A)
+    notify(TENANT_A, kind="system", title="three", summary="x\ud800")
+    items = json.loads(path.read_text(encoding="utf-8"))
+    assert [i["title"] for i in items] == ["one", "two"], items
+
+
+def test_a_refused_decision_sends_no_log_or_notification(store, workspaces, monkeypatch):
+    """A refused decision (already decided, missing, busy, not saved) used to send the
+    "handoff approved/rejected" log line and a decision-titled notification all the same.
+    MUTATION: drop the `if not ok` gate in the approve branch; separately, in the reject
+    branch."""
+    import vaf.core.user_notifications as un
+
+    ws = workspaces
+    notes = []
+    monkeypatch.setattr(un, "append_notification", lambda *a, **kw: notes.append(kw["title"]))
+    hid = _create_handoff(ws)
+    unsaved = ws.tw.create_handoff(TENANT_A, ws.task_a, "Unsaved", "c")["id"]
+    real_save = ws.tw._save_json
+
+    def save(path, value):
+        if isinstance(value, dict) and value.get("id") == unsaved:
+            raise OSError(28, "No space left on device", str(path))
+        return real_save(path, value)
+
+    monkeypatch.setattr(ws.tw, "_save_json", save)
+    seen = []
+    replies = _ws(monkeypatch, role="user", scope=TENANT_A, seen=seen, frames=[
+        _handoff("approve", ws.task_a, hid),
+        _handoff("approve", ws.task_a, hid),
+        _handoff("reject", ws.task_a, hid),
+        _handoff("approve", ws.task_a, "ffff0000"),
+        _handoff("reject", ws.task_a, "ffff0000"),
+        _handoff("approve", ws.task_a, unsaved),
+        _handoff("reject", ws.task_a, unsaved),
+    ])
+    assert replies[0]["ok"] is True
+    errors = [r["error"] for r in replies[1:]]
+    assert errors == ["handoff already decided"] * 2 + ["handoff not found"] * 2 + [
+        "handoff decision not saved"] * 2, errors
+    logs = [m["entry"]["message"] for m in seen if m.get("type") == "new_log"
+            and "Thinking Workspace handoff" in m["entry"]["message"]]
+    assert len(logs) == 1 and hid in logs[0] and "approved" in logs[0], logs
+    assert notes == ["Workspace handoff approved"], notes
+
+
+# ── seeded fuzz: any interleaving of approve and reject decides once ──────────
+
+def _decision_fuzz(ws, store, monkeypatch, draws: int, seed: int = 4444) -> list:
+    """Per draw: 2 to 4 threads behind one barrier, each approving or rejecting one fresh
+    handoff, with or without a create action; sometimes an approval first crashes after its
+    claim. Returns the draws that broke the invariant."""
+    rng = random.Random(seed)
+    tw = ws.tw
+    real_apply = tw._apply_automation_action
+    bad = []
+    for draw in range(draws):
+        with_create = rng.random() < 0.7
+        crash = with_create and rng.random() < 0.3
+        actions = [rng.choice(("approve", "reject")) for _ in range(rng.randint(2, 4))]
+        if with_create:
+            hid = _create_handoff(ws, f"fuzz {draw}")
+        else:
+            hid = tw.create_handoff(TENANT_A, ws.task_a, "Plain", "c")["id"]
+        before = _a_tasks(store)
+        if crash:
+            def crash_once(*a, **kw):
+                raise _Crash()
+            monkeypatch.setattr(tw, "_apply_automation_action", crash_once)
+            try:
+                tw.approve_handoff(TENANT_A, ws.task_a, hid)
+            except _Crash:
+                pass
+            monkeypatch.setattr(tw, "_apply_automation_action", real_apply)
+
+        def call(action):
+            if action == "approve":
+                return lambda: tw.approve_handoff(TENANT_A, ws.task_a, hid)
+            return lambda: tw.reject_handoff(TENANT_A, ws.task_a, hid, reason="no")
+
+        out = _race([call(a) for a in actions])
+        record = _record(ws, hid)
+        made = len(_a_tasks(store) - before)
+        trues = [o for o in out if o is True]
+        others = [o for o in out if o is not True]
+        # After a crash the claimed approval is finished by whichever call locks first; a
+        # reject finishing it answers "already decided", and so does every call after it.
+        allowed = {0, 1} if (crash and "approve" in actions) else {0} if crash else {1}
+        problems = []
+        if len(trues) not in allowed:
+            problems.append(f"{len(trues)} calls returned True")
+        if not all(isinstance(o, tw.HandoffAlreadyDecided) for o in others):
+            problems.append(f"outcomes {out!r}")
+        if record.get("status") not in ("approved", "rejected") or "claim" in record:
+            problems.append(f"record {record.get('status')} claim={'claim' in record}")
+        if crash and record.get("status") != "approved":
+            problems.append("a claimed approval was not finished")
+        want_made = 1 if (with_create and record.get("status") == "approved") else 0
+        if made != want_made:
+            problems.append(f"{made} automations created")
+        if problems:
+            bad.append((draw, actions, with_create, crash, problems))
+    return bad
+
+
+def test_decision_interleavings_fuzz(store, workspaces, monkeypatch):
+    """MUTATION: replace `_decision_lock` with `contextlib.nullcontext()`.
+    `VAF_FUZZ_DRAWS` raises the draw count for a run outside the suite."""
+    draws = int(os.environ.get("VAF_FUZZ_DRAWS", "12"))
+    bad = _decision_fuzz(workspaces, store, monkeypatch, draws)
+    assert bad == [], bad[:5]

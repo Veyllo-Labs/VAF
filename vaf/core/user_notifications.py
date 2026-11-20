@@ -104,8 +104,14 @@ def append_notification(
     items.append(item)
     items = _trim(items)
     try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(items, f, ensure_ascii=False, indent=0)
+        # Encoded in full before any file is opened, then temp file + replace: a streamed
+        # dump into the truncated file stopped at the first value that does not encode (a
+        # lone surrogate), the cut-off file read back as an empty list, and the next append
+        # replaced every earlier notification of the account. Now that one notification is
+        # dropped and logged. Plain JSON: `get_notifications` reads it as such.
+        from vaf.core.data_files import write_json_atomic
+
+        write_json_atomic(path, items, encrypt=False, indent=0)
     except Exception as e:
         logger.warning("Could not write notifications file %s: %s", path, e)
     # Live push to Web UI

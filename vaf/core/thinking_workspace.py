@@ -15,8 +15,11 @@ MVP safety defaults:
 from __future__ import annotations
 
 import json
+import re
 import shutil
+import threading
 import uuid
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -86,6 +89,62 @@ class HandoffAlreadyDecided(Exception):
     """The handoff was approved or rejected before; it is not applied again."""
 
 
+class HandoffBusy(Exception):
+    """Another decision of the same account held the decision lock past the timeout."""
+
+
+class HandoffNotSaved(Exception):
+    """A decision could not be written. The handoff is still pending; when its approval was
+    already claimed, the next approve or reject finishes it without applying it twice."""
+
+
+# One decision at a time per account. The holder's work takes milliseconds (8 ms median,
+# 326 ms at most, measured with a create action); a caller that waits longer than this
+# answers "busy" instead of blocking its connection indefinitely.
+_DECISION_LOCK_TIMEOUT_S = 5.0
+
+# Used only when the filelock package cannot be imported: it serializes the decisions of
+# this process (the tray's two listeners run in one), not those of a second process.
+_FALLBACK_DECISION_LOCK = threading.Lock()
+
+
+@contextmanager
+def _decision_lock(user_scope_id: Optional[str]):
+    """Hold the account's decision lock, `<workspace>/handoff.lock`, or raise `HandoffBusy`.
+
+    A kernel lock (`flock`, `msvcrt.locking` through filelock), not a marker file: the
+    operating system releases it when its holder dies, so a crashed process never blocks the
+    next decision, and two threads of one process exclude each other because every call
+    opens its own descriptor. The path comes from the connection's scope alone, and the
+    machine owner's aliases share it because they share the workspace.
+
+    Named boundary: without filelock only this process is serialized."""
+    from vaf.core.secure_store import _get_filelock_cls
+
+    timeout = _DECISION_LOCK_TIMEOUT_S
+    lock_cls = _get_filelock_cls()
+    if lock_cls is None:
+        if not _FALLBACK_DECISION_LOCK.acquire(timeout=timeout):
+            raise HandoffBusy("handoff is being decided")
+        try:
+            yield
+        finally:
+            _FALLBACK_DECISION_LOCK.release()
+        return
+    from filelock import Timeout
+
+    lock = lock_cls(str(ensure_workspace(user_scope_id) / "handoff.lock"), timeout=timeout)
+    try:
+        lock.acquire()
+    except Timeout:
+        # A `Timeout` is an `OSError`; left as it is, a caller would answer "not found".
+        raise HandoffBusy("handoff is being decided") from None
+    try:
+        yield
+    finally:
+        lock.release()
+
+
 def _task_root(user_scope_id: Optional[str], task_id: str) -> Path:
     """A task's directory. `task_id` reaches here from the client (the WebSocket handoff
     commands) and from the model (the workspace tools), so it must be ONE entry: a walk
@@ -125,8 +184,12 @@ def _load_json(path: Path, default: Any) -> Any:
 
 
 def _save_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, ensure_ascii=False), encoding="utf-8")
+    """Encode first, then temp file + replace: a value that does not encode (a lone
+    surrogate) raises and leaves the old file as it was, where a truncating write emptied
+    it. Plain JSON (`encrypt=False`): `_load_json` and the handoff list read it as such."""
+    from vaf.core.data_files import write_json_atomic
+
+    write_json_atomic(path, value, encrypt=False, indent=2)
 
 
 def append_event(user_scope_id: Optional[str], task_id: str, event: str, details: Optional[Dict[str, Any]] = None) -> None:
@@ -309,12 +372,17 @@ def get_handoff(user_scope_id: Optional[str], task_id: str, handoff_id: str) -> 
     return handoff
 
 
-def _apply_automation_action(user_scope_id: Optional[str], action: Dict[str, Any]) -> Dict[str, Any]:
+def _apply_automation_action(user_scope_id: Optional[str], action: Dict[str, Any], *,
+                             planned_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Apply approved automation action from a handoff.
     Supported operations:
     - create: requires prompt; optional name/description/frequency/time/weekday/day/enabled
     - update: requires task_id; supports name/description/prompt/frequency/time/weekday/day/enabled
+
+    `planned_id` is the id the approval's claim chose for a create. When a task with that
+    id already exists, an earlier attempt created it and stopped before the decision was
+    saved, so it is reported, not created a second time.
 
     Named boundary: the update asks `AutomationAccess(user_scope_id)` WITHOUT the role, so a
     second admin's approved proposal reaches only its own automations, not the root and
@@ -344,7 +412,10 @@ def _apply_automation_action(user_scope_id: Optional[str], action: Dict[str, Any
                 day = max(1, min(31, int(day)))
             except (TypeError, ValueError):
                 day = None
+        if planned_id and mgr.get(planned_id) is not None:
+            return {"ok": True, "operation": "create", "task_id": planned_id}
         task = AutomationTask(
+            **({"id": planned_id} if planned_id else {}),
             name=name,
             description=description,
             prompt=prompt,
@@ -415,25 +486,103 @@ def _after_decision(user_scope_id: Optional[str], task_id: str, handoff_id: str,
                                      f"bookkeeping failed after the decision: {e!r}")
 
 
+# An id this module chose for a planned create: 8 lowercase hex characters, the shape of
+# `AutomationTask`'s default id. The id becomes a file name in the automation store, so a
+# claim carrying anything else is not trusted as one.
+_CLAIM_ID = re.compile(r"[0-9a-f]{8}")
+
+
+def _valid_claim(handoff: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The approval claim saved on a pending handoff, or None when there is none this
+    module would have written (no action, another shape, an id that is not 8 hex)."""
+    claim = handoff.get("claim")
+    if not isinstance(handoff.get("automation_action"), dict) or not isinstance(claim, dict):
+        return None
+    if claim.get("decision") != "approve":
+        return None
+    planned = claim.get("automation_id")
+    if planned is not None and not (isinstance(planned, str) and _CLAIM_ID.fullmatch(planned)):
+        return None
+    return claim
+
+
+def _unused_automation_id(user_scope_id: Optional[str]) -> str:
+    """An 8-hex automation id that no task of this account's store carries yet."""
+    from vaf.core.automation import AutomationManager
+
+    taken = AutomationManager(user_scope_id=user_scope_id).tasks
+    while True:
+        candidate = uuid.uuid4().hex[:8]
+        if candidate not in taken:
+            return candidate
+
+
+def _save_decision(hpath: Path, handoff: Dict[str, Any]) -> None:
+    """`_save_json` for a decision record. A failure becomes `HandoffNotSaved`, with fixed
+    text: the `OSError` names the server's data path."""
+    try:
+        _save_json(hpath, handoff)
+    except (OSError, ValueError):
+        raise HandoffNotSaved("handoff decision not saved") from None
+
+
+def _approve_locked(user_scope_id: Optional[str], hpath: Path,
+                    handoff: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Approve a pending handoff while the decision lock is held; the action's result.
+
+    With an automation action the approval is CLAIMED on the pending record before the
+    action runs, carrying the id a create will use, and the claim is replaced by the
+    `approved` status after it. A crash or a failed save anywhere in between leaves the
+    claim, and the next call finishes from it: a create whose task already exists is not
+    created again, an update is applied again with the same values."""
+    action = handoff.get("automation_action")
+    if not isinstance(action, dict):
+        handoff.pop("claim", None)
+        handoff["status"] = "approved"
+        handoff["approved_at"] = datetime.now().isoformat()
+        _save_decision(hpath, handoff)
+        return None
+    claim = _valid_claim(handoff)
+    if claim is None:
+        claim = {"decision": "approve", "claimed_at": datetime.now().isoformat()}
+        op = str(action.get("operation") or "").strip().lower()
+        if op == "create" and str(user_scope_id or "").strip():
+            # Never for a blank scope: that manager would be every account's store, and
+            # the action itself is refused for it anyway.
+            claim["automation_id"] = _unused_automation_id(user_scope_id)
+        handoff["claim"] = claim
+        _save_decision(hpath, handoff)
+    result = _apply_automation_action(user_scope_id, action,
+                                      planned_id=claim.get("automation_id"))
+    handoff["automation_action_result"] = result
+    handoff.pop("claim", None)
+    handoff["status"] = "approved"
+    handoff["approved_at"] = datetime.now().isoformat()
+    _save_decision(hpath, handoff)
+    return result
+
+
 def approve_handoff(user_scope_id: Optional[str], task_id: str, handoff_id: str) -> bool:
     """Approve a pending handoff and apply its automation action, once. False for a missing
     handoff; `HandoffAlreadyDecided` for one decided before, so a retry never applies the
-    action a second time.
+    action a second time; `HandoffBusy` when another decision of the account holds the lock
+    past the timeout; `HandoffNotSaved` when a save failed (the handoff stays pending, and a
+    claimed approval is finished by the next approve or reject).
 
-    Named boundary: the pending check and the save are not one atomic step, so two
-    approvals of the same handoff at the same instant (two sockets) can both pass the
-    check. One connection's commands run one after another."""
-    found = _decide(user_scope_id, task_id, handoff_id)
-    if found is None:
-        return False
-    hpath, mdpath, handoff = found
-    handoff["status"] = "approved"
-    handoff["approved_at"] = datetime.now().isoformat()
-    action_result = None
-    if isinstance(handoff.get("automation_action"), dict):
-        action_result = _apply_automation_action(user_scope_id, handoff.get("automation_action") or {})
-        handoff["automation_action_result"] = action_result
-    _save_json(hpath, handoff)
+    Decisions of one account run one at a time (`_decision_lock`), so two connections, the
+    tray's two listeners or a second process cannot both pass the pending check.
+
+    Named boundaries of the retry after a crash or a failed save: an update is applied again
+    with the approved values, so a manual edit of that automation in between is overwritten;
+    a created task that was deleted in between is created again, because that is what the
+    approval asked for; another task created in the same account with the same random 8-hex
+    id in between would be taken for the planned one (a 2^-32 chance)."""
+    with _decision_lock(user_scope_id):
+        found = _decide(user_scope_id, task_id, handoff_id)
+        if found is None:
+            return False
+        hpath, mdpath, handoff = found
+        action_result = _approve_locked(user_scope_id, hpath, handoff)
     _after_decision(user_scope_id, task_id, handoff_id, hpath, mdpath, "approved",
                     "handoff_approved",
                     {"handoff_id": handoff_id, "automation_action_result": action_result})
@@ -442,16 +591,34 @@ def approve_handoff(user_scope_id: Optional[str], task_id: str, handoff_id: str)
 
 def reject_handoff(user_scope_id: Optional[str], task_id: str, handoff_id: str, reason: str = "") -> bool:
     """Reject a pending handoff. False for a missing one; `HandoffAlreadyDecided` for one
-    decided before."""
-    found = _decide(user_scope_id, task_id, handoff_id)
-    if found is None:
-        return False
-    hpath, mdpath, handoff = found
-    handoff["status"] = "rejected"
-    handoff["rejected_at"] = datetime.now().isoformat()
-    if reason:
-        handoff["rejected_reason"] = reason[:500]
-    _save_json(hpath, handoff)
+    decided before; `HandoffBusy` and `HandoffNotSaved` as for `approve_handoff`.
+
+    An approval that was claimed first is the decision: a reject finishes it (an automation
+    may already exist under it) and answers `HandoffAlreadyDecided`, never stores `rejected`.
+    A lone surrogate in the reason becomes `?`: it cannot be encoded, and the save would
+    fail on it."""
+    reason = str(reason or "").encode("utf-8", errors="replace").decode("utf-8")
+    finished_approval = False
+    with _decision_lock(user_scope_id):
+        found = _decide(user_scope_id, task_id, handoff_id)
+        if found is None:
+            return False
+        hpath, mdpath, handoff = found
+        if _valid_claim(handoff) is not None:
+            action_result = _approve_locked(user_scope_id, hpath, handoff)
+            finished_approval = True
+        else:
+            handoff.pop("claim", None)
+            handoff["status"] = "rejected"
+            handoff["rejected_at"] = datetime.now().isoformat()
+            if reason:
+                handoff["rejected_reason"] = reason[:500]
+            _save_decision(hpath, handoff)
+    if finished_approval:
+        _after_decision(user_scope_id, task_id, handoff_id, hpath, mdpath, "approved",
+                        "handoff_approved",
+                        {"handoff_id": handoff_id, "automation_action_result": action_result})
+        raise HandoffAlreadyDecided(handoff_id)
     _after_decision(user_scope_id, task_id, handoff_id, hpath, mdpath, "rejected",
                     "handoff_rejected", {"handoff_id": handoff_id, "reason": reason[:200]})
     return True

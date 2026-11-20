@@ -130,7 +130,7 @@ def _fallback_decision_lock(user_scope_id: Optional[str]) -> threading.Lock:
 
 
 @contextmanager
-def _decision_lock(user_scope_id: Optional[str]):
+def _decision_lock(user_scope_id: Optional[str], timeout: Optional[float] = None):
     """Hold the account's decision lock, `<workspace>/handoff.lock`, or raise `HandoffBusy`
     (waited past the timeout) or `HandoffNotSaved` (the lock file could not be opened).
 
@@ -140,10 +140,14 @@ def _decision_lock(user_scope_id: Optional[str]):
     opens its own descriptor. The path comes from the connection's scope alone, and the
     machine owner's aliases share it because they share the workspace.
 
+    `timeout` is how long to wait for the lock (`_DECISION_LOCK_TIMEOUT_S` when None); 0 tries
+    once, for a caller that waits elsewhere (the WebSocket waits on its event loop, so no
+    worker thread is held while another decision has the lock).
+
     Named boundary: without filelock only this process is serialized."""
     from vaf.core.secure_store import _get_filelock_cls
 
-    timeout = _DECISION_LOCK_TIMEOUT_S
+    timeout = _DECISION_LOCK_TIMEOUT_S if timeout is None else max(0.0, float(timeout))
     lock_cls = _get_filelock_cls()
     if lock_cls is None:
         try:
@@ -369,8 +373,9 @@ _ACTION_TEXT_FIELDS = ("operation", "task_id", "prompt", "name", "description", 
 
 
 def _action_type_error(action: Dict[str, Any]) -> Optional[str]:
-    """The first field of an automation action with a type the action cannot use, or None.
-    Text fields must be strings, `day` a whole number or a string (it is parsed)."""
+    """The first field of an automation action with a type or value the action cannot use,
+    or None. Text fields must be strings, `day` a whole number or a string (it is parsed),
+    `enabled` a bool, a number or a word that says on or off (`read_enabled`)."""
     for key in _ACTION_TEXT_FIELDS:
         value = action.get(key)
         if value is not None and not isinstance(value, str):
@@ -378,6 +383,14 @@ def _action_type_error(action: Dict[str, Any]) -> Optional[str]:
     day = action.get("day")
     if day is not None and (isinstance(day, bool) or not isinstance(day, (int, str))):
         return "day"
+    enabled = action.get("enabled")
+    if enabled is not None:
+        from vaf.core.automation import read_enabled
+
+        if read_enabled(enabled) is None:
+            # Applied it would be off (it fails closed); refused here so the proposal
+            # says what it means.
+            return "enabled"
     return None
 
 
@@ -396,7 +409,8 @@ def create_handoff(
         bad = _action_type_error(automation_action)
         if bad is not None:
             # Refused where the proposal is made, so its author can correct it.
-            raise ValueError(f"invalid automation action: {bad!r} has the wrong type")
+            raise ValueError(f"invalid automation action: {bad!r} has a type or value "
+                             f"that cannot be used")
     handoff_id = str(uuid.uuid4())[:8]
     handoff = {
         "id": handoff_id,
@@ -607,7 +621,8 @@ def _planned_task_exists(user_scope_id: Optional[str], planned_id: Optional[str]
 
     try:
         return scoped_task_record(str(user_scope_id), planned_id) is not None
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, RecursionError) as e:
+        # RecursionError: json.loads on a deeply nested file; unreadable all the same.
         append_domain_log("backend", f"[THINKING_WORKSPACE] planned automation unreadable: "
                                      f"{e!r}")
         raise HandoffNotSaved("handoff decision not saved") from None
@@ -696,7 +711,8 @@ def _approve_locked(user_scope_id: Optional[str], hpath: Path,
     return _finish_approval(hpath, handoff, result)
 
 
-def approve_handoff(user_scope_id: Optional[str], task_id: str, handoff_id: str) -> bool:
+def approve_handoff(user_scope_id: Optional[str], task_id: str, handoff_id: str, *,
+                    lock_timeout: Optional[float] = None) -> bool:
     """Approve a pending handoff and apply its automation action, once. False for a missing
     handoff (or an id that is not one entry, answered before any wait for the lock);
     `HandoffAlreadyDecided` for one decided before, so a retry never applies the action a
@@ -706,6 +722,7 @@ def approve_handoff(user_scope_id: Optional[str], task_id: str, handoff_id: str)
 
     Decisions of one account run one at a time (`_decision_lock`), so two connections, the
     tray's two listeners or a second process cannot both pass the pending check.
+    `lock_timeout` is how long to wait for that lock (five seconds when None, 0 to try once).
 
     Named boundaries of the retry after a crash or a failed save: an update is applied again
     with the approved values, so a manual edit of that automation in between is overwritten;
@@ -714,7 +731,7 @@ def approve_handoff(user_scope_id: Optional[str], task_id: str, handoff_id: str)
     id in between would be taken for the planned one (a 2^-32 chance)."""
     if not _ids_are_entries(task_id, handoff_id):
         return False
-    with _decision_lock(user_scope_id):
+    with _decision_lock(user_scope_id, lock_timeout):
         found = _decide(user_scope_id, task_id, handoff_id)
         if found is None:
             return False
@@ -726,7 +743,8 @@ def approve_handoff(user_scope_id: Optional[str], task_id: str, handoff_id: str)
     return True
 
 
-def reject_handoff(user_scope_id: Optional[str], task_id: str, handoff_id: str, reason: str = "") -> bool:
+def reject_handoff(user_scope_id: Optional[str], task_id: str, handoff_id: str, reason: str = "",
+                   *, lock_timeout: Optional[float] = None) -> bool:
     """Reject a pending handoff. False for a missing one; `HandoffAlreadyDecided` for one
     decided before; `HandoffBusy` and `HandoffNotSaved` as for `approve_handoff`.
 
@@ -740,7 +758,7 @@ def reject_handoff(user_scope_id: Optional[str], task_id: str, handoff_id: str, 
     if not _ids_are_entries(task_id, handoff_id):
         return False
     finished_approval = False
-    with _decision_lock(user_scope_id):
+    with _decision_lock(user_scope_id, lock_timeout):
         found = _decide(user_scope_id, task_id, handoff_id)
         if found is None:
             return False

@@ -59,8 +59,33 @@ _WEEKDAY_NAMES = {
     "monday": "monday", "tuesday": "tuesday", "wednesday": "wednesday",
     "thursday": "thursday", "friday": "friday", "saturday": "saturday", "sunday": "sunday",
 }
-_ENABLED_FALSE = frozenset({"false", "0", "no", "off", ""})
-_ENABLED_TRUE = frozenset({"true", "1", "yes", "on"})
+# The words that say off or on, after folding (`read_enabled`). Anything else is not
+# understood, and an automation is then off: a proposal or a request that meant "off" in a
+# word this list lacks must not leave a task running on a schedule.
+_ENABLED_FALSE = frozenset({"false", "0", "no", "off", "", "nein", "aus", "falsch",
+                            "disabled", "disable"})
+_ENABLED_TRUE = frozenset({"true", "1", "yes", "on", "ja", "an", "wahr", "enabled", "enable"})
+
+
+def read_enabled(value: Any) -> Optional[bool]:
+    """True or False for a value that says on or off, None for one that says neither. Text is
+    folded first (`agent_origin.folded_text`: compatibility forms such as a full-width
+    "ｆａｌｓｅ" become plain letters, and invisible characters such as a zero-width space
+    are dropped), then stripped and lower-cased; it is never `bool()`-ed, because
+    `bool("false")` is True. A bool is itself, a number is off when 0."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        from vaf.core.agent_origin import folded_text
+
+        word = folded_text(value).strip().lower()
+        if word in _ENABLED_TRUE:
+            return True
+        if word in _ENABLED_FALSE:
+            return False
+    return None
 
 
 def coerce_schedule_fields(fields: Dict[str, Any]) -> Dict[str, Any]:
@@ -73,10 +98,9 @@ def coerce_schedule_fields(fields: Dict[str, Any]) -> Dict[str, Any]:
       dropped when it does not parse. A string day used to reach `datetime.replace`, which
       raised `TypeError` inside `list()`, and so in the scheduler's start and refresh: one
       approved proposal disarmed every account's automations.
-    - `enabled`: a bool. Text is parsed, never `bool()`-ed: "false", "0", "no", "off" and ""
-      are False, "true", "1", "yes", "on" True (case and spaces ignored); other text is
-      dropped. `bool("false")` is True, which kept running an automation that was meant to
-      be switched off.
+    - `enabled`: a bool, read by `read_enabled` (text folded and parsed, never `bool()`-ed,
+      which kept "false" on). A value that says neither on nor off is False: it fails
+      closed, so an automation meant to be switched off in an unknown word stays off.
     - `weekday`: stripped and lower-cased, a German name mapped to the English one; "" is
       None; anything that is not text is dropped.
 
@@ -91,16 +115,7 @@ def coerce_schedule_fields(fields: Dict[str, Any]) -> Dict[str, Any]:
             del out["day"]
     enabled = out.get("enabled")
     if enabled is not None:
-        if isinstance(enabled, str):
-            word = enabled.strip().lower()
-            if word in _ENABLED_FALSE:
-                out["enabled"] = False
-            elif word in _ENABLED_TRUE:
-                out["enabled"] = True
-            else:
-                del out["enabled"]
-        else:
-            out["enabled"] = bool(enabled)
+        out["enabled"] = read_enabled(enabled) is True
     weekday = out.get("weekday")
     if weekday is not None:
         if isinstance(weekday, str):
@@ -239,9 +254,12 @@ class AutomationTask:
             now = after.astimezone(tz) if tz else after
         try:
             next_time = self._next_clock_time(now, hour, minute)
-        except (ValueError, OverflowError, TypeError, AttributeError):
+        except (ValueError, OverflowError, TypeError, AttributeError) as e:
             # TypeError and AttributeError too: a day or weekday of a type the calendar
-            # cannot take (set past the coercion) must not make list() raise.
+            # cannot take (set past the coercion) must not make list() raise. Logged with
+            # the id only, so a task that is never armed can be found.
+            append_domain_log("backend", f"[AUTOMATION] no next run for {self.id}: "
+                                         f"{type(e).__name__}")
             return None
         return _to_server_local_naive(next_time) if next_time else None
 

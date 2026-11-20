@@ -5119,11 +5119,19 @@ def _emit_sec_ws(detail: str, ip: str = "") -> None:
     except Exception:
         pass
 
-# Thinking-workspace handoff decisions run here, never on the event loop (one may wait
-# seconds for another decision's lock) and never on the loop's default executor, which
-# speech-to-text and other commands share: contending decisions occupy at most these two
-# threads and queue behind them. The lock's own timeout starts inside the worker.
+# Thinking-workspace handoff decisions run here, never on the event loop and never on the
+# loop's default executor, which speech-to-text and other commands share. A worker is held
+# only for one attempt that does not wait for the decision lock (`lock_timeout=0`); the wait
+# for another decision's lock happens on the event loop (`_decide_handoff`), so a locked
+# account never occupies a worker, and at most one decision per account is queued or
+# running at a time. Measured before: with two accounts' locks held, a third account's free
+# decision waited 4.97 s for a worker, and 9.49 s while one account sent eight at once.
 _HANDOFF_DECISION_POOL = None
+_HANDOFF_RETRY_S = 0.05
+# The accounts (workspace keys) with a decision queued or running, in this process: the
+# tray's two listeners run two event loops in two threads, so a thread lock guards it.
+_HANDOFFS_DECIDING: set = set()
+_HANDOFFS_DECIDING_GUARD = threading.Lock()
 
 
 def _handoff_decision_pool():
@@ -5134,10 +5142,42 @@ def _handoff_decision_pool():
     return _HANDOFF_DECISION_POOL
 
 
-async def _decide_handoff(fn, *args, **kwargs):
-    """`fn(*args, **kwargs)` on the handoff decision pool, awaited from the event loop."""
-    return await asyncio.get_running_loop().run_in_executor(
-        _handoff_decision_pool(), functools.partial(fn, *args, **kwargs))
+async def _decide_handoff(user_scope_id, decision, *args, **kwargs):
+    """`decision(*args, **kwargs, lock_timeout=0)` (`approve_handoff` or `reject_handoff`) on
+    the handoff decision pool, awaited from the event loop, at most one per account.
+
+    A second decision of an account that has one queued or running answers `HandoffBusy`
+    ("handoff is being decided") at once, before it takes a place in the pool, so one
+    account cannot fill the pool. A decision whose lock is held elsewhere (a second process,
+    the tray's other listener) gives its worker back after one attempt and tries again here
+    every 50 ms until the decision lock's timeout (`_DECISION_LOCK_TIMEOUT_S`, counted from
+    the first attempt), then answers `HandoffBusy`. The account key is the workspace key
+    (`_scope_key`), so the machine owner's aliases count as one account.
+
+    Named boundary: two workers serve every account, so decisions of more than two accounts
+    at the same instant queue for the length of the decisions ahead of them (milliseconds;
+    with a very large automation store, up to a second each), never for a lock wait."""
+    from vaf.core import thinking_workspace as tw
+
+    key = tw._scope_key(user_scope_id)
+    with _HANDOFFS_DECIDING_GUARD:
+        if key in _HANDOFFS_DECIDING:
+            raise tw.HandoffBusy("handoff is being decided")
+        _HANDOFFS_DECIDING.add(key)
+    try:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + tw._DECISION_LOCK_TIMEOUT_S
+        attempt = functools.partial(decision, *args, lock_timeout=0, **kwargs)
+        while True:
+            try:
+                return await loop.run_in_executor(_handoff_decision_pool(), attempt)
+            except tw.HandoffBusy:
+                if loop.time() >= deadline:
+                    raise
+                await asyncio.sleep(_HANDOFF_RETRY_S)
+    finally:
+        with _HANDOFFS_DECIDING_GUARD:
+            _HANDOFFS_DECIDING.discard(key)
 
 
 async def _announce_handoff_approved(websocket: WebSocket, user_scope_id: Optional[str],
@@ -9037,13 +9077,13 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # data path and is answered like a missing handoff; a handoff decided
                         # before is not applied again. Everything after a saved decision is
                         # best effort and never changes the answer to "not found". The
-                        # decision runs on its own pool (`_handoff_decision_pool`): it may
-                        # wait seconds for another decision's lock, and this loop serves
-                        # every other socket meanwhile.
+                        # decision runs on its own pool, one per account at a time, and a
+                        # wait for another decision's lock happens on this loop between
+                        # attempts (`_decide_handoff`), never holding a worker.
                         refusal = "handoff not found"
                         try:
-                            ok = await _decide_handoff(approve_handoff, user_scope_id,
-                                                       task_id, handoff_id)
+                            ok = await _decide_handoff(user_scope_id, approve_handoff,
+                                                       user_scope_id, task_id, handoff_id)
                         except HandoffAlreadyDecided:
                             ok, refusal = False, "handoff already decided"
                         except HandoffBusy:
@@ -9117,8 +9157,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # "not found"; the notification after a saved decision is best effort.
                         refusal = "handoff not found"
                         try:
-                            ok = await _decide_handoff(reject_handoff, user_scope_id, task_id,
-                                                       handoff_id, reason=reason)
+                            ok = await _decide_handoff(user_scope_id, reject_handoff,
+                                                       user_scope_id, task_id, handoff_id,
+                                                       reason=reason)
                         except HandoffAlreadyApproved as approved:
                             # An approval claimed earlier had already created its automation;
                             # the reject finished it. Not rejected, and the account is told

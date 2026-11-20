@@ -1974,17 +1974,17 @@ def test_the_handoff_tool_refuses_a_mistyped_action(store, workspaces):
 def test_the_websocket_loop_is_free_while_a_decision_waits(store, workspaces, monkeypatch,
                                                            action):
     """A decision waiting for another decision's lock held the event loop that serves every
-    socket of the listener. It now waits on the decision pool: a coroutine scheduled on the
-    session's loop runs while the decision is still waiting, not after it. The lock timeout
-    only bounds the test. MUTATION: call `approve_handoff`, separately `reject_handoff`,
-    directly in its WebSocket branch again."""
+    socket of the listener. Now the probe runs a coroutine on the session's loop while the
+    decision waits, and only then lets the lock go: on a free loop the waiting decision then
+    gets the lock and succeeds; on a blocked loop the probe could run only after the decision
+    had given up as busy. The lock timeout only bounds the test. MUTATION: call
+    `approve_handoff`, separately `reject_handoff`, directly in its WebSocket branch again."""
     import anyio
 
     ws = workspaces
     hid = _create_handoff(ws)
-    monkeypatch.setattr(ws.tw, "_DECISION_LOCK_TIMEOUT_S", 1.5)
-    held, done = threading.Event(), threading.Event()
-    deciding, decided = threading.Event(), threading.Event()
+    monkeypatch.setattr(ws.tw, "_DECISION_LOCK_TIMEOUT_S", 3.0)
+    held, done, deciding = threading.Event(), threading.Event(), threading.Event()
 
     def hold():
         with ws.tw._decision_lock(TENANT_A):
@@ -1996,21 +1996,16 @@ def test_the_websocket_loop_is_free_while_a_decision_waits(store, workspaces, mo
 
     def deciding_wrapper(*a, **kw):
         deciding.set()
-        try:
-            return real(*a, **kw)
-        finally:
-            decided.set()
+        return real(*a, **kw)
 
     monkeypatch.setattr(ws.tw, name, deciding_wrapper)
     holder = threading.Thread(target=hold, daemon=True)
     holder.start()
-    order = []
 
     def probe(session):
         assert deciding.wait(10)   # the decision has started and waits for the lock
         session.portal.call(anyio.sleep, 0)
-        order.append("probe before the decision" if not decided.is_set()
-                     else "probe after the decision")
+        done.set()                 # only now may the decision get the lock
 
     try:
         assert held.wait(10)
@@ -2019,8 +2014,7 @@ def test_the_websocket_loop_is_free_while_a_decision_waits(store, workspaces, mo
     finally:
         done.set()
         holder.join(10)
-    assert replies[0]["error"] == "handoff is being decided", replies[0]
-    assert order == ["probe before the decision"], order
+    assert replies[0]["ok"] is True and replies[0]["error"] is None, replies[0]
 
 
 @pytest.mark.parametrize("action", ["approve", "reject"])
@@ -2156,7 +2150,12 @@ def test_save_task_never_truncates(store):
     ({"enabled": "0"}, {"enabled": False}), ({"enabled": "no"}, {"enabled": False}),
     ({"enabled": ""}, {"enabled": False}), ({"enabled": "true"}, {"enabled": True}),
     ({"enabled": "Yes"}, {"enabled": True}), ({"enabled": "1"}, {"enabled": True}),
-    ({"enabled": "maybe"}, {}), ({"enabled": 0}, {"enabled": False}),
+    ({"enabled": "maybe"}, {"enabled": False}), ({"enabled": 0}, {"enabled": False}),
+    ({"enabled": "nein"}, {"enabled": False}), ({"enabled": "aus"}, {"enabled": False}),
+    ({"enabled": "disabled"}, {"enabled": False}),
+    ({"enabled": "\uff46\uff41\uff4c\uff53\uff45"}, {"enabled": False}),
+    ({"enabled": "false\u200b"}, {"enabled": False}), ({"enabled": ["x"]}, {"enabled": False}),
+    ({"enabled": "ja"}, {"enabled": True}), ({"enabled": "\uff54\uff52\uff55\uff45"}, {"enabled": True}),
     ({"enabled": True}, {"enabled": True}),
     ({"weekday": " Monday "}, {"weekday": "monday"}), ({"weekday": "Montag"}, {"weekday": "monday"}),
     ({"weekday": ""}, {"weekday": None}), ({"weekday": 3}, {}),
@@ -2360,3 +2359,181 @@ def test_a_workspace_setup_failure_is_not_saved_not_missing(store, workspaces, m
         with pytest.raises(ws.tw.HandoffNotSaved):
             decide(TENANT_A, ws.task_a, hid)
     assert ws.tw.approve_handoff(TENANT_A, ws.task_a, "../x") is False
+
+
+# ── one decision per account on the pool, enabled fails closed, small pins ──────
+
+def test_a_locked_account_does_not_delay_another_account(store, workspaces, monkeypatch):
+    """Two accounts whose decision locks are held elsewhere used to hold both workers of the
+    decision pool for the whole lock wait, so a third account's free decision waited for
+    them (measured 4.97 s). A waiting decision now gives its worker back between attempts:
+    the third account's decision finishes while the other two are still waiting. MUTATION:
+    let `_decide_handoff` wait for the lock inside the worker (one call, no `lock_timeout`)."""
+    import asyncio
+
+    import vaf.core.web_server as web_server
+
+    ws = workspaces
+    tw = ws.tw
+    monkeypatch.setattr(tw, "_DECISION_LOCK_TIMEOUT_S", 1.0)
+    hid_a = _create_handoff(ws)
+    task_c = tw.create_task(ADMIN2, "C task", "test")["id"]
+    hid_c = tw.create_handoff(ADMIN2, task_c, "C handoff", "c")["id"]
+    entered = {TENANT_A: threading.Event(), TENANT_B: threading.Event()}
+    real = tw.approve_handoff
+
+    def approve(scope, *a, **kw):
+        if scope in entered:
+            entered[scope].set()
+        return real(scope, *a, **kw)
+
+    done = threading.Event()
+    holding = []
+
+    def hold(scope):
+        with tw._decision_lock(scope):
+            holding.append(scope)
+            done.wait(20)
+
+    holders = [threading.Thread(target=hold, args=(s,), daemon=True) for s in (TENANT_A, TENANT_B)]
+    for h in holders:
+        h.start()
+
+    async def scenario():
+        a = asyncio.ensure_future(web_server._decide_handoff(TENANT_A, approve, TENANT_A,
+                                                             ws.task_a, hid_a))
+        b = asyncio.ensure_future(web_server._decide_handoff(TENANT_B, approve, TENANT_B,
+                                                             ws.task_b, ws.handoff_b))
+        for _ in range(500):
+            if all(e.is_set() for e in entered.values()):
+                break
+            await asyncio.sleep(0.01)
+        c = await web_server._decide_handoff(ADMIN2, approve, ADMIN2, task_c, hid_c)
+        before_them = not a.done() and not b.done()
+        rest = await asyncio.gather(a, b, return_exceptions=True)
+        return c, before_them, rest
+
+    try:
+        for _ in range(500):
+            if len(holding) == 2:
+                break
+            threading.Event().wait(0.01)
+        c, before_them, rest = asyncio.run(scenario())
+    finally:
+        done.set()
+        for h in holders:
+            h.join(10)
+    assert c is True and before_them, (c, before_them, rest)
+    assert all(isinstance(r, tw.HandoffBusy) for r in rest), rest
+
+
+def test_one_account_flooding_decisions_does_not_delay_another(store, monkeypatch):
+    """One account sending many decisions at once filled the pool's two workers and its
+    queue, so another account waited behind all of them (measured 9.49 s for eight). Now an
+    account has at most one decision queued or running: the others answer busy at once, and
+    the other account's decision runs on the free worker. Also pins the pool itself: the
+    decisions run on `vaf-handoff-decision` threads of a `DaemonPool`, not the loop's default
+    executor. MUTATION: drop the per-account check in `_decide_handoff`."""
+    import asyncio
+
+    import vaf.core.thinking_workspace as tw
+    import vaf.core.web_server as web_server
+    from vaf.core.bounded_run import DaemonPool
+
+    assert isinstance(web_server._handoff_decision_pool(), DaemonPool)
+    release = threading.Event()
+    ran_on = []
+
+    def slow(*a, lock_timeout=None):
+        ran_on.append(threading.current_thread().name)
+        release.wait(5)
+        return True
+
+    def fast(*a, lock_timeout=None):
+        ran_on.append(threading.current_thread().name)
+        return True
+
+    async def scenario():
+        floods = [asyncio.ensure_future(web_server._decide_handoff(TENANT_A, slow))
+                  for _ in range(8)]
+        try:
+            await asyncio.sleep(0.1)
+            other = await asyncio.wait_for(web_server._decide_handoff(TENANT_B, fast), 3)
+        finally:
+            release.set()
+        return other, await asyncio.gather(*floods, return_exceptions=True)
+
+    other, floods = asyncio.run(scenario())
+    assert other is True
+    assert floods.count(True) == 1, floods
+    assert sum(isinstance(f, tw.HandoffBusy) for f in floods) == 7, floods
+    assert ran_on and all(n.startswith("vaf-handoff-decision") for n in ran_on), ran_on
+
+
+def test_enabled_fails_closed_and_the_proposal_must_say_it(store, workspaces):
+    """An `enabled` text the coercion did not know left the automation running. It now
+    reads as off, after folding (a full-width "false" and one with a zero-width space are
+    "false"), and a proposal with a word that says neither is refused where it is made.
+    MUTATIONS: let an unknown text read as on; separately, drop the `enabled` check in
+    `_action_type_error`."""
+    from vaf.tools.thinking_workspace_handoff import ThinkingWorkspaceHandoffTool
+
+    ws = workspaces
+    assert auto_mod.read_enabled("maybe") is None
+    assert AutomationTask(enabled="maybe").enabled is False
+    refused = ThinkingWorkspaceHandoffTool().run(
+        task_id=ws.task_a, title="t", content="c", user_scope_id=TENANT_A,
+        automation_action={"operation": "update", "task_id": A_ID, "enabled": "maybe"})
+    assert refused.startswith("Error") and "'enabled'" in refused, refused
+    hid = ws.tw.create_handoff(TENANT_A, ws.task_a, "Off", "c", automation_action={
+        "operation": "update", "task_id": A_ID, "enabled": "\uff46\uff41\uff4c\uff53\uff45"})["id"]
+    assert ws.tw.approve_handoff(TENANT_A, ws.task_a, hid) is True
+    assert json.loads(_path(store, A_ID).read_text(encoding="utf-8"))["enabled"] is False
+
+
+def test_a_deeply_nested_planned_task_keeps_the_claim(store, workspaces, monkeypatch):
+    """A planned task file nested too deeply for the JSON parser raised `RecursionError`,
+    which the strict read did not catch: the WebSocket answered with the raw error text. It
+    is unreadable like any other and answers "not saved". MUTATION: catch only `OSError` and
+    `ValueError` in `_planned_task_exists`."""
+    ws = workspaces
+    hid = _create_handoff(ws)
+    planned = _crash_after_create(ws, monkeypatch, hid)
+    (store / TENANT_A / f"{planned}.json").write_text("[" * 200000, encoding="utf-8")
+    with pytest.raises(ws.tw.HandoffNotSaved):
+        ws.tw.reject_handoff(TENANT_A, ws.task_a, hid)
+    assert _record(ws, hid)["claim"]["automation_id"] == planned
+
+
+def test_a_german_weekday_is_read_where_every_task_is_built(store, monkeypatch):
+    """The German weekday map moved into the shared coercion; a task built with " Freitag "
+    (also by the agent's create tool) runs on Fridays, not on Monday, the fallback of an
+    unknown name. MUTATION: drop the weekday line of `AutomationTask.__post_init__`."""
+    from vaf.tools.automation import AutomationTool
+
+    assert AutomationTask(frequency="weekly", weekday=" Freitag ").weekday == "friday"
+    monkeypatch.setattr(auto_mod, "ensure_scheduler_started", lambda **kw: (None, False))
+    before = _a_tasks(store)
+    out = AutomationTool().run(name="Fridays", prompt="weekly on fridays", frequency="weekly",
+                               weekday="Freitag", time="13:30", user_scope_id=TENANT_A,
+                               user_role="user")
+    assert "Created" in out, out
+    made = _a_tasks(store) - before
+    assert len(made) == 1, made
+    stored = json.loads((store / TENANT_A / f"{next(iter(made))}.json").read_text(encoding="utf-8"))
+    assert stored["weekday"] == "friday", stored
+
+
+def test_a_next_run_that_cannot_be_read_is_logged_by_id(monkeypatch):
+    """`calculate_next_run` answers None for a field it cannot use; that is now logged with
+    the task id and the error's name only, so a task that is never armed can be found.
+    MUTATION: drop the log line."""
+    lines = []
+    monkeypatch.setattr(auto_mod, "append_domain_log", lambda domain, text: lines.append(text))
+    task = AutomationTask(id="abcd0123", frequency="monthly", day=5, time="08:00",
+                          prompt="secret prompt")
+    task.day = "x"
+    assert task.calculate_next_run() is None
+    assert len(lines) == 1 and "abcd0123" in lines[0] and "TypeError" in lines[0], lines
+    assert "secret" not in lines[0]
+

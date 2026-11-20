@@ -16,6 +16,10 @@ already show, computed with the standard library's zoneinfo - asked again after 
 MUTATION: restore the third-party clock and the first test goes red (pytz is blocked here,
 as it is missing on a fresh install); restore the old monthly branch and the 31st test
 goes red.
+
+The clock runs only a task that is still on disk as it was armed (`_clock_record_verdict`),
+so every task here is saved through `create` first and the copy it returns, the task as
+stored, is what gets armed: the scheduler arms what it loaded from the store.
 """
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -38,6 +42,8 @@ def manager(tmp_path, monkeypatch):
     monkeypatch.setitem(__import__("sys").modules, "pytz", None)
     mgr = AutomationManager(storage_dir=str(tmp_path / "automations"))
     mgr._log_scheduler_event = lambda msg: None
+    # `create` mirrors into the thinking workspace, which lives under Platform.data_dir().
+    mgr._sync_workspace_automation_state = lambda *a, **kw: None
     ran = []
     mgr._run_scheduled_task = lambda task: ran.append(task.id)
     mgr.ran = ran
@@ -49,16 +55,22 @@ def _task(**kw):
     return AutomationTask(**{**base, **kw})
 
 
-def test_a_task_with_an_owner_timezone_is_armed_without_pytz(manager):
-    task = _task()
+def _arm(manager, **kw):
+    """Save the task to the store and arm the stored copy, as the scheduler does."""
+    task = manager.create(_task(**kw))
     manager._schedule_task(task)
+    return task
+
+
+def test_a_task_with_an_owner_timezone_is_armed_without_pytz(manager):
+    task = _arm(manager)
     job = manager._clock_jobs["t1"]
     assert job.due == task.calculate_next_run(), "the scheduler fires at the next run the lists show"
     assert job.due.astimezone(TOKYO).strftime("%H:%M") == "08:00", "08:00 in the owner's zone"
 
 
 def test_a_due_task_runs_once_and_is_armed_for_its_next_run(manager):
-    manager._schedule_task(_task())
+    _arm(manager)
     first = manager._clock_jobs["t1"].due
     manager._run_due_clock_jobs(now=first - timedelta(seconds=30))
     assert manager.ran == [], "not before its time"
@@ -69,7 +81,7 @@ def test_a_due_task_runs_once_and_is_armed_for_its_next_run(manager):
 
 
 def test_a_one_time_task_ends_after_it_fired(manager):
-    manager._schedule_task(_task(id="once", frequency="once"))
+    _arm(manager, id="once", frequency="once")
     due = manager._clock_jobs["once"].due
     manager._run_due_clock_jobs(now=due + timedelta(seconds=5))
     assert manager.ran == ["once"] and "once" not in manager._clock_jobs
@@ -79,7 +91,7 @@ def test_a_failing_run_does_not_stop_the_clock(manager):
     def boom(task):
         raise RuntimeError("provider down")
     manager._run_scheduled_task = boom
-    manager._schedule_task(_task())
+    _arm(manager)
     due = manager._clock_jobs["t1"].due
     manager._run_due_clock_jobs(now=due + timedelta(seconds=5))
     assert manager._clock_jobs["t1"].due > due

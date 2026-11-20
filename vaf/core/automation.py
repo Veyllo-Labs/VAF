@@ -2074,9 +2074,22 @@ vaf automation delete <id>   # Delete task
                         append_domain_log("backend", f"[AUTOMATION] run log not restored for {task_id}: {_e}")
                 # Back into the cache inside the lock, in the order the file changed.
                 self.tasks[task_id] = task
-            return True
         except Exception:
             return False
+
+        # After the store lock is released (`_store_lock` is a leaf): the mirror that the
+        # delete set to switched off shows the task's real state again, and the running
+        # scheduler arms it as after a create. Every lane mutates through a fresh manager, so
+        # without the refresh the restored task stayed unarmed (and a restored event task
+        # out of the scheduler's list) until the next create, update or restart. Best-effort:
+        # the task is back on disk either way.
+        self._sync_workspace_automation_state(task, event="automation_restored")
+        try:
+            if not refresh_scheduler_from_disk(origin=f"restore:{task_id}") and self._running:
+                self._schedule_task(task)
+        except Exception as e:
+            self._log_scheduler_event(f"RESTORE_ARM_FAILED task_id={task_id} error={e!r}")
+        return True
     
     def list_trash(self) -> List[AutomationTask]:
         """List all tasks in trash."""
@@ -3087,6 +3100,39 @@ vaf automation delete <id>   # Delete task
             f"next={due:%Y-%m-%d %H:%M}"
         )
 
+    def _clock_record_verdict(self, task: AutomationTask) -> Tuple[str, str]:
+        """Whether a due clock job may run, judged against the task's record on disk now:
+        ("run", ""), ("drop", reason) or ("skip", reason).
+
+        The scheduler holds its own copy of every task, and every lane deletes, moves to the
+        trash or switches off through a manager of its own (another process too: the
+        terminal while the web app runs), so the copy outlives the task. Measured before this
+        check: a daily task deleted in the app or by the agent ran its full prompt at its
+        next time, and was armed again for the day after, until a refresh or restart.
+
+        - drop: the file is gone or names another task, the id now names a task created anew
+          (another `incarnation`), the task is switched off, or it is no longer a clock task;
+        - skip: the file is there but cannot be read as a record (a manual edit half
+          written), so this one slot is not run and the task is not taken for deleted.
+
+        Read without the store lock: every write is a temp file put in place, so a read sees a
+        whole record. The run itself still gets the scheduler's copy (a prompt or time edited
+        in another process arrives at the next refresh)."""
+        try:
+            record = _read_task_record(self._path_for_task(task), strict=True)
+            if record is None or str(record.get("id")).strip() != str(task.id):
+                return "drop", "task gone"
+            if _incarnation(record.get("incarnation")) != task.incarnation:
+                return "drop", "created anew"
+            current = AutomationTask.from_dict(record)
+        except Exception:
+            return "skip", "record unreadable"
+        if not current.enabled:
+            return "drop", "disabled"
+        if current.frequency == Frequency.ON_EVENT:
+            return "drop", "no longer a clock task"
+        return "run", ""
+
     def _run_due_clock_jobs(self, now: Optional[datetime] = None) -> None:
         """Run every armed clock task that is due, then arm it for its next run (a one-time
         task ends). Called on the scheduler loop's tick; `now` is naive server-local."""
@@ -3094,10 +3140,20 @@ vaf automation delete <id>   # Delete task
         with self._clock_lock:
             due = [job for job in self._clock_jobs.values() if job.due <= now]
         for job in sorted(due, key=lambda j: j.due):
-            try:
-                self._run_scheduled_task(job.task)
-            except Exception as e:
-                self._log_scheduler_event(f"RUN_FAILED task_id={job.task.id} error={e!r}")
+            verdict, reason = self._clock_record_verdict(job.task)
+            if verdict == "drop":
+                with self._clock_lock:
+                    if self._clock_jobs.get(job.task.id) is job:
+                        del self._clock_jobs[job.task.id]
+                self._log_scheduler_event(f"CLOCK_DROPPED task_id={job.task.id} reason={reason!r}")
+                continue
+            if verdict == "skip":
+                self._log_scheduler_event(f"CLOCK_SKIPPED task_id={job.task.id} reason={reason!r}")
+            else:
+                try:
+                    self._run_scheduled_task(job.task)
+                except Exception as e:
+                    self._log_scheduler_event(f"RUN_FAILED task_id={job.task.id} error={e!r}")
             with self._clock_lock:
                 if self._clock_jobs.get(job.task.id) is not job:
                     continue  # a refresh re-armed or removed it meanwhile

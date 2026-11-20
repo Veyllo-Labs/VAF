@@ -118,6 +118,37 @@ def _armed_scheduler(monkeypatch):
     return sched, stop
 
 
+class _Clock:
+    """A clock the test sets: the scheduler's `datetime.now()` and the owner's time
+    (`user_time.user_now`, no time zone) both read `self.now`, so arming a job and ticking
+    it count from the same moment and never cross a real slot by chance."""
+
+    def __init__(self, monkeypatch, start: datetime):
+        import vaf.core.user_time as user_time
+        self.now = start
+        clock = self
+
+        class _Now(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return clock.now
+
+        monkeypatch.setattr(auto_mod, "datetime", _Now)
+        monkeypatch.setattr(user_time, "user_now", lambda username=None, identity=None: clock.now)
+        monkeypatch.setattr(user_time, "resolve_user_timezone",
+                            lambda username=None, identity=None: None)
+
+
+_DAY = datetime(2026, 3, 2)
+
+
+def _set_frequency(store, frequency: str, task_id: str = CLOCK_ID) -> None:
+    path = _path(store, task_id)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record["frequency"] = frequency
+    path.write_text(json.dumps(record), encoding="utf-8")
+
+
 def _trash(task_id: str = CLOCK_ID) -> None:
     from vaf.tools.automation import DeleteAutomationTool
     assert "Moved to Trash" in DeleteAutomationTool().run(task_id=task_id, **TENANT)
@@ -339,8 +370,11 @@ def test_an_id_spelled_differently_on_disk(store, monkeypatch, frequency, spelli
     a JSON number for an all-digit id) passes the id check, which reads it stripped. The run
     and the armed job keep the id the job is armed under: deleting the job by the record's
     spelling raised KeyError out of the tick, which ended the scheduler loop for every
-    account. MUTATION: take the record's id for the run and the job (no `current.id = task.id`,
-    and the key read from `job.task` after the claim)."""
+    account. The run's bookkeeping writes onto the same file under the same cache key: kept
+    as the record spells it, the stamp went into a second file (`" aaaa0001 .json"`) and a
+    number id added a second cache key. MUTATION: take the record's id in
+    `_task_from_record` (no `fresh.id = task.id`); separately, read the job's key from
+    `job.task` after the claim."""
     task_id = CLOCK_ID if spelling == "spaces" else "12345678"
     written = f" {CLOCK_ID} " if spelling == "spaces" else 12345678
     path = _write(store["root"], AutomationTask(id=task_id, name="Report", prompt="report",
@@ -359,6 +393,78 @@ def test_an_id_spelled_differently_on_disk(store, monkeypatch, frequency, spelli
             assert sched._clock_jobs[task_id].due > due, "armed for its next run"
         else:
             assert task_id not in sched._clock_jobs, "a one-time task ends"
+        run = next(t for t in sched.ran_tasks if t.id == task_id)
+        sched._record_successful_run(run)
+        names = {p.name for p in auto_mod._task_files(path.parent)}
+        assert names == {f"{CLOCK_ID}.json", f"{EVENT_ID}.json", path.name}, names
+        assert json.loads(path.read_text(encoding="utf-8"))["last_run"], "the run is stamped"
+        assert [k for k in sched.tasks if str(k).strip() == task_id] == [task_id]
+    finally:
+        stop.set()
+
+
+@pytest.mark.parametrize("scope", [123, ["x"], True], ids=["number", "list", "bool"])
+def test_a_scope_that_is_not_text_is_read_from_the_folder(store, monkeypatch, scope):
+    """A `user_scope_id` that is not text made every path of the task raise: the clock
+    failed on that job on every tick, before the other accounts' jobs due after it. A
+    scope is text or nothing (`AutomationTask.__post_init__`); nothing is the scope of the
+    folder the file lives in, so the task runs as the account whose folder holds it.
+    MUTATION: keep a scope that is not text."""
+    path = _path(store, CLOCK_ID)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record["user_scope_id"] = scope
+    path.write_text(json.dumps(record), encoding="utf-8")
+    assert AutomationTask.from_dict(record).user_scope_id is None
+    sched, stop = _armed_scheduler(monkeypatch)
+    try:
+        due = _tick(sched)
+        assert sorted(sched.ran) == sorted([CLOCK_ID, OTHER_ID])
+        run = next(t for t in sched.ran_tasks if t.id == CLOCK_ID)
+        assert run.user_scope_id == TENANT_A
+        assert sched._clock_jobs[CLOCK_ID].due > due
+    finally:
+        stop.set()
+
+
+def test_one_job_that_raises_does_not_stop_the_others(store, monkeypatch):
+    """An exception out of one job's handling gives up that job's slot (it is armed for the
+    next one) and the tick goes on with the jobs after it. MUTATION: handle the due jobs
+    without the try around each one."""
+    sched, stop = _armed_scheduler(monkeypatch)
+    try:
+        real = sched._clock_record_verdict
+
+        def verdict(task):
+            if task.id == CLOCK_ID:
+                raise TypeError("a job that breaks")
+            return real(task)
+
+        monkeypatch.setattr(sched, "_clock_record_verdict", verdict)
+        due = _tick(sched)
+        assert sched.ran == [OTHER_ID]
+        assert sched._clock_jobs[CLOCK_ID].due > due, "the failing job gave up this slot"
+        assert any(m.startswith(f"CLOCK_JOB_FAILED task_id={CLOCK_ID}") for m in store["logs"])
+    finally:
+        stop.set()
+
+
+def test_a_path_that_cannot_be_built_skips_one_slot(store, monkeypatch):
+    """The verdict answers skip when even the task's path cannot be built, as for a record
+    it cannot read. MUTATION: build the path before the verdict's try."""
+    sched, stop = _armed_scheduler(monkeypatch)
+    try:
+        real = sched._path_for_task
+
+        def path_for(task):
+            if task.id == CLOCK_ID:
+                raise TypeError("no path")
+            return real(task)
+
+        monkeypatch.setattr(sched, "_path_for_task", path_for)
+        due = _tick(sched)
+        assert sched.ran == [OTHER_ID]
+        assert sched._clock_jobs[CLOCK_ID].due > due
+        assert f"CLOCK_SKIPPED task_id={CLOCK_ID} reason='record unreadable'" in store["logs"]
     finally:
         stop.set()
 
@@ -560,15 +666,17 @@ def test_a_one_time_slot_claimed_during_the_refresh_runs_once(store, monkeypatch
     """A tick that claims a one-time task while a refresh reads the store ends its job; the
     refresh arms the task again from its file (still there when the run has not removed it
     yet, or its removal failed) and must not give it back the slot just claimed. Measured
-    before: two runs. MUTATION: decide which slots to keep from the jobs as they were
-    before `reload_tasks`."""
-    path = _path(store, CLOCK_ID)
-    record = json.loads(path.read_text(encoding="utf-8"))
-    record["frequency"] = "once"
-    path.write_text(json.dumps(record), encoding="utf-8")
+    before: two runs. On a controlled clock: on the wall clock the forced slot could fall
+    just before the task's real time, which the refresh then armed and the later tick ran.
+    MUTATION: decide which slots to keep from the jobs as they were before
+    `reload_tasks`."""
+    _set_frequency(store, "once")
+    clock = _Clock(monkeypatch, _DAY.replace(hour=9, minute=59))
     sched, stop = _armed_scheduler(monkeypatch)
     try:
-        _pending(sched)
+        slot = sched._clock_jobs[CLOCK_ID].due
+        assert slot == _DAY.replace(hour=10)
+        clock.now = slot + timedelta(seconds=5)
         real_reload = sched.reload_tasks
 
         def tick_while_reading():
@@ -578,9 +686,45 @@ def test_a_one_time_slot_claimed_during_the_refresh_runs_once(store, monkeypatch
         monkeypatch.setattr(sched, "reload_tasks", tick_while_reading)
         auto_mod.refresh_scheduler_from_disk(origin="test")
         monkeypatch.setattr(sched, "reload_tasks", real_reload)
+        clock.now = slot + timedelta(seconds=35)
         sched._run_due_clock_jobs()
-        sched._run_due_clock_jobs(now=datetime.now() + timedelta(seconds=35))
         assert sched.ran.count(CLOCK_ID) == 1
+    finally:
+        stop.set()
+
+
+@pytest.mark.parametrize("frequency", ["daily", "once"])
+def test_a_slot_claimed_between_arming_and_swap_runs_once(store, monkeypatch, frequency):
+    """The refresh arms its new jobs while the old ones are in force. A job armed before
+    its slot, whose slot the tick then claims on the OLD job before the swap, must not bring
+    that slot back. Measured before: two runs of the slot, daily and one-time. MUTATION:
+    swap without the record of claimed slots."""
+    _set_frequency(store, frequency)
+    clock = _Clock(monkeypatch, _DAY.replace(hour=9, minute=59))
+    sched, stop = _armed_scheduler(monkeypatch)
+    try:
+        slot = sched._clock_jobs[CLOCK_ID].due
+        assert slot == _DAY.replace(hour=10)
+        real_swap = sched._swap_clock_jobs
+
+        def tick_then_swap(fresh):
+            assert fresh[CLOCK_ID].due == slot, "armed before the slot"
+            clock.now = slot + timedelta(seconds=5)
+            sched._run_due_clock_jobs()
+            real_swap(fresh)
+
+        monkeypatch.setattr(sched, "_swap_clock_jobs", tick_then_swap)
+        clock.now = slot - timedelta(seconds=1)
+        auto_mod.refresh_scheduler_from_disk(origin="test")
+        monkeypatch.setattr(sched, "_swap_clock_jobs", real_swap)
+        clock.now = slot + timedelta(seconds=35)
+        sched._run_due_clock_jobs()
+        assert sched.ran.count(CLOCK_ID) == 1 and sched.ran.count(OTHER_ID) == 1
+        if frequency == "daily":
+            assert sched._clock_jobs[CLOCK_ID].due == slot + timedelta(days=1)
+        else:
+            assert CLOCK_ID not in sched._clock_jobs
+        assert f"CLAIM_KEPT task_id={CLOCK_ID} reason='slot already claimed'" in store["logs"]
     finally:
         stop.set()
 

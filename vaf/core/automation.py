@@ -195,6 +195,14 @@ class AutomationTask:
         self.weekday = fields.get("weekday")
         self.enabled = fields["enabled"] if self.enabled is not None else False
         self.incarnation = _incarnation(self.incarnation)
+        # A scope names a directory and an account, so it is text or nothing. A number, a
+        # list or a bool (a record edited by hand or by another program) made every path of
+        # the task raise, and the clock tried it again on every tick. None is "no scope of
+        # its own": a loader stamps the scope of the directory the file lives in, and only a
+        # file in the root directory, which the machine owner's store holds, stays a root
+        # task there.
+        if not isinstance(self.user_scope_id, str):
+            self.user_scope_id = None
 
     def to_dict(self) -> Dict:
         """Convert to dict, excluding next_run (calculated dynamically)."""
@@ -1319,6 +1327,8 @@ class AutomationManager:
         self._scheduler_thread: Optional[threading.Thread] = None
         self._running = False
         self._clock_jobs: Dict[str, _ClockJob] = {}
+        # (task id, incarnation) -> the slot the tick claimed, until the next swap.
+        self._clock_claims: Dict[Tuple[Any, Optional[str]], datetime] = {}
         self._clock_lock = threading.Lock()
         self._create_readme()
         self._load_tasks()
@@ -1752,8 +1762,13 @@ vaf automation delete <id>   # Delete task
     def _task_from_record(self, record: Dict[str, Any], task: AutomationTask,
                           path: Path) -> AutomationTask:
         """The task a record read from `path` is. It keeps its path: the scope comes from
-        where the task lives, as `_load_tasks` stamps it on a file that does not carry one."""
+        where the task lives, as `_load_tasks` stamps it on a file that does not carry one,
+        and the id is the task's own. Every caller has matched the record's id to it read
+        stripped, so an id written with spaces around it or as a number names this task; kept
+        as the record spells it, a write went to a second file (`" abc123 .json"`) and the
+        cache got a second key."""
         fresh = AutomationTask.from_dict(record)
+        fresh.id = task.id
         fresh.user_scope_id = (task.user_scope_id or fresh.user_scope_id
                                or getattr(self, "user_scope_id", None))
         if self._path_for_task(fresh) != path:
@@ -3002,6 +3017,7 @@ vaf automation delete <id>   # Delete task
         # A start arms every task afresh.
         self._clock_lock = getattr(self, "_clock_lock", None) or threading.Lock()
         self._clock_jobs = {}
+        self._clock_claims = {}
         from vaf.core.tool_dispatch import account_directory_once
         with account_directory_once():
             enabled_tasks = self.list(enabled_only=True)
@@ -3135,14 +3151,32 @@ vaf automation delete <id>   # Delete task
 
         What is kept is decided here, from the jobs armed at this moment and the time now,
         under the lock the tick claims a job with: a slot that came due while the refresh
-        read the store is kept too, and a slot the tick has claimed is never handed back (a
-        claimed job has its next slot set, or is gone when it had none). A task whose rule
-        changed is armed by its new rule, and one that is gone or switched off stays
-        unarmed (only a job the refresh armed again gets a slot back)."""
-        kept = []
+        read the store is kept too. A task whose rule changed is armed by its new rule, and
+        one that is gone or switched off stays unarmed (only a job the refresh armed again
+        gets a slot back).
+
+        A slot the tick claimed is never handed back. The new jobs are armed while the old
+        ones are in force, so a job armed before its slot can arrive after the tick claimed
+        that slot on the old job (measured: two runs of the same slot, daily and one-time).
+        Every claim since the last swap is recorded (`_clock_claims`, by id and
+        incarnation); a new job due at or before its task's claimed slot gets the next slot
+        after it instead, and a one-time task, which has none, is not armed again. The
+        record is emptied here: refreshes run one at a time, so the next one arms after
+        this swap and counts from a time past every claim recorded so far."""
+        kept, claimed = [], []
         with self._clock_lock:
             now = datetime.now()
-            for task_id, job in fresh.items():
+            claims = self._clock_claims
+            for task_id, job in list(fresh.items()):
+                slot = claims.get((task_id, job.task.incarnation))
+                if slot is not None and job.due <= slot:
+                    nxt = None if job.once else job.task.calculate_next_run(after=slot)
+                    if nxt is None:
+                        del fresh[task_id]
+                    else:
+                        job.due = nxt
+                    claimed.append(task_id)
+                    continue
                 old = self._clock_jobs.get(task_id)
                 if (old is not None and old.due <= now and old.due < job.due
                         and _same_clock_rule(old.task, job.task)):
@@ -3150,8 +3184,11 @@ vaf automation delete <id>   # Delete task
                     kept.append(task_id)
             self._clock_jobs.clear()
             self._clock_jobs.update(fresh)
+            claims.clear()
         for task_id in kept:
             self._log_scheduler_event(f"KEPT_DUE task_id={task_id} reason='slot pending at refresh'")
+        for task_id in claimed:
+            self._log_scheduler_event(f"CLAIM_KEPT task_id={task_id} reason='slot already claimed'")
 
     def _clock_record_verdict(self, task: AutomationTask
                               ) -> Tuple[str, str, Optional[AutomationTask]]:
@@ -3174,20 +3211,20 @@ vaf automation delete <id>   # Delete task
           written), so this one slot is not run and the task is not taken for deleted;
         - run: the task to run is the record on disk (its scope from where it lives, as the
           trigger lane's run has it), not the scheduler's older copy. Its id is the one the
-          job is armed under: the record's may be spelled differently (spaces, a number) and
-          still name this task, and the id keys the armed jobs, the run lock and the file.
+          job is armed under (`_task_from_record`): the record's may be spelled differently
+          (spaces, a number) and still name this task, and the id keys the armed jobs, the
+          run lock and the file.
 
         Read without the store lock: every write is a temp file put in place, so a read sees a
         whole record."""
-        path = self._path_for_task(task)
         try:
+            path = self._path_for_task(task)
             record = _read_task_record(path, strict=True)
             if record is None or str(record.get("id")).strip() != str(task.id):
                 return "drop", "task gone", None
             if _incarnation(record.get("incarnation")) != task.incarnation:
                 return "drop", "created anew", None
             current = self._task_from_record(record, task, path)
-            current.id = task.id
         except Exception:
             return "skip", "record unreadable", None
         if not current.enabled:
@@ -3213,34 +3250,51 @@ vaf automation delete <id>   # Delete task
             due = [job for job in self._clock_jobs.values() if job.due <= now]
         for job in sorted(due, key=lambda j: j.due):
             task_id = job.task.id  # the key it is armed under
-            verdict, reason, current = self._clock_record_verdict(job.task)
-            with self._clock_lock:
-                if self._clock_jobs.get(task_id) is not job:
-                    continue  # a refresh re-armed or removed it meanwhile
+            try:
+                self._run_due_clock_job(job, task_id, now)
+            except Exception as e:
+                # One job never stops the others: it gives up this slot like a skip.
+                self._log_scheduler_event(f"CLOCK_JOB_FAILED task_id={task_id} error={e!r}")
+                with self._clock_lock:
+                    # Still due: not claimed yet, so its slot is not taken twice.
+                    if self._clock_jobs.get(task_id) is job and job.due <= now:
+                        self._claim(job, task_id, now)
+
+    def _claim(self, job: _ClockJob, task_id: Any, now: datetime) -> None:
+        """Take a due job's slot: record the claim, then set its next slot, or end the job
+        when it has none (a one-time task). Called under `_clock_lock`."""
+        self._clock_claims[(task_id, job.task.incarnation)] = job.due
+        # Counted from the tick. The run starts in a thread of its own; a run still going
+        # when its next slot comes is refused by the task's run lock.
+        nxt = None if job.once else job.task.calculate_next_run(after=max(now, datetime.now()))
+        if nxt is None:
+            del self._clock_jobs[task_id]
+        else:
+            job.due = nxt
+
+    def _run_due_clock_job(self, job: _ClockJob, task_id: Any, now: datetime) -> None:
+        verdict, reason, current = self._clock_record_verdict(job.task)
+        with self._clock_lock:
+            if self._clock_jobs.get(task_id) is not job:
+                return  # a refresh re-armed or removed it meanwhile
+            if verdict == "drop":
+                del self._clock_jobs[task_id]
+            else:
                 if verdict == "run":
                     # The record on disk is the task from here on: its next slot is counted
                     # from its own rule, and the next run is its own again.
                     job.task = current
                     job.once = current.frequency == Frequency.ONCE
-                if verdict == "drop":
-                    nxt = None
-                else:
-                    # Counted from the tick. The run starts in a thread of its own; a run
-                    # still going when its next slot comes is refused by the task's run lock.
-                    nxt = None if job.once else job.task.calculate_next_run(after=max(now, datetime.now()))
-                if nxt is None:
-                    del self._clock_jobs[task_id]
-                else:
-                    job.due = nxt
-            if verdict == "drop":
-                self._log_scheduler_event(f"CLOCK_DROPPED task_id={task_id} reason={reason!r}")
-            elif verdict == "skip":
-                self._log_scheduler_event(f"CLOCK_SKIPPED task_id={task_id} reason={reason!r}")
-            else:
-                try:
-                    self._run_scheduled_task(current)
-                except Exception as e:
-                    self._log_scheduler_event(f"RUN_FAILED task_id={task_id} error={e!r}")
+                self._claim(job, task_id, now)
+        if verdict == "drop":
+            self._log_scheduler_event(f"CLOCK_DROPPED task_id={task_id} reason={reason!r}")
+        elif verdict == "skip":
+            self._log_scheduler_event(f"CLOCK_SKIPPED task_id={task_id} reason={reason!r}")
+        else:
+            try:
+                self._run_scheduled_task(current)
+            except Exception as e:
+                self._log_scheduler_event(f"RUN_FAILED task_id={task_id} error={e!r}")
 
 
 class AutomationAccess:

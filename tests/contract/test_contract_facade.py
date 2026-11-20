@@ -56,6 +56,7 @@ EXPORTED = [
     "code_audit",
     "contained_path",
     "derive_peer_id",
+    "describe_error",
     "describe_room_entry",
     "egress_session",
     "extract_pdf_markdown",

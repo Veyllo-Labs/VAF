@@ -7,7 +7,8 @@ Thinking Workspace write tool (Thinking Mode only, safe write zone).
 from typing import Optional
 
 from vaf.tools.base import BaseTool
-from vaf.core.thinking_workspace import describe_os_error, create_task, write_workspace_file
+from vaf.core.path_jail import describe_error
+from vaf.core.thinking_workspace import create_task, write_workspace_file
 
 
 def _scope_str(user_scope_id) -> Optional[str]:
@@ -69,9 +70,8 @@ class ThinkingWorkspaceWriteTool(BaseTool):
                 write_workspace_file(scope, task_id, path, content, append=append)
                 return f"Workspace file written: task={task_id}, path={path}, append={append}"
             return "Error: Invalid mode."
-        except OSError as e:
-            # The operating system's error text quotes the server's absolute path.
-            return f"Error writing workspace: {describe_os_error(e)}"
         except Exception as e:
-            return f"Error writing workspace: {e}"
+            # An operating-system error quotes the server's absolute path; describe_error
+            # keeps only its reason and passes every other error's text unchanged.
+            return f"Error writing workspace: {describe_error(e)}"
 

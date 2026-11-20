@@ -39,13 +39,14 @@ while it is still text, when it is longer than any file system opens (`is_overlo
 `PATH_CHARS_MAX`; a single name: `NAME_CHARS_MAX`), and the containment comparison asks the
 one parent that can equal the root (`_within`) instead of all of them.
 """
+import logging
 import os
 import unicodedata
 from pathlib import Path
 from typing import Optional, Tuple
 
 __all__ = ["FolderMoved", "NAME_CHARS_MAX", "PATH_CHARS_MAX", "PathEscape", "WriteRefused",
-           "contained_path", "discard_written", "is_overlong_path", "is_remote_path",
+           "contained_path", "describe_error", "discard_written", "is_overlong_path", "is_remote_path",
            "is_rooted", "open_folder", "open_for_read", "open_for_write", "safe_entry_name"]
 
 # Longer than any path a Linux or macOS system call opens: PATH_MAX is 4096 bytes on Linux
@@ -396,6 +397,76 @@ class WriteRefused(PermissionError):
     """`open_for_write` would have written through a link, into something that is not a
     regular file, or into VAF's own state. A PermissionError, so a caller that already turns
     an OSError of its open into a refusal reports this one the same way."""
+
+
+def _withheld(exc) -> str:
+    return f"{type(exc).__name__} (details in the server log)"
+
+
+def describe_error(exc: BaseException, *, log: bool = True) -> str:
+    """The text of ``exc`` that is safe to send back to whoever made the request.
+
+    An error raised by the operating system quotes the absolute path it failed on
+    (``[Errno 36] File name too long: '/home/user/.../workspace/bbb...'``), so an answer built
+    from ``str(e)`` hands the caller the outside of the root it was just contained in: the home
+    folder, the account name, the data directory's layout. That is the second way a contained
+    root leaks, after the path itself, and it is reached by text alone: a name over 255
+    characters makes ``is_file()``, ``mkdir`` and ``write_bytes`` raise exactly that.
+
+    In order:
+
+    (a) Not an `OSError`: ``str(exc)``, the text its raiser wrote, unchanged.
+    (b) An `OSError` with an ``errno``: its ``strerror`` (else ``os.strerror(errno)``), the
+        operating system's words for the reason ("File name too long", "No space left on
+        device", "Connection refused"), which never contain a path.
+    (c) An `OSError` without an ``errno`` but with a ``filename`` or ``filename2``, or a
+        `WriteRefused` (every one names the path it refused): its ``strerror`` if set, else the
+        withheld text.
+    (d) Any other `OSError`: ``str(exc)`` when its class comes from ``builtins`` or from VAF
+        (``vaf.``), whose own raise sites put an id in the message ("Session not found: <id>",
+        "Task not found"); the withheld text for every other module, whose messages quote
+        paths: ``shutil.Error`` (the pairs it failed to copy), Pillow's
+        ``UnidentifiedImageError`` (the file it could not read), a ``requests`` error (the
+        URL and its query).
+
+    The withheld text is ``"<ClassName> (details in the server log)"``, and with ``log`` true
+    the full ``str(exc)`` goes to this module's logger at WARNING, so the detail stays on the
+    server. ``log=False`` is for a caller that logs the exception itself. Nothing is logged
+    when nothing was withheld. Never raises: an exception whose ``str()`` raises is answered
+    with its class name. One ``str()`` and a few attribute reads; no pattern is matched.
+    """
+    try:
+        text = str(exc)
+    except Exception:
+        text = None
+    try:
+        answer = _describe(exc, text)
+    except Exception:
+        answer = _withheld(exc)
+    if log and answer != text:
+        logging.getLogger(__name__).warning(
+            "%s withheld from a reply: %s", type(exc).__name__,
+            text if text is not None else "(its text could not be read)")
+    return answer
+
+
+def _describe(exc, text) -> str:
+    if not isinstance(exc, OSError):
+        return text if text is not None else type(exc).__name__
+    reason = exc.strerror if isinstance(exc.strerror, str) and exc.strerror else None
+    if exc.errno is not None:
+        if reason is None and isinstance(exc.errno, int):
+            try:
+                reason = os.strerror(exc.errno)
+            except (ValueError, OverflowError):
+                reason = None
+        return reason or _withheld(exc)
+    if exc.filename is not None or exc.filename2 is not None or isinstance(exc, WriteRefused):
+        return reason or _withheld(exc)
+    module = str(getattr(type(exc), "__module__", "") or "")
+    if text is not None and (module == "builtins" or module.startswith("vaf.")):
+        return text
+    return _withheld(exc)
 
 
 # The safe branch needs to open a file relative to a directory handle and refuse a link in

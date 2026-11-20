@@ -13,6 +13,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Added
 
+- **`vaf.describe_error(exc)`**: the text of an error that is safe to send back. An
+  operating-system error gives only its reason, never the absolute path it quotes; what was
+  withheld goes to the log.
 - **`vaf.is_overlong_path(path)`**: True for a path longer than any file system opens (4096
   characters). Ask it first, before `vaf.is_remote_path`, for a path that comes from outside.
   `vaf.contained_path`, `vaf.safe_entry_name` and `vaf.jail_allows` already apply the limit

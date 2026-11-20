@@ -1487,7 +1487,11 @@ Hard limits you must respect (they are architecture, not fine print):
   containment at the next login or start. Then open the
   file with `vaf.open_for_write(path, mode)` instead of `open()`: a check and a later
   `open()` decide one thing and write another when a link sits at the name or a folder is
-  swapped on the way.
+  swapped on the way. When the file operation itself fails, answer with
+  `vaf.describe_error(e)`, never `str(e)`: the operating system's error quotes the absolute
+  path it failed on, so `str(e)` hands the caller the home folder and the account name
+  outside the root you just contained it in (a name over 255 characters is enough to make
+  `is_file()` raise one).
 - **Which tools an account may use at all is YOUR backend's answer.** Register
   one resolver process-wide with `set_account_allowlist_resolver` (its own
   section below) and every scoped, non-admin call is checked against it in the
@@ -3440,6 +3444,21 @@ Stable public surface (safe to build on):
   permission) is `PathEscape("folder not found")`, never a raw `OSError`; without it, a
   path the OS refuses to resolve at all (Windows past MAX_PATH without long-path support)
   is `PathEscape("path cannot be resolved")`.
+- `vaf.describe_error(exc, *, log=True) -> str` - the text of an error that is safe to send
+  back to whoever made the request. An `OSError` raised by the operating system quotes the
+  absolute path it failed on (`[Errno 36] File name too long: '/home/user/...'`), so a reply
+  built from `str(e)` leaks the root a route just contained. In order: (a) not an `OSError`:
+  `str(exc)`, unchanged; (b) an `OSError` with an `errno`: its `strerror` (else
+  `os.strerror(errno)`), the operating system's words, which never contain a path; (c) one
+  without an `errno` but with a `filename` or `filename2`, or a `vaf.WriteRefused` (every one
+  names the path it refused): its `strerror` if set, else the withheld text; (d) any other
+  `OSError`: `str(exc)` when its class comes from `builtins` or from `vaf`, the withheld text
+  for any other module (`shutil.Error` quotes the pairs it failed to copy, Pillow's
+  `UnidentifiedImageError` the file, a `requests` error the URL). The withheld text is
+  `"<ClassName> (details in the server log)"`; with `log=True` the full `str(exc)` goes to
+  the `vaf.core.path_jail` logger at WARNING, so the detail stays on the server. Pass
+  `log=False` when you log the exception yourself. Nothing is logged when nothing was
+  withheld, and it never raises (an exception whose `str()` raises answers its class name).
 - `vaf.code_audit(root, *, scope=, base=, paths=, include_untracked=, profile=, ask=,
   checks=, max_files=, remember=, batch_chars=, progress=, parallel=, should_stop=,
   verify_steps=, linked_worktree=, expect_folder=)` /

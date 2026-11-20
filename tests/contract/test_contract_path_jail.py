@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """Contract: vaf.contained_path, vaf.safe_entry_name, vaf.PathEscape, vaf.is_remote_path,
-vaf.is_overlong_path.
+vaf.is_overlong_path, vaf.describe_error.
 
 docs/EMBEDDING.md promises an embedder that a tool taking a path from a model,
 a request body or a peer can decide containment with a supported primitive
@@ -14,8 +14,15 @@ absolute path from outside can be refused while it is still text when it names a
 network share or a device path, which resolving it on Windows already contacts.
 And a path or a name longer than any file system opens is refused as text, because
 resolving and comparing it costs time that grows with the square of its length.
+And when the file operation itself fails, the text that may be sent back carries the
+operating system's reason, never the absolute path its error quotes.
 """
+import builtins
+import errno
+import logging
 import os
+import random
+import shutil
 
 import pytest
 
@@ -168,3 +175,125 @@ def test_an_overlong_fragment_or_name_is_one_more_PathEscape(tmp_path):
     with pytest.raises(vaf.PathEscape, match="too long"):
         vaf.safe_entry_name("n" * 256)
     assert vaf.safe_entry_name("n" * 255) == "n" * 255
+
+
+# ---- vaf.describe_error ----------------------------------------------------------------------
+
+_WITHHELD_SUFFIX = " (details in the server log)"
+
+
+class _Unprintable(Exception):
+    def __str__(self):
+        raise RuntimeError("no text")
+
+
+def _foreign(module, name="UnidentifiedImageError"):
+    """An OSError subclass that another library defines, as its module names it."""
+    return type(name, (OSError,), {"__module__": module})
+
+
+@pytest.mark.parametrize("exc, expected", [
+    # (b) the operating system's reason, whatever path the error quotes
+    (OSError(errno.ENAMETOOLONG, "File name too long", "/home/user/x"), "File name too long"),
+    (OSError(errno.ENOSPC, "No space left on device"), "No space left on device"),
+    # (d) VAF's own and the builtin classes keep the text their raiser wrote
+    (FileNotFoundError("Task not found"), "Task not found"),
+    (_foreign("vaf.x", "StoreGone")("Session not found: ab12cd34"), "Session not found: ab12cd34"),
+    # (d) another module's message quotes paths: withheld
+    (shutil.Error([("/home/user/a", "/home/user/b", "why")]), "Error" + _WITHHELD_SUFFIX),
+    (_foreign("PIL")("cannot identify image file '/home/user/a.png'"),
+     "UnidentifiedImageError" + _WITHHELD_SUFFIX),
+    # (c) a file name without an errno: withheld
+    (OSError(None, None, b"/home/user/x"), "OSError" + _WITHHELD_SUFFIX),
+    # (c) WriteRefused names the path it refused
+    (vaf.WriteRefused("refusing to write /home/user/x: it is a link"),
+     "WriteRefused" + _WITHHELD_SUFFIX),
+    # (a) not an OSError: unchanged
+    (ValueError("bad"), "bad"),
+    # never raises
+    (_Unprintable(), "_Unprintable"),
+])
+def test_describe_error_gives_the_reason_and_never_the_path(exc, expected):
+    assert vaf.describe_error(exc, log=False) == expected
+
+
+def test_describe_error_keeps_the_withheld_text_in_the_log(caplog):
+    caplog.set_level(logging.WARNING)
+    vaf.describe_error(OSError(None, None, "/home/user/x"))
+    records = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(records) == 1 and "/home/user/x" in records[0].getMessage()
+
+    caplog.clear()
+    vaf.describe_error(OSError(None, None, "/home/user/x"), log=False)
+    vaf.describe_error(ValueError("bad"))
+    vaf.describe_error(FileNotFoundError("Task not found"))
+    assert caplog.records == []
+
+
+# Fuzz: every exception shape describe_error can meet, against the invariant it promises.
+_OS_CLASSES = sorted({c for c in vars(builtins).values()
+                      if isinstance(c, type) and issubclass(c, OSError)}, key=lambda c: c.__name__)
+_OS_CLASSES += [shutil.Error, shutil.SameFileError, shutil.SpecialFileError, shutil.ReadError,
+                vaf.WriteRefused]
+_OS_CLASSES += [_foreign(m, f"Synthetic{i}") for i, m in
+                enumerate(("builtins", "vaf.x", "PIL", "requests.exceptions", "thirdparty"))]
+_REASONS = ["File name too long", "No space left on device", "Permission denied", "Connection refused"]
+_ROOT_CHARS = "abcXYZ019 _-.'\"\u00e9\u20ac\u4e2d"
+
+
+def _draw(rng):
+    root = "/" + "".join(rng.choice(_ROOT_CHARS) for _ in range(rng.randint(8, 40)))
+    filename = rng.choice([None, root + "/x", (root + "/y").encode("utf-8", "surrogateescape")])
+    filename2 = rng.choice([None, None, root + "/z"])
+    cls = rng.choice(_OS_CLASSES + [ValueError, RuntimeError, _Unprintable])
+    err = rng.choice([None] + sorted(errno.errorcode))
+    reason = rng.choice([None] + _REASONS)
+    message = rng.choice([f"failed on {root}", "plain words", ""])
+    try:
+        if cls is _Unprintable:
+            exc = cls()
+        elif not issubclass(cls, OSError):
+            exc = cls(message)
+        elif err is None and reason is None and filename is None:
+            exc = cls(message)
+        elif filename2 is not None:
+            exc = cls(err, reason, filename, None, filename2)
+        else:
+            exc = cls(err, reason, filename)
+    except TypeError:  # a class with its own constructor (shutil.Error takes one argument)
+        exc = cls(message)
+    return exc, root
+
+
+def _check(exc, root):
+    answer = vaf.describe_error(exc, log=False)
+    assert isinstance(answer, str)
+    if isinstance(exc, _Unprintable):
+        assert answer == "_Unprintable"
+        return
+    if not isinstance(exc, OSError):
+        assert answer == str(exc)
+        return
+    module = type(exc).__module__
+    guarded = (exc.errno is not None or exc.filename is not None or exc.filename2 is not None
+               or isinstance(exc, vaf.WriteRefused)
+               or not (module == "builtins" or module.startswith("vaf.")))
+    if not guarded:
+        assert answer == str(exc)
+        return
+    assert root not in answer and (exc.filename is None or str(exc.filename) not in answer)
+    allowed = {type(exc).__name__ + _WITHHELD_SUFFIX}
+    if isinstance(exc.strerror, str) and exc.strerror:
+        allowed.add(exc.strerror)
+    if isinstance(exc.errno, int):
+        allowed.add(os.strerror(exc.errno))
+    assert answer in allowed, (exc, answer)
+
+
+def test_describe_error_holds_its_invariant_over_a_seeded_corpus():
+    """3000 draws, seed 4450: the class, errno, reason, file names and message vary freely;
+    the answer never contains the drawn root and is the reason, the withheld text, or the
+    unchanged text exactly where rules (a) and (d) say so."""
+    rng = random.Random(4450)
+    for _ in range(3000):
+        _check(*_draw(rng))

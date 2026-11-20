@@ -55,7 +55,7 @@ __all__ = ["__version__", "Agent", "AuditFinding", "AuditReport", "BOOKKEEPING_K
            "UploadVerdict", "VoiceTurnEngine", "WaitInfo", "WriteRefused",
            "account_allows_tool", "add_revocation_listener", "advise_tools",
            "build_capability_addendum",
-           "code_audit", "contained_path", "derive_peer_id",
+           "code_audit", "contained_path", "derive_peer_id", "describe_error",
            "describe_room_entry", "egress_session", "extract_pdf_markdown",
            "fold_room_owners", "fold_room_tasks", "fold_room_votes", "get_environment_manager",
            "inspect_upload",
@@ -99,8 +99,8 @@ def __getattr__(name):
         # same blind spot - and log_helper itself is internal (see docs/EMBEDDING.md).
         from .core.log_helper import install_thread_excepthook
         return install_thread_excepthook
-    if name in ("PathEscape", "WriteRefused", "contained_path", "is_overlong_path",
-                "is_remote_path", "open_for_write", "safe_entry_name"):
+    if name in ("PathEscape", "WriteRefused", "contained_path", "describe_error",
+                "is_overlong_path", "is_remote_path", "open_for_write", "safe_entry_name"):
         # Keep a caller-supplied path inside the directory it may touch. The
         # jail above answers WHICH roots a caller owns; this answers whether a
         # fragment or a name stays inside the one root you opened it against,
@@ -116,10 +116,15 @@ def __getattr__(name):
         # is_overlong_path is asked before that: resolving a path and comparing it with its
         # root cost time that grows with the square of its length, and a text longer than any
         # file system opens is refused while it is still text.
-        from .core.path_jail import (PathEscape, WriteRefused, contained_path, is_overlong_path,
-                                     is_remote_path, open_for_write, safe_entry_name)
+        # describe_error is the answer when the file operation itself fails: the operating
+        # system's error quotes the absolute path it failed on, so str(e) in a reply hands
+        # the caller the outside of the root it was just contained in.
+        from .core.path_jail import (PathEscape, WriteRefused, contained_path, describe_error,
+                                     is_overlong_path, is_remote_path, open_for_write,
+                                     safe_entry_name)
         return {"PathEscape": PathEscape, "WriteRefused": WriteRefused,
-                "contained_path": contained_path, "is_overlong_path": is_overlong_path,
+                "contained_path": contained_path, "describe_error": describe_error,
+                "is_overlong_path": is_overlong_path,
                 "is_remote_path": is_remote_path, "open_for_write": open_for_write,
                 "safe_entry_name": safe_entry_name}[name]
     if name in ("EnvironmentManager", "get_environment_manager"):

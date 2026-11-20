@@ -1237,7 +1237,7 @@ def test_workspace_tools_quote_no_server_path(store, workspaces):
     """The model's three workspace tools answered an OS error with its text, which quotes
     the server's data path. Multibyte ids are refused like missing tasks, and an error the
     OS raises (a file name too long inside the task) gives only its reason. MUTATIONS: answer
-    the `except OSError` of the read or the write tool with `str(e)`; make `describe_os_error`
+    the `except` of the read or the write tool with `str(e)`; make `vaf.describe_error`
     return `str(e)`. (A character count in `_entry` is caught by the byte tests above: this
     `except OSError` is the backstop that keeps such an id pathless here too.)"""
     from vaf.tools.thinking_workspace_handoff import ThinkingWorkspaceHandoffTool
@@ -1262,7 +1262,8 @@ def test_workspace_tools_quote_no_server_path(store, workspaces):
         assert out.startswith("Error"), out
         assert str(ws.root) not in out and "Errno" not in out and TENANT_A not in out, out
     assert "File name too long" in outs[-2], outs[-2]
-    assert ws.tw.describe_os_error(FileNotFoundError("Task not found")) == "Task not found"
+    from vaf.core.path_jail import describe_error
+    assert describe_error(FileNotFoundError("Task not found")) == "Task not found"
 
 
 # ── one decision at a time, and a claimed approval is finished, never repeated ──

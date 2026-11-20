@@ -61,7 +61,8 @@ def test_facade_exports_exactly_the_documented_surface():
         "__version__",
         "account_allows_tool", "add_revocation_listener", "advise_tools",
         "build_capability_addendum", "code_audit", "contained_path",
-        "derive_peer_id", "describe_room_entry", "egress_session", "extract_pdf_markdown",
+        "derive_peer_id", "describe_error", "describe_room_entry", "egress_session",
+        "extract_pdf_markdown",
         "fold_room_owners", "fold_room_tasks", "fold_room_votes", "get_environment_manager",
         "inspect_upload",
         "install_thread_excepthook", "invited_rooms", "is_error_reply", "is_host_config",
@@ -105,6 +106,7 @@ def test_the_newly_public_names_actually_resolve():
     assert callable(vaf.safe_entry_name)
     assert vaf.is_remote_path("\\\\host\\share\\x") and not vaf.is_remote_path("C:\\Users\\a\\x")
     assert vaf.is_overlong_path("a" * 4097) and not vaf.is_overlong_path("C:\\Users\\a\\x")
+    assert vaf.describe_error(OSError(2, "No such file or directory", "/x")) == "No such file or directory"
     assert issubclass(vaf.PathEscape, ValueError)
     assert callable(vaf.set_account_allowlist_resolver)
     assert callable(vaf.set_confirmation_bypass_resolver)

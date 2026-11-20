@@ -75,16 +75,6 @@ def _entry(name: str) -> str:
     return entry
 
 
-def describe_os_error(error: OSError) -> str:
-    """What a caller may read of an `OSError`: this module's own not-found errors carry no
-    file name and pass through as they are; one the operating system raised quotes the
-    server's absolute path, so only its reason is given (`File name too long`, `No space
-    left on device`)."""
-    if error.filename is None and error.filename2 is None:
-        return str(error)
-    return error.strerror or type(error).__name__
-
-
 class HandoffAlreadyDecided(Exception):
     """The handoff was approved or rejected before; it is not applied again."""
 

@@ -603,7 +603,7 @@ async def get_whatsapp_dashboard(request: Request):
 
     # The caller's own process, not the whole bridge: a bridge running for other accounts is
     # not this account's WhatsApp running.
-    running = has_process_for_user(username)
+    running = has_process_for_user(username, user_scope_id)
     enabled_effective = channel_enabled_for_scope("whatsapp", user_scope_id)
     connected = get_connection_status(username, wait_timeout=5.0) if (running and enabled_effective) else False
 
@@ -701,7 +701,7 @@ async def get_whatsapp_status(request: Request):
     enabled_effective = channel_enabled_for_scope("whatsapp", user_scope_id)
     linked = whatsapp_auth_exists(username)
     # The caller's own process (see the dashboard).
-    running = has_process_for_user(username)
+    running = has_process_for_user(username, user_scope_id)
     from vaf.core.whatsapp_auth import get_linked_phone
 
     # "configured" is "an account is linked": that account is the agent's own number and
@@ -723,6 +723,8 @@ async def get_whatsapp_status(request: Request):
 # and the bridge's master switch at once (`whatsapp_bridge` module docstring), is off.
 SWITCHED_OFF_FOR_ACCOUNT = "WhatsApp is switched off on this VAF. An admin has to switch it on first."
 SWITCHED_OFF_FOR_ADMIN = "WhatsApp not enabled. Enable in Settings -> Connections."
+# What such an account is told when Node could not be started: the installation is an admin's.
+START_FAILED_FOR_ACCOUNT = "Failed to start WhatsApp. Ask an admin to check the WhatsApp installation."
 
 
 def _global_switch_on() -> bool:
@@ -731,11 +733,15 @@ def _global_switch_on() -> bool:
 
 
 def _account_start_answer(ok: bool, message: str) -> None:
-    """Raise what a failed account start answers: 500 when Node could not be started, 400 when
-    the account cannot start (not linked, switched off, the bridge stopping)."""
-    from vaf.api.whatsapp_bridge import START_FAILED
-    if not ok:
-        raise HTTPException(status_code=500 if message == START_FAILED else 400, detail=message)
+    """Raise what a failed account start answers: 500 when Node could not be started or the
+    old process did not end, 400 when the account cannot start (not linked, switched off,
+    the bridge stopping, stopped again before it started)."""
+    from vaf.api.whatsapp_bridge import START_FAILED, STOP_FAILED
+    if ok:
+        return
+    if message == START_FAILED:
+        raise HTTPException(status_code=500, detail=START_FAILED_FOR_ACCOUNT)
+    raise HTTPException(status_code=500 if message == STOP_FAILED else 400, detail=message)
 
 
 @router.post("/start")
@@ -779,7 +785,11 @@ async def stop_whatsapp_bridge(request: Request):
         return {"status": "stopped", "message": "WhatsApp bridge stopped."}
 
     account = request_account(request)
-    await asyncio.to_thread(stop_account, account["username"])
+    # The scope too: an account whose name equals another account's (one named like the local
+    # admin) must not stop that account's process.
+    if await asyncio.to_thread(stop_account, account["username"], account["user_scope_id"]) is False:
+        from vaf.api.whatsapp_bridge import STOP_FAILED
+        raise HTTPException(status_code=500, detail=STOP_FAILED)
     return {"status": "stopped", "message": "WhatsApp stopped for this account."}
 
 

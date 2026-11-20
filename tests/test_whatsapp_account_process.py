@@ -23,6 +23,7 @@ import io
 import json
 import os
 import random
+import subprocess
 import threading
 import time
 
@@ -67,12 +68,53 @@ class FakeProc:
             self.returncode = -9
 
 
+class StubbornProc(FakeProc):
+    """A process that ignores SIGTERM, and with `killable=False` survives the kill too: its
+    wait times out for as long as it runs."""
+
+    killable = True
+
+    def terminate(self):
+        pass
+
+    def wait(self, timeout=None):
+        if self.returncode is None:
+            raise subprocess.TimeoutExpired("node", timeout)
+        return self.returncode
+
+    def kill(self):
+        if self.killable:
+            self.returncode = -9
+
+
+def _run_threads(*targets):
+    """Start one thread per target at once, join them, and return the exceptions they raised:
+    a thread's exception never reaches `join`, so without this a raising operation passes."""
+    errors = []
+
+    def guarded(fn):
+        try:
+            fn()
+        except BaseException as e:  # noqa: BLE001 - every failure is the test's business
+            errors.append(e)
+
+    threads = [threading.Thread(target=guarded, args=(fn,)) for fn in targets]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+    errors.extend(RuntimeError("thread did not finish") for t in threads if t.is_alive())
+    return errors
+
+
 class World:
     def __init__(self, tmp_path):
         self.tmp = tmp_path
         self.spawned = []          # every FakeProc ever spawned, in order
         self.spawn_delay = 0.0
         self.on_spawn = None       # optional hook(name) run inside the fake spawn
+        self.fail_spawn = set()    # names whose spawn fails (Node could not be started)
+        self.proc_class = {}       # name -> FakeProc subclass
         self.calls = []            # recorded bridge-level calls
 
     # config on disk
@@ -138,13 +180,17 @@ def world(tmp_path, monkeypatch):
     monkeypatch.setattr(wa, "_sender_thread", None)
     monkeypatch.setattr(wa, "_chat_sync_thread", None)
     monkeypatch.setattr(wa, "_outgoing_queue", None)
+    monkeypatch.setattr(wa, "_pending_starts", {})
+    monkeypatch.setattr(wa, "COLD_START_TIMEOUT", 3.0)
 
     def spawn(username, auth_dir):
         if w.on_spawn:
             w.on_spawn(username)
         if w.spawn_delay:
             time.sleep(w.spawn_delay)
-        proc = FakeProc(username)
+        if username in w.fail_spawn:
+            return None
+        proc = w.proc_class.get(username, FakeProc)(username)
         w.spawned.append(proc)
         return proc
 
@@ -181,6 +227,14 @@ def _record(world, monkeypatch, *names, through=True):
 
 WHOLE = ("start_bridge", "stop_bridge", "restart_bridge", "start_missing_accounts")
 ACCOUNT = ("start_account", "stop_account", "restart_account")
+
+
+def _quiet_reads(monkeypatch):
+    """The dashboard's read lanes answer at once instead of waiting on a fake process."""
+    monkeypatch.setattr(wa, "get_connection_status", lambda username, wait_timeout=2.0: False)
+    monkeypatch.setattr(wa, "get_whatsapp_chats", lambda username, wait_timeout=2.0: [])
+    monkeypatch.setattr(wa, "get_contact_names", lambda username, wait_timeout=2.0: {})
+    monkeypatch.setattr(wa, "get_lid_mappings", lambda username, wait_timeout=2.0: [])
 
 
 def _client(user):
@@ -221,13 +275,15 @@ def _stop_and_join():
 # -- AC1, AC2 -----------------------------------------------------------------------------------
 
 def test_a_non_admin_stop_stops_only_their_own_process(world, monkeypatch):
-    """MUTATION: the route's non-admin branch calls `stop_bridge()`; or `stop_account` sets
-    `_bridge_stop`."""
+    """MUTATION: the route's non-admin branch calls `stop_bridge()`; `stop_account` sets
+    `_bridge_stop`; or `stop_account` leaves the account's connection state as connected."""
     procs = _bridge_with(world, "admin", "alice")
+    wa._connection_status.update({"admin": True, "alice": True})
     _record(world, monkeypatch, *WHOLE)
     res = _client(ALICE).post("/api/whatsapp/stop")
     assert res.status_code == 200, res.text
     assert world.calls == []
+    assert wa._connection_status == {"admin": True, "alice": False}
     assert procs["alice"].returncode is not None and "alice" not in wa._processes
     assert world.live("admin") and procs["admin"].returncode is None
     assert wa._scope_by_user == {"admin": ADMIN_SCOPE}
@@ -240,7 +296,7 @@ def test_a_non_admin_restart_restarts_only_their_own_process(world, monkeypatch)
     _record(world, monkeypatch, *WHOLE, *ACCOUNT)
     res = _client(ALICE).post("/api/whatsapp/restart")
     assert res.status_code == 200, res.text
-    assert world.calls == [("restart_account", "alice", ALICE_SCOPE), ("stop_account", "alice"),
+    assert world.calls == [("restart_account", "alice", ALICE_SCOPE), ("stop_account", "alice", ALICE_SCOPE),
                            ("start_account", "alice", ALICE_SCOPE)]
     assert procs["alice"].returncode is not None
     assert world.live("alice") and wa._processes["alice"] is not procs["alice"]
@@ -383,11 +439,7 @@ def test_concurrent_starts_spawn_one_process(world, bridge):
         barrier.wait()
         results.append(wa.start_account("alice", ALICE_SCOPE))
 
-    threads = [threading.Thread(target=go) for _ in range(2)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(timeout=5)
+    assert _run_threads(go, go) == []
     assert [ok for ok, _ in results] == [True, True], results
     assert world.wait_for(lambda: world.live("alice"))
     time.sleep(0.15)
@@ -409,13 +461,9 @@ def test_concurrent_bridge_starts_start_one_bridge(world, monkeypatch):
 
     def go():
         barrier.wait()
-        wa.start_bridge()
+        assert wa.start_bridge()
 
-    threads = [threading.Thread(target=go) for _ in range(2)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(timeout=5)
+    assert _run_threads(go, go) == []
     assert world.wait_for(lambda: world.live("admin"))
     assert len(sender_loops) == 1
     assert world.names() == ["admin"]
@@ -434,11 +482,19 @@ def test_no_orphan_after_bridge_stop(world):
             spawning.set()
     world.on_spawn = hook
     world.spawn_delay = 0.2
-    starter = threading.Thread(target=lambda: wa.start_account("alice", ALICE_SCOPE))
+    errors = []
+
+    def start():
+        try:
+            wa.start_account("alice", ALICE_SCOPE)
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+    starter = threading.Thread(target=start)
     starter.start()
     assert spawning.wait(timeout=3)
     wa.stop_bridge()
     starter.join(timeout=5)
+    assert errors == [] and not starter.is_alive()
     wa._bridge_thread.join(timeout=5)
     assert not wa._bridge_thread.is_alive()
     assert wa._processes == {} and wa._scope_by_user == {}
@@ -512,10 +568,7 @@ def test_status_running_is_the_callers_own_process(world, monkeypatch):
     _bridge_with(world, "admin")
     world.link("alice")
     world.own_switch(ALICE_SCOPE, True)
-    monkeypatch.setattr(wa, "get_connection_status", lambda username, wait_timeout=2.0: False)
-    monkeypatch.setattr(wa, "get_whatsapp_chats", lambda username, wait_timeout=2.0: [])
-    monkeypatch.setattr(wa, "get_contact_names", lambda username, wait_timeout=2.0: {})
-    monkeypatch.setattr(wa, "get_lid_mappings", lambda username, wait_timeout=2.0: [])
+    _quiet_reads(monkeypatch)
     for user, expected in ((ALICE, False), (ADMIN, True)):
         client = _client(user)
         status = client.get("/api/whatsapp/status")
@@ -524,6 +577,192 @@ def test_status_running_is_the_callers_own_process(world, monkeypatch):
         dash = client.get("/api/whatsapp/dashboard")
         assert dash.status_code == 200, dash.text
         assert dash.json()["running"] is expected, (user["username"], "dashboard")
+
+
+# -- Admin refusals, cold starts, stops that do not end, name collisions -----------------------
+
+def test_an_admin_start_is_refused_while_whatsapp_is_switched_off(world, monkeypatch):
+    """The admin branch keeps the master switch gate. MUTATION: drop the global-switch check
+    from the admin branch of `/start` (or of `/restart`)."""
+    world.link("admin")
+    world.global_switch(False)
+    _record(world, monkeypatch, *WHOLE, *ACCOUNT, through=False)
+    for path in ("/api/whatsapp/start", "/api/whatsapp/restart"):
+        res = _client(ADMIN).post(path)
+        assert res.status_code == 400, (path, res.text)
+        assert res.json()["detail"] == "WhatsApp not enabled. Enable in Settings -> Connections."
+    assert world.calls == [] and world.names() == []
+
+
+def test_two_accounts_starting_a_stopped_bridge_both_run(world, monkeypatch):
+    """Two different accounts start at once while the bridge is down: the first brings it up
+    with its own process, the second must then start into it rather than be told the bridge
+    runs. MUTATION S: drop `_lifecycle_lock` from `start_account`'s "bridge is down" branch;
+    both then call `start_bridge(only=...)`, the second finds the thread alive, and only one
+    process comes up."""
+    for name in ("alice", "bob"):
+        world.link(name)
+        world.own_switch(SCOPES[name], True)
+
+    def slow_deps():
+        time.sleep(0.1)
+        return True, ""
+    monkeypatch.setattr(wa, "ensure_bridge_deps", slow_deps)
+    barrier = threading.Barrier(2)
+    results = {}
+
+    def start(name):
+        def run():
+            barrier.wait()
+            results[name] = wa.start_account(name, SCOPES[name])
+        return run
+
+    assert _run_threads(start("alice"), start("bob")) == []
+    assert results["alice"][0] and results["bob"][0], results
+    assert world.live("alice") and world.live("bob"), world.names()
+    assert sorted(world.names()) == ["alice", "bob"]
+
+
+def test_an_account_start_during_a_whole_restart_waits_for_it(world, monkeypatch):
+    """An admin's restart holds the lifecycle from its stop to its start, so an account start
+    that arrives between the two cannot bring the bridge up with that account alone.
+    MUTATION T: drop `_lifecycle_lock` from `restart_bridge`; the restart then ends with
+    Alice's process only and the admin's never comes back."""
+    procs = _bridge_with(world, "admin", "alice")
+    stopped, go = threading.Event(), threading.Event()
+    real_stop = wa.stop_bridge
+
+    def stop_then_pause():
+        old = wa._bridge_thread
+        real_stop()
+        old.join(timeout=5)
+        stopped.set()
+        go.wait(timeout=5)
+    monkeypatch.setattr(wa, "stop_bridge", stop_then_pause)
+    results = {}
+
+    def restart():
+        results["restart"] = wa.restart_bridge()
+
+    def alice_starts():
+        assert stopped.wait(timeout=5)
+        results["alice"] = wa.start_account("alice", ALICE_SCOPE)
+
+    def release():
+        assert stopped.wait(timeout=5)
+        time.sleep(0.3)
+        go.set()
+
+    assert _run_threads(restart, alice_starts, release) == []
+    assert results["restart"] is True and results["alice"][0], results
+    assert world.wait_for(lambda: world.live("admin") and world.live("alice")), world.names()
+    assert procs["admin"].returncode is not None and wa._processes["admin"] is not procs["admin"]
+
+
+def test_a_cold_start_whose_spawn_fails_says_so(world, monkeypatch):
+    """An account start that brings the bridge up waits for its own spawn: when Node cannot be
+    started for it, the answer is a failure (500, worded for somebody who cannot fix the
+    installation), not "started". The bridge stays up for anybody who starts into it.
+    MUTATION: `start_account` answers ACCOUNT_STARTED right after `start_bridge(only=...)`."""
+    world.link("alice")
+    world.own_switch(ALICE_SCOPE, True)
+    world.fail_spawn = {"alice"}
+    assert wa.start_account("alice", ALICE_SCOPE) == (False, wa.START_FAILED)
+    assert not world.live("alice") and not wa._bridge_stop.is_set() and wa.is_bridge_running()
+    _stop_and_join()
+    res = _client(ALICE).post("/api/whatsapp/start")
+    assert res.status_code == 500, res.text
+    assert res.json()["detail"] == "Failed to start WhatsApp. Ask an admin to check the WhatsApp installation."
+    # Another account starts into the bridge Alice's failed start brought up.
+    world.link("bob")
+    world.own_switch(BOB_SCOPE, True)
+    world.fail_spawn = set()
+    assert wa.start_account("bob", BOB_SCOPE) == (True, wa.ACCOUNT_STARTED)
+    assert world.live("bob")
+
+
+def test_a_stop_cancels_a_pending_cold_start(world, monkeypatch):
+    """A Stop that arrives while the bridge thread has not yet spawned the account's process
+    cancels that spawn, even though no process is registered yet; a later Start still works.
+    MUTATION: `stop_account` leaves the pending start alone."""
+    world.link("alice")
+    world.own_switch(ALICE_SCOPE, True)
+    gate = threading.Event()
+    monkeypatch.setattr("vaf.core.channel_pairing.refile_whatsapp_owner_numbers",
+                        lambda: gate.wait(timeout=5) and [])
+    results = {}
+
+    def start():
+        results["start"] = wa.start_account("alice", ALICE_SCOPE)
+
+    def stop_then_release():
+        assert world.wait_for(lambda: "alice" in wa._pending_starts and wa.is_bridge_running())
+        results["stop"] = wa.stop_account("alice", ALICE_SCOPE)
+        gate.set()
+
+    assert _run_threads(start, stop_then_release) == []
+    assert results["stop"] is True
+    assert results["start"] == (False, wa.START_CANCELLED), results
+    time.sleep(0.1)
+    assert world.names() == [] and not world.live("alice")
+    assert wa.start_account("alice", ALICE_SCOPE) == (True, wa.ACCOUNT_STARTED)
+    assert world.live("alice") and world.names() == ["alice"]
+
+
+@pytest.mark.parametrize("killable", [False, True])
+def test_a_process_that_does_not_end_is_not_reported_stopped(world, killable):
+    """Terminate, then kill, and wait for the process either way. One that survives both stays
+    registered, the stop answers 500, and a restart starts no second process on its login.
+    MUTATION: drop the `wait` after `kill()` in `_terminate`."""
+    StubbornProc.killable = killable
+    world.proc_class["alice"] = StubbornProc
+    procs = _bridge_with(world, "admin", "alice")
+    try:
+        if killable:
+            assert wa.stop_account("alice", ALICE_SCOPE) is True
+            assert "alice" not in wa._processes and procs["alice"].returncode == -9
+            return
+        assert wa.stop_account("alice", ALICE_SCOPE) is False
+        assert wa._processes["alice"] is procs["alice"] and wa._scope_by_user["alice"] == ALICE_SCOPE
+        res = _client(ALICE).post("/api/whatsapp/stop")
+        assert res.status_code == 500 and res.json()["detail"] == wa.STOP_FAILED, res.text
+        assert wa.restart_account("alice", ALICE_SCOPE) == (False, wa.STOP_FAILED)
+        assert world.names().count("alice") == 1
+    finally:
+        StubbornProc.killable = True
+        procs["alice"].returncode = -9      # let the teardown's shutdown end it
+
+
+def test_an_account_named_like_the_local_admin_reaches_only_its_own_process(world, monkeypatch):
+    """An ordinary account whose name equals the local admin's, with a scope of its own: its
+    stop and restart leave the admin's process alone and its status is not the admin's.
+    MUTATION: `stop_account` ignores the scope; `/status` or `/dashboard` asks without it."""
+    procs = _bridge_with(world, "admin")
+    _quiet_reads(monkeypatch)
+    # The namesake's own switch is on, so `/status` reports its `running` unmasked.
+    world.own_switch(BOB_SCOPE, True)
+    namesake = {"username": "admin", "role": "user", "user_scope_id": BOB_SCOPE}
+    client = _client(namesake)
+    assert client.post("/api/whatsapp/stop").status_code == 200
+    assert world.live("admin") and procs["admin"].returncode is None
+    res = client.post("/api/whatsapp/restart")
+    assert res.status_code == 400 and res.json()["detail"] == wa.NOT_STARTABLE, res.text
+    assert wa._processes["admin"] is procs["admin"] and procs["admin"].returncode is None
+    assert wa.stop_account("admin", BOB_SCOPE) is None and world.live("admin")
+    for path in ("/api/whatsapp/status", "/api/whatsapp/dashboard"):
+        res = client.get(path)
+        assert res.status_code == 200 and res.json()["running"] is False, (path, res.text)
+
+
+def test_a_restart_stops_nothing_for_an_account_that_cannot_start_again(world):
+    """An account whose own switch went off while its process runs: its Restart answers 400 and
+    leaves that process as it is. MUTATION: drop the `_runnable_account` check that
+    `restart_account` makes before it stops."""
+    procs = _bridge_with(world, "admin", "alice")
+    world.own_switch(ALICE_SCOPE, False)
+    res = _client(ALICE).post("/api/whatsapp/restart")
+    assert res.status_code == 400 and res.json()["detail"] == wa.NOT_STARTABLE, res.text
+    assert wa._processes["alice"] is procs["alice"] and procs["alice"].returncode is None
 
 
 # -- Fuzz: the spawn gate -------------------------------------------------------------------------
@@ -554,9 +793,14 @@ def _fuzz_schedule(world, rng):
 
     def op(kind, name):
         if kind == "start_account":
-            wa.start_account(name, SCOPES[name])
+            ok, msg = wa.start_account(name, SCOPES[name])
+            # Fake spawns never fail and Node is always there: a start that reports a failure
+            # (or ran into its timeout) lost its own spawn.
+            if msg == wa.START_FAILED:
+                violations.append(f"start of {name} failed")
         elif kind == "stop_account":
-            wa.stop_account(name)
+            if wa.stop_account(name, SCOPES[name]) is False:
+                violations.append(f"stop of {name} did not end its process")
         elif kind == "start_missing":
             wa.start_missing_accounts()
         elif kind == "stop_bridge":
@@ -577,14 +821,12 @@ def _fuzz_schedule(world, rng):
     plan = [[draw() for _ in range(2)] for _ in range(4)]
 
     def worker(ops):
-        for kind, name in ops:
-            op(kind, name)
+        def run():
+            for kind, name in ops:
+                op(kind, name)
+        return run
 
-    workers = [threading.Thread(target=worker, args=(ops,)) for ops in plan]
-    for t in workers:
-        t.start()
-    for t in workers:
-        t.join(timeout=5)
+    violations.extend(f"operation raised: {e!r}" for e in _run_threads(*(worker(ops) for ops in plan)))
     wa.stop_bridge()
     remember_bridge()
     for t in bridge_threads:
@@ -602,6 +844,8 @@ def _fuzz_schedule(world, rng):
 
 def _fuzz_reset(world):
     world.spawned.clear()
+    with wa._spawn_lock:
+        wa._pending_starts.clear()
     with wa._process_lock:
         wa._processes.clear()
         wa._scope_by_user.clear()

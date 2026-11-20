@@ -525,5 +525,5 @@ def test_a_non_admin_drives_only_their_own_process(config_file, monkeypatch, rou
     assert calls, "the probe reached no lifecycle function"
     assert not [c for c in calls if c[1] in WHOLE_BRIDGE], calls
     own = {"start_account": ("alice", ALICE["user_scope_id"]), "restart_account": ("alice", ALICE["user_scope_id"]),
-           "stop_account": ("alice",)}
+           "stop_account": ("alice", ALICE["user_scope_id"])}
     assert all(c[0] == "whatsapp" and c[2:] == own[c[1]] for c in calls), calls

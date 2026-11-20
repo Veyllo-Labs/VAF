@@ -78,15 +78,41 @@ _spawns_open = False
 # Serialises the bridge's own start and restart: the routes run them off the event loop, and
 # two starts at once would each spawn a bridge thread and a sender loop.
 _lifecycle_lock = threading.RLock()
-# What an account's own start answers when it cannot start (the routes turn the first two into
-# 400 and the last into 500).
+# What an account's own start answers when it cannot start (the routes turn START_FAILED and
+# STOP_FAILED into 500, every other refusal into 400).
 NOT_STARTABLE = ("WhatsApp is not linked or not switched on for your account. "
                  "Link it and turn it on in Settings, Connections.")
 BRIDGE_STOPPING = "WhatsApp is stopping; try again in a few seconds."
 START_FAILED = ("Failed to start WhatsApp. Ensure Node.js is installed and npm install was run "
                 "in vaf/whatsapp_node.")
+START_CANCELLED = "WhatsApp was stopped for this account before it had started."
+STOP_FAILED = "WhatsApp did not stop for this account; try again."
 ACCOUNT_STARTED = "WhatsApp started for this account."
 ACCOUNT_ALREADY_RUNNING = "WhatsApp already runs for this account."
+
+
+class _PendingStart:
+    """An account start that brought the bridge up and waits for the bridge thread to spawn
+    its process. The bridge thread answers it once (`resolve`); a stop of the same account
+    before the spawn cancels it, so the bridge thread skips that spawn."""
+
+    def __init__(self, user_scope_id: str) -> None:
+        self.user_scope_id = str(user_scope_id or "")
+        self.cancelled = False
+        self.ok = False
+        self.message = START_FAILED
+        self.done = threading.Event()
+
+    def resolve(self, ok: bool, message: str) -> None:
+        if not self.done.is_set():
+            self.ok, self.message = bool(ok), message
+            self.done.set()
+
+
+# username -> the pending start of that account, guarded by `_spawn_lock`.
+_pending_starts: Dict[str, _PendingStart] = {}
+# How long an account start that brought the bridge up waits for its own spawn.
+COLD_START_TIMEOUT = 60.0
 # What a send answers when the account has no Node process of its own (see _process_for).
 NO_PROCESS_FOR_ACCOUNT = "No WhatsApp process runs for this account. Link WhatsApp in Settings, Connections."
 # What a send answers when it carries no scope and names somebody other than the local admin
@@ -1695,7 +1721,7 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
                     wc["enabled"] = False
                     cfg["whatsapp_config"] = wc
                     Config.save(cfg)
-            stop_account(username)
+            stop_account(username, user_scope_id)
         except Exception as e:
             logger.exception("Failed to stop WhatsApp on session expiry: %s", e)
     elif typ == "connected":
@@ -2312,15 +2338,30 @@ def _spawn_account(user_scope_id: str, username: str, auth_dir: Path) -> bool:
     return True
 
 
-def _terminate(proc: subprocess.Popen) -> None:
+def _terminate(proc: subprocess.Popen) -> bool:
+    """End a Node process: terminate, then kill after five seconds, and wait for it either way.
+    False when it still runs after the kill, so no caller reports a stop that did not happen
+    or starts a second process on the same login next to it."""
     try:
         proc.terminate()
         proc.wait(timeout=5)
+        return True
     except Exception:
-        try:
-            proc.kill()
-        except Exception:
-            pass
+        pass
+    try:
+        proc.kill()
+        proc.wait(timeout=5)
+        return True
+    except Exception:
+        return proc.poll() is not None
+
+
+def _resolve_pending(message: str) -> None:
+    """Answer every account start still waiting on this bridge thread. Caller holds
+    `_spawn_lock`."""
+    for pending in _pending_starts.values():
+        pending.resolve(False, START_CANCELLED if pending.cancelled else message)
+    _pending_starts.clear()
 
 
 def _run_bridge(only: Optional[str] = None) -> None:
@@ -2346,6 +2387,7 @@ def _run_bridge(only: Optional[str] = None) -> None:
             nobody = not _processes
         if not users and nobody:
             _spawns_open = False
+            _resolve_pending(NOT_STARTABLE)
             logger.info("WhatsApp bridge: no users with linked auth, exiting")
             _write_bridge_state(False)
             return
@@ -2355,18 +2397,31 @@ def _run_bridge(only: Optional[str] = None) -> None:
 
     for user_scope_id, username, auth_dir in users:
         with _spawn_lock:
-            _spawn_account(user_scope_id, username, auth_dir)
+            pending = _pending_starts.pop(username, None)
+            if pending is not None and pending.cancelled:
+                pending.resolve(False, START_CANCELLED)
+                continue
+            ok = _spawn_account(user_scope_id, username, auth_dir)
+            if pending is not None:
+                pending.resolve(ok, ACCOUNT_STARTED if ok else
+                                BRIDGE_STOPPING if _bridge_stop.is_set() else START_FAILED)
+    with _spawn_lock:
+        # A start for an account this bridge did not find to run (switched off or unlinked
+        # in the meantime) is answered now rather than left to its timeout.
+        _resolve_pending(NOT_STARTABLE)
 
     _bridge_stop.wait()
     set_whatsapp_reply_callback(None)
     with _spawn_lock:
         _spawns_open = False
+        _resolve_pending(BRIDGE_STOPPING)
         with _process_lock:
-            running = list(_processes.values())
+            running = list(_processes.items())
             _processes.clear()
             _scope_by_user.clear()
-        for proc in running:
-            _terminate(proc)
+        for username, proc in running:
+            if not _terminate(proc):
+                logger.error("WhatsApp: the process of %s did not end on the bridge's stop", username)
     _write_bridge_state(False)
 
 
@@ -2471,30 +2526,66 @@ def _start_into_running(entry: Tuple[str, str, Path]) -> Tuple[bool, str]:
 
 def start_account(username: str, user_scope_id: str) -> Tuple[bool, str]:
     """Start this account's own process and nobody else's: into the running bridge, or by
-    bringing the bridge up with this process alone. (ok, message); the message is one of
-    NOT_STARTABLE, BRIDGE_STOPPING, START_FAILED, ACCOUNT_STARTED, ACCOUNT_ALREADY_RUNNING."""
+    bringing the bridge up with this process alone and waiting for its spawn. (ok, message);
+    the message is one of NOT_STARTABLE, BRIDGE_STOPPING, START_FAILED, START_CANCELLED,
+    ACCOUNT_STARTED, ACCOUNT_ALREADY_RUNNING."""
     entry = _runnable_account(username, user_scope_id)
     if entry is None:
         return False, NOT_STARTABLE
+    pending: Optional[_PendingStart] = None
     with _lifecycle_lock:
         if not is_bridge_running():
-            if start_bridge(only=entry[1]):
-                return True, ACCOUNT_STARTED
-            return False, START_FAILED
-    return _start_into_running(entry)
+            pending = _PendingStart(entry[0])
+            with _spawn_lock:
+                _pending_starts[entry[1]] = pending
+            if not start_bridge(only=entry[1]):
+                with _spawn_lock:
+                    if _pending_starts.get(entry[1]) is pending:
+                        del _pending_starts[entry[1]]
+                return False, START_FAILED
+    if pending is None:
+        return _start_into_running(entry)
+    # The bridge thread spawns this account's process and answers here; a failed spawn is
+    # this account's failure only, the bridge stays up for anybody who started meanwhile.
+    if not pending.done.wait(timeout=COLD_START_TIMEOUT):
+        with _spawn_lock:
+            pending.cancelled = True
+            pending.resolve(False, START_FAILED)
+    return pending.ok, pending.message
 
 
-def stop_account(username: str) -> bool:
-    """Stop this account's own process. Never touches the bridge, the sender loop or any other
-    account. False when the account had no process."""
+def stop_account(username: str, user_scope_id: Optional[str] = None) -> Optional[bool]:
+    """Stop this account's own process, and cancel its start still waiting for the bridge
+    thread. Never touches the bridge, the sender loop or any other account. True when it
+    stopped something, None when the account had nothing to stop, False when its process did
+    not end (it stays registered, so nothing starts a second one next to it).
+
+    With `user_scope_id`, a process or pending start registered under this name for another
+    scope is not this account's and is left alone: an account's name can equal another
+    account's (an ordinary account named like the local admin), its scope cannot."""
     name = (username or "").strip()
+    wanted = str(user_scope_id or "").strip()
     with _spawn_lock:
+        pending = _pending_starts.get(name)
+        cancelled = False
+        if pending is not None and (not wanted or pending.user_scope_id == wanted):
+            pending.cancelled = True
+            pending.resolve(False, START_CANCELLED)
+            cancelled = True
         with _process_lock:
-            proc = _processes.pop(name, None)
-            _scope_by_user.pop(name, None)
+            own_scope = str(_scope_by_user.get(name) or "").strip()
+            proc = None
+            if name in _processes and (not wanted or own_scope == wanted):
+                proc = _processes.pop(name)
+                _scope_by_user.pop(name, None)
         if proc is None:
+            return True if cancelled else None
+        if not _terminate(proc):
+            with _process_lock:
+                _processes.setdefault(name, proc)
+                _scope_by_user.setdefault(name, own_scope)
+            logger.error("WhatsApp: the process of %s did not end", name)
             return False
-        _terminate(proc)
     with _connection_lock:
         _connection_status[name] = False
     _write_bridge_state(is_bridge_running())
@@ -2503,8 +2594,12 @@ def stop_account(username: str) -> bool:
 
 
 def restart_account(username: str, user_scope_id: str) -> Tuple[bool, str]:
-    """`stop_account`, then `start_account`."""
-    stop_account(username)
+    """`stop_account`, then `start_account`; nothing is stopped for an account that could not
+    start again (not linked, switched off, or a sign-in whose scope is not the account's)."""
+    if _runnable_account(username, user_scope_id) is None:
+        return False, NOT_STARTABLE
+    if stop_account(username, user_scope_id) is False:
+        return False, STOP_FAILED
     return start_account(username, user_scope_id)
 
 
@@ -2533,12 +2628,13 @@ def any_process_connected(wait_timeout: float = 2.0) -> bool:
     return any(get_connection_status(u, wait_timeout=wait_timeout) for u in names)
 
 
-def has_process_for_user(username: str) -> bool:
-    """True if we have a running Node process for this user (so sends will not be dropped)."""
+def has_process_for_user(username: str, user_scope_id: Optional[str] = None) -> bool:
+    """True if we have a running Node process for this user (so sends will not be dropped).
+    With `user_scope_id`, only a process started for that scope counts (`_process_for`)."""
     if not is_bridge_running():
         return False
     uname = (username or "").strip() or "admin"
-    _, proc = _process_for(uname)
+    _, proc = _process_for(uname, user_scope_id)
     return bool(proc is not None and proc.poll() is None and proc.stdin)
 
 

@@ -368,12 +368,13 @@ def test_fuzz_never_two_nodes_on_one_login(world, monkeypatch, tmp_path):
                     refusals.append(str(folder))
             time.sleep(rng.random() * 0.002)
 
+    spawned = 0
     for _ in range(rounds):
+        # Every Node of the last round ends; the oracle then looks at this round's only, so a
+        # long run stays linear in its rounds.
         with _FuzzNode.lock:
-            for n in _FuzzNode.nodes:
-                if n.died is None:
-                    _FuzzNode.seq += 1
-                    n.died = _FuzzNode.seq
+            spawned += len(_FuzzNode.nodes)
+            _FuzzNode.nodes = []
         wa._spawned_nodes.clear()
         plans = [[rng.choice(folders) for _ in range(3)] for _ in range(rng.randint(2, 4))]
         threads = [threading.Thread(target=worker, args=(plan,)) for plan in plans]
@@ -383,4 +384,5 @@ def test_fuzz_never_two_nodes_on_one_login(world, monkeypatch, tmp_path):
             t.join(10)
     assert _FuzzNode.violations == [], _FuzzNode.violations[:5]
     assert refusals == [], refusals[:5]
-    assert len(_FuzzNode.nodes) > rounds, "the fuzz spawned almost nothing; it is broken"
+    spawned += len(_FuzzNode.nodes)
+    assert spawned > rounds, "the fuzz spawned almost nothing; it is broken"

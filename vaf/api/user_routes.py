@@ -89,8 +89,9 @@ def request_account(request: Request) -> Dict[str, str]:
 
     The WhatsApp start, stop and restart read it for anybody who is not an admin, because
     they act on that account's own process. Routes that read no account are not covered: the
-    Telegram and Discord bot switches and the Telegram verification. The WhatsApp chat history asks the session gate with the authenticated
-    scope instead (`session_access_allowed`), which refuses a non-admin caller without one."""
+    Telegram and Discord bot switches and the Telegram verification. The WhatsApp chat
+    history asks the session gate with the authenticated scope instead
+    (`session_access_allowed`), which refuses a non-admin caller without one."""
     user = getattr(request.state, "user", None)
     if not user or not isinstance(user, dict):
         return {"user_scope_id": str(get_local_admin_scope_id()), "username": get_local_admin_username()}

@@ -17,6 +17,7 @@ config, a scratch APP_DIR.
 import os
 import random
 import unicodedata
+import uuid
 
 import pytest
 from sqlalchemy import delete, select
@@ -45,6 +46,21 @@ def h(monkeypatch, tmp_path):
     async def _cheap(p):
         return f"hash:{p}"
     monkeypatch.setattr(user_admin, "hash_password_async", _cheap)
+    # SQLite stores the UUID columns with numeric affinity: a random id whose hex digits are
+    # all decimal (one "e" at most, about 1 in 160,000) is stored as a REAL and cannot be read
+    # back, which the fuzz's quarter million inserts hit. Ids with hex letters in them.
+    from auth_harness import AsyncSessionShim
+    import itertools
+    counter = itertools.count(1)
+    real_add = AsyncSessionShim.add
+
+    def add(self, obj):
+        if isinstance(obj, LocalUser):
+            n = next(counter)
+            obj.id = obj.id or uuid.UUID(f"ab12cd34-0000-4000-8000-{n:012x}")
+            obj.user_scope_id = obj.user_scope_id or uuid.UUID(f"ab12cd34-0000-4000-9000-{n:012x}")
+        return real_add(self, obj)
+    monkeypatch.setattr(AsyncSessionShim, "add", add)
     harness.state = state
     return harness
 
@@ -206,7 +222,9 @@ def test_fuzz_accepted_names_never_share_a_key(h):
             s.commit()
         seeded = "\u017fa\u017f"
         with Session(h.engine) as s:
-            s.add(LocalUser(username=seeded, password_hash="x", role="user"))
+            s.add(LocalUser(username=seeded, password_hash="x", role="user",
+                            id=uuid.UUID("ab12cd34-0000-4000-a000-0000000000ff"),
+                            user_scope_id=uuid.UUID("ab12cd34-0000-4000-b000-0000000000ff")))
             s.commit()
         taken = {portable_name_key(seeded)}
         for _ in range(12):

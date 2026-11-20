@@ -1275,12 +1275,15 @@ vaf automation delete <id>   # Delete task
         return self.storage_dir / f"{task.id}.json"
 
     def _save_task(self, task: AutomationTask):
-        """Save a task to storage. When task has user_scope_id, save to that user's dir (for global manager)."""
-        filepath = self._path_for_task(task)
-        if task.user_scope_id:
-            filepath.parent.mkdir(parents=True, exist_ok=True)
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(task.to_dict(), f, indent=2, ensure_ascii=False)
+        """Save a task to storage. When task has user_scope_id, save to that user's dir (for global manager).
+
+        Encoded in full first, then temp file + replace: a truncating write that failed half
+        way (a full disk, a value that does not encode) left an empty or cut-off file, which
+        `_read_task_record` skips, so the automation was gone from every later load. Plain
+        JSON (`encrypt=False`): every reader of this store parses it with `json.load`."""
+        from vaf.core.data_files import write_json_atomic
+
+        write_json_atomic(self._path_for_task(task), task.to_dict(), encrypt=False, indent=2)
 
     def _sync_workspace_automation_state(
         self,

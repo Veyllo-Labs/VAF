@@ -109,10 +109,11 @@ def _snapshot(root: Path) -> dict:
 
 # ── a real /ws connection ─────────────────────────────────────────────────────
 
-def _ws(monkeypatch, *, role, scope, frames, seen=None):
+def _ws(monkeypatch, *, role, scope, frames, seen=None, probe=None):
     """Send `frames` ([(frame, reply_type), ...]) over one real `/ws` connection opened with a
     signed token; the replies in order. `role=None` signs no role claim (the machine owner's
-    tokenless identity carries none). `seen`, a list, receives every message read.
+    tokenless identity carries none). `seen`, a list, receives every message read. `probe`
+    is called with the session while the frames are being answered.
 
     The account-standing check of the handshake answers what it answers with the auth store
     unreachable (the token stands) without asking it: it dialed the store four times per
@@ -153,6 +154,8 @@ def _ws(monkeypatch, *, role, scope, frames, seen=None):
 
         reader = threading.Thread(target=pump, daemon=True)
         reader.start()
+        if probe is not None:
+            probe(ws)
         reader.join(30)
     assert len(box["replies"]) == len(frames), f"missing replies ({box.get('error')!r})"
     return box["replies"]
@@ -1300,7 +1303,9 @@ def _count_creates(monkeypatch) -> list:
 
 
 def _race(fns) -> list:
-    """Run the callables at the same instant (a barrier); each one's result or exception."""
+    """Run the callables at the same instant (a barrier); each one's result or exception.
+    Daemon workers: a decision that hangs fails the assert below and cannot keep the test
+    process alive."""
     barrier = threading.Barrier(len(fns))
     out = [None] * len(fns)
 
@@ -1311,7 +1316,8 @@ def _race(fns) -> list:
         except BaseException as e:  # noqa: BLE001 - the outcome is what is compared
             out[i] = e
 
-    threads = [threading.Thread(target=run, args=(i, fn)) for i, fn in enumerate(fns)]
+    threads = [threading.Thread(target=run, args=(i, fn), daemon=True)
+               for i, fn in enumerate(fns)]
     for t in threads:
         t.start()
     for t in threads:
@@ -1490,7 +1496,14 @@ def test_a_killed_lock_holder_does_not_block(store, workspaces, monkeypatch):
         [sys.executable, "-c", _HOLD_THE_LOCK, str(ws.root.parent), TENANT_A, LOCAL],
         stdout=subprocess.PIPE, cwd=str(_REPO), text=True)
     try:
-        assert proc.stdout.readline().strip() == "held"
+        # Bounded: a child that stalls before it holds the lock fails here, and the
+        # `finally` below kills and reaps it.
+        ready = []
+        reader = threading.Thread(target=lambda: ready.append(proc.stdout.readline()),
+                                  daemon=True)
+        reader.start()
+        reader.join(30)
+        assert ready and ready[0].strip() == "held", ready
         with pytest.raises(ws.tw.HandoffBusy):
             ws.tw.approve_handoff(TENANT_A, ws.task_a, hid)
         proc.kill()
@@ -1545,31 +1558,93 @@ def test_a_busy_decision_answers_busy(store, workspaces, monkeypatch):
     assert _a_tasks(store) == before and _record(ws, hid)["status"] == "pending"
 
 
-def test_a_reject_after_a_claimed_approval_finishes_it(store, workspaces, monkeypatch):
-    """An approval claimed before a crash is the decision: a reject finishes it (the
-    automation may already exist) and answers "already decided", never stores `rejected`.
-    MUTATION: let `reject_handoff` ignore the claim."""
+def _crash_after_claim(ws, monkeypatch, hid) -> str:
+    """Approve once and die between the claim and the action; the planned id."""
+    real_apply = ws.tw._apply_automation_action
+
+    def crash(*a, **kw):
+        raise _Crash()
+
+    monkeypatch.setattr(ws.tw, "_apply_automation_action", crash)
+    with pytest.raises(_Crash):
+        ws.tw.approve_handoff(TENANT_A, ws.task_a, hid)
+    monkeypatch.setattr(ws.tw, "_apply_automation_action", real_apply)
+    return _record(ws, hid)["claim"]["automation_id"]
+
+
+def _crash_after_create(ws, monkeypatch, hid) -> str:
+    """Approve once and die after the planned task was stored; its id."""
+    real = AutomationManager.create
+
+    def create_then_crash(self, task):
+        real(self, task)
+        raise _Crash()
+
+    monkeypatch.setattr(AutomationManager, "create", create_then_crash)
+    with pytest.raises(_Crash):
+        ws.tw.approve_handoff(TENANT_A, ws.task_a, hid)
+    monkeypatch.setattr(AutomationManager, "create", real)
+    return _record(ws, hid)["claim"]["automation_id"]
+
+
+def test_a_reject_wins_over_a_claim_that_created_nothing(store, workspaces, monkeypatch):
+    """An approval that died between its claim and its action created nothing, so a reject
+    still wins: it is stored as rejected and announced like any reject. MUTATION: let every
+    claim count as taken effect in `_claim_took_effect` (the reject then creates the
+    automation and answers "already approved")."""
+    import vaf.core.user_notifications as un
+
     ws = workspaces
     hid = _create_handoff(ws)
     before = _a_tasks(store)
-    real_apply = ws.tw._apply_automation_action
-    fired = []
+    _crash_after_claim(ws, monkeypatch, hid)
+    notes = []
+    monkeypatch.setattr(un, "append_notification", lambda *a, **kw: notes.append(kw["title"]))
+    seen = []
+    replies = _ws(monkeypatch, role="user", scope=TENANT_A, seen=seen, frames=[
+        ({"type": "reject_thinking_workspace_handoff", "task_id": ws.task_a,
+          "handoff_id": hid, "reason": "changed my mind"}, "thinking_workspace_handoff_result")])
+    assert replies[0]["ok"] is True and replies[0]["error"] is None, replies[0]
+    record = _record(ws, hid)
+    assert record["status"] == "rejected" and "claim" not in record, record
+    assert _a_tasks(store) == before
+    logs = [m["entry"]["message"] for m in seen if m.get("type") == "new_log"
+            and "Thinking Workspace handoff" in m["entry"]["message"]]
+    assert len(logs) == 1 and "rejected" in logs[0], logs
+    assert notes == ["Workspace handoff rejected"], notes
 
-    def apply_once(*a, **kw):
-        if not fired:
-            fired.append(1)
-            raise _Crash()
-        return real_apply(*a, **kw)
 
-    monkeypatch.setattr(ws.tw, "_apply_automation_action", apply_once)
-    with pytest.raises(_Crash):
-        ws.tw.approve_handoff(TENANT_A, ws.task_a, hid)
-    planned = _record(ws, hid)["claim"]["automation_id"]
-    with pytest.raises(ws.tw.HandoffAlreadyDecided):
-        ws.tw.reject_handoff(TENANT_A, ws.task_a, hid, reason="changed my mind")
+def test_a_reject_after_a_claimed_create_finishes_and_announces_it(store, workspaces,
+                                                                   monkeypatch):
+    """An approval that died after its automation was stored has taken effect: a reject
+    finishes it, never stores `rejected` over an automation that exists, answers "handoff
+    already approved" with the result, and sends the approval's notification and log line,
+    so the account learns what was created. MUTATIONS: let the reject branch answer
+    `HandoffAlreadyApproved` like any `HandoffAlreadyDecided`; separately, let
+    `reject_handoff` give up every claim."""
+    import vaf.core.user_notifications as un
+
+    ws = workspaces
+    hid = _create_handoff(ws)
+    before = _a_tasks(store)
+    planned = _crash_after_create(ws, monkeypatch, hid)
+    assert _a_tasks(store) - before == {planned}
+    notes = []
+    monkeypatch.setattr(un, "append_notification", lambda *a, **kw: notes.append(kw["title"]))
+    seen = []
+    replies = _ws(monkeypatch, role="user", scope=TENANT_A, seen=seen, frames=[
+        _handoff("reject", ws.task_a, hid)])
+    reply = replies[0]
+    assert reply["ok"] is False and reply["error"] == "handoff already approved", reply
+    assert reply["automation_action_result"] == {"ok": True, "operation": "create",
+                                                 "task_id": planned}, reply
     record = _record(ws, hid)
     assert record["status"] == "approved" and "claim" not in record, record
     assert _a_tasks(store) - before == {planned}
+    logs = [m["entry"]["message"] for m in seen if m.get("type") == "new_log"
+            and "Thinking Workspace handoff" in m["entry"]["message"]]
+    assert len(logs) == 1 and "approved" in logs[0] and "applied" in logs[0], logs
+    assert notes == ["Workspace handoff approved"], notes
 
 
 def test_a_forged_claim_id_is_not_used_as_a_name(store, workspaces, monkeypatch):
@@ -1670,30 +1745,25 @@ def test_a_refused_decision_sends_no_log_or_notification(store, workspaces, monk
 
 def _decision_fuzz(ws, store, monkeypatch, draws: int, seed: int = 4444) -> list:
     """Per draw: 2 to 4 threads behind one barrier, each approving or rejecting one fresh
-    handoff, with or without a create action; sometimes an approval first crashes after its
-    claim. Returns the draws that broke the invariant."""
+    handoff, with or without a create action; sometimes an approval first dies after its
+    claim (nothing created) or after its create (the automation exists). Returns the draws
+    that broke the invariant."""
     rng = random.Random(seed)
     tw = ws.tw
-    real_apply = tw._apply_automation_action
     bad = []
     for draw in range(draws):
         with_create = rng.random() < 0.7
-        crash = with_create and rng.random() < 0.3
+        crash = rng.choice((None, "claim", "create")) if with_create and rng.random() < 0.4 else None
         actions = [rng.choice(("approve", "reject")) for _ in range(rng.randint(2, 4))]
         if with_create:
             hid = _create_handoff(ws, f"fuzz {draw}")
         else:
             hid = tw.create_handoff(TENANT_A, ws.task_a, "Plain", "c")["id"]
         before = _a_tasks(store)
-        if crash:
-            def crash_once(*a, **kw):
-                raise _Crash()
-            monkeypatch.setattr(tw, "_apply_automation_action", crash_once)
-            try:
-                tw.approve_handoff(TENANT_A, ws.task_a, hid)
-            except _Crash:
-                pass
-            monkeypatch.setattr(tw, "_apply_automation_action", real_apply)
+        if crash == "claim":
+            _crash_after_claim(ws, monkeypatch, hid)
+        elif crash == "create":
+            _crash_after_create(ws, monkeypatch, hid)
 
         def call(action):
             if action == "approve":
@@ -1705,9 +1775,12 @@ def _decision_fuzz(ws, store, monkeypatch, draws: int, seed: int = 4444) -> list
         made = len(_a_tasks(store) - before)
         trues = [o for o in out if o is True]
         others = [o for o in out if o is not True]
-        # After a crash the claimed approval is finished by whichever call locks first; a
-        # reject finishing it answers "already decided", and so does every call after it.
-        allowed = {0, 1} if (crash and "approve" in actions) else {0} if crash else {1}
+        # Whoever locks first decides. Only after a create that took effect does a reject
+        # that comes first finish the approval and answer "already approved" (not True).
+        if crash == "create":
+            allowed = {0, 1} if "approve" in actions else {0}
+        else:
+            allowed = {1}
         problems = []
         if len(trues) not in allowed:
             problems.append(f"{len(trues)} calls returned True")
@@ -1715,8 +1788,8 @@ def _decision_fuzz(ws, store, monkeypatch, draws: int, seed: int = 4444) -> list
             problems.append(f"outcomes {out!r}")
         if record.get("status") not in ("approved", "rejected") or "claim" in record:
             problems.append(f"record {record.get('status')} claim={'claim' in record}")
-        if crash and record.get("status") != "approved":
-            problems.append("a claimed approval was not finished")
+        if crash == "create" and record.get("status") != "approved":
+            problems.append("an approval in effect was rejected")
         want_made = 1 if (with_create and record.get("status") == "approved") else 0
         if made != want_made:
             problems.append(f"{made} automations created")
@@ -1793,3 +1866,256 @@ def test_the_first_decisions_of_a_process_share_one_lock(store, workspaces, monk
     assert out.count(True) == 1, out
     assert all(isinstance(o, ws.tw.HandoffAlreadyDecided) for o in out if o is not True), out
     assert len(_a_tasks(store) - before) == 1
+
+
+# ── round two: no error keeps a handoff pending, the loop never waits, ids before the lock ──
+
+_MISTYPED = [
+    {"operation": "create", "prompt": 5},
+    {"operation": "create", "prompt": "p", "name": ["a"]},
+    {"operation": "create", "prompt": "p", "frequency": "weekly", "weekday": 3},
+    {"operation": "update", "task_id": 7, "name": "x"},
+]
+_MISTYPED_IDS = ["prompt", "name", "weekday", "update-task-id"]
+
+
+def _with_action(ws, action, *, claim=None) -> str:
+    """A pending handoff of tenant A whose record carries `action` as it is (written past
+    `create_handoff`, as a record from before its check would be), optionally claimed."""
+    hid = ws.tw.create_handoff(TENANT_A, ws.task_a, "Stored", "c")["id"]
+    path = ws.root / TENANT_A / "tasks" / ws.task_a / "handoff" / f"{hid}.json"
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record["automation_action"] = action
+    if claim is not None:
+        record["claim"] = claim
+    path.write_text(json.dumps(record), encoding="utf-8")
+    return hid
+
+
+@pytest.mark.parametrize("action", _MISTYPED, ids=_MISTYPED_IDS)
+def test_a_mistyped_action_is_decided_and_never_sticks(store, workspaces, action):
+    """An action with a field of the wrong type raised on every approve and, once claimed,
+    on every reject too: the handoff stayed pending for good. It is now approved with the
+    result "invalid automation action" and never claimed. MUTATION: drop the type check
+    before the claim in `_approve_locked` (the approve raises `AttributeError`)."""
+    ws = workspaces
+    hid = _with_action(ws, action)
+    before = _snapshot(store)
+    assert ws.tw.approve_handoff(TENANT_A, ws.task_a, hid) is True
+    record = _record(ws, hid)
+    assert record["status"] == "approved" and "claim" not in record, record
+    assert record["automation_action_result"] == {"ok": False,
+                                                  "error": "invalid automation action"}
+    with pytest.raises(ws.tw.HandoffAlreadyDecided):
+        ws.tw.reject_handoff(TENANT_A, ws.task_a, hid)
+    assert _snapshot(store) == before
+
+
+@pytest.mark.parametrize("decision", ["approve", "reject"])
+@pytest.mark.parametrize("action", _MISTYPED, ids=_MISTYPED_IDS)
+def test_a_claimed_mistyped_action_is_decided(store, workspaces, action, decision):
+    """A record already claimed with such an action (written by the build before the type
+    check): an approve finishes it as "invalid automation action", a reject wins because the
+    action never ran; either way the claim is gone. MUTATIONS: drop the type check in
+    `_approve_locked` and in `_claim_took_effect`."""
+    ws = workspaces
+    hid = _with_action(ws, action, claim={"decision": "approve", "automation_id": "abcd0123"})
+    if decision == "approve":
+        assert ws.tw.approve_handoff(TENANT_A, ws.task_a, hid) is True
+        want = "approved"
+    else:
+        assert ws.tw.reject_handoff(TENANT_A, ws.task_a, hid, reason="no") is True
+        want = "rejected"
+    record = _record(ws, hid)
+    assert record["status"] == want and "claim" not in record, record
+    assert "abcd0123" not in _a_tasks(store)
+
+
+def test_any_error_of_the_action_after_the_claim_ends_the_decision(store, workspaces,
+                                                                     monkeypatch):
+    """An error the type check does not foresee (here a `RuntimeError`) is finished like a
+    refusal, with the claim removed, instead of staying pending for every later decision.
+    MUTATION: drop the `except Exception` after the action in `_approve_locked`."""
+    ws = workspaces
+    hid = _create_handoff(ws)
+
+    def boom(*a, **kw):
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(ws.tw, "_apply_automation_action", boom)
+    assert ws.tw.approve_handoff(TENANT_A, ws.task_a, hid) is True
+    record = _record(ws, hid)
+    assert record["status"] == "approved" and "claim" not in record, record
+    assert record["automation_action_result"] == {"ok": False,
+                                                  "error": "invalid automation action"}
+
+
+def test_the_handoff_tool_refuses_a_mistyped_action(store, workspaces):
+    """The model's proposal with a number as the prompt is refused where it is made, with a
+    reason the model can act on, and nothing is stored. MUTATION: drop the type check in
+    `create_handoff`."""
+    from vaf.tools.thinking_workspace_handoff import ThinkingWorkspaceHandoffTool
+
+    ws = workspaces
+    handoff_dir = ws.root / TENANT_A / "tasks" / ws.task_a / "handoff"
+    before = sorted(p.name for p in handoff_dir.glob("*")) if handoff_dir.exists() else []
+    out = ThinkingWorkspaceHandoffTool().run(
+        task_id=ws.task_a, title="t", content="c", user_scope_id=TENANT_A,
+        automation_action={"operation": "create", "prompt": 5})
+    assert out.startswith("Error") and "invalid automation action" in out, out
+    after = sorted(p.name for p in handoff_dir.glob("*")) if handoff_dir.exists() else []
+    assert after == before
+
+
+def test_the_websocket_loop_is_free_while_a_decision_waits(store, workspaces, monkeypatch):
+    """A decision waiting for another decision's lock held the event loop that serves every
+    socket of the listener. It now waits on a worker thread: a coroutine scheduled on the
+    session's loop meanwhile runs at once. MUTATION: call `approve_handoff` directly in the
+    WebSocket branch again."""
+    import time
+
+    import anyio
+
+    ws = workspaces
+    hid = _create_handoff(ws)
+    monkeypatch.setattr(ws.tw, "_DECISION_LOCK_TIMEOUT_S", 1.5)
+    held, done = threading.Event(), threading.Event()
+
+    def hold():
+        with ws.tw._decision_lock(TENANT_A):
+            held.set()
+            done.wait(20)
+
+    holder = threading.Thread(target=hold, daemon=True)
+    holder.start()
+    waited = []
+
+    def probe(session):
+        time.sleep(0.3)   # the approve frame is in, its decision waits for the lock
+        started = time.monotonic()
+        session.portal.call(anyio.sleep, 0)
+        waited.append(time.monotonic() - started)
+
+    try:
+        assert held.wait(10)
+        replies = _ws(monkeypatch, role="user", scope=TENANT_A, probe=probe,
+                      frames=[_handoff("approve", ws.task_a, hid)])
+    finally:
+        done.set()
+        holder.join(10)
+    assert replies[0]["error"] == "handoff is being decided", replies[0]
+    assert waited and waited[0] < 0.5, waited
+
+
+@pytest.mark.parametrize("action", ["approve", "reject"])
+def test_an_invalid_id_is_not_found_while_the_lock_is_held(store, workspaces, monkeypatch,
+                                                            action):
+    """An id that is not one entry answers "not found" at once, also while another decision
+    holds the lock, not "busy" after the wait. MUTATION: drop the `_handoff_paths` check
+    before the lock."""
+    ws = workspaces
+    monkeypatch.setattr(ws.tw, "_DECISION_LOCK_TIMEOUT_S", 0.2)
+    decide = ws.tw.approve_handoff if action == "approve" else ws.tw.reject_handoff
+    held, done = threading.Event(), threading.Event()
+
+    def hold():
+        with ws.tw._decision_lock(TENANT_A):
+            held.set()
+            done.wait(20)
+
+    holder = threading.Thread(target=hold, daemon=True)
+    holder.start()
+    try:
+        assert held.wait(10)
+        for task_id, handoff_id in ((ws.task_a, "../x"), (ws.task_a, "x" * 300),
+                                    ("../" + TENANT_B, "ffff0000")):
+            assert decide(TENANT_A, task_id, handoff_id) is False, (task_id, handoff_id)
+    finally:
+        done.set()
+        holder.join(10)
+
+
+def test_the_fallback_lock_is_one_per_workspace(store, workspaces, monkeypatch):
+    """Without filelock, one account's decision made every other account wait; the machine
+    owner's aliases still share one lock, as they share one workspace. MUTATIONS: one global
+    fallback lock; separately, key the fallback by the raw scope."""
+    import vaf.core.secure_store as secure_store
+
+    tw = workspaces.tw
+    monkeypatch.setattr(secure_store, "_get_filelock_cls", lambda: None)
+    monkeypatch.setattr(tw, "_DECISION_LOCK_TIMEOUT_S", 0.2)
+
+    def held_by(scope, check):
+        held, done = threading.Event(), threading.Event()
+
+        def hold():
+            with tw._decision_lock(scope):
+                held.set()
+                done.wait(20)
+
+        holder = threading.Thread(target=hold, daemon=True)
+        holder.start()
+        try:
+            assert held.wait(10)
+            check()
+        finally:
+            done.set()
+            holder.join(10)
+
+    def a_is_free():
+        with tw._decision_lock(TENANT_A):
+            pass
+
+    def owner_aliases_wait():
+        for alias in (LOCAL, "default"):
+            with pytest.raises(tw.HandoffBusy):
+                with tw._decision_lock(alias):
+                    pass
+
+    held_by(TENANT_B, a_is_free)
+    held_by(None, owner_aliases_wait)
+
+
+def test_a_lock_file_error_is_not_answered_as_missing(store, workspaces, monkeypatch):
+    """The lock file cannot be opened (a permission error): the handoff exists, so the
+    answer is "handoff decision not saved", without the path, and nothing is decided.
+    MUTATION: drop the `except OSError` around the lock acquisition."""
+    import vaf.core.secure_store as secure_store
+
+    ws = workspaces
+    hid = _create_handoff(ws)
+
+    class Unopenable:
+        def __init__(self, path, timeout):
+            self.path = path
+
+        def acquire(self):
+            raise PermissionError(13, "Permission denied", self.path)
+
+        def release(self):
+            pass
+
+    monkeypatch.setattr(secure_store, "_get_filelock_cls", lambda: Unopenable)
+    replies = _ws(monkeypatch, role="user", scope=TENANT_A, frames=[
+        _handoff("approve", ws.task_a, hid), _handoff("reject", ws.task_a, hid)])
+    for reply in replies:
+        assert reply["ok"] is False and reply["error"] == "handoff decision not saved", reply
+        assert str(ws.root) not in json.dumps(reply) and "Errno" not in json.dumps(reply)
+    assert _record(ws, hid)["status"] == "pending"
+
+
+def test_save_task_never_truncates(store):
+    """A task save that fails half way (here a value that does not encode) emptied the task
+    file, which every later load skipped: the automation was gone. MUTATION:
+    `AutomationManager._save_task` back to `open(path, "w")` + `json.dump`."""
+    mgr = AutomationManager(user_scope_id=TENANT_A)
+    path = _path(store, A_ID)
+    before = path.read_bytes()
+    task = mgr.get(A_ID)
+    task.name = "x\ud800"
+    with pytest.raises(ValueError):
+        mgr._save_task(task)
+    assert path.read_bytes() == before
+    assert AutomationManager(user_scope_id=TENANT_A).get(A_ID).name == f"Task {A_ID}"
+    assert not [p.name for p in path.parent.iterdir() if p.name.startswith(".tmp-")]
+

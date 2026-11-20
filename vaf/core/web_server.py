@@ -5119,6 +5119,58 @@ def _emit_sec_ws(detail: str, ip: str = "") -> None:
     except Exception:
         pass
 
+async def _announce_handoff_approved(websocket: WebSocket, user_scope_id: Optional[str],
+                                     task_id: str, handoff_id: str,
+                                     action_result: Optional[dict]) -> None:
+    """The notification and the log line of an approved thinking-workspace handoff. Sent by
+    the approve command, and by a reject that found the approval claimed and in effect and
+    finished it, so the account learns that its automation was created either way. Best
+    effort: the decision is saved before this runs."""
+    from vaf.core.user_notifications import append_notification
+
+    if not isinstance(action_result, dict):
+        action_result = None
+    action_failed = action_result is not None and action_result.get("ok") is False
+    summary_parts = ["Action: approve", f"Task: {task_id}", f"Handoff: {handoff_id}"]
+    if action_result is not None:
+        op = str(action_result.get("operation") or "").strip()
+        ok_txt = "ok" if action_result.get("ok") else "failed"
+        if op:
+            summary_parts.append(f"Automation action: {op} ({ok_txt})")
+        if action_result.get("task_id"):
+            summary_parts.append(f"Automation id: {action_result.get('task_id')}")
+        if action_result.get("error"):
+            summary_parts.append(f"Error: {action_result.get('error')}")
+    try:
+        append_notification(
+            user_scope_id,
+            kind="system",
+            title="Workspace handoff approved",
+            status="error" if action_failed else "success",
+            summary="\n".join(summary_parts),
+            task_id=task_id,
+            handoff_id=handoff_id,
+            action="approve",
+            automation_action_result=action_result,
+        )
+    except Exception as _nf_err:
+        log("API", f"handoff {handoff_id} approve notification failed: {_nf_err!r}")
+    if action_failed:
+        tail = " Automation action failed."
+    elif action_result is not None and action_result.get("ok") is True:
+        tail = " Automation action applied."
+    else:
+        tail = ""
+    await websocket.send_json({
+        "type": "new_log",
+        "entry": {
+            "timestamp": time.time(),
+            "message": f"Thinking Workspace handoff approved ({handoff_id}).{tail}",
+            "source": "System",
+        },
+    })
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(None)):
     """
@@ -8963,7 +9015,6 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         from vaf.core.thinking_workspace import (HandoffAlreadyDecided,
                                                                  HandoffBusy, HandoffNotSaved,
                                                                  approve_handoff, get_handoff)
-                        from vaf.core.user_notifications import append_notification
 
                         user_scope_id = manager.get_connection_user(websocket) if manager else None
                         task_id = (cmd.get("task_id") or "").strip()
@@ -8979,10 +9030,13 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # Lookup and decision. A filesystem error here names the server's
                         # data path and is answered like a missing handoff; a handoff decided
                         # before is not applied again. Everything after a saved decision is
-                        # best effort and never changes the answer to "not found".
+                        # best effort and never changes the answer to "not found". The
+                        # decision runs on a worker thread: it may wait seconds for another
+                        # decision's lock, and this loop serves every other socket meanwhile.
                         refusal = "handoff not found"
                         try:
-                            ok = approve_handoff(user_scope_id, task_id, handoff_id)
+                            ok = await asyncio.to_thread(approve_handoff, user_scope_id,
+                                                         task_id, handoff_id)
                         except HandoffAlreadyDecided:
                             ok, refusal = False, "handoff already decided"
                         except HandoffBusy:
@@ -9010,57 +9064,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         except Exception as _hf_err:
                             log("API", f"handoff {handoff_id} approved; re-read failed: {_hf_err!r}")
                         action_result = handoff.get("automation_action_result") if isinstance(handoff, dict) else None
-                        action_failed = isinstance(action_result, dict) and (action_result.get("ok") is False)
-                        notif_status = "error" if action_failed else "success"
-                        summary_parts = [
-                            f"Action: approve",
-                            f"Task: {task_id}",
-                            f"Handoff: {handoff_id}",
-                        ]
-                        if isinstance(action_result, dict):
-                            op = str(action_result.get("operation") or "").strip()
-                            ok_txt = "ok" if action_result.get("ok") else "failed"
-                            if op:
-                                summary_parts.append(f"Automation action: {op} ({ok_txt})")
-                            if action_result.get("task_id"):
-                                summary_parts.append(f"Automation id: {action_result.get('task_id')}")
-                            if action_result.get("error"):
-                                summary_parts.append(f"Error: {action_result.get('error')}")
-                        try:
-                            append_notification(
-                                user_scope_id,
-                                kind="system",
-                                title="Workspace handoff approved",
-                                status=notif_status,
-                                summary="\n".join(summary_parts),
-                                task_id=task_id,
-                                handoff_id=handoff_id,
-                                action="approve",
-                                automation_action_result=action_result if isinstance(action_result, dict) else None,
-                            )
-                        except Exception as _nf_err:
-                            log("API", f"handoff {handoff_id} approve notification failed: {_nf_err!r}")
-                        await websocket.send_json(
-                            {
-                                "type": "new_log",
-                                "entry": {
-                                    "timestamp": time.time(),
-                                    "message": (
-                                        f"Thinking Workspace handoff approved ({handoff_id})."
-                                        + (
-                                            " Automation action failed."
-                                            if action_failed
-                                            else (
-                                                " Automation action applied."
-                                                if isinstance(action_result, dict) and action_result.get("ok") is True
-                                                else ""
-                                            )
-                                        )
-                                    ),
-                                    "source": "System",
-                                },
-                            }
-                        )
+                        await _announce_handoff_approved(websocket, user_scope_id, task_id,
+                                                         handoff_id, action_result)
                         await websocket.send_json({
                             "type": "thinking_workspace_handoff_result",
                             "ok": True,
@@ -9080,7 +9085,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                 elif type == "reject_thinking_workspace_handoff":
                     try:
-                        from vaf.core.thinking_workspace import (HandoffAlreadyDecided,
+                        from vaf.core.thinking_workspace import (HandoffAlreadyApproved,
+                                                                 HandoffAlreadyDecided,
                                                                  HandoffBusy, HandoffNotSaved,
                                                                  reject_handoff)
                         from vaf.core.user_notifications import append_notification
@@ -9104,7 +9110,24 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # "not found"; the notification after a saved decision is best effort.
                         refusal = "handoff not found"
                         try:
-                            ok = reject_handoff(user_scope_id, task_id, handoff_id, reason=reason)
+                            ok = await asyncio.to_thread(reject_handoff, user_scope_id, task_id,
+                                                         handoff_id, reason=reason)
+                        except HandoffAlreadyApproved as approved:
+                            # An approval claimed earlier had already created its automation;
+                            # the reject finished it. Not rejected, and the account is told
+                            # what was created, as after an approve.
+                            await _announce_handoff_approved(websocket, user_scope_id, task_id,
+                                                             handoff_id, approved.action_result)
+                            await websocket.send_json({
+                                "type": "thinking_workspace_handoff_result",
+                                "ok": False,
+                                "action": "reject",
+                                "task_id": task_id,
+                                "handoff_id": handoff_id,
+                                "automation_action_result": approved.action_result,
+                                "error": "handoff already approved",
+                            })
+                            continue
                         except HandoffAlreadyDecided:
                             ok, refusal = False, "handoff already decided"
                         except HandoffBusy:

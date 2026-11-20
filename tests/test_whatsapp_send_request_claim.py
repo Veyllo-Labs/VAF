@@ -115,6 +115,50 @@ def test_an_ended_runs_sender_loop_claims_nothing(ipc):
     assert [p.name.endswith("_waiting.json") for p in ipc.iterdir()] == [True]
 
 
+def test_a_file_claimed_as_the_run_ends_is_handed_back(ipc, monkeypatch):
+    """A loop that passed its stop check and claims a file just as its run ends renames it back
+    for the next run's loop, instead of taking a request it will never send. MUTATION: keep the
+    claimed file after a stop that came with the claim."""
+    _write_request("for-the-next-run")
+    (found,) = ipc.glob("*.json")
+    stop = threading.Event()
+    real_claim = wa._claim_request_file
+
+    def claim_as_the_run_ends(path):
+        claimed = real_claim(path)
+        stop.set()
+        return claimed
+    monkeypatch.setattr(wa, "_claim_request_file", claim_as_the_run_ends)
+    assert wa._dequeue_external_send_request(stop) is None
+    assert _leftovers(ipc) == [found.name]
+    monkeypatch.setattr(wa, "_claim_request_file", real_claim)
+    item = wa._dequeue_external_send_request(threading.Event())
+    assert item is not None and item[4] == "for-the-next-run"
+
+
+def test_a_failed_producer_ends_the_schedule(ipc, monkeypatch):
+    """The fuzz's own harness: a producer that raises still releases its consumers, and the
+    error reaches the test. MUTATION: set `produced` only after a successful run."""
+    import sys
+    before = set(threading.enumerate())
+    calls = []
+
+    def fails_on_the_third(req_id):
+        calls.append(req_id)
+        if len(calls) == 3:
+            raise OSError("disk full")
+        _write_request_real(req_id)
+    module = sys.modules[__name__]
+    _write_request_real = module._write_request
+    monkeypatch.setattr(module, "_write_request", fails_on_the_third)
+    rng = random.Random(1)
+    rng.randint = lambda a, b: 2 if (a, b) == (2, 4) else 10
+    with pytest.raises(OSError, match="disk full"):
+        _claim_schedule(rng)
+    left = [t for t in threading.enumerate() if t not in before and t.is_alive()]
+    assert left == []
+
+
 # -- Fuzz: the claim ------------------------------------------------------------------------------
 
 def _claim_schedule(rng):
@@ -126,14 +170,21 @@ def _claim_schedule(rng):
     written, taken = [], []
     lock = threading.Lock()
     produced = threading.Event()
+    failed = []
 
     def producer():
-        for gap in gaps:
-            req_id = uuid.uuid4().hex
-            _write_request(req_id)
-            written.append(req_id)
-            time.sleep(gap)
-        produced.set()
+        # `produced` in any case: consumers waiting for it would otherwise poll forever and,
+        # as non-daemon threads, hold the interpreter open.
+        try:
+            for gap in gaps:
+                req_id = uuid.uuid4().hex
+                _write_request(req_id)
+                written.append(req_id)
+                time.sleep(gap)
+        except BaseException as e:  # noqa: BLE001 - raised again in the test thread
+            failed.append(e)
+        finally:
+            produced.set()
 
     def consumer():
         mine = []
@@ -151,6 +202,8 @@ def _claim_schedule(rng):
         t.start()
     for t in threads:
         t.join(timeout=10)
+    if failed:
+        raise failed[0]
     assert not any(t.is_alive() for t in threads)
     return written, taken
 

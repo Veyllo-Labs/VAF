@@ -1324,7 +1324,7 @@
       "stateStopped": "nicht gestartet",
       "restartBridge": "WhatsApp neu starten",
       "restarting": "Startet neu…",
-      "restartNotForAccounts": "WhatsApp wurde neu gestartet, aber nicht für {names}: Der vorherige WhatsApp-Prozess ist noch nicht beendet.",
+      "restartNotForAccounts": "WhatsApp wurde neu gestartet, aber nicht für {names}: Die vorherige Verbindung ist noch nicht beendet. Starte WhatsApp in einer Minute noch einmal neu. Klappt es dann immer noch nicht, starte VAF neu.",
       "relink": "Neu verknüpfen (neuer QR-Code)",
       "cardOwnerTitle": "Deine Nummer (Hauptnutzer)",
       "cardOwnerDesc": "Die Nummer, von der du chattest. Der Agent erreicht dich hier, und Nachrichten von ihr bekommen den vollen Agenten, wie bei Telegram.",

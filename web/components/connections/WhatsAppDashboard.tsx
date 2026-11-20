@@ -130,6 +130,9 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
     const [ownerAddError, setOwnerAddError] = useState<string | null>(null);
     const [restarting, setRestarting] = useState(false);
     const [restartError, setRestartError] = useState<string | null>(null);
+    // An admin's restart that skipped accounts: shown outside the stopped banner, which the
+    // refresh after the restart may hide, until the next restart.
+    const [restartNotice, setRestartNotice] = useState<string | null>(null);
     const [assignPhone, setAssignPhone] = useState('');
     const [note, setNote] = useState<string | null>(null);
     const [addingContact, setAddingContact] = useState(false);
@@ -282,6 +285,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
     const handleRestartBridge = async () => {
         setRestarting(true);
         setRestartError(null);
+        setRestartNotice(null);
         try {
             await saveWhatsAppConfig({ enabled: true });
             const res = await fetch(api('api/whatsapp/restart'), { method: 'POST', credentials: 'include' });
@@ -291,7 +295,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
             await fetchDashboard();
             // An admin's restart that skipped an account whose previous process has not ended.
             const notStarted: string[] = Array.isArray(json?.not_started) ? json.not_started : [];
-            if (notStarted.length) setRestartError(t('restartNotForAccounts', { names: notStarted.join(', ') }));
+            if (notStarted.length) setRestartNotice(t('restartNotForAccounts', { names: notStarted.join(', ') }));
         } catch (e) {
             setRestartError(e instanceof Error ? e.message : String(e));
         } finally {
@@ -725,7 +729,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
     const dot = data?.connected ? 'green' : data?.running ? 'amber' : 'gray';
 
     // Also while switched off with the process still up (it stops on the next stop or restart).
-    const banner = data && (!data.running || !data.enabled) ? (
+    const stoppedBanner = data && (!data.running || !data.enabled) ? (
         <div className="px-5 py-2 bg-amber-50 border-b border-amber-200 text-amber-600 text-[13px] flex items-center gap-2 flex-wrap">
             <AlertTriangle className="w-4 h-4 flex-shrink-0" />
             {/* `running` is this account's own connection, and nothing in the payload says a
@@ -733,11 +737,24 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                 switch is on gets the neutral sentence that names both ways out. */}
             {/* A floor for the text, so the buttons wrap below it instead of squeezing it. */}
             <span className="flex-1 min-w-[14rem]">{!data.linked ? t('bridgeNotStartedDesc') : !data.enabled ? t('switchedOffDesc') : t('connectionNotRunningDesc')}</span>
-            {restartError && <span className="text-red-600">{restartError}</span>}
+            {restartError && <span className="flex-1 min-w-[14rem] break-words text-red-600">{restartError}</span>}
             <button type="button" onClick={handleRestartBridge} disabled={restarting}
                 className="px-2 py-1 rounded-md border border-amber-200 hover:bg-amber-100 disabled:opacity-50">{restarting ? t('starting') : t('startBridge')}</button>
             {data.linked && <button type="button" onClick={handleRelink} className="px-2 py-1 rounded-md hover:bg-amber-100">{t('relinkOpensSetup')}</button>}
         </div>
+    ) : null;
+    // Outside the stopped banner: a restart that brought the admin's own connection up hides
+    // that banner, while the accounts it skipped still need the line.
+    const banner = stoppedBanner || restartNotice ? (
+        <>
+            {stoppedBanner}
+            {restartNotice && (
+                <div className="px-5 py-2 bg-amber-50 border-b border-amber-200 text-[13px] flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-600" />
+                    <span className="flex-1 min-w-0 break-words text-red-600">{restartNotice}</span>
+                </div>
+            )}
+        </>
     ) : null;
 
     const conversationExtra = (chat: ShellChat) => {
@@ -924,7 +941,8 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                     <button type="button" onClick={handleRelink} className={BTN}>{t('relink')}</button>
                     <button type="button" onClick={handleReloadNames} disabled={namesBusy || !data?.connected} className={BTN}>{namesBusy ? t('reloadingNames') : t('reloadNames')}</button>
                 </div>
-                {restartError && <p className="mt-2 text-xs text-red-600">{restartError}</p>}
+                {restartError && <p className="mt-2 text-xs text-red-600 break-words">{restartError}</p>}
+                {restartNotice && <p className="mt-2 text-xs text-red-600 break-words">{restartNotice}</p>}
                 {namesMsg && <p className="mt-2 text-xs text-gray-500">{namesMsg}</p>}
             </SettingsCard>
 

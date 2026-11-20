@@ -1324,7 +1324,7 @@
       "stateStopped": "未起動",
       "restartBridge": "WhatsAppを再起動",
       "restarting": "再起動中…",
-      "restartNotForAccounts": "WhatsAppを再起動しましたが、{names}は再起動されていません。以前のWhatsAppプロセスがまだ終了していません。",
+      "restartNotForAccounts": "WhatsAppを再起動しましたが、{names}は再起動されていません。以前の接続がまだ終了していません。1分後にもう一度WhatsAppを再起動してください。それでも失敗する場合は、VAFを再起動してください。",
       "relink": "再リンク（新しいQRコード）",
       "cardOwnerTitle": "自分の番号（メインユーザー）",
       "cardOwnerDesc": "普段チャットに使っている番号です。エージェントはここに連絡でき、この番号からのメッセージにはTelegramと同じようにフルエージェントが応答します。",

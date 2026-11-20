@@ -22,6 +22,7 @@ Fake processes only: no Node, no network, no port.
 import io
 import json
 import os
+import queue
 import random
 import subprocess
 import threading
@@ -1207,10 +1208,10 @@ def test_a_buffered_line_of_an_ended_process_is_not_acted_on(world, monkeypatch,
     real_dispatch = wa._dispatch_bridge_event
     acted = []
 
-    def dispatch(username, user_scope_id, typ, obj):
+    def dispatch(username, user_scope_id, typ, obj, **kwargs):
         if threading.current_thread() is old.reader:
             acted.append(typ)
-        return real_dispatch(username, user_scope_id, typ, obj)
+        return real_dispatch(username, user_scope_id, typ, obj, **kwargs)
     monkeypatch.setattr(wa, "_dispatch_bridge_event", dispatch)
 
     if how == "account_restart":
@@ -1239,9 +1240,10 @@ def test_a_buffered_line_of_an_ended_process_is_not_acted_on(world, monkeypatch,
 
 def test_an_admin_restart_names_the_accounts_it_could_not_start(world):
     """A restart that skipped Alice because her previous process has not ended says so, in the
-    function, the route and the window; without one, `not_started` is empty and the message
-    the old one. MUTATION: answer `(True, "", [])` with a survivor; the route drops
-    `not_started`; remove the window's line."""
+    function, the route and the window (outside the stopped banner); without one,
+    `not_started` is empty and the message the old one. MUTATION: answer `(True, "", [])` with
+    a survivor; the route drops `not_started`; remove the window's line; show it only with
+    the stopped banner."""
     procs = _bridge_with(world, "admin")
     ok, message, not_started = wa.restart_bridge_result()
     assert (ok, message, not_started) == (True, "", [])
@@ -1259,8 +1261,8 @@ def test_an_admin_restart_names_the_accounts_it_could_not_start(world):
     try:
         ok, message, not_started = wa.restart_bridge_result()
         assert ok is True and not_started == ["alice"]
-        assert message == ("WhatsApp restarted, but not for: alice. "
-                           "The previous WhatsApp process of that account has not ended yet.")
+        assert message == ("WhatsApp restarted, but not for alice: the previous connection has not ended yet. "
+                           "Try Restart WhatsApp again in a minute. If it still fails, restart VAF.")
         res = _client(ADMIN).post("/api/whatsapp/restart")
         assert res.status_code == 200, res.text
         assert res.json()["not_started"] == ["alice"] and res.json()["message"] == message
@@ -1272,7 +1274,14 @@ def test_an_admin_restart_names_the_accounts_it_could_not_start(world):
            / "WhatsAppDashboard.tsx").read_text(encoding="utf-8")
     handler = src[src.index("const handleRestartBridge"):src.index("const handleRelink")]
     assert "not_started" in handler
-    assert "t('restartNotForAccounts', { names:" in handler
+    assert "setRestartNotice(t('restartNotForAccounts', { names:" in handler
+    assert "setRestartNotice(null)" in handler.split("try {", 1)[0], "cleared on the next restart"
+    # Outside the stopped banner, which the refresh after a restart of the admin's own
+    # connection hides.
+    stopped = src[src.index("const stoppedBanner"):src.index("const banner = ")]
+    assert "restartNotice" not in stopped
+    assert "const banner = stoppedBanner || restartNotice ?" in src
+    assert src.count("{restartNotice && ") == 2, "the banner line and the settings card"
     for path in sorted((Path(__file__).resolve().parent.parent / "web" / "messages").glob("*.json")):
         text = json.loads(path.read_text(encoding="utf-8"))["settings"]["whatsappDashboard"]["restartNotForAccounts"]
         assert "{names}" in text and "\u2014" not in text, path.name
@@ -1361,8 +1370,9 @@ def test_a_send_after_a_crash_answers_not_running_at_once(world, monkeypatch):
 
 def test_a_send_for_a_survivor_says_its_process_has_not_ended(world, monkeypatch):
     """Alice's process outlived the restart's kill: her send answers that the previous process
-    has not ended, not that she has no WhatsApp to link. MUTATION: the sender loop answers
-    NO_PROCESS_FOR_ACCOUNT for a retired process."""
+    has not ended, not that she has no WhatsApp to link; under another account's scope it
+    says nothing about her process. MUTATION: the sender loop answers NO_PROCESS_FOR_ACCOUNT
+    for a retired process; or ignores the scope."""
     _real_sender_and_state(world, monkeypatch, chat_sync=False)
     monkeypatch.setattr(wa, "_is_reply_allowed", lambda *a, **k: True)
     survivor = _survivor_after_restart(world)
@@ -1371,6 +1381,10 @@ def test_a_send_for_a_survivor_says_its_process_has_not_ended(world, monkeypatch
                                                  timeout=3.0, user_scope_id=ALICE_SCOPE)
         assert wa.PREVIOUS_NOT_ENDED in out and wa.NO_PROCESS_FOR_ACCOUNT not in out, out
         assert survivor.stdin.getvalue() == ""
+        # Under another account's scope the survivor is not that account's: no word about it.
+        out = wa.send_whatsapp_with_confirmation("alice", "491700000042@s.whatsapp.net", "hi",
+                                                 timeout=3.0, user_scope_id=BOB_SCOPE)
+        assert wa.NO_PROCESS_FOR_ACCOUNT in out and wa.PREVIOUS_NOT_ENDED not in out, out
     finally:
         survivor.returncode = -9
 
@@ -1383,6 +1397,206 @@ def test_the_survivor_set_is_gone():
     assert not hasattr(wa, "_survivors") and not hasattr(wa, "_is_survivor")
     assert "_terminate(" not in inspect.getsource(wa._run_bridge_until_stopped)
     assert "_bridge_stop.clear()" not in inspect.getsource(wa)
+
+
+# -- After the run's end nothing acts for it ----------------------------------------------------
+
+JID = "491700000042@s.whatsapp.net"
+
+
+def _send_results(monkeypatch):
+    results = {}
+    monkeypatch.setattr(wa, "_complete_send_request",
+                        lambda req_id, ok, err=None, **k: results.__setitem__(req_id, (ok, err)))
+    return results
+
+
+def test_a_send_queued_ahead_of_the_shutdown_is_not_written(world, monkeypatch):
+    """An item still in an ended run's queue (ahead of the shutdown's None) is not written to
+    the process now registered for the account, which belongs to the next run; its sender
+    learns it did not leave. MUTATION: drop the stop check after the process pick."""
+    results = _send_results(monkeypatch)
+    next_runs = FakeProc("alice")
+    with wa._process_lock:
+        wa._processes["alice"] = next_runs
+        wa._scope_by_user["alice"] = ALICE_SCOPE
+    q, stop = queue.Queue(), threading.Event()
+    q.put(("alice", JID, "queued before the stop", None, "r1", None, None, None, ALICE_SCOPE))
+    q.put(None)
+    stop.set()
+    REAL_SENDER(q=q, stop=stop)
+    assert next_runs.stdin.getvalue() == ""
+    assert results == {"r1": (False, wa.BRIDGE_STOPPING)}
+
+
+def test_a_stop_during_the_process_pick_redirects_nothing(world, monkeypatch):
+    """The run ends and the next one registers its process while the loop picks one: the loop
+    writes to neither. MUTATION: drop the stop check after the process pick."""
+    results = _send_results(monkeypatch)
+    q, stop = queue.Queue(), threading.Event()
+    replacement = FakeProc("alice")
+
+    def pick_as_the_run_ends(username, user_scope_id=None):
+        stop.set()
+        return "alice", replacement
+    monkeypatch.setattr(wa, "_process_for", pick_as_the_run_ends)
+    q.put(("alice", JID, "hi", None, "r2", None, None, None, ALICE_SCOPE))
+    q.put(None)
+    REAL_SENDER(q=q, stop=stop)
+    assert replacement.stdin.getvalue() == ""
+    assert results == {"r2": (False, wa.BRIDGE_STOPPING)}
+
+
+def test_an_expiry_line_of_a_replaced_process_stops_nothing(world, monkeypatch):
+    """A `qr` line whose dispatch began before its process was replaced acts on nobody: neither
+    the replacement is stopped nor the admin's switch turned off. The current process's own
+    line still stops it. MUTATION: drop the registration check in the `qr` handler."""
+    procs = _bridge_with(world, "admin", "alice")
+    assert wa.restart_account("alice", ALICE_SCOPE) == (True, wa.ACCOUNT_STARTED)
+    new_alice = wa._processes["alice"]
+    wa._dispatch_bridge_event("alice", ALICE_SCOPE, "qr", {}, proc=procs["alice"])
+    assert wa._processes.get("alice") is new_alice and new_alice.returncode is None
+
+    assert wa.restart_account("admin", ADMIN_SCOPE) == (True, wa.ACCOUNT_STARTED)
+    new_admin = wa._processes["admin"]
+    wa._dispatch_bridge_event("admin", ADMIN_SCOPE, "qr", {}, proc=procs["admin"])
+    assert wa._processes.get("admin") is new_admin and new_admin.returncode is None
+    assert world.cfg()["whatsapp_config"]["enabled"] is True
+
+    wa._dispatch_bridge_event("alice", ALICE_SCOPE, "qr", {}, proc=new_alice)
+    assert "alice" not in wa._processes and new_alice.returncode is not None
+
+
+def test_a_restart_reports_what_its_spawns_decided(world, monkeypatch):
+    """Alice's survivor ends while the new run gets ready: the run starts her, and the restart
+    does not name her as skipped. MUTATION: the names taken from a check before the start."""
+    world.proc_class["alice"] = Unkillable
+    procs = _bridge_with(world, "admin", "alice")
+    survivor = procs["alice"]
+    world.proc_class.clear()
+
+    def survivor_ends():
+        survivor.returncode = -9
+        return []
+    monkeypatch.setattr("vaf.core.channel_pairing.refile_whatsapp_owner_numbers", survivor_ends)
+    try:
+        assert wa.restart_bridge_result() == (True, "", [])
+        assert world.live("alice") and wa._processes["alice"] is not survivor
+    finally:
+        survivor.returncode = -9
+
+
+def test_a_spawn_that_raises_answers_its_waiting_start_at_once(world, monkeypatch):
+    """The bridge thread fails at the account its waiting start is for, after it took that
+    start out of the waiting list: the start is answered then, not after its timeout.
+    MUTATION: drop the answer before the failure is raised."""
+    world.link("alice")
+    world.own_switch(ALICE_SCOPE, True)
+    monkeypatch.setattr(wa, "COLD_START_TIMEOUT", 5.0)
+    _crash_in_bridge_thread(monkeypatch, "after_spawn")
+    began = time.monotonic()
+    assert wa.start_account("alice", ALICE_SCOPE) == (False, wa.START_FAILED)
+    assert time.monotonic() - began < 2.0
+    wa._bridge_thread.join(timeout=5)
+    assert wa._pending_starts == {} and world.names() == []
+
+
+def test_a_bridge_thread_that_cannot_start_rolls_the_run_back(world, monkeypatch):
+    """`Thread.start` fails for the bridge thread after the sender loop started and the state
+    file said running: the run is ended on the spot. MUTATION: drop the rollback's stop, its
+    False write, or its answer to waiting starts."""
+    monkeypatch.setattr(wa, "_write_bridge_state", REAL_STATE)
+    world.link("admin")
+    waiting = wa._PendingStart(CAROL_SCOPE)
+    with wa._spawn_lock:
+        wa._pending_starts["carol"] = waiting
+    real_start = threading.Thread.start
+
+    def start(self):
+        if getattr(self, "_target", None) is wa._run_bridge:
+            raise RuntimeError("can't start new thread")
+        return real_start(self)
+    monkeypatch.setattr(threading.Thread, "start", start)
+    assert wa.start_bridge() is False
+    monkeypatch.setattr(threading.Thread, "start", real_start)
+    assert wa._read_bridge_state()["running"] is False
+    assert wa._bridge_stop.is_set() and not wa._spawns_open and wa._bridge_thread is None
+    assert waiting.done.is_set() and (waiting.ok, waiting.message) == (False, wa.START_FAILED)
+    sender = wa._sender_thread
+    sender.join(timeout=2)
+    assert not sender.is_alive()
+    # The next start works.
+    assert wa.start_bridge() is True
+    assert world.wait_for(lambda: world.live("admin"))
+
+
+class Slotted:
+    """A process double that refuses new attributes, so it cannot carry the retirement mark."""
+
+    __slots__ = ("name", "returncode", "stdout", "stderr", "stdin")
+
+    def __init__(self, name):
+        self.name, self.returncode = name, None
+        self.stdout, self.stderr, self.stdin = io.StringIO(""), io.StringIO(""), io.StringIO()
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.returncode = -15
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+    def kill(self):
+        self.returncode = -9
+
+
+def test_one_process_that_refuses_the_mark_does_not_stop_the_end(world):
+    """The end of a run terminates every process even when one cannot be marked. MUTATION: an
+    unguarded `_retire`."""
+    odd, admin = Slotted("bob"), FakeProc("admin")
+    with wa._process_lock:
+        wa._processes.update(bob=odd, admin=admin)
+        wa._scope_by_user.update(bob=BOB_SCOPE, admin=ADMIN_SCOPE)
+    wa._end_run(threading.Event(), requested=True)
+    assert odd.returncode is not None and admin.returncode is not None
+    assert wa._processes == {} and wa._terminating == 0
+    assert world.states[-1] is False
+
+
+def test_stopping_a_dead_survivor_after_the_run_says_not_running(world, monkeypatch):
+    """After the run has ended, the survivor it left dies and its account's stop removes it:
+    the state file still says not running, so sends from outside answer at once. MUTATION: the
+    account stop writes running unconditionally."""
+    monkeypatch.setattr(wa, "_write_bridge_state", REAL_STATE)
+    world.proc_class["alice"] = Unkillable
+    procs = _bridge_with(world, "admin", "alice")
+    _stop_and_join()
+    survivor = procs["alice"]
+    assert wa._processes.get("alice") is survivor
+    survivor.returncode = -9
+    assert wa.stop_account("alice", ALICE_SCOPE) is True
+    assert wa._read_bridge_state()["running"] is False
+
+
+def test_a_survivor_alone_is_not_the_fallback_process(world, monkeypatch):
+    """Alice's survivor is the only registered process: the one-process fallback does not hand
+    it her send, which answers that the previous process has not ended. MUTATION: the
+    fallback accepts a retired process."""
+    _real_sender_and_state(world, monkeypatch, chat_sync=False)
+    monkeypatch.setattr(wa, "_is_reply_allowed", lambda *a, **k: True)
+    world.proc_class["alice"] = Unkillable
+    procs = _bridge_with(world, "alice")
+    survivor = procs["alice"]
+    try:
+        assert wa.restart_bridge() is True
+        assert list(wa._processes) == ["alice"] and wa._processes["alice"] is survivor
+        out = wa.send_whatsapp_with_confirmation("alice", JID, "hi", timeout=3.0, user_scope_id=ALICE_SCOPE)
+        assert survivor.stdin.getvalue() == ""
+        assert wa.PREVIOUS_NOT_ENDED in out, out
+    finally:
+        survivor.returncode = -9
 
 
 # -- Fuzz: the spawn gate -------------------------------------------------------------------------
@@ -1400,7 +1614,6 @@ def _fuzz_schedule(world, rng, crash):
     crash["armed"] = rng.random() < 0.2
     crash["where"] = rng.choice(("before_spawn", "after_spawn"))
     crash["spawned_by"] = set()
-    crashing = crash["armed"]
 
     def on_spawn(name):
         with wa._process_lock:
@@ -1419,10 +1632,12 @@ def _fuzz_schedule(world, rng, crash):
 
     def op(kind, name):
         if kind == "start_account":
+            fired = crash["fired"]
             ok, msg = wa.start_account(name, SCOPES[name])
             # Fake spawns never fail and Node is always there: a start that reports a failure
-            # (or ran into its timeout) lost its own spawn, unless its bridge thread failed.
-            if msg == wa.START_FAILED and not crashing:
+            # (or ran into its timeout) lost its own spawn, unless an injected failure of a
+            # bridge thread happened while it waited (the start a failed run answers).
+            if msg == wa.START_FAILED and crash["fired"] == fired:
                 violations.append(f"start of {name} failed")
         elif kind == "stop_account":
             if wa.stop_account(name, SCOPES[name]) is False:

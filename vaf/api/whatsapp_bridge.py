@@ -89,7 +89,7 @@ START_FAILED = ("Failed to start WhatsApp. Ensure Node.js is installed and npm i
                 "in vaf/whatsapp_node.")
 START_CANCELLED = "WhatsApp was stopped for this account before it had started."
 STOP_FAILED = "WhatsApp did not stop for this account; try again."
-PREVIOUS_NOT_ENDED = "The previous WhatsApp process of this account has not ended yet."
+PREVIOUS_NOT_ENDED = "The previous WhatsApp process of this account has not ended yet. Try again shortly."
 SHUTDOWN_OVERRAN = "The old WhatsApp process did not stop in time; try again."
 ACCOUNT_STARTED = "WhatsApp started for this account."
 ACCOUNT_ALREADY_RUNNING = "WhatsApp already runs for this account."
@@ -117,6 +117,24 @@ class _PendingStart:
 _pending_starts: Dict[str, _PendingStart] = {}
 
 
+class _RunOutcome:
+    """What a bridge run's spawn phase decided: the accounts it skipped because their previous
+    process has not ended (or belongs to another scope), and `settled` once that phase is over
+    (or the run ended without one). An admin's restart reports these decisions, never a guess
+    taken before the start."""
+
+    def __init__(self) -> None:
+        self.skipped: List[str] = []
+        self.settled = threading.Event()
+
+
+# The current (or last) run's outcome, replaced by `start_bridge` with each run.
+_run_outcome = _RunOutcome()
+# How long an admin's restart waits for the new run's spawn decisions before it answers
+# without naming any skipped account.
+RESTART_REPORT_WAIT = 15.0
+
+
 def _retire(proc: Any) -> None:
     """Mark a process VAF is ending (an account's stop or restart, the bridge's shutdown, a
     replaced registration) before the terminate: from here on nothing it writes is acted on
@@ -127,8 +145,14 @@ def _retire(proc: Any) -> None:
     clear it (an `id()` set could, once the old object is freed and its id reused).
 
     Named boundary: a line whose dispatch began before the mark is not called back; the check
-    cannot be atomic with a dispatch, which may itself stop the account."""
-    proc._vaf_retired = True
+    cannot be atomic with a dispatch, which may itself stop the account. The one event that
+    ends a process (`qr`) closes that gap itself: it acts only while its process is still the
+    account's registration (`_is_registration`). Never raises: one
+    object that refuses the attribute must not abort the end of every other process."""
+    try:
+        proc._vaf_retired = True
+    except Exception:
+        logger.warning("WhatsApp: could not mark a process %r as ended", proc, exc_info=True)
 
 
 def _is_retired(proc: Any) -> bool:
@@ -334,11 +358,16 @@ def _claim_request_file(path: Path) -> Optional[Path]:
     return claimed
 
 
-def _dequeue_external_send_request() -> Optional[Tuple[Any, ...]]:
+def _dequeue_external_send_request(stop: Optional[threading.Event] = None) -> Optional[Tuple[Any, ...]]:
     """The oldest request file a process without the bridge wrote, as a queue item, or None.
 
     Claimed by a rename before it is read: two consumers that read a file before either
     unlinked it both sent it (measured: 410 of 600 files handed out twice by two threads).
+    `stop` is the consumer's run: once it is set after the claim, the file is renamed back for
+    the next run's loop, since a claim is exclusive and an ended loop would otherwise take a
+    request meant for its successor with it. Checked after the rename, so a stop that was not
+    set then means the run was still active when the file became ours (a stop is never
+    cleared, and a new run starts only after the old one's stop).
 
     Named boundary: a consumer that dies between the claim and the unlink leaves a `.claimed`
     file that nobody delivers; its sender's wait then answers SEND_UNCONFIRMED, which is true,
@@ -349,6 +378,13 @@ def _dequeue_external_send_request() -> Optional[Tuple[Any, ...]]:
             path = _claim_request_file(found)
             if path is None:
                 continue
+            if stop is not None and stop.is_set():
+                try:
+                    path.rename(found)
+                    return None
+                except OSError:
+                    # Not handed back: read below, and the ended loop answers it as stopping.
+                    pass
             response_path: Optional[Path] = None
             req_id: Optional[str] = None
             try:
@@ -1111,6 +1147,13 @@ def _preferred_lid_jid(username: str, chat_jid: str, kind: str) -> str:
     return chat_jid
 
 
+def _refuse_after_stop(req_id: Optional[str], response_path: Optional[Path], username: str) -> None:
+    """Answer a send its loop's run ended before it was written: it did not leave."""
+    logger.warning("WhatsApp: a send for %s was not written, its bridge run has ended", username)
+    if req_id:
+        _complete_send_request(req_id, False, BRIDGE_STOPPING, response_path=response_path)
+
+
 def _sender_loop(q: Optional[queue.Queue] = None, stop: Optional[threading.Event] = None) -> None:
     """Read (username, chat_jid, text, voice_path?, req_id?, document_path?, response_path?, origin?,
     user_scope_id?) from the queue and write to that user's Node stdin. `origin` is "owner" when
@@ -1133,7 +1176,7 @@ def _sender_loop(q: Optional[queue.Queue] = None, stop: Optional[threading.Event
             except queue.Empty:
                 if stop.is_set():
                     break
-                item = _dequeue_external_send_request()
+                item = _dequeue_external_send_request(stop)
                 if item is None:
                     continue
             if item is None:
@@ -1165,6 +1208,16 @@ def _sender_loop(q: Optional[queue.Queue] = None, stop: Optional[threading.Event
                     continue
                 item_scope, username = str(ident[0]), ident[1]
             _, proc = _process_for(username, item_scope)
+            if stop.is_set():
+                # The run has ended (an item queued ahead of the shutdown's None, or one
+                # taken while it ended): the process picked may be the next run's
+                # replacement, which this loop must not write to (two writers on one stdin).
+                # Checked after the pick, so a stop still clear means the pick was this run's
+                # (a stop is never cleared, and a new run spawns only after the old stop). A
+                # write that follows and races the end keeps SEND_UNCONFIRMED, because it may
+                # have reached Node.
+                _refuse_after_stop(req_id, response_path, username)
+                continue
             if not proc or proc.poll() is not None:
                 # Never another account's process: that would send from its agent number.
                 logger.warning("WhatsApp process for %s not running, dropped reply", username)
@@ -1534,7 +1587,7 @@ def _read_user_process(
                 except Exception:
                     pass
             try:
-                _dispatch_bridge_event(username, user_scope_id, typ, obj)
+                _dispatch_bridge_event(username, user_scope_id, typ, obj, proc=proc)
             except Exception as e:
                 logger.exception("WhatsApp bridge event handler failed for type=%s: %s", typ, e)
                 try:
@@ -1751,8 +1804,11 @@ def _sent_by_this_bridge(message_id: Any) -> bool:
     return str(message_id or "").upper().startswith("3EB0")
 
 
-def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dict[str, Any]) -> None:
-    """Handle one JSON event from the bridge (pong, message, chats, etc.)."""
+def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dict[str, Any],
+                           proc: Any = None) -> None:
+    """Handle one JSON event from the bridge (pong, message, chats, etc.). `proc` is the
+    process whose reader got the line; an event that ends a process (`qr`) acts only while it
+    is still the account's registration."""
     if typ == "pong":
         connected = bool(obj.get("connected", False))
         with _connection_lock:
@@ -1792,21 +1848,31 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
         # here would be a fourth hand copy of the per-account switch writer.
         from vaf.core.config import is_local_admin_lane
         own_switch = is_local_admin_lane(user_scope_id)
-        logger.warning("WhatsApp session expired for %s – the process needs a QR but cannot show it. "
-                       "Stopping this account's process%s.", username,
-                       " and switching WhatsApp off" if own_switch else "")
+        stopped: Optional[bool] = None
         try:
-            if own_switch:
-                cfg = Config.load()
-                wc = cfg.get("whatsapp_config") or {}
-                if isinstance(wc, dict):
-                    wc = dict(wc)
-                    wc["enabled"] = False
-                    cfg["whatsapp_config"] = wc
-                    Config.save(cfg)
-            stop_account(username, user_scope_id)
+            with _spawn_lock:
+                # The line's own process only: a reader can pass its retirement check and be
+                # dispatched after a restart replaced that process, and a stop by name would
+                # then end the replacement (and turn the admin's switch off for it).
+                if proc is not None and not _is_registration(username, proc):
+                    logger.info("WhatsApp: an expiry line of a replaced process of %s was ignored", username)
+                    return
+                logger.warning("WhatsApp session expired for %s – the process needs a QR but cannot show it. "
+                               "Stopping this account's process%s.", username,
+                               " and switching WhatsApp off" if own_switch else "")
+                if own_switch:
+                    cfg = Config.load()
+                    wc = cfg.get("whatsapp_config") or {}
+                    if isinstance(wc, dict):
+                        wc = dict(wc)
+                        wc["enabled"] = False
+                        cfg["whatsapp_config"] = wc
+                        Config.save(cfg)
+                stopped = _stop_account_held(username, user_scope_id)
         except Exception as e:
             logger.exception("Failed to stop WhatsApp on session expiry: %s", e)
+        if stopped:
+            _account_stopped(username)
     elif typ == "connected":
         with _connection_lock:
             _connection_status[username] = True
@@ -2493,21 +2559,27 @@ def _resolve_pending(message: str) -> None:
     _pending_starts.clear()
 
 
-def _run_bridge(only: Optional[str] = None, stop: Optional[threading.Event] = None) -> None:
+def _run_bridge(only: Optional[str] = None, stop: Optional[threading.Event] = None,
+                outcome: Optional[_RunOutcome] = None) -> None:
     """Main bridge loop: start processes for each user (or for the account `only` alone),
     register callback, wait for the run's `stop` (a private Event without one). However the
     run ends (stopped, nobody to run, or a failure) it ends through `_end_run`: one end path,
     so no way out leaves the run's loops, processes or state file behind."""
     run_stop = stop if stop is not None else threading.Event()
+    run_outcome = outcome if outcome is not None else _RunOutcome()
     try:
-        _run_bridge_until_stopped(only, run_stop)
+        _run_bridge_until_stopped(only, run_stop, run_outcome)
     except Exception:
         logger.exception("WhatsApp bridge thread failed; its processes are stopped")
     finally:
         _end_run(run_stop, requested=run_stop.is_set())
+        run_outcome.settled.set()
 
 
-def _run_bridge_until_stopped(only: Optional[str], stop: threading.Event) -> None:
+def _run_bridge_until_stopped(only: Optional[str], stop: threading.Event,
+                              outcome: Optional[_RunOutcome] = None) -> None:
+    if outcome is None:
+        outcome = _RunOutcome()
     global _spawns_open
     # Owner numbers older versions filed under an admin's own scope move to the account they
     # were registered for, before any process reads the whitelist. Here because every lane
@@ -2542,9 +2614,17 @@ def _run_bridge_until_stopped(only: Optional[str], stop: threading.Event) -> Non
             if pending is not None and pending.cancelled:
                 pending.resolve(False, START_CANCELLED)
                 continue
-            blocked = _blocked_by_previous(username, user_scope_id)
-            ok = _spawn_account(user_scope_id, username, auth_dir)
+            try:
+                blocked = _blocked_by_previous(username, user_scope_id)
+                ok = _spawn_account(user_scope_id, username, auth_dir)
+            except Exception:
+                # Out of `_pending_starts` already, so the end's answer would not reach it:
+                # answered here, before the failure ends the run.
+                if pending is not None:
+                    pending.resolve(False, START_FAILED)
+                raise
             if blocked:
+                outcome.skipped.append(username)
                 logger.error("WhatsApp: %s not started, its previous process has not ended", username)
             if pending is not None:
                 pending.resolve(ok, ACCOUNT_STARTED if ok else PREVIOUS_NOT_ENDED if blocked else
@@ -2553,6 +2633,7 @@ def _run_bridge_until_stopped(only: Optional[str], stop: threading.Event) -> Non
         # A start for an account this bridge did not find to run (switched off or unlinked
         # in the meantime) is answered now rather than left to its timeout.
         _resolve_pending(NOT_STARTABLE)
+    outcome.settled.set()
 
     stop.wait()
 
@@ -2600,6 +2681,7 @@ def start_bridge(only: Optional[str] = None) -> bool:
     """Start the WhatsApp bridge. Returns True if started (or already running). With `only`,
     the bridge comes up with that account's process alone; nobody else's starts."""
     global _bridge_thread, _sender_thread, _chat_sync_thread, _outgoing_queue, _bridge_stop, _spawns_open
+    global _run_outcome
 
     with _lifecycle_lock:
         whatsapp_config = Config.get("whatsapp_config") or {}
@@ -2624,20 +2706,36 @@ def start_bridge(only: Optional[str] = None) -> bool:
         # so a thread of an earlier run that missed its stop cannot wake into this one.
         run_stop = threading.Event()
         run_queue: queue.Queue = queue.Queue()
+        run_outcome = _RunOutcome()
         _ensure_ipc_dirs()
         with _spawn_lock:
             _bridge_stop = run_stop
             _outgoing_queue = run_queue
+            _run_outcome = run_outcome
             _spawns_open = True
             # Before the bridge thread starts, so its end's False is the last word
             # (`_write_bridge_state`).
             _write_bridge_state(True)
-        _sender_thread = threading.Thread(target=_sender_loop, kwargs={"q": run_queue, "stop": run_stop},
-                                          daemon=True)
-        _sender_thread.start()
-        _bridge_thread = threading.Thread(target=_run_bridge, kwargs={"only": only, "stop": run_stop},
-                                          daemon=True)
-        _bridge_thread.start()
+        try:
+            _sender_thread = threading.Thread(target=_sender_loop, kwargs={"q": run_queue, "stop": run_stop},
+                                              daemon=True)
+            _sender_thread.start()
+            _bridge_thread = threading.Thread(target=_run_bridge,
+                                              kwargs={"only": only, "stop": run_stop, "outcome": run_outcome},
+                                              daemon=True)
+            _bridge_thread.start()
+        except Exception:
+            # The run is published (running on disk, spawns open) but has no bridge thread to
+            # end it: ended here instead, so no send waits on it and no start on its spawn.
+            logger.exception("WhatsApp bridge could not start its threads")
+            with _spawn_lock:
+                _spawns_open = False
+                _resolve_pending(START_FAILED)
+                run_stop.set()
+                run_outcome.settled.set()
+                _write_bridge_state(False)
+            _bridge_thread = None
+            return False
         # Periodic chat list sync (default every 10 min) so bot has latest chats
         try:
             sync_interval = int((whatsapp_config.get("chat_sync_interval_sec") or 600))
@@ -2674,31 +2772,21 @@ def _shutdown_deadline() -> float:
     return 2 * TERMINATE_WAIT * (count + 1) + 5.0
 
 
-def _not_started_by_restart() -> List[str]:
-    """The runnable accounts a whole start now would skip because their previous process has
-    not ended (a survivor) or belongs to another scope (`_blocked_by_previous`)."""
-    try:
-        return sorted({name for scope, name, _ in _get_users_to_run() if _blocked_by_previous(name, scope)})
-    except Exception:
-        logger.warning("WhatsApp: could not list the accounts a restart skips", exc_info=True)
-        return []
-
-
 def _restarted_text(not_started: List[str]) -> str:
     if not not_started:
         return ""
-    whose = "of that account has" if len(not_started) == 1 else "of those accounts have"
-    return (f"WhatsApp restarted, but not for: {', '.join(not_started)}. "
-            f"The previous WhatsApp process {whose} not ended yet.")
+    return (f"WhatsApp restarted, but not for {', '.join(not_started)}: the previous connection has "
+            "not ended yet. Try Restart WhatsApp again in a minute. If it still fails, restart VAF.")
 
 
-def restart_bridge_result() -> Tuple[bool, str, List[str]]:
+def restart_bridge_result(report: bool = True) -> Tuple[bool, str, List[str]]:
     """Stop the bridge, wait for its full shutdown, then start again: (ok, message,
     not_started). Not ok when the old bridge did not end in time (SHUTDOWN_OVERRAN), since a
     start next to its still running thread would answer "already running" and start nothing,
-    or when the new start failed (START_FAILED). `not_started` names the runnable accounts the
-    new run skips because their previous process has not ended, and the message then says so:
-    a restart that left one out answered a plain success before."""
+    or when the new start failed (START_FAILED). `not_started` names the accounts the new run's
+    spawn phase skipped because their previous process has not ended, and the message then
+    says so: a restart that left one out answered a plain success before. `report=False`
+    answers at once and names nobody (`restart_bridge`, whose callers read only `ok`)."""
     global _bridge_thread
     with _lifecycle_lock:
         if _bridge_thread is not None and _bridge_thread.is_alive():
@@ -2713,15 +2801,20 @@ def restart_bridge_result() -> Tuple[bool, str, List[str]]:
             if old.is_alive():
                 logger.error("WhatsApp: the bridge did not stop within %.0f s; not started again", deadline)
                 return False, SHUTDOWN_OVERRAN, []
-        not_started = _not_started_by_restart()
         if not start_bridge():
             return False, START_FAILED, []
-        return True, _restarted_text(not_started), not_started
+        outcome = _run_outcome
+    if not report:
+        return True, "", []
+    # The new run's own spawn decisions, once its spawn phase is over; still pending after the
+    # wait, nothing is named rather than a guess (a process that ended meanwhile is started).
+    not_started = sorted(set(outcome.skipped)) if outcome.settled.wait(RESTART_REPORT_WAIT) else []
+    return True, _restarted_text(not_started), not_started
 
 
 def restart_bridge() -> bool:
     """`restart_bridge_result` as True or False."""
-    return restart_bridge_result()[0]
+    return restart_bridge_result(report=False)[0]
 
 
 def _runnable_account(username: str, user_scope_id: str) -> Optional[Tuple[str, str, Path]]:
@@ -2807,38 +2900,59 @@ def stop_account(username: str, user_scope_id: Optional[str] = None) -> Optional
     With `user_scope_id`, a process or pending start registered under this name for another
     scope is not this account's and is left alone: an account's name can equal another
     account's (an ordinary account named like the local admin), its scope cannot."""
+    with _spawn_lock:
+        stopped = _stop_account_held(username, user_scope_id)
+    if stopped:
+        _account_stopped(username)
+    return stopped
+
+
+def _is_registration(username: str, proc: Any) -> bool:
+    """Whether `proc` is still the live process registered under this name, and not retired.
+    A process that died after its line is no longer one; the next start replaces it."""
+    return proc is not None and _registered_live((username or "").strip()) is proc and not _is_retired(proc)
+
+
+def _stop_account_held(username: str, user_scope_id: Optional[str] = None) -> Optional[bool]:
+    """`stop_account`'s work; the caller holds `_spawn_lock` and, on True, calls
+    `_account_stopped`."""
     name = (username or "").strip()
     wanted = str(user_scope_id or "").strip()
-    with _spawn_lock:
-        pending = _pending_starts.get(name)
-        cancelled = False
-        if pending is not None and (not wanted or pending.user_scope_id == wanted):
-            pending.cancelled = True
-            pending.resolve(False, START_CANCELLED)
-            cancelled = True
+    pending = _pending_starts.get(name)
+    cancelled = False
+    if pending is not None and (not wanted or pending.user_scope_id == wanted):
+        pending.cancelled = True
+        pending.resolve(False, START_CANCELLED)
+        cancelled = True
+    with _process_lock:
+        own_scope = str(_scope_by_user.get(name) or "").strip()
+        proc = None
+        if name in _processes and (not wanted or own_scope == wanted):
+            proc = _processes.pop(name)
+            _scope_by_user.pop(name, None)
+    if proc is None:
+        return True if cancelled else None
+    # Before the terminate: a line its reader still holds (a `qr` that would stop this
+    # account again, now its next process) is not acted on.
+    _retire(proc)
+    if not _terminate(proc):
+        # Registered again, retired: a survivor, like one of the bridge's shutdown.
         with _process_lock:
-            own_scope = str(_scope_by_user.get(name) or "").strip()
-            proc = None
-            if name in _processes and (not wanted or own_scope == wanted):
-                proc = _processes.pop(name)
-                _scope_by_user.pop(name, None)
-        if proc is None:
-            return True if cancelled else None
-        # Before the terminate: a line its reader still holds (a `qr` that would stop this
-        # account again, now its next process) is not acted on.
-        _retire(proc)
-        if not _terminate(proc):
-            # Registered again, retired: a survivor, like one of the bridge's shutdown.
-            with _process_lock:
-                _processes.setdefault(name, proc)
-                _scope_by_user.setdefault(name, own_scope)
-            logger.error("WhatsApp: the process of %s did not end", name)
-            return False
-        _write_bridge_state(_spawns_open and not _bridge_stop.is_set())
+            _processes.setdefault(name, proc)
+            _scope_by_user.setdefault(name, own_scope)
+        logger.error("WhatsApp: the process of %s did not end", name)
+        return False
+    # Running only while this run still takes processes: after its end (a survivor stopped
+    # once it died) a True here would outlive the bridge.
+    _write_bridge_state(_spawns_open and not _bridge_stop.is_set())
+    return True
+
+
+def _account_stopped(username: str) -> None:
+    name = (username or "").strip()
     with _connection_lock:
         _connection_status[name] = False
     logger.info("WhatsApp: process stopped for %s", name)
-    return True
 
 
 def restart_account(username: str, user_scope_id: str) -> Tuple[bool, str]:

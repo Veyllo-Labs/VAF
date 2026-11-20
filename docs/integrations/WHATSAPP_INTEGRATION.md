@@ -300,12 +300,17 @@ the caller's own process for anybody else:
   and the stop answers 500, so no second Node starts on its login; that holds for a failed
   account stop exactly as for the bridge's shutdown. Such a survivor gets no lane write, a
   send for its account answers "The previous WhatsApp process of this account has not ended
-  yet", and a start of that account answers 500 with the same text until it has ended; so
-  does a start under a name whose live process was started for another scope (an account that
-  reuses a deleted account's name). An admin's Restart WhatsApp names the accounts it could
-  not start for that reason (`not_started` in the answer; the window shows "WhatsApp
-  restarted, but not for ..."). A send while no bridge runs answers at once that the bridge is
-  not running. A whole restart waits for the shutdown (both waits of every process still
+  yet. Try again shortly.", and a start of that account answers 500 with the same text until
+  it has ended; so does a start under a name whose live process was started for another
+  scope (an account that reuses a deleted account's name). An expiry line (`qr`) stops only
+  the process that wrote it, and only while that process is still the account's registration,
+  so a line an old process's reader was already dispatching cannot end the replacement a
+  restart brought up. An admin's Restart WhatsApp names the accounts its new run skipped for
+  that reason, from the spawn decisions themselves (`not_started` in the answer; the window
+  shows "WhatsApp restarted, but not for ...", with the next step: Restart WhatsApp again in
+  a minute, since a survivor that has ended blocks nothing, or restart VAF if it never ends,
+  which drops its registration). A send while no bridge runs answers at once that the bridge
+  is not running. A whole restart waits for the shutdown (both waits of every process still
   registered or still being terminated, plus a margin) and answers failure (500, "The old
   WhatsApp process did not stop in time; try again.") when it overruns, instead of a success
   that started nothing.
@@ -314,12 +319,21 @@ the caller's own process for anybody else:
   later one. However the bridge thread ends (a stop, nobody to run, or a failure), the same
   end runs under `_spawn_lock`: spawns close, every waiting start is answered, the run's stop
   is set, the reply callback goes, every registered process is retired and terminated, and the
-  state file says not running. A failed bridge thread therefore stops its run's processes and
+  state file says not running. A send its sender loop takes after the run's stop (one queued
+  ahead of the shutdown's end marker) is not written; it answers "WhatsApp is stopping; try
+  again in a few seconds.", because the next run's process must not get a second writer. If
+  the bridge thread cannot even be started, the start is rolled back the same way. A failed
+  bridge thread therefore stops its run's processes and
   loops and is reported as not running; it stays down until a Start or a VAF restart (the
   reconnect worker skips a bridge that is not running). A Stop that arrives while a start
   that brought the bridge up still waits for its spawn cancels that spawn, and such a start
   answers only once its own spawn happened or failed; one that timed out while a start into
   the running bridge brought its account up meanwhile answers success.
+- **Named boundary: the Telegram and Discord bridges were not measured.** Each keeps one
+  module-level stop (an Event or a flag) and one sender loop, the pattern that let a WhatsApp
+  sender loop outlive its run. Neither has a request folder with several consumers, so the
+  double send measured here has no counterpart there; whether a loop of theirs can outlive a
+  failed start was not measured.
 
 Measured before: an ordinary account's Stop ended every account's process and its Restart
 restarted all of them, while its Start answered "already running" and started nothing for it,
@@ -523,7 +537,7 @@ Outgoing items are tuples: `(username, chat_jid, text, voice_path, req_id, docum
 
 Node responds with `{ "type": "send_result", "req_id": "...", "success": true|false, "error": "..." }`. Python delivers this to the waiting caller (e.g. the `send_whatsapp` tool) via a per-request queue.
 
-A process without the bridge (the CLI, a sub-agent) reads `whatsapp_bridge_ipc/bridge_state.json` and, while it says running, writes its send as a request file into `whatsapp_bridge_ipc/requests/` and waits for the result file. The sender loop claims each request file by renaming it (`<name>.<uuid>.claimed`) before it reads it, so one request is sent once however many loops run; a loop whose run has ended claims nothing. Named boundary: a consumer that dies between the claim and the unlink leaves a `.claimed` file nobody delivers, and its sender's wait answers "No delivery confirmation", which is true, since nobody knows whether it left.
+A process without the bridge (the CLI, a sub-agent) reads `whatsapp_bridge_ipc/bridge_state.json` and, while it says running, writes its send as a request file into `whatsapp_bridge_ipc/requests/` and waits for the result file. The sender loop claims each request file by renaming it (`<name>.<uuid>.claimed`) before it reads it, so one request is sent once however many loops run; a loop whose run has ended claims nothing, and one whose run ended just as it claimed renames the file back for the next run. Named boundary: a consumer that dies between the claim and the unlink leaves a `.claimed` file nobody delivers, and its sender's wait answers "No delivery confirmation", which is true, since nobody knows whether it left.
 
 ### Outbound Item and Node Command Reference
 

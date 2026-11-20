@@ -58,7 +58,16 @@ _flow_locks_lock = threading.Lock()
 LOGIN_IN_USE = ("WhatsApp is running on this account's login. Use Re-link in the WhatsApp "
                 "window, or stop WhatsApp, before you scan a new code.")
 LINK_NODE_SURVIVED = ("The phone is linked, but the setup process did not stop. Restart VAF, "
-                      "then start WhatsApp.")
+                      "or ask whoever runs this server to restart it, then start WhatsApp.")
+LINK_ACCOUNT_ENDED = "WhatsApp setup stopped: this account was deactivated or deleted."
+LOGIN_NAME_NOT_A_FOLDER = ("This account's name cannot be used as a folder name, so its WhatsApp "
+                           "login cannot be removed here. Ask whoever runs this server to remove "
+                           "it by hand.")
+FLOW_BUSY = "WhatsApp setup is still busy for this account. Try again in a few seconds."
+# How long a start or reset waits for the account's transition already running. Ending a
+# link Node that resists can take TERMINATE_WAIT twice; the requests behind it answer
+# FLOW_BUSY instead of each holding a worker thread of the shared executor that long.
+FLOW_LOCK_WAIT = 2.0
 LOGIN_NOT_REMOVED = ("The WhatsApp login could not be removed completely. Try again, or ask "
                      "whoever runs this server to check the folder permissions.")
 
@@ -67,6 +76,13 @@ def _flow_lock(user_scope_id: Any) -> threading.Lock:
     key = _scope_key(user_scope_id)
     with _flow_locks_lock:
         return _flow_locks.setdefault(key, threading.Lock())
+
+
+def _take_flow_lock(user_scope_id: Any) -> Optional[threading.Lock]:
+    """The account's `_flow_lock`, taken within FLOW_LOCK_WAIT, or None (busy). The caller
+    releases it."""
+    lock = _flow_lock(user_scope_id)
+    return lock if lock.acquire(timeout=FLOW_LOCK_WAIT) else None
 
 
 def _jid_to_phone(jid: str) -> str:
@@ -962,24 +978,6 @@ def _set_flow_state(key: str, flow: object, state: Dict[str, Any]) -> bool:
         return True
 
 
-def _stop_link_node(proc: Any) -> bool:
-    """Terminate a link Node (3 s, then killed, 3 s more); True once it has exited."""
-    if proc.poll() is not None:
-        return True
-    try:
-        proc.terminate()
-        proc.wait(timeout=3)
-        return True
-    except Exception:
-        pass
-    try:
-        proc.kill()
-        proc.wait(timeout=3)
-        return True
-    except Exception:
-        return proc.poll() is not None
-
-
 def _release_link_node(key: str, proc: Any) -> None:
     """Drop the handle of a link Node that has exited (and only then)."""
     with _qr_lock:
@@ -999,7 +997,8 @@ def _end_link_flow(user_scope_id: Any) -> bool:
         proc = _qr_procs.get(key)
     if proc is None:
         return True
-    ended = _stop_link_node(proc)
+    from vaf.api.whatsapp_bridge import _terminate   # terminate, wait, kill, wait (TERMINATE_WAIT)
+    ended = _terminate(proc)
     _release_link_node(key, proc)
     return ended
 
@@ -1058,9 +1057,7 @@ def _run_qr_login(username: str, user_scope_id: str, flow: object) -> None:
         return
     # The bridge's node_modules are installed here, not by hand: first link on a fresh
     # install, or a lockfile bump after `vaf update`, both land on this path.
-    from vaf.api.whatsapp_bridge import (
-        LoginInUse, _account_may_start, _terminate, ensure_bridge_deps, spawn_node_bridge,
-    )
+    from vaf.api.whatsapp_bridge import LoginInUse, _terminate, ensure_bridge_deps, spawn_node_bridge
     if not _set_flow_state(key, flow, {"message": "Preparing the WhatsApp bridge (installing its dependencies)...", "ts": 0}):
         return
     deps_ok, deps_msg = ensure_bridge_deps()
@@ -1073,13 +1070,21 @@ def _run_qr_login(username: str, user_scope_id: str, flow: object) -> None:
         # Spawned and registered under the lock, and only while this flow is current: a flow
         # replaced during the install (minutes) must not start a Node next to its successor's,
         # and one whose account was deactivated or deleted meanwhile starts none at all (the
-        # revocation listener ends what is registered; this ends what was not yet).
+        # revocation listener ends what is registered; this ends what was not yet). Whether
+        # the account still stands is a store read, asked BEFORE the lock: `/qr` takes
+        # `_qr_lock` on the event loop, and a store that hangs would hold every account's poll.
+        # Under the lock only the in-memory mark is asked, which is set before the listeners
+        # run, so a revocation in this process cannot slip between the two.
+        from vaf.core import revocation
+        scope = str(user_scope_id or "").strip()
+        stands = revocation.account_stands(scope)
         with _qr_lock:
             if not _flow_is_current(key, flow):
                 log_whatsapp_qr("[VAF] QR flow replaced before its Node started; nothing spawned")
                 return
-            if not _account_may_start(user_scope_id):
+            if not stands or revocation.is_revoked(scope):
                 _qr_flows.pop(key, None)
+                _qr_state[key] = {"error": LINK_ACCOUNT_ENDED, "ts": time.time()}
                 log_whatsapp_qr("[VAF] QR flow of a deactivated or deleted account; nothing spawned")
                 return
             try:
@@ -1336,26 +1341,35 @@ async def reset_whatsapp_auth(request: Request):
     """Remove the caller's WhatsApp login, so the next QR flow links afresh (Re-link, or a
     session that was logged out). The caller's own link flow and own process end first, held
     to the caller's scope; nothing is removed while a process still runs on the login (500
-    when the caller's own did not end, 409 when another one runs on it). Nobody else's
-    process is stopped."""
+    when the caller's own did not end, 409 when another one runs on it), nor for a name that
+    is not one folder name (500, LOGIN_NAME_NOT_A_FOLDER). Nobody else's process is stopped.
+    The whole transition runs under the account's `_flow_lock`, so a start cannot spawn a link
+    Node on the login while it is removed; 409 FLOW_BUSY when the lock stays taken."""
     import asyncio
 
     from vaf.api.whatsapp_bridge import PREVIOUS_NOT_ENDED, STOP_FAILED, login_in_use, stop_account
-    from vaf.core.whatsapp_auth import get_whatsapp_auth_dir, remove_login
+    from vaf.core.whatsapp_auth import get_whatsapp_auth_dir, is_one_folder_name, remove_login
 
     user_info = get_current_vaf_user(request)
     username = user_info["username"]
     user_scope_id = user_info.get("user_scope_id")
 
     def _reset() -> Optional[HTTPException]:
-        with _flow_lock(user_scope_id):
+        lock = _take_flow_lock(user_scope_id)
+        if lock is None:
+            return HTTPException(status_code=409, detail=FLOW_BUSY)
+        try:
             _end_link_flow(user_scope_id)
             if stop_account(username, user_scope_id) is False:
                 return HTTPException(status_code=500, detail=STOP_FAILED)
             if login_in_use(get_whatsapp_auth_dir(username)):
                 return HTTPException(status_code=409, detail=PREVIOUS_NOT_ENDED)
+            if not is_one_folder_name(username):
+                return HTTPException(status_code=500, detail=LOGIN_NAME_NOT_A_FOLDER)
             if not remove_login(username):
                 return HTTPException(status_code=500, detail=LOGIN_NOT_REMOVED)
+        finally:
+            lock.release()
         return None
     refused = await asyncio.to_thread(_reset)
     if refused is not None:
@@ -1374,31 +1388,38 @@ async def start_qr_flow(request: Request):
     user_info = get_current_vaf_user(request)
     username = user_info["username"]
     user_scope_id = user_info.get("user_scope_id")
-    if not await asyncio.to_thread(_begin_link_flow, username, user_scope_id):
-        return JSONResponse(status_code=409, content={"detail": LOGIN_IN_USE})
+    began = await asyncio.to_thread(_begin_link_flow, username, user_scope_id)
+    if began != "started":
+        return JSONResponse(status_code=409, content={"detail": LOGIN_IN_USE if began == "in_use" else FLOW_BUSY})
     return {"status": "started", "message": "Scan the QR code in WhatsApp (Linked Devices). Poll GET /api/whatsapp/qr for the QR."}
 
 
-def _begin_link_flow(username: str, user_scope_id: Any) -> bool:
+def _begin_link_flow(username: str, user_scope_id: Any) -> str:
     """`/qr/start`'s transition, whole under the account's `_flow_lock`: end the old flow, look
-    at the login, install the new token and start its thread. False (and `LOGIN_IN_USE` in the
-    poll) while a WhatsApp process runs on the login."""
+    at the login, install the new token and start its thread. "started"; "in_use" (and
+    `LOGIN_IN_USE` in the poll) while a WhatsApp process runs on the login; "busy" when the
+    account's lock stays taken for FLOW_LOCK_WAIT (another start or reset still ending a Node)."""
     from vaf.api.whatsapp_bridge import login_in_use
     from vaf.core.whatsapp_auth import get_whatsapp_auth_dir
 
     key = _scope_key(user_scope_id)
-    with _flow_lock(user_scope_id):
+    lock = _take_flow_lock(user_scope_id)
+    if lock is None:
+        return "busy"
+    try:
         _end_link_flow(user_scope_id)
         flow = object()
         if login_in_use(get_whatsapp_auth_dir(username)):
             with _qr_lock:
                 _qr_flows[key] = flow
                 _qr_state[key] = {"error": LOGIN_IN_USE, "ts": time.time()}
-            return False
+            return "in_use"
         with _qr_lock:
             _qr_flows[key] = flow
         threading.Thread(target=_run_qr_login, args=(username, user_scope_id, flow), daemon=True).start()
-        return True
+        return "started"
+    finally:
+        lock.release()
 
 
 @router.post("/whitelist/remove")

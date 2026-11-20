@@ -487,6 +487,8 @@ def test_a_link_of_a_revoked_account_spawns_nothing(world, monkeypatch):
         routes._qr_flows[ALICE_SCOPE] = flow
         routes._run_qr_login("alice", ALICE_SCOPE, flow)
         assert spawned == [] and ALICE_SCOPE not in routes._qr_procs
+        # A later poll reads an end, not "waiting" for a worker that has returned.
+        assert routes._qr_state[ALICE_SCOPE]["error"] == routes.LINK_ACCOUNT_ENDED
     finally:
         revocation.restore_account(ALICE_SCOPE)
 
@@ -507,3 +509,67 @@ def test_the_lane_wrappers_require_a_scope(lane):
     import inspect
     param = inspect.signature(getattr(wa, lane)).parameters["user_scope_id"]
     assert param.kind is inspect.Parameter.KEYWORD_ONLY and param.default is inspect.Parameter.empty
+
+
+
+# -- review round 2 ---------------------------------------------------------------------------
+
+def _link_world(monkeypatch, rows):
+    from vaf.core import node_runtime, tool_dispatch
+    monkeypatch.setattr(node_runtime, "find", lambda name: "node")
+    monkeypatch.setattr(wa, "ensure_bridge_deps", lambda *a, **k: (True, ""))
+    monkeypatch.setattr(tool_dispatch, "_account_directory_resolver", rows)
+    spawned = []
+    monkeypatch.setattr(wa, "spawn_node_bridge", lambda *a, **k: spawned.append(a) or QRNode([]))
+    return spawned
+
+
+def test_a_link_of_an_account_the_directory_drops_spawns_nothing(world, monkeypatch):
+    """Deleted in another process: no mark here, only the directory knows. MUTATION: the link
+    spawn asks the in-memory mark only - red."""
+    spawned = _link_world(monkeypatch, lambda: [{"username": "bob", "user_scope_id": BOB_SCOPE, "active": True}])
+    flow = object()
+    routes._qr_flows[ALICE_SCOPE] = flow
+    routes._run_qr_login("alice", ALICE_SCOPE, flow)
+    assert spawned == [] and routes._qr_state[ALICE_SCOPE]["error"] == routes.LINK_ACCOUNT_ENDED
+
+
+def test_the_store_is_not_read_under_the_qr_lock(world, monkeypatch):
+    """`/qr` takes `_qr_lock` on the event loop; a store read under it holds every account's
+    poll. MUTATION: ask `account_stands` inside the lock again - red."""
+    held = []
+
+    def directory():
+        held.append(routes._qr_lock.locked())
+        return [{"username": "alice", "user_scope_id": ALICE_SCOPE, "active": True}]
+    spawned = _link_world(monkeypatch, directory)
+    flow = object()
+    routes._qr_flows[ALICE_SCOPE] = flow
+    routes._run_qr_login("alice", ALICE_SCOPE, flow)
+    assert held and not any(held), held
+    assert len(spawned) == 1
+
+
+@pytest.mark.parametrize("route", ["/api/whatsapp/qr/reset", "/api/whatsapp/qr/start"])
+def test_a_busy_account_transition_answers_at_once(world, monkeypatch, route):
+    """Another start or reset of the account still holds its lock (ending a link Node that
+    resists): this one answers FLOW_BUSY and touches nothing. Also pins that a reset takes the
+    lock at all. MUTATION: `/qr/reset` without the lock (the reset row red); wait for the lock
+    without a bound (both rows red by the elapsed-time check)."""
+    folder = _folder("alice")
+    monkeypatch.setattr(routes, "FLOW_LOCK_WAIT", 0.05)
+    started = []
+    monkeypatch.setattr(routes, "_run_qr_login", lambda *a: started.append(a))
+    lock = routes._flow_lock(ALICE_SCOPE)
+    lock.acquire()
+    releaser = threading.Timer(3.0, lock.release)      # an unbounded wait ends, and the test fails
+    releaser.start()
+    began = time.monotonic()
+    res = _client(ALICE).post(route)
+    elapsed = time.monotonic() - began
+    releaser.cancel()
+    if lock.locked():
+        lock.release()
+    assert elapsed < 2.0, elapsed
+    assert res.status_code == 409 and res.json()["detail"] == routes.FLOW_BUSY, res.text
+    assert (folder / "creds.json").is_file() and started == []

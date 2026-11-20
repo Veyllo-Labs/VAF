@@ -370,7 +370,10 @@ the caller's own process for anybody else:
   next start or reset ends it again. Each account's start and reset run as one transition
   under a lock of their own (end the old flow, look at the login, install the new flow or
   stop and remove): two starts at once can no longer leave a Node running whose flow the
-  other replaced. Every spawn, the account's process and the link alike, is refused for an
+  other replaced, and a start cannot spawn a link Node while a reset removes the login. A
+  start or reset that finds the account's transition still running after 2 s (a link Node
+  that resists its end) answers 409 "WhatsApp setup is still busy for this account. Try again
+  in a few seconds." instead of waiting. Every spawn, the account's process and the link alike, is refused for an
   account that was deactivated or deleted meanwhile (`_account_may_start`, asked under the
   lock the spawn holds), so a start already under way when the revocation landed starts
   nothing.
@@ -385,7 +388,12 @@ the caller's own process for anybody else:
   opens another account's login or a folder outside `users/`. Deletion and `/qr/reset`
   remove nothing for such a name (`whatsapp_auth.is_one_folder_name`), and deletion keeps a
   folder that the kernel resolves to any other account's (`os.path.samefile`, asked of every
-  account). Measured before: deleting an account named `admin/` removed the owner's login.
+  account), and the whole login when the account directory gives no answer to ask it by.
+  Measured before: deleting an account named `admin/` removed the owner's login. For admins:
+  do not create account names with `/`, `\`, a trailing dot or a leading `.`; WhatsApp linked
+  under such a name stays in its folder after the account is deleted, and its Re-link answers
+  "This account's name cannot be used as a folder name, so its WhatsApp login cannot be
+  removed here. Ask whoever runs this server to remove it by hand."
 - **Named boundary: the Telegram and Discord bridges were not measured.** Each keeps one
   module-level stop (an Event or a flag) and one sender loop, the pattern that let a WhatsApp
   sender loop outlive its run. Neither has a request folder with several consumers, so the
@@ -734,7 +742,7 @@ Best practice: if the bot does not reply, check that you see `[Python] got type=
 - **QR or terminal issues:** Stderr of the Node process (including `connection.update` events) is logged to `whatsapp_qr_<date>.log`. After scanning, WhatsApp may disconnect with 515/516; the bridge then reconnects with stored credentials. If "logging in" stays stuck, check network/firewall.
 - **Session expired:** When an account's process needs a new QR but cannot show it, VAF stops that account's process and nobody else's. For the local admin it also turns the global `enabled` off, which is that account's own switch; another account's own switch stays on, so a later restart of the whole bridge starts its process again, which asks for a QR and stops again. Use Reset and scan a new QR code.
 - **"WhatsApp is running on this account's login":** the setup was started while this account's WhatsApp runs, or while an earlier link has not ended. Stop WhatsApp first, or use Re-link in the WhatsApp window, which stops it before it shows a new code.
-- **A login moved aside:** when you create an ordinary account under a name that an earlier account used, and that account's WhatsApp login is still on disk, VAF moves the old login aside before the new account exists, so the new account starts unlinked. It goes to `~/.vaf/users/<name>/whatsapp.previous-<UTC time>`, for example `~/.vaf/users/carol/whatsapp.previous-20261120T101500Z` (a `-2`, `-3` is added when that name is taken). A name that differs only in capitals, accents or similar letters counts as the same name, so the folder can be under another spelling (`Carol`). The admin who creates the account sees nothing on screen; the server log has a WARNING line "A WhatsApp login left under the user name ... was moved to users/...", and `~/.vaf/users/*/whatsapp.previous-*` lists every moved login. Restore one only if the new account is the same person: the old login gives the account that WhatsApp number and its chats. To restore, stop VAF, remove the new account's `whatsapp` folder if one exists, and rename the moved folder back to `whatsapp`. The first admin keeps its folder (the owner set up again after a lost database).
+- **A login moved aside:** when you create an ordinary account under a name that an earlier account used, and that account's WhatsApp login is still on disk, VAF moves the old login aside before the new account exists, so the new account starts unlinked. It goes to `~/.vaf/users/<name>/whatsapp.previous-<UTC time>`, for example `~/.vaf/users/carol/whatsapp.previous-20261120T101500Z` (a `-2`, `-3` is added when that name is taken). A name that differs only in capitals, accents or similar letters counts as the same name, so the folder can be under another spelling (`Carol`). The admin who creates the account sees nothing on screen; the server log has a WARNING line "A WhatsApp login left under the user name ... was moved to users/...", and `~/.vaf/users/*/whatsapp.previous-*` lists every moved login. Restore one only if the new account is the same person: the old login gives the account that WhatsApp number and its chats. To restore, stop VAF, remove the new account's own login folder `~/.vaf/users/<new account's name>/whatsapp` if one exists, and move the moved folder there under that name (for an account "carol" whose old login was found under `Carol/`: move `~/.vaf/users/Carol/whatsapp.previous-...` to `~/.vaf/users/carol/whatsapp`; a rename inside `Carol/` restores nothing, the bridge opens `carol/whatsapp`). The first admin keeps its folder (the owner set up again after a lost database).
 - **Repeated `GET /api/whatsapp/qr` in the server log:** This endpoint is polled by the WhatsApp setup wizard (every ~1.5s before a QR is shown, ~2.5s after) to detect when the QR appears and when your phone finishes linking. Polling runs **only while the setup wizard is open** and stops when you close it. Seeing it continuously means the wizard is open in a browser tab; close it to stop the polling.
 
 ### Voice: STT Fails (Incoming Voice Not Transcribed)

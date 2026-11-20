@@ -3092,7 +3092,8 @@ def _account_may_start(user_scope_id: Any) -> bool:
     every spawn, under the lock the spawn holds: a start that passed its own checks before a
     deactivation or deletion landed would otherwise spawn after the revocation listener had
     already stopped everything (measured: `_spawn_account` after `revoke_account` answered True
-    and registered the process)."""
+    and registered the process). The QR link asks the two halves itself: the store read before
+    its `_qr_lock`, which `/qr` takes on the event loop, and the in-memory mark under it."""
     from vaf.core import revocation
     scope = str(user_scope_id or "").strip()
     return not revocation.is_revoked(scope) and revocation.account_stands(scope)
@@ -3181,37 +3182,45 @@ def _forget_cached(names, user_scope_id: Any, *, keep_unowned: bool = False) -> 
         _contact_sync_last.pop(n, None)
 
 
+class DirectoryUnknown(RuntimeError):
+    """The account directory gave no answer to decide by."""
+
+
 def _other_account_names(user_scope_id: Any) -> List[str]:
     """Every account name but this scope's: the local admin's from the config and the account
-    directory's. Empty names are left out."""
+    directory's. Empty names are left out.
+
+    Raises `DirectoryUnknown` when the directory answers nothing at all: the framework reads an
+    unreachable store as an empty directory (`tool_dispatch.resolve_account_directory`, a
+    lookup by design), and an empty list would tell the shared-folder check that no other
+    account exists, so a deletion during an outage removed a login another account opens.
+    Asked right after a deletion committed, an empty answer is an outage, or an installation
+    with no other account left whose login could be at stake; either way nothing is removed."""
     from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
+    from vaf.core.tool_dispatch import resolve_account_directory
     gone = _scope_key(user_scope_id)
-    names: List[str] = []
-    try:
-        if _scope_key(get_local_admin_scope_id()) != gone:
-            names.append(str(get_local_admin_username() or "").strip())
-    except Exception:
-        pass
-    try:
-        from vaf.core.tool_dispatch import resolve_account_directory
-        names += [str(r.get("username") or "").strip() for r in resolve_account_directory()
-                  if _scope_key(r.get("user_scope_id")) != gone]
-    except Exception:
-        pass
+    rows = resolve_account_directory()
+    if not rows:
+        raise DirectoryUnknown("the account directory answered nothing")
+    names: List[str] = [str(r.get("username") or "").strip() for r in rows
+                        if _scope_key(r.get("user_scope_id")) != gone]
+    if _scope_key(get_local_admin_scope_id()) != gone:
+        names.append(str(get_local_admin_username() or "").strip())
     return [n for n in names if n]
 
 
-def _folder_of_another_account(username: str, user_scope_id: Any) -> Optional[str]:
+def _folder_of_another_account(username: str, others: List[str]) -> Optional[str]:
     """The name of another account (the local admin included) whose login folder is this
     name's folder on this file system, or None. Asked of EVERY other account by the kernel
     (`os.path.samefile`), not only of names that look alike: the same name under another scope
     (an ordinary account named like a local admin that has no row of its own), a twin from
     before names were compared by `portable_name_key` on a case-insensitive file system, and
     any spelling the kernel resolves to the same folder. Removing such a folder would remove
-    the other account's login. Accounts are counted in tens."""
+    the other account's login. `others` are the other accounts' names
+    (`_other_account_names`). Accounts are counted in tens."""
     name = (username or "").strip()
     mine = get_whatsapp_auth_dir(name)
-    for other in _other_account_names(user_scope_id):
+    for other in others:
         try:
             if os.path.samefile(get_whatsapp_auth_dir(other), mine):
                 return other
@@ -3240,7 +3249,16 @@ def forget_account_login(username: str, user_scope_id: Any) -> bool:
     names = {n for n, _ in _registrations_of(user_scope_id)} | {name}
     if stop_scope(user_scope_id) is False:
         logger.error("WhatsApp: the process of the deleted account %s did not end", name)
-    _forget_cached(names, user_scope_id, keep_unowned=name in _other_account_names(user_scope_id))
+    try:
+        others = _other_account_names(user_scope_id)
+    except Exception as e:
+        # Which other account opens this folder cannot be told: keep the login, and the
+        # cached state no scope is recorded for, rather than remove another account's.
+        _forget_cached(names, user_scope_id, keep_unowned=True)
+        logger.warning("WhatsApp: the login of the deleted account %s is kept, the account "
+                       "directory could not be read (%s)", name, e)
+        return False
+    _forget_cached(names, user_scope_id, keep_unowned=name in others)
     if not is_one_folder_name(name):
         logger.warning("WhatsApp: the login of the deleted account %r is kept, the name is not "
                        "one folder name and could open another folder", name)
@@ -3250,7 +3268,7 @@ def forget_account_login(username: str, user_scope_id: Any) -> bool:
         logger.warning("WhatsApp: the login of the deleted account %s is kept, a process still "
                        "runs on it", name)
         return False
-    other = _folder_of_another_account(name, user_scope_id)
+    other = _folder_of_another_account(name, others)
     if other is not None:
         logger.warning("WhatsApp: the login of the deleted account %s is kept, it is the folder "
                        "of the account %s on this file system", name, other)

@@ -430,7 +430,7 @@ def test_reset_of_a_path_shaped_name_removes_nothing(world, protected):
         return await call_next(request)
     app.include_router(routes.router)
     res = TestClient(app).post("/api/whatsapp/qr/reset")
-    assert res.status_code == 500 and res.json()["detail"] == routes.LOGIN_NOT_REMOVED, res.text
+    assert res.status_code == 500 and res.json()["detail"] == routes.LOGIN_NAME_NOT_A_FOLDER, res.text
     assert (protected["owner"] / "creds.json").is_file()
 
 
@@ -507,7 +507,7 @@ def test_a_new_account_never_reads_a_deleted_accounts_cache(world, quiet_events,
     new_bob = "ab12cd34-0000-4000-8000-0000000000b9"
     _cache_as("bob", BOB_SCOPE)
     monkeypatch.setattr(wa, "is_bridge_running", lambda: bridge != "down")
-    for scope, expect in ((new_bob, False), (BOB_SCOPE, True)):
+    for scope, expect in ((new_bob, False), (None, False), ("", False), ("   ", False), (BOB_SCOPE, True)):
         chats = wa.get_whatsapp_chats("bob", wait_timeout=0.01, user_scope_id=scope)
         lids = wa.get_lid_mappings("bob", wait_timeout=0.01, user_scope_id=scope)
         names = wa.get_contact_names("bob", wait_timeout=0.01, user_scope_id=scope)
@@ -586,3 +586,42 @@ def test_an_unlistable_users_folder_refuses_the_account(creating, monkeypatch):
     assert "check the folder permissions" in refused.value.message
     with Session(creating.engine) as s:
         assert s.execute(select(LocalUser)).first() is None
+
+
+
+# -- review round 2 ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("how", ["deactivated", "deleted"])
+def test_a_start_spawns_nothing_for_an_account_the_directory_no_longer_lists(world, monkeypatch, how):
+    """Deactivated or deleted in ANOTHER process (no revocation mark here): only the account
+    directory says so. MUTATION: `_account_may_start` asks the mark only - red."""
+    monkeypatch.setattr(wa, "_bridge_stop", __import__("threading").Event())
+    monkeypatch.setattr(wa, "_spawns_open", True)
+    spawned = []
+    monkeypatch.setattr(wa, "_run_user_process", lambda name, auth_dir: spawned.append(name) or FakeProc())
+    monkeypatch.setattr(wa, "_write_bridge_state", lambda running: None)
+    monkeypatch.setattr(wa, "_read_user_process", lambda *a, **k: None)
+    monkeypatch.setattr(wa, "_forward_bridge_stderr", lambda *a, **k: None)
+    if how == "deactivated":
+        world.rows[0]["active"] = False
+    else:
+        del world.rows[0]
+    assert not revocation.is_revoked(ALICE_SCOPE)
+    with wa._spawn_lock:
+        assert wa._spawn_account(ALICE_SCOPE, "alice", _login("alice")) is False
+    assert spawned == [] and "alice" not in wa._processes
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a folder link needs a privilege on Windows")
+def test_a_directory_that_answers_nothing_keeps_the_login(world, protected, caplog):
+    """The framework reads an unreachable store as an empty directory. `users/bobby` links to
+    alice's folder; with no other account to ask `samefile` of, removing bobby's login would
+    remove alice's. MUTATION: read an empty directory as "no other account" - red."""
+    os.symlink(Config.APP_DIR / "users" / "alice", Config.APP_DIR / "users" / "bobby", target_is_directory=True)
+    world.rows[:] = []
+    wa._connection_status["bobby"] = True
+    caplog.set_level(logging.WARNING, logger="vaf.api.whatsapp_bridge")
+    assert wa.forget_account_login("bobby", "ab12cd34-0000-4000-8000-0000000000e2") is False
+    assert (protected["alice"] / "creds.json").is_file()
+    assert wa._connection_status.get("bobby") is True, "state no scope is recorded for is kept too"
+    assert any("could not be read" in r.getMessage() for r in caplog.records)

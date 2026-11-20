@@ -1222,6 +1222,8 @@ def test_a_buffered_line_of_an_ended_process_is_not_acted_on(world, monkeypatch,
     elif how == "survivor_replaced":
         assert wa.restart_bridge() is True
         assert world.wait_for(lambda: world.names().count("admin") == 2 and world.live("admin"))
+        # The new run has decided about Alice: ended before that, the run would spawn her itself.
+        assert wa._run_outcome.settled.wait(timeout=3)
         assert wa._processes["alice"] is old
         old.returncode = -9                     # the survivor ends at last
         assert wa.start_account("alice", ALICE_SCOPE) == (True, wa.ACCOUNT_STARTED)
@@ -1648,6 +1650,33 @@ def test_a_stop_resets_the_connection_before_a_replacement_can_report(world, mon
         real_reset(username)
     monkeypatch.setattr(wa, "_account_stopped", reset_with_a_replacement_racing)
     assert wa.stop_account("alice", ALICE_SCOPE) is True
+    replacement["racer"].join(timeout=5)
+    assert replacement["start"] == (True, wa.ACCOUNT_STARTED)
+    assert wa._processes["alice"] is not procs["alice"]
+    assert wa._connection_status["alice"] is True
+
+
+def test_an_expiry_stop_resets_the_connection_before_a_replacement_can_report(world, monkeypatch):
+    """The twin of the stop's case, through the `qr` handler: it marks the connection down
+    before it releases the spawn lock, so a replacement that starts and reports `connected`
+    right after stays connected. MUTATION: in the `qr` handler only, reset the connection after
+    the lock is released."""
+    procs = _bridge_with(world, "admin", "alice")
+    real_reset = wa._account_stopped
+    replacement = {}
+
+    def start_and_connect():
+        replacement["start"] = wa.start_account("alice", ALICE_SCOPE)
+        wa._dispatch_bridge_event("alice", ALICE_SCOPE, "connected", {"selfJid": "491700000001@s.whatsapp.net"})
+
+    def reset_with_a_replacement_racing(username):
+        racer = threading.Thread(target=start_and_connect)
+        racer.start()
+        racer.join(timeout=0.3)     # blocks on the spawn lock while the handler holds it
+        replacement["racer"] = racer
+        real_reset(username)
+    monkeypatch.setattr(wa, "_account_stopped", reset_with_a_replacement_racing)
+    wa._dispatch_bridge_event("alice", ALICE_SCOPE, "qr", {}, proc=procs["alice"])
     replacement["racer"].join(timeout=5)
     assert replacement["start"] == (True, wa.ACCOUNT_STARTED)
     assert wa._processes["alice"] is not procs["alice"]

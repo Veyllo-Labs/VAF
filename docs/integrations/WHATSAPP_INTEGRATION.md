@@ -306,12 +306,12 @@ the caller's own process for anybody else:
   the process that wrote it, and only while that process is still the account's registration,
   so a line an old process's reader was already dispatching cannot end the replacement a
   restart brought up. An admin's Restart WhatsApp names the accounts its new run skipped for
-  that reason, from the spawn decisions themselves, waiting for the new run's spawn phase at
-  most `RESTART_REPORT_WAIT` (15 s) and naming nobody after that; the reconnect worker's
-  restart does not wait for them (`not_started` in the answer; the window
-  shows "WhatsApp restarted, but not for ...", with the next step: Restart WhatsApp again in
-  a minute, since a survivor that has ended blocks nothing, or restart VAF if it never ends,
-  which drops its registration). A send while no bridge runs answers at once that the bridge
+  that reason (`not_started` in the answer; the window shows "WhatsApp restarted, but not
+  for ...", with the next step: Restart WhatsApp again in a minute, since a survivor that has
+  ended blocks nothing, or restart VAF if it never ends, which drops its registration). It
+  takes them from the spawn decisions themselves, waiting for the new run's spawn phase at
+  most `RESTART_REPORT_WAIT` (15 s) and naming nobody after that. The reconnect worker's
+  restart does not wait. A send while no bridge runs answers at once that the bridge
   is not running. A whole restart waits for the shutdown (both waits of every process still
   registered or still being terminated, plus a margin) and answers failure (500, "The old
   WhatsApp process did not stop in time; try again.") when it overruns, instead of a success

@@ -289,6 +289,9 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
             if (!res.ok) { setRestartError(json?.detail || json?.message || String(res.status)); return; }
             await new Promise(r => setTimeout(r, 3000));
             await fetchDashboard();
+            // An admin's restart that skipped an account whose previous process has not ended.
+            const notStarted: string[] = Array.isArray(json?.not_started) ? json.not_started : [];
+            if (notStarted.length) setRestartError(t('restartNotForAccounts', { names: notStarted.join(', ') }));
         } catch (e) {
             setRestartError(e instanceof Error ? e.message : String(e));
         } finally {

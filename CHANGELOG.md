@@ -94,6 +94,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   is now written onto the automation as it is at that moment, one at a time, and a run that ends
   never marks an automation created again under the same id as done. A room-triggered run starts
   only once the position it read up to is saved, so a restart does not run it twice.
+- **WhatsApp no longer sends one message twice after a failed start.** When the WhatsApp
+  bridge failed while starting, a second sending loop could start next to the first, and
+  messages sent from the command line or a sub-agent could reach the contact twice. A failed
+  start now stops cleanly and says WhatsApp is not running, a restart of your own connection
+  can no longer be stopped by a message the old connection left behind, and an admin's Restart
+  WhatsApp says which accounts it could not start.
 - **WhatsApp: an account that is not an admin can no longer stop or restart WhatsApp for
   everybody.** Starting, restarting and switching WhatsApp off now act on that account's own
   connection, and an expired session stops only the connection it belongs to. While WhatsApp is

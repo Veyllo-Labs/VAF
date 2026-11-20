@@ -508,7 +508,7 @@ def test_a_non_admin_drives_only_their_own_process(config_file, monkeypatch, rou
     calls = []
     answers = {"start_account": (True, "started"), "restart_account": (True, "restarted"),
                "stop_account": True, "start_bridge": True, "restart_bridge": True,
-               "restart_bridge_result": (True, ""),
+               "restart_bridge_result": (True, "", []),
                "start_missing_accounts": [], "stop_bridge": None}
     for channel in ("whatsapp", "telegram", "discord"):
         module = importlib.import_module(f"vaf.api.{channel}_bridge")

@@ -1324,6 +1324,7 @@
       "stateStopped": "başlatılmadı",
       "restartBridge": "WhatsApp'ı yeniden başlat",
       "restarting": "Yeniden başlatılıyor…",
+      "restartNotForAccounts": "WhatsApp yeniden başlatıldı, ancak {names} için değil: önceki WhatsApp işlemi henüz sona ermedi.",
       "relink": "Yeniden bağla (yeni QR kodu)",
       "cardOwnerTitle": "Kendi numaran (ana kullanıcı)",
       "cardOwnerDesc": "Sohbet ettiğin numara. Ajan sana buradan ulaşır ve bu numaradan gelen mesajlar Telegram'daki gibi tam ajanı kullanır.",

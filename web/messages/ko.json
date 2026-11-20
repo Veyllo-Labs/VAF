@@ -1324,6 +1324,7 @@
       "stateStopped": "시작 안 됨",
       "restartBridge": "WhatsApp 다시 시작",
       "restarting": "다시 시작하는 중…",
+      "restartNotForAccounts": "WhatsApp을 다시 시작했지만 {names}은(는) 시작되지 않았습니다. 이전 WhatsApp 프로세스가 아직 끝나지 않았습니다.",
       "relink": "다시 연결 (새 QR 코드)",
       "cardOwnerTitle": "내 번호 (주 사용자)",
       "cardOwnerDesc": "직접 채팅하는 번호예요. 에이전트가 여기로 연락하고, 이 번호에서 온 메시지는 Telegram처럼 에이전트 전체를 쓸 수 있어요.",

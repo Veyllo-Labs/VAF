@@ -804,9 +804,13 @@ async def restart_whatsapp_bridge(request: Request):
     if caller_is_admin(request):
         if not _global_switch_on():
             raise HTTPException(status_code=400, detail=SWITCHED_OFF_FOR_ADMIN)
-        ok, message = await asyncio.to_thread(restart_bridge_result)
+        ok, message, not_started = await asyncio.to_thread(restart_bridge_result)
         if ok:
-            return {"status": "restarted", "message": "WhatsApp bridge restarted. Wait 20-30 s, then refresh."}
+            # `not_started`: the accounts whose previous process has not ended, so the new run
+            # skipped them; the window names them instead of a plain success.
+            return {"status": "restarted",
+                    "message": message if not_started else "WhatsApp bridge restarted. Wait 20-30 s, then refresh.",
+                    "not_started": list(not_started)}
         # An overrun is the old process not ending, not the installation: say which.
         raise HTTPException(status_code=500, detail=message if message == SHUTDOWN_OVERRAN else
                             "Failed to restart bridge. Check Node.js and npm install in vaf/whatsapp_node.")

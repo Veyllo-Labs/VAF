@@ -292,30 +292,53 @@ the caller's own process for anybody else:
 - **The scope decides, not the name alone.** A non-admin's stop and restart name the caller's
   scope as well, so an ordinary account whose name equals another account's (one named like
   the local admin) stops nothing of that account's, and its restart stops nothing at all
-  unless it could start again (`restart_account` checks first). A process that survives the
-  kill stays registered and the stop answers 500, so no second Node starts on its login; the
-  same holds at the whole bridge's shutdown, whose survivors stay registered. A survivor's
-  readers stop at the next line they see, without acting on it, no lane sends through it, and
-  a start of that account answers 500 "The previous WhatsApp process of this account has not
-  ended yet" until it has ended; so does a start under a name whose live process was started
-  for another scope (an account that reuses a deleted account's name). A send while no bridge
-  runs answers at once that the bridge is not running. A whole restart waits for the shutdown
-  (both waits of every process still registered or still being terminated, plus a margin) and
-  answers failure (500, "The old WhatsApp process did not stop in time; try again.") when it
-  overruns, instead of a success that started nothing. If the bridge thread itself fails, every
-  start waiting on it is answered and cleared, so the next start brings that account up. A
-  Stop that arrives while a start that brought the bridge up still waits for its spawn cancels
-  that spawn, and such a start answers only once its own spawn happened or failed.
+  unless it could start again (`restart_account` checks first).
+- **A process VAF tried to end acts for nobody.** Every process VAF ends (an account's stop or
+  restart, the bridge's shutdown, a registration replaced by a new spawn) is retired first
+  (`_retire`, a mark on the process object), and nothing it writes afterwards is acted on: its
+  readers drop the next line they see. One that survives the kill as well stays registered
+  and the stop answers 500, so no second Node starts on its login; that holds for a failed
+  account stop exactly as for the bridge's shutdown. Such a survivor gets no lane write, a
+  send for its account answers "The previous WhatsApp process of this account has not ended
+  yet", and a start of that account answers 500 with the same text until it has ended; so
+  does a start under a name whose live process was started for another scope (an account that
+  reuses a deleted account's name). An admin's Restart WhatsApp names the accounts it could
+  not start for that reason (`not_started` in the answer; the window shows "WhatsApp
+  restarted, but not for ..."). A send while no bridge runs answers at once that the bridge is
+  not running. A whole restart waits for the shutdown (both waits of every process still
+  registered or still being terminated, plus a margin) and answers failure (500, "The old
+  WhatsApp process did not stop in time; try again.") when it overruns, instead of a success
+  that started nothing.
+- **A run has one end.** Each bridge start makes a new stop for that run, and its sender loop,
+  chat-sync loop and readers watch only their own, so no thread of an earlier run wakes into a
+  later one. However the bridge thread ends (a stop, nobody to run, or a failure), the same
+  end runs under `_spawn_lock`: spawns close, every waiting start is answered, the run's stop
+  is set, the reply callback goes, every registered process is retired and terminated, and the
+  state file says not running. A failed bridge thread therefore stops its run's processes and
+  loops and is reported as not running; it stays down until a Start or a VAF restart (the
+  reconnect worker skips a bridge that is not running). A Stop that arrives while a start
+  that brought the bridge up still waits for its spawn cancels that spawn, and such a start
+  answers only once its own spawn happened or failed; one that timed out while a start into
+  the running bridge brought its account up meanwhile answers success.
 
 Measured before: an ordinary account's Stop ended every account's process and its Restart
 restarted all of them, while its Start answered "already running" and started nothing for it,
 so a newly linked account's process came up only with a restart of everybody's. Every spawn and
 every stop runs under one lock (`_spawn_lock`), the bridge's shutdown included, so one account
 never gets two Node processes on one login, and no process outlives the bridge unless it
-survives the kill too (it then stays registered, so nothing starts next to it; after the
-bridge's shutdown nothing it writes is acted on and its account cannot start until it ends). Pinned by
+survives the kill too (it then stays registered, so nothing starts next to it; once VAF has
+tried to end it nothing it writes is acted on and its account cannot start until it ends). Pinned by
 `tests/test_whatsapp_account_process.py` (with a seeded fuzz of the lifecycle) and the
 `PROCESS_RULES` table in `tests/test_channel_route_write_rights.py`.
+
+Measured before the run had one end, with fake processes: two threads draining three request
+files per round handed out 410 of 600 files twice. A bridge thread that failed left its sender
+loop polling the request folder and the state file at `running: true`, and the next start added
+a second sender loop next to it. Alice's own restart, while her old process still held a `qr`
+line in its pipe, had that line stop her new process. With the start's `running: true` written
+after the bridge thread started, 39 of 200 starts with nobody to run left the state file saying
+running. Pinned by the same file and `tests/test_whatsapp_send_request_claim.py`, both with a
+seeded fuzz (the spawn gate with injected bridge-thread failures, and the request-file claim).
 
 - **Self-chat (the linked account's own chat)**: A message in the linked account's "message yourself" chat is somebody typing on the agent's phone, not the owner talking to the agent. The bridge drops it before the store, the activity and the queue; a downloaded voice file is deleted. In logs you will see `SELF_CHAT dropped`. The Node decides `selfChat` by comparing the sender with the linked account (for `@lid` senders only after resolving the LID to a number).
 
@@ -500,6 +523,8 @@ Outgoing items are tuples: `(username, chat_jid, text, voice_path, req_id, docum
 
 Node responds with `{ "type": "send_result", "req_id": "...", "success": true|false, "error": "..." }`. Python delivers this to the waiting caller (e.g. the `send_whatsapp` tool) via a per-request queue.
 
+A process without the bridge (the CLI, a sub-agent) reads `whatsapp_bridge_ipc/bridge_state.json` and, while it says running, writes its send as a request file into `whatsapp_bridge_ipc/requests/` and waits for the result file. The sender loop claims each request file by renaming it (`<name>.<uuid>.claimed`) before it reads it, so one request is sent once however many loops run; a loop whose run has ended claims nothing. Named boundary: a consumer that dies between the claim and the unlink leaves a `.claimed` file nobody delivers, and its sender's wait answers "No delivery confirmation", which is true, since nobody knows whether it left.
+
 ### Outbound Item and Node Command Reference
 
 | Python outbound tuple | Node command | Description |
@@ -542,7 +567,7 @@ The window is laid out like the mail client: the chat list on the left (name, ne
 - **Unread, waits for you, done**: every row carries the inbox's state under its preview (the red unread pill, the amber **Waits for you** chip, **Agent answered**, **Done**), the list header's right side becomes an **N waiting for you** button that jumps to the next waiting chat, and opening a chat marks it read on every surface (see [INBOX.md](INBOX.md)).
 - **Conversation header**: name, badge, number and a one-line explanation of what the agent does with this chat; **Add as contact** on any chat the book does not know yet creates the record and nothing more (`POST /api/contacts`): adding somebody is not the same as handing them a pass that outlives the Inbound switch. When the number is in the contact book, the header says so and shows the **Let the agent reply** switch, which is on exactly while the agent answers this person on WhatsApp: because you allowed them, or because nobody decided and Inbound is open here. Switching it on asks once whether the agent may talk to this person in Front Office mode; switching it off asks nothing and writes a refusal, which holds when Inbound opens again (`PATCH /api/contacts/{id}` with `assistant_access`; the dashboard payload carries `contact_id`, `contact_name`, `contact_access` and the folded `assistant_answers` / `assistant_reason` per chat). The reason rides along as the switch's title, because this header is a strip; the full sentence is in the contact book. **Load older messages** is a pill at the top of the message list, where scrolling up lands, not a header button. The search over chats and contacts sits at the top of the chat list; the search field in the conversation header searches inside the open chat. Where the agent answers, the footer names the mode (full agent, Front Office) and, for the owner's chat, the message count until the next Memory Learning; where the person writes themselves, the compose box takes the footer's place.
 - **Compose box and Composer** (where the agent does NOT answer: a read-only chat, or every chat while `inbound_to_agent` is off; owner and contact chats are the agent's, and an unassigned `@lid` has no address): under the conversation a text field with **Send** (Enter sends, Shift+Enter breaks the line; the field grows with what you type to three lines and scrolls beyond that without a visible bar, the Composer's instruction field likewise) sends your own words from the agent's number, `POST /api/whatsapp/send` (`chat_id`, `text`); the bridge's sender loop stores the row and the pane reloads. The message is stored under `OWNER_SENDER`, so it is not the agent writing: the person's answer stays a read-only message for you, and writing by hand grants nobody anything. To the right of the conversation the **Composer** drafts into that text field, the same assistant as the mail window's on the shared lane (`vaf/core/composer.py` with the `CHAT` profile, `vaf/core/composer_lane.py`; design and containment in [EMAIL_CLIENT.md](EMAIL_CLIENT.md#mail-composer)): say what the reply should say or what to pay attention to, **Write a draft** reads the stored chat (newest inbound message first, your side labelled so the model matches how this number writes, memory keyed on your instruction, plus what the agent learned in this chat if it ever answered here), **Rewrite my text** works on what you typed and reads no chat messages (it still knows what the agent learned in this chat), follow-ups refine the last draft, **Stop**, **Undo**, and a result line that says how much of the chat was read and whether it had a sample of your tone (`POST /api/whatsapp/composer`, SSE frames identical to the mail route: `meta`, optional `notice`, cumulative text, `error` or `end`). One model call, no tools, nothing sent: you press Send. The panel is offered while `mail_composer_enabled` is on (`composer_enabled` in the dashboard payload); on a phone it stacks under the conversation. Switching chats keeps each chat's box and Composer exchange in the window's memory (a state swap, no request) and brings them back when you return; a draft or a send still running for the chat you left is bound to that chat, so its outcome lands in that chat's stash rather than in the one on screen; closing the window drops them all.
-- **Settings (gear)**: *Agent number* with connection state, Restart WhatsApp (an admin restarts every account's process, anybody else their own, see [Who starts and stops what](#who-starts-and-stops-what)) and Re-link; *Your number (main user)* to register or remove the number you chat from (`POST /api/whatsapp/whitelist/add` / `remove`; the linked account's own number is refused with HTTP 400). An admin also sees a user name field and can register the number for another account by its user name: the exact name is looked up, and a name that matches no active account, or matches two accounts only by letter case, is refused ("There is no active account with the user name ..."). Losing admin rights while such an entry is typed clears it, so it is never registered as your own number. Nobody else sees that field (`may_register_for_others` in the dashboard payload), and a request from another account that names somebody else, by name or by scope, is refused with HTTP 403; *Who else can write to your agent* listing the Front Office contacts with a link to the contacts dashboard; *Reply window* (`reply_window_hours`, saved through `PATCH /api/config`) with the `inbound_to_agent` switch; *Activity* (messages per 4-hour interval, 7 days) and the log path.
+- **Settings (gear)**: *Agent number* with connection state, Restart WhatsApp (an admin restarts every account's process and is told which accounts it could not start because their previous process has not ended, anybody else their own, see [Who starts and stops what](#who-starts-and-stops-what)) and Re-link; *Your number (main user)* to register or remove the number you chat from (`POST /api/whatsapp/whitelist/add` / `remove`; the linked account's own number is refused with HTTP 400). An admin also sees a user name field and can register the number for another account by its user name: the exact name is looked up, and a name that matches no active account, or matches two accounts only by letter case, is refused ("There is no active account with the user name ..."). Losing admin rights while such an entry is typed clears it, so it is never registered as your own number. Nobody else sees that field (`may_register_for_others` in the dashboard payload), and a request from another account that names somebody else, by name or by scope, is refused with HTTP 403; *Who else can write to your agent* listing the Front Office contacts with a link to the contacts dashboard; *Reply window* (`reply_window_hours`, saved through `PATCH /api/config`) with the `inbound_to_agent` switch; *Activity* (messages per 4-hour interval, 7 days) and the log path.
 - **Connection status**: Indicator next to "Chats": green = WhatsApp connected, amber = this account's WhatsApp running but not connected, grey = this account's WhatsApp is not started. Status is determined by ping/pong with the account's own Node process.
 - **Chat list**: Built from (1) Node’s chat list (Baileys), (2) `chat_activity` (incoming/outgoing activity), (3) the contacts you allowed that have a WhatsApp channel, so those chats appear even before Baileys has synced them, and (4) the per-user message store, the persistent inbox: every chat it holds is a row. **Deduplication:** Each contact is shown once; the same person as E.164 and as @lid is merged into one row when LID→E.164 is known (the account's LID map or the Node). Phone numbers are normalized to a single leading `+` to avoid duplicate entries (e.g. `++49...`). The **message count** shown per chat is the **store's count** (the number the inbox and the agent's `inbox` tool show), and each row carries the person's own state from the same overview the inbox reads: `unread`, `waits`, `waits_reason`, `answered_by_agent`, `done`, `last_preview`, `preview_from` (see [INBOX.md](INBOX.md)). The badge is `inbox.chat_mode` over the same rows (the lane's own answer), and `reply_window_until` is `inbox.reply_window_until` over them; the dashboard asks the bridge for the chat list and the names only, never for a rule. **Contact names** are resolved from the contact list; matching uses canonical phone form (0-prefix German numbers, e.g. `0152...`, are treated as `+49...`) so names appear even if the contact was stored as `0152...` and the session uses `+49152...`.
 - **Refresh**: Re-fetches chat list and pings the bridge.

@@ -26,12 +26,19 @@ import random
 import subprocess
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
 from vaf.api import whatsapp_bridge as wa
 from vaf.core.config import Config
 from vaf.core.platform import Platform
+
+# The real loops and state write, before any fixture replaces them, for the tests that need a
+# run's own threads and the file processes without the bridge read.
+REAL_SENDER = wa._sender_loop
+REAL_CHAT_SYNC = wa._chat_sync_loop
+REAL_STATE = wa._write_bridge_state
 
 ADMIN_SCOPE = "ab12cd34-0000-4000-8000-0000000000aa"
 ALICE_SCOPE = "ab12cd34-0000-4000-8000-000000000001"
@@ -41,6 +48,11 @@ SCOPES = {"admin": ADMIN_SCOPE, "alice": ALICE_SCOPE, "bob": BOB_SCOPE, "carol":
 
 ADMIN = {"username": "admin", "role": "admin", "user_scope_id": ADMIN_SCOPE}
 ALICE = {"username": "alice", "role": "user", "user_scope_id": ALICE_SCOPE}
+
+
+# Names of fake processes terminated without being retired first: every path that ends a
+# process must retire it before the terminate, or a line its reader still holds is acted on.
+UNRETIRED_TERMINATES = []
 
 
 class FakeProc:
@@ -57,6 +69,8 @@ class FakeProc:
         return self.returncode
 
     def terminate(self):
+        if not wa._is_retired(self):
+            UNRETIRED_TERMINATES.append(self.name)
         if self.returncode is None:
             self.returncode = -15
 
@@ -130,6 +144,9 @@ class World:
         self.fail_spawn = set()    # names whose spawn fails (Node could not be started)
         self.proc_class = {}       # name -> FakeProc subclass
         self.calls = []            # recorded bridge-level calls
+        self.loops = []            # (kind, thread, stop) of every sender and chat-sync loop started
+        self.states = []           # every state-file write, in order
+        self.callbacks = []        # every reply callback set
 
     # config on disk
     def cfg(self):
@@ -195,7 +212,6 @@ def world(tmp_path, monkeypatch):
     monkeypatch.setattr(wa, "_chat_sync_thread", None)
     monkeypatch.setattr(wa, "_outgoing_queue", None)
     monkeypatch.setattr(wa, "_pending_starts", {})
-    monkeypatch.setattr(wa, "_survivors", set())
     monkeypatch.setattr(wa, "_terminating", 0)
     monkeypatch.setattr(wa, "COLD_START_TIMEOUT", 3.0)
 
@@ -216,10 +232,19 @@ def world(tmp_path, monkeypatch):
     monkeypatch.setattr(wa, "_node_path", lambda: "node")
     monkeypatch.setattr(wa, "_wa_bridge_path", lambda: node_js)
     monkeypatch.setattr(wa, "ensure_bridge_deps", lambda: (True, ""))
-    monkeypatch.setattr(wa, "_sender_loop", lambda: None)
-    monkeypatch.setattr(wa, "_chat_sync_loop", lambda: None)
-    monkeypatch.setattr(wa, "_write_bridge_state", lambda running: None)
-    monkeypatch.setattr(wa, "set_whatsapp_reply_callback", lambda cb: None)
+    # The loops a run starts record their run's stop and wait for it, so a run that never
+    # stopped them shows as a live thread.
+    def loop(kind):
+        def run(q=None, stop=None):
+            w.loops.append((kind, threading.current_thread(), stop))
+            if stop is not None:
+                stop.wait()
+        return run
+    monkeypatch.setattr(wa, "_sender_loop", loop("sender"))
+    monkeypatch.setattr(wa, "_chat_sync_loop", loop("chat_sync"))
+    monkeypatch.setattr(wa, "_write_bridge_state", lambda running: w.states.append(bool(running)))
+    monkeypatch.setattr(wa, "set_whatsapp_reply_callback", lambda cb: w.callbacks.append(cb))
+    UNRETIRED_TERMINATES.clear()
     monkeypatch.setattr("vaf.core.channel_pairing.refile_whatsapp_owner_numbers", lambda: [])
     yield w
     # Teardown before monkeypatch restores the module: no bridge thread survives the test.
@@ -472,7 +497,7 @@ def test_concurrent_bridge_starts_start_one_bridge(world, monkeypatch):
         time.sleep(0.05)
         return True, ""
     monkeypatch.setattr(wa, "ensure_bridge_deps", slow_deps)
-    monkeypatch.setattr(wa, "_sender_loop", lambda: sender_loops.append(1))
+    monkeypatch.setattr(wa, "_sender_loop", lambda *a, **k: sender_loops.append(1))
     barrier = threading.Barrier(2)
 
     def go():
@@ -931,7 +956,7 @@ def test_after_the_survivor_ends_a_start_succeeds(world):
     survivor.returncode = -9
     assert wa.start_account("alice", ALICE_SCOPE) == (True, wa.ACCOUNT_STARTED)
     assert world.live("alice") and wa._processes["alice"] is not survivor
-    assert wa._survivors == set()
+    assert not wa._is_retired(wa._processes["alice"])
 
 
 def test_a_send_while_the_bridge_is_down_answers_at_once(world, monkeypatch):
@@ -1007,23 +1032,382 @@ def test_a_dead_survivor_does_not_keep_an_empty_bridge_up(world):
     assert not wa.is_bridge_running()
 
 
+# -- A run ends cleanly, however it ends ----------------------------------------------------------
+
+def _loops_of(world, stop):
+    return [t for kind, t, s in world.loops if s is stop]
+
+
+def _real_sender_and_state(world, monkeypatch, chat_sync=True):
+    """The run's own sender loop and chat-sync loop, and the state file processes without the
+    bridge read, instead of the fixture's stubs."""
+    monkeypatch.setattr(wa, "_sender_loop", REAL_SENDER)
+    monkeypatch.setattr(wa, "_write_bridge_state", REAL_STATE)
+    if chat_sync:
+        monkeypatch.setattr(wa, "_chat_sync_loop", REAL_CHAT_SYNC)
+        data = world.cfg()
+        data["whatsapp_config"]["chat_sync_interval_sec"] = 600
+        world.write(data)
+
+
+def _crash_in_bridge_thread(monkeypatch, where):
+    """Make the bridge thread raise once: before it spawns anything, or after the admin's spawn
+    (at Alice's)."""
+    armed = [True]
+    if where == "before_spawn":
+        real = wa._get_users_to_run
+
+        def users():
+            if armed[0] and threading.current_thread() is wa._bridge_thread:
+                armed[0] = False
+                raise RuntimeError("account directory unavailable")
+            return real()
+        monkeypatch.setattr(wa, "_get_users_to_run", users)
+    else:
+        real = wa._blocked_by_previous
+
+        def blocked(username, user_scope_id):
+            if armed[0] and username == "alice" and threading.current_thread() is wa._bridge_thread:
+                armed[0] = False
+                raise RuntimeError("bridge thread failed after a spawn")
+            return real(username, user_scope_id)
+        monkeypatch.setattr(wa, "_blocked_by_previous", blocked)
+    return armed
+
+
+@pytest.mark.parametrize("where", ["before_spawn", "after_spawn"])
+def test_a_crashed_bridge_thread_ends_its_run(world, monkeypatch, where):
+    """A failure in the bridge thread ends the run like a stop: state file not running, the
+    run's stop set and its loops ended, every process it spawned retired and terminated, the
+    reply callback gone, a waiting start answered; and the next start and stop leave no loop of
+    either run. MUTATION: drop `stop.set()` from `_end_run`; run the shutdown only when the
+    stop was requested; drop the False write; reuse one cleared Event instead of a new one."""
+    world.link("admin")
+    world.link("alice")
+    world.own_switch(ALICE_SCOPE, True)
+    _real_sender_and_state(world, monkeypatch)
+    _crash_in_bridge_thread(monkeypatch, where)
+    waiting = wa._PendingStart(CAROL_SCOPE)
+    with wa._spawn_lock:
+        wa._pending_starts["carol"] = waiting
+    assert wa.start_bridge()
+    run_stop, sender, chat_sync = wa._bridge_stop, wa._sender_thread, wa._chat_sync_thread
+    wa._bridge_thread.join(timeout=5)
+    assert not wa.is_bridge_running()
+
+    assert wa._read_bridge_state()["running"] is False
+    assert run_stop.is_set()
+    spawned = list(world.spawned)
+    assert [p.name for p in spawned] == ([] if where == "before_spawn" else ["admin"])
+    assert all(wa._is_retired(p) and p.returncode is not None for p in spawned)
+    assert wa._processes == {} and wa._scope_by_user == {}
+    assert world.callbacks[-1] is None
+    assert waiting.done.is_set() and (waiting.ok, waiting.message) == (False, wa.START_FAILED)
+    assert UNRETIRED_TERMINATES == []
+
+    # The next run starts at once: the failed run's loops end on their own stop, not on
+    # whatever the next run's stop says.
+    assert wa.start_bridge()
+    assert world.wait_for(lambda: world.live("admin") and world.live("alice")), world.names()
+    sender.join(timeout=2.5)
+    chat_sync.join(timeout=1)
+    assert not sender.is_alive() and not chat_sync.is_alive()
+    new_sender = wa._sender_thread
+    assert new_sender is not sender and new_sender.is_alive()
+    _stop_and_join()
+    new_sender.join(timeout=2.5)
+    assert not new_sender.is_alive()
+    assert wa._read_bridge_state()["running"] is False
+
+
+def test_a_bridge_with_nobody_to_run_ends_its_run(world, monkeypatch):
+    """The exit with nobody to run ends the run's loops, and the state file says not running
+    once the thread has ended, in 200 starts of 200. MUTATION: write True after the bridge
+    thread has started (39 of 200 measured); return from the nobody branch past `_end_run`."""
+    assert wa.start_bridge()
+    run_stop = wa._bridge_stop
+    wa._bridge_thread.join(timeout=5)
+    # Its sender loop and its chat-sync loop (a 0 in the config still starts one).
+    assert world.wait_for(lambda: len(_loops_of(world, run_stop)) == 2)
+    loops = _loops_of(world, run_stop)
+    for t in loops:
+        t.join(timeout=1)
+    assert run_stop.is_set() and not any(t.is_alive() for t in loops)
+
+    monkeypatch.setattr(wa, "_write_bridge_state", REAL_STATE)
+    stale = 0
+    for _ in range(200):
+        assert wa.start_bridge()
+        wa._bridge_thread.join(timeout=5)
+        stale += wa._read_bridge_state()["running"] is not False
+    assert stale == 0, f"{stale} of 200 starts left the state file at running"
+    assert world.wait_for(lambda: not any(t.is_alive() for _, t, _s in world.loops), timeout=5)
+
+
+def test_a_restart_in_the_chat_sync_warm_up_leaves_one_loop(world, monkeypatch):
+    """The chat-sync loop waits on its run's stop: a restart during its warm-up ends it at once
+    instead of after the warm-up, next to the new run's loop. MUTATION: the warm-up back to
+    `time.sleep` steps."""
+    _real_sender_and_state(world, monkeypatch)
+    world.link("admin")
+    assert wa.start_bridge()
+    old = wa._chat_sync_thread
+    # Into its warm-up first: a restart before the loop has read its config can end it at its
+    # first look at the stop, which proves nothing about the warm-up.
+    time.sleep(0.3)
+    assert old.is_alive()
+    assert wa.restart_bridge() is True
+    old.join(timeout=1)
+    assert not old.is_alive()
+    assert wa._chat_sync_thread is not old and wa._chat_sync_thread.is_alive()
+
+
+class Buffered(FakeProc):
+    """A process with one `qr` line still in its pipe, delivered once `release` is set."""
+
+    def __init__(self, name):
+        super().__init__(name)
+        self.release = threading.Event()
+        self.reader = None
+        self.started = threading.Event()
+
+        def lines():
+            self.reader = threading.current_thread()
+            self.started.set()
+            self.release.wait(timeout=5)
+            yield json.dumps({"type": "qr"}) + "\n"
+        self.stdout = lines()
+
+
+class BufferedUnkillable(Buffered):
+    def terminate(self):
+        if not wa._is_retired(self):
+            UNRETIRED_TERMINATES.append(self.name)
+
+    def wait(self, timeout=None):
+        if self.returncode is None:
+            raise subprocess.TimeoutExpired("node", timeout)
+        return self.returncode
+
+    def kill(self):
+        pass
+
+
+@pytest.mark.parametrize("how", ["account_restart", "survivor_replaced", "dead_replaced", "shutdown"])
+def test_a_buffered_line_of_an_ended_process_is_not_acted_on(world, monkeypatch, how):
+    """A line the old process's reader receives after the process was stopped, restarted,
+    shut down or replaced is dropped, so its `qr` does not stop the account's NEW process
+    (measured before: it did, for Alice's own restart). MUTATION: `stop_account` does not
+    retire; `_spawn_account` does not retire the replaced entry; readers check only the stop."""
+    world.proc_class["alice"] = BufferedUnkillable if how == "survivor_replaced" else Buffered
+    procs = _bridge_with(world, "admin", "alice")
+    old = procs["alice"]
+    assert old.started.wait(timeout=3)
+    world.proc_class.clear()
+    real_dispatch = wa._dispatch_bridge_event
+    acted = []
+
+    def dispatch(username, user_scope_id, typ, obj):
+        if threading.current_thread() is old.reader:
+            acted.append(typ)
+        return real_dispatch(username, user_scope_id, typ, obj)
+    monkeypatch.setattr(wa, "_dispatch_bridge_event", dispatch)
+
+    if how == "account_restart":
+        assert wa.restart_account("alice", ALICE_SCOPE) == (True, wa.ACCOUNT_STARTED)
+    elif how == "survivor_replaced":
+        assert wa.restart_bridge() is True
+        assert world.wait_for(lambda: world.names().count("admin") == 2 and world.live("admin"))
+        assert wa._processes["alice"] is old
+        old.returncode = -9                     # the survivor ends at last
+        assert wa.start_account("alice", ALICE_SCOPE) == (True, wa.ACCOUNT_STARTED)
+    elif how == "dead_replaced":
+        old.returncode = 1                      # Node exited on its own, still registered
+        assert wa.start_account("alice", ALICE_SCOPE) == (True, wa.ACCOUNT_STARTED)
+    else:
+        assert wa.restart_bridge() is True
+        assert world.wait_for(lambda: world.names().count("alice") == 2 and world.live("alice"))
+    new = wa._processes["alice"]
+    assert new is not old and new.returncode is None
+
+    old.release.set()
+    old.reader.join(timeout=3)
+    assert not old.reader.is_alive()
+    assert acted == []
+    assert wa._processes.get("alice") is new and new.returncode is None
+
+
+def test_an_admin_restart_names_the_accounts_it_could_not_start(world):
+    """A restart that skipped Alice because her previous process has not ended says so, in the
+    function, the route and the window; without one, `not_started` is empty and the message
+    the old one. MUTATION: answer `(True, "", [])` with a survivor; the route drops
+    `not_started`; remove the window's line."""
+    procs = _bridge_with(world, "admin")
+    ok, message, not_started = wa.restart_bridge_result()
+    assert (ok, message, not_started) == (True, "", [])
+    res = _client(ADMIN).post("/api/whatsapp/restart")
+    assert res.status_code == 200, res.text
+    assert res.json() == {"status": "restarted", "not_started": [],
+                          "message": "WhatsApp bridge restarted. Wait 20-30 s, then refresh."}
+    assert procs["admin"].returncode is not None
+
+    world.proc_class["alice"] = Unkillable
+    world.link("alice")
+    world.own_switch(ALICE_SCOPE, True)
+    assert wa.start_account("alice", ALICE_SCOPE) == (True, wa.ACCOUNT_STARTED)
+    survivor = wa._processes["alice"]
+    try:
+        ok, message, not_started = wa.restart_bridge_result()
+        assert ok is True and not_started == ["alice"]
+        assert message == ("WhatsApp restarted, but not for: alice. "
+                           "The previous WhatsApp process of that account has not ended yet.")
+        res = _client(ADMIN).post("/api/whatsapp/restart")
+        assert res.status_code == 200, res.text
+        assert res.json()["not_started"] == ["alice"] and res.json()["message"] == message
+        assert wa._processes["alice"] is survivor and world.names().count("alice") == 1
+    finally:
+        survivor.returncode = -9
+
+    src = (Path(__file__).resolve().parent.parent / "web" / "components" / "connections"
+           / "WhatsAppDashboard.tsx").read_text(encoding="utf-8")
+    handler = src[src.index("const handleRestartBridge"):src.index("const handleRelink")]
+    assert "not_started" in handler
+    assert "t('restartNotForAccounts', { names:" in handler
+    for path in sorted((Path(__file__).resolve().parent.parent / "web" / "messages").glob("*.json")):
+        text = json.loads(path.read_text(encoding="utf-8"))["settings"]["whatsappDashboard"]["restartNotForAccounts"]
+        assert "{names}" in text and "\u2014" not in text, path.name
+
+
+def _cold_start_behind_a_slow_bridge(world, monkeypatch):
+    """A cold start of Alice's whose bridge thread hangs in its first step past the start's
+    timeout. Returns (release, answer): set `release` to let the bridge thread go on."""
+    world.link("alice")
+    world.own_switch(ALICE_SCOPE, True)
+    monkeypatch.setattr(wa, "COLD_START_TIMEOUT", 1.0)
+    release = threading.Event()
+    monkeypatch.setattr("vaf.core.channel_pairing.refile_whatsapp_owner_numbers",
+                        lambda: release.wait(timeout=5) and [])
+    answer = {}
+
+    def cold():
+        res = _client(ALICE).post("/api/whatsapp/start")
+        answer["status"], answer["body"] = res.status_code, res.json()
+    thread = threading.Thread(target=cold)
+    thread.start()
+    assert world.wait_for(lambda: "alice" in wa._pending_starts and wa.is_bridge_running())
+    return release, answer, thread
+
+
+def test_a_timed_out_cold_start_whose_account_runs_answers_success(world, monkeypatch):
+    """A start into the running bridge brought Alice up while her cold start still waited for
+    the bridge thread: the cold start's timeout answers success, not 500. MUTATION: drop the
+    live-process check on the timeout."""
+    release, answer, thread = _cold_start_behind_a_slow_bridge(world, monkeypatch)
+    try:
+        assert wa.start_account("alice", ALICE_SCOPE) == (True, wa.ACCOUNT_STARTED)
+        thread.join(timeout=5)
+        assert answer["status"] == 200, answer
+        assert answer["body"]["message"] == wa.ACCOUNT_ALREADY_RUNNING
+        assert "alice" not in wa._pending_starts
+    finally:
+        release.set()
+    time.sleep(0.1)
+    assert world.live("alice") and world.names() == ["alice"]
+
+
+@pytest.mark.parametrize("registered", ["nothing", "retired", "another scope"])
+def test_a_timed_out_cold_start_without_a_process_still_fails(world, monkeypatch, registered):
+    """Without a live, unretired process of Alice's own scope the timeout still answers
+    START_FAILED and cancels the pending spawn. MUTATION: accept a retired or another scope's
+    process on the timeout."""
+    if registered != "nothing":
+        other = FakeProc("alice")
+        if registered == "retired":
+            wa._retire(other)
+        with wa._process_lock:
+            wa._processes["alice"] = other
+            wa._scope_by_user["alice"] = ALICE_SCOPE if registered == "retired" else BOB_SCOPE
+    release, answer, thread = _cold_start_behind_a_slow_bridge(world, monkeypatch)
+    pending = wa._pending_starts["alice"]
+    try:
+        thread.join(timeout=5)
+        assert answer["status"] == 500, answer
+        assert answer["body"]["detail"] == "Failed to start WhatsApp. Ask an admin to check the WhatsApp installation."
+        assert pending.cancelled and (pending.ok, pending.message) == (False, wa.START_FAILED)
+    finally:
+        release.set()
+    time.sleep(0.1)
+    assert world.names() == []
+
+
+def test_a_send_after_a_crash_answers_not_running_at_once(world, monkeypatch):
+    """After the bridge thread failed, a send from a process without the bridge reads the state
+    file and answers at once that the bridge is not running, instead of queueing a file nobody
+    serves and waiting its whole timeout. MUTATION: the crash path without the False write."""
+    world.link("admin")
+    world.link("alice")
+    world.own_switch(ALICE_SCOPE, True)
+    monkeypatch.setattr(wa, "_write_bridge_state", REAL_STATE)
+    monkeypatch.setattr(wa, "_is_reply_allowed", lambda *a, **k: True)
+    _crash_in_bridge_thread(monkeypatch, "after_spawn")
+    assert wa.start_bridge()
+    wa._bridge_thread.join(timeout=5)
+    began = time.monotonic()
+    out = wa.send_whatsapp_with_confirmation("alice", "491700000042@s.whatsapp.net", "hi",
+                                             timeout=3.0, user_scope_id=ALICE_SCOPE)
+    assert time.monotonic() - began < 1.0
+    assert out.startswith("WhatsApp bridge is not running."), out
+
+
+def test_a_send_for_a_survivor_says_its_process_has_not_ended(world, monkeypatch):
+    """Alice's process outlived the restart's kill: her send answers that the previous process
+    has not ended, not that she has no WhatsApp to link. MUTATION: the sender loop answers
+    NO_PROCESS_FOR_ACCOUNT for a retired process."""
+    _real_sender_and_state(world, monkeypatch, chat_sync=False)
+    monkeypatch.setattr(wa, "_is_reply_allowed", lambda *a, **k: True)
+    survivor = _survivor_after_restart(world)
+    try:
+        out = wa.send_whatsapp_with_confirmation("alice", "491700000042@s.whatsapp.net", "hi",
+                                                 timeout=3.0, user_scope_id=ALICE_SCOPE)
+        assert wa.PREVIOUS_NOT_ENDED in out and wa.NO_PROCESS_FOR_ACCOUNT not in out, out
+        assert survivor.stdin.getvalue() == ""
+    finally:
+        survivor.returncode = -9
+
+
+def test_the_survivor_set_is_gone():
+    """A survivor is a registered, alive, retired process: no second bookkeeping, and the
+    bridge thread's run has one end (`_end_run`), not a shutdown block of its own and no
+    reused stop. (Structural: red while the old set or block exists.)"""
+    import inspect
+    assert not hasattr(wa, "_survivors") and not hasattr(wa, "_is_survivor")
+    assert "_terminate(" not in inspect.getsource(wa._run_bridge_until_stopped)
+    assert "_bridge_stop.clear()" not in inspect.getsource(wa)
+
+
 # -- Fuzz: the spawn gate -------------------------------------------------------------------------
 
 FUZZ_ACCOUNTS = ("admin", "alice", "bob")
 
 
-def _fuzz_schedule(world, rng):
-    """One schedule: 8 operations over 4 threads, fake spawns sleeping 0 to 5 ms. Returns the
-    invariant violations it saw."""
+def _fuzz_schedule(world, rng, crash):
+    """One schedule: 8 operations over 4 threads, fake spawns sleeping 0 to 5 ms. In one of five
+    schedules the bridge thread raises once, before or after its first spawn (`crash`, set by
+    the test's wrappers). Returns the invariant violations it saw."""
     violations = []
     bridge_threads = []
     threads_lock = threading.Lock()
+    crash["armed"] = rng.random() < 0.2
+    crash["where"] = rng.choice(("before_spawn", "after_spawn"))
+    crash["spawned_by"] = set()
+    crashing = crash["armed"]
 
     def on_spawn(name):
         with wa._process_lock:
             current = wa._processes.get(name)
         if current is not None and current.poll() is None:
             violations.append(f"second live process for {name}")
+        crash["spawned_by"].add(threading.current_thread())
         time.sleep(rng_spawn.uniform(0, 0.005))
     rng_spawn = random.Random(rng.random())
     world.on_spawn = on_spawn
@@ -1037,8 +1421,8 @@ def _fuzz_schedule(world, rng):
         if kind == "start_account":
             ok, msg = wa.start_account(name, SCOPES[name])
             # Fake spawns never fail and Node is always there: a start that reports a failure
-            # (or ran into its timeout) lost its own spawn.
-            if msg == wa.START_FAILED:
+            # (or ran into its timeout) lost its own spawn, unless its bridge thread failed.
+            if msg == wa.START_FAILED and not crashing:
                 violations.append(f"start of {name} failed")
         elif kind == "stop_account":
             if wa.stop_account(name, SCOPES[name]) is False:
@@ -1081,24 +1465,63 @@ def _fuzz_schedule(world, rng):
     alive = [p.name for p in world.spawned if p.returncode is None]
     if alive:
         violations.append(f"orphans: {alive}")
+    # Every run ended: its loops have ended, its stop is set, and the state file's last word
+    # is "not running"; every process was retired before its terminate.
+    for kind, t, stop in world.loops:
+        t.join(timeout=5)
+        if t.is_alive():
+            violations.append(f"{kind} loop of a run still alive")
+        if stop is None or not stop.is_set():
+            violations.append(f"{kind} loop's run never stopped")
+    if world.states and world.states[-1] is not False:
+        violations.append(f"last state write {world.states[-1]!r}")
+    if UNRETIRED_TERMINATES:
+        violations.append(f"terminated without retirement: {UNRETIRED_TERMINATES}")
     return violations
 
 
 def _fuzz_reset(world):
     world.spawned.clear()
+    world.loops.clear()
+    world.states.clear()
+    UNRETIRED_TERMINATES.clear()
     with wa._spawn_lock:
         wa._pending_starts.clear()
     with wa._process_lock:
         wa._processes.clear()
         wa._scope_by_user.clear()
-    wa._bridge_stop.clear()
 
 
-def test_spawn_gate_fuzz(world):
+def test_spawn_gate_fuzz(world, monkeypatch):
     """Seeded interleavings of account starts and stops, the admin's start into a running
-    bridge, and the bridge's start and stop. Oracle: no second live process for one account at
-    any spawn, the registry's two maps in step after every operation, and nothing registered
-    or alive after the final stop. `VAF_FUZZ_DRAWS` raises the draw count outside the suite."""
+    bridge, and the bridge's start and stop, with a failing bridge thread in one schedule of
+    five. Oracle: no second live process for one account at any spawn, the registry's two maps
+    in step after every operation, nothing registered or alive after the final stop, every
+    run's loops ended and its stop set, the last state write False, and no process terminated
+    before it was retired. A START_FAILED counts only in a schedule without a failure.
+    `VAF_FUZZ_DRAWS` raises the draw count outside the suite."""
+    crash = {"armed": False, "fired": 0}
+    real_users, real_blocked = wa._get_users_to_run, wa._blocked_by_previous
+
+    def in_bridge_thread():
+        return threading.current_thread() is wa._bridge_thread
+
+    def users():
+        if crash["armed"] and crash["where"] == "before_spawn" and in_bridge_thread():
+            crash["armed"] = False
+            crash["fired"] += 1
+            raise RuntimeError("bridge thread failed before its first spawn")
+        return real_users()
+
+    def blocked(username, user_scope_id):
+        if (crash["armed"] and crash["where"] == "after_spawn" and in_bridge_thread()
+                and threading.current_thread() in crash["spawned_by"]):
+            crash["armed"] = False
+            crash["fired"] += 1
+            raise RuntimeError("bridge thread failed after its first spawn")
+        return real_blocked(username, user_scope_id)
+    monkeypatch.setattr(wa, "_get_users_to_run", users)
+    monkeypatch.setattr(wa, "_blocked_by_previous", blocked)
     for name in FUZZ_ACCOUNTS:
         world.link(name)
         if name != "admin":
@@ -1110,7 +1533,8 @@ def test_spawn_gate_fuzz(world):
     failures = []
     for draw in range(draws):
         _fuzz_reset(world)
-        found = _fuzz_schedule(world, random.Random(master.random()))
+        found = _fuzz_schedule(world, random.Random(master.random()), crash)
         if found:
             failures.append((draw, found))
+    print(f"spawn gate fuzz: {draws} draws, seed {seed}, {crash['fired']} bridge-thread failures injected")
     assert failures == [], f"seed {seed}: {failures[:5]}"

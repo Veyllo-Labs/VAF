@@ -1324,6 +1324,7 @@
       "stateStopped": "未启动",
       "restartBridge": "重启 WhatsApp",
       "restarting": "正在重启…",
+      "restartNotForAccounts": "WhatsApp 已重启，但 {names} 未重启：之前的 WhatsApp 进程尚未结束。",
       "relink": "重新关联（新的二维码）",
       "cardOwnerTitle": "你的号码（主用户）",
       "cardOwnerDesc": "你平时聊天用的号码。智能体在这里联系你，来自这个号码的消息会获得完整的智能体，和 Telegram 一样。",

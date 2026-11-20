@@ -2587,10 +2587,12 @@ account but the owner's is read as an ordinary user, which is the restrictive an
 
 A LOOKUP, not a guard, so the polarity differs from the allowlist: a raising
 resolver is read as an empty directory rather than a refusal, because what is built on
-it either finds somebody to invite, where "nobody found" is already the safe outcome, or
-asks whether an account still stands, where "nobody known" keeps the open default. Names are compared case-insensitively; an inactive account is listed but
-never resolved for an invitation; nothing is cached here. Unregistered means no
-directory: `Room.invite_account` still works with a scope you resolved yourself, and
+it either finds somebody - to invite, or the account a messenger number is registered for -
+where "nobody found" is already the safe outcome (the invitation or the registration is
+refused, an entry already stored is left alone), or asks whether an account still stands,
+where "nobody known" keeps the open default. Names are compared case-insensitively; an
+inactive account is listed but never resolved for an invitation or a registration; nothing
+is cached here. Unregistered means no directory: `Room.invite_account` still works with a scope you resolved yourself, and
 the name-based lanes (`vaf a2a invite --account`, the agent's `room_invite` with
 `account`) answer "no such account" for every name but the owner's.
 

@@ -519,6 +519,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   itself or to you, and the delivery fix above could reset that account's saved chat again
   on every message. A send without an account that names any other account is no longer
   made.
+- **WhatsApp: a number an admin registers for another account now belongs to that account.**
+  It used to be filed under the admin's own account. It replaced the admin's own registered
+  number (or the other account's), the admin's notifications and reminders went to that
+  number, and the other account's went to the web UI. Now the user name is looked up, an
+  unknown name is refused, and only an admin sees the name field. An account that is not an
+  admin can no longer replace another account's number by having the same name. Numbers
+  filed under the wrong account are moved to the account they were registered for when
+  WhatsApp starts, and each move appears in the security log. If you registered a number for
+  another account before, check that your own number is still listed under "Your number".
 - **Telegram: another account can no longer read your Telegram conversation or take over
   your contacts through its relay list.** Any account could add any Telegram ID as its
   relay contact. Adding your own ID opened your whole conversation with your agent in that

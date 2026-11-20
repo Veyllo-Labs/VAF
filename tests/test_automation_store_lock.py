@@ -1,0 +1,798 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
+"""Two changes of one automation made at the same moment keep each other's fields.
+
+THE DEFECT. `AutomationManager.update` changed the manager's CACHED copy of a task and wrote
+the whole object back, and the run bookkeeping and the room-trigger cursor wrote back the
+object the scheduler captured when the task fired. Every lane builds its manager per command
+(the WebSocket, the agent's tool, an approved handoff in a worker thread, the CLI, a second
+process), so the copy a lane wrote was as old as its manager. Measured before the fix: a lane
+that loaded the task, then saved its name after another lane had saved a new time, put the
+old time back (200 of 200 two-thread trials lost a field, 13 of 100 two-process trials); a run
+put back a time and an off switch set while it ran; an update or a run stamp after a delete
+brought the deleted task back; a restore silently replaced a live task of the same id.
+
+THE RULE. Every write of a task file holds the lock of its directory (`.automations.lock`,
+`AutomationManager._store_lock`, a kernel lock through filelock), and a change is applied to
+the record ON DISK at that moment (`_mutate_record`), never to the copy the lane loaded.
+A file that is gone is not written. The lock is a leaf: nothing that takes another lock runs
+while it is held.
+
+MUTATIONS, each turns the named test red:
+- `_mutate_record` writes the passed object instead of re-reading the file
+  -> test_a_stale_manager_keeps_the_other_lanes_field, test_two_processes_lose_no_field,
+     test_concurrent_writers_fuzz;
+- `_store_lock` -> `contextlib.nullcontext()` -> test_two_threads_inside_the_read_modify_write_lose_nothing,
+  test_a_lock_held_by_another_process_makes_update_wait_then_busy;
+- the filelock `Timeout` not mapped -> test_a_lock_held_by_another_process_makes_update_wait_then_busy,
+  test_busy_store_answers_without_a_path;
+- the stamp sites back to `_stamp_successful_run(task); self._save_task(task)`
+  -> test_a_run_keeps_edits_made_while_it_ran[prompt|workflow];
+- `_mutate_record` writes the passed object when the file is missing
+  -> test_update_after_delete_does_not_resurrect, test_a_run_stamp_after_trash_does_not_resurrect;
+- drop the destination check of `restore_from_trash` -> test_restore_never_overwrites_a_live_task;
+- `_fire_room_triggers` back to `self._save_task(task)` -> test_the_cursor_lands_on_the_current_record,
+  test_a_changed_trigger_room_gets_no_old_cursor, test_only_create_and_mutate_record_save_whole_tasks;
+- drop the room comparison of `_cursor_patch` -> test_a_changed_trigger_room_gets_no_old_cursor;
+- filter the update keys with `hasattr` again -> test_update_ignores_identity_and_property_keys;
+- refresh the scheduler inside the store lock -> test_the_store_lock_is_a_leaf,
+  test_no_deadlock_between_handoff_scheduler_and_updates;
+- the fallback lock made fresh per call -> test_without_filelock_threads_still_serialize.
+
+Every store lives under tmp_path; the `store` fixture of tests/test_automation_access.py keeps
+the thinking workspace and the account-name lookup out of it.
+"""
+import ast
+import itertools
+import json
+import os
+import random
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+import pytest
+
+from test_automation_access import (A_ID, TENANT_A, _handoff, _record, _write, _ws,  # noqa: F401
+                                    store, workspaces)
+from vaf.core import automation as auto_mod
+from vaf.core.automation import (AutomationAccess, AutomationManager, AutomationStoreBusy,
+                                 AutomationTask)
+
+TID = "5707e001"
+_REPO = Path(__file__).resolve().parent.parent
+_AUTOMATION_PY = _REPO / "vaf" / "core" / "automation.py"
+
+# One value per stored field an update lane changes, as the store keeps it after coercion.
+FIELDS = {
+    "name": "renamed",
+    "description": "described",
+    "prompt": "a new prompt",
+    "time": "07:30",
+    "frequency": "weekly",
+    "weekday": "friday",
+    "day": 15,
+    "enabled": False,
+    "output_path": "Reports",
+    "parameters": {"city": "Berlin"},
+    "workflow_steps": [{"tool": "web_search", "args": {"query": "x"}}],
+    "trigger": {"kind": "room_message", "room_id": "room-x", "match": "go"},
+}
+
+
+@pytest.fixture
+def one(store, tmp_path):
+    """A store directory holding one root task (no scope, so no account lookup)."""
+    d = tmp_path / "one"
+    AutomationManager(storage_dir=str(d)).create(AutomationTask(
+        id=TID, name="n0", description="d0", prompt="p0", frequency="daily", time="06:00"))
+    return d
+
+
+def _disk(d: Path, task_id: str = TID) -> dict:
+    return json.loads((d / f"{task_id}.json").read_text(encoding="utf-8"))
+
+
+def _join_all(threads, seconds=15.0):
+    deadline = time.monotonic() + seconds
+    for t in threads:
+        t.join(max(0.0, deadline - time.monotonic()))
+    return [t.name for t in threads if t.is_alive()]
+
+
+# ── AC1: a stale manager keeps the other lane's field ────────────────────────
+
+@pytest.mark.parametrize("first,second", list(itertools.combinations(FIELDS, 2)),
+                         ids=lambda v: v if isinstance(v, str) else None)
+def test_a_stale_manager_keeps_the_other_lanes_field(one, first, second):
+    stale = AutomationManager(storage_dir=str(one))     # built before either writes
+    other = AutomationManager(storage_dir=str(one))
+    assert other.update(TID, **{first: FIELDS[first]}) is not None
+    assert stale.update(TID, **{second: FIELDS[second]}) is not None
+    record = _disk(one)
+    assert record[first] == FIELDS[first], f"{first} lost to the stale {second} write"
+    assert record[second] == FIELDS[second]
+
+
+# ── AC2, AC12: two threads inside the read-modify-write ─────────────────────
+
+def _race_inside_the_write(d: Path, monkeypatch):
+    """Thread 1 reads the record and pauses 0.3 s before it writes; thread 2 updates another
+    field during that pause. Returns (record, finish times, errors)."""
+    m1 = AutomationManager(storage_dir=str(d))
+    m2 = AutomationManager(storage_dir=str(d))
+    real_read = auto_mod._read_task_record
+    first_read = threading.Event()
+
+    def slow_read(path):
+        record = real_read(path)
+        if threading.current_thread().name == "rmw-1":
+            first_read.set()
+            time.sleep(0.3)
+        return record
+
+    monkeypatch.setattr(auto_mod, "_read_task_record", slow_read)
+    barrier = threading.Barrier(2)
+    done, errors = {}, []
+
+    def one_():
+        try:
+            barrier.wait(5)
+            m1.update(TID, name="by-1")
+        except Exception as e:  # noqa: BLE001 - reported by the caller
+            errors.append(repr(e))
+        done["1"] = time.monotonic()
+
+    def two_():
+        try:
+            barrier.wait(5)
+            assert first_read.wait(5)
+            m2.update(TID, time="07:30")
+        except Exception as e:  # noqa: BLE001 - reported by the caller
+            errors.append(repr(e))
+        done["2"] = time.monotonic()
+
+    threads = [threading.Thread(target=one_, name="rmw-1", daemon=True),
+               threading.Thread(target=two_, name="rmw-2", daemon=True)]
+    for t in threads:
+        t.start()
+    assert _join_all(threads, 10) == []
+    return _disk(d), done, errors
+
+
+def test_two_threads_inside_the_read_modify_write_lose_nothing(one, monkeypatch):
+    record, done, errors = _race_inside_the_write(one, monkeypatch)
+    assert errors == []
+    assert record["name"] == "by-1" and record["time"] == "07:30", record
+    assert done["2"] >= done["1"], "the second writer did not wait for the first"
+
+
+def test_without_filelock_threads_still_serialize(one, monkeypatch):
+    import vaf.core.secure_store as secure_store
+
+    monkeypatch.setattr(secure_store, "_get_filelock_cls", lambda: None)
+    record, done, errors = _race_inside_the_write(one, monkeypatch)
+    assert errors == []
+    assert record["name"] == "by-1" and record["time"] == "07:30", record
+    assert done["2"] >= done["1"]
+
+
+# ── AC3: two processes ───────────────────────────────────────────────────────
+
+_CHILD = r'''
+import json, random, sys, time
+from pathlib import Path
+from vaf.core import automation as A
+
+A.AutomationManager._sync_workspace_automation_state = lambda self, *a, **k: None
+mode, store = sys.argv[1], Path(sys.argv[2])
+if mode == "race":
+    field, ids, rounds, seed = sys.argv[3], sys.argv[4].split(","), int(sys.argv[5]), int(sys.argv[6])
+    rng = random.Random(seed)
+    (store.parent / f"ready-{field}").write_text("1")
+    deadline = time.monotonic() + 30
+    while not (store.parent / "go").exists() and time.monotonic() < deadline:
+        time.sleep(0.005)
+    last, losses = {}, 0
+    for i in range(rounds):
+        tid = ids[i % len(ids)]
+        mgr = A.AutomationManager(storage_dir=str(store))
+        if tid in last and getattr(mgr.get(tid), field) != last[tid]:
+            losses += 1
+        time.sleep(rng.uniform(0, 0.003))
+        value = f"{field}-{i}"
+        mgr.update(tid, **{field: value})
+        last[tid] = value
+    print(json.dumps({"losses": losses, "last": last}), flush=True)
+elif mode == "hold":
+    mgr = A.AutomationManager(storage_dir=str(store))
+    mgr.update(sys.argv[3], description="from-child")
+    with A.AutomationManager._store_lock(store):
+        print("held", flush=True)
+        sys.stdin.readline()
+    print("released", flush=True)
+'''
+
+
+def _child_env(tmp_path: Path) -> dict:
+    home = tmp_path / "child-home"
+    for sub in ("", "data", "config", "cache", "tmp"):
+        (home / sub).mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    env.update({
+        "PYTHONPATH": os.pathsep.join([str(_REPO)] + [p for p in [os.environ.get("PYTHONPATH")] if p]),
+        "HOME": str(home), "USERPROFILE": str(home),
+        "XDG_DATA_HOME": str(home / "data"), "XDG_CONFIG_HOME": str(home / "config"),
+        "XDG_CACHE_HOME": str(home / "cache"), "TMPDIR": str(home / "tmp"),
+        "PYTHONIOENCODING": "utf-8",
+    })
+    return env
+
+
+def _child(tmp_path: Path, *args, stdin=None) -> subprocess.Popen:
+    script = tmp_path / "store_child.py"
+    script.write_text(_CHILD, encoding="utf-8")
+    return subprocess.Popen([sys.executable, str(script), *args], env=_child_env(tmp_path),
+                            stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, encoding="utf-8")
+
+
+def test_two_processes_lose_no_field(store, tmp_path):
+    """Two processes, each a fresh manager per round with a pause between loading and
+    writing, each owning one field of three tasks. Each round checks that its own last
+    value is still on disk, and so does the end."""
+    d = tmp_path / "procs"
+    ids = [f"5707e10{i}" for i in range(3)]
+    mgr = AutomationManager(storage_dir=str(d))
+    for tid in ids:
+        mgr.create(AutomationTask(id=tid, name="n0", description="d0", time="06:00"))
+    procs = {field: _child(tmp_path, "race", str(d), field, ",".join(ids), "30", str(seed))
+             for field, seed in (("name", 4501), ("description", 4502))}
+    try:
+        deadline = time.monotonic() + 60
+        while not all((tmp_path / f"ready-{f}").exists() for f in procs):
+            assert time.monotonic() < deadline, "children did not start"
+            assert all(p.poll() is None for p in procs.values()), \
+                [p.communicate()[1][-2000:] for p in procs.values() if p.poll() is not None]
+            time.sleep(0.01)
+        (tmp_path / "go").write_text("1")
+        out = {}
+        for field, proc in procs.items():
+            stdout, stderr = proc.communicate(timeout=60)
+            assert proc.returncode == 0, stderr[-2000:]
+            out[field] = json.loads(stdout.strip().splitlines()[-1])
+    finally:
+        for proc in procs.values():
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(5)
+    for field, result in out.items():
+        assert result["losses"] == 0, (field, result)
+        for tid, value in result["last"].items():
+            assert _disk(d, tid)[field] == value, (field, tid)
+
+
+def test_a_lock_held_by_another_process_makes_update_wait_then_busy(one, tmp_path, monkeypatch):
+    mgr = AutomationManager(storage_dir=str(one))       # loaded before the child's write
+    proc = _child(tmp_path, "hold", str(one), TID, stdin=subprocess.PIPE)
+    try:
+        line = proc.stdout.readline()
+        assert line.strip() == "held", proc.stderr.read()[-2000:] if not line else line
+
+        monkeypatch.setattr(auto_mod, "_STORE_LOCK_TIMEOUT_S", 0.2)
+        with pytest.raises(AutomationStoreBusy) as busy:
+            mgr.update(TID, name="parent")
+        assert str(busy.value) == "automation store is busy"
+        assert str(one) not in str(busy.value)
+
+        monkeypatch.setattr(auto_mod, "_STORE_LOCK_TIMEOUT_S", 5.0)
+        box = {}
+
+        def update():
+            started = time.monotonic()
+            box["task"] = mgr.update(TID, name="parent")
+            box["waited"] = time.monotonic() - started
+
+        waiter = threading.Thread(target=update, daemon=True)
+        waiter.start()
+        time.sleep(0.6)
+        assert waiter.is_alive(), "the update did not wait for the other process's lock"
+        proc.stdin.write("release\n")
+        proc.stdin.flush()
+        waiter.join(10)
+        assert box.get("task") is not None and box["waited"] >= 0.5, box
+        assert proc.stdout.readline().strip() == "released"
+        proc.wait(10)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(5)
+    record = _disk(one)
+    assert record["name"] == "parent" and record["description"] == "from-child", record
+
+
+# ── AC4: a run keeps the edits made while it ran ────────────────────────────
+
+class _FakeAgent:
+    tools = {}
+    _current_username = "alice"
+    _tool_authorizer = None
+    during_run = None
+
+    def __init__(self, *a, **k):
+        self.history = []
+
+    def load_model(self):
+        pass
+
+    def init_chat(self):
+        self.history = []
+
+    def chat_step(self, prompt, stream_callback=None, **k):
+        type(self).during_run()
+        if stream_callback:
+            stream_callback("Done.")
+
+    def _clean_reasoning(self, text):
+        return text
+
+    def _sanitize_response(self, text):
+        return text
+
+    def shutdown(self):
+        pass
+
+
+@pytest.mark.parametrize("lane", ["prompt", "workflow"])
+def test_a_run_keeps_edits_made_while_it_ran(one, monkeypatch, lane):
+    import vaf.core.agent as agent_mod
+    import vaf.workflows.engine as engine_mod
+    from types import SimpleNamespace
+
+    from vaf.core.lock_manager import LockManager
+
+    def edit_while_running():
+        AutomationManager(storage_dir=str(one)).update(TID, time="09:15", enabled=False,
+                                                       name="renamed mid-run")
+
+    class _Engine:
+        def __init__(self, *a, **k):
+            pass
+
+        def execute(self, steps, variables=None, check_stop=None, **k):
+            edit_while_running()
+            return SimpleNamespace(success=True, paused=False, final_output="", error=None)
+
+    monkeypatch.setattr(_FakeAgent, "during_run", staticmethod(edit_while_running))
+    monkeypatch.setattr(agent_mod, "Agent", _FakeAgent)
+    monkeypatch.setattr(engine_mod, "WorkflowEngine", _Engine)
+    monkeypatch.setattr(auto_mod, "bind_identity", lambda *a, **k: None)
+    monkeypatch.setattr(auto_mod, "resolve_scope_identity", lambda *a, **k: None)
+    monkeypatch.setattr(auto_mod, "_resolve_username", lambda scope: "alice")
+    monkeypatch.setattr(auto_mod, "_push_result_to_web_ui", lambda *a, **k: None)
+    monkeypatch.setattr("vaf.memory.rag.turn_memory_context", lambda *a, **k: "")
+    monkeypatch.setattr(LockManager, "acquire", lambda lock_id: True)
+    monkeypatch.setattr(LockManager, "release", lambda lock_id: None)
+
+    scheduler = AutomationManager(storage_dir=str(one))
+    if lane == "workflow":
+        AutomationManager(storage_dir=str(one)).update(
+            TID, workflow_steps=[{"tool": "write_file", "args": {"path": "r.md", "content": "x"}}])
+        scheduler.reload_tasks()
+    task = scheduler.get(TID)                            # captured when the run fires
+    scheduler.run_task(task, new_terminal=False)
+    record = _disk(one)
+    assert record["time"] == "09:15" and record["enabled"] is False, record
+    assert record["name"] == "renamed mid-run"
+    assert record["last_run"] and record["last_completed_local_date"], record
+
+
+# ── AC5, AC6: a task that is gone stays gone; a restore never overwrites ────
+
+@pytest.mark.parametrize("permanent", [True, False], ids=["deleted", "trashed"])
+def test_update_after_delete_does_not_resurrect(one, permanent):
+    lane = AutomationManager(storage_dir=str(one))
+    other = AutomationManager(storage_dir=str(one))
+    assert other.delete(TID, permanent=permanent)
+    trashed = one / "trash" / f"{TID}.json"
+    before = trashed.read_bytes() if trashed.exists() else None
+    assert lane.update(TID, name="after the delete") is None
+    assert not (one / f"{TID}.json").exists(), "the deleted task is back"
+    assert lane.get(TID) is None
+    if not permanent:
+        assert trashed.read_bytes() == before
+
+
+def test_a_run_stamp_after_trash_does_not_resurrect(one, monkeypatch):
+    monkeypatch.setattr(auto_mod, "_resolve_username", lambda scope: "alice")
+    scheduler = AutomationManager(storage_dir=str(one))
+    task = scheduler.get(TID)
+    assert AutomationManager(storage_dir=str(one)).move_to_trash(TID)
+    trashed = one / "trash" / f"{TID}.json"
+    before = trashed.read_bytes()
+    assert scheduler._record_successful_run(task) is None
+    assert task.last_run, "the run's own copy is still stamped"
+    assert not (one / f"{TID}.json").exists(), "the trashed task is back in the store"
+    assert trashed.read_bytes() == before
+    assert scheduler.get(TID) is None
+
+
+def test_restore_never_overwrites_a_live_task(one):
+    mgr = AutomationManager(storage_dir=str(one))
+    assert mgr.move_to_trash(TID)
+    AutomationManager(storage_dir=str(one)).create(AutomationTask(id=TID, name="live", time="08:00"))
+    live = (one / f"{TID}.json").read_bytes()
+    assert mgr.restore_from_trash(TID) is False
+    assert (one / f"{TID}.json").read_bytes() == live
+    assert (one / "trash" / f"{TID}.json").exists()
+
+
+# ── AC7: the trigger cursor lands on the current record ─────────────────────
+
+_TRIGGER = {"kind": "room_message", "room_id": "room-1", "match": "go"}
+
+
+def _scheduler_with_a_hit(d: Path, newest: int):
+    """A scheduler that loads the store now, and a watch whose next tick reports one hit
+    (read up to `newest`) for the task it hands in."""
+    from vaf.core.automation_triggers import TriggerHit
+
+    class _Watch:
+        def tick(self, tasks):
+            return [TriggerHit(t, [], newest, {}) for t in tasks if t.id == "e7e00001"]
+
+    return AutomationManager(storage_dir=str(d)), _Watch()
+
+
+@pytest.fixture
+def event_task(store, tmp_path):
+    d = tmp_path / "events"
+    AutomationManager(storage_dir=str(d)).create(AutomationTask(
+        id="e7e00001", name="on deploy", prompt="p0", frequency="on_event", time="",
+        trigger=dict(_TRIGGER)))
+    return d
+
+
+def _fire(scheduler, watch):
+    started = []
+    scheduler._trigger_watch = watch
+    scheduler._run_scheduled_task = lambda task, *, trigger=None: started.append(task.id)
+    assert scheduler._fire_room_triggers() == 1
+    return started
+
+
+def test_the_cursor_lands_on_the_current_record(event_task):
+    scheduler, watch = _scheduler_with_a_hit(event_task, 42)
+    AutomationManager(storage_dir=str(event_task)).update("e7e00001", prompt="p1")
+    assert _fire(scheduler, watch) == ["e7e00001"]
+    record = _disk(event_task, "e7e00001")
+    assert record["prompt"] == "p1", "the prompt edited after the scheduler loaded it is lost"
+    assert record["trigger"] == dict(_TRIGGER, cursor=42)
+
+
+def test_a_changed_trigger_room_gets_no_old_cursor(event_task):
+    scheduler, watch = _scheduler_with_a_hit(event_task, 42)
+    moved = dict(_TRIGGER, room_id="room-2")
+    AutomationManager(storage_dir=str(event_task)).update("e7e00001", trigger=moved)
+    _fire(scheduler, watch)
+    assert _disk(event_task, "e7e00001")["trigger"] == moved
+
+
+# ── AC8: identity and property keys are never applied ───────────────────────
+
+def test_update_ignores_identity_and_property_keys(one):
+    mgr = AutomationManager(storage_dir=str(one))
+    task = mgr.update(TID, id="0ther001", user_scope_id="ab12cd34-0000-4000-8000-0000000000f1",
+                      next_run_label="soon", name="kept")
+    assert task is not None and task.id == TID and task.user_scope_id is None
+    assert sorted(p.name for p in one.glob("*.json")) == [f"{TID}.json"]
+    assert not [p for p in one.iterdir() if p.is_dir() and p.name != "trash"]
+    record = _disk(one)
+    assert record["id"] == TID and record["user_scope_id"] is None and record["name"] == "kept"
+
+
+# ── AC9, AC10: no deadlock, and the guards that keep it so ──────────────────
+
+def test_no_deadlock_between_handoff_scheduler_and_updates(store, workspaces, monkeypatch):
+    """An approved handoff update (decision lock, then the store lock, then the scheduler
+    refresh), scheduler refreshes that delete spent one-time tasks in the same directory
+    (the scheduler's lock, then the store lock) and WebSocket-style updates, all at once.
+    None may wait for a lock the other holds: each step finishes well inside the store
+    lock's timeout."""
+    ws = workspaces
+    hid = ws.tw.create_handoff(TENANT_A, ws.task_a, "A handoff", "c", automation_action={
+        "operation": "update", "task_id": A_ID, "name": "approved name"})["id"]
+    stop = threading.Event()
+    alive = threading.Thread(target=stop.wait, args=(30,), daemon=True)
+    alive.start()
+    scheduler = AutomationManager()
+    scheduler._running = True
+    scheduler._scheduler_thread = alive
+    monkeypatch.setattr(auto_mod, "_scheduler_manager", scheduler)
+    errors, slow = [], []
+
+    def timed(label, fn):
+        started = time.monotonic()
+        try:
+            fn()
+        except Exception as e:  # noqa: BLE001 - reported by the assert below
+            errors.append((label, repr(e)))
+        took = time.monotonic() - started
+        if took > 2.0:
+            slow.append((label, round(took, 2)))
+
+    def refreshes():
+        for i in range(20):
+            _write(store, AutomationTask(id=f"0cce{i:04d}", name="spent", prompt="p",
+                                         frequency="once", time="23:59",
+                                         last_run="2026-01-01T00:00:00", user_scope_id=TENANT_A))
+            timed("refresh", lambda: auto_mod.refresh_scheduler_from_disk(origin="test"))
+
+    def updates():
+        for i in range(20):
+            def one_update(i=i):
+                mgr, _task = AutomationAccess(TENANT_A, "user").get(A_ID)
+                assert mgr.update(A_ID, description=f"ws-{i}") is not None
+            timed("update", one_update)
+
+    def approve():
+        timed("approve", lambda: ws.tw.approve_handoff(TENANT_A, ws.task_a, hid))
+
+    threads = [threading.Thread(target=f, daemon=True, name=f.__name__)
+               for f in (refreshes, updates, approve)]
+    try:
+        for t in threads:
+            t.start()
+        assert _join_all(threads, 15) == [], "a lane is stuck"
+    finally:
+        stop.set()
+    assert errors == [] and slow == [], (errors, slow)
+    record = json.loads((store / TENANT_A / f"{A_ID}.json").read_text(encoding="utf-8"))
+    assert record["name"] == "approved name" and record["description"] == "ws-19", record
+    assert not list((store / TENANT_A).glob("0cce*.json")), "a spent one-time task was kept"
+
+
+def _functions(tree):
+    return {node.name: node for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+
+
+def _call_name(call: ast.Call) -> str:
+    func = call.func
+    return func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else ""
+
+
+_NOT_UNDER_THE_STORE_LOCK = {"refresh_scheduler_from_disk", "ensure_scheduler_started",
+                             "_sync_workspace_automation_state", "LockManager", "acquire",
+                             "_decision_lock", "approve_handoff", "reject_handoff",
+                             "sync_automation_status_to_workspace", "_schedule_task",
+                             "reload_tasks", "start_scheduler"}
+
+
+def test_the_store_lock_is_a_leaf():
+    """No body that holds the store lock reaches a call that takes another lock, directly
+    or through a function of this module it calls."""
+    tree = ast.parse(_AUTOMATION_PY.read_text(encoding="utf-8"))
+    functions = _functions(tree)
+    locked = [node for node in ast.walk(tree) if isinstance(node, ast.With)
+              and any(isinstance(item.context_expr, ast.Call)
+                      and _call_name(item.context_expr) == "_store_lock" for item in node.items)]
+    assert len(locked) >= 4, "the guard found too few locked blocks to mean anything"
+    bad = []
+
+    def visit(nodes, where, seen):
+        for stmt in nodes:
+            for node in ast.walk(stmt):
+                if isinstance(node, (ast.Import, ast.ImportFrom)):
+                    names = [getattr(node, "module", "") or ""] + [a.name for a in node.names]
+                    if any("thinking_workspace" in n or n == "LockManager" for n in names):
+                        bad.append((where, "import " + ", ".join(names)))
+                if isinstance(node, ast.Name) and node.id == "LockManager":
+                    bad.append((where, "LockManager"))
+                if not isinstance(node, ast.Call):
+                    continue
+                name = _call_name(node)
+                if name in _NOT_UNDER_THE_STORE_LOCK:
+                    bad.append((where, name))
+                elif name in functions and name not in seen:
+                    visit(functions[name].body, f"{where} -> {name}", seen | {name})
+
+    for block in locked:
+        visit(block.body, f"line {block.lineno}", frozenset({"_store_lock"}))
+    assert bad == []
+
+
+def test_only_create_and_mutate_record_save_whole_tasks():
+    tree = ast.parse(_AUTOMATION_PY.read_text(encoding="utf-8"))
+    callers = []
+    for func in _functions(tree).values():
+        for node in ast.walk(func):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                    and node.func.attr == "_save_task":
+                callers.append(func.name)
+    assert callers and set(callers) <= {"create", "_mutate_record"}, callers
+
+
+# ── AC11: a lock failure reaches no client with a path ──────────────────────
+
+class _Held:
+    """Hold one directory's store lock in another thread."""
+
+    def __init__(self, directory: Path):
+        self.directory = directory
+        self.held, self.done = threading.Event(), threading.Event()
+
+    def _hold(self):
+        with AutomationManager._store_lock(self.directory):
+            self.held.set()
+            self.done.wait(20)
+
+    def __enter__(self):
+        self.thread = threading.Thread(target=self._hold, daemon=True)
+        self.thread.start()
+        assert self.held.wait(10)
+        return self
+
+    def __exit__(self, *exc):
+        self.done.set()
+        self.thread.join(10)
+
+
+def _upd(task_id, **fields):
+    return ({"type": "update_automation", "task_id": task_id, **fields}, "update_automation_result")
+
+
+def test_busy_store_answers_without_a_path(store, monkeypatch):
+    import vaf.core.secure_store as secure_store
+
+    monkeypatch.setattr(auto_mod, "_STORE_LOCK_TIMEOUT_S", 0.2)
+    before = (store / TENANT_A / f"{A_ID}.json").read_bytes()
+    with _Held(store / TENANT_A):
+        busy = _ws(monkeypatch, role="user", scope=TENANT_A, frames=[_upd(A_ID, name="x")])[0]
+    assert busy == {"type": "update_automation_result", "ok": False,
+                    "error": "automation store is busy"}
+
+    real_cls = secure_store._get_filelock_cls()
+
+    class Unopenable:
+        def __init__(self, path):
+            self.path = path
+
+        def acquire(self):
+            raise PermissionError(13, "Permission denied", self.path)
+
+        def release(self):
+            pass
+
+    def lock_for(path, timeout=-1, **kw):
+        # Only the store lock fails: the handshake's own stores lock through the same accessor.
+        if Path(path).name == ".automations.lock":
+            return Unopenable(path)
+        return real_cls(path, timeout=timeout, **kw)
+
+    monkeypatch.setattr(secure_store, "_get_filelock_cls", lambda: lock_for)
+    unopenable = _ws(monkeypatch, role="user", scope=TENANT_A, frames=[_upd(A_ID, name="x")])[0]
+    assert unopenable == {"type": "update_automation_result", "ok": False,
+                          "error": "automation store could not be locked"}
+    for reply in (busy, unopenable):
+        assert str(store) not in json.dumps(reply) and "Errno" not in json.dumps(reply)
+    assert (store / TENANT_A / f"{A_ID}.json").read_bytes() == before
+
+
+def test_a_busy_store_keeps_the_handoff_claim(store, workspaces, monkeypatch):
+    ws = workspaces
+    hid = ws.tw.create_handoff(TENANT_A, ws.task_a, "A handoff", "c", automation_action={
+        "operation": "update", "task_id": A_ID, "name": "approved name"})["id"]
+    monkeypatch.setattr(auto_mod, "_STORE_LOCK_TIMEOUT_S", 0.2)
+    with _Held(store / TENANT_A):
+        first = _ws(monkeypatch, role="user", scope=TENANT_A,
+                    frames=[_handoff("approve", ws.task_a, hid)])[0]
+    assert first["ok"] is False and first["error"] == "handoff decision not saved", first
+    assert str(store) not in json.dumps(first) and "Errno" not in json.dumps(first)
+    pending = _record(ws, hid)
+    assert pending["status"] == "pending" and pending.get("claim"), pending
+    second = _ws(monkeypatch, role="user", scope=TENANT_A,
+                 frames=[_handoff("approve", ws.task_a, hid)])[0]
+    assert second["ok"] is True, second
+    record = json.loads((store / TENANT_A / f"{A_ID}.json").read_text(encoding="utf-8"))
+    assert record["name"] == "approved name"
+    assert _record(ws, hid)["status"] == "approved"
+
+
+# ── Fuzz: seeded concurrent writers, run stamps and cursor patches ──────────
+
+_FUZZ_FIELDS = ("name", "description", "prompt", "time", "output_path", "parameters")
+
+
+def _fuzz_value(field: str, writer: int, rnd: int):
+    return {"w": f"{writer}-{rnd}"} if field == "parameters" else f"{field}-{writer}-{rnd}"
+
+
+def _fuzz_draw(d: Path, seed: int) -> list:
+    """One draw; the list of oracle violations (empty when the invariant holds)."""
+    rng = random.Random(seed)
+    trigger = {"kind": "room_message", "room_id": "room-f", "match": "go"}
+    AutomationManager(storage_dir=str(d)).create(AutomationTask(
+        id=TID, name="n0", prompt="p0", frequency="on_event", time="", trigger=dict(trigger)))
+    fields = list(_FUZZ_FIELDS)
+    rng.shuffle(fields)
+    writers = rng.randint(2, 4)
+    owned = [fields[i::writers] for i in range(writers)]
+    plans = [[rng.uniform(0, 0.002) for _ in range(rng.randint(1, 15))] for _ in range(writers)]
+    # The scheduler's own writes, from the copy it captured before any writer ran.
+    sched_ops = [(rng.choice(("stamp", "cursor")), rng.uniform(0, 0.002))
+                 for _ in range(rng.randint(0, 6))]
+    scheduler = AutomationManager(storage_dir=str(d))
+    captured = scheduler.get(TID)
+    expect_cursor = [None]
+    stamped = [False]
+    errors = []
+    barrier = threading.Barrier(writers + 1)
+
+    def writer(w):
+        try:
+            barrier.wait(5)
+            for rnd, pause in enumerate(plans[w]):
+                mgr = AutomationManager(storage_dir=str(d))
+                time.sleep(pause)
+                mgr.update(TID, **{f: _fuzz_value(f, w, rnd) for f in owned[w]})
+        except Exception as e:  # noqa: BLE001 - reported as a violation
+            errors.append(f"writer {w}: {e!r}")
+
+    def sched():
+        try:
+            barrier.wait(5)
+            for n, (op, pause) in enumerate(sched_ops, 1):
+                time.sleep(pause)
+                if op == "stamp":
+                    stamped[0] = scheduler._record_successful_run(captured) is not None
+                else:
+                    scheduler._mutate_record(captured, auto_mod._cursor_patch(dict(trigger, cursor=n)))
+                    expect_cursor[0] = n
+        except Exception as e:  # noqa: BLE001 - reported as a violation
+            errors.append(f"scheduler: {e!r}")
+
+    threads = [threading.Thread(target=writer, args=(w,), daemon=True) for w in range(writers)]
+    threads.append(threading.Thread(target=sched, daemon=True))
+    for t in threads:
+        t.start()
+    stuck = _join_all(threads, 20)
+    bad = list(errors) + [f"stuck: {stuck}"] * bool(stuck)
+    try:
+        record = _disk(d)
+    except (OSError, ValueError) as e:
+        return bad + [f"record unreadable: {e!r}"]
+    for w in range(writers):
+        for f in owned[w]:
+            want = _fuzz_value(f, w, len(plans[w]) - 1)
+            if record.get(f) != want:
+                bad.append(f"{f}: {record.get(f)!r} != {want!r}")
+    if stamped[0] and not record.get("last_run"):
+        bad.append("the run stamp is lost")
+    want_trigger = dict(trigger) if expect_cursor[0] is None else dict(trigger, cursor=expect_cursor[0])
+    if record.get("trigger") != want_trigger:
+        bad.append(f"trigger {record.get('trigger')!r} != {want_trigger!r}")
+    if record.get("id") != TID or record.get("user_scope_id") is not None:
+        bad.append("identity changed")
+    names = sorted(p.name for p in d.iterdir() if p.is_file())
+    if [n for n in names if n.endswith(".json")] != [f"{TID}.json"] \
+            or [n for n in names if n.startswith(".tmp-")]:
+        bad.append(f"store holds {names}")
+    return bad
+
+
+def test_concurrent_writers_fuzz(store, tmp_path, monkeypatch):
+    """Seeded draws of 2-4 writers, each owning disjoint fields, with run stamps and cursor
+    patches from a scheduler copy captured before they start. Oracle: every field ends at
+    its owner's last value, a stamp and the last cursor are on disk, the identity is
+    unchanged, and the directory holds the one task file and no temp file.
+    `VAF_FUZZ_DRAWS` raises the draw count for a run outside the suite."""
+    monkeypatch.setattr(auto_mod, "_resolve_username", lambda scope: "alice")
+    draws = int(os.environ.get("VAF_FUZZ_DRAWS", "25"))
+    for i in range(draws):
+        seed = 4500 + i
+        bad = _fuzz_draw(tmp_path / f"draw-{i}", seed)
+        assert bad == [], f"seed {seed}: {bad}"

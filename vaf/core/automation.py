@@ -19,6 +19,7 @@ import uuid
 import subprocess
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Any, Callable, Tuple
@@ -724,13 +725,28 @@ def _revoked_run_note(task) -> str:
 
 
 def _stamp_successful_run(task: AutomationTask) -> None:
-    """Record completion time and local calendar day (survives restarts via _save_task)."""
+    """Record completion time and local calendar day on `task` (written by `_record_successful_run`)."""
     from vaf.core.user_time import user_now
     now = datetime.now()
     task.last_run = now.isoformat()
     # "local date" = the OWNER's calendar day (their timezone), so daily "done today" checks
     # match the user's day, not the server's.
     task.last_completed_local_date = user_now(_resolve_username(task.user_scope_id)).date().isoformat()
+
+
+def _cursor_patch(fired: Dict[str, Any]) -> Callable[[Dict[str, Any]], bool]:
+    """The change that writes a fired trigger's cursor onto a task record: only when the
+    record's trigger still has the fired one's kind and room (False, nothing to write,
+    otherwise). A cursor is a position in ONE room; written into a trigger that now watches
+    another room it would skip that room's frames up to an unrelated number."""
+    def patch(record: Dict[str, Any]) -> bool:
+        current = record.get("trigger")
+        if not isinstance(current, dict) or current.get("kind") != fired.get("kind") \
+                or current.get("room_id") != fired.get("room_id"):
+            return False
+        record["trigger"] = dict(current, cursor=fired.get("cursor"))
+        return True
+    return patch
 
 
 # Bounded per-automation run log. Until this existed the record carried `last_run`, stamped ONLY on
@@ -770,6 +786,63 @@ def _read_task_record(path: Path) -> Optional[Dict[str, Any]]:
     if not isinstance(data, dict) or not str(data.get("id") or "").strip():
         return None
     return data
+
+
+# Every write of a task file holds the lock of the directory it lives in,
+# `<dir>/.automations.lock` (neither `_task_files` nor the slot count reads it). One lock per
+# directory, not per task: a holder keeps it for well under a millisecond (0.33 ms median for
+# lock, read, change and atomic write of a 4 KB task, measured), so two tasks of one account
+# never wait on each other for long, create, delete, restore and the trash move need no per-id
+# bookkeeping, and a filelock that leaves its file behind leaves one per directory rather than
+# one per task id ever written. Different accounts are different directories.
+_STORE_LOCK_NAME = ".automations.lock"
+# How long a writer waits for another one before it answers "busy" (as the handoff's decision
+# lock waits). The WebSocket waits on its event loop, so a wait is bounded by this.
+_STORE_LOCK_TIMEOUT_S = 5.0
+# Per thread: resolved directory -> how deep this thread holds its store lock. A second
+# FileLock instance on a path the same thread already holds waits out the whole timeout
+# (filelock is not reentrant across instances, measured), and `_save_task` takes the lock
+# inside `_mutate_record`.
+_STORE_LOCK_HELD = threading.local()
+# Used only when the filelock package cannot be imported: one in-process lock per directory.
+_FALLBACK_STORE_LOCKS: Dict[str, threading.Lock] = {}
+_FALLBACK_STORE_LOCKS_GUARD = threading.Lock()
+
+
+class AutomationStoreBusy(OSError):
+    """Another writer held the automation store's lock past the timeout. An `OSError`, so a
+    lane that answers a store it could not write (an approved handoff answers "not saved" and
+    keeps its claim for the next approve) answers this one the same way."""
+
+
+def _acquire_store_lock(directory: Path) -> Callable[[], None]:
+    """Take the kernel lock of one store directory; the function that releases it. Raises
+    `AutomationStoreBusy` after `_STORE_LOCK_TIMEOUT_S`, or `OSError("automation store could
+    not be locked")` when the lock file cannot be opened. Both texts are fixed: the WebSocket
+    answers with the error's text, and the filelock error names the data path."""
+    from vaf.core.secure_store import _get_filelock_cls
+
+    timeout = max(0.0, float(_STORE_LOCK_TIMEOUT_S))
+    lock_cls = _get_filelock_cls()
+    if lock_cls is None:
+        with _FALLBACK_STORE_LOCKS_GUARD:
+            fallback = _FALLBACK_STORE_LOCKS.setdefault(str(directory), threading.Lock())
+        if not fallback.acquire(timeout=timeout):
+            raise AutomationStoreBusy("automation store is busy")
+        return fallback.release
+    from filelock import Timeout
+
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        lock = lock_cls(str(directory / _STORE_LOCK_NAME), timeout=timeout)
+        lock.acquire()
+    except Timeout:
+        # A `Timeout` is an `OSError` whose text names the lock path.
+        raise AutomationStoreBusy("automation store is busy") from None
+    except OSError as e:
+        append_domain_log("backend", f"[AUTOMATION] store lock not taken: {e!r}")
+        raise OSError("automation store could not be locked") from None
+    return lock.release
 
 
 def scoped_task_record(user_scope_id: str, task_id: str) -> Optional[Dict[str, Any]]:
@@ -1201,7 +1274,11 @@ class AutomationManager:
             task = hit.task
             task.trigger = dict(task.trigger or {}, cursor=int(hit.newest))
             try:
-                self._save_task(task)
+                # Onto the current record, and only while it still watches the same room: the
+                # scheduler's copy is as old as its last refresh, and writing it back put back a
+                # prompt or a trigger edited since. The watch's own cursor (per process) still
+                # keeps these frames from firing twice here.
+                self._mutate_record(task, _cursor_patch(task.trigger))
             except Exception:
                 pass
             self._log_scheduler_event(
@@ -1402,10 +1479,113 @@ vaf automation delete <id>   # Delete task
         Encoded in full first, then temp file + replace: a truncating write that failed half
         way (a full disk, a value that does not encode) left an empty or cut-off file, which
         `_read_task_record` skips, so the automation was gone from every later load. Plain
-        JSON (`encrypt=False`): every reader of this store parses it with `json.load`."""
+        JSON (`encrypt=False`): every reader of this store parses it with `json.load`.
+
+        Writes the WHOLE object, so it holds the store lock and is called only where the
+        object is the current record: a new task (`create`) and `_mutate_record`, which built
+        it from the file under that same lock. Writing back an object loaded earlier puts back
+        every field another lane changed since (tests/test_automation_store_lock.py pins the
+        two callers)."""
         from vaf.core.data_files import write_json_atomic
 
-        write_json_atomic(self._path_for_task(task), task.to_dict(), encrypt=False, indent=2)
+        path = self._path_for_task(task)
+        with self._store_lock(path.parent):
+            write_json_atomic(path, task.to_dict(), encrypt=False, indent=2)
+
+    @staticmethod
+    @contextmanager
+    def _store_lock(directory: Path):
+        """Hold the lock of one store directory (`.automations.lock` in it), or raise
+        `AutomationStoreBusy` (waited past `_STORE_LOCK_TIMEOUT_S`) or `OSError` (the lock
+        file could not be opened), both with a fixed text.
+
+        A kernel lock (`flock`, `msvcrt.locking` through filelock), as the handoff's decision
+        lock: the operating system releases it when its holder dies, and two threads of one
+        process exclude each other because each acquisition opens its own descriptor.
+        Reentrant within one thread: only the outermost entry takes the lock.
+
+        A LEAF: while it is held, code reads the task record, changes it, writes it, and moves
+        or unlinks that task's files, nothing else. It never refreshes the scheduler, mirrors
+        into the thinking workspace or takes the run lock, so every lock order that exists is
+        "another lock, then this one" (the handoff's decision lock, the scheduler's manager
+        lock, the run lock) and none can be reversed. Pinned by a static guard.
+
+        Named boundaries: without filelock only the threads of this process are serialized.
+        Fifteen modules hold a file lock by hand, with different failure semantics; a shared
+        helper would be its own consolidation, so this one keeps the decision lock's shape."""
+        try:
+            key = str(Path(directory).resolve())
+        except (OSError, RuntimeError):
+            key = os.path.abspath(str(directory))
+        depth = getattr(_STORE_LOCK_HELD, "depth", None)
+        if depth is None:
+            depth = _STORE_LOCK_HELD.depth = {}
+        if depth.get(key):
+            depth[key] += 1
+            try:
+                yield
+            finally:
+                depth[key] -= 1
+            return
+        release = _acquire_store_lock(Path(key))
+        depth[key] = 1
+        try:
+            yield
+        finally:
+            depth.pop(key, None)
+            release()
+
+    def _mutate_record(self, task: AutomationTask,
+                       change: Callable[[Dict[str, Any]], Optional[bool]]) -> Optional[AutomationTask]:
+        """Apply `change` to the task's record AS IT IS ON DISK NOW, under the store lock,
+        and write it; the task built from the written record (also put into the cache).
+
+        `task` names the record (its id and its path); its other fields are not written.
+        A lane's manager, and the object a run captured when it fired, can be minutes old,
+        and writing that object back put back every field another lane had changed since
+        (measured: 200 of 200 two-thread trials lost a field, a run switched a task that
+        was switched off during it back on).
+
+        None when the file is gone or is not this task's record (deleted, moved to the
+        trash, unreadable): nothing is written, so a deleted task is never brought back and
+        a file this code cannot read is never overwritten. `change` returning False means
+        "nothing to write": the current record is returned unwritten."""
+        path = self._path_for_task(task)
+        tasks = getattr(self, "tasks", None)
+        if tasks is None:
+            tasks = {}
+        with self._store_lock(path.parent):
+            record = _read_task_record(path)
+            if record is None or str(record.get("id")).strip() != str(task.id):
+                tasks.pop(task.id, None)
+                return None
+            write = change(record) is not False
+            fresh = AutomationTask.from_dict(record)
+            # The record keeps its path: the scope comes from where the task lives, as
+            # `_load_tasks` stamps it on a file that does not carry one.
+            fresh.user_scope_id = (task.user_scope_id or fresh.user_scope_id
+                                   or getattr(self, "user_scope_id", None))
+            if self._path_for_task(fresh) != path:
+                fresh.user_scope_id = task.user_scope_id
+            if write:
+                self._save_task(fresh)
+        tasks[fresh.id] = fresh
+        return fresh
+
+    def _record_successful_run(self, task: AutomationTask) -> Optional[AutomationTask]:
+        """Stamp a successful run on the captured `task` (its mirror and labels read it) and
+        write ONLY the two run fields onto the current record. A time, switch, prompt or name
+        changed while the run went keeps its change, and a task deleted or moved to the trash
+        during its run stays gone. A bookkeeping write must not fail the automation: an error
+        (a busy or unwritable store) is logged, as `append_run_log` does."""
+        _stamp_successful_run(task)
+        stamp = {"last_run": task.last_run,
+                 "last_completed_local_date": task.last_completed_local_date}
+        try:
+            return self._mutate_record(task, lambda record: record.update(stamp))
+        except Exception as e:
+            append_domain_log("backend", f"[AUTOMATION] run of {task.id} not recorded: {e!r}")
+            return None
 
     def _sync_workspace_automation_state(
         self,
@@ -1563,20 +1743,27 @@ vaf automation delete <id>   # Delete task
         return (True, None)
     
     def update(self, task_id: str, **kwargs) -> Optional[AutomationTask]:
-        """Update an existing task."""
-        if task_id not in self.tasks:
+        """Update an existing task: the given fields, written onto the record as it is on disk
+        now (`_mutate_record`), so another lane's edit of a different field made since this
+        manager loaded the task stays. Two edits of the same field: the one written last
+        stands. The task as written, a NEW object (the cached one is not changed in place);
+        None when there is no such task, or it was deleted or became unreadable meanwhile."""
+        cached = self.tasks.get(task_id)
+        if cached is None:
             return None
-        
-        task = self.tasks[task_id]
-        # setattr skips __post_init__, so the schedule fields are coerced here: every
-        # update lane (the WebSocket, the agent's tool, an approved handoff, the CLI)
-        # reaches the store through this call.
-        for key, value in coerce_schedule_fields(kwargs).items():
-            if hasattr(task, key):
-                setattr(task, key, value)
-        
-        # next_run is calculated dynamically - no need to store it
-        self._save_task(task)
+        # The schedule fields are coerced here (every update lane, the WebSocket, the agent's
+        # tool, an approved handoff and the CLI, reaches the store through this call). Only
+        # stored fields are applied, never the identity: an `id` or `user_scope_id` would
+        # move the file, and a property name is not a field.
+        fields = AutomationTask.__dataclass_fields__
+        changes = {key: value for key, value in coerce_schedule_fields(kwargs).items()
+                   if key in fields and key not in ("id", "user_scope_id")}
+        task = self._mutate_record(cached, lambda record: record.update(changes))
+        if task is None:
+            return None
+
+        # After the store lock is released: the mirror and the scheduler refresh take locks
+        # of their own (`_store_lock` is a leaf).
         self._sync_workspace_automation_state(task, event="automation_updated")
         # Keep the live scheduler in sync with on-disk changes (e.g. updated time).
         try:
@@ -1593,32 +1780,35 @@ vaf automation delete <id>   # Delete task
         task = self.tasks[task_id]
         filepath = self._path_for_task(task)
         trash_path = self.trash_dir / f"{task_id}.json"
-        
-        if filepath.exists():
-            if permanent:
-                # Permanent deletion
-                filepath.unlink()
-            else:
-                # Move to trash
-                import shutil
-                shutil.move(str(filepath), str(trash_path))
 
-        # The run log lives beside the task file, so it has to follow it - otherwise a deleted
-        # automation leaves its history orphaned in the storage directory forever, and a restore
-        # comes back without the record the review rung reads. Tolerates a missing log: it only
-        # starts existing once the task has actually run.
-        _log_src = _run_log_path(filepath)
-        if _log_src.exists():
-            try:
+        # Under the store lock: a change that took the lock first is written before the file
+        # goes, and one that comes after finds no file and writes nothing (`_mutate_record`).
+        with self._store_lock(filepath.parent):
+            if filepath.exists():
                 if permanent:
-                    _log_src.unlink()
+                    # Permanent deletion
+                    filepath.unlink()
                 else:
+                    # Move to trash
                     import shutil
-                    shutil.move(str(_log_src), str(_run_log_path(trash_path)))
-            except OSError as _e:
-                append_domain_log("backend", f"[AUTOMATION] run log not moved for {task_id}: {_e}")
-        
-        del self.tasks[task_id]
+                    shutil.move(str(filepath), str(trash_path))
+
+            # The run log lives beside the task file, so it has to follow it - otherwise a
+            # deleted automation leaves its history orphaned in the storage directory forever,
+            # and a restore comes back without the record the review rung reads. Tolerates a
+            # missing log: it only starts existing once the task has actually run.
+            _log_src = _run_log_path(filepath)
+            if _log_src.exists():
+                try:
+                    if permanent:
+                        _log_src.unlink()
+                    else:
+                        import shutil
+                        shutil.move(str(_log_src), str(_run_log_path(trash_path)))
+                except OSError as _e:
+                    append_domain_log("backend", f"[AUTOMATION] run log not moved for {task_id}: {_e}")
+
+        self.tasks.pop(task_id, None)
         try:
             task.enabled = False
             self._sync_workspace_automation_state(task, event="automation_deleted")
@@ -1644,16 +1834,22 @@ vaf automation delete <id>   # Delete task
             
             # Move back to storage (user scope dir if task has user_scope_id)
             filepath = self._path_for_task(task)
-            if task.user_scope_id:
-                filepath.parent.mkdir(parents=True, exist_ok=True)
+            filepath.parent.mkdir(parents=True, exist_ok=True)
             import shutil
-            shutil.move(str(trash_path), str(filepath))
-            _log_trash = _run_log_path(trash_path)
-            if _log_trash.exists():
-                try:
-                    shutil.move(str(_log_trash), str(_run_log_path(filepath)))
-                except OSError as _e:
-                    append_domain_log("backend", f"[AUTOMATION] run log not restored for {task_id}: {_e}")
+            with self._store_lock(filepath.parent):
+                # Never over a live task of the same id: the move replaced it silently, and
+                # an approval retry creates its planned id again.
+                if filepath.exists():
+                    append_domain_log("backend", f"[AUTOMATION] {task_id} not restored: a task "
+                                                 f"with this id is in the store")
+                    return False
+                shutil.move(str(trash_path), str(filepath))
+                _log_trash = _run_log_path(trash_path)
+                if _log_trash.exists():
+                    try:
+                        shutil.move(str(_log_trash), str(_run_log_path(filepath)))
+                    except OSError as _e:
+                        append_domain_log("backend", f"[AUTOMATION] run log not restored for {task_id}: {_e}")
 
             # Add back to tasks
             self.tasks[task_id] = task
@@ -2062,8 +2258,8 @@ vaf automation delete <id>   # Delete task
                     return _revoked_run_note(task)
                 if workflow_saved_file:
                     # Workflow's write_file step already saved the output.
-                    _stamp_successful_run(task)
-                    self._save_task(task)
+                    # Only the run's own fields, onto the record as it is now.
+                    self._record_successful_run(task)
                     # This branch RETURNS below, so the run log at the end of run_task is never
                     # reached from here. Without this line every workflow-based automation would be
                     # invisible to the log, and the findings built on it would quietly describe only
@@ -2412,9 +2608,9 @@ vaf automation delete <id>   # Delete task
                 UI.success(f"Output saved: {output_file}")
             
             # Update task (local completion date persists across restarts)
-            _stamp_successful_run(task)
-            # next_run is calculated dynamically - no need to store it
-            self._save_task(task)
+            # Only the run's own fields, onto the record as it is now: a time or switch
+            # changed while the run went stays, a task deleted meanwhile stays deleted.
+            self._record_successful_run(task)
 
             # If frequency is ONCE, delete after run
             if task.frequency == Frequency.ONCE:

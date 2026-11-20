@@ -221,11 +221,10 @@ def test_the_admin_name_rule_follows_the_configured_name(world):
 ], ids=["scoped-dana", "scoped-admin", "scopeless-admin"])
 def test_the_discord_lane(world, dana_entry, inbound_open):
     """`send_to_main_messenger(None, "admin", ...)`, the Discord bridge's `send_to_user`.
-    Named boundary: an entry without a scope filed under "admin" is not the admin's registered
-    number to the bridge's reply check (`_get_allowed_phones_for_user` matches name or scope),
-    so with Inbound closed that one row goes to the web UI. MUTATION: remove the conversion
-    from `send_to_main_messenger` -> the connections are looked up as "admin" -> red; with the
-    reader and bridge conversions also gone, B's process writes."""
+    Named boundary: an entry without a scope is the fallback of no lane, so with only such an
+    entry for the admin the note goes to the web UI in both Inbound states. MUTATION: remove
+    the conversion from `send_to_main_messenger` -> the connections are looked up as "admin"
+    -> red; with the reader and bridge conversions also gone, B's process writes."""
     _inbound(world, inbound_open)
     world.whitelist(dana_entry, B_ENTRY)
     world.stored(by_scope={B: BOB_JID}, by_name={"admin": BOB_JID})
@@ -234,7 +233,7 @@ def test_the_discord_lane(world, dana_entry, inbound_open):
     world.drain()
     assert world.written("admin") == [], "sent through the ordinary admin account's process"
     assert world.connections == [("dana", ADM)]
-    if dana_entry.get("user_scope_id") is None and not inbound_open:
+    if dana_entry.get("user_scope_id") is None:
         assert result == (False, None) and world.written("dana") == []
         return
     assert world.written("dana") == [(DANA_JID, "dana's private note")]
@@ -337,12 +336,15 @@ def test_scopeless_bridge_sends_naming_anybody_else_are_refused(world, entry, na
                          ids=["scopeless-entry", "scoped-entry"])
 def test_no_mutual_reset(world, dana_entry, caller):
     """The local admin's entry filed under "admin", next to B's own "admin" entry and B's number
-    under the "admin" key. MUTATION: remove the conversion from `get_whatsapp_chat_jid` -> the
-    admin's lane reads B's key as its own and B's lane resets it back -> 12 events -> red."""
+    under the "admin" key. An entry without a scope is the fallback of no lane, so that shape
+    gives the admin's lane no number. MUTATION: remove the conversion from
+    `get_whatsapp_chat_jid` -> the admin's lane reads B's key as its own and B's lane resets it
+    back -> 12 events -> red."""
     world.whitelist(dana_entry, B_ENTRY)
     world.stored(by_name={"admin": BOB_JID})
+    expected = DANA_JID if dana_entry.get("user_scope_id") else None
     for _ in range(10):
-        assert mc.get_whatsapp_chat_jid(*caller) == DANA_JID
+        assert mc.get_whatsapp_chat_jid(*caller) == expected
         assert mc.get_whatsapp_chat_jid(B, "admin") == BOB_JID
     assert world.resets() == []
     disk = json.loads(world.store.read_text(encoding="utf-8"))
@@ -393,16 +395,58 @@ def test_the_scopeless_lane_reads_the_admins_scope_key(world):
     assert mc.get_whatsapp_chat_jid(None, None) == SELF_CHAT
 
 
-@pytest.mark.parametrize("admin_name, filed", [("admin", "admin"), ("admin", ""), ("dana", "admin"),
-                                               ("dana", ""), ("dana", "Dana")])
-def test_a_legacy_scopeless_entry_is_still_the_admins_number(world, admin_name, filed):
-    """An older install's whitelist entry without a scope, filed under an admin name, with an
-    empty store. MUTATION: drop the admin-scope match of a scopeless entry in
-    `get_whatsapp_chat_jid_from_whitelist` -> None -> red."""
+@pytest.mark.parametrize("admin_name, filed", [("admin", "admin"), ("admin", ""), ("admin", None),
+                                               ("dana", "admin"), ("dana", ""), ("dana", "Dana")])
+def test_a_scopeless_entry_never_takes_the_admins_scoped_lane(world, monkeypatch, admin_name, filed):
+    """An entry without a scope under an admin name (by hand, or an older settings save's copy
+    of the Connections page), holding B's number, ahead of the admin's own scoped entry, with
+    an empty store and Inbound open. The admin's scoped lane reads its own entry, as before
+    this change; the scopeless lane is the same lane. With only the scopeless entry, no lane
+    finds a number. MUTATION: let the admin's scope also match a scopeless entry under an
+    admin name (first in whitelist order) -> B's number is returned and Dana's process sends
+    her note there -> red."""
     world.state["local_admin_username"] = admin_name
-    world.whitelist(_entry(DANA_PHONE, None, filed))
-    assert mc.get_whatsapp_chat_jid(None, None) == DANA_JID
-    assert mc.get_whatsapp_chat_jid_from_whitelist(ALI, "alice") is None, "only the admin's scope"
+    if admin_name == "admin":
+        # No ordinary account can be named "admin" then: the admin's own process carries it.
+        monkeypatch.setattr(wa, "_processes", {"admin": wa._processes["dana"]})
+        monkeypatch.setattr(wa, "_scope_by_user", {"admin": ADM})
+    world.state["whatsapp_config"]["whitelist"] = [{"phone_number": BOB_PHONE, "vaf_username": filed},
+                                                   _entry(DANA_PHONE, ADM, admin_name)]
+    assert mc.get_whatsapp_chat_jid_from_whitelist(ADM, admin_name) == DANA_JID
+    assert mc.send_to_main_messenger(ADM, admin_name, "dana's note") == (True, "whatsapp")
+    assert mc.send_to_main_messenger(None, None, "dana's note") == (True, "whatsapp")
+    world.drain()
+    assert world.written("dana") == [(DANA_JID, "dana's note")] * 2
+    assert world.written("admin") == []
+    world.store.unlink()
+    world.whitelist({"phone_number": DANA_PHONE, "vaf_username": filed})
+    assert mc.get_whatsapp_chat_jid(ADM, admin_name) is None
+    assert mc.get_whatsapp_chat_jid(None, None) is None
+
+
+@pytest.mark.parametrize("lane", [(None, None), (ADM, "dana"), (B, "admin"), (ALI, "alice")])
+def test_a_lookup_reads_the_config_a_fixed_number_of_times(world, monkeypatch, lane):
+    """The admin's name is read once per lookup, not once per whitelist entry: every read loads
+    the config file (`Config.get`), so per entry the lookup was quadratic in the entries without
+    a scope (measured 544 ms at 1,000 such entries against 6.6 ms). Counted, not timed: the
+    loads for 5 and for 400 entries without a scope are the same. MUTATION: read the admin's
+    name inside the per-entry predicate again -> the count grows with the entries -> red."""
+    loads = []
+    state = world.state
+    monkeypatch.setattr(Config, "load", classmethod(lambda cls: (loads.append(1), state)[1]))
+    monkeypatch.setattr(Config, "get", classmethod(
+        lambda cls, key, default=None: cls.load().get(key, default)))
+
+    def count(n):
+        world.whitelist(_entry(DANA_PHONE, ADM, "dana"), B_ENTRY,
+                        *[{"phone_number": f"+49170000{i:05d}", "vaf_username": f"user{i}"} for i in range(n)])
+        world.stored()
+        loads.clear()
+        mc.get_whatsapp_chat_jid(*lane)
+        return len(loads)
+
+    small, large = count(5), count(400)
+    assert small == large, (small, large)
 
 
 def test_the_helpers_live_in_the_framework():

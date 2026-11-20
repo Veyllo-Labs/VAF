@@ -558,11 +558,18 @@ def get_whatsapp_chat_jid_from_whitelist(
     first), which `get_whatsapp_chat_jid` then saved as the non-admin's own endpoint. The name
     is the key only for a caller without a scope (the legacy single-user lane).
 
-    The local admin's scope also matches an entry without a scope filed under an admin name
-    (`is_local_admin_name`), the attribution `_whatsapp_registered_entries` gives it, first
-    match in whitelist order: the scopeless lane is read under the admin's scope
-    (`messenger_lane_identity`), and an older install's entry filed under "admin" without a
-    scope is still the admin's registered number.
+    Named boundary: an entry without a scope is never the fallback of a scoped lane, the local
+    admin's included, although `_whatsapp_registered_entries` counts one filed under an admin
+    name as the admin's own (never foreign to the admin). The lane without a scope is read
+    under the admin's scope (`messenger_lane_identity`), so such an entry is found by no lane.
+    It is written by hand, or by a settings save of a version that stored the Connections
+    page's copy of a number it had just added (`{phone_number, vaf_username: null}`), and the
+    lookups before this one did not find that copy either. Matched as the admin's, first in
+    whitelist order, it took the place of the admin's own scoped entry, whatever number it
+    held. The repair is to give the entry the admin's scope AND the admin's own username:
+    with the scope alone, the name "admin" still matches an ordinary account named "admin" in
+    the bridge (`_get_allowed_phones_for_user`). Registering the number again on the
+    Connections page writes an entry with the account's scope and name.
     """
     whatsapp_config = Config.get("whatsapp_config") or {}
     if not isinstance(whatsapp_config, dict) or not whatsapp_config.get("whitelist"):
@@ -570,14 +577,11 @@ def get_whatsapp_chat_jid_from_whitelist(
     whitelist = whatsapp_config.get("whitelist") or []
     scope_str = str(user_scope_id).strip() if user_scope_id is not None else ""
     vaf_username = (username or "").strip() or "admin"
-    admin_lane = bool(scope_str) and scope_str == _local_admin_scope()
     for entry in whitelist:
         if not isinstance(entry, dict) or not entry.get("phone_number"):
             continue
         if scope_str:
-            entry_scope = str(entry.get("user_scope_id") or "").strip()
-            matches = entry_scope == scope_str or (
-                admin_lane and not entry_scope and is_local_admin_name(entry.get("vaf_username")))
+            matches = str(entry.get("user_scope_id") or "").strip() == scope_str
         else:
             matches = entry.get("vaf_username") == vaf_username
         if matches:
@@ -590,12 +594,14 @@ def _whatsapp_registered_entries() -> List[Tuple[str, Optional[str], str]]:
     entry, in whitelist order; the number is "" for an entry without a usable one.
 
     The owning scope is the entry's scope. An entry without one is the local admin's when its
-    name is one `is_local_admin_name` holds, empty, "admin" or the local admin's name (the
-    reading `is_local_admin_lane` gives a missing scope), and nobody's otherwise ("unattributed", None). Named boundary: the
-    bridge counts a scopeless entry filed under "alice" as Alice's by name
-    (`whatsapp_bridge._get_allowed_phones_for_user` matches by name OR scope), so reading it
-    as the admin's would drop Alice's own endpoint on every message she sends; an
-    unattributed number is never another account's to the repair below.
+    name is one `is_local_admin_name` holds (empty, "admin" or the local admin's name; the
+    reading `is_local_admin_lane` gives a missing scope), and nobody's otherwise
+    ("unattributed", None). Named boundary: the bridge counts a scopeless entry filed under
+    "alice" as Alice's by name (`whatsapp_bridge._get_allowed_phones_for_user` matches by name
+    OR scope), so reading it as the admin's would drop Alice's own endpoint on every message
+    she sends; an unattributed number is never another account's to the repair below. The
+    admin's name is read once per call: the predicate per entry would load the config file
+    once per entry.
 
     Deliberately not `owner_endpoints`: that one gives the local admin every entry (the
     inbox's owner lane), so another account's number would never be foreign to the admin."""
@@ -604,13 +610,15 @@ def _whatsapp_registered_entries() -> List[Tuple[str, Optional[str], str]]:
     if not isinstance(entries, list):
         return []
     admin_scope = _local_admin_scope()
+    from vaf.core.config import get_local_admin_username  # per call, as `_local_admin_scope`
+    admin_name = get_local_admin_username()
     out: List[Tuple[str, Optional[str], str]] = []
     for entry in entries:
         if not isinstance(entry, dict):
             continue
         name = str(entry.get("vaf_username") or "").strip()
         scope = str(entry.get("user_scope_id") or "").strip()
-        if not scope and is_local_admin_name(name):
+        if not scope and is_local_admin_name(name, admin_name):
             scope = admin_scope
         out.append((phone_digits_canonical(str(entry.get("phone_number") or "")), scope or None, name))
     return out
@@ -767,8 +775,8 @@ def get_whatsapp_chat_jid(
             _save_endpoints(data)
     own_jid: Optional[str] = None
     if dropped or not found:
-        # By scope, with the same attribution as `_whatsapp_registered_entries`, so the
-        # number it finds is in `own` and never in `foreign`.
+        # By scope only: an entry of the lane's own scope, whose number is in `own` and never
+        # in `foreign`.
         own_jid = get_whatsapp_chat_jid_from_whitelist(user_scope_id, username)
     if dropped:
         from vaf.core.config import resolve_caller_username

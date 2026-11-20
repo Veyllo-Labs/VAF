@@ -770,14 +770,18 @@ def _get_allowed_phones_for_user(username: str, user_scope_id: str) -> Tuple[Lis
     seen. What is left of it is one debug line for a user whose book and whitelist are both
     empty. A caller that wants the answer, not the list, asks `evaluate_ingress`.
 
-    Named boundary: an entry without a scope filed under "admin" or no name is not the local
-    admin's registered number here on an install whose admin has another name (it matches
-    neither the admin's name nor scope), while the endpoint reader does give it to the admin
-    (`messaging_connections._whatsapp_registered_entries`). A send of the admin's scopeless
-    lane to that number therefore goes to the web UI with Inbound closed, and with Inbound open
-    to the admin's own number through the admin's own process. Where an ordinary account is
-    named "admin", the name match counts the entry as that account's number too. Giving the
-    entry the admin's scope fixes both, and the Connections page always writes one."""
+    Named boundaries:
+    - An entry without a scope filed under "admin" or no name is not the local admin's
+      registered number here on an install whose admin has another name (it matches neither
+      the admin's name nor scope); where an ordinary account is named "admin", the name match
+      makes it that account's. Such an entry is written by hand, or by a settings save of a
+      version that stored the Connections page's copy of a number it had just added. The
+      repair is the admin's scope AND the admin's own username on the entry: with the scope
+      alone, the name "admin" still matches that ordinary account.
+    - A scoped entry still matches by name too, not by its scope alone. An admin who registers
+      a number for another account on the WhatsApp window sends only that account's name, and
+      the route files the entry under the admin's own scope with that name: matched by scope
+      alone, the number would become the admin's and leave the account it was registered for."""
     config_phones: List[str] = []
     allowed_phones: List[str] = []
     whatsapp_config = Config.get("whatsapp_config") or {}
@@ -913,12 +917,17 @@ def _process_for(username: str, user_scope_id: Optional[str] = None
 
     Named boundary: a request without a scope is settled by its name alone. Only the read and
     sync lanes ask that way (the chat list, history, avatars, names, LID mappings, the
-    connection check), and they pass the signed-in account's own name
-    (`user_routes.request_account` refuses a sign-in without a scope or a name). Every send lane
-    carries a scope: `_enqueue_reply`, `send_whatsapp_with_confirmation` and the sender loop
-    convert a scopeless request with `config.messenger_lane_identity` (the local admin's, or
-    refused) before they get here. Refusing a scopeless request in here would cut every
-    ordinary account off its own chat list."""
+    connection check), with the signed-in account's own name (`user_routes.request_account`
+    refuses a sign-in without a scope or a name). That is not proof for every name: the
+    account directory refuses a duplicate name with `lower()`, while the account directory's
+    lookup by name casefolds (`scope_id_for_username`), so an account named "Straße" next to an
+    admin named "strasse" is read here as the admin's spelling and gets the admin's process
+    when it is the only one running. Not closed here; passing the scope from those lanes is
+    the fix. Every send lane carries a scope: `_enqueue_reply`,
+    `send_whatsapp_with_confirmation` and the sender loop convert a scopeless request with
+    `config.messenger_lane_identity` (the local admin's, or refused) before they get here.
+    Refusing a scopeless request in here would cut every ordinary account off its own chat
+    list."""
     name = (username or "").strip()
     wanted = str(user_scope_id or "").strip()
     with _process_lock:

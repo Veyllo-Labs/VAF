@@ -258,8 +258,8 @@ chat if one is left, else its own registered number; without one, WhatsApp deliv
 destination and the message goes to the web UI. A chat saved under another account's name is
 not read at all, so it is neither used nor reset and logs nothing. A send that carries no
 account (the Discord bridge's `send_to_user`, reminders saved by older versions) is the local
-admin's: it goes through the admin's own process to the admin's own chat, even where an ordinary
-account was registered under the name "admin", and a send without an account that names anybody
+admin's: it goes out only through the admin's own process to the admin's own chat (or to the web
+UI), even where an ordinary account was registered under the name "admin", and a send without an account that names anybody
 else is refused (`config.messenger_lane_identity`; `send_whatsapp_with_confirmation` answers
 "a request without an account acts only for the local admin").
 

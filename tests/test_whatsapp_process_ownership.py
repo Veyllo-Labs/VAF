@@ -108,12 +108,12 @@ def test_the_same_account_under_another_spelling_still_gets_it(admin_only, lane)
 
 
 def test_the_sender_loop_refuses_another_accounts_item(admin_only, monkeypatch):
-    results = {}
-    monkeypatch.setattr(wa, "_complete_send_request",
-                        lambda req_id, ok, err=None, **k: results.__setitem__(req_id, (ok, err)))
     """A scoped item of another account finds no process of its own; a scopeless item naming
     another account is refused before any process is asked (`messenger_lane_identity`), and a
     scopeless item under an admin name is the local admin's."""
+    results = {}
+    monkeypatch.setattr(wa, "_complete_send_request",
+                        lambda req_id, ok, err=None, **k: results.__setitem__(req_id, (ok, err)))
     q = queue.Queue()
     q.put(("alice", "491700000042@s.whatsapp.net", "from alice", None, "r1", None, None, None, ALICE_SCOPE))
     q.put(("Admin", "491700000042@s.whatsapp.net", "from the admin", None, "r2"))

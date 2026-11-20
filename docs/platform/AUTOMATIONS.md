@@ -187,17 +187,18 @@ that WAITS for approval does not exist (`vaf/workflows/resume.py` records that c
 a paused multi-step run outside the interactive CLI was considered and refused for want of
 an owner process), so do not describe this as a workflow gate. **Membership is checked every tick**: a trigger naming a room the
 account is not in is nothing, not an error. **The cursor starts at the room's newest frame**
-the first time a process sees the task, never at zero, so a trigger created today does not fire
+the first time a process sees the task when the task carries no position, never at zero, so a trigger created today does not fire
 on last week's transcript; after a fire the position is persisted, so a restart cannot fire the
 same frames twice and frames that arrived while the process was down are caught up in one run.
 **A hit runs only once its position is on disk.** The position is written onto the task's
 record as it is at that moment, under the store's lock, and that is also where the hit is judged
 against the task as it is now. Nothing is written and nothing runs when the task is gone or was
 created anew under the id, is no longer an event task (changed to a clock schedule with its old
-trigger still on the record), watches another rule by now (another room, text or emoji; every
-field but the cursor is compared), or has already been read this far (another process wrote a
-position at or past this one: a position never moves back). A task switched off gets its position
-written and no run. The run gets the task as it is on disk, not the scheduler's older copy, and
+trigger still on the record), or has already been read this far (another process wrote a position
+at or past this one: a commit never writes a position below the stored one). A task whose rule on
+disk is no longer the one the scheduler's copy matched (another room, text or emoji; every field
+but the cursor is compared) is not run either: the watch is moved back (below), so the frames are
+read again under the rule on disk. A task switched off gets its position written and no run. The run gets the task as it is on disk, not the scheduler's older copy, and
 only the frames past the position the record carried.
 
 When the position cannot be written (the store busy for five seconds, not writable, or the task
@@ -208,8 +209,21 @@ tick, that account's other hits are moved back without a second wait, so a busy 
 wait per tick, not one per hit. Each hit's run is started on its own: one that cannot start does
 not touch the others (its position is written, so its frames count as consumed). The watch keeps
 each position bound to the room it counts in and to the task it was read for: positions count per
-room, and a task created anew under an id starts at the room's newest frame, like a new task.
-The per-task run lock keeps a trigger that fires again mid-run from overlapping it.
+room, and a task created anew under an id is set again as on first sight.
+
+Where the position goes when the task changes: `create` writes a task without one, so a task
+created from a stored one (a replacement) starts at the room's newest frame and never runs what
+was said before it existed. An update that keeps the trigger in the same room keeps the higher of
+the stored and the given position (a lane that sends the trigger again, such as a prompt edit
+through the agent's tool, does not move it back); one that moves the trigger to another room
+drops it, the old room's number means nothing there. Named boundary: a trigger moved to another
+room and back between the ticks of two scheduler processes (the web app and a terminal that
+started its own) comes back without a position, so the process whose watch is behind can run
+frames the other has already run.
+
+The per-task run lock keeps a trigger that fires again mid-run from overlapping it. Named
+boundary: such a hit's position is already written when the run is refused as "already
+running", so its frames are consumed without a run of their own.
 
 **A prompt-lane run a room message started is a room turn.** The prompt is the user's, but the
 words steering the run are whoever spoke in the room, so the run is bound like the agent's own

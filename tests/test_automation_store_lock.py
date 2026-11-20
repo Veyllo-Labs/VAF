@@ -1084,11 +1084,111 @@ def test_one_busy_store_costs_one_wait_per_tick(rooms, monkeypatch):
     monkeypatch.setattr(auto_mod, "_STORE_LOCK_TIMEOUT_S", 0.2)
     with _Held(rooms.dir):
         tries.clear()
-        started = time.monotonic()
         assert _tick(scheduler) == 0
-        took = time.monotonic() - started
-    assert len(tries) == 1 and took < 0.6, (len(tries), round(took, 2))
+    # One lock attempt is one wait; the count is the budget, not the wall clock.
+    assert len(tries) == 1, len(tries)
     assert _tick(scheduler) == 10 and len(runs) == 10
+
+
+def test_a_half_written_task_file_is_not_taken_for_gone(rooms, monkeypatch):
+    """The task file does not parse once (a manual edit half written) when a hit commits: no
+    run, the task stays known, and the next tick runs the frames."""
+    import builtins
+    import io
+
+    path = rooms.dir / f"{EID}.json"
+    half = []
+
+    def open_(file, *a, **kw):
+        if half and Path(file) == path:
+            half.pop()
+            return io.StringIO('{"id": "' + EID + '", "name": "on ro')
+        return builtins.open(file, *a, **kw)
+
+    monkeypatch.setattr(auto_mod, "open", open_, raising=False)
+    scheduler, runs = _scheduler(monkeypatch)
+    _tick(scheduler)
+    rooms.r1.room.say(rooms.r1.guest, "go one")
+    half.append(1)
+    assert _tick(scheduler) == 0 and runs == [] and _cursor(rooms) is None
+    assert not half, "the half-written read never happened"
+    assert scheduler.get(EID) is not None, "the task was taken for gone"
+    assert _tick(scheduler) == 1 and _texts(runs) == [["go one"]]
+
+
+def test_a_rule_changed_on_disk_reads_the_frames_again_under_it(rooms, monkeypatch):
+    """The scheduler still holds the rule "go" when the rule on disk is already "stop", and
+    both are said: the stale report is not run, and the next tick runs "stop two" once."""
+    scheduler, runs = _scheduler(monkeypatch)
+    _tick(scheduler)
+    AutomationManager(user_scope_id=TENANT_A).update(
+        EID, trigger={"kind": "room_message", "room_id": "room-1", "match": "stop"})
+    rooms.r1.room.say(rooms.r1.guest, "go one")
+    rooms.r1.room.say(rooms.r1.guest, "stop two")
+    assert _tick(scheduler) == 0 and runs == []
+    assert _tick(scheduler) == 1 and _texts(runs) == [["stop two"]]
+    assert _tick(scheduler) == 0 and len(runs) == 1
+
+
+def test_a_task_created_from_a_stored_one_starts_at_the_rooms_newest_frame(rooms, monkeypatch):
+    """A stored task (carrying a read position) is reused to create its replacement: the new
+    task has read nothing, so a frame said before it existed never runs under it."""
+    scheduler, runs = _scheduler(monkeypatch)
+    _tick(scheduler)
+    rooms.r1.room.say(rooms.r1.guest, "go one")
+    assert _tick(scheduler) == 1
+    rooms.r1.room.say(rooms.r1.guest, "go two")          # said before the replacement
+    # Read through its own manager: `delete` switches off the object it deletes.
+    stored = AutomationManager(user_scope_id=TENANT_A).get(EID)
+    assert stored.trigger.get("cursor"), "the stored task carries no position"
+    editor = AutomationManager(user_scope_id=TENANT_A)
+    assert editor.delete(EID, permanent=True)
+    editor.create(stored)
+    assert "cursor" not in _disk(rooms.dir, EID)["trigger"]
+    scheduler.reload_tasks()
+    assert _tick(scheduler) == 0 and len(runs) == 1, "a frame from before the task ran"
+    rooms.r1.room.say(rooms.r1.guest, "go three")
+    assert _tick(scheduler) == 1 and _texts(runs)[-1] == ["go three"]
+
+
+def test_a_trigger_moved_to_another_room_takes_no_position_with_it(rooms, monkeypatch):
+    """The trigger moves to room-2 with room-1's position still in the dict: the position is
+    dropped, so room-2's frames are not skipped up to room-1's count."""
+    scheduler, runs = _scheduler(monkeypatch)
+    _tick(scheduler)
+    for n in range(12):
+        rooms.r1.room.say(rooms.r1.guest, f"idle {n}")
+    rooms.r1.room.say(rooms.r1.guest, "go one")
+    assert _tick(scheduler) == 1
+    carried = _disk(rooms.dir, EID)["trigger"]
+    assert carried["cursor"] > rooms.r2.room.store.highest_lamport() + 1
+    AutomationManager(user_scope_id=TENANT_A).update(EID, trigger=dict(carried, room_id="room-2"))
+    assert "cursor" not in _disk(rooms.dir, EID)["trigger"]
+    scheduler.reload_tasks()
+    assert _tick(scheduler) == 0
+    rooms.r2.room.say(rooms.r2.guest, "go later")
+    assert _tick(scheduler) == 1 and _texts(runs)[-1] == ["go later"]
+
+
+def test_an_edit_that_sends_the_same_trigger_keeps_its_position(rooms, monkeypatch):
+    """Two scheduler processes over one store: the first runs "go once" and writes its
+    position; an edit sends the same trigger again (without a position) with a new prompt;
+    the second process, whose watch is behind, must not run "go once" again. The position
+    also never moves back through an update that names a lower one."""
+    web, web_runs = _scheduler(monkeypatch)
+    cli, cli_runs = _scheduler(monkeypatch)
+    _tick(web)
+    _tick(cli)
+    said = rooms.r1.room.say(rooms.r1.guest, "go once")
+    assert _tick(web) == 1 and _texts(web_runs) == [["go once"]]
+    rule = {"kind": "room_message", "room_id": "room-1", "match": "go"}
+    editor = AutomationManager(user_scope_id=TENANT_A)
+    editor.update(EID, trigger=dict(rule), prompt="edited")
+    assert _cursor(rooms) == said.lamport
+    cli.reload_tasks()
+    assert _tick(cli) == 0 and cli_runs == [], "the other process ran the frame again"
+    editor.update(EID, trigger=dict(rule, cursor=1))
+    assert _cursor(rooms) == said.lamport, "an update moved the position back"
 
 
 def test_a_hit_of_a_deleted_task_misses_its_successor_with_the_same_rule(rooms, monkeypatch):

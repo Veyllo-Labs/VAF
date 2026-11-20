@@ -3250,8 +3250,12 @@ Stable public surface (safe to build on):
   call `watch.rewind(hit.task.id, hit.since)`, because the watch has already moved past
   those frames, and the next tick reports them again. The watch binds each position to the
   room it counts in and to the task's `incarnation` (when your task objects carry one), so
-  a task created anew under an id starts at the room's newest frame. The loop guard (the owner's own agent never fires
-  a trigger), the membership guard and the start-at-newest cursor are inside it, so a
+  a task created anew under an id, or one whose room changed, is set again as on first
+  sight: at the persisted `trigger["cursor"]` when it is positive, otherwise at the room's
+  newest frame. So drop `cursor` from the trigger when you change its room or create a task
+  from a stored one, and never move a persisted cursor back: a position belongs to one room
+  and one task, and a lower one replays frames. The loop guard (the owner's own agent never
+  fires a trigger), the membership guard and the start-at-newest cursor are inside it, so a
   scheduler built on it does not have to know them. The run a hit starts is driven by
   whoever spoke in the room, so treat it as a room turn: ask the room who that was with
   `room.wake_authority(scope, [f.sender for f in hit.frames])` (`from_user_only` is your

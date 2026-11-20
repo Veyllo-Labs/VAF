@@ -775,6 +775,28 @@ def _stored_cursor(trigger: Any) -> int:
         return 0
 
 
+def _without_cursor(trigger: Any) -> Any:
+    """A trigger without a read position: what a task that has read nothing carries."""
+    if not isinstance(trigger, dict) or "cursor" not in trigger:
+        return trigger
+    return {key: value for key, value in trigger.items() if key != "cursor"}
+
+
+def _carried_cursor(stored: Any, given: Any) -> Any:
+    """The trigger an update writes, with the read position it keeps. Positions count per
+    room: in the same room the higher of the stored and the given one stays, so an edit that
+    sends the trigger again (a prompt edit through a lane that rebuilds the trigger) does not
+    move the position back for another scheduler process that has not read this far; in
+    another room none stays, the old room's number means nothing there."""
+    if not isinstance(given, dict):
+        return given
+    bare = _without_cursor(given)
+    if not isinstance(stored, dict) or stored.get("room_id") != given.get("room_id"):
+        return bare
+    cursor = max(_stored_cursor(stored), _stored_cursor(given))
+    return dict(bare, cursor=cursor) if cursor > 0 else bare
+
+
 def _cursor_patch(fired: Dict[str, Any]) -> Callable[[Dict[str, Any]], bool]:
     """The change that writes a fired trigger's cursor onto a task record, and only when the
     record is still the event task whose rule fired and has not read this far already
@@ -843,21 +865,21 @@ def _read_task_record(path: Path, strict: bool = False) -> Optional[Dict[str, An
     AutomationTask would invent one per load, and a task whose id changes can never be found to
     be edited or deleted.
 
-    `strict`: a file that is there but cannot be read (an `OSError` other than a missing file)
-    raises instead of answering None, for a caller that must not take a passing read failure
-    for a deleted task."""
+    `strict`: only a missing file answers None. A file that is there but cannot be read (any
+    other `OSError`), does not parse (a manual edit half written) or holds no task record raises
+    instead, for a caller that must not take a passing state of the file for a deleted task."""
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except FileNotFoundError:
         return None
-    except OSError:
+    except (OSError, ValueError):
         if strict:
             raise
         return None
-    except ValueError:
-        return None
     if not isinstance(data, dict) or not str(data.get("id") or "").strip():
+        if strict:
+            raise ValueError("not a task record")
         return None
     return data
 
@@ -1343,9 +1365,11 @@ class AutomationManager:
 
         The cursor is committed onto the record as it is on disk, under the store lock
         (`_cursor_patch`), which is also where the hit is judged against the task as it
-        is now: a task gone or created anew under the id, no longer an event task, watching
-        another rule, or already read this far (another process) gets nothing written and
-        no run; a task switched off gets its cursor written and no run. The run gets the
+        is now: a task gone or created anew under the id, no longer an event task, or
+        already read this far (another process) gets nothing written and no run; a task
+        switched off gets its cursor written and no run. A task whose rule changed on disk
+        is rewound (below) instead of dropped: the scheduler's copy was older, and the
+        frames the watch read past may match the rule on disk. The run gets the
         task as it is on disk, never the scheduler's older copy, and only the frames past
         the cursor the record carried.
 
@@ -1387,6 +1411,13 @@ class AutomationManager:
                 continue
             except Exception as e:
                 rewind(hit, f"not committed: {e!r}")
+                continue
+            if current is not None and patch.reason == "rule changed":
+                # The scheduler's copy was older than the rule on disk, and the watch read
+                # past frames only the old rule was asked about. The commit put the current
+                # record into the cache, so the next report reads them again under the rule
+                # on disk (another room or a task created anew is set again by the watch).
+                rewind(hit, "rule changed")
                 continue
             if current is None or not patch.applied:
                 self._log_scheduler_event(
@@ -1774,6 +1805,9 @@ vaf automation delete <id>   # Delete task
         # next_run is calculated dynamically - no need to store it
         task = copy.deepcopy(task)
         task.incarnation = uuid.uuid4().hex[:12]
+        # A new task has read nothing yet: a cursor carried in (a stored task reused for its
+        # replacement) would make the watch start there and run frames said before it existed.
+        task.trigger = _without_cursor(task.trigger)
         path = self._path_for_task(task)
         with self._store_lock(path.parent):
             self._save_task(task)
@@ -1913,7 +1947,14 @@ vaf automation delete <id>   # Delete task
         fields = AutomationTask.__dataclass_fields__
         changes = {key: value for key, value in coerce_schedule_fields(kwargs).items()
                    if key in fields and key not in ("id", "user_scope_id", "incarnation")}
-        task = self._mutate_record(cached, lambda record: record.update(changes))
+        def apply(record: Dict[str, Any]) -> None:
+            stored = record.get("trigger")
+            record.update(changes)
+            if "trigger" in changes:
+                # The read position follows the room, never moves back within it.
+                record["trigger"] = _carried_cursor(stored, changes["trigger"])
+
+        task = self._mutate_record(cached, apply)
         if task is None:
             return None
 

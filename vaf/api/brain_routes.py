@@ -33,6 +33,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from vaf.api.config_routes import get_current_user_or_local_admin
+from vaf.core.path_jail import describe_error
 
 router = APIRouter(prefix="/api/agent", tags=["agent-brain"])
 
@@ -107,4 +108,4 @@ def get_brain(
             "agents": agents,
         }
     except Exception as e:
-        return {"error": str(e), **_EMPTY}
+        return {"error": describe_error(e), **_EMPTY}

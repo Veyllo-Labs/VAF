@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from vaf.auth.user_workspace import get_user_workspace
 from vaf.auth.database import get_auth_db
 from vaf.core.config import Config, get_local_admin_username
+from vaf.core.path_jail import describe_error
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +85,7 @@ async def get_persona(username: str = Depends(get_current_username)):
             "soul": ws.get_soul(),
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=describe_error(e))
 
 @router.put("/identity")
 async def update_identity(data: IdentityUpdate, username: str = Depends(get_current_username)):

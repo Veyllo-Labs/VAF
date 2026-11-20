@@ -26,6 +26,7 @@ from vaf.core.config import get_local_admin_scope_id
 
 # Use the same account-config SSOT as mail so calendar status sees the same accounts as Email
 from vaf.core.email_accounts import get_email_config as _get_email_config
+from vaf.core.path_jail import describe_error
 
 logger = logging.getLogger("vaf.api.calendar")
 
@@ -408,4 +409,4 @@ async def ensure_daily_check_automation(_user: Dict[str, Any] = Depends(_get_cur
         return {"ok": True, "created": True, "task_id": task.id}
     except Exception as e:
         logger.exception("Failed to ensure daily calendar check automation")
-        return {"ok": False, "created": False, "error": str(e)}
+        return {"ok": False, "created": False, "error": describe_error(e)}

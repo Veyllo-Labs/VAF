@@ -52,6 +52,7 @@ from vaf.auth.crypto import (
     get_totp_uri,
 )
 from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
+from vaf.core.path_jail import describe_error
 
 logger = logging.getLogger(__name__)
 
@@ -395,7 +396,7 @@ async def bootstrap(body: BootstrapRequest, request: Request, response: Response
         logger.exception("Bootstrap failed: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Setup failed: {e!s}",
+            detail=f"Setup failed: {describe_error(e)}",
         ) from e
 
 
@@ -935,7 +936,7 @@ async def _me_user_from_token(token: str) -> dict | None:
         except OSError:
             pass  # connection refused — retry
         except Exception as _db_err:
-            _err_str = str(_db_err).lower()
+            _err_str = describe_error(_db_err).lower()
             # Transient states must be RETRIED (not 401'd): a restart leaves Postgres briefly
             # "starting up" (asyncpg CannotConnectNowError) — that message has no "connect" keyword, so
             # it used to escape here → /me returned 401 + cleared the cookie → the user got logged out

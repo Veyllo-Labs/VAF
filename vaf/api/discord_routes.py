@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from vaf.api.user_routes import caller_is_admin, require_admin
 from vaf.core.channel_secrets import has_channel_secret
+from vaf.core.path_jail import describe_error
 
 logger = logging.getLogger("vaf.api.discord")
 
@@ -130,10 +131,13 @@ async def start_verification(request: StartVerificationRequest, _: Dict[str, Any
                 @client.event
                 async def on_error(event, *args, **kwargs):
                     global _verification_state
+                    import sys
                     import traceback
-                    error_msg = traceback.format_exc()
-                    logger.error(f"Discord error: {error_msg}")
-                    _verification_state["error"] = str(error_msg)
+                    logger.error(f"Discord error: {traceback.format_exc()}")
+                    # The traceback names the server's install folders; the reply gets the
+                    # error's own text, and an operating-system error only its reason.
+                    _verification_state["error"] = (
+                        f"Discord reported an error: {describe_error(sys.exc_info()[1])}")
                 
                 # Run the bot
                 client.run(request.bot_token)
@@ -142,7 +146,7 @@ async def start_verification(request: StartVerificationRequest, _: Dict[str, Any
                 _verification_state["error"] = "Invalid bot token. Please check and try again."
                 logger.error("Discord login failed: Invalid token")
             except Exception as e:
-                _verification_state["error"] = str(e)
+                _verification_state["error"] = describe_error(e)
                 logger.error(f"Discord bot error: {e}")
         
         # Start bot in background
@@ -162,7 +166,7 @@ async def start_verification(request: StartVerificationRequest, _: Dict[str, Any
         raise
     except Exception as e:
         logger.error(f"Failed to start verification: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=describe_error(e))
 
 
 @router.get("/verification-status")
@@ -363,7 +367,7 @@ async def get_discord_session_history(session_id: str, request: Request):
         }
     except Exception as e:
         logger.exception("Discord session history error: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=describe_error(e))
 
 
 @router.post("/stop")

@@ -19,6 +19,7 @@ from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel
 
 from vaf.core.config import is_admin_identity
+from vaf.core.path_jail import describe_error
 
 router = APIRouter(prefix="/api/supervisor", tags=["supervisor"])
 
@@ -103,7 +104,7 @@ async def supervisor_status(request: Request, session: Optional[str] = Query(Non
         liveness = float(Config.get("subagent_liveness_timeout_seconds", 60))
         tasks = ipc.get_active_tasks(session_id=session) if session else ipc.get_active_tasks()
     except Exception as exc:
-        return {"units": [], "error": str(exc)}
+        return {"units": [], "error": describe_error(exc)}
 
     if not admin:
         owned = _owned_session_ids(user.get("user_scope_id"))

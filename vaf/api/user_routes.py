@@ -17,6 +17,7 @@ import logging
 import secrets
 import uuid as uuid_module
 from datetime import datetime, timezone
+from vaf.core.path_jail import describe_error
 
 def _utc_now_naive():
     """Return naive UTC datetime for DB columns that use DateTime without timezone."""
@@ -368,7 +369,7 @@ async def create_user(data: UserCreate, _: Dict[str, Any] = Depends(require_admi
         logger.error(f"Failed to create user: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create user: {str(e)}"
+            detail=f"Failed to create user: {describe_error(e)}"
         )
 
 
@@ -408,7 +409,7 @@ async def get_user(user_id: str, _: Dict[str, Any] = Depends(require_admin)):
         logger.error(f"Failed to get user: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get user: {str(e)}"
+            detail=f"Failed to get user: {describe_error(e)}"
         )
 
 
@@ -534,7 +535,7 @@ async def update_user(user_id: str, data: UserUpdate, admin: Dict[str, Any] = De
         logger.error(f"Failed to update user: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to update user: {str(e)}"
+            detail=f"Failed to update user: {describe_error(e)}"
         )
 
 
@@ -605,7 +606,7 @@ async def reset_password(user_id: str, _: Dict[str, Any] = Depends(require_admin
         logger.error(f"Failed to reset password: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to reset password: {str(e)}"
+            detail=f"Failed to reset password: {describe_error(e)}"
         )
 
 
@@ -674,7 +675,7 @@ async def reset_2fa(user_id: str, _: Dict[str, Any] = Depends(require_admin)):
         logger.error(f"Failed to reset 2FA: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to reset 2FA: {str(e)}"
+            detail=f"Failed to reset 2FA: {describe_error(e)}"
         )
 
 
@@ -728,5 +729,5 @@ async def delete_user(user_id: str, admin: Dict[str, Any] = Depends(require_admi
         logger.error(f"Failed to delete user: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete user: {str(e)}"
+            detail=f"Failed to delete user: {describe_error(e)}"
         )

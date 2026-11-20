@@ -49,6 +49,7 @@ from vaf.core.update_check import (
     read_update_result,
     spawn_update_process,
 )
+from vaf.core.path_jail import describe_error
 
 router = APIRouter(prefix="/api/system", tags=["system"])
 
@@ -186,7 +187,7 @@ def _run_backup() -> None:
         _backup_state["result"] = {"name": result.path.name, "size": result.size,
                                    "members": result.members, "warnings": result.warnings}
     except Exception as e:      # a backup must never take the server with it
-        _backup_state["error"] = str(e)[:300]
+        _backup_state["error"] = describe_error(e)[:300]
     finally:
         _backup_state["running"] = False
         _backup_state["finished_at"] = _now()
@@ -235,7 +236,7 @@ def _run_profile_switch(profile: str, prune: bool) -> None:
     try:
         _profile_state["result"] = inference_profile.apply(profile, prune=prune)
     except Exception as e:      # a switch must never take the server with it
-        _profile_state["error"] = str(e)[:300]
+        _profile_state["error"] = describe_error(e)[:300]
     finally:
         _profile_state["running"] = False
         _profile_state["finished_at"] = _now()
@@ -307,7 +308,7 @@ def _run_engine_switch(engine: str, model: Optional[str], install: bool,
                                     progress=progress, output=_install_log())
         _engine_state["result"] = result.to_dict()
     except Exception as e:      # a switch must never take the server with it
-        _engine_state["error"] = str(e)[:300]
+        _engine_state["error"] = describe_error(e)[:300]
     finally:
         # finished_at first: a poll that sees running False reads a finished job.
         _engine_state["finished_at"] = _now()
@@ -376,7 +377,7 @@ def _run_repair() -> None:
         result = repair_service_stack(progress=progress)
         _repair_state["result"] = result
     except Exception as e:      # a repair must never take the server with it
-        _repair_state["error"] = str(e)[:300]
+        _repair_state["error"] = describe_error(e)[:300]
     finally:
         _repair_state["running"] = False
         _repair_state["finished_at"] = _now()
@@ -495,7 +496,7 @@ def update_apply(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
         except Exception as e:
             with _update_lock:
                 _update_started_at = None
-            raise HTTPException(status_code=500, detail=f"Could not start the updater: {e}")
+            raise HTTPException(status_code=500, detail=f"Could not start the updater: {describe_error(e)}")
     except BaseException:
         container_jobs.release(container_jobs.UPDATE)
         raise

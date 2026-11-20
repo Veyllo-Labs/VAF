@@ -16,6 +16,7 @@ from typing import Any, Dict, List
 from fastapi import APIRouter, HTTPException, Request
 
 from vaf.api.contact_routes import get_current_vaf_user
+from vaf.core.path_jail import describe_error
 
 router = APIRouter(prefix="/api/sandbox", tags=["sandbox"])
 
@@ -58,7 +59,7 @@ def _overview(scope, everyone: bool) -> Dict[str, Any]:
     except Exception as e:
         # docker not answering or timing out: the same answer _act gives, as data the
         # section can show rather than an internal error.
-        return {"available": False, "reason": f"sandbox unavailable: {e}"[:300],
+        return {"available": False, "reason": f"sandbox unavailable: {describe_error(e)}"[:300],
                 "environments": [], "processes": []}
     return {"available": True, "environments": [_row(e, with_owner=everyone) for e in envs],
             "processes": procs, "processes_scope": "own"}
@@ -92,7 +93,7 @@ async def _act(request: Request, env_id: str, action: str, all: int) -> Dict[str
     except Exception as e:
         # docker missing, not answering or timing out: the sandbox is unavailable, which
         # is not the same as "no such environment".
-        raise HTTPException(status_code=503, detail=f"sandbox unavailable: {e}"[:300])
+        raise HTTPException(status_code=503, detail=f"sandbox unavailable: {describe_error(e)}"[:300])
     return {"ok": True, "id": env.id, "action": action}
 
 

@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse, FileResponse
 from fastapi import HTTPException, Query
 from starlette.requests import Request
 import asyncio
+import errno
 import uvicorn
 import threading
 import inspect
@@ -34,7 +35,7 @@ from vaf.core.channel_secrets import has_channel_secret
 from vaf.version import __version__
 from vaf.core.log_helper import append_domain_log, get_dated_log_path, is_debug_logging_enabled
 from pathlib import Path
-from vaf.core.path_jail import PathEscape, contained_path, safe_entry_name
+from vaf.core.path_jail import PathEscape, contained_path, describe_error, safe_entry_name
 from vaf.core.rate_window import RateWindow
 from vaf.network.binding import connection_client_ip
 from typing import Any, Dict, Optional, List
@@ -100,13 +101,24 @@ def _ensure_headless_agent_runner(origin: str = "web_server") -> None:
 
 @app.exception_handler(Exception)
 async def json_exception_handler(request, exc):
-    """Ensure unhandled exceptions return JSON (for API clients) instead of HTML."""
+    """Every unhandled exception answers JSON (for API clients), never an HTML page.
+
+    An `HTTPException` answers its own status and detail. Anything else answers 500 with
+    `describe_error`'s text: an operating-system error gives its reason only ("File name too
+    long"), because its own text quotes the absolute path it failed on, the server's home and
+    data folders included, and this answer reaches a remote room member as well as the
+    account. The traceback goes to the server log with the request's path; never its query,
+    which carries a room seat (docs/agents/A2A_PROTOCOL.md)."""
     from fastapi.responses import JSONResponse
-    # HTTPException: return JSON; other exceptions: 500 with error message
     if isinstance(exc, HTTPException):
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail, "error": str(exc.detail)})
-    log_uvicorn.exception("Unhandled exception: %s", exc)
-    return JSONResponse(status_code=500, content={"ok": False, "error": str(exc), "detail": str(exc)})
+    # Not inside an `except`, so the traceback is handed over explicitly: exception() alone
+    # logged "NoneType: None" here.
+    url = getattr(request, "url", None)
+    log_uvicorn.error("Unhandled exception on %s %s", getattr(request, "method", "-"),
+                      getattr(url, "path", "-"), exc_info=(type(exc), exc, exc.__traceback__))
+    text = describe_error(exc, log=False)
+    return JSONResponse(status_code=500, content={"ok": False, "error": text, "detail": text})
 
 
 # CORS admits exactly one origin: the Web UI on this machine, the only page that calls the
@@ -3060,7 +3072,7 @@ async def whare_wananga_tool_knowledge(name: str):
         from vaf.whare_wananga import load as _ww_load, learned_state as _ww_state
         return {"ok": True, "tool": name, "state": _ww_state(name), "record": _ww_load(name)}
     except Exception as e:
-        return {"ok": False, "tool": name, "state": "unlearned", "record": None, "error": str(e)}
+        return {"ok": False, "tool": name, "state": "unlearned", "record": None, "error": describe_error(e)}
 
 
 @app.post("/api/whare_wananga/train/{name}")
@@ -3090,7 +3102,7 @@ async def whare_wananga_train(name: str):
         print(f"[WHARE-WANANGA] training started: {name} (validate/refine loop)")
         return {"ok": True, "tool": name, **st}
     except Exception as e:
-        return {"ok": False, "tool": name, "state": "error", "message": str(e)}
+        return {"ok": False, "tool": name, "state": "error", "message": describe_error(e)}
 
 
 @app.get("/api/whare_wananga/training_status/{name}")
@@ -3100,7 +3112,7 @@ async def whare_wananga_training_status(name: str):
         from vaf.whare_wananga import jobs
         return {"ok": True, "tool": name, "status": jobs.get_status(name)}
     except Exception as e:
-        return {"ok": False, "tool": name, "status": None, "error": str(e)}
+        return {"ok": False, "tool": name, "status": None, "error": describe_error(e)}
 
 
 @app.get("/api/whare_wananga/active_runs")
@@ -3119,7 +3131,7 @@ async def whare_wananga_active_runs():
         from vaf.whare_wananga import active_runs
         return {"ok": True, "runs": active_runs()}
     except Exception as e:
-        return {"ok": False, "runs": [], "error": str(e)}
+        return {"ok": False, "runs": [], "error": describe_error(e)}
 
 
 @app.post("/api/subagent/stream")
@@ -3431,14 +3443,14 @@ async def get_tool_source(name: str):
                  except Exception as ex:
                      print(f"[DEBUG] File read fallback failed: {ex}")
                  
-                 return {"error": f"Failed to read source: {e}"}
+                 return {"error": f"Failed to read source: {describe_error(e)}"}
         else:
              print(f"[DEBUG] Tool '{name}' not found in agent.tools")
              print(f"[DEBUG] Available tools: {list(manager.agent_instance.tools.keys())}")
              
     except Exception as e:
         print(f"[DEBUG] General error in get_tool_source: {e}")
-        return {"error": str(e)}
+        return {"error": describe_error(e)}
     return {"error": "Tool not found"}
 
 # Sounds directory for Web UI completion/notification (vaf/media/sounds)
@@ -3740,7 +3752,7 @@ async def upload_session_workspace_file(req: WorkspaceUploadRequest, request: Re
         with open(target, "wb") as f:
             f.write(data)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Write failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Write failed: {describe_error(e)}")
     return {"ok": True, "name": name, "size": len(data)}
 
 
@@ -3772,7 +3784,7 @@ async def create_session_workspace_folder(req: WorkspaceMkdirRequest, request: R
     try:
         os.mkdir(target)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Create failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Create failed: {describe_error(e)}")
     return {"ok": True, "name": name}
 
 
@@ -3817,7 +3829,7 @@ async def delete_session_workspace_entry(req: WorkspaceDeleteRequest, request: R
         else:
             os.remove(target)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Delete failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Delete failed: {describe_error(e)}")
     return {"ok": True, "name": name}
 
 
@@ -4226,7 +4238,7 @@ async def delete_my_workspace(req: WorkspaceFolderDeleteRequest, request: Reques
     try:
         _sh.rmtree(target)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Delete failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Delete failed: {describe_error(e)}")
     return {"ok": True, "sessionId": sid}
 
 
@@ -4394,8 +4406,15 @@ def _allowed_file_path(path_str: str, request: Request, *, mode: str = "read",
         if not scope or not jail_allows(target, user_scope_id=scope, user_role=user.get("role"),
                                         mode=mode):
             raise HTTPException(status_code=403, detail="Access denied")
-    if must_exist and not target.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
+    if must_exist:
+        # A path the OS cannot even look at (a name over 255 characters, no permission on a
+        # folder above it) is not a file to serve; its OSError quotes the absolute path.
+        try:
+            is_file = target.is_file()
+        except OSError:
+            is_file = False
+        if not is_file:
+            raise HTTPException(status_code=404, detail="File not found")
     return target
 
 
@@ -4696,7 +4715,7 @@ async def get_file_as_html(request: Request, path: str = Query(..., description=
     except ImportError as e:
         raise HTTPException(status_code=503, detail=f"Support not installed: {e}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to convert to HTML: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to convert to HTML: {describe_error(e)}")
 
 
 @app.get("/api/file/docx-model")
@@ -4718,7 +4737,7 @@ async def get_file_as_docx_model(request: Request, path: str = Query(..., descri
     except ImportError as e:
         raise HTTPException(status_code=503, detail=f"DOCX support not installed: {e}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to convert docx to native model: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to convert docx to native model: {describe_error(e)}")
 
 
 class FileSaveRequest(BaseModel):
@@ -4788,7 +4807,7 @@ def _save_editor_file(target, data: bytes, base_revision: Optional[str], request
             "code": "conflict", "path": str(dest), "current_revision": conflict.current,
             "message": "The file changed on disk since it was opened."})
     except OSError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save file: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {describe_error(e)}")
     return {"status": "ok", "path": str(dest), "revision": revision, "redirected": redirected}
 
 
@@ -4805,7 +4824,7 @@ async def save_file_as_docx_native(body: FileSaveDocxNativeRequest, request: Req
     except ImportError as e:
         raise HTTPException(status_code=503, detail=f"DOCX support not installed: {e}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save native docx: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save native docx: {describe_error(e)}")
     return await asyncio.to_thread(_save_editor_file, target, data, body.base_revision, request,
                                    office=True, as_copy=body.as_copy)
 
@@ -4902,7 +4921,7 @@ async def save_file_as_xlsx(body: FileSaveRequest, request: Request):
     except ImportError:
         raise HTTPException(status_code=503, detail="Excel support not installed. Run: pip install openpyxl")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save xlsx: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save xlsx: {describe_error(e)}")
     return await asyncio.to_thread(_save_editor_file, target, data, body.base_revision, request,
                                    office=True, as_copy=body.as_copy)
 
@@ -4916,7 +4935,7 @@ async def save_file_as_pptx(body: FileSaveRequest, request: Request):
     except ImportError:
         raise HTTPException(status_code=503, detail="PowerPoint support not installed. Run: pip install python-pptx")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save pptx: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save pptx: {describe_error(e)}")
     return await asyncio.to_thread(_save_editor_file, target, data, body.base_revision, request,
                                    office=True, as_copy=body.as_copy)
 
@@ -5016,7 +5035,7 @@ async def get_workflow_details(wf_id: str):
             }
         return {"error": "Workflow not found"}
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": describe_error(e)}
 
 # Auth cookie name (must match auth_routes) so WebSocket can read JWT when frontend doesn't pass ?token=
 VAF_TOKEN_COOKIE = "vaf_token"
@@ -5941,7 +5960,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 try:
                                     room.cast(identity, vote_id, choice)
                                 except Exception as _vote_err:
-                                    return f"Could not cast that vote: {_vote_err}"
+                                    return f"Could not cast that vote: {describe_error(_vote_err)}"
 
                             elif type == "room_react":
                                 # The person reacting as themselves, on the same lane their
@@ -5955,7 +5974,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 try:
                                     room.react(identity, target, emoji)
                                 except Exception as _react_err:
-                                    return f"Could not react: {_react_err}"
+                                    return f"Could not react: {describe_error(_react_err)}"
 
                             elif type == "rename_room":
                                 title = str(cmd.get("title") or "").strip()
@@ -6623,7 +6642,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             await websocket.send_json({
                                 "type": "model_preview",
                                 "repo_id": repo_id,
-                                "error": str(e),
+                                "error": describe_error(e),
                                 "gguf_files": []
                             })
 
@@ -6729,9 +6748,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                               if is_selectable_model(f.name)]
                                 return True, None, new_models
                             except InterruptedError as e:
-                                return False, str(e) or "Download cancelled", []
+                                return False, describe_error(e) or "Download cancelled", []
                             except Exception as e:
-                                return False, str(e), []
+                                return False, describe_error(e), []
 
                         async def run_download():
                             nonlocal progress_queue, ws_id
@@ -6770,7 +6789,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             try:
                                 success, err, new_models = await download_task
                             except Exception as e:
-                                success, err, new_models = False, str(e), []
+                                success, err, new_models = False, describe_error(e), []
                             finally:
                                 _active_model_download_cancels.pop(ws_id, None)
                                 drain_task.cancel()
@@ -6935,7 +6954,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             await websocket.send_json({
                                 "type": "config_saved",
                                 "status": "error",
-                                "error": str(e),
+                                "error": describe_error(e),
                                 "requires_refresh": False,
                             })
                             continue
@@ -7057,7 +7076,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 await websocket.send_json({"type": "contact_reply_result", "ok": True, "decision": "reject", "replyId": reply_id})
                         except Exception as e:
                             log("WebServer", f"contact_reply_decision failed: {e}")
-                            await websocket.send_json({"type": "contact_reply_result", "ok": False, "error": str(e)[:200], "replyId": reply_id})
+                            await websocket.send_json({"type": "contact_reply_result", "ok": False, "error": describe_error(e)[:200], "replyId": reply_id})
 
                 elif type == "speaker_confirm_reply":
                     # Web-card answer to a speaker confirmation (yes / no /
@@ -7095,7 +7114,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         log("WebServer", f"speaker_confirm_reply failed: {e}")
                         await websocket.send_json({
                             "type": "speaker_confirm_result", "ok": False,
-                            "error": str(e)[:200], "confirmId": cmd.get("confirmId") or "",
+                            "error": describe_error(e)[:200], "confirmId": cmd.get("confirmId") or "",
                         })
 
                 elif type == "gate_response":
@@ -7864,10 +7883,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         })
                     except Exception as e:
                         import traceback as _tb
-                        _tb_str = _tb.format_exc()
-                        log("WebServer", f"set_sidebar_documents FAILED: {e}\n{_tb_str}")
+                        log("WebServer", f"set_sidebar_documents FAILED: {e}\n{_tb.format_exc()}")
                         log_attachment("SAVE_FAILED", session=session_id, error=str(e),
-                            tb=_tb_str[-400:])
+                            tb=_tb.format_exc()[-400:])
                         # Use whatever contents were computed before the failure.
                         # Sending [] here would wipe the user's attached documents from
                         # the viewer even when file extraction succeeded but session save
@@ -7876,7 +7894,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             "type": "sidebar_documents_set",
                             "contents": contents,
                             "sessionId": session_id,
-                            "error": str(e)
+                            "error": describe_error(e)
                         })
 
                 elif type == "get_tools":
@@ -7964,7 +7982,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         await websocket.send_json({
                             "type": "tools_list",
                             "tools": [],
-                            "error": str(e),
+                            "error": describe_error(e),
                         })
 
                 # ── Custom Tool Management (admin-only) ───────────────────────────
@@ -8025,7 +8043,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     except Exception as e:
                         await websocket.send_json({
                             "type": "custom_tool_error",
-                            "error": str(e),
+                            "error": describe_error(e),
                         })
 
                 elif type == "update_custom_tool":
@@ -8063,7 +8081,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     except Exception as e:
                         await websocket.send_json({
                             "type": "custom_tool_error",
-                            "error": str(e),
+                            "error": describe_error(e),
                         })
 
                 elif type == "delete_custom_tool":
@@ -8098,7 +8116,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     except Exception as e:
                         await websocket.send_json({
                             "type": "custom_tool_error",
-                            "error": str(e),
+                            "error": describe_error(e),
                         })
 
                 elif type == "get_mcp_servers":
@@ -8107,7 +8125,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         agent = manager.agent_instance if manager else None
                         await websocket.send_json({"type": "mcp_servers", "servers": _mcp_servers_payload(agent)})
                     except Exception as e:
-                        await websocket.send_json({"type": "mcp_server_error", "error": str(e)})
+                        await websocket.send_json({"type": "mcp_server_error", "error": describe_error(e)})
 
                 elif type in ("create_mcp_server", "update_mcp_server"):
                     # Add or edit an MCP server in mcp_servers.json, then hot-reload.
@@ -8147,7 +8165,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             await websocket.send_json({"type": "mcp_server_saved", "name": _ms_name, "servers": _mcp_servers_payload(agent)})
                             await _broadcast_tools_update(manager)
                     except Exception as e:
-                        await websocket.send_json({"type": "mcp_server_error", "error": str(e)})
+                        await websocket.send_json({"type": "mcp_server_error", "error": describe_error(e)})
 
                 elif type == "delete_mcp_server":
                     # Remove an MCP server from mcp_servers.json, then hot-reload. Payload: { name }
@@ -8169,7 +8187,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             await websocket.send_json({"type": "mcp_server_deleted", "name": _md_name, "servers": _mcp_servers_payload(agent)})
                             await _broadcast_tools_update(manager)
                     except Exception as e:
-                        await websocket.send_json({"type": "mcp_server_error", "error": str(e)})
+                        await websocket.send_json({"type": "mcp_server_error", "error": describe_error(e)})
 
                 elif type == "test_mcp_server":
                     # Probe a server config (without saving) so the admin can validate it in the
@@ -8204,7 +8222,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 token=data.get("token") or None, user_scope_id=_tm_scope)
                             await websocket.send_json({"type": "mcp_server_test_result", **_tm_res})
                     except Exception as e:
-                        await websocket.send_json({"type": "mcp_server_test_result", "connected": False, "tool_count": 0, "tools": [], "error": str(e)})
+                        await websocket.send_json({"type": "mcp_server_test_result", "connected": False, "tool_count": 0, "tools": [], "error": describe_error(e)})
 
                 elif type == "update_custom_tool_permissions":
                     # Change which users can see a custom tool.
@@ -8239,7 +8257,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     except Exception as e:
                         await websocket.send_json({
                             "type": "custom_tool_error",
-                            "error": str(e),
+                            "error": describe_error(e),
                         })
 
                 elif type == "get_custom_tool_source":
@@ -8269,7 +8287,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     except Exception as e:
                         await websocket.send_json({
                             "type": "custom_tool_error",
-                            "error": str(e),
+                            "error": describe_error(e),
                         })
                 
                 elif type == "get_custom_tool_users":
@@ -8315,7 +8333,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     except Exception as e:
                         await websocket.send_json({
                             "type": "custom_tool_error",
-                            "error": str(e),
+                            "error": describe_error(e),
                         })
 
                 elif type == "get_workflows":
@@ -8331,7 +8349,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         await websocket.send_json({
                             "type": "workflows_list",
                             "workflows": [],
-                            "error": str(e)
+                            "error": describe_error(e)
                         })
 
                 elif type == "get_workflow_run_state":
@@ -8424,7 +8442,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             await websocket.send_json({"type": "workflow_created", "workflow_id": _wf_id})
                             await websocket.send_json({"type": "workflows_list", "workflows": list_templates()})
                         except Exception as e:
-                            await websocket.send_json({"type": "workflow_error", "error": str(e)})
+                            await websocket.send_json({"type": "workflow_error", "error": describe_error(e)})
 
                 elif type == "update_workflow":
                     _wf_scope       = manager.get_connection_user(websocket)
@@ -8479,7 +8497,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             await websocket.send_json({"type": "workflow_updated", "workflow_id": _wf_id})
                             await websocket.send_json({"type": "workflows_list", "workflows": list_templates()})
                         except Exception as e:
-                            await websocket.send_json({"type": "workflow_error", "error": str(e)})
+                            await websocket.send_json({"type": "workflow_error", "error": describe_error(e)})
 
                 elif type == "delete_workflow":
                     _wf_scope       = manager.get_connection_user(websocket)
@@ -8511,7 +8529,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             await websocket.send_json({"type": "workflow_deleted", "workflow_id": _wf_id})
                             await websocket.send_json({"type": "workflows_list", "workflows": list_templates()})
                         except Exception as e:
-                            await websocket.send_json({"type": "workflow_error", "error": str(e)})
+                            await websocket.send_json({"type": "workflow_error", "error": describe_error(e)})
 
                 # ─────────────────────────────────────────────────────────────
                 # SKILLS (Anthropic Agent Skills / SKILL.md). The second routing
@@ -8537,7 +8555,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 _s["can_manage"] = False
                         await websocket.send_json({"type": "skills_list", "skills": _skills})
                     except Exception as e:
-                        await websocket.send_json({"type": "skills_list", "skills": [], "error": str(e)})
+                        await websocket.send_json({"type": "skills_list", "skills": [], "error": describe_error(e)})
 
                 elif type == "get_skill_source":
                     # Return the raw SKILL.md text for the editor (admin-only).
@@ -8553,7 +8571,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             _ss_src = _skr.get_skill_md_source(_ss_id)
                             await websocket.send_json({"type": "skill_source", "skill_id": _ss_id, "source": _ss_src or ""})
                     except Exception as e:
-                        await websocket.send_json({"type": "skill_error", "error": str(e)})
+                        await websocket.send_json({"type": "skill_error", "error": describe_error(e)})
 
                 elif type in ("create_skill", "update_skill"):
                     _sk_scope = manager.get_connection_user(websocket)
@@ -8661,7 +8679,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 })
                                 await _broadcast_skills_update(manager)
                         except Exception as e:
-                            await websocket.send_json({"type": "skill_error", "error": str(e)})
+                            await websocket.send_json({"type": "skill_error", "error": describe_error(e)})
 
                 elif type == "delete_skill":
                     _sk_scope = manager.get_connection_user(websocket)
@@ -8679,7 +8697,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             await websocket.send_json({"type": "skill_deleted", "skill_id": _sk_id})
                             await _broadcast_skills_update(manager)
                         except Exception as e:
-                            await websocket.send_json({"type": "skill_error", "error": str(e)})
+                            await websocket.send_json({"type": "skill_error", "error": describe_error(e)})
 
                 elif type == "update_skill_permissions":
                     # Change which users can see a skill (mirror update_custom_tool_permissions).
@@ -8697,7 +8715,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             await websocket.send_json({"type": "skill_permissions_updated", "skill_id": _sk_id, "shared_with": _shared})
                             await _broadcast_skills_update(manager)
                     except Exception as e:
-                        await websocket.send_json({"type": "skill_error", "error": str(e)})
+                        await websocket.send_json({"type": "skill_error", "error": describe_error(e)})
 
                 elif type == "upload_skill":
                     # Import an uploaded skill .zip (folder bundle). Payload:
@@ -8742,7 +8760,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 await websocket.send_json({"type": "skill_created", "skill_id": _sid})
                                 await _broadcast_skills_update(manager)
                         except Exception as e:
-                            await websocket.send_json({"type": "skill_error", "error": str(e)})
+                            await websocket.send_json({"type": "skill_error", "error": describe_error(e)})
                         finally:
                             if _tmpzip:
                                 try:
@@ -8762,7 +8780,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         await websocket.send_json({
                             "type": "trusted_sources_list",
                             "categories": [],
-                            "error": str(e)
+                            "error": describe_error(e)
                         })
 
                 elif type == "add_trusted_source":
@@ -8790,7 +8808,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             payload = _get_trusted_sources_for_ui()
                             await websocket.send_json({"type": "trusted_source_updated", "ok": True, "categories": payload.get("categories", [])})
                     except Exception as e:
-                        await websocket.send_json({"type": "trusted_source_updated", "ok": False, "error": str(e)})
+                        await websocket.send_json({"type": "trusted_source_updated", "ok": False, "error": describe_error(e)})
 
                 elif type == "create_trusted_category":
                     try:
@@ -8811,7 +8829,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 payload = _get_trusted_sources_for_ui()
                                 await websocket.send_json({"type": "trusted_source_updated", "ok": True, "categories": payload.get("categories", [])})
                     except Exception as e:
-                        await websocket.send_json({"type": "trusted_source_updated", "ok": False, "error": str(e)})
+                        await websocket.send_json({"type": "trusted_source_updated", "ok": False, "error": describe_error(e)})
 
                 elif type == "delete_trusted_category":
                     try:
@@ -8830,7 +8848,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 payload = _get_trusted_sources_for_ui()
                                 await websocket.send_json({"type": "trusted_source_updated", "ok": True, "categories": payload.get("categories", [])})
                     except Exception as e:
-                        await websocket.send_json({"type": "trusted_source_updated", "ok": False, "error": str(e)})
+                        await websocket.send_json({"type": "trusted_source_updated", "ok": False, "error": describe_error(e)})
 
                 elif type == "remove_trusted_source":
                     try:
@@ -8855,7 +8873,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         payload = _get_trusted_sources_for_ui()
                         await websocket.send_json({"type": "trusted_source_updated", "ok": True, "categories": payload.get("categories", [])})
                     except Exception as e:
-                        await websocket.send_json({"type": "trusted_source_updated", "ok": False, "error": str(e)})
+                        await websocket.send_json({"type": "trusted_source_updated", "ok": False, "error": describe_error(e)})
 
                 # AUTOMATIONS. Every branch that reads or changes the task store asks
                 # `AutomationAccess`: the unscoped `AutomationManager()` holds every account's
@@ -8880,7 +8898,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         await websocket.send_json({
                             "type": "automations_list",
                             "automations": [],
-                            "error": str(e)
+                            "error": describe_error(e)
                         })
 
                 elif type == "create_automation":
@@ -8956,7 +8974,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         await websocket.send_json({
                             "type": "create_automation_result",
                             "ok": False,
-                            "error": str(e)
+                            "error": describe_error(e)
                         })
 
                 elif type == "delete_automation":
@@ -8972,7 +8990,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         ok = bool(mgr is not None and mgr.delete(task_id, permanent=True))
                         await websocket.send_json({"type": "delete_automation_result", "ok": ok})
                     except Exception as e:
-                        await websocket.send_json({"type": "delete_automation_result", "ok": False, "error": str(e)})
+                        await websocket.send_json({"type": "delete_automation_result", "ok": False, "error": describe_error(e)})
 
                 elif type == "update_automation":
                     try:
@@ -9031,7 +9049,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             "automation": _automation_wire(updated),
                         })
                     except Exception as e:
-                        await websocket.send_json({"type": "update_automation_result", "ok": False, "error": str(e)})
+                        await websocket.send_json({"type": "update_automation_result", "ok": False, "error": describe_error(e)})
 
                 elif type == "get_automation_notes":
                     try:
@@ -9040,7 +9058,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         notes = list_notes(user_scope_id)
                         await websocket.send_json({"type": "automation_notes_list", "notes": notes})
                     except Exception as e:
-                        await websocket.send_json({"type": "automation_notes_list", "notes": [], "error": str(e)})
+                        await websocket.send_json({"type": "automation_notes_list", "notes": [], "error": describe_error(e)})
 
                 elif type == "get_automation_todos":
                     try:
@@ -9049,7 +9067,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         todos = list_todos(user_scope_id)
                         await websocket.send_json({"type": "automation_todos_list", "todos": todos})
                     except Exception as e:
-                        await websocket.send_json({"type": "automation_todos_list", "todos": [], "error": str(e)})
+                        await websocket.send_json({"type": "automation_todos_list", "todos": [], "error": describe_error(e)})
 
                 elif type == "get_thinking_workspace_handoffs":
                     try:
@@ -9059,7 +9077,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         handoffs = list_pending_handoffs(user_scope_id)
                         await websocket.send_json({"type": "thinking_workspace_handoffs_list", "handoffs": handoffs})
                     except Exception as e:
-                        await websocket.send_json({"type": "thinking_workspace_handoffs_list", "handoffs": [], "error": str(e)})
+                        await websocket.send_json({"type": "thinking_workspace_handoffs_list", "handoffs": [], "error": describe_error(e)})
 
                 elif type == "approve_thinking_workspace_handoff":
                     try:
@@ -9132,7 +9150,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             "type": "thinking_workspace_handoff_result",
                             "ok": False,
                             "action": "approve",
-                            "error": str(e),
+                            "error": describe_error(e),
                         })
 
                 elif type == "reject_thinking_workspace_handoff":
@@ -9242,7 +9260,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             "type": "thinking_workspace_handoff_result",
                             "ok": False,
                             "action": "reject",
-                            "error": str(e),
+                            "error": describe_error(e),
                         })
 
                 elif type == "get_notifications":
@@ -9253,7 +9271,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         notifications = get_notifications(user_scope_id, limit=limit)
                         await websocket.send_json({"type": "notifications_list", "notifications": notifications})
                     except Exception as e:
-                        await websocket.send_json({"type": "notifications_list", "notifications": [], "error": str(e)})
+                        await websocket.send_json({"type": "notifications_list", "notifications": [], "error": describe_error(e)})
 
                 elif type == "create_automation_note":
                     try:
@@ -9267,7 +9285,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         note = add_note(user_scope_id, content, title=title)
                         await websocket.send_json({"type": "create_automation_note_result", "ok": True, "note": note})
                     except Exception as e:
-                        await websocket.send_json({"type": "create_automation_note_result", "ok": False, "error": str(e)})
+                        await websocket.send_json({"type": "create_automation_note_result", "ok": False, "error": describe_error(e)})
 
                 elif type == "create_automation_todo":
                     try:
@@ -9281,7 +9299,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         todo = add_todo(user_scope_id, text, due_at=due_at)
                         await websocket.send_json({"type": "create_automation_todo_result", "ok": True, "todo": todo})
                     except Exception as e:
-                        await websocket.send_json({"type": "create_automation_todo_result", "ok": False, "error": str(e)})
+                        await websocket.send_json({"type": "create_automation_todo_result", "ok": False, "error": describe_error(e)})
 
                 elif type == "update_automation_todo":
                     try:
@@ -9300,7 +9318,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             continue
                         await websocket.send_json({"type": "update_automation_todo_result", "ok": True, "todo": updated})
                     except Exception as e:
-                        await websocket.send_json({"type": "update_automation_todo_result", "ok": False, "error": str(e)})
+                        await websocket.send_json({"type": "update_automation_todo_result", "ok": False, "error": describe_error(e)})
 
                 elif type == "delete_automation_note":
                     try:
@@ -9313,7 +9331,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         ok = delete_note(user_scope_id, note_id)
                         await websocket.send_json({"type": "delete_automation_note_result", "ok": ok, "id": note_id if ok else None})
                     except Exception as e:
-                        await websocket.send_json({"type": "delete_automation_note_result", "ok": False, "error": str(e)})
+                        await websocket.send_json({"type": "delete_automation_note_result", "ok": False, "error": describe_error(e)})
 
                 elif type == "delete_automation_todo":
                     try:
@@ -9326,7 +9344,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         ok = delete_todo(user_scope_id, todo_id)
                         await websocket.send_json({"type": "delete_automation_todo_result", "ok": ok, "id": todo_id if ok else None})
                     except Exception as e:
-                        await websocket.send_json({"type": "delete_automation_todo_result", "ok": False, "error": str(e)})
+                        await websocket.send_json({"type": "delete_automation_todo_result", "ok": False, "error": describe_error(e)})
 
                 elif type == "process_audio":
                     # Process audio for STT: Docker (HTTP) or local (faster-whisper)
@@ -9442,7 +9460,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             except Exception as transcribe_error:
                                 await websocket.send_json({
                                     "type": "stt_error",
-                                    "error": f"Transcription failed: {str(transcribe_error)}"
+                                    "error": f"Transcription failed: {describe_error(transcribe_error)}"
                                 })
                                 continue
 
@@ -9492,7 +9510,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     except Exception as e:
                         await websocket.send_json({
                             "type": "stt_error",
-                            "error": str(e)
+                            "error": describe_error(e)
                         })
                     finally:
                         if temp_path and os.path.exists(temp_path):
@@ -10750,7 +10768,13 @@ async def a2a_workspace_fetch(room_id: str, request: Request,
     def _fetch():
         _room, workspace = _a2a_workspace_for_seat(room_id, seat, request)
         target = _a2a_workspace_member_path(workspace, path)
-        if not target.is_file():
+        # A path the OS cannot look at (a name too long for it) is no file in this workspace,
+        # and its OSError would quote the host's absolute workspace path to a remote peer.
+        try:
+            is_file = target.is_file()
+        except OSError:
+            is_file = False
+        if not is_file:
             raise HTTPException(status_code=404, detail="no such file in this workspace")
         return target.read_bytes(), target.name
 
@@ -10780,8 +10804,17 @@ async def a2a_workspace_push(room_id: str, request: Request,
     def _push():
         _room, workspace = _a2a_workspace_for_seat(room_id, seat, request)
         target = _a2a_workspace_member_path(workspace, path)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(body)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(body)
+        except OSError as e:
+            # The peer chose the path, so a name this host cannot store is the peer's error;
+            # any other failure is ours. Neither answer carries the host's workspace path.
+            # ERROR_FILENAME_EXCED_RANGE (206) is Windows' word for the same thing.
+            if e.errno == errno.ENAMETOOLONG or getattr(e, "winerror", None) == 206:
+                raise HTTPException(status_code=400, detail="path is too long for this host")
+            raise HTTPException(status_code=500,
+                                detail=f"could not store the file: {describe_error(e)}")
         return {"room": room_id,
                 "path": target.relative_to(workspace.resolve()).as_posix(),
                 "size": len(body)}
@@ -10860,7 +10893,7 @@ async def a2a_room_endpoint(websocket: WebSocket, room_id: str,
     except Exception as e:
         _A2A_OUTBOXES.get(room.room_id, {}).pop(identity.peer_id, None)
         log("API", f"A2A refused {identity.peer_id} in {room.room_id}: {e}")
-        await websocket.close(code=4009, reason=str(e))
+        await websocket.close(code=4009, reason=describe_error(e))
         return
 
     # From the moment the lease exists, EVERY exit runs the finally below. The
@@ -11021,7 +11054,7 @@ async def process_uploaded_files(files: list) -> str:
                     pass
                     
         except Exception as e:
-            error_msg = f"\n\n--- FILE: {filename} ---\n[ERROR] Failed to process file: {str(e)}\n----------------\n"
+            error_msg = f"\n\n--- FILE: {filename} ---\n[ERROR] Failed to process file: {describe_error(e)}\n----------------\n"
             results.append(error_msg)
             print(f"[WebUI] Error processing {filename}: {e}")
     
@@ -11380,7 +11413,7 @@ async def process_files_to_sidebar_list(files: list, session_id: str = None,
             log_attachment("FILE_ERROR", name=err_name, error=str(e), tb=_tb2.format_exc()[-300:])
             results.append({
                 "name": err_name,
-                "content": f"[ERROR] Failed to process file: {str(e)}",
+                "content": f"[ERROR] Failed to process file: {describe_error(e)}",
                 "path": "Hochgeladen über Web-UI (kein lokaler Pfad)",
             })
     return results

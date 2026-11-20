@@ -522,6 +522,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **Error messages no longer show the server's folders.** When the server failed to read or
+  write a file, some error messages showed the full folder path on the server, including the
+  home folder and the account's folder name. That happened for a file name that is too long
+  to save, a full disk or a missing permission. It also reached a guest in a shared room who
+  fetched or uploaded a file. These messages now give only the reason, such as 'File name too
+  long', and the full detail stays in the server log.
 - **A very long path no longer stalls VAF for everyone.** A folder path of a few tens of
   kilobytes sent to the chat workspace, a room's shared folder or the file routes kept the
   server busy for seconds, growing with the square of its length, while every other request

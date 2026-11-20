@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from vaf.api.user_routes import require_admin
 from vaf.core.log_helper import LEGACY_CHAIN_SEED, TIMELINE_CHAIN_SEED, get_app_log_dir
+from vaf.core.path_jail import describe_error
 
 router = APIRouter(prefix="/api/logs", tags=["logs"])
 
@@ -78,7 +79,7 @@ async def read_log(
         tail_lines = [ln.rstrip("\n") for ln in all_lines[-tail:]]
         return {"filename": filename, "total_lines": len(all_lines), "lines": tail_lines}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to read log: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to read log: {describe_error(exc)}")
 
 
 # ── Timeline endpoints ────────────────────────────────────────────────────────
@@ -226,7 +227,7 @@ async def get_timeline_events(
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to read timeline: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to read timeline: {describe_error(exc)}")
 
 
 async def _scope_for_username(username: str) -> str:

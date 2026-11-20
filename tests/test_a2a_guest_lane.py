@@ -9,8 +9,10 @@ exactly when a wire endpoint exists; the checksum it prints is computed from the
 it names; and the two downloads answer without an account, because a guest holds a
 join ticket and nothing else.
 """
+import errno
 import hashlib
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -288,6 +290,61 @@ def test_push_list_fetch_round_trip_byte_identical(client, seated):
                          params={"seat": seated["seat"], "path": "sub/roundtrip.bin"})
     assert fetched.status_code == 200
     assert fetched.content == payload
+
+
+@pytest.fixture()
+def answering_client():
+    """The app as a remote peer meets it: an unhandled error answers through the global
+    handler instead of raising in the test, so a missing `except` shows as its reply."""
+    from fastapi.testclient import TestClient
+
+    from vaf.core.web_server import app
+    return TestClient(app, raise_server_exceptions=False, client=("127.0.0.1", 50000))
+
+
+def _listing(workspace):
+    return sorted(p.relative_to(workspace).as_posix() for p in workspace.rglob("*"))
+
+
+def test_a_path_the_host_cannot_look_at_is_no_file_and_names_no_host_folder(
+        answering_client, seated):
+    """A name longer than the file system takes, and a fragment that passes PATH_MAX once it
+    is joined to the workspace, make `is_file()` raise an OSError quoting the host's absolute
+    workspace path. MUTATION: drop the `try` around `is_file` in the fetch; the global
+    handler answers 500."""
+    for bad in ("b" * 256, "a/" * 2040 + "x"):
+        answer = answering_client.get("/api/a2a/rooms/room-seatfs/file",
+                                      params={"seat": seated["seat"], "path": bad})
+        assert answer.status_code == 404, (bad[:8], answer.status_code, answer.text[:200])
+        assert answer.json()["detail"] == "no such file in this workspace"
+        assert str(seated["workspace"]) not in answer.text
+
+
+def test_a_push_the_host_cannot_store_answers_without_the_host_folder(
+        answering_client, seated, monkeypatch):
+    """MUTATION: drop the push's `except OSError`; the global handler answers 500 with the
+    OS reason (wrong status), and before it the error text with the path."""
+    before = _listing(seated["workspace"])
+    answer = answering_client.post("/api/a2a/rooms/room-seatfs/file",
+                                   params={"seat": seated["seat"], "path": "b" * 256},
+                                   content=b"x")
+    assert str(seated["workspace"]) not in answer.text
+    if sys.platform.startswith("linux") or sys.platform == "darwin":
+        # NAME_MAX is 255 bytes there; Windows may name the same failure differently.
+        assert answer.status_code == 400
+        assert answer.json()["detail"] == "path is too long for this host"
+    assert _listing(seated["workspace"]) == before
+
+    def refusing_write(self, data):
+        raise PermissionError(errno.EACCES, "Permission denied", str(self))
+
+    monkeypatch.setattr(Path, "write_bytes", refusing_write)
+    answer = answering_client.post("/api/a2a/rooms/room-seatfs/file",
+                                   params={"seat": seated["seat"], "path": "sub/new.bin"},
+                                   content=b"x")
+    assert answer.status_code == 500
+    assert answer.json()["detail"] == "could not store the file: Permission denied"
+    assert str(seated["workspace"]) not in answer.text
 
 
 def test_the_wire_has_no_delete(client):

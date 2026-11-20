@@ -22,6 +22,7 @@ from vaf.api.user_routes import caller_is_admin, request_account, require_admin
 from vaf.core.channel_secrets import channel_secret, has_channel_secret
 from vaf.core.messaging_connections import channel_enabled_for_scope
 from vaf.core.security_events import log_security_event
+from vaf.core.path_jail import describe_error
 
 logger = logging.getLogger("vaf.api.telegram")
 
@@ -123,7 +124,7 @@ async def start_verification(request: StartVerificationRequest, _: Dict[str, Any
                 # stop_signals=None and stop it via application.stop_running() instead.
                 application.run_polling(allowed_updates=Update.ALL_TYPES, stop_signals=None)
             except Exception as e:
-                err_msg = str(e)
+                err_msg = describe_error(e)
                 if "rejected" in err_msg.lower() or "invalid token" in err_msg.lower():
                     _verification_state["error"] = (
                         "Invalid bot token. Paste only the token from BotFather in step 2 (Enter Token), "
@@ -148,7 +149,7 @@ async def start_verification(request: StartVerificationRequest, _: Dict[str, Any
         raise
     except Exception as e:
         logger.exception("Failed to start Telegram verification")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=describe_error(e))
 
 
 @router.get("/verification-status")
@@ -637,7 +638,7 @@ async def get_telegram_session_history(session_id: str, request: Request):
         }
     except Exception as e:
         logger.exception("Session history error: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=describe_error(e))
 
 
 @router.post("/relay-whitelist-remove")
@@ -696,7 +697,7 @@ async def start_telegram_bridge(_: Dict[str, Any] = Depends(require_admin)):
             return {"status": "started", "message": "Telegram bridge started."}
     except Exception as e:
         logger.exception("Failed to start Telegram bridge")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=describe_error(e))
     return {"status": "error", "message": "Failed to start bridge."}
 
 

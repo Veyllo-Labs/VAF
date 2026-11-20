@@ -23,6 +23,7 @@ from vaf.core.config import Config
 from vaf.core.security_events import log_security_event
 from vaf.api.user_routes import caller_is_admin, request_account
 from vaf.core.messaging_connections import channel_enabled_for_scope, whatsapp_inbound_to_agent, whatsapp_session_id
+from vaf.core.path_jail import describe_error
 
 logger = logging.getLogger("vaf.api.whatsapp")
 
@@ -897,7 +898,7 @@ async def get_whatsapp_session_history(session_id: str, request: Request):
         }
     except Exception as e:
         logger.exception("WhatsApp session history error: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=describe_error(e))
 
 
 _QR_DRAW_FAILED = "The QR code could not be drawn. Try again with a new code."
@@ -924,7 +925,7 @@ def _run_qr_login(username: str) -> None:
     except OSError as e:
         log_whatsapp_qr(f"[VAF] Session directory not usable: {e}")
         with _qr_lock:
-            _qr_state[username] = {"error": f"The WhatsApp session folder could not be prepared: {e}", "ts": 0}
+            _qr_state[username] = {"error": f"The WhatsApp session folder could not be prepared: {describe_error(e)}", "ts": 0}
         return
     from vaf.core import node_runtime
     node = node_runtime.find("node")
@@ -1020,7 +1021,7 @@ def _run_qr_login(username: str) -> None:
                 _qr_procs.pop(username, None)
     except Exception as e:
         with _qr_lock:
-            _qr_state[username] = {"error": str(e), "ts": 0}
+            _qr_state[username] = {"error": describe_error(e), "ts": 0}
         with _qr_lock:
             _qr_procs.pop(username, None)
 
@@ -1190,7 +1191,7 @@ async def get_qr_code(request: Request):
         return _qr_answer({"status": "waiting", "message": state.get("message") or "Start QR flow from Settings -> Connections."})
     except Exception as e:
         logger.exception("WhatsApp QR endpoint error: %s", e)
-        return _qr_answer({"status": "error", "error": f"Internal error: {e}"})
+        return _qr_answer({"status": "error", "error": f"Internal error: {describe_error(e)}"})
 
 
 @router.post("/qr/reset")

@@ -25,6 +25,7 @@ from vaf.memory.tag_link_sync import sync_memories_for_tag_link
 from vaf.core.config import Config
 import json
 import logging
+from vaf.core.path_jail import describe_error
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +163,7 @@ async def health_check():
     except Exception as e:
         return {
             "status": "unhealthy",
-            "error": str(e),
+            "error": describe_error(e),
             "db_connected": False
         }
 
@@ -240,7 +241,7 @@ async def create_memory(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to create memory: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=describe_error(e))
 
 
 @memory_router.get("", response_model=List[MemoryResponse])
@@ -271,7 +272,7 @@ async def list_memories(
             return [MemoryResponse(**m) for m in memories]
     except Exception as e:
         logger.error(f"Failed to list memories: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=describe_error(e))
 
 
 # Tag links (connect tags: A↔B means memories with A get B and vice versa)
@@ -341,7 +342,7 @@ async def get_graph(
             return GraphResponse(**graph_data)
     except Exception as e:
         logger.error(f"Failed to get graph: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=describe_error(e))
 
 
 @memory_router.get("/learn-status/{doc_tag}")
@@ -393,7 +394,7 @@ async def get_learn_status(
         return out
     except Exception as e:
         logger.error(f"Failed to read learn status for {doc_tag!r}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=describe_error(e))
 
 
 @memory_router.get("/{memory_id}", response_model=MemoryResponse)
@@ -421,7 +422,7 @@ async def get_memory(
         raise
     except Exception as e:
         logger.error(f"Failed to get memory: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=describe_error(e))
 
 
 @memory_router.put("/{memory_id}", response_model=MemoryResponse)
@@ -460,7 +461,7 @@ async def update_memory(
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to update memory: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=describe_error(e))
 
 
 @memory_router.delete("/by-doc-tag/{doc_tag}")
@@ -483,7 +484,7 @@ async def delete_by_doc_tag(
             return {"status": "deleted", "doc_tag": doc_tag, "count": count, "hard": hard}
     except Exception as e:
         logger.error(f"Failed to delete by doc tag {doc_tag!r}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=describe_error(e))
 
 
 def _valid_chat_key(key: str) -> bool:
@@ -517,7 +518,7 @@ async def delete_chat_namespace(
         await get_cache().invalidate_graph()
     except Exception as e:
         logger.error(f"Failed to delete chat namespace {key!r}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=describe_error(e))
     return {"status": "deleted", "chat_key": key, "count": count, "hard": True}
 
 
@@ -552,7 +553,7 @@ async def delete_memory(
         raise
     except Exception as e:
         logger.error(f"Failed to delete memory: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=describe_error(e))
 
 
 @memory_router.put("/{memory_id}/connections")
@@ -585,7 +586,7 @@ async def update_connections(
             }
     except Exception as e:
         logger.error(f"Failed to update connections: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=describe_error(e))
 
 
 @memory_router.post("/{memory_id}/tags")
@@ -639,7 +640,7 @@ async def add_tag_to_memory(
         raise
     except Exception as e:
         logger.error(f"Failed to add tag: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=describe_error(e))
 
 
 @memory_router.delete("/{memory_id}/tags/{tag}")
@@ -687,7 +688,7 @@ async def remove_tag_from_memory(
         raise
     except Exception as e:
         logger.error(f"Failed to remove tag: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=describe_error(e))
 
 
 # RAG endpoints
@@ -755,7 +756,7 @@ async def rag_query(
             return response
     except Exception as e:
         logger.error(f"RAG query failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=describe_error(e))
 
 
 @memory_router.post("/rag/query/stream")
@@ -805,7 +806,7 @@ async def rag_query_stream(
                 yield f"data: {json.dumps({'type': 'done'})}\n\n"
         except Exception as e:
             logger.error(f"Streaming RAG query failed: {e}")
-            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'error': describe_error(e)})}\n\n"
     
     return StreamingResponse(
         generate(),
@@ -852,4 +853,4 @@ async def semantic_search(
             ]
     except Exception as e:
         logger.error(f"Semantic search failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=describe_error(e))

@@ -1071,8 +1071,12 @@ reason the socket's credential does (the integrated proxy strips Authorization
 headers), which is the same log exposure the ticket already has. Uploads are capped
 (25 MB), paths are relative, POSIX-form on the wire whatever the host's OS
 (a Windows host lists `sub/a.bin`, never `sub\a.bin`), and contained to the
-workspace (a `..` or a symlink pointing out is refused), and DELETING over the
-wire does not exist on purpose:
+workspace (a `..` or a symlink pointing out is refused). An answer never carries the
+host's own folder: a path the host's file system cannot even look at (a name too long
+for it) is a 404 like a missing file, a push whose name is too long for the host is a
+400 "path is too long for this host", and a push the host could not store otherwise is a
+500 "could not store the file: <reason>" with the operating system's reason only.
+DELETING over the wire does not exist on purpose:
 destruction of the shared folder stays with the members on the machine that owns
 it. The convention after a push is one `say` naming where the file landed - there
 is deliberately no file frame kind.

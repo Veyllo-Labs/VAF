@@ -47,6 +47,7 @@ from vaf.api.oauth_session_binding import (
     enforce_callback_actor_binding,
     require_oauth_actor_in_network_mode,
 )
+from vaf.core.path_jail import describe_error
 
 logger = logging.getLogger("vaf.api.cloud")
 
@@ -318,7 +319,7 @@ async def connect_webdav(
         await asyncio.to_thread(check_destination, url, username=_username or "")
     except EgressRefused as exc:
         if exc.address or not url.lower().startswith(("http://", "https://")):
-            raise HTTPException(status_code=400, detail=str(exc)) from None
+            raise HTTPException(status_code=400, detail=describe_error(exc)) from None
 
     account_id = f"nextcloud_{uuid.uuid4().hex[:12]}"
     cred_username = _get_cred_username(_username)
@@ -466,7 +467,7 @@ async def trigger_sync(
         raise HTTPException(status_code=401, detail=str(exc))
     except Exception as exc:
         logger.error("Auth failed for cloud account %s: %s", account_id, exc)
-        raise HTTPException(status_code=401, detail=f"Authentication error: {exc}")
+        raise HTTPException(status_code=401, detail=f"Authentication error: {describe_error(exc)}")
 
     manifest = SyncManifest(username=_username, provider=provider_name)
     sync_dir = _local_sync_dir(_username, account_id)
@@ -486,7 +487,7 @@ async def trigger_sync(
         logger.error("Sync failed for cloud account %s: %s", account_id, exc)
         return {
             "ok": False,
-            "error": str(exc),
+            "error": describe_error(exc),
             "uploaded": 0,
             "downloaded": 0,
             "deleted_local": 0,
@@ -576,7 +577,7 @@ async def browse_cloud(
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=describe_error(exc))
 
     try:
         items = await asyncio.to_thread(
@@ -589,7 +590,7 @@ async def browse_cloud(
         )
     except Exception as exc:
         logger.warning("Browse failed for %s folder %s: %s", account_id, folder_id, exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=describe_error(exc))
 
     return {
         "account_id": account_id,
@@ -640,7 +641,7 @@ async def search_cloud(
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=describe_error(exc))
 
     try:
         items = await asyncio.to_thread(provider.search_files, q.strip(), mime_type, 50)
@@ -648,7 +649,7 @@ async def search_cloud(
         return {"account_id": account_id, "items": []}
     except Exception as exc:
         logger.warning("Search failed for %s q=%s: %s", account_id, q, exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=describe_error(exc))
 
     return {
         "account_id": account_id,
@@ -773,7 +774,7 @@ async def resolve_conflict(
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Provider error: {exc}")
+        raise HTTPException(status_code=500, detail=f"Provider error: {describe_error(exc)}")
 
     local_path = Path(entry["local_path"])
     remote_path = entry["remote_path"]
@@ -850,7 +851,7 @@ async def resolve_conflict(
         raise
     except Exception as exc:
         logger.error("Conflict resolution failed for %s/%s: %s", account_id, file_id, exc)
-        raise HTTPException(status_code=500, detail=f"Resolution failed: {exc}")
+        raise HTTPException(status_code=500, detail=f"Resolution failed: {describe_error(exc)}")
 
     return {"ok": True, "action": action, "file_id": file_id}
 

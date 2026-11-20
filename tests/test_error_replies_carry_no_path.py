@@ -14,21 +14,35 @@ exactly that, and a remote room member reaches the shared-folder routes. Pinned 
 - the file route decision answers 404 for a path the OS cannot look at;
 - the workspace upload, mkdir and delete answer "<Prefix> failed: <reason>";
 - a static guard over every route module: inside an ``except`` that can catch an OSError,
-  the exception's text is read only in a log call, a comparison or ``describe_error``, and
-  traceback text and ``sys.exc_info()`` only in a log call or ``describe_error``.
+  the exception's text (``str``, ``repr``, an f-string, ``%`` and ``.format`` with a literal
+  or a template in a variable, ``getattr`` or an attribute read of ``args``, ``filename``,
+  ``strerror``; through any plain ``x = e`` alias) is read only as an argument of a log call
+  (``log``, ``log_*``, ``*_log``, ``logger.<level>``, ``print``), of ``describe_error`` or in a
+  comparison, judged by the NEAREST call it is an argument of; traceback text and
+  ``sys.exc_info()`` only in a log call or ``describe_error``;
+- the office conversion routes answer a file that is not a valid Word or PowerPoint package
+  with words of their own, because that library error is not an OSError and quotes the path.
 
 The guard fails closed: an exception name it cannot resolve to a class counts as one that
 can catch an OSError. It has no exemptions.
 
 NAMED BOUNDARIES of the guard:
 
-- It reads the handler's own body. An exception handed whole to a helper that builds the
-  reply is not followed; measured: two helpers in scope receive one (``_stt_busy_payload``
-  for ``QueueBusy``, not an OSError, and ``_is_db_not_ready_error``, a classification).
-- Non-OSError text passes unchanged (rule (a) of ``describe_error``): it is the text its
-  raiser wrote. The one stdlib non-OSError measured to quote a path is ``Path.relative_to``'s
-  ``ValueError``, and its two calls in route modules run on paths already contained (an
-  ``rglob`` under the room workspace and a ``contained_path`` result).
+- It reads the handler's own body, by name. Shapes it does not follow: an exception handed
+  whole to a helper that builds the reply (measured: two in scope, ``_stt_busy_payload`` for
+  ``QueueBusy``, not an OSError, and ``_is_db_not_ready_error``, a classification);
+  ``json.dumps(..., default=str)`` over a structure holding the exception; a comprehension or
+  ``map(str, ...)`` over a list holding it; ``traceback.TracebackException`` and
+  ``print_exc(file=...)`` into a buffer. None of them occurs in scope.
+- Text that is not an OSError's passes unchanged (rule (a) of ``describe_error``): it is the
+  text its raiser wrote, and some raisers write a path. Measured: ``Path.relative_to``'s
+  ``ValueError`` (its two calls in route modules run on paths already contained: an ``rglob``
+  under the room workspace and a ``contained_path`` result); python-docx's and python-pptx's
+  ``PackageNotFoundError`` (answered at the two conversion routes, the only place a route
+  hands a caller's file to them); VAF's own ``PathEscape`` from ``open_folder``,
+  ``open_for_read`` and ``vaf/core/persistence.py``, which no route module calls; and VAF's
+  own exceptions that wrap a caught error's text (``UserAdminError`` and ``BackupError``, the
+  two that reach a reply, build it with ``describe_error`` now).
 - ``vaf/api/*_bridge.py`` and ``vaf/tools/*`` are outside its scope: they hand their text
   to the account's own agent as a tool result or keep it as internal status, not as an HTTP
   or socket reply.
@@ -57,7 +71,7 @@ SCOPE = (["vaf/core/web_server.py", "vaf/memory/routes.py"]
 
 _LOG_ATTRS = {"debug", "info", "warning", "warn", "error", "exception", "critical"}
 # Attributes whose value is the exception's text or the path it quotes.
-_TEXT_ATTRS = {"args", "filename", "filename2", "__str__", "__repr__"}
+_TEXT_ATTRS = {"args", "filename", "filename2", "strerror", "__str__", "__repr__"}
 # Traceback text names the source files of the install and the frames' arguments.
 _TRACEBACK_TEXT = {"format_exc", "format_exception", "format_exception_only", "format_tb",
                    "format_stack"}
@@ -154,42 +168,71 @@ def catches_oserror(type_node, imports, module_name):
     return any(_class_catches(t) for t in targets)
 
 
-def _allowed_sink(node):
-    if isinstance(node, ast.Compare):
-        return True
-    if not isinstance(node, ast.Call):
-        return False
-    func = node.func
-    if isinstance(func, ast.Name):
-        return "log" in func.id.lower() or func.id in ("print", "describe_error")
-    if isinstance(func, ast.Attribute):
-        return (func.attr in _LOG_ATTRS or func.attr.startswith("log")
-                or func.attr == "describe_error")
+def _is_log_name(name):
+    """A name that says "log" as a word of its own: ``log``, ``log_*``, ``*_log``, ``logger``,
+    ``logging``. Not a substring: ``_login_failure``, ``price_catalog`` and
+    ``get_app_log_dir`` are no log calls."""
+    plain = str(name).lstrip("_").lower()
+    return (plain in ("log", "logger", "logging") or plain.startswith(("log_", "logger_"))
+            or plain.endswith(("_log", "_logger")))
+
+
+def _is_logger(node):
+    """The receiver of ``<receiver>.warning(...)``: a logger by its name, or a
+    ``getLogger(...)`` call."""
+    if isinstance(node, ast.Name):
+        return _is_log_name(node.id)
+    if isinstance(node, ast.Attribute):
+        return _is_log_name(node.attr)
+    if isinstance(node, ast.Call):
+        func = node.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+        return name == "getLogger"
     return False
 
 
-def _reads_text(node, var):
+def _allowed_sink(call):
+    """A call whose arguments may carry an exception's text: a log call or describe_error."""
+    func = call.func
+    if isinstance(func, ast.Name):
+        return _is_log_name(func.id) or func.id in ("print", "describe_error")
+    if isinstance(func, ast.Attribute):
+        return (func.attr == "describe_error" or _is_log_name(func.attr)
+                or (func.attr in _LOG_ATTRS and _is_logger(func.value)))
+    return False
+
+
+def _reads_text(node, names):
+    """Is ``node`` a read of the text of one of ``names`` (the handler's name and its
+    aliases)?"""
     def is_var(n):
-        return isinstance(n, ast.Name) and n.id == var
+        return isinstance(n, ast.Name) and n.id in names
+
+    def holds_var(n):
+        return (is_var(n) or (isinstance(n, (ast.Tuple, ast.List)) and any(is_var(e) for e in n.elts))
+                or (isinstance(n, ast.Dict) and any(is_var(v) for v in n.values)))
+
     if isinstance(node, ast.Call):
         func = node.func
-        if (isinstance(func, ast.Name) and func.id in ("str", "repr", "format")
-                and node.args and is_var(node.args[0])):
+        if isinstance(func, ast.Name) and func.id in ("str", "repr", "format") \
+                and node.args and is_var(node.args[0]):
             return True
-        if isinstance(func, ast.Attribute) and func.attr == "format" and (
-                any(is_var(a) for a in node.args)
-                or any(is_var(k.value) for k in node.keywords)):
+        if isinstance(func, ast.Name) and func.id == "getattr" and len(node.args) >= 2 \
+                and is_var(node.args[0]):
+            attr = node.args[1]
+            # A name that is not a constant could be any attribute: judged as text.
+            return not (isinstance(attr, ast.Constant) and attr.value not in _TEXT_ATTRS)
+        if isinstance(func, ast.Attribute) and func.attr in ("format", "format_map") and (
+                any(holds_var(a) for a in node.args)
+                or any(holds_var(k.value) for k in node.keywords)):
             return True
     if isinstance(node, ast.FormattedValue) and is_var(node.value):
         return True
     if isinstance(node, ast.Attribute) and node.attr in _TEXT_ATTRS and is_var(node.value):
         return True
-    if (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod)
-            and isinstance(node.left, (ast.Constant, ast.JoinedStr))):
-        right = node.right
-        return (is_var(right)
-                or (isinstance(right, ast.Tuple) and any(is_var(e) for e in right.elts))
-                or (isinstance(right, ast.Dict) and any(is_var(v) for v in right.values)))
+    # `"%s" % e`, and a format string held in a variable: `tmpl % e`.
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod) and holds_var(node.right):
+        return True
     return False
 
 
@@ -203,17 +246,45 @@ def _is_exception_text(node):
     return name in _TRACEBACK_TEXT or name == "exc_info"
 
 
-def _in_allowed_sink(node, parents, stop=None):
-    while node in parents and node is not stop:
-        node = parents[node]
-        if _allowed_sink(node):
+def _in_allowed_sink(node, parents):
+    """Judged by the NEAREST call the text is an argument of, or a comparison before it: a
+    log call further up does not excuse a reply built inside it. A call on the text itself
+    (``str(e).lower()``) passes it on and is looked through."""
+    child = node
+    while child in parents:
+        parent = parents[child]
+        if isinstance(parent, ast.Compare):
             return True
+        if isinstance(parent, ast.Call):
+            if child is parent.func:
+                child = parent
+                continue
+            return _allowed_sink(parent)
+        if isinstance(parent, (ast.stmt, ast.ExceptHandler)):
+            return False
+        child = parent
     return False
+
+
+def _aliases(handler):
+    """The handler's name and every name a plain ``x = <one of them>`` binds in its body."""
+    names = {handler.name}
+    changed = True
+    while changed:
+        changed = False
+        for node in ast.walk(handler):
+            if (isinstance(node, ast.Assign) and isinstance(node.value, ast.Name)
+                    and node.value.id in names):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id not in names:
+                        names.add(target.id)
+                        changed = True
+    return names
 
 
 def scan_source(source, filename, module_name):
     """``file:line`` of every read of an exception's text, or of traceback text, that is not
-    a log call, a comparison or ``describe_error``."""
+    an argument of a log call or ``describe_error``, or part of a comparison."""
     tree = ast.parse(source, filename)
     imports = _imports(tree, module_name.rpartition(".")[0])
     parents = {}
@@ -229,13 +300,14 @@ def scan_source(source, filename, module_name):
             continue
         if not catches_oserror(handler.type, imports, module_name):
             continue
+        names = _aliases(handler)
         stack = list(handler.body)
         while stack:
             node = stack.pop()
-            if isinstance(node, ast.ExceptHandler) and node.name == handler.name:
+            if isinstance(node, ast.ExceptHandler) and node.name in names:
                 continue  # rebinds the name: judged as a handler of its own
-            if _reads_text(node, handler.name):
-                if not _in_allowed_sink(node, parents, stop=handler):
+            if _reads_text(node, names):
+                if not _in_allowed_sink(node, parents):
                     findings.append((node.lineno, node.col_offset))
                 continue
             stack.extend(ast.iter_child_nodes(node))
@@ -287,6 +359,30 @@ _FLAGGED = {
     "call_type": 'try:\n    x()\nexcept pick() as e:\n    y(str(e))\n',
     "tuple": 'try:\n    x()\nexcept (ValueError, OSError) as e:\n    y(str(e))\n',
     "traceback": 'import traceback\ndef f():\n    state["error"] = traceback.format_exc()\n',
+    # a name that merely contains "log" is no log call
+    "login_name": 'try:\n    x()\nexcept Exception as e:\n    _login_reply(str(e))\n',
+    "catalog_name": 'try:\n    x()\nexcept Exception as e:\n    price_catalog(str(e))\n',
+    "log_dir_name": 'try:\n    x()\nexcept Exception as e:\n    get_app_log_dir(str(e))\n',
+    "level_on_a_reply": 'try:\n    x()\nexcept Exception as e:\n    reply.error(str(e))\n',
+    # the nearest call decides, not a log call further up
+    "reply_inside_log": 'try:\n    x()\nexcept Exception as e:\n    log("x", reply(str(e)))\n',
+    "reply_inside_compare": ('try:\n    x()\nexcept Exception as e:\n'
+                             '    if send(str(e)) == 1:\n        pass\n'),
+    # aliases
+    "alias": 'try:\n    x()\nexcept Exception as e:\n    err = e\n    y(str(err))\n',
+    "alias_chain": ('try:\n    x()\nexcept Exception as e:\n    a = e\n    b = a\n'
+                    '    y(f"{b}")\n'),
+    # text attributes, read by name
+    "getattr_filename": 'try:\n    x()\nexcept Exception as e:\n    y(getattr(e, "filename"))\n',
+    "getattr_args": 'try:\n    x()\nexcept Exception as e:\n    y(getattr(e, "args")[0])\n',
+    "getattr_dynamic": 'try:\n    x()\nexcept Exception as e:\n    y(getattr(e, name))\n',
+    "strerror": 'try:\n    x()\nexcept Exception as e:\n    y(e.strerror)\n',
+    # a format string held in a variable
+    "template_percent": ('try:\n    x()\nexcept Exception as e:\n    tmpl = "x %s"\n'
+                         '    y(tmpl % e)\n'),
+    "template_format": ('try:\n    x()\nexcept Exception as e:\n    tmpl = "x {}"\n'
+                        '    y(tmpl.format(e))\n'),
+    "format_map": 'try:\n    x()\nexcept Exception as e:\n    y("{x}".format_map({"x": e}))\n',
 }
 
 _ALLOWED = {
@@ -301,6 +397,15 @@ _ALLOWED = {
                          '    logger.error("boom %s", traceback.format_exc())\n'),
     "exc_info_described": ('import sys\ntry:\n    x()\nexcept:\n'
                            '    y(describe_error(sys.exc_info()[1]))\n'),
+    "tuple_without_oserror": 'try:\n    x()\nexcept (ValueError, KeyError) as e:\n    y(str(e))\n',
+    "method_on_the_text": ('try:\n    x()\nexcept Exception as e:\n'
+                           '    if "denied" in str(e).lower():\n        y()\n'),
+    "logger_attribute": 'try:\n    x()\nexcept Exception as e:\n    self.logger.warning("%s", str(e))\n',
+    "get_logger": ('import logging\ntry:\n    x()\nexcept Exception as e:\n'
+                   '    logging.getLogger(__name__).error(f"x {e}")\n'),
+    "log_prefix": 'try:\n    x()\nexcept Exception as e:\n    log_attachment("X", error=str(e))\n',
+    "getattr_status": ('try:\n    x()\nexcept Exception as e:\n'
+                       '    y(getattr(e, "status_code", None))\n'),
     "rebound": ('try:\n    x()\nexcept Exception as e:\n    try:\n        z()\n'
                 '    except ValueError as e:\n        y(str(e))\n'),
 }
@@ -464,3 +569,58 @@ def test_the_workspace_routes_answer_the_reason_without_the_path(workspace, monk
             web_server.WorkspaceDeleteRequest(sessionId="s1", name="old.txt"), _request()))
     assert detail == f"Delete failed: {os.strerror(errno.ENAMETOOLONG)}"
     assert (workspace / "old.txt").exists()
+
+
+# ---- the office conversion routes -----------------------------------------------------------
+
+@pytest.mark.parametrize("name, data, route, label", [
+    ("empty.docx", b"", "/api/file/as-html", "Word"),
+    ("empty.docx", b"", "/api/file/docx-model", "Word"),
+    ("notes.docx", b"plain text, not a zip", "/api/file/as-html", "Word"),
+    ("notes.docx", b"plain text, not a zip", "/api/file/docx-model", "Word"),
+    ("slides.pptx", b"plain text, not a zip", "/api/file/as-html", "PowerPoint"),
+    ("empty.pptx", b"", "/api/file/as-html", "PowerPoint"),
+])
+def test_an_office_file_that_is_no_package_answers_without_the_path(tmp_path, monkeypatch, name,
+                                                                     data, route, label):
+    """python-docx and python-pptx raise PackageNotFoundError, not an OSError, for a file that
+    is not a valid package, and its text quotes the absolute resolved path (a "~" spelling
+    expanded to the home folder). MUTATION: answer `describe_error(e)` at either converter."""
+    pytest.importorskip("docx")
+    pytest.importorskip("pptx")
+    from fastapi.testclient import TestClient
+
+    from vaf.core.platform import Platform
+    from vaf.core.web_server import app
+
+    home = tmp_path / "home-ab12cd34"
+    docs = home / "Documents"
+    docs.mkdir(parents=True)
+    (docs / name).write_bytes(data)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setattr(Platform, "served_file_roots", staticmethod(lambda: [docs.resolve()]))
+    monkeypatch.setattr("vaf.api.user_routes.caller_is_admin", lambda request: True)
+    client = TestClient(app, raise_server_exceptions=False, client=("127.0.0.1", 50000))
+    for spelled in (str(docs / name), "~/Documents/" + name):
+        answer = client.get(route, params={"path": spelled})
+        assert answer.status_code == 500, (spelled, answer.status_code, answer.text[:200])
+        assert answer.json()["detail"].endswith(f": not a valid {label} file"), answer.text
+        assert str(home) not in answer.text and str(home.resolve()) not in answer.text
+
+
+def test_a_services_http_error_keeps_its_status_and_drops_its_url():
+    """The cloud routes and the model download answer a requests or huggingface_hub HTTP
+    error, an OSError from another module: withheld, but a refused login and a missing file
+    stay told apart. MUTATION: drop the status from `_withheld` - red."""
+    import requests
+
+    from vaf.core.path_jail import describe_error
+
+    response = requests.Response()
+    response.status_code = 401
+    error = requests.HTTPError(
+        "401 Client Error: Unauthorized for url: https://h.example/x?token=t0k3n", response=response)
+    assert describe_error(error, log=False) == "HTTPError (HTTP 401)"
+    assert describe_error(requests.ConnectionError("HTTPSConnectionPool(host='h.example')"),
+                          log=False) == "ConnectionError (details in the server log)"

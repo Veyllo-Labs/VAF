@@ -55,6 +55,7 @@ def env(tmp_path, monkeypatch):
     from vaf.core.lock_manager import LockManager
     from vaf.core.platform import Platform
 
+    real_lock = (LockManager.__dict__["acquire"], LockManager.__dict__["release"])
     monkeypatch.setattr(Platform, "vaf_dir", staticmethod(lambda: tmp_path / "vaf"))
     monkeypatch.setattr(automation, "bind_identity", lambda *a, **k: None)
     monkeypatch.setattr(automation, "resolve_scope_identity", lambda *a, **k: None)
@@ -71,7 +72,7 @@ def env(tmp_path, monkeypatch):
     out = tmp_path / "out"
     out.mkdir()
     return SimpleNamespace(store=tmp_path / "tasks", out=out, pushed=pushed, synced=synced,
-                           monkeypatch=monkeypatch)
+                           monkeypatch=monkeypatch, real_lock=real_lock, tmp=tmp_path)
 
 
 def _task(env, frequency="daily", **fields):
@@ -586,7 +587,7 @@ def test_the_mark_lands_only_on_the_task_that_fired(env):
     assert manager.delete(TID, permanent=True)
     AutomationManager(storage_dir=str(env.store)).create(AutomationTask(
         id=TID, name="report again", prompt="Write it.", frequency="once", time="06:00"))
-    assert manager._mark_once_consumed(old) is None
+    assert manager._mark_once_consumed(old) == "refused"
     assert _record(env)["name"] == "report again" and _record(env).get("consumed_at") is None
 
 
@@ -655,6 +656,162 @@ def test_a_consumed_one_time_task_is_not_restored(env, monkeypatch):
     answer = RestoreAutomationTool().run(task_id=TID)
     assert answer.startswith("Error:") and "already run" in answer, answer
     assert (manager.trash_dir / f"{TID}.json").exists()
+
+
+SKIPPED = "this one-time automation has already run"
+
+
+def test_a_copy_whose_record_was_removed_is_refused(env):
+    """A copy loaded before another run of the task finished and removed it cannot tell that
+    run apart from none: it fails closed, as the clock does ('task gone').
+    MUTATION: answer False for a missing record."""
+    seen = _prompt_agent(env, returns="Fertig.", turn=ANSWERED_TWICE)
+    manager, copy_ = _task(env, "once")
+    assert AutomationManager(storage_dir=str(env.store)).delete(TID, permanent=True)
+    out = manager.run_task(copy_, new_terminal=False)
+    assert SKIPPED in out and seen["calls"] == 0 and env.pushed == []
+
+
+def test_a_copy_whose_record_was_marked_after_loading_is_refused(env):
+    """MUTATION: decide from the captured copy only."""
+    seen = _prompt_agent(env, returns="Fertig.", turn=ANSWERED_TWICE)
+    manager, copy_ = _task(env, "once")
+    other = AutomationManager(storage_dir=str(env.store))
+    assert other._mark_once_consumed(other.get(TID)) == "marked"
+    assert copy_.consumed_at is None                      # loaded before the mark
+    out = manager.run_task(copy_, new_terminal=False)
+    assert SKIPPED in out and seen["calls"] == 0
+
+
+def test_an_old_copy_never_runs_on_a_task_created_anew(env):
+    """The id now names a task created anew: the old copy is refused ('created anew'), the new
+    task is neither marked nor removed by it, and the new task's own run still goes.
+    MUTATION: answer False for a record of another incarnation."""
+    seen = _prompt_agent(env, returns="Fertig.", turn=ANSWERED_TWICE)
+    manager, old = _task(env, "once")
+    assert manager.delete(TID, permanent=True)
+    fresh = AutomationManager(storage_dir=str(env.store)).create(AutomationTask(
+        id=TID, name="report again", prompt="Write it.", frequency="once", time="06:00"))
+    out = manager.run_task(old, new_terminal=False)
+    assert SKIPPED in out and seen["calls"] == 0
+    assert _record(env)["name"] == "report again" and _record(env).get("consumed_at") is None
+    AutomationManager(storage_dir=str(env.store)).run_task(fresh, new_terminal=False)
+    assert seen["calls"] == 1
+
+
+@pytest.mark.parametrize("since_loading", ["marked", "removed", "created-anew"])
+def test_a_fired_one_time_task_spawns_no_terminal(env, since_loading):
+    """Only the check before the lane stands between a stale copy and a spawned terminal (the
+    mark is asked in the child). The parent asks the record as it is now, for a copy loaded
+    before the task was marked, removed or created anew. MUTATIONS: drop the check before the
+    terminal branch; decide from the captured copy only; let a missing record or one of
+    another incarnation through."""
+    from vaf.core.platform import Platform
+    spawned = []
+    env.monkeypatch.setattr(Platform, "open_new_terminal",
+                            staticmethod(lambda *a, **k: spawned.append(a) or True))
+    manager, copy_ = _task(env, "once")
+    other = AutomationManager(storage_dir=str(env.store))
+    if since_loading == "marked":
+        assert other._mark_once_consumed(other.get(TID)) == "marked"
+    else:
+        assert other.delete(TID, permanent=True)
+        if since_loading == "created-anew":
+            other.create(AutomationTask(id=TID, name="again", prompt="p", frequency="once",
+                                        time="06:00"))
+    out = manager.run_task(copy_, new_terminal=True)
+    assert SKIPPED in out and spawned == []
+
+
+@pytest.mark.parametrize("where", ["before-the-lane", "at-the-mark"])
+def test_a_refused_run_leaves_no_run_lock(env, where):
+    """The real run lock, in a scratch folder: a refused run takes it and gives it back.
+    MUTATIONS: drop the release in either refusal."""
+    from vaf.core.lock_manager import LockManager
+    locks = env.tmp / "locks"
+    env.monkeypatch.setattr(LockManager, "LOCK_DIR", locks)
+    env.monkeypatch.setattr(LockManager, "acquire", env.real_lock[0])
+    env.monkeypatch.setattr(LockManager, "release", env.real_lock[1])
+    seen = _prompt_agent(env, returns="Fertig.", turn=ANSWERED_TWICE)
+    manager, copy_ = _task(env, "once")
+    other = AutomationManager(storage_dir=str(env.store))
+    assert other._mark_once_consumed(other.get(TID)) == "marked"
+    if where == "at-the-mark":                 # the check before the lane saw it unmarked
+        env.monkeypatch.setattr(AutomationManager, "_once_spent_on_disk", lambda self, t: False)
+    out = manager.run_task(copy_, new_terminal=False)
+    assert SKIPPED in out and seen["calls"] == 0
+    assert list(locks.glob("*.lock")) == [], "a refused run left its run lock behind"
+
+
+def test_two_starts_at_the_same_instant_run_once(env):
+    """The run lock is check-then-write, so two starts at the same instant can both take it
+    (measured); the mark is a compare-and-set and lets exactly one of them run.
+    MUTATION: write the mark without asking whether the record has fired."""
+    import threading
+    seen = _prompt_agent(env, returns="Fertig.", turn=ANSWERED_TWICE)
+    _task(env, "once")
+    both_checked = threading.Barrier(2, timeout=10)
+    real_check = AutomationManager._once_spent_on_disk
+
+    def check_then_wait(self, task):
+        answer = real_check(self, task)
+        both_checked.wait()                   # both are past the check before either marks
+        return answer
+
+    env.monkeypatch.setattr(AutomationManager, "_once_spent_on_disk", check_then_wait)
+    copies = [AutomationManager(storage_dir=str(env.store)) for _ in range(2)]
+    outs = [None, None]
+
+    def start(i):
+        outs[i] = copies[i].run_task(copies[i].get(TID), new_terminal=False)
+
+    threads = [threading.Thread(target=start, args=(i,), daemon=True) for i in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(20)
+    assert seen["calls"] == 1, outs
+    assert sum(SKIPPED in str(o) for o in outs) == 1, outs
+
+
+def test_a_trash_copy_marked_while_the_restore_waited_is_not_restored(env):
+    """The restore asks the trash copy again under the store lock. MUTATION: decide from the
+    copy read before the lock."""
+    from contextlib import contextmanager
+    manager, task = _task(env, "once")
+    assert manager.delete(TID)                                   # into the trash, unmarked
+    trash = manager.trash_dir / f"{TID}.json"
+    real = manager._store_lock
+
+    @contextmanager
+    def marked_while_waiting(directory):
+        data = json.loads(trash.read_text(encoding="utf-8"))
+        data["consumed_at"] = "2026-11-20T06:00:00"              # another lane ran it meanwhile
+        trash.write_text(json.dumps(data), encoding="utf-8")
+        with real(directory):
+            yield
+
+    env.monkeypatch.setattr(manager, "_store_lock", marked_while_waiting)
+    assert manager.restore_from_trash(TID) is False
+    assert trash.exists() and _record(env) is None
+
+
+def test_a_manual_run_of_a_daily_task_that_ran_still_goes(env):
+    """Only a one-time task is refused for having fired. MUTATION: mark and check every
+    frequency."""
+    from typer.testing import CliRunner
+    import vaf.cli.autoclose as autoclose
+    seen = _prompt_agent(env, returns="Fertig.", turn=ANSWERED_TWICE)
+    manager, task = _task(env, "daily")
+    assert manager._record_successful_run(task) is not None
+    assert _record(env)["last_run"]
+    finished = []
+    env.monkeypatch.setattr(automation, "get_manager",
+                            lambda: AutomationManager(storage_dir=str(env.store)))
+    env.monkeypatch.setattr(autoclose, "finish_terminal", lambda **k: finished.append(k))
+    result = CliRunner().invoke(automation.automation_app, ["run", TID])
+    assert result.exception is None, result.output
+    assert seen["calls"] == 1 and finished == [{"success": True}]
 
 
 # ── access taken away while the caller's callback ran ────────────────────────

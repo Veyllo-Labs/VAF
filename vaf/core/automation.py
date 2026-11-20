@@ -912,12 +912,16 @@ def _stamp_successful_run(task: AutomationTask) -> None:
     task.last_completed_local_date = user_now(_resolve_username(task.user_scope_id)).date().isoformat()
 
 
+def _has_fired(task: "AutomationTask") -> bool:
+    """A run of the task started (`consumed_at`) or completed (`last_run`,
+    `last_completed_local_date`)."""
+    return bool(task.last_run or task.last_completed_local_date or task.consumed_at)
+
+
 def _once_already_ran(task: "AutomationTask") -> bool:
-    """A one-time task that has fired: its run started (`consumed_at`) or completed (`last_run`,
-    `last_completed_local_date`). The scheduler never arms one again and the clock never runs
-    one again, whatever its run's outcome was (einmalig = einmalig)."""
-    return task.frequency == Frequency.ONCE and bool(
-        task.last_run or task.last_completed_local_date or task.consumed_at)
+    """A one-time task that has fired (`_has_fired`). The scheduler never arms one again and
+    the clock never runs one again, whatever its run's outcome was (einmalig = einmalig)."""
+    return task.frequency == Frequency.ONCE and _has_fired(task)
 
 
 def _incarnation(value: Any) -> Optional[str]:
@@ -2161,10 +2165,12 @@ vaf automation delete <id>   # Delete task
         return self._delete(task, permanent=permanent)
 
     def _once_spent_on_disk(self, task: AutomationTask) -> bool:
-        """Whether `task` is a one-time task that has fired already (`_once_already_ran`), by
-        its record as it is on disk now when that record is still this task's (same id and
-        `incarnation`), and by the captured copy otherwise. Never raises: an unreadable record
-        leaves the copy's answer."""
+        """Whether `task` is a one-time task that must not run (again), by its record as it is
+        on disk now: the captured copy or the record has fired (`_once_already_ran`), or the
+        record is gone, unreadable or belongs to a task created anew under the id. The clock
+        drops a job for the same reasons (`_clock_record_verdict`): a one-time task that ran
+        and was removed leaves no record, so a copy loaded before that cannot tell it apart
+        from one that never ran, and it fails closed. Never raises."""
         if task.frequency != Frequency.ONCE:
             return False
         if _once_already_ran(task):
@@ -2173,30 +2179,45 @@ vaf automation delete <id>   # Delete task
             record = _read_task_record(self._path_for_task(task))
             if (record is None or str(record.get("id")).strip() != str(task.id)
                     or _incarnation(record.get("incarnation")) != task.incarnation):
-                return False
+                return True
             current = AutomationTask.from_dict(record)
         except Exception:
-            return False
-        return bool(current.last_run or current.last_completed_local_date or current.consumed_at)
+            return True
+        return _once_already_ran(current)
 
-    def _mark_once_consumed(self, task: AutomationTask) -> Optional[AutomationTask]:
-        """Write `consumed_at` onto the record of the one-time task whose run starts, and only
-        that task's (`same_incarnation`), under the store lock (`_mutate_record`); the captured
-        `task` carries it too. A refresh or a restart then never arms the task again and the
-        clock never runs it again (`_once_already_ran`), also when its run fails and its removal
+    def _mark_once_consumed(self, task: AutomationTask) -> str:
+        """Claim the run of a one-time task: write `consumed_at` onto its record, and only that
+        task's (`same_incarnation`), as a compare-and-set under the store lock
+        (`_mutate_record`). A refresh or a restart then never arms the task again and the clock
+        never runs it again (`_once_already_ran`), also when its run fails and its removal
         after the run fails as well.
 
-        Never raises: a store that is busy or cannot be written must not stop the run it was
-        scheduled for. The failure is logged; the run's removal after it is then the only
+        "marked": this run claimed it (the captured `task` carries the mark too). "refused":
+        nothing was written, because the record has fired already (another start claimed it
+        first; the run lock alone cannot tell two starts at the same instant apart), is gone,
+        or belongs to a task created anew; the run must not go. "unwritten": the store is busy
+        or cannot be written. Never raises: that must not stop the run it was scheduled for, so
+        the failure is logged and the run goes; the run's removal after it is then the only
         guard left (the named boundary in docs/platform/AUTOMATIONS.md)."""
         stamp = datetime.now().isoformat()
-        task.consumed_at = stamp
+        claimed = {"done": False}
+
+        def claim(record: Dict[str, Any]) -> Optional[bool]:
+            if _has_fired(AutomationTask.from_dict(record)):
+                return False
+            record["consumed_at"] = stamp
+            claimed["done"] = True
+            return None
+
         try:
-            return self._mutate_record(task, lambda record: record.update({"consumed_at": stamp}),
-                                       same_incarnation=True)
+            self._mutate_record(task, claim, same_incarnation=True)
         except Exception as e:
             append_domain_log("backend", f"[AUTOMATION] one-time {task.id} not marked consumed: {e!r}")
-            return None
+            return "unwritten"
+        if not claimed["done"]:
+            return "refused"
+        task.consumed_at = stamp
+        return "marked"
 
     def _remove_spent_once(self, task: AutomationTask) -> bool:
         """Remove a one-time task its run consumed, and only that task: one created anew under
@@ -2290,6 +2311,14 @@ vaf automation delete <id>   # Delete task
             filepath.parent.mkdir(parents=True, exist_ok=True)
             import shutil
             with self._store_lock(filepath.parent):
+                # The trash copy as it is NOW: while this restore waited for the lock, another
+                # lane may have restored it, run it and moved it back with its mark.
+                with open(trash_path, 'r', encoding='utf-8') as f:
+                    task = AutomationTask.from_dict(json.load(f))
+                if _once_already_ran(task):
+                    append_domain_log("backend", f"[AUTOMATION] {task_id} not restored: a one-time "
+                                                 f"automation that has already run stays in the trash")
+                    return False
                 # Never over a live task of the same id: the move replaced it silently, and
                 # an approval retry creates its planned id again.
                 if filepath.exists():
@@ -2486,10 +2515,12 @@ vaf automation delete <id>   # Delete task
             append_domain_log_always("backend", msg)
             return msg
         # einmalig = einmalig, also for a run started by hand (`vaf automation run`, the agent's
-        # immediate run): a one-time task that has fired already, as its record says NOW (its
-        # run may have marked it since this copy was loaded, and its removal may have failed),
-        # does not run again. Asked under the run lock, so a run going at this moment has
-        # either marked it or is refused above.
+        # immediate run) and for a copy loaded before another run of it ended: a one-time task
+        # whose record says NOW that it has fired, or whose record is gone or belongs to a task
+        # created anew, does not run again, and no terminal is spawned for it. The run lock is
+        # no guarantee here (it is check-then-write, so two starts at the same instant can both
+        # take it); the decisive check is the mark itself, a compare-and-set under the store
+        # lock right before the run (`_mark_once_consumed`).
         if self._once_spent_on_disk(task):
             LockManager.release(lock_id)
             msg = (f"[SKIPPED] Automation '{task.name}' ({task.id}): this one-time automation "
@@ -2573,8 +2604,12 @@ vaf automation delete <id>   # Delete task
         # einmalig = einmalig: a one-time task is consumed when its run STARTS, on disk, before
         # anything executes. A run that acted (sent a message) and then failed is not stamped,
         # so without this mark only its removal stood between it and a second run.
-        if task.frequency == Frequency.ONCE:
-            self._mark_once_consumed(task)
+        if task.frequency == Frequency.ONCE and self._mark_once_consumed(task) == "refused":
+            LockManager.release(lock_id)
+            msg = (f"[SKIPPED] Automation '{task.name}' ({task.id}): this one-time automation "
+                   f"has already run.")
+            append_domain_log_always("backend", msg)
+            return msg
 
         try:
             # ... (Rest of the method logic) ...

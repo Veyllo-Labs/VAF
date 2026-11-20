@@ -94,7 +94,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   show as failed, with the error the run reported (or a note that the model gave no answer, or
   that the time limit was reached and what to change), and say what happens next: a recurring
   automation runs again at its next time, a one-time automation is used up by its run and never
-  runs a second time.
+  runs a second time. A one-time automation that has run is not restored from the trash, and
+  `vaf automation run` refuses to start it again.
 - **Automations: a run that gave several answers delivers all of them, and `vaf automation run`
   keeps its window open after a failed run.** Before, only the last answer arrived, and the
   window closed as if the run had succeeded; it now shows why the run did not finish.

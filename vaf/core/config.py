@@ -2617,25 +2617,90 @@ def account_for_username(username: str) -> Optional[Tuple[str, str]]:
     if admin_scope and name == admin_name:
         return admin_scope, admin_name
     try:
-        from vaf.core.tool_dispatch import resolve_account_directory
-        rows = resolve_account_directory()
+        from vaf.core.tool_dispatch import account_directory_index
+        named = account_directory_index().by_name.get(name.casefold(), ())
     except Exception:
-        rows = []
-    exact = [row for row in rows if row["username"] == name]
+        named = ()
+    exact = [row for row in named if row["username"] == name]
     if exact:
         row = exact[0]
         return (row["user_scope_id"], row["username"]) if row.get("active", True) else None
-    wanted = name.casefold()
-    found: Dict[str, Tuple[str, bool]] = {}
-    if admin_scope and admin_name.casefold() == wanted:
-        found[admin_scope] = (admin_name, True)
-    for row in rows:
-        if row["username"].casefold() == wanted:
-            found.setdefault(row["user_scope_id"], (row["username"], bool(row.get("active", True))))
+    found = _accounts_named_casefolded(name, named, admin_name, admin_scope)
     if len(found) != 1:
         return None
     scope, (stored, active) = next(iter(found.items()))
     return (scope, stored) if active else None
+
+
+def _accounts_named_casefolded(name: str, named, admin_name: str,
+                               admin_scope: str) -> Dict[str, Tuple[str, bool]]:
+    """Every account whose name casefolds to `name`'s, by scope: `{scope: (name as stored,
+    active)}`. `named` are the directory rows under that casefolded name
+    (`AccountDirectoryIndex.by_name`); the local admin from the config counts too. The one
+    ambiguity rule of both directions: a name stands for an account only when exactly one
+    scope is in here (`account_for_username`, `account_name_for_scope`)."""
+    wanted = name.casefold()
+    found: Dict[str, Tuple[str, bool]] = {}
+    if admin_scope and admin_name.casefold() == wanted:
+        found[admin_scope] = (admin_name, True)
+    for row in named:
+        if row["username"].casefold() == wanted:
+            found.setdefault(row["user_scope_id"], (row["username"], bool(row.get("active", True))))
+    return found
+
+
+def account_name_for_scope(user_scope_id: Optional[str]) -> Optional[str]:
+    """The account NAME the registered directory gives a scope, or None when there is none
+    that is safe to key a per-user store on. The forward direction of `account_for_username`,
+    for work that starts with a scope and no name (a scheduled automation, a thinking run,
+    the facade's `user_scope`); the caller falls back to the synthetic `scope_<8 hex>`.
+
+    The name keys per-user files (`users/<name>/`) and is shown as a display name, so a
+    directory row is taken only when ALL of these hold, and None answers otherwise:
+    - it is one plain entry name (`path_jail.safe_entry_name`: no separator, not `.` or
+      `..`, no control character, not hidden), unchanged by that check;
+    - it is not the local admin's (`is_local_admin_name`: the literal "admin" or the
+      owner's name, casefolded), and does not carry the synthetic names' `scope_` prefix;
+    - exactly one scope in the directory carries it, casefolded (the rule
+      `account_for_username` decides by), and that scope is this one.
+    VAF's auth store keeps names unique, so for its own accounts these only decide rows
+    changed outside VAF; a directory an embedder registers is bound by none of it. The
+    scope compares stripped and case-insensitively, as the UUID column did; `active` is
+    not asked (whether a deactivated account may run is `revocation.account_stands`'s
+    question). The owner's scope answers the owner's name from the config without a
+    lookup, compared as `resolve_caller_username` compares it. Any error answers None.
+
+    Named boundary: on an installation whose config still holds the legacy owner scope
+    while the admin signs in with the account's real one (docs/platform/UUID.md, Problem
+    3), work under the real scope gets the synthetic name, so its next runs read in
+    server-local time and a thinking run binds an empty workspace, never the owner's.
+    """
+    try:
+        scope = str(user_scope_id or "").strip()
+        if not scope:
+            return None
+        admin_scope = str(get_local_admin_scope_id() or "").strip()
+        admin_name = str(get_local_admin_username() or "").strip()
+        if admin_scope and scope == admin_scope:
+            return admin_name or None
+        from vaf.core.path_jail import safe_entry_name
+        from vaf.core.tool_dispatch import account_directory_index
+        index = account_directory_index()
+        rows = index.by_scope.get(scope.lower())
+        if not rows:
+            return None
+        name = rows[0]["username"]
+        if safe_entry_name(name) != name:
+            return None
+        if name.casefold().startswith("scope_") or is_local_admin_name(name, admin_name):
+            return None
+        found = _accounts_named_casefolded(name, index.by_name.get(name.casefold(), ()),
+                                           admin_name, admin_scope)
+        if {s.strip().lower() for s in found} != {scope.lower()}:
+            return None
+        return name
+    except Exception:
+        return None
 
 
 def config_reader(config: Optional[Mapping] = None) -> Callable[..., Any]:

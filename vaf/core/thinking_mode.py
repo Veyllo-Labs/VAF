@@ -59,30 +59,24 @@ def _resolve_username_for_scope(user_scope_id: Any) -> Optional[str]:
     injects the ADMIN's personal identity/profile (name, preferences, dos/donts, timezone)
     into that user's thinking context (system_prompt.py <user_context> block + RAG query seed)
     - a cross-user data leak. Returns the real username when the scope maps to an account, a
-    synthetic per-scope username (scope_<8hex>) when the scope is unknown, and None for an
-    empty scope so callers can decide a safe fallback. NEVER returns the machine owner's name
-    for another scope.
+    synthetic per-scope username (scope_<8hex>) when it does not, and None for an empty scope
+    so callers can decide a safe fallback.
 
-    The accounts are the ones the application registered
-    (`tool_dispatch.set_account_directory_resolver`; VAF registers its `local_users` table),
-    never the auth store read from here: that import made the framework reach into the
-    harness, and an embedder that runs no such store got a refused connect per lookup. The
-    scopes compare stripped and case-insensitively, as the UUID column did. `active` is not
-    asked: whether a deactivated account may still run is `revocation.account_stands`'s
-    question. VAF's resolver remembers a store it could not reach for 30 seconds
+    Which directory name counts is `config.account_name_for_scope`'s rule: the directory the
+    application registered (`tool_dispatch.set_account_directory_resolver`; VAF registers its
+    `local_users` table), never the auth store read from here, and only a name that is one
+    plain entry, not the local admin's, not `scope_`-prefixed and carried by this scope
+    alone. VAF's resolver remembers a store it could not reach for 30 seconds
     (`permissions._store_down`), and a listing reads the directory once
     (`account_directory_once`).
     """
     if not user_scope_id:
         return None
-    wanted = str(user_scope_id).strip().lower()
     try:
-        from vaf.core.tool_dispatch import resolve_account_directory
-        for row in resolve_account_directory():
-            if row["user_scope_id"].strip().lower() == wanted:
-                if not _is_owner_name_for_other_scope(row["username"], wanted):
-                    return row["username"]
-                break
+        from vaf.core.config import account_name_for_scope
+        name = account_name_for_scope(str(user_scope_id))
+        if name:
+            return name
     except Exception as e:
         logger.debug("scope->username lookup failed for %s: %s", user_scope_id, e)
 
@@ -94,33 +88,22 @@ def _resolve_username_for_scope(user_scope_id: Any) -> Optional[str]:
         return None
 
 
-def _is_owner_name_for_other_scope(username: str, scope: str) -> bool:
-    """True when a directory row gives a scope that is not the machine owner's the owner's
-    name. The auth store keeps names unique, so it never did; a directory an embedder
-    registers is not bound by that, and the owner's name opens the owner's files. Compared
-    case-insensitively: a case-insensitive file system opens the same folder."""
-    try:
-        from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
-        owner_name = str(get_local_admin_username() or "").strip().casefold()
-        owner_scope = str(get_local_admin_scope_id() or "").strip().lower()
-    except Exception:
-        return False
-    return bool(owner_name) and username.strip().casefold() == owner_name and scope != owner_scope
-
-
 def _registered_scope_ids() -> set:
-    """Return the set of user_scope_id strings for REGISTERED accounts (the account directory).
+    """Return the set of user_scope_id strings, lower-cased, for REGISTERED accounts (the
+    account directory).
 
     Used to distinguish an infrequent-but-real LAN user from a stale orphan web-session UUID in the
     dead-session cap: a registered account is a real user and must not be dropped just for being idle
     past the cap, whereas an unknown orphan UUID should be. Returns an empty set on any error and
     for an empty directory (the caller then falls back to the previous admin-vs-nonadmin behaviour,
     never crashing the scheduler). Read from the directory the application registered, like the
-    name lookup above, so an unreachable store is not asked again for 30 seconds.
+    name lookup above, so an unreachable store is not asked again for 30 seconds. Lower-cased
+    because a directory may spell a scope in upper case while last_interaction.json keys it
+    lower-case; the caller lower-cases its side too.
     """
     try:
         from vaf.core.tool_dispatch import resolve_account_directory
-        return {row["user_scope_id"] for row in resolve_account_directory()}
+        return {row["user_scope_id"].lower() for row in resolve_account_directory()}
     except Exception as e:
         logger.debug("registered-scope lookup failed: %s", e)
         return set()
@@ -1003,7 +986,7 @@ def get_idle_user_scope_ids(idle_minutes: float) -> List[Optional[str]]:
             if (
                 max_idle_age_sec is not None
                 and logical_id is not None
-                and str(logical_id).strip() not in registered_scopes
+                and str(logical_id).strip().lower() not in registered_scopes
                 and (now - ts_float) > max_idle_age_sec
             ):
                 continue

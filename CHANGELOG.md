@@ -92,9 +92,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   listing from the account directory, and a store that could not be reached is not asked again
   for 30 seconds; before, every listing asked it again for every task, about two seconds each
   on Windows, and the app's automations window waited for it. While the store is down a
-  tenant's next run shows in server time, as it did before. An account directory registered
-  with `set_account_directory_resolver` now also names the account behind a scope for
-  scheduled work and for `user_scope`.
+  tenant's next run shows in server time, as it did before, and goes back to the tenant's own
+  time zone once the store answers again.
 - **Automations: two changes made at the same moment no longer undo each other.** Changing an
   automation in the app while the agent, an approved proposal, the terminal or a second window
   changed another field of it could put the other field back; a run that ended put back a time
@@ -510,6 +509,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Changed
 
+- **For applications built on VAF: the account directory also names the account behind a
+  scope.** A directory registered with `set_account_directory_resolver` now answers the
+  account name for scheduled work and for `user_scope`, which used to get a synthetic
+  `scope_` name. A name is used only when it is one plain file name, is not "admin" or the
+  machine owner's name, does not start with `scope_` and belongs to exactly one account
+  (compared without case); otherwise the scope keeps its synthetic name.
 - **The document editor opens Word and PowerPoint files up to 100 MB.** A larger one is
   refused with "too large to open here (over 100 MB)" instead of being read whole into
   memory. The text of a Word or PowerPoint file attached in a chat is read up to 20 MB, as

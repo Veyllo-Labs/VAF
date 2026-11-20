@@ -428,8 +428,13 @@ def test_the_harness_registers_the_account_directory_and_the_framework_reads_onl
     # The name lookup is `account_for_username`; `scope_id_for_username` answers with it.
     block = config.split("def scope_id_for_username")[1].split("\ndef ")[0]
     assert "vaf.auth" not in block and "account_for_username(username)" in block
+    # It reads the directory through its index (`account_directory_index`, built from
+    # `resolve_account_directory`), the same read the forward name lookup uses.
     block = config.split("def account_for_username")[1].split("\ndef ")[0]
-    assert "vaf.auth" not in block and "resolve_account_directory" in block
+    assert "vaf.auth" not in block and "account_directory_index()" in block
+    index = (ROOT / "vaf" / "core" / "tool_dispatch.py").read_text(encoding="utf-8")
+    index = index.split("def account_directory_index")[1].split("\ndef ")[0]
+    assert "resolve_account_directory()" in index
 
     # The primitive itself: a lookup, not a guard - a raising resolver is an empty
     # directory, and rows that cannot be addressed or scoped are dropped.

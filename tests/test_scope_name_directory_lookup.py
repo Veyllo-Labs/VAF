@@ -123,22 +123,25 @@ def directory(store, monkeypatch):
 
 # ── AC1: the framework no longer reads the harness's auth store ──────────────
 
-def _function_source(name: str) -> str:
-    path = _REPO / "vaf" / "core" / "thinking_mode.py"
-    src = path.read_text(encoding="utf-8")
+def _function_source(rel: str, name: str) -> str:
+    src = (_REPO / rel).read_text(encoding="utf-8")
     for node in ast.walk(ast.parse(src)):
         if isinstance(node, ast.FunctionDef) and node.name == name:
             return ast.get_source_segment(src, node)
-    raise AssertionError(f"{name} is gone from thinking_mode.py")
+    raise AssertionError(f"{name} is gone from {rel}")
 
 
-@pytest.mark.parametrize("name", ["_resolve_username_for_scope", "_registered_scope_ids"])
-def test_the_lookups_read_the_directory_not_the_auth_store(name):
-    """MUTATION: re-add `from vaf.auth.database import get_auth_db` to either function."""
-    body = _function_source(name)
+@pytest.mark.parametrize("rel, name, reads", [
+    ("vaf/core/thinking_mode.py", "_resolve_username_for_scope", "account_name_for_scope("),
+    ("vaf/core/thinking_mode.py", "_registered_scope_ids", "resolve_account_directory()"),
+    ("vaf/core/config.py", "account_name_for_scope", "account_directory_index()"),
+])
+def test_the_lookups_read_the_directory_not_the_auth_store(rel, name, reads):
+    """MUTATION: re-add `from vaf.auth.database import get_auth_db` to any of them."""
+    body = _function_source(rel, name)
     for banned in ("vaf.auth", "get_auth_db", "asyncio.run", "Thread"):
         assert banned not in body, f"{name} still uses {banned}"
-    assert "resolve_account_directory()" in body
+    assert reads in body
 
 
 # ── AC2: the name is the directory's ─────────────────────────────────────────
@@ -159,17 +162,152 @@ def test_a_scope_resolves_to_its_directory_name(directory, store):
     assert store.refusing.calls == 0
 
 
-def test_the_owners_name_is_never_given_to_another_scope(store, monkeypatch):
-    """A directory row that names a tenant scope with the machine owner's name (any case)
-    must not hand that scope the owner's files; the owner's own row still resolves.
-    MUTATION: drop the `_is_owner_name_for_other_scope` check."""
+OWNER = "ownerx"
+
+
+def _owner_named(monkeypatch, name=OWNER):
+    import vaf.core.config as config_mod
+    monkeypatch.setattr(config_mod, "get_local_admin_username", lambda: name)
+
+
+def _rows(*pairs):
+    return [{"username": name, "user_scope_id": scope} for name, scope in pairs]
+
+
+# Each case: the directory, then {scope: the name it must resolve to}. A name the rule
+# refuses resolves to the scope's synthetic name, never to the name another account has.
+REFUSED = {
+    # MUTATION: drop the "exactly one scope carries it" check (both scopes get "alice").
+    "duplicate": (_rows(("alice", S_A), ("alice", S_B)),
+                  {S_A: _synthetic(S_A), S_B: _synthetic(S_B)}),
+    # Same MUTATION, and: index names without casefolding (Alice and alice are one folder
+    # on a case-insensitive file system).
+    "case_twin": (_rows(("Alice", S_A), ("alice", S_B)),
+                  {S_A: _synthetic(S_A), S_B: _synthetic(S_B)}),
+    # MUTATION: compare with the owner's name only instead of `is_local_admin_name`.
+    "literal_admin": (_rows(("admin", S_A)), {S_A: _synthetic(S_A)}),
+    "literal_admin_upper": (_rows(("ADMIN", S_A)), {S_A: _synthetic(S_A)}),
+    # The owner's name, any case. Refused twice over: by `is_local_admin_name`, and by the
+    # one-scope rule, which counts the owner's scope from the config (see the test below
+    # for the first alone).
+    "owner_name": (_rows((OWNER, S_A), ("OwnerX", S_B)),
+                   {S_A: _synthetic(S_A), S_B: _synthetic(S_B)}),
+    # MUTATION: drop the `safe_entry_name` check (each maps to users/ownerx or escapes).
+    "path_alias": (_rows((OWNER + "/", S_A), (OWNER + "/.", S_B), ("./" + OWNER, S_C)),
+                   {S_A: _synthetic(S_A), S_B: _synthetic(S_B), S_C: _synthetic(S_C)}),
+    "path_escape": (_rows(("..", S_A), ("a\\b", S_B), ("bob\x00", S_C)),
+                    {S_A: _synthetic(S_A), S_B: _synthetic(S_B), S_C: _synthetic(S_C)}),
+    # MUTATION: drop the `scope_` prefix check (UNLISTED's synthetic name is taken).
+    "synthetic_prefix": (_rows((_synthetic(UNLISTED), S_A), ("Scope_1234abcd", S_B)),
+                         {S_A: _synthetic(S_A), S_B: _synthetic(S_B)}),
+}
+
+
+@pytest.mark.parametrize("case", sorted(REFUSED))
+def test_a_directory_name_another_account_could_have_is_refused(case, store, monkeypatch):
     from vaf.core.thinking_mode import _resolve_username_for_scope
 
-    rows = [{"username": "Admin", "user_scope_id": S_A},
-            {"username": "admin", "user_scope_id": LOCAL}]
+    _owner_named(monkeypatch)
+    rows, expected = REFUSED[case]
     monkeypatch.setattr(tool_dispatch, "_account_directory_resolver", lambda: rows)
+    assert {scope: _resolve_username_for_scope(scope) for scope in expected} == expected
+    # The owner's own scope answers the owner's name from the config.
+    assert _resolve_username_for_scope(LOCAL) == OWNER
+
+
+def test_the_owners_name_is_refused_without_an_owner_scope(store, monkeypatch):
+    """With no owner scope in the config the one-scope rule cannot see the owner, so
+    `is_local_admin_name` alone keeps the owner's name from a tenant. MUTATION: drop
+    `is_local_admin_name`."""
+    import vaf.core.config as config_mod
+    from vaf.core.thinking_mode import _resolve_username_for_scope
+
+    _owner_named(monkeypatch)
+    monkeypatch.setattr(config_mod, "get_local_admin_scope_id", lambda: "")
+    monkeypatch.setattr(tool_dispatch, "_account_directory_resolver",
+                        lambda: _rows(("OwnerX", S_A)))
     assert _resolve_username_for_scope(S_A) == _synthetic(S_A)
-    assert _resolve_username_for_scope(LOCAL) == "admin"
+
+
+def test_a_name_one_account_alone_carries_is_kept(store, monkeypatch):
+    """The rule refuses only what another account could have: two distinct names, a name
+    with a dot or a space inside, and a scope listed twice under one name all resolve."""
+    from vaf.core.thinking_mode import _resolve_username_for_scope
+
+    _owner_named(monkeypatch)
+    rows = _rows(("alice", S_A), ("bob.smith", S_B), ("carol", S_C), ("Carol", S_C.upper()))
+    monkeypatch.setattr(tool_dispatch, "_account_directory_resolver", lambda: rows)
+    assert [_resolve_username_for_scope(s) for s in SCOPES] == ["alice", "bob.smith", "carol"]
+
+
+def test_an_unreadable_owner_name_fails_closed(store, monkeypatch):
+    """When the owner's name cannot be read, no directory name is trusted: a row with the
+    owner's name for a tenant would otherwise pass. MUTATION: read the owner's name in a
+    try/except that answers "" (the guard then fails open)."""
+    import vaf.core.config as config_mod
+    from vaf.core.thinking_mode import _resolve_username_for_scope
+
+    def broken():
+        raise OSError("config unreadable")
+
+    monkeypatch.setattr(config_mod, "get_local_admin_username", broken)
+    monkeypatch.setattr(tool_dispatch, "_account_directory_resolver",
+                        lambda: _rows((OWNER, S_A), ("alice", S_B)))
+    assert _resolve_username_for_scope(S_A) == _synthetic(S_A)
+    assert _resolve_username_for_scope(S_B) == _synthetic(S_B)
+
+
+def test_the_name_lookup_builds_one_index_per_block(store, monkeypatch):
+    """A listing names one account per task: inside a block every lookup uses one index,
+    and what a caller got back cannot change it. MUTATION: drop the `held.index` reuse in
+    `account_directory_index` (one index per lookup, a scan of the whole directory each)."""
+    from vaf.core.thinking_mode import _resolve_username_for_scope
+
+    rows = [{"username": f"user{i}", "user_scope_id": f"ab12cd34-0000-4000-8000-{i:012d}"}
+            for i in range(200)]
+    monkeypatch.setattr(tool_dispatch, "_account_directory_resolver", lambda: rows)
+    built = []
+    real = tool_dispatch.AccountDirectoryIndex
+
+    class Counting(real):
+        __slots__ = ()
+
+        def __init__(self, got):
+            built.append(1)
+            super().__init__(got)
+
+    monkeypatch.setattr(tool_dispatch, "AccountDirectoryIndex", Counting)
+    with account_directory_once():
+        names = [_resolve_username_for_scope(row["user_scope_id"]) for row in rows]
+        index = tool_dispatch.account_directory_index()
+        with pytest.raises(TypeError):
+            index.rows[0]["username"] = "mallory"
+        with pytest.raises(TypeError):
+            index.by_scope[rows[1]["user_scope_id"]][0]["username"] = "mallory"
+        assert _resolve_username_for_scope(rows[0]["user_scope_id"]) == "user0"
+    assert names == [row["username"] for row in rows]
+    assert len(built) == 1
+
+
+def test_a_registered_scope_matches_whatever_its_case(store, monkeypatch):
+    """The dead-session cap keeps a registered account whose directory scope and
+    last_interaction.json key differ in case, either way round; an unregistered scope
+    silent as long is dropped. MUTATIONS: drop the `.lower()` in `_registered_scope_ids`;
+    drop it at the cap's membership test."""
+    import time as _time
+
+    import vaf.core.thinking_mode as tm
+
+    data = store.root.parent / "data"
+    data.mkdir()
+    monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: data))
+    eight_days = _time.time() - 8 * 24 * 3600
+    (data / "last_interaction.json").write_text(json.dumps({
+        S_A: {"ts": eight_days}, S_B.upper(): {"ts": eight_days}, UNLISTED: {"ts": eight_days},
+    }), encoding="utf-8")
+    monkeypatch.setattr(tool_dispatch, "_account_directory_resolver",
+                        lambda: _rows(("alice", S_A.upper()), ("bob", S_B)))
+    assert tm.get_idle_user_scope_ids(10) == [S_A, S_B.upper()]
 
 
 def test_without_a_directory_the_name_is_synthetic_and_nothing_dials(store):

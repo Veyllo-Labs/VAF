@@ -63,6 +63,8 @@ _cache_lock = threading.Lock()
 # that the store is back by at most this long.
 _STORE_DOWN_S = 30.0
 _store_down = OutageMemory(_STORE_DOWN_S)   # keyed on the database url
+# How long `list_accounts` waits for its side thread when called on a running event loop.
+_DIRECTORY_JOIN_S = 5.0
 
 
 def _store_url() -> str:
@@ -240,7 +242,12 @@ def list_accounts() -> list:
     an event loop is already running (a WebSocket handler) the lookup goes to a side
     thread, so callers on the loop should hand this to an executor. A store that could
     not be reached is not asked again for ``_STORE_DOWN_S`` seconds (per database
-    url); the answer meanwhile is the same empty directory.
+    url); the answer meanwhile is the same empty directory. A side thread still waiting
+    after ``_DIRECTORY_JOIN_S`` answers the empty directory too, but does NOT count as an
+    outage: a slow store was reached, and remembering it as unreachable would make every
+    permission row read as an unreachable store (unrestricted) for the whole pause. Named
+    boundary: a store that neither answers nor refuses costs every such call the full wait,
+    which is one more reason for a caller on the loop to use an executor.
     """
     import asyncio
 
@@ -279,9 +286,11 @@ def list_accounts() -> list:
 
             worker = threading.Thread(target=_run, daemon=True)
             worker.start()
-            worker.join(timeout=5.0)
+            worker.join(timeout=_DIRECTORY_JOIN_S)
+            if worker.is_alive():
+                return []
             if box[0] is None:
-                raise RuntimeError("account directory lookup failed or timed out")
+                raise RuntimeError("account directory lookup failed")
             rows = box[0]
     except Exception:
         _store_down.failed(url)

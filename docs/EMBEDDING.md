@@ -2618,8 +2618,11 @@ nobody, the same open default as an unreachable store.
 It also NAMES the account behind a scope when work starts with a scope and no name: the
 identity `user_scope` binds, a scheduled automation (whose next run is read in that
 account's time zone) and a thinking run. A scope the directory does not list gets a
-synthetic name of its own, `scope_` and the first eight hex digits; a row that gives
-another scope the machine owner's name is ignored. If asking your backend is expensive,
+synthetic name of its own, `scope_` and the first eight hex digits, and so does a scope
+whose name another account could have: a name that is not one plain file name, is
+"admin" or the machine owner's name (any case), starts with `scope_`, or that more than
+one scope carries (compared without case). The name keys per-user files, so two scopes
+never share one. If asking your backend is expensive,
 or it can be down, cache or remember that inside your resolver, as VAF's own does for
 its auth store (30 seconds after a failed connect).
 

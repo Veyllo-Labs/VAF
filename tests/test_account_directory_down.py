@@ -126,3 +126,51 @@ def test_the_store_pause_is_thirty_seconds():
     MUTATION: `_STORE_DOWN_S = 7.0` - red; `_store_down = OutageMemory(0.0)` - red."""
     assert permissions._STORE_DOWN_S == 30.0
     assert permissions._store_down.pause_s == 30.0
+
+
+class _SlowStore:
+    """A store that answers only after `delay` seconds (or refuses at once)."""
+
+    def __init__(self, delay: float, refuse: bool = False):
+        self.delay = delay
+        self.refuse = refuse
+        self.calls = 0
+
+    @contextlib.asynccontextmanager
+    async def session(self):
+        import asyncio
+        self.calls += 1
+        if self.refuse:
+            raise ConnectionRefusedError("store down")
+        await asyncio.sleep(self.delay)
+        yield _Session()
+
+
+def _on_a_running_loop(fn):
+    import asyncio
+
+    async def _call():
+        return fn()
+
+    return asyncio.run(_call())
+
+
+@pytest.mark.parametrize("refuse", [False, True])
+def test_a_slow_store_is_not_remembered_as_down(refuse, monkeypatch):
+    """On a running loop the directory waits `_DIRECTORY_JOIN_S` for its side thread. A
+    store still answering after that was reached, not refused: remembering it as down
+    would make every permission row read as an unreachable store (unrestricted) for the
+    whole pause. A refusal is still remembered. MUTATION: drop the `worker.is_alive()`
+    branch in `list_accounts` (the timeout is counted as an outage)."""
+    import time as _time
+
+    import vaf.auth.database as auth_db
+    fake = _SlowStore(delay=0.6, refuse=refuse)
+    monkeypatch.setattr(auth_db, "get_auth_db", fake.session)
+    monkeypatch.setattr(permissions, "_store_url", lambda: _URL)
+    monkeypatch.setattr(permissions, "_store_down", OutageMemory(permissions._STORE_DOWN_S))
+    monkeypatch.setattr(permissions, "_DIRECTORY_JOIN_S", 0.1)
+    assert _on_a_running_loop(permissions.list_accounts) == []
+    _time.sleep(0.8)        # the side thread finishes either way
+    assert fake.calls == 1
+    assert permissions._store_down.is_down(_URL) is refuse

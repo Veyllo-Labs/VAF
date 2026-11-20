@@ -1088,3 +1088,23 @@ def test_a_restore_of_project_environments_without_their_image_changes_nothing(t
     assert "nothing was changed" in str(err.value)
     assert sorted(p.name for p in target["roots"]["app"].iterdir()) == before
     assert target["calls"]["pg"] == 0
+
+
+def test_a_failed_backup_names_the_reason_not_the_path(install, monkeypatch, tmp_path):
+    """The admin's backup status shows this message, and an OS error's text quotes the absolute
+    path it failed on. Inside a store it is named relative to that store's root, outside every
+    root not at all. MUTATION: build the message from `{e}` again - red."""
+    import errno
+
+    data = install["roots"]["data"]
+    for failing, where in ((data / "sub" / "store", " (data/sub/store)"),
+                           (tmp_path / "elsewhere-ab12cd34" / "x", "")):
+        def _refused(staging, container=None, failing=failing):
+            raise PermissionError(errno.EACCES, "Permission denied", str(failing))
+
+        monkeypatch.setattr(backup, "_dump_postgres", _refused)
+        with pytest.raises(backup.BackupError) as err:
+            backup.create_backup(install["out"], include_volumes=False)
+        assert str(err.value) == (f"The backup failed: PermissionError: "
+                                  f"{os.strerror(errno.EACCES)}{where}")
+        assert str(tmp_path) not in str(err.value)

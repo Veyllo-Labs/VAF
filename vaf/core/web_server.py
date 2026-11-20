@@ -15,6 +15,7 @@ import threading
 import inspect
 import html
 import os
+import sys
 import time
 import queue
 import functools
@@ -4515,6 +4516,24 @@ def _docx_to_pdf_via_libreoffice(docx_path: str) -> bytes | None:
     return None
 
 
+# python-docx and python-pptx answer a file that is not a valid package (not a zip, empty) with
+# `PackageNotFoundError`, which is not an OSError, so `describe_error` keeps its text, and the
+# text is "Package not found at '<the absolute resolved path>'", with a "~" spelling expanded.
+_OFFICE_PACKAGE_ERRORS = (("docx.opc.exceptions", "Word"), ("pptx.exc", "PowerPoint"))
+
+
+def _office_conversion_error(exc) -> str:
+    """The reason a conversion route gives for ``exc``: "not a valid Word file" (or PowerPoint)
+    for the two libraries' `PackageNotFoundError`, else `describe_error`'s text. Asked through
+    the loaded module, so a library that is not installed costs nothing here (its import would
+    have failed before)."""
+    for module, label in _OFFICE_PACKAGE_ERRORS:
+        error = getattr(sys.modules.get(module), "PackageNotFoundError", None)
+        if isinstance(error, type) and isinstance(exc, error):
+            return f"not a valid {label} file"
+    return describe_error(exc)
+
+
 def _docx_to_html(target) -> str:
     from docx import Document
     doc = Document(str(target))
@@ -4715,7 +4734,7 @@ async def get_file_as_html(request: Request, path: str = Query(..., description=
     except ImportError as e:
         raise HTTPException(status_code=503, detail=f"Support not installed: {e}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to convert to HTML: {describe_error(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to convert to HTML: {_office_conversion_error(e)}")
 
 
 @app.get("/api/file/docx-model")
@@ -4737,7 +4756,7 @@ async def get_file_as_docx_model(request: Request, path: str = Query(..., descri
     except ImportError as e:
         raise HTTPException(status_code=503, detail=f"DOCX support not installed: {e}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to convert docx to native model: {describe_error(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to convert docx to native model: {_office_conversion_error(e)}")
 
 
 class FileSaveRequest(BaseModel):

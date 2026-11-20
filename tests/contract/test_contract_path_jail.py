@@ -260,20 +260,23 @@ def _http_error(status):
     (ValueError("bad"), "bad"),
     # never raises
     (_Unprintable(), "_Unprintable"),
-    (_HostileStr(), "plain words"),
-    (_NamelessOSError(None, None, "/home/user/x"), "Error" + _WITHHELD_SUFFIX),
 ])
 def test_describe_error_gives_the_reason_and_never_the_path(exc, expected):
     answer = vaf.describe_error(exc, log=False)
     assert type(answer) is str and str.__eq__(answer, expected), (answer, expected)
 
 
-def test_describe_error_never_raises_with_logging_on(caplog):
-    """The comparison with the text and the log call run for these too; neither may raise."""
+@pytest.mark.parametrize("log", [False, True])
+def test_describe_error_never_raises_for_a_hostile_class(caplog, log):
+    """A ``__str__`` handing back a ``str`` whose comparison raises, and a class whose name
+    cannot be read; with ``log`` the comparison with the text and the log call run as well.
+    Built here and not as parameters: a failure would otherwise be reported through their
+    own broken repr."""
     caplog.set_level(logging.WARNING)
-    assert str.__eq__(vaf.describe_error(_HostileStr()), "plain words")
-    assert vaf.describe_error(_NamelessOSError(None, None, "/home/user/x")) == \
-        "Error" + _WITHHELD_SUFFIX
+    answer = vaf.describe_error(_HostileStr(), log=log)
+    assert type(answer) is str and str.__eq__(answer, "plain words")
+    answer = vaf.describe_error(_NamelessOSError(None, None, "/home/user/x"), log=log)
+    assert type(answer) is str and str.__eq__(answer, "Error" + _WITHHELD_SUFFIX)
 
 
 def test_a_failing_log_handler_does_not_escape(monkeypatch):

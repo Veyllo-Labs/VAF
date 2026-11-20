@@ -14,8 +14,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ### Added
 
 - **`vaf.describe_error(exc)`**: the text of an error that is safe to send back. An
-  operating-system error gives only its reason, never the absolute path it quotes; what was
-  withheld goes to the log.
+  operating-system error gives only the operating system's words for it, never the absolute
+  path it quotes; what was withheld goes to the log.
 - **`vaf.is_overlong_path(path)`**: True for a path longer than any file system opens (4096
   characters). Ask it first, before `vaf.is_remote_path`, for a path that comes from outside.
   `vaf.contained_path`, `vaf.safe_entry_name` and `vaf.jail_allows` already apply the limit
@@ -525,9 +525,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **Error messages no longer show the server's folders.** When the server failed to read or
   write a file, some error messages showed the full folder path on the server, including the
   home folder and the account's folder name. That happened for a file name that is too long
-  to save, a full disk or a missing permission. It also reached a guest in a shared room who
-  fetched or uploaded a file. These messages now give only the reason, such as 'File name too
-  long', and the full detail stays in the server log.
+  to save, a full disk or a missing permission, and when the document editor opened a Word or
+  PowerPoint file that is empty or not a real document. It also reached a guest in a shared
+  room who fetched or uploaded a file, the first setup when the settings file could not be
+  written, and a failed backup. These messages now give only the reason, such as 'File name
+  too long' or 'not a valid Word file', and the full detail stays in the server log. A failed
+  backup still names the folder it could not read, inside VAF's data. A download or a cloud
+  storage error from another service now shows its HTTP status, such as 'HTTP 401', instead
+  of the address it called.
 - **A very long path no longer stalls VAF for everyone.** A folder path of a few tens of
   kilobytes sent to the chat workspace, a room's shared folder or the file routes kept the
   server busy for seconds, growing with the square of its length, while every other request

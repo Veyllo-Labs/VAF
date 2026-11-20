@@ -58,6 +58,7 @@ from sqlalchemy import func, select
 
 from vaf.auth.crypto import hash_password, hash_password_async
 from vaf.auth.models import LocalUser
+from vaf.core.path_jail import describe_error
 
 logger = logging.getLogger(__name__)
 
@@ -407,7 +408,7 @@ async def create_first_admin(
             raise UserAdminError(
                 "identity_not_written",
                 "The account was created but its identity could not be written to "
-                f"the config, and the account could not be removed either ({e}). "
+                f"the config, and the account could not be removed either ({describe_error(e)}). "
                 "Set these two keys by hand before starting VAF: "
                 f'local_admin_scope_id = "{user.user_scope_id}", '
                 f'local_admin_username = "{user.username}".',
@@ -415,7 +416,7 @@ async def create_first_admin(
             ) from cleanup_error
         raise UserAdminError(
             "identity_not_written",
-            f"The admin identity could not be written to the config ({e}); "
+            f"The admin identity could not be written to the config ({describe_error(e)}); "
             "nothing was created.",
             500,
         ) from e

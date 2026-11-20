@@ -264,3 +264,22 @@ def test_the_first_admin_always_reaches_the_terminal_door(monkeypatch, _isolated
     asyncio.run(user_admin.create_first_admin(
         _lookup(FakeDb(), "dora"), username="dora", password="longenough12"))
     assert mirrored == ["hash:longenough12"]
+
+
+def test_an_unwritable_config_is_named_without_its_path(monkeypatch, _isolated):
+    """The first-setup route answers with this message before any admin exists, and the OS
+    error's text quotes the config file's absolute path. MUTATION: build it from `{e}` - red."""
+    import errno
+    import os
+
+    from vaf.core import config as config_module
+
+    def _refused(c):
+        raise PermissionError(errno.EACCES, "Permission denied", "/home/user/.vaf/config.yaml")
+
+    monkeypatch.setattr(config_module.Config, "save", _refused)
+    with pytest.raises(UserAdminError) as e:
+        asyncio.run(user_admin.create_first_admin(
+            _lookup(FakeDb(), "dora"), username="dora", password="longenough12"))
+    assert "/home/user" not in e.value.message
+    assert f"({os.strerror(errno.EACCES)})" in e.value.message

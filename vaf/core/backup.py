@@ -77,6 +77,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from vaf.core.path_jail import describe_error
+
 logger = logging.getLogger("vaf.core.backup")
 
 # Chosen once; pinned in tests/test_persisted_format_tags.py.
@@ -296,7 +298,10 @@ def create_backup(dest: Optional[Path] = None, *, include_projects: bool = True,
         raise
     except Exception as e:
         _discard(partial, final)
-        raise BackupError(f"The backup failed: {type(e).__name__}: {e}") from e
+        # The admin's backup status shows this message, and an OS error's own text quotes
+        # the absolute path it failed on: the reason, and where it is inside VAF's stores.
+        raise BackupError(f"The backup failed: {type(e).__name__}: {describe_error(e)}"
+                          f"{_inside_the_stores(e)}") from e
     finally:
         shutil.rmtree(staging, ignore_errors=True)
         try:
@@ -370,6 +375,30 @@ def _inside(path: Path, folder: Path) -> bool:
         return True
     except (ValueError, OSError):
         return False
+
+
+def _inside_the_stores(exc) -> str:
+    """Where an OS error happened, as ``" (projects/ab12cd34/locked)"``: its file relative to
+    the most specific store root that holds it, so a failed backup still names the folder it
+    could not read without naming the home folder above it. "" when the error names no file
+    or one outside every root."""
+    name = getattr(exc, "filename", None) if isinstance(exc, OSError) else None
+    if not isinstance(name, str):
+        return ""
+    try:
+        from vaf.core import data_stores
+        target = Path(name)
+        found = None
+        for key, root in data_stores.roots().items():
+            try:
+                rel = target.relative_to(root)
+            except ValueError:
+                continue
+            if found is None or len(root.parts) > found[0]:
+                found = (len(root.parts), f"{key}/{rel.as_posix()}" if rel.parts else key)
+        return f" ({found[1]})" if found else ""
+    except Exception:
+        return ""
 
 
 def _collect_files(staging: Path, include_projects: bool, skipped: List[str],

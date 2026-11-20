@@ -12,6 +12,7 @@ import json
 import time
 import requests
 
+from vaf.core.path_jail import describe_error
 from vaf.core.progress import StatePublisher, resolve_ui_session_id
 from vaf.core.text_match import compile_de
 import sys
@@ -1679,7 +1680,7 @@ Remove duplicates and ensure smooth flow.
                 except Exception as e:
                     err_str = str(e)
                     hint = " For AES-encrypted PDFs (e.g. bank statements) run: pip install pycryptodome" if ("PyCryptodome" in err_str or "AES" in err_str) else ""
-                    return f"[ERROR] Failed to read PDF: {e}{hint}"
+                    return f"[ERROR] Failed to read PDF: {describe_error(e)}{hint}"
             
             # ═══════════════════════════════════════════════════════════
             # Word Documents (.docx)
@@ -1718,7 +1719,7 @@ Remove duplicates and ensure smooth flow.
                 except ImportError:
                     return f"[ERROR] Word document support not installed. Run: pip install python-docx"
                 except Exception as e:
-                    return f"[ERROR] Failed to read Word document: {e}"
+                    return f"[ERROR] Failed to read Word document: {describe_error(e)}"
             
             # ═══════════════════════════════════════════════════════════
             # Excel Files (.xlsx, .xls)
@@ -1760,7 +1761,7 @@ Remove duplicates and ensure smooth flow.
                 except ImportError:
                     return f"[ERROR] Excel support not installed. Run: pip install openpyxl"
                 except Exception as e:
-                    return f"[ERROR] Failed to read Excel file: {e}"
+                    return f"[ERROR] Failed to read Excel file: {describe_error(e)}"
             
             # ═══════════════════════════════════════════════════════════
             # PowerPoint Files (.pptx)
@@ -1796,7 +1797,7 @@ Remove duplicates and ensure smooth flow.
                 except ImportError:
                     return f"[ERROR] PowerPoint support not installed. Run: pip install python-pptx"
                 except Exception as e:
-                    return f"[ERROR] Failed to read PowerPoint file: {e}"
+                    return f"[ERROR] Failed to read PowerPoint file: {describe_error(e)}"
             
             # ═══════════════════════════════════════════════════════════
             # Text Files (default)
@@ -1891,7 +1892,7 @@ Remove duplicates and ensure smooth flow.
         except Exception as e:
             err_str = str(e)
             hint = " For AES-encrypted PDFs run: pip install pycryptodome" if ("PyCryptodome" in err_str or "AES" in err_str) else ""
-            return f"[ERROR] Failed to read file in chunks: {e}{hint}"
+            return f"[ERROR] Failed to read file in chunks: {describe_error(e)}{hint}"
     
     def _show_tree(self, path: Path, caller, max_depth: int = 3) -> str:
         """Show directory tree."""

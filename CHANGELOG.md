@@ -478,6 +478,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Changed
 
+- **The document editor opens Word and PowerPoint files up to 100 MB.** A larger one is
+  refused with "too large to open here (over 100 MB)" instead of being read whole into
+  memory. The text of a Word or PowerPoint file attached in a chat is read up to 20 MB, as
+  before.
 - **Speech voices whose licence forbids commercial use are no longer offered.** VAF now
   offers only voices whose licence allows commercial use, and records each licence. Piper on your
   computer speaks English, German, French, Spanish, Italian, Icelandic, Swedish, Ukrainian,
@@ -529,11 +533,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   upload carried, a Word or PowerPoint file that is empty, not a real document, or another
   kind of file under the wrong name (a spreadsheet saved as .docx, a template, a macro
   document). It also reached a guest in a shared room who fetched or uploaded a file, the
-  first setup when the settings file could not be written, and a failed backup. These messages now give only the reason, such as 'File name
-  too long' or 'not a valid Word file', and the full detail stays in the server log. A failed
-  backup still names the folder it could not read, inside VAF's data. A download or a cloud
-  storage error from another service now shows its HTTP status, such as 'HTTP 401', instead
-  of the address it called.
+  first setup when the settings file could not be written, and a failed backup. These
+  messages now give only the reason, such as 'File name too long' or 'not a valid Word file',
+  and the full detail stays in the server log. A failed backup still names the folder it
+  could not read, inside VAF's data. A download or a cloud storage error from another service
+  now shows its HTTP status, such as 'HTTP 401', instead of the address it called.
 - **A very long path no longer stalls VAF for everyone.** A folder path of a few tens of
   kilobytes sent to the chat workspace, a room's shared folder or the file routes kept the
   server busy for seconds, growing with the square of its length, while every other request

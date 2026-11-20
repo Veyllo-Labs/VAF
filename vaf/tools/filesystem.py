@@ -4,6 +4,7 @@
 import os
 import shutil
 import tempfile
+from vaf.core.path_jail import describe_error
 from vaf.tools.base import BaseTool
 from pathlib import Path
 from typing import List, Tuple
@@ -1060,7 +1061,7 @@ For semantic analysis across many files, consider librarian_agent instead."""
                 except Exception as e:
                     err_str = str(e)
                     hint = " For AES-encrypted PDFs run: pip install pycryptodome" if ("PyCryptodome" in err_str or "AES" in err_str) else ""
-                    return f"Error reading PDF: {e}{hint}"
+                    return f"Error reading PDF: {describe_error(e)}{hint}"
             
             # ═══════════════════════════════════════════════════════════
             # Word Documents (.docx)
@@ -1095,7 +1096,7 @@ For semantic analysis across many files, consider librarian_agent instead."""
                 except ImportError:
                     return "Error: Word document support not installed. Run: pip install python-docx"
                 except Exception as e:
-                    return f"Error reading Word document: {e}"
+                    return f"Error reading Word document: {describe_error(e)}"
             
             # ═══════════════════════════════════════════════════════════
             # Excel Files (.xlsx, .xls)
@@ -1133,7 +1134,7 @@ For semantic analysis across many files, consider librarian_agent instead."""
                 except ImportError:
                     return "Error: Excel support not installed. Run: pip install openpyxl"
                 except Exception as e:
-                    return f"Error reading Excel file: {e}"
+                    return f"Error reading Excel file: {describe_error(e)}"
             
             # ═══════════════════════════════════════════════════════════
             # PowerPoint Files (.pptx)
@@ -1165,7 +1166,7 @@ For semantic analysis across many files, consider librarian_agent instead."""
                 except ImportError:
                     return "Error: PowerPoint support not installed. Run: pip install python-pptx"
                 except Exception as e:
-                    return f"Error reading PowerPoint file: {e}"
+                    return f"Error reading PowerPoint file: {describe_error(e)}"
             
             # ═══════════════════════════════════════════════════════════
             # Text Files (default)

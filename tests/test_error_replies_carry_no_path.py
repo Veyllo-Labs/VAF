@@ -421,6 +421,8 @@ _FLAGGED = {
     "raise_keyword": ('try:\n    x()\nexcept Exception as e:\n'
                       '    raise HTTPException(500, detail=e)\n'),
     "raise_alias": 'try:\n    x()\nexcept Exception as e:\n    err = e\n    raise ValueError("x", err)\n',
+    "raise_in_a_tuple": 'try:\n    x()\nexcept Exception as e:\n    raise RuntimeError((e,))\n',
+    "raise_starred": 'try:\n    x()\nexcept Exception as e:\n    raise RuntimeError(*[e])\n',
     # a nested handler rebinds one name; the outer one still holds the OSError
     "nested_rebinding": ('try:\n    x()\nexcept Exception as e:\n    err = e\n    try:\n'
                          '        z()\n    except ValueError as err:\n'
@@ -758,6 +760,77 @@ def test_the_read_file_tool_opens_an_office_file_from_its_bytes(tmp_path, monkey
     monkeypatch.setattr(filesystem, "is_safe_path", lambda path, read_only=True: (True, str(target)))
     out = filesystem.ReadFileTool()._read(path=str(target))
     assert f"not a valid {label} file" in out and str(target.parent) not in out, out[:300]
+
+
+@pytest.mark.parametrize("name, kind, reader", [
+    ("letter.docx", "docx", "Word document"),
+    ("deck.pptx", "pptx", "PowerPoint file"),
+])
+def test_an_office_file_that_cannot_be_read_is_named_without_its_path(tmp_path, monkeypatch, name,
+                                                                      kind, reader):
+    """A file that exists but cannot be read (no permission) raises the operating system's
+    error, which quotes the absolute path, in the file reader tool and in both upload lanes.
+    Patched rather than chmod'ed: root reads a file with no permission bits. MUTATION: answer
+    `{e}` in the readers of vaf/tools/filesystem.py or vaf/tools/librarian.py - red."""
+    import base64
+    import tempfile
+
+    from vaf.core import office_package, web_server
+    from vaf.tools import filesystem
+    # Imported before is_safe_path is patched below: the librarian binds it at its own import,
+    # and a first import inside the patch kept the stand-in for every later test.
+    import vaf.tools.librarian  # noqa: F401
+
+    def refused(path, max_bytes):
+        raise PermissionError(errno.EACCES, "Permission denied", str(path))
+
+    monkeypatch.setattr(office_package, "_package_bytes", refused)
+    target = tmp_path / "home-ab12cd34" / name
+    target.parent.mkdir()
+    target.write_bytes(_office_package(tmp_path, kind))
+    with monkeypatch.context() as patch:
+        patch.setattr(filesystem, "is_safe_path", lambda path, read_only=True: (True, str(target)))
+        out = filesystem.ReadFileTool()._read(path=str(target))
+    assert out == f"Error reading {reader}: {os.strerror(errno.EACCES)}", out
+
+    monkeypatch.setattr(web_server, "_office_to_pdf_via_gotenberg", lambda *a, **k: None)
+    monkeypatch.setattr(web_server, "_docx_to_pdf_via_libreoffice", lambda *a, **k: None)
+    upload = [{"name": name, "data": base64.b64encode(target.read_bytes()).decode("ascii"),
+               "mimeType": "application/octet-stream"}]
+    temporary = tempfile.gettempdir()
+    (entry,) = asyncio.run(web_server.process_files_to_sidebar_list(upload))
+    assert f"Failed to read {reader}: {os.strerror(errno.EACCES)}" in entry["content"]
+    assert temporary not in entry["content"]
+    chat_text = asyncio.run(web_server.process_uploaded_files(upload))
+    assert f"Failed to read {reader}" in chat_text and temporary not in chat_text, chat_text[:300]
+
+
+@pytest.mark.skipif(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+                    reason="needs a file its owner cannot read: not on Windows, not as root")
+@pytest.mark.parametrize("name, reader", [("sheet.xlsx", "Excel file"), ("paper.pdf", "PDF")])
+def test_a_spreadsheet_or_pdf_that_cannot_be_read_is_named_without_its_path(tmp_path, monkeypatch,
+                                                                            name, reader):
+    """The same for the two readers that open the file by its path. MUTATION: answer `{e}` in
+    the Excel or PDF reader of either tool - red."""
+    from vaf.tools import filesystem
+    from vaf.tools.librarian import LibrarianTool  # before the patch below, as above
+
+    target = tmp_path / "home-ab12cd34" / name
+    target.parent.mkdir()
+    if name.endswith(".xlsx"):
+        target.write_bytes(_office_package(tmp_path, "xlsx"))
+    else:
+        target.write_bytes(b"%PDF-1.4\n")
+    target.chmod(0)
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(filesystem, "is_safe_path",
+                          lambda path, read_only=True: (True, str(target)))
+            from_the_tool = filesystem.ReadFileTool()._read(path=str(target))
+        for out in (from_the_tool, LibrarianTool()._read_file(target, True)):
+            assert reader in out and str(target.parent) not in out, out[:300]
+    finally:
+        target.chmod(0o600)
 
 
 def test_the_office_opener_hands_the_libraries_bytes_never_a_path(tmp_path, monkeypatch):

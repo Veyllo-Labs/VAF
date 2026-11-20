@@ -160,10 +160,27 @@ class _RunOutcome:
         # The bridge thread raised: the one way a run ends that the reconnect worker brings
         # back (`Reconnector`). A stop on request or a run with nobody to run stays down.
         self.failed = False
+        # (name, scope key) of every account this run was started for or spawned, minus the ones
+        # stopped on request since (`stop_account`, an expired session): who a crash recovery
+        # brings back, and whose automatic reconnect may go on after a failed spawn. Guarded by
+        # `_spawn_lock`.
+        self.members: set = set()
+        # `_whole_stops` when the run was published: a whole-bridge Stop since then cancels any
+        # recovery of this run (`start_bridge(unless_stopped_after=...)`).
+        self.started_after = 0
+        # A crash recovery's run starts only these (name, scope key) pairs: the failed run's
+        # members. None for every other run.
+        self.recover_only: Optional[set] = None
 
 
 # The current (or last) run's outcome, replaced by `start_bridge` with each run.
 _run_outcome = _RunOutcome()
+# How many whole-bridge Stops there were (`stop_bridge`), and the leaf lock that makes counting a
+# Stop and setting the current run's stop one step, and checking that count and publishing a
+# new run another: a crash recovery's start and an admin's Stop then cannot pass each other (the
+# Stop either cancels the start or ends the run it published). Nothing is taken under it.
+_whole_stops = 0
+_marks_lock = threading.Lock()
 # How long an admin's restart waits for the new run's spawn decisions before it answers
 # without naming any skipped account.
 RESTART_REPORT_WAIT = 15.0
@@ -1951,6 +1968,8 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
                                "Stopping this account's process.", username)
                 if _stop_account_held(username, user_scope_id):
                     _account_stopped(username)
+                # An expired login asks for a QR again on every start: nothing brings it back.
+                _leave_run(username, user_scope_id)
         except Exception as e:
             logger.exception("Failed to stop WhatsApp on session expiry: %s", e)
     elif typ == "connected":
@@ -2610,6 +2629,7 @@ def _spawn_account(user_scope_id: str, username: str, auth_dir: Path) -> bool:
             _retire(replaced)
         _processes[username] = proc
         _scope_by_user[username] = str(user_scope_id)
+    _run_outcome.members.add((username, _scope_key(user_scope_id)))
     _write_bridge_state(True)
     # The readers watch the stop of the run they were spawned into: spawns are open, so the
     # module's Event is that run's.
@@ -2692,7 +2712,10 @@ def _run_bridge_until_stopped(only: Optional[str], stop: threading.Event,
     users = _get_users_to_run()
     if only is not None:
         users = [u for u in users if u[1] == only]
+    if outcome.recover_only is not None:
+        users = [u for u in users if (u[1], _scope_key(u[0])) in outcome.recover_only]
     with _spawn_lock:
+        outcome.members.update((u[1], _scope_key(u[0])) for u in users)
         # An account start that raced this one may already have a process here: then the
         # bridge stays up for it.
         with _process_lock:
@@ -2784,20 +2807,33 @@ def anyone_to_run() -> bool:
     return bool(_get_users_to_run())
 
 
-def start_bridge(only: Optional[str] = None) -> bool:
+def start_bridge(only: Optional[str] = None, *, recover: Optional[set] = None,
+                 unless_stopped_after: Optional[int] = None) -> bool:
     """Start the WhatsApp bridge. Returns True if started (or already running). With `only`,
     the bridge comes up with that account's process alone; nobody else's starts. Without it,
     False when no account is linked and switched on (`anyone_to_run`), before Node is looked
     for or the dependencies are installed: a VAF where nobody uses WhatsApp starts nothing and
     logs no missing Node. No global switch gates it: each account's own switch decides its
-    own process (module docstring)."""
+    own process (module docstring).
+
+    A crash recovery (`Reconnector`) passes `recover`, the failed run's members as (name,
+    scope key) pairs, so accounts stopped on request before the failure stay stopped, and
+    `unless_stopped_after`, the whole-Stop count at that run's start: a Stop since then makes
+    the start answer False without publishing a run, checked in one step with the publishing
+    (`_marks_lock`)."""
     global _bridge_thread, _sender_thread, _chat_sync_thread, _outgoing_queue, _bridge_stop, _spawns_open
     global _run_outcome
 
     with _lifecycle_lock:
         if _bridge_thread is not None and _bridge_thread.is_alive():
             return True
-        if only is None and not anyone_to_run():
+        # Whom this run is for: its members from the start, so a run that fails before its
+        # spawn phase is still recovered for them (`_RunOutcome.members`).
+        intended = {(name, _scope_key(scope)) for scope, name, _ in _get_users_to_run()
+                    if only is None or name == only}
+        if recover is not None:
+            intended &= set(recover)
+        if only is None and recover is None and not intended:
             logger.info("WhatsApp bridge not started: %s", NOBODY_TO_RUN)
             return False
         whatsapp_config = Config.get("whatsapp_config") or {}
@@ -2820,9 +2856,17 @@ def start_bridge(only: Optional[str] = None) -> bool:
         run_stop = threading.Event()
         run_queue: queue.Queue = queue.Queue()
         run_outcome = _RunOutcome()
+        run_outcome.members.update(intended)
+        if recover is not None:
+            run_outcome.recover_only = set(recover)
         _ensure_ipc_dirs()
         with _spawn_lock:
-            _bridge_stop = run_stop
+            with _marks_lock:
+                if unless_stopped_after is not None and _whole_stops != unless_stopped_after:
+                    logger.info("WhatsApp: recovery not started, the bridge was stopped meanwhile")
+                    return False
+                _bridge_stop = run_stop
+                run_outcome.started_after = _whole_stops
             _outgoing_queue = run_queue
             _run_outcome = run_outcome
             _spawns_open = True
@@ -2862,9 +2906,13 @@ def start_bridge(only: Optional[str] = None) -> bool:
 
 
 def stop_bridge() -> None:
-    """Request bridge stop."""
-    global _outgoing_queue
-    _bridge_stop.set()
+    """Request bridge stop. Counted (`_whole_stops`) in one step with setting the current run's
+    stop, so a crash recovery whose start is under way either finds the count changed and
+    publishes nothing, or is the run this stop ends."""
+    global _outgoing_queue, _whole_stops
+    with _marks_lock:
+        _whole_stops += 1
+        _bridge_stop.set()
     if _outgoing_queue is not None:
         try:
             _outgoing_queue.put(None)
@@ -2941,25 +2989,66 @@ def _runnable_account(username: str, user_scope_id: str) -> Optional[Tuple[str, 
 
 
 def _start_into_running(entry: Tuple[str, str, Path]) -> Tuple[bool, str]:
+    with _spawn_lock:
+        return _start_into_running_held(entry)
+
+
+def _start_into_running_held(entry: Tuple[str, str, Path]) -> Tuple[bool, str]:
+    """`_start_into_running`'s work; the caller holds `_spawn_lock`."""
     user_scope_id, username, auth_dir = entry
+    if _bridge_stop.is_set() or not _spawns_open:
+        return False, BRIDGE_STOPPING
+    if _blocked_by_previous(username, user_scope_id):
+        return False, PREVIOUS_NOT_ENDED
+    if _registered_alive(username):
+        return True, ACCOUNT_ALREADY_RUNNING
+    if not _account_may_start(user_scope_id):
+        return False, NOT_STARTABLE
+    if _spawn_account(user_scope_id, username, auth_dir):
+        logger.info("WhatsApp: process started for %s", username)
+        return True, ACCOUNT_STARTED
+    # What refused the spawn, asked again: `stop_bridge` sets the run's stop without this
+    # lock, and a switch-off writes the config without it, so either can land between the
+    # checks above and the spawn's own. Neither is a failure of Node.
+    if _bridge_stop.is_set() or not _spawns_open:
+        return False, BRIDGE_STOPPING
+    return False, NOT_STARTABLE if not _account_may_start(user_scope_id) else START_FAILED
+
+
+def _reconnect_account(username: str, user_scope_id: str,
+                       judged: Optional[Any]) -> Optional[Tuple[bool, str]]:
+    """The reconnect worker's restart of one account: of exactly the process it judged down
+    (`judged`), or, with None, of an account whose earlier automatic restart stopped its
+    process and could not spawn the next one. None when there is nothing left to restart: the
+    registration is no longer the judged process (its owner or an admin stopped it, a restart
+    replaced it), the account is no longer a member of the run (stopped on request since), or
+    the bridge no longer takes processes. Otherwise (ok, message).
+
+    One hold of `_spawn_lock` from the check to the spawn, and only into the running bridge
+    (`_start_into_running_held`), never `start_account`'s cold start: measured with
+    `restart_account` in its place, an owner's Stop or an admin's whole Stop that landed while
+    the pass waited for the connection check was undone by the restart, which brought the
+    account (and the bridge) up again."""
+    entry = _runnable_account(username, user_scope_id)
+    if entry is None:
+        return False, NOT_STARTABLE
+    name, key = entry[1], _scope_key(user_scope_id)
     with _spawn_lock:
         if _bridge_stop.is_set() or not _spawns_open:
-            return False, BRIDGE_STOPPING
-        if _blocked_by_previous(username, user_scope_id):
-            return False, PREVIOUS_NOT_ENDED
-        if _registered_alive(username):
-            return True, ACCOUNT_ALREADY_RUNNING
-        if not _account_may_start(user_scope_id):
-            return False, NOT_STARTABLE
-        if _spawn_account(user_scope_id, username, auth_dir):
-            logger.info("WhatsApp: process started for %s", username)
-            return True, ACCOUNT_STARTED
-        # What refused the spawn, asked again: `stop_bridge` sets the run's stop without this
-        # lock, and a switch-off writes the config without it, so either can land between the
-        # checks above and the spawn's own. Neither is a failure of Node.
-        if _bridge_stop.is_set() or not _spawns_open:
-            return False, BRIDGE_STOPPING
-        return False, NOT_STARTABLE if not _account_may_start(user_scope_id) else START_FAILED
+            return None
+        current, registered = _registration(name)
+        if judged is None:
+            if current is not None or (name, key) not in _run_outcome.members:
+                return None
+        else:
+            if current is not judged or registered != str(user_scope_id or "").strip():
+                return None
+            stopped = _stop_account_held(name, user_scope_id)
+            if stopped is False:
+                return False, STOP_FAILED
+            if stopped:
+                _account_stopped(name)
+        return _start_into_running_held(entry)
 
 
 def _runs_own_process(username: str, user_scope_id: str) -> bool:
@@ -3024,7 +3113,19 @@ def stop_account(username: str, user_scope_id: Optional[str] = None) -> Optional
             # Still under the lock: once it is released a replacement can start and report
             # `connected`, which a later reset here would overwrite.
             _account_stopped(username)
+        # A stop on request: no automatic reconnect or crash recovery brings it back, even
+        # when nothing was registered (an automatic restart whose spawn had failed).
+        _leave_run(username, user_scope_id)
     return stopped
+
+
+def _leave_run(username: str, user_scope_id: Optional[str]) -> None:
+    """Drop this account from the current run's members (`_RunOutcome.members`): every pair
+    under this name, or only this scope's when one is given. Caller holds `_spawn_lock`."""
+    name = (username or "").strip()
+    key = _scope_key(user_scope_id)
+    for member in [m for m in _run_outcome.members if m[0] == name and (not key or m[1] == key)]:
+        _run_outcome.members.discard(member)
 
 
 def _is_registration(username: str, proc: Any) -> bool:
@@ -3349,6 +3450,9 @@ class _DownAccount:
         self.tries = 0
         self.last_try: Optional[float] = None
         self.gave_up = False
+        # This worker restarted the account: while it stays a member of the run (no stop on
+        # request since), a restart whose spawn failed is tried again, up to the bound.
+        self.intent = False
 
 
 class Reconnector:
@@ -3358,15 +3462,21 @@ class Reconnector:
     While the bridge runs, a candidate is an account that is linked and switched on, has a
     registration under its name for its own scope, and whose process has ended (a Node that
     exited, or a survivor an admin's restart skipped that has ended since) or is alive, acts
-    and is not connected. One that has been down for RECONNECT_GRACE is restarted through
-    `restart_account`, at most RECONNECT_MAX_TRIES times, RECONNECT_COOLDOWN apart; a refusal
-    is logged with its reason, and the last try is logged once as an error. Left alone: an
-    account without a registration (its owner or an admin stopped it, its session expired), a
-    survivor that still runs, and an account seen connected, which also resets its count.
+    and is not connected. One that has been down for RECONNECT_GRACE is restarted, at most
+    RECONNECT_MAX_TRIES times, RECONNECT_COOLDOWN apart: exactly the process it judged, into
+    the running bridge (`_reconnect_account`), so a Stop that lands during the pass is never
+    undone. A restart whose spawn failed leaves no registration; it is tried again while the
+    account is still a member of the run, and a stop on request ends that. A refusal is logged
+    with its reason, and the last try once as an error. Left alone: an account without a
+    registration that this worker did not restart (its owner or an admin stopped it, its
+    session expired), a survivor that still runs, and an account seen connected, which also
+    resets its count.
 
     While the bridge is down, it is started again only when its last run failed (the thread
-    raised), somebody is runnable, and fewer than CRASH_RESTARTS_MAX such starts were made in
-    a row without an account seen connected. A stop on request or a run with nobody to run
+    raised), no whole-bridge Stop came since that run started, and fewer than
+    CRASH_RESTARTS_MAX such starts were made in a row without an account seen connected; it
+    starts only that run's members (`start_bridge(recover=...)`), so an account stopped on
+    request before the failure stays stopped. A stop on request or a run with nobody to run
     stays down.
 
     Measured before, with a worker that restarted the whole bridge: an account's own Stop was
@@ -3394,20 +3504,30 @@ class Reconnector:
         for scope, name, _ in _get_users_to_run():
             key = (_scope_key(scope), name)
             seen.add(key)
-            state = self._account_state(name, scope)
+            proc, state = self._account_state(name, scope)
             if state == "connected":
                 self._crash_restarts = 0
-            if state != "down":
+            if state == "none" and key in self._down and self._down[key].intent:
+                judged = None       # this worker's restart, whose spawn failed: go on with it
+            elif state != "down":
                 self._down.pop(key, None)
                 continue
+            else:
+                judged = proc
             down = self._down.setdefault(key, _DownAccount(now))
             if down.gave_up or now - down.since < self.grace:
                 continue
             if down.last_try is not None and now - down.last_try < self.cooldown:
                 continue
-            ok, message = restart_account(name, scope)
+            result = _reconnect_account(name, scope, judged)
+            if result is None:
+                # Stopped, restarted or ended meanwhile: nothing of this worker's to go on with.
+                self._down.pop(key, None)
+                continue
+            ok, message = result
             down.tries += 1
             down.last_try = now
+            down.intent = True
             actions.append((name, ok, message))
             if not ok:
                 logger.warning("WhatsApp: reconnecting %s failed: %s", name, message)
@@ -3421,31 +3541,39 @@ class Reconnector:
         return actions
 
     @staticmethod
-    def _account_state(name: str, scope: str) -> str:
-        """"none" (no registration of this account's own: stopped, expired, or another
-        scope's process under the name), "survivor" (retired and still running), "connected",
-        or "down" (its process ended, or it acts and is not connected)."""
+    def _account_state(name: str, scope: str) -> Tuple[Optional[Any], str]:
+        """(the registered process, state): "none" (no registration of this account's own:
+        stopped, expired, or another scope's process under the name), "survivor" (retired and
+        still running), "connected", or "down" (its process ended, or it acts and is not
+        connected)."""
         proc, registered = _registration(name)
         if proc is None or registered != str(scope or "").strip():
-            return "none"
+            return None, "none"
         if proc.poll() is not None:
-            return "down"
+            return proc, "down"
         if _is_retired(proc):
-            return "survivor"
+            return proc, "survivor"
         if get_connection_status(name, wait_timeout=2.0, user_scope_id=scope):
-            return "connected"
-        return "down"
+            return proc, "connected"
+        return proc, "down"
 
     def _bring_back(self, now: float) -> List[Tuple[str, bool, str]]:
-        if not last_run_failed() or self._crash_restarts >= self.crash_restarts_max:
+        outcome = _run_outcome
+        if not outcome.failed or self._crash_restarts >= self.crash_restarts_max:
             return []
         if self._last_crash_restart is not None and now - self._last_crash_restart < self.cooldown:
             return []
-        if not anyone_to_run():
+        with _marks_lock:
+            if _whole_stops != outcome.started_after:
+                return []       # stopped on request since that run started
+        with _spawn_lock:
+            members = set(outcome.members)
+        eligible = {(name, _scope_key(scope)) for scope, name, _ in _get_users_to_run()} & members
+        if not eligible:
             return []
         self._crash_restarts += 1
         self._last_crash_restart = now
-        ok = start_bridge()
+        ok = start_bridge(recover=eligible, unless_stopped_after=outcome.started_after)
         message = "WhatsApp bridge started again after a failed run." if ok else START_FAILED
         if ok:
             logger.warning("WhatsApp: %s (%d of %d)", message, self._crash_restarts, self.crash_restarts_max)

@@ -21,6 +21,7 @@ Fake processes only: no Node, no network, no port.
 """
 import os
 import random
+import sys
 import threading
 import time
 
@@ -209,6 +210,22 @@ def _off_after_the_users_are_read(monkeypatch, name):
     return fired
 
 
+def _off_after_the_check(monkeypatch, name):
+    """The reconnect worker's restart passed its own check (`_runnable_account`), then the
+    switch-off lands, then it takes the spawn lock."""
+    real = wa._runnable_account
+    fired = []
+
+    def wrapped(username, user_scope_id):
+        entry = real(username, user_scope_id)
+        if not fired and username == name and entry is not None:
+            fired.append(True)
+            _switch_off(name)
+        return entry
+    monkeypatch.setattr(wa, "_runnable_account", wrapped)
+    return fired
+
+
 def _off_before_the_spawn(monkeypatch, name):
     """A start passed its own check (`_runnable_account`), then the switch-off lands, then it
     takes the spawn lock (`_start_into_running`)."""
@@ -244,11 +261,16 @@ def test_a_switch_off_races_no_start(world, monkeypatch, path):
         elif path == "start_missing_accounts":
             assert wa.start_missing_accounts() == []
         else:
+            # The reconnect's own check is `_runnable_account`, before the spawn lock: the
+            # switch-off lands right after it.
+            fired = _off_after_the_check(monkeypatch, "alice")
             monkeypatch.setattr(wa, "get_connection_status",
                                 lambda username, wait_timeout=2.0, **k: username == "admin")
             procs["alice"].returncode = 1          # her Node exited: a reconnect candidate
             reconnector = wa.Reconnector(grace=0.0, cooldown=0.0)
-            assert [a[0] for a in reconnector.step(1000.0)] == ["alice"]
+            # The switch-off's stop removed the process it judged: nothing to restart, or a
+            # refusal; never a start.
+            assert not [a for a in reconnector.step(1000.0) if a[1]]
     assert fired, "the switch-off never landed in the window"
     time.sleep(0.05)
     assert not channel_enabled_for_scope("whatsapp", ALICE_SCOPE)
@@ -340,6 +362,8 @@ FUZZ_NAMES = ("admin", "alice", "bob")
 # How long a lane may run before it counts as hung, and the longest one seen (reported).
 LANE_HANG = 60.0
 LONGEST_LANE = [0.0]
+# Set once a lane hung: the fuzz stops at that draw.
+HUNG = threading.Event()
 
 
 def _fuzz_draw(world, rng, violations):
@@ -388,14 +412,17 @@ def _fuzz_draw(world, rng, violations):
             longest[0] = max(longest[0], time.monotonic() - began)
 
     # Joined in full, never after a short timeout: a lane still running would carry its
-    # operations into the next draw (a starved machine can stretch a lane past ten seconds),
-    # and only a lane that hangs counts.
-    threads = [threading.Thread(target=lane, args=(items,)) for items in lanes]
+    # operations into the next draw. A lane that hangs is a violation that ends the whole fuzz
+    # (`HUNG`): no later draw runs next to it, and as a daemon thread it cannot keep the test
+    # process from exiting.
+    threads = [threading.Thread(target=lane, args=(items,), daemon=True) for items in lanes]
     for t in threads:
         t.start()
     for t in threads:
         t.join(timeout=LANE_HANG)
-    violations.extend(f"lane hung for {LANE_HANG:.0f} s" for t in threads if t.is_alive())
+    if any(t.is_alive() for t in threads):
+        HUNG.set()
+        violations.append(f"lane hung for {LANE_HANG:.0f} s; the fuzz stops here")
     violations.extend(f"raised: {e!r}" for e in errors)
     LONGEST_LANE[0] = max(LONGEST_LANE[0], longest[0])
     for name in FUZZ_NAMES:
@@ -407,6 +434,42 @@ def _fuzz_draw(world, rng, violations):
     return plan
 
 
+class _OneOpRng:
+    """A draw's random source that plans four `start_missing` operations with no pause."""
+
+    def choice(self, seq):
+        return "start_missing" if "start_missing" in seq else seq[0]
+
+    def randint(self, a, b):
+        return a
+
+    def uniform(self, a, b):
+        return 0.0
+
+
+def test_a_hung_lane_stops_the_fuzz_and_cannot_hold_the_process(world, monkeypatch):
+    """A lane that hangs is a violation, marks the fuzz as stopped, and runs as a daemon
+    thread, so the test process can still exit. MUTATION: lanes as non-daemon threads; no
+    `HUNG` mark."""
+    _bridge_with(world, "admin")
+    _quiet_reads(monkeypatch)
+    monkeypatch.setattr(sys.modules[__name__], "LANE_HANG", 0.2)
+    release = threading.Event()
+    monkeypatch.setattr(wa, "start_missing_accounts", lambda: release.wait(30))
+    HUNG.clear()
+    violations = []
+    try:
+        _fuzz_draw(world, _OneOpRng(), violations)
+        assert HUNG.is_set()
+        assert any("hung" in v for v in violations), violations
+        stuck = [t for t in threading.enumerate() if t.is_alive() and t is not threading.main_thread()
+                 and not t.daemon]
+        assert stuck == [], stuck
+    finally:
+        release.set()
+        HUNG.clear()
+
+
 def test_switch_off_fuzz(world, monkeypatch):
     """Seeded schedules of switch-ons and switch-offs (the route's own work), account starts and
     restarts, the admin's start into the running bridge, reconnector passes and process deaths.
@@ -415,6 +478,7 @@ def test_switch_off_fuzz(world, monkeypatch):
     count outside the suite; the seed is printed on failure."""
     _quiet_reads(monkeypatch)
     monkeypatch.setattr(wa, "TERMINATE_WAIT", 0.05)
+    HUNG.clear()
     draws = int(os.environ.get("VAF_FUZZ_DRAWS", "150"))
     seed = int(os.environ.get("VAF_FUZZ_SEED", "454"))
     master = random.Random(seed)
@@ -440,6 +504,8 @@ def test_switch_off_fuzz(world, monkeypatch):
         if violations:
             failures.append((draw, plan, violations))
             print(f"draw {draw}: {failures[-1]}")
+        if HUNG.is_set():
+            break       # a lane still runs: no shared state is trustworthy from here on
         _stop_and_join()
     print(f"switch-off fuzz: {draws} draws, seed {seed}, {len(failures)} mismatches, "
           f"longest lane {LONGEST_LANE[0]:.2f} s")

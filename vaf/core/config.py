@@ -1575,7 +1575,9 @@ class Config:
             "chat_activity": "messaging_connections.append_channel_activity",
         },
         "whatsapp_config": {
-            "whitelist": "whatsapp whitelist routes and bridge",
+            "whitelist": "channel_pairing.pair_whatsapp_number (the add route), "
+                         "channel_pairing.refile_whatsapp_owner_numbers (the bridge start), the whatsapp "
+                         "whitelist-remove route and whatsapp_bridge._drop_self_number_from_whitelist",
             # The shared map applies to every account: an admin's assignment and the bridge.
             "lid_to_e164": "whatsapp lid-assign route (admin) and bridge",
             # Everybody else's assignment, keyed by scope, read by their own lane only.
@@ -2579,14 +2581,25 @@ def scope_id_for_username(username: str) -> Optional[str]:
     had. An embedder with no directory registered gets None for every name but the
     owner's, which is the safe answer for a door.
     """
+    account = account_for_username(username)
+    return account[0] if account else None
+
+
+def account_for_username(username: str) -> Optional[Tuple[str, str]]:
+    """`(scope, name as the account stores it)` for an account NAME, or None: the one lookup
+    `scope_id_for_username` answers with, for a caller that also writes the name down (a
+    WhatsApp number registered for "ALICE" is filed under "alice"). Same rules: casefolded,
+    the local admin from the config, everybody else from the directory, active accounts
+    only, never raises."""
     name = str(username or "").strip()
     if not name:
         return None
     try:
-        if name.casefold() == str(get_local_admin_username() or "").strip().casefold():
+        admin_name = str(get_local_admin_username() or "").strip()
+        if name.casefold() == admin_name.casefold():
             admin = str(get_local_admin_scope_id() or "").strip()
             if admin:
-                return admin
+                return admin, admin_name
     except Exception:
         pass
     try:
@@ -2594,7 +2607,7 @@ def scope_id_for_username(username: str) -> Optional[str]:
         wanted = name.casefold()
         for row in resolve_account_directory():
             if row["username"].casefold() == wanted and row.get("active", True):
-                return row["user_scope_id"]
+                return row["user_scope_id"], row["username"]
     except Exception:
         return None
     return None

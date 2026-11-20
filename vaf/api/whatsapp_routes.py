@@ -6,6 +6,7 @@ WhatsApp Integration API Routes
 
 Handles WhatsApp bridge start/stop, QR display for linking, status, and whitelist management.
 """
+import asyncio
 import json
 import logging
 import re
@@ -671,6 +672,9 @@ async def get_whatsapp_dashboard(request: Request):
             {"phone_number": e.get("phone_number", ""), "vaf_username": e.get("vaf_username")}
             for e in whitelist
         ],
+        # Whether the "Your number" card offers a user name field: the same check
+        # `POST /whitelist/add` applies before it accepts another account's name.
+        "may_register_for_others": caller_is_admin(request),
         "front_office_contacts": front_office_contacts,
         "lid_mappings_from_node": lid_mappings_from_node,
         "lid_chats_to_assign": lid_chats_to_assign,
@@ -1215,24 +1219,47 @@ async def remove_whitelist_entry(request: Request, body: WhitelistAddRequest):
 
 @router.post("/whitelist/add")
 async def add_whitelist_entry(request: Request, body: WhitelistAddRequest):
-    """Add a whitelist entry for WhatsApp (phone_number -> user)."""
+    """Register the number an account chats with its agent from (`phone_number -> account`).
+
+    Whose number it is: the caller's own account, unless an admin names another one by its
+    user name. That name is looked up in the account directory (`config.account_for_username`,
+    off the event loop: the directory is a database query) and the entry is filed under THAT
+    account's scope; an unknown or inactive name is refused (404), and a `user_scope_id` that
+    is not the named account's is refused (400). An account that is not an admin may name
+    nobody else, by name or by scope (403); it used to get its own entry silently. The entry
+    is written by `channel_pairing.pair_whatsapp_number`, which changes only the target
+    account's entry, found by scope: an older version filed a number an admin registered for
+    another account under the admin's own scope, and matched an existing entry by name too, so
+    an ordinary account named "admin" could overwrite the admin's entry. Entries filed that
+    way are moved when the bridge starts (`channel_pairing.refile_whatsapp_owner_numbers`)."""
     user_info = get_current_vaf_user(request)
     phone = (body.phone_number or "").strip()
     if not phone:
         raise HTTPException(status_code=400, detail="phone_number required")
-    is_admin = caller_is_admin(request)
-    if is_admin:
-        vaf_username = (body.vaf_username or user_info["username"]).strip()
-        user_scope_id = body.user_scope_id or user_info["user_scope_id"]
+    own_scope = str(user_info["user_scope_id"]).strip()
+    own_name = str(user_info["username"]).strip()
+    name = (body.vaf_username or "").strip()
+    scope_in = (body.user_scope_id or "").strip()
+    names_another = bool(name) and name.casefold() != own_name.casefold()
+    if not caller_is_admin(request):
+        if names_another or (scope_in and scope_in != own_scope):
+            raise HTTPException(status_code=403, detail="You can only register your own number.")
+        target_scope, target_name = own_scope, own_name
+    elif not names_another:
+        target_scope, target_name = own_scope, own_name
     else:
-        # Non-admin users may only create/update their own whitelist entry.
-        vaf_username = user_info["username"]
-        user_scope_id = user_info["user_scope_id"]
+        from vaf.core.config import account_for_username
+        account = await asyncio.to_thread(account_for_username, name)
+        if account is None:
+            raise HTTPException(status_code=404, detail=f"There is no active VAF account called '{name}'.")
+        target_scope, target_name = account
+    if scope_in and scope_in != target_scope:
+        raise HTTPException(status_code=400, detail=f"user_scope_id does not belong to {target_name}.")
 
     # The linked account is the agent's own number. Registering it as the main-user
     # number would recreate the "chat with yourself" model this bridge no longer supports.
     from vaf.core.whatsapp_auth import get_linked_phone
-    linked_phone = get_linked_phone(vaf_username)
+    linked_phone = get_linked_phone(target_name)
     from vaf.core.contacts_store import phone_digits_canonical
     phone_key = phone_digits_canonical(phone)
     if linked_phone and phone_key and phone_key == phone_digits_canonical(linked_phone):
@@ -1241,49 +1268,15 @@ async def add_whitelist_entry(request: Request, body: WhitelistAddRequest):
             detail="This is the agent's own linked number. Register the number you chat from, not the one you scanned the QR code with.",
         )
 
-    config = Config.load()
-    wc = config.get("whatsapp_config") or {}
-    if not isinstance(wc, dict):
-        wc = {"enabled": wc.get("enabled", False) if isinstance(wc, dict) else False, "whitelist": []}
-    whitelist = list(wc.get("whitelist") or [])
-    for i, e in enumerate(whitelist):
-        if isinstance(e, dict) and (
-            str(e.get("user_scope_id")) == str(user_scope_id) or e.get("vaf_username") == vaf_username
-        ):
-            old_phone = str(e.get("phone_number") or "").strip()
-            unchanged = (old_phone == phone and str(e.get("user_scope_id")) == str(user_scope_id)
-                         and e.get("vaf_username") == vaf_username)
-            whitelist[i] = {**e, "phone_number": phone, "user_scope_id": user_scope_id, "vaf_username": vaf_username}
-            wc["whitelist"] = whitelist
-            config["whatsapp_config"] = wc
-            Config.save(config)
-            # The same number registered again changes nothing and records nothing. A new
-            # number for this account is two changes: the old number lost the owner's
-            # access, the new one gained it (`path` keeps them apart in the throttle).
-            if not unchanged:
-                who = str(user_info.get("username") or "")
-                if old_phone and old_phone != phone:
-                    log_security_event("channel_unpaired", channel="whatsapp", username=who, path=old_phone,
-                                       detail=f"owner {old_phone}")
-                log_security_event("channel_paired", channel="whatsapp", username=who, path=phone,
-                                   detail=f"owner {phone} for {vaf_username}")
-            return {"status": "updated", "message": "Whitelist entry updated."}
-    whitelist.append({
-        "phone_number": phone,
-        "user_scope_id": user_scope_id,
-        "vaf_username": vaf_username,
-    })
-    wc["whitelist"] = whitelist
-    if "enabled" not in wc:
-        wc["enabled"] = True
-    config["whatsapp_config"] = wc
-    Config.save(config)
-    # The owner number is the one sender that gets the agent's full tool set: recorded
-    # in the security log whoever registered it, so the log answers "who may talk to
+    from vaf.core.channel_pairing import pair_whatsapp_number
+    status = pair_whatsapp_number(phone, user_scope_id=target_scope, username=target_name,
+                                  changed_by=str(user_info.get("username") or ""))
+    # The owner number is the one sender that gets the agent's full tool set: recorded in the
+    # security log by the writer whoever registered it, so the log answers "who may talk to
     # the agent, and since when" rather than only "who was turned away".
-    log_security_event("channel_paired", channel="whatsapp", username=str(user_info.get("username") or ""),
-                       path=phone, detail=f"owner {phone} for {vaf_username}")
-    return {"status": "added", "message": "Whitelist entry added."}
+    if status == "added":
+        return {"status": "added", "message": "Whitelist entry added.", "vaf_username": target_name}
+    return {"status": "updated", "message": "Whitelist entry updated.", "vaf_username": target_name}
 
 
 # A LID is WhatsApp's opaque per-person id: ASCII digits and "@lid", nothing else (no

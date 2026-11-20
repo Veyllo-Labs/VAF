@@ -110,7 +110,8 @@ SECURITY_EVENT_KINDS: dict[str, str] = {
     "channel_paired": "A sender was given access on a messenger channel: an owner number, a "
                       "Telegram whitelist or relay entry, the Discord admin, or a LID bound to "
                       "an allowed number. `channel` carries the platform, `username` who changed "
-                      "it, `path` the paired id (so two changes seconds apart stay two events), "
+                      "it (for a correction VAF makes at WhatsApp start, the account whose "
+                      "access changed), `path` the paired id (so two changes seconds apart stay two events), "
                       "`detail` the role and the id. A write that changes nothing records nothing",
     "channel_unpaired": "A sender lost that access again; same fields",
     "app_pairing_refused": "A Veyllo App pairing was refused: a wrong, spent or expired "

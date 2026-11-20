@@ -572,7 +572,8 @@ def get_whatsapp_chat_jid_from_whitelist(
     `_get_allowed_phones_for_user`); otherwise remove it, since under the admin's scope the
     fallback by scope would pick it, first in whitelist order, and send the admin's notes to
     that number. Registering the number again on the Connections page is not enough: it
-    writes or updates the admin's own entry and leaves the old one in place.
+    writes or updates only the registering account's own entry by scope and leaves the old
+    one in place.
     """
     whatsapp_config = Config.get("whatsapp_config") or {}
     if not isinstance(whatsapp_config, dict) or not whatsapp_config.get("whitelist"):
@@ -729,18 +730,16 @@ def get_whatsapp_chat_jid(
     - Two accounts filed under one name (`_whatsapp_name_is_lanes`): an ordinary account named
       "admin" reads its own name key, which older versions also wrote the local admin's chats
       under; a value there that is no registered number is returned to that account.
-    - An entry filed under a lane's scope is that lane's number, whoever's number it is. An
-      admin who registers a number for another account on the WhatsApp window sends only that
-      account's name; the route files the number under the admin's own scope, and its update
-      loop matches an existing entry by scope or name, first in whitelist order, so it
-      overwrites the admin's own entry or that account's entry with the number under the
-      admin's scope. Every lane of the local admin, the ones without a scope included
-      (`messenger_lane_identity`), then delivers to that number through the admin's own
-      process, while the account the number was registered for counts it as the admin's on
-      its own lane: its saved chat there is reset as foreign (`owner_endpoint_reset`) and its
-      notifications go to the web UI. The bridge's reply check, which also matches by name,
-      still answers that number for the account's own process; that is all it covers. The
-      cause is that route, not this reader, and it is not closed here.
+    - An entry filed under a lane's scope is that lane's number. A number an admin registers
+      for another account is filed under that account's scope (the route resolves the name,
+      `channel_pairing.pair_whatsapp_number` changes only that scope's entry). Older versions
+      filed it under the admin's own scope, where every lane of the local admin delivered to
+      it; those entries are moved to the account they were registered for each time the
+      bridge starts (`channel_pairing.refile_whatsapp_owner_numbers`), after which the
+      admin's saved chat holding that number is reset here once as foreign. Not moved, and
+      still read by scope: an entry under a non-admin's scope with another account's name,
+      one under the scope of an account that is no longer an admin, and one under the
+      ambiguous name "admin" (see the refile's boundaries).
     - The registered-number helpers stay private: this is the one reader of "whose number is
       this"; a second reader is the measurement that would earn a public primitive.
     - Cost: one canonicalisation per whitelist entry, plus one LID-map copy when another

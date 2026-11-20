@@ -425,7 +425,10 @@ def test_the_harness_registers_the_account_directory_and_the_framework_reads_onl
     main = (ROOT / "vaf" / "main.py").read_text(encoding="utf-8")
     assert "set_account_directory_resolver(_account_directory_resolver)" in main
     config = (ROOT / "vaf" / "core" / "config.py").read_text(encoding="utf-8")
+    # The name lookup is `account_for_username`; `scope_id_for_username` answers with it.
     block = config.split("def scope_id_for_username")[1].split("\ndef ")[0]
+    assert "vaf.auth" not in block and "account_for_username(username)" in block
+    block = config.split("def account_for_username")[1].split("\ndef ")[0]
     assert "vaf.auth" not in block and "resolve_account_directory" in block
 
     # The primitive itself: a lookup, not a guard - a raising resolver is an empty

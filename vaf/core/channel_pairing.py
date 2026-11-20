@@ -30,17 +30,28 @@ it becomes the contact. An id typed into a form proves nothing about who holds i
 add by id is an admin's (`pair_telegram_relay(..., paired_by="admin")`), like the wizard's
 owner entry.
 
+A WhatsApp owner number (`whatsapp_config.whitelist`) is the number an account chats with its
+agent from. It has one writer too, `pair_whatsapp_number`, which changes only the entry of
+the account it is told and never matches by name, and `refile_whatsapp_owner_numbers` moves
+the entries older versions filed under an admin's own scope to the account they were
+registered for.
+
 NAMED BOUNDARY: first-party only, like the channel registry (`vaf/core/channels.py`): no
-facade export, no embedder has a shared bot of their own to pair on. Re-measure when one does.
+facade export, no embedder has a shared bot of their own to pair on, and the WhatsApp bridge
+and its routes are the harness's (`vaf/api`); no facade name references a messenger
+whitelist. Re-measure when one does.
 """
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import secrets
 import threading
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 PAIRING_TTL_SECONDS = 600
 # The channel a relay code is issued on: codes are kept per (channel, account), so a relay
@@ -268,3 +279,201 @@ def pair_telegram_relay(telegram_user_id: str, telegram_username: Optional[str],
         except Exception:
             pass
     return "paired" if new_entry else "unchanged"
+
+
+def _whatsapp_whitelist(config: Dict[str, Any]) -> Tuple[Dict[str, Any], List[Any]]:
+    block = config.get("whatsapp_config")
+    block = block if isinstance(block, dict) else {}
+    whitelist = block.get("whitelist")
+    return block, list(whitelist) if isinstance(whitelist, list) else []
+
+
+def _whatsapp_entry_key(entry: Dict[str, Any]) -> Tuple[str, str, str]:
+    """(number, scope, name) of an owner entry, stripped."""
+    return (str(entry.get("phone_number") or "").strip(), str(entry.get("user_scope_id") or "").strip(),
+            str(entry.get("vaf_username") or "").strip())
+
+
+def pair_whatsapp_number(phone_number: str, *, user_scope_id: str, username: str, changed_by: str) -> str:
+    """Write one owner entry on the WhatsApp whitelist: this number is the one that account
+    chats with its agent from. The one writer, for `POST /api/whatsapp/whitelist/add`.
+
+    Returns "added" (the account had no entry), "updated" (its entry now carries this number
+    or this name) or "unchanged". The entry is found by the account's SCOPE only: the first
+    entry filed under it is replaced, any other entry is left as it is, one without a scope
+    included. A match by name, as the route used to make, let an ordinary account named
+    "admin" overwrite the admin's entry filed under that name, and an admin registering for
+    another account overwrite the admin's own entry. Who the account is, the caller decides
+    (the route resolves a name an admin typed through the account directory).
+
+    Records `channel_unpaired` for a number the entry no longer carries and `channel_paired`
+    for the new one, `username` the account that made the change; "unchanged" records nothing.
+    Raises ValueError without a number or a scope. Under the config lock from load to save.
+    """
+    from vaf.core.config import Config
+
+    phone = str(phone_number or "").strip()
+    scope = str(user_scope_id or "").strip()
+    name = str(username or "").strip()
+    if not phone or not scope:
+        raise ValueError("an owner number needs the number and the account's scope")
+    old_phone = ""
+    with Config._locked():
+        config = Config.load()
+        block, whitelist = _whatsapp_whitelist(config)
+        index = next((i for i, e in enumerate(whitelist)
+                      if isinstance(e, dict) and str(e.get("user_scope_id") or "").strip() == scope), None)
+        if index is None:
+            whitelist.append({"phone_number": phone, "user_scope_id": scope, "vaf_username": name})
+            block = {**block, "whitelist": whitelist}
+            block.setdefault("enabled", True)
+            status = "added"
+        else:
+            previous = whitelist[index]
+            if (previous.get("phone_number"), previous.get("user_scope_id"), previous.get("vaf_username")) \
+                    == (phone, scope, name):
+                return "unchanged"
+            old_phone = str(previous.get("phone_number") or "").strip()
+            whitelist[index] = {**previous, "phone_number": phone, "user_scope_id": scope, "vaf_username": name}
+            block = {**block, "whitelist": whitelist}
+            status = "updated"
+        config["whatsapp_config"] = block
+        Config.save(config)
+    # A new number for the account is two changes: the old number lost the owner's access,
+    # the new one gained it (`path` keeps them apart in the throttle).
+    try:
+        from vaf.core.security_events import log_security_event
+        who = str(changed_by or "")
+        if old_phone and old_phone != phone:
+            log_security_event("channel_unpaired", channel="whatsapp", username=who, path=old_phone,
+                               detail=f"owner {old_phone}")
+        log_security_event("channel_paired", channel="whatsapp", username=who, path=phone,
+                           detail=f"owner {phone} for {name}")
+    except Exception:
+        pass
+    return status
+
+
+def refile_whatsapp_owner_numbers() -> List[Dict[str, str]]:
+    """Move the owner numbers older versions filed under an admin's own scope to the account
+    they were registered for. Run once each time the WhatsApp bridge starts
+    (`whatsapp_bridge._run_bridge`); returns the changes made, `[{"action": "moved" |
+    "removed", "phone_number", "vaf_username", "from_scope", "to_scope"}]`. Never raises.
+
+    Why: an admin who registered a number for another account sent only that account's name,
+    and the route filed it under the ADMIN's scope with that name. Every reader goes by scope
+    (`messaging_connections._whatsapp_registered_entries`), so the admin's lanes, the ones
+    without a scope included, delivered the admin's notes to that number, and the account it
+    was registered for read it as the admin's and got its notifications in the web UI only.
+    `pair_whatsapp_number` no longer writes that shape, and registering again does not repair
+    an old one (it writes the account's own entry by scope and leaves the misfiled one).
+
+    An entry is moved when all of these hold: it has a scope S, a name N and a number; N is
+    not the ambiguous "admin" (the admin's legacy alias, and also an ordinary account's name
+    while the admin is named otherwise); N resolves to an active account T
+    (`config.scope_id_for_username`) and T is not S; and S is an admin's
+    (`config.is_admin_account`), since only an admin's route call wrote that shape. When T
+    already has an entry with the same number (`phone_digits_canonical`), the misfiled one is
+    removed instead of becoming a duplicate. Each move is `channel_unpaired` for S's account
+    and `channel_paired` for N; a removal is `channel_unpaired` only. A moved entry no longer
+    matches, so a second pass changes nothing and records nothing.
+
+    Cost: one `scope_id_for_username` per distinct name and one `is_admin_account` per
+    distinct scope in a pass, and none when no scoped entry carries a name. The directory
+    behind them is a database query, which is why this runs at the bridge start, off the
+    event loop, and not on every read: every lane with an effect (a proactive send, the reply
+    check) needs a running bridge. An empty directory (nothing registered, a store that is
+    down) resolves no name, so nothing moves.
+
+    Named boundaries:
+    - A deleted account whose name was later given to a new account: an entry an admin
+      registered for the old one moves to the new one; the entry carries no date to tell them
+      apart. The bridge's reply check already admitted that number for the new account by
+      name. The `channel_paired` event names it, and an admin removes it.
+    - Not moved: an entry under a non-admin's scope with another account's name (a hand edit
+      of unknown intent), an entry under the scope of an account that is no longer an admin,
+      and an entry under the ambiguous name "admin".
+    """
+    try:
+        return _refile_whatsapp_owner_numbers()
+    except Exception:
+        logger.warning("WhatsApp: correcting owner numbers filed under the wrong account failed", exc_info=True)
+        return []
+
+
+def _refile_whatsapp_owner_numbers() -> List[Dict[str, str]]:
+    from vaf.core.config import (Config, get_local_admin_username, is_admin_account, resolve_caller_username,
+                                 scope_id_for_username)
+    from vaf.core.contacts_store import phone_digits_canonical
+
+    _block, whitelist = _whatsapp_whitelist(Config.load())
+    named = [key for key in (_whatsapp_entry_key(e) for e in whitelist if isinstance(e, dict)) if all(key)]
+    if not named:
+        return []
+    admin_name = get_local_admin_username().strip().casefold()
+    targets: Dict[str, Optional[str]] = {}
+    admins: Dict[str, bool] = {}
+    candidates: List[Tuple[Tuple[str, str, str], str]] = []
+    for key in named:
+        _phone, scope, name = key
+        folded = name.casefold()
+        if folded == "admin" and admin_name != "admin":
+            continue
+        if folded not in targets:
+            targets[folded] = str(scope_id_for_username(name) or "").strip() or None
+        target = targets[folded]
+        if not target or target == scope:
+            continue
+        if scope not in admins:
+            admins[scope] = is_admin_account(scope)
+        if admins[scope]:
+            candidates.append((key, target))
+    if not candidates:
+        return []
+
+    def same_number(a: str, b: str) -> bool:
+        ca, cb = phone_digits_canonical(a), phone_digits_canonical(b)
+        return ca == cb if ca and cb else a.strip() == b.strip()
+
+    changes: List[Dict[str, str]] = []
+    with Config._locked():
+        config = Config.load()
+        block, whitelist = _whatsapp_whitelist(config)
+        for key, target in candidates:
+            # The entry as it was read; one changed since is somebody's newer write.
+            index = next((i for i, e in enumerate(whitelist) if isinstance(e, dict) and _whatsapp_entry_key(e) == key),
+                         None)
+            if index is None:
+                continue
+            phone, scope, name = key
+            change = {"phone_number": phone, "vaf_username": name, "from_scope": scope, "to_scope": target}
+            if any(isinstance(e, dict) and str(e.get("user_scope_id") or "").strip() == target
+                   and same_number(str(e.get("phone_number") or ""), phone) for e in whitelist):
+                del whitelist[index]
+                changes.append({"action": "removed", **change})
+            else:
+                whitelist[index] = {**whitelist[index], "user_scope_id": target}
+                changes.append({"action": "moved", **change})
+        if changes:
+            config["whatsapp_config"] = {**block, "whitelist": whitelist}
+            Config.save(config)
+
+    from vaf.core.security_events import log_security_event
+    filed_under: Dict[str, str] = {}
+    for change in changes:
+        scope, name, phone = change["from_scope"], change["vaf_username"], change["phone_number"]
+        if scope not in filed_under:
+            filed_under[scope] = resolve_caller_username(None, scope, allow_lookup=True)
+        logger.warning("WhatsApp: an owner number registered for %r was filed under the account %r; %s",
+                       name, filed_under[scope],
+                       "moved to its own account" if change["action"] == "moved" else "removed as a duplicate")
+        try:
+            log_security_event("channel_unpaired", channel="whatsapp", username=filed_under[scope], path=phone,
+                               detail=f"owner {phone}, registered for {name} under this account; "
+                                      "corrected at WhatsApp start")
+            if change["action"] == "moved":
+                log_security_event("channel_paired", channel="whatsapp", username=name, path=phone,
+                                   detail=f"owner {phone} for {name}, moved from the account it was filed under")
+        except Exception:
+            pass
+    return changes

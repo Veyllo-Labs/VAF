@@ -1161,10 +1161,11 @@ def set_account_directory_resolver(resolver) -> None:
     ordinary user, which is the restrictive answer.
 
     A LOOKUP, not a guard, so its polarity differs from the allowlist resolver's: a
-    raising resolver is read as an EMPTY directory rather than a refusal, because the
-    only thing built on it is finding somebody to invite, and "nobody found" is already
-    the safe outcome. Names are compared case-insensitively by the callers; the
-    resolver returns them as stored. Never cached here - a directory that changes when
+    raising resolver is read as an EMPTY directory rather than a refusal, because what
+    is built on it either finds somebody (to invite, or the account a messenger number is
+    registered for), where "nobody found" is already the safe outcome, or asks whether an
+    account still stands, where "nobody known" keeps the open default. Names are compared
+    case-insensitively by the callers; the resolver returns them as stored. Never cached here - a directory that changes when
     an account is created should show the account on the next look, and a resolver
     that finds lookups expensive caches inside itself.
 

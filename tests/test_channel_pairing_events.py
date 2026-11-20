@@ -12,8 +12,8 @@ the acting user, the paired id as `path` (two changes seconds apart stay two eve
 changed; a write that changes nothing emits nothing, and a replaced owner number or admin is one
 `channel_unpaired` for the old id and one `channel_paired` for the new.
 
-MUTATION: drop any one `log_security_event(...)` call in the routes and the matching
-assertion below goes red.
+MUTATION: drop any one `log_security_event(...)` call in the routes or in their writers
+(`vaf/core/channel_pairing.py`) and the matching assertion below goes red.
 """
 import asyncio
 from types import SimpleNamespace
@@ -52,6 +52,10 @@ def test_whatsapp_owner_numbers_and_lid_bindings_are_recorded_once_per_change(co
     monkeypatch.setattr(routes, "caller_is_admin", lambda request: True)
     monkeypatch.setattr("vaf.core.whatsapp_auth.get_linked_phone", lambda username: None)
     events = _recorder(monkeypatch, routes)
+    # An owner number is written, and recorded, by its one writer
+    # (`channel_pairing.pair_whatsapp_number`); the remove and the LID routes record their own.
+    import vaf.core.security_events as security_events
+    monkeypatch.setattr(security_events, "log_security_event", lambda kind, **f: events.append((kind, f)))
 
     out = asyncio.run(routes.add_whitelist_entry(_req(), routes.WhitelistAddRequest(phone_number="+491700000042")))
     assert out["status"] == "added"

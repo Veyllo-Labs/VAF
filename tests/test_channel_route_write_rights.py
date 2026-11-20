@@ -317,7 +317,8 @@ PROBES = {
         {"whatsapp_config": {"enabled": True, "whitelist": [WA_ADMIN]}},
         "post", "/api/whatsapp/whitelist/add", {"phone_number": ADMIN_PHONE, "user_scope_id": ADMIN_SCOPE,
                                                 "vaf_username": "admin"},
-        200,
+        # A non-admin naming another account, by name or by scope, is refused outright.
+        403,
         lambda c: [e for e in _wa(c).get("whitelist") or [] if e.get("user_scope_id") != ALICE["user_scope_id"]]),
     "whatsapp_routes:remove_whitelist_entry": (
         {"whatsapp_config": {"enabled": True, "whitelist": [WA_ALICE_SAME, WA_ADMIN]}},

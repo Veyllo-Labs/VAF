@@ -778,10 +778,12 @@ def _get_allowed_phones_for_user(username: str, user_scope_id: str) -> Tuple[Lis
       version that stored the Connections page's copy of a number it had just added. The
       repair is the admin's scope AND the admin's own username on the entry: with the scope
       alone, the name "admin" still matches that ordinary account.
-    - A scoped entry still matches by name too, not by its scope alone. An admin who registers
-      a number for another account on the WhatsApp window sends only that account's name, and
-      the route files the entry under the admin's own scope with that name: matched by scope
-      alone, the number would become the admin's and leave the account it was registered for."""
+    - A scoped entry still matches by name too, not by its scope alone, for an entry whose
+      scope and name disagree (written by hand). The route files a number an admin registers
+      for another account under that account's scope, and entries older versions filed under
+      the admin's scope are moved at the bridge start
+      (`channel_pairing.refile_whatsapp_owner_numbers`), so a route-written entry no longer
+      needs the name to reach its account."""
     config_phones: List[str] = []
     allowed_phones: List[str] = []
     whatsapp_config = Config.get("whatsapp_config") or {}
@@ -2223,6 +2225,15 @@ def _chat_sync_loop() -> None:
 def _run_bridge() -> None:
     """Main bridge loop: start processes for each user, register callback, wait for stop."""
     global _processes
+    # Owner numbers older versions filed under an admin's own scope move to the account they
+    # were registered for, before any process reads the whitelist. Here because every lane
+    # that acts on a number needs a running bridge, and off the event loop because the
+    # account directory behind it is a database query. It never stops the bridge.
+    try:
+        from vaf.core.channel_pairing import refile_whatsapp_owner_numbers
+        refile_whatsapp_owner_numbers()
+    except Exception:
+        logger.warning("WhatsApp: owner-number correction skipped", exc_info=True)
     users = _get_users_to_run()
     if not users:
         logger.info("WhatsApp bridge: no users with linked auth, exiting")

@@ -234,7 +234,8 @@ def list_accounts() -> list:
 
     Every account in the auth store as ``{"username", "user_scope_id", "active", "role"}``,
     names as stored. Never raises: an unreachable store is an empty directory, which
-    for the one thing built on it - finding somebody to invite - is the safe answer.
+    for what is built on it - finding somebody to invite, resolving the account a messenger
+    number is registered for - is the safe answer.
     Runs the async store from a sync caller the way the other resolvers here do; when
     an event loop is already running (a WebSocket handler) the lookup goes to a side
     thread, so callers on the loop should hand this to an executor. A store that could

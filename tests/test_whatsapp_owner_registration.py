@@ -292,6 +292,23 @@ def test_the_refile_moves_exactly_the_misfiled_entries(world):
     assert json.dumps(world.state, sort_keys=True) == after and len(world.events) == 5
 
 
+def test_two_numbers_filed_crosswise_both_reach_their_account(world):
+    """Fuzz regression (seed 4470, draw 653 of 5,000): one number registered for two admins,
+    each entry filed under the other admin's scope. The first move found the second misfiled
+    entry under its target and removed itself as a duplicate, then the second moved away, so
+    the first account lost the number. An entry that is about to move is not one its target
+    already holds. MUTATION: count pending moves as held again."""
+    world.whitelist(_e(P[1], EVE, "dana"), _e("0" + P[1][3:], ADM, "eve"))
+    changes = channel_pairing.refile_whatsapp_owner_numbers()
+    assert [(c["action"], c["to_scope"]) for c in changes] == [("moved", ADM), ("moved", EVE)]
+    assert world.wl() == [_e(P[1], ADM, "dana"), _e("0" + P[1][3:], EVE, "eve")]
+    # Moved once, then a twin under the same account is a duplicate after all.
+    world.whitelist(_e(P[2], EVE, "alice"), _e(P[2], ADM, "alice"))
+    changes = channel_pairing.refile_whatsapp_owner_numbers()
+    assert [(c["action"], c["from_scope"]) for c in changes] == [("moved", EVE), ("removed", ADM)]
+    assert world.wl() == [_e(P[2], ALI, "alice")]
+
+
 def test_the_name_admin_moves_when_the_local_admin_is_named_so(world):
     """An admin named "admin" makes the name unambiguous: an entry a second admin filed under
     it is the local admin's, and the local admin's own entry stays."""

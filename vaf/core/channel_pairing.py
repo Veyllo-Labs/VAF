@@ -439,21 +439,34 @@ def _refile_whatsapp_owner_numbers() -> List[Dict[str, str]]:
     with Config._locked():
         config = Config.load()
         block, whitelist = _whatsapp_whitelist(config)
+        # First every move, then the duplicates: an entry that is about to move away is not a
+        # number its scope holds (two entries of one number, each filed under the other
+        # account, would otherwise remove the first and move the second, and the first
+        # account would lose the number).
+        moves: List[Tuple[int, Dict[str, str]]] = []
         for key, target in candidates:
             # The entry as it was read; one changed since is somebody's newer write.
-            index = next((i for i, e in enumerate(whitelist) if isinstance(e, dict) and _whatsapp_entry_key(e) == key),
-                         None)
+            index = next((i for i, e in enumerate(whitelist) if isinstance(e, dict) and _whatsapp_entry_key(e) == key
+                          and all(i != m for m, _c in moves)), None)
             if index is None:
                 continue
             phone, scope, name = key
-            change = {"phone_number": phone, "vaf_username": name, "from_scope": scope, "to_scope": target}
-            if any(isinstance(e, dict) and str(e.get("user_scope_id") or "").strip() == target
-                   and same_number(str(e.get("phone_number") or ""), phone) for e in whitelist):
-                del whitelist[index]
-                changes.append({"action": "removed", **change})
-            else:
-                whitelist[index] = {**whitelist[index], "user_scope_id": target}
-                changes.append({"action": "moved", **change})
+            moves.append((index, {"phone_number": phone, "vaf_username": name, "from_scope": scope,
+                                  "to_scope": target}))
+            whitelist[index] = {**whitelist[index], "user_scope_id": target}
+        moved = {index for index, _c in moves}
+        kept: set = set()
+        dropped: set = set()
+        for index, change in moves:
+            # Held already: by an entry that stays where it was, or by a move kept earlier in
+            # this pass.
+            held = any((i not in moved or i in kept) and isinstance(e, dict)
+                       and str(e.get("user_scope_id") or "").strip() == change["to_scope"]
+                       and same_number(str(e.get("phone_number") or ""), change["phone_number"])
+                       for i, e in enumerate(whitelist))
+            (dropped if held else kept).add(index)
+            changes.append({"action": "removed" if held else "moved", **change})
+        whitelist = [e for i, e in enumerate(whitelist) if i not in dropped]
         if changes:
             config["whatsapp_config"] = {**block, "whitelist": whitelist}
             Config.save(config)

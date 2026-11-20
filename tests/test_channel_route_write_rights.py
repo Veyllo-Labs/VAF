@@ -34,6 +34,14 @@ the generic config PATCH in `config_routes.py`, whose route-owned sub-keys the s
 tests/test_messenger_subkeys_route_owned.py already holds), a key built at run time, a write
 through a helper in another module that is not a lane named in the table, and a whole block
 replaced by a value that was not a dict literal are invisible to it.
+
+THE SECOND TABLE, `PROCESS_RULES`: every route that starts, stops or restarts a bridge's
+processes (it names one of `BRIDGE_LIFECYCLE`, directly or through a helper in its module),
+with its rule: `admin` (anybody else gets 403 and nothing is started or stopped) or
+`own-process` (anybody else reaches only their own account's process, as their sign-in names
+it). These routes write no route-owned sub-key, which is why they are not rows of `RULES`.
+Its named boundary: a lifecycle function is seen only under its own name, and
+`web_server.py`'s startup auto-start and reconnect worker are not routes.
 """
 import ast
 import json
@@ -352,3 +360,170 @@ def test_a_non_admin_leaves_every_other_accounts_entry_alone(config_file, monkey
     res = call(path, json=body) if body is not None else call(path)
     assert res.status_code == expected, (res.status_code, res.text)
     assert json.dumps(others(config_file.on_disk()), sort_keys=True) == before
+
+
+# -- the second table: who may drive a bridge's processes ---------------------------------------
+#
+# `RULES` above declares the writers of route-owned config sub-keys. Starting and stopping a
+# bridge writes none of them, so its routes are declared here instead, with their own
+# discovery: every route function in `vaf/api/*_routes.py` that names one of the bridge
+# lifecycle functions below (a call, an attribute such as `importlib...stop_bridge()`, or a
+# function handed to `asyncio.to_thread`), directly or through a helper in its module.
+# Measured before this table: the WhatsApp start, stop and restart took no `Request` and read
+# no account, so an ordinary account's Stop and Restart ended every account's process.
+#
+# The rules: `admin` (an account that is not an admin gets 403 and no lifecycle function is
+# called), `own-process` (such an account reaches no whole-bridge function, and every account
+# function it reaches names its own name and scope).
+#
+# NAMED BOUNDARY of this discovery: a lifecycle function is seen only under one of the names
+# below, spelled as a constant; `web_server.py`'s startup auto-start and its reconnect worker
+# drive the WhatsApp bridge too, and they are not routes.
+
+BRIDGE_LIFECYCLE = {
+    "start_bridge", "stop_bridge", "restart_bridge", "start_missing_accounts",
+    "start_account", "stop_account", "restart_account",
+}
+WHOLE_BRIDGE = {"start_bridge", "stop_bridge", "restart_bridge", "start_missing_accounts"}
+
+PROCESS_RULES = {
+    "config_routes:disconnect_channel": "admin",
+    "discord_routes:start_discord_bridge": "admin",
+    "discord_routes:stop_discord_bridge": "admin",
+    "telegram_routes:start_telegram_bridge": "admin",
+    "telegram_routes:stop_telegram_bridge": "admin",
+    "whatsapp_routes:start_whatsapp_bridge": "own-process",
+    "whatsapp_routes:stop_whatsapp_bridge": "own-process",
+    "whatsapp_routes:restart_whatsapp_bridge": "own-process",
+}
+PROCESS_RULE_KINDS = {"admin", "own-process"}
+
+
+def _names_a_lifecycle_function(fn, names) -> bool:
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in names:
+            return True
+        if isinstance(node, ast.Attribute) and node.attr in names:
+            return True
+    return False
+
+
+def process_routes(source: str, names=None):
+    """The route functions of one module that drive a bridge's processes."""
+    names = BRIDGE_LIFECYCLE if names is None else names
+    tree = ast.parse(source)
+    funcs = {n.name: n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    drivers = {name for name, fn in funcs.items() if _names_a_lifecycle_function(fn, names)}
+    grew = True
+    while grew:
+        grew = False
+        for name, fn in funcs.items():
+            if name in drivers:
+                continue
+            if {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)} & drivers:
+                drivers.add(name)
+                grew = True
+    return sorted(name for name, fn in funcs.items() if name in drivers and _is_route(fn))
+
+
+def _discovered_process_routes():
+    out = set()
+    for path in sorted(API.glob("*_routes.py")):
+        for name in process_routes(path.read_text(encoding="utf-8")):
+            out.add(f"{path.stem}:{name}")
+    return out
+
+
+def test_every_process_route_declares_its_rule():
+    """MUTATION: drop a row; or add a `stop_bridge()` call to any new route."""
+    found = _discovered_process_routes()
+    assert found - set(PROCESS_RULES) == set(), "a route drives a bridge without a declared rule"
+    assert set(PROCESS_RULES) - found == set(), "a declared route no longer drives a bridge; drop its row"
+    assert set(PROCESS_RULES.values()) <= PROCESS_RULE_KINDS
+
+
+def test_the_process_scanner_reports_an_undeclared_route():
+    """The scanner's self-test: a direct call, an attribute call, a function handed over, a
+    helper; a bare import and a non-route stay out."""
+    synthetic = (
+        "import asyncio, importlib\n"
+        "from fastapi import APIRouter\n"
+        "router = APIRouter()\n"
+        "def _halt():\n"
+        "    from x import stop_bridge\n"
+        "    stop_bridge()\n"
+        "def not_a_route():\n"
+        "    start_bridge()\n"
+        "@router.post('/a')\n"
+        "async def direct(request):\n"
+        "    start_bridge(only='x')\n"
+        "@router.post('/b')\n"
+        "async def attribute(request):\n"
+        "    importlib.import_module('vaf.api.x_bridge').restart_bridge()\n"
+        "@router.post('/c')\n"
+        "async def handed_over(request):\n"
+        "    await asyncio.to_thread(stop_account, 'alice')\n"
+        "@router.post('/d')\n"
+        "async def through_a_helper(request):\n"
+        "    _halt()\n"
+        "@router.post('/e')\n"
+        "async def only_imports(request):\n"
+        "    from x import start_missing_accounts as s\n"
+        "    return {}\n"
+        "@router.get('/f')\n"
+        "async def harmless(request):\n"
+        "    return {'start_bridge': 1}\n"
+    )
+    assert process_routes(synthetic) == ["attribute", "direct", "handed_over", "through_a_helper"]
+
+
+# route -> (method, path, the status an account that is not an admin gets). Pinned, so a probe
+# whose URL went stale (404, 405) fails instead of passing on nothing called.
+PROCESS_PROBES = {
+    "config_routes:disconnect_channel": ("delete", "/api/config/channels/whatsapp/credentials", 403),
+    "discord_routes:start_discord_bridge": ("post", "/api/discord/start", 403),
+    "discord_routes:stop_discord_bridge": ("post", "/api/discord/stop", 403),
+    "telegram_routes:start_telegram_bridge": ("post", "/api/telegram/start", 403),
+    "telegram_routes:stop_telegram_bridge": ("post", "/api/telegram/stop", 403),
+    "whatsapp_routes:start_whatsapp_bridge": ("post", "/api/whatsapp/start", 200),
+    "whatsapp_routes:stop_whatsapp_bridge": ("post", "/api/whatsapp/stop", 200),
+    "whatsapp_routes:restart_whatsapp_bridge": ("post", "/api/whatsapp/restart", 200),
+}
+
+
+def test_every_declared_process_route_has_a_probe():
+    assert set(PROCESS_PROBES) == set(PROCESS_RULES)
+    assert all(PROCESS_PROBES[r][2] == (403 if kind == "admin" else 200) for r, kind in PROCESS_RULES.items())
+
+
+@pytest.mark.parametrize("route", sorted(PROCESS_RULES))
+def test_a_non_admin_drives_only_their_own_process(config_file, monkeypatch, route):
+    """Every lifecycle function of every bridge is a recorder (nothing starts or stops for
+    real). MUTATION: remove `Depends(require_admin)` from `stop_telegram_bridge`; make a
+    WhatsApp route call `stop_bridge()` for everybody."""
+    import importlib
+
+    config_file.seed(whatsapp_config={"enabled": True},
+                     connection_enabled_by_scope={ALICE["user_scope_id"]: {"whatsapp": True}})
+    calls = []
+    answers = {"start_account": (True, "started"), "restart_account": (True, "restarted"),
+               "stop_account": True, "start_bridge": True, "restart_bridge": True,
+               "start_missing_accounts": [], "stop_bridge": None}
+    for channel in ("whatsapp", "telegram", "discord"):
+        module = importlib.import_module(f"vaf.api.{channel}_bridge")
+        for name in BRIDGE_LIFECYCLE:
+            monkeypatch.setattr(module, name,
+                                lambda *a, _n=name, _c=channel, **k: calls.append((_c, _n) + a) or answers[_n],
+                                raising=False)
+        monkeypatch.setattr(module, "is_bridge_running", lambda: True, raising=False)
+    method, path, expected = PROCESS_PROBES[route]
+    res = getattr(_client(route.split(":", 1)[0]), method)(path)
+    assert res.status_code == expected, (res.status_code, res.text)
+    if PROCESS_RULES[route] == "admin":
+        assert calls == []
+        return
+    assert calls, "the probe reached no lifecycle function"
+    assert not [c for c in calls if c[1] in WHOLE_BRIDGE], calls
+    own = {"start_account": ("alice", ALICE["user_scope_id"]), "restart_account": ("alice", ALICE["user_scope_id"]),
+           "stop_account": ("alice",)}
+    assert all(c[0] == "whatsapp" and c[2:] == own[c[1]] for c in calls), calls

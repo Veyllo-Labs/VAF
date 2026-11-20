@@ -86,8 +86,9 @@ def request_account(request: Request) -> Dict[str, str]:
     copies that disagreed (one accepted a scope without a name and then read the caller as
     the local admin).
 
-    Routes that read no account are not covered: the bridge and bot switches, the WhatsApp
-    QR log path and the Telegram verification. The WhatsApp chat history asks the session
+    The WhatsApp start, stop and restart read it for anybody who is not an admin, because
+    they act on that account's own process. Routes that read no account are not covered: the
+    Telegram and Discord bot switches, the WhatsApp QR log path and the Telegram verification. The WhatsApp chat history asks the session
     gate with the authenticated scope instead (`session_access_allowed`), which refuses a
     non-admin caller without one."""
     user = getattr(request.state, "user", None)

@@ -87,6 +87,7 @@ import pytest
 from test_automation_access import (A_ID, TENANT_A, _handoff, _record, _write, _ws,  # noqa: F401
                                     store, workspaces)
 from vaf.core import automation as auto_mod
+from vaf.core.session import TurnStatus
 from vaf.core.automation import (AutomationAccess, AutomationManager, AutomationStoreBusy,
                                  AutomationTask)
 
@@ -400,6 +401,7 @@ class _FakeAgent:
     _current_username = "alice"
     _tool_authorizer = None
     during_run = None
+    last_turn = property(lambda self: TurnStatus())
 
     def __init__(self, *a, **k):
         self.history = []

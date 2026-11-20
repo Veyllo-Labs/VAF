@@ -756,6 +756,90 @@ def _revoked_run_note(task) -> str:
     return msg
 
 
+# The four ways a run can end. `paused` is a workflow that handed a step to a background helper:
+# the drain resumes the remaining steps without the automation's context, so nothing could stamp
+# the run later, and it counts as done now (a daily task would otherwise read "Due" forever).
+RUN_STATUSES = ("ok", "paused", "failed", "timed_out")
+_COMPLETED_STATUSES = frozenset({"ok", "paused"})
+
+# What a failed turn delivers when it left no text of its own.
+NO_ANSWER_NOTE = "Die Automation hat keine Antwort erhalten."
+
+
+@dataclass(frozen=True)
+class RunOutcome:
+    """How one automation run ended, decided once per run (`AutomationManager.run_task`).
+
+    Every consumer reads this one value: the stamp of `last_run` and
+    `last_completed_local_date` (`completed` only), the run log, the delivery to chat,
+    messenger and notification and the thinking workspace (`wire_status`), the legacy output
+    file (`ok` only) and `vaf automation run`, which holds its window and exits 1 when the run
+    did not complete (`on_outcome`). A one-time task is consumed by its run whatever the
+    outcome, and no outcome is retried: a failed run may already have acted (sent a message),
+    and a recurring task's next slot is its retry.
+
+    `text` is what the person is shown; `report` is what `run_task` returns when it differs (a
+    workflow's full execution report beside its short summary). `status` is coerced at the
+    boundary: anything that is not one of `RUN_STATUSES` is `failed`, so an unknown value never
+    counts as done."""
+    status: str
+    text: str = ""
+    report: str = ""
+
+    def __post_init__(self):
+        status = self.status if isinstance(self.status, str) else ""
+        object.__setattr__(self, "status", status if status in RUN_STATUSES else "failed")
+        object.__setattr__(self, "text", "" if self.text is None else str(self.text))
+        object.__setattr__(self, "report", "" if self.report is None else str(self.report))
+
+    @property
+    def completed(self) -> bool:
+        """The run counts as done: it stamps `last_run` (ok and paused)."""
+        return self.status in _COMPLETED_STATUSES
+
+    @property
+    def wire_status(self) -> str:
+        """The status the run log, the delivery and the thinking workspace carry."""
+        return "success" if self.completed else "error"
+
+    @property
+    def returned(self) -> str:
+        """What `run_task` returns, and what the run log and the workspace summarise."""
+        return self.report or self.text
+
+
+def _prompt_outcome(answer, turn, stream_text: Callable[[], str], *, timed_out: bool,
+                    timeout_note: str = "") -> RunOutcome:
+    """The outcome of a prompt run, from what the turn RETURNED and how it ended.
+
+    `answer` is `chat_step`'s return value, `turn` the agent's `last_turn` read right after it
+    (never needed for a timed-out run, whose worker was abandoned). The turn is judged the way
+    every host judges one (`returned_turn_copy`): `turn.failed` (the backend failed, loop
+    protection stopped it) or a `[SYSTEM_LOG_ONLY]` head (the empty retries ran out) is
+    `failed`, with the turn's own text, or `NO_ANSWER_NOTE` when it has none. A turn whose
+    rounds answered, or that acknowledged a delegation (`[ASYNC_ACK]`), delivers its return
+    value: every answer of the turn, joined by the engine, without the control head.
+
+    Only a turn that neither failed nor answered (a turn closed by a tool, a status line)
+    delivers `stream_text()`, the cleaned stream with its history fallback; that path is
+    always `ok`. Never reads the stream to decide a status."""
+    if timed_out:
+        return RunOutcome("timed_out", timeout_note)
+    from vaf.core.completion import split_control_head
+    from vaf.core.session import FAILED_TURN_KEY, TurnStatus, returned_turn_copy
+    from vaf.markers import ASYNC_ACK
+    if not isinstance(turn, TurnStatus):
+        turn = TurnStatus()
+    copy, meta = returned_turn_copy(answer, turn)
+    text = copy.strip()
+    if isinstance(meta, dict) and meta.get(FAILED_TURN_KEY):
+        return RunOutcome("failed", text or NO_ANSWER_NOTE)
+    answered = any(r.answer for r in turn.rounds) or split_control_head(answer)[0] == ASYNC_ACK
+    if answered and text:
+        return RunOutcome("ok", text)
+    return RunOutcome("ok", stream_text() or "")
+
+
 def _stamp_successful_run(task: AutomationTask) -> None:
     """Record completion time and local calendar day on `task` (written by `_record_successful_run`)."""
     from vaf.core.user_time import user_now
@@ -2244,7 +2328,8 @@ vaf automation delete <id>   # Delete task
             return (False, seconds_remaining)
     
     def run_task(self, task: AutomationTask, callback: Callable = None, new_terminal: bool = True,
-                 trigger: Optional[Dict[str, Any]] = None) -> str:
+                 trigger: Optional[Dict[str, Any]] = None, *,
+                 on_outcome: Optional[Callable[["RunOutcome"], None]] = None) -> str:
         """
         Execute an automation task.
         
@@ -2256,6 +2341,9 @@ vaf automation delete <id>   # Delete task
                 appended to the prompt on the prompt lane, offered as template variables on the
                 workflow lane. Never stored on the task. Forces the in-process lane, because a
                 spawned terminal would run the task without it.
+            on_outcome: Called once with the run's `RunOutcome`, right after its run log is
+                written; never for a run that was skipped, locked, revoked or handed to a
+                terminal. It cannot fail the run.
         """
         if trigger is not None:
             new_terminal = False
@@ -2326,17 +2414,23 @@ vaf automation delete <id>   # Delete task
                 thread.start()
                 return f"Automation '{task.name}' started in background thread (new terminal unavailable)"
         
-        result = ""
+        # How the run ended, decided once per lane (or by the exception handler) and read by
+        # every consumer below: the stamp, the output file, the run log, the delivery.
+        outcome: Optional[RunOutcome] = None
+        # True on the workflow lane when it succeeded: its write_file step already saved the
+        # output, so the legacy output file is not written a second time.
+        workflow_saved_file = False
         # Final path of the saved output file (if any). Initialised here so it survives to the
-        # delivery call after the try/finally; set only when a file is actually written.
+        # delivery call after the try/finally; set only when a file is actually written, or
+        # when a successful workflow's last step produced one.
         saved_output_path: Optional[str] = None
-        # True when the prompt-based agent already delivered to the user in-run via a
-        # send tool (confirmed by the tool result). Drives the same double-delivery
-        # dedup the workflow lane has; survives to the delivery call below.
-        prompt_delivered_in_run = False
+        # True when the run already delivered to the user in-run (confirmed by the tool
+        # result): a workflow send step, or a send tool of the prompt-based agent. Then the
+        # post-run messenger text is not pushed a second time; survives to the delivery below.
+        delivered_in_run = False
         # Companion: True when that in-run send already carried a document attachment
         # (then the post-run file follow-up must not send a second one).
-        prompt_file_delivered_in_run = False
+        file_delivered_in_run = False
         # True when a prompt run hit the time limit AND did not finish within the
         # grace window: no partial stream as result, no legacy file wrap - the user
         # gets one honest timeout note instead (live 2026-07-13: the half stream was
@@ -2479,7 +2573,7 @@ vaf automation delete <id>   # Delete task
                     result += "## Steps so far:\n"
                     for i, step_result in enumerate(step_results, 1):
                         result += f"{i}. {step_result['tool']} - {step_result['status']}\n"
-                    workflow_saved_file = False
+                    outcome = RunOutcome("paused", result)
                 elif workflow_result.success:
                     # MULTI-STEP AUTOMATION: Build detailed output showing each step
                     result_parts = ["# Workflow Execution Report\n"]
@@ -2508,62 +2602,32 @@ vaf automation delete <id>   # Delete task
                     # IMPORTANT: If workflow has write_file step, it already saved the output
                     # Skip legacy output_path saving to avoid duplicate files
                     workflow_saved_file = True
+                    # A short, friendly summary for the person instead of the raw technical
+                    # report. final_output is the LAST step's result string - only treat it as
+                    # a saved file when it actually IS one, otherwise the Web UI printed tool
+                    # chatter like "Gespeichert: Message sent to the user via Telegram." (live
+                    # 2026-07-13).
+                    saved_path = str(workflow_result.final_output or "").strip()
+                    saved_output_path = (saved_path if (saved_path and os.path.isfile(saved_path))
+                                         else None)
+                    short_summary = (
+                        f"✅ **{task.name}** ist fertig!\n\n"
+                        + (f"{saved_output_path}\n\n" if saved_output_path else "")
+                        + f"Alle {len(steps)} Schritte erfolgreich abgeschlossen."
+                    ).strip()
+                    outcome = RunOutcome("ok", short_summary, report=result)
+                    # A send step already reached the user: no second messenger push.
+                    delivered_in_run = _delivered_via_send_step(step_results)
+                    file_delivered_in_run = _file_delivered_via_send_step(step_results)
                 else:
                     result = f"# Workflow Failed\n\n**Error:** {workflow_result.error}\n\n"
                     result += "## Steps Executed:\n"
                     for i, step_result in enumerate(step_results, 1):
                         status_icon = "✅" if step_result["status"] == "success" else "❌"
                         result += f"{status_icon} Step {i}: {step_result['tool']} - {step_result['status']}\n"
-                    workflow_saved_file = False
-                
+                    outcome = RunOutcome("failed", result)
+
                 agent.shutdown()
-                
-                # Skip legacy output saving if workflow already saved the file
-                if workflow_saved_file and is_revoked(task.user_scope_id):
-                    # This branch delivers and returns on its own, before the check below.
-                    return _revoked_run_note(task)
-                if workflow_saved_file:
-                    # Workflow's write_file step already saved the output.
-                    # Only the run's own fields, onto the record as it is now.
-                    self._record_successful_run(task)
-                    # This branch RETURNS below, so the run log at the end of run_task is never
-                    # reached from here. Without this line every workflow-based automation would be
-                    # invisible to the log, and the findings built on it would quietly describe only
-                    # the prompt-based ones.
-                    append_run_log(
-                        self._path_for_task(task),
-                        status="success",
-                        started_at=_run_started.isoformat(),
-                        duration_seconds=(datetime.now() - _run_started).total_seconds(),
-                        summary=(result or "")[:200],
-                    )
-                    self._sync_workspace_automation_state(
-                        task,
-                        run_status="success",
-                        summary=(result or "")[:1000],
-                        event="automation_run",
-                    )
-                    # Delete ONCE tasks here too (early-return path would skip the
-                    # ONCE-delete block further below).
-                    if task.frequency == Frequency.ONCE:
-                        self._remove_spent_once(task)
-                    # Build a short, friendly bot summary instead of the raw technical report.
-                    # final_output is the LAST step's result string - only treat it as a saved
-                    # file when it actually IS one, otherwise the Web UI printed tool chatter
-                    # like "Gespeichert: Message sent to the user via Telegram." (live 2026-07-13).
-                    saved_path = str(workflow_result.final_output or "").strip()
-                    real_file = saved_path if (saved_path and os.path.isfile(saved_path)) else None
-                    short_summary = (
-                        f"✅ **{task.name}** ist fertig!\n\n"
-                        + (f"{real_file}\n\n" if real_file else "")
-                        + f"Alle {len(steps)} Schritte erfolgreich abgeschlossen."
-                    ).strip()
-                    _push_result_to_web_ui(
-                        task, "success", short_summary, output_file=real_file,
-                        deliver_messenger=not _delivered_via_send_step(step_results),
-                        file_delivered_in_run=_file_delivered_via_send_step(step_results),
-                    )
-                    return result
             else:
                 # Legacy: Use prompt-based execution (backwards compatibility)
                 # ONE-STEP AUTOMATION: Simple prompt, clean output only
@@ -2655,90 +2719,129 @@ vaf automation delete <id>   # Delete task
                 # the automation lock released; the abandoned worker cannot keep spawning recursive workflows
                 # because those tools were stripped above.
                 _auto_to = 600.0
+                # Only a failure to IMPORT the bounded runner falls back to a plain call. An
+                # exception of the turn itself is the run's failure: answering it with a second,
+                # unbounded turn ran the model twice and could repeat what the first one did.
                 try:
                     from vaf.core.bounded_run import (
                         run_bounded as _run_bounded,
                         TIMEOUT_PREFIX as _TO_PREFIX,
                         STOPPED_PREFIX as _ST_PREFIX,
                     )
+                except Exception:
+                    _run_bounded = None
+                try:
                     from vaf.core.config import Config as _CfgAuto
                     _auto_to = float(_CfgAuto.get("automation_run_timeout_seconds", 600) or 600)
-                    _chat_done = {"done": False}
-
-                    def _do_chat():
-                        agent.chat_step(prompt, stream_callback=capture, memory_context=memory_context or None)
-                        _chat_done["done"] = True
-                        return True
-
-                    _bounded_ret = _run_bounded(
-                        _do_chat, timeout=_auto_to, label="automation_prompt_run",
-                        stop_check=lambda: is_revoked(task.user_scope_id))
-                    # The old code ignored this return value entirely - a timed-out run was
-                    # indistinguishable from a finished one, so the half stream became the
-                    # "result" while the abandoned worker delivered again later.
-                    if isinstance(_bounded_ret, str) and _bounded_ret.startswith(_TO_PREFIX):
-                        append_domain_log_always(
-                            "backend",
-                            f"[AUTOMATION] '{task.name}' hit the {int(_auto_to)}s time limit - "
-                            f"waiting up to {int(_TIMEOUT_GRACE_SECONDS)}s grace for the abandoned run to finish.",
-                        )
-                        if _wait_for_abandoned_run(_chat_done):
-                            append_domain_log_always(
-                                "backend",
-                                f"[AUTOMATION] '{task.name}' finished within the grace window - "
-                                f"treating it as a normal completion.",
-                            )
-                        else:
-                            prompt_timeout_unresolved = True
-                            append_domain_log_always(
-                                "backend",
-                                f"[AUTOMATION] '{task.name}' still unfinished after the grace window - "
-                                f"delivering an honest timeout note (no partial result, no file wrap).",
-                            )
-                    elif isinstance(_bounded_ret, str) and _bounded_ret.startswith(_ST_PREFIX):
-                        # The account's access was taken away mid-run: no grace wait, no
-                        # partial result (and no delivery, below).
-                        prompt_timeout_unresolved = True
                 except Exception:
-                    # Fallback to a plain call if run_bounded is unavailable for any reason.
-                    agent.chat_step(prompt, stream_callback=capture, memory_context=memory_context or None)
+                    _auto_to = 600.0
+                # The turn's return value and how it ended are what decide the run
+                # (`_prompt_outcome`); `done` is set however the turn ends, also when it raised,
+                # so the grace wait below does not outwait a turn that already failed.
+                _chat_done = {"done": False, "answer": None, "error": None}
 
-                if prompt_timeout_unresolved:
-                    result = (
-                        f"Error: Zeitlimit überschritten - die Automation '{task.name}' war nach "
-                        f"{int(_auto_to)}s plus Nachfrist noch nicht fertig. Es wird bewusst kein "
-                        f"Teilergebnis zugestellt; falls der Lauf im Hintergrund doch noch fertig "
-                        f"wird, meldet er sich selbst."
-                    )
-                else:
-                    # Deliver only the final clean answer. Use the SAME canonical cleaner the live chat uses
-                    # (agent._clean_reasoning): it removes whole marked reasoning blocks (content included),
-                    # so reasoning is stripped structurally and in any language, not by phrase heuristics.
-                    # When nothing unmarked reached the stream, the newest assistant message of the run
-                    # that the same cleaner leaves non-empty is the result, else nothing.
-                    result = ""
+                def _do_chat():
                     try:
-                        result = (agent._clean_reasoning("".join(raw_parts)) or "").strip()
+                        _chat_done["answer"] = agent.chat_step(
+                            prompt, stream_callback=capture, memory_context=memory_context or None)
+                    except Exception as exc:
+                        _chat_done["error"] = exc
+                        raise
+                    finally:
+                        _chat_done["done"] = True
+                    return True
+
+                _turn_error: Optional[BaseException] = None
+                try:
+                    if _run_bounded is None:
+                        _do_chat()
+                    else:
+                        _bounded_ret = _run_bounded(
+                            _do_chat, timeout=_auto_to, label="automation_prompt_run",
+                            stop_check=lambda: is_revoked(task.user_scope_id))
+                        # The old code ignored this return value entirely - a timed-out run was
+                        # indistinguishable from a finished one, so the half stream became the
+                        # "result" while the abandoned worker delivered again later.
+                        if isinstance(_bounded_ret, str) and _bounded_ret.startswith(_TO_PREFIX):
+                            append_domain_log_always(
+                                "backend",
+                                f"[AUTOMATION] '{task.name}' hit the {int(_auto_to)}s time limit - "
+                                f"waiting up to {int(_TIMEOUT_GRACE_SECONDS)}s grace for the abandoned run to finish.",
+                            )
+                            if _wait_for_abandoned_run(_chat_done):
+                                append_domain_log_always(
+                                    "backend",
+                                    f"[AUTOMATION] '{task.name}' finished within the grace window - "
+                                    f"judging it like a turn that ended in time.",
+                                )
+                                _turn_error = _chat_done["error"]
+                            else:
+                                prompt_timeout_unresolved = True
+                                append_domain_log_always(
+                                    "backend",
+                                    f"[AUTOMATION] '{task.name}' still unfinished after the grace window - "
+                                    f"delivering a timeout note (no partial result, no file wrap).",
+                                )
+                        elif isinstance(_bounded_ret, str) and _bounded_ret.startswith(_ST_PREFIX):
+                            # The account's access was taken away mid-run: no grace wait, no
+                            # partial result (and no delivery, below).
+                            prompt_timeout_unresolved = True
+                except Exception as exc:
+                    _turn_error = exc
+
+                def _stream_result() -> str:
+                    # A turn without an answer of its own: the cleaned stream. The SAME canonical
+                    # cleaner the live chat uses (agent._clean_reasoning) removes whole marked
+                    # reasoning blocks (content included), so reasoning is stripped structurally
+                    # and in any language, not by phrase heuristics. When nothing unmarked reached
+                    # the stream, the newest assistant message of the run that the same cleaner
+                    # leaves non-empty is the result, else nothing.
+                    text = ""
+                    try:
+                        text = (agent._clean_reasoning("".join(raw_parts)) or "").strip()
                     except Exception:
-                        result = ""
-                    if not result:
+                        text = ""
+                    if not text:
                         try:
-                            result = self._extract_clean_answer(agent.history, agent._clean_reasoning)
+                            text = self._extract_clean_answer(agent.history, agent._clean_reasoning)
                         except Exception:
-                            result = ""
+                            text = ""
+                    return text
+
+                if _turn_error is not None:
+                    outcome = RunOutcome("failed", f"Error: {_turn_error}")
+                else:
+                    outcome = _prompt_outcome(
+                        _chat_done["answer"],
+                        None if prompt_timeout_unresolved else agent.last_turn,
+                        _stream_result,
+                        timed_out=prompt_timeout_unresolved,
+                        timeout_note=(
+                            f"Zeitlimit überschritten: Die Automation '{task.name}' war nach "
+                            f"{int(_auto_to)}s und der Nachfrist noch nicht fertig. Es gibt kein "
+                            f"Teilergebnis, und was der Lauf danach noch erledigt, wird nicht als "
+                            f"Ergebnis zugestellt."
+                        ),
+                    )
+                # A send tool of this run already reached the user: no second messenger push.
+                delivered_in_run = _delivered_via_agent_history(getattr(agent, "history", None))
+                file_delivered_in_run = _file_delivered_via_agent_history(
+                    getattr(agent, "history", None))
 
                 agent.shutdown()
 
-            # Access taken away while the prompt ran: no output file, no "ran successfully"
-            # stamp (the schedule would count it as done), no delivery. The `finally` below still
-            # releases the lock and consumes a one-time task, like the workflow lane's return.
+            # Access taken away while the run went: no output file, no "ran successfully"
+            # stamp (the schedule would count it as done), no delivery, on either lane. The
+            # `finally` below still releases the lock and consumes a one-time task.
             if is_revoked(task.user_scope_id):
                 return _revoked_run_note(task)
 
-            # Save output if path specified. NEVER on an unresolved timeout: wrapping the
-            # honest error note (or a half stream) into an output file produced the junk
-            # HTML attachments of 2026-07-13.
-            if task.output_path and not prompt_timeout_unresolved:
+            # Save output if path specified, and only for an answer: never for a failure, a
+            # timeout or a paused workflow (wrapping a timeout note or a half stream into an
+            # output file produced the junk HTML attachments of 2026-07-13), and never a second
+            # time for a workflow whose own step already saved it.
+            if task.output_path and outcome.status == "ok" and not workflow_saved_file:
+                result = outcome.text
                 # Resolve path properly (handle "Desktop", "Documents", etc.)
                 output_path_str = str(task.output_path).strip()
                 output_path = Path(output_path_str).expanduser()
@@ -2873,21 +2976,22 @@ vaf automation delete <id>   # Delete task
 
                 UI.success(f"Output saved: {output_file}")
             
-            # Update task (local completion date persists across restarts)
+            # Update task (local completion date persists across restarts), only for a run that
+            # counts as done: a failed or timed-out run stamped here read "Done (today)", was
+            # skipped by the catch-up and hid from the review findings.
             # Only the run's own fields, onto the record as it is now: a time or switch
             # changed while the run went stays, a task deleted meanwhile stays deleted.
-            self._record_successful_run(task)
+            if outcome.completed:
+                self._record_successful_run(task)
 
-            # If frequency is ONCE, delete after run
+            # If frequency is ONCE, delete after run, whatever the outcome (einmalig = einmalig).
             if task.frequency == Frequency.ONCE and self._remove_spent_once(task):
                 append_domain_log_always("backend", f"Automation '{task.name}' ({task.id}) frequency is 'once' - deleted after run.")
 
-            prompt_delivered_in_run = _delivered_via_agent_history(getattr(agent, "history", None))
-            prompt_file_delivered_in_run = _file_delivered_via_agent_history(getattr(agent, "history", None))
             agent.shutdown()
-            
+
         except Exception as e:
-            result = f"Error: {e}"
+            outcome = RunOutcome("failed", f"Error: {e}")
             UI.error(f"Automation failed: {e}")
         finally:
             if _room_bound_agent is not None:
@@ -2947,20 +3051,32 @@ vaf automation delete <id>   # Delete task
         
         if is_revoked(task.user_scope_id):
             return _revoked_run_note(task)
+        if outcome is None:
+            # Every lane decides its outcome; a run that reaches here without one did not
+            # complete, and it never counts as done.
+            outcome = RunOutcome("failed", NO_ANSWER_NOTE)
 
-        # Deliver result to user via Web UI chat + messenger.
-        # Only one delivery path — no duplicate notification + chat message.
+        # The one place both halves of an outcome are recorded, for both lanes: `last_run`
+        # records only the completed runs, so without this an errored run leaves no trace.
         try:
-            status = "error" if (result or "").strip().startswith("Error:") else "success"
-            # The one place both halves of an outcome are known. `last_run` records only the
-            # successes, so without this an errored run leaves no trace at all.
             append_run_log(
                 self._path_for_task(task),
-                status=status,
+                status=outcome.wire_status,
                 started_at=_run_started.isoformat(),
                 duration_seconds=(datetime.now() - _run_started).total_seconds(),
-                summary=(result or "")[:200],
+                summary=outcome.returned[:200],
             )
+        except Exception:
+            pass
+        if on_outcome is not None:
+            try:
+                on_outcome(outcome)
+            except Exception:
+                pass
+
+        # Deliver result to user via Web UI chat + messenger.
+        # Only one delivery path - no duplicate notification + chat message.
+        try:
             # For prompt-based tasks the result IS the summary (already clean text).
             # saved_output_path is None for chat-only runs (no file produced) -> text-only delivery.
             # A confirmed in-run send suppresses only the messenger TEXT push (live 2026-07-14:
@@ -2969,24 +3085,25 @@ vaf automation delete <id>   # Delete task
             # in-run send cannot have carried it (live 2026-08-21: the report file never
             # reached the messenger).
             _push_result_to_web_ui(
-                task, status, result or "Completed", output_file=saved_output_path,
-                deliver_messenger=not prompt_delivered_in_run,
-                file_delivered_in_run=prompt_file_delivered_in_run,
+                task, outcome.wire_status, outcome.text or "Completed",
+                output_file=saved_output_path,
+                deliver_messenger=not delivered_in_run,
+                file_delivered_in_run=file_delivered_in_run,
             )
         except Exception:
             pass
         try:
             self._sync_workspace_automation_state(
                 task,
-                run_status=status,
-                summary=(result or "")[:1000],
+                run_status=outcome.wire_status,
+                summary=outcome.returned[:1000],
                 event="automation_run",
             )
         except Exception:
             pass
 
         # Always return cleanly
-        return result
+        return outcome.returned
     
     def start_scheduler(self):
         """Start the background scheduler."""
@@ -3806,15 +3923,20 @@ def run_automation(
         # The run's output is the model's text: printed as written, never as markup.
         console.print(text, end="", markup=False, emoji=False)
 
+    # The run's own verdict (`RunOutcome`): a run that failed or ran out of time holds the
+    # window and exits 1 like a crash does, and so does a run that ended without one (skipped,
+    # locked, its account's access taken away).
+    outcomes = []
     ok = True
     try:
         # Don't open ANOTHER terminal - we may already be running inside one.
-        manager.run_task(task, callback=print_output, new_terminal=False)
+        manager.run_task(task, callback=print_output, new_terminal=False,
+                         on_outcome=outcomes.append)
     except Exception as exc:
         ok = False
         console.print(f"\n[red]Automation failed: {escape_markup(exc)}[/red]")
     console.print("\n")
-    finish_terminal(success=ok)
+    finish_terminal(success=ok and bool(outcomes) and outcomes[0].completed)
 
 
 @automation_app.command("delete")

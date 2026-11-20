@@ -389,6 +389,7 @@ def test_run_task_wires_file_dedup_flags():
     import inspect
     import vaf.core.automation as auto
     src = inspect.getsource(auto.AutomationManager.run_task)
-    assert src.count("file_delivered_in_run=") == 2          # workflow lane + prompt lane
-    assert "_file_delivered_via_send_step(step_results)" in src
-    assert "file_delivered_in_run=prompt_file_delivered_in_run" in src
+    # Each lane sets the flag from its own evidence; the one delivery for both passes it.
+    assert "file_delivered_in_run = _file_delivered_via_send_step(step_results)" in src
+    assert "file_delivered_in_run = _file_delivered_via_agent_history(" in src
+    assert src.count("file_delivered_in_run=file_delivered_in_run") == 1

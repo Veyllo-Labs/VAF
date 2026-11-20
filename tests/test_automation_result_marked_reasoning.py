@@ -51,6 +51,7 @@ import pytest
 
 from vaf.core.agent import Agent
 from vaf.core.automation import AutomationManager
+from vaf.core.session import TurnStatus
 
 SCOPE = "ab12cd34-0000-4000-8000-0000000000c3"
 AUTOMATION_PY = Path(__file__).resolve().parents[1] / "vaf" / "core" / "automation.py"
@@ -195,6 +196,8 @@ def _drive(monkeypatch, tmp_path, chunks, turn_history, *, cleaner=None, shutdow
         _tool_authorizer = None
         _clean_reasoning = cleaner or Agent._clean_reasoning
         _sanitize_response = Agent._sanitize_response
+        # Answered nothing and nothing failed: the run delivers its cleaned stream.
+        last_turn = property(lambda self: TurnStatus())
 
         def __init__(self, *a, **k):
             self.history = []

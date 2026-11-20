@@ -1,0 +1,573 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
+"""An automation run's outcome is decided once, and a failed or timed-out run is never done.
+
+MEASURED BEFORE THE FIX (the real `run_task`, stub agent and stub workflow engine): a workflow
+whose engine returned `success=False` was stamped, logged and pushed as `success`; a prompt run
+past its time limit and grace was stamped; a turn whose backend failed was delivered as
+`(success, "Completed")` when nothing streamed and as a success with the raw failure when it did;
+a turn that answered twice delivered only its last answer (the joined stream is cleaned as one
+text); a turn that raised was run a second time without a time limit; and `vaf automation run`
+closed its window as a success whatever happened.
+
+Every row drives the real `AutomationManager.run_task` against a scratch store. The MUTATIONS
+that turn each test red are named in its docstring.
+"""
+import ast
+import inspect
+import json
+import os
+import random
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from vaf.core import automation
+from vaf.core.agent import Agent
+from vaf.core.automation import (NO_ANSWER_NOTE, AutomationManager, AutomationTask, RunOutcome,
+                                 _prompt_outcome, load_run_log)
+from vaf.core.session import TurnRound, TurnStatus
+
+TID = "0c0e0001"
+FAILED_TURN = TurnStatus(failed=True)
+ANSWERED_TWICE = TurnStatus(rounds=(TurnRound(1, (), True), TurnRound(2, (), True)))
+TOOL_ROUND = TurnStatus(rounds=(TurnRound(1, ("call-1",), False),))
+
+
+# ── the scratch world ────────────────────────────────────────────────────────
+
+@pytest.fixture
+def env(tmp_path, monkeypatch):
+    """A scratch store and output folder; deliveries and workspace syncs are recorded."""
+    from vaf.core.lock_manager import LockManager
+    from vaf.core.platform import Platform
+
+    monkeypatch.setattr(Platform, "vaf_dir", staticmethod(lambda: tmp_path / "vaf"))
+    monkeypatch.setattr(automation, "bind_identity", lambda *a, **k: None)
+    monkeypatch.setattr(automation, "resolve_scope_identity", lambda *a, **k: None)
+    monkeypatch.setattr(automation, "_resolve_username", lambda scope: "alice")
+    monkeypatch.setattr("vaf.memory.rag.turn_memory_context", lambda *a, **k: "")
+    monkeypatch.setattr(LockManager, "acquire", lambda lock_id: True)
+    monkeypatch.setattr(LockManager, "release", lambda lock_id: None)
+    pushed, synced = [], []
+    monkeypatch.setattr(automation, "_push_result_to_web_ui",
+                        lambda task, status, summary, **k: pushed.append((status, summary, k)))
+    monkeypatch.setattr(AutomationManager, "_sync_workspace_automation_state",
+                        lambda self, task, run_status="", summary="", event="":
+                        event == "automation_run" and synced.append(run_status))
+    out = tmp_path / "out"
+    out.mkdir()
+    return SimpleNamespace(store=tmp_path / "tasks", out=out, pushed=pushed, synced=synced,
+                           monkeypatch=monkeypatch)
+
+
+def _task(env, frequency="daily", **fields):
+    """A root task on disk (no scope, so no account lookup), with an output folder."""
+    AutomationManager(storage_dir=str(env.store)).create(AutomationTask(
+        id=TID, name="report", prompt="Write the report.", frequency=frequency, time="06:00",
+        output_path=str(env.out), output_format="markdown", **fields))
+    manager = AutomationManager(storage_dir=str(env.store))
+    return manager, manager.get(TID)
+
+
+def _record(env):
+    path = env.store / f"{TID}.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+
+
+def _log(env):
+    return [r["status"] for r in load_run_log(env.store / f"{TID}.json")]
+
+
+def _pushed(env):
+    return [(status, text) for status, text, _k in env.pushed]
+
+
+def _assert_not_done(env, frequency):
+    record = _record(env)
+    if frequency == "once":
+        assert record is None, "a one-time task outlived its run"
+        return
+    assert record is not None
+    assert record.get("last_run") is None, "a run that did not complete was stamped"
+    assert record.get("last_completed_local_date") is None
+    assert _log(env) == ["error"]
+
+
+def _prompt_agent(env, *, returns=None, chunks=(), turn=TurnStatus(), raises=None):
+    """Installs a stub `Agent` for the prompt lane; returns its call record."""
+    import vaf.core.agent as agent_mod
+    seen = {"calls": 0, "shutdowns": 0}
+
+    class _Agent:
+        tools = {}
+        _current_username = "alice"
+        _tool_authorizer = None
+        _clean_reasoning = Agent._clean_reasoning
+        _sanitize_response = Agent._sanitize_response
+
+        def __init__(self, *a, **k):
+            self.history = []
+            self._turn = TurnStatus()
+
+        @property
+        def last_turn(self):
+            return self._turn
+
+        def load_model(self):
+            pass
+
+        def init_chat(self):
+            self.history = [{"role": "system", "content": "system"}]
+
+        def chat_step(self, prompt, stream_callback=None, **k):
+            seen["calls"] += 1
+            self.history.append({"role": "user", "content": prompt})
+            for chunk in chunks:
+                if stream_callback:
+                    stream_callback(chunk)
+            if raises is not None:
+                raise raises
+            self._turn = turn
+            return returns
+
+        def shutdown(self):
+            seen["shutdowns"] += 1
+
+    env.monkeypatch.setattr(agent_mod, "Agent", _Agent)
+    return seen
+
+
+def _workflow(env, **result):
+    """Installs a stub `Agent` and `WorkflowEngine` for the workflow lane."""
+    import vaf.core.agent as agent_mod
+    import vaf.workflows.engine as engine_mod
+
+    class _Agent:
+        tools = {}
+        _current_username = "alice"
+        _tool_authorizer = None
+        history = []
+
+        def __init__(self, *a, **k):
+            pass
+
+        def load_model(self):
+            pass
+
+        def init_chat(self):
+            pass
+
+        def shutdown(self):
+            pass
+
+    class _Engine:
+        def __init__(self, *a, callback=None, **k):
+            self.callback = callback
+
+        def execute(self, steps, variables=None, check_stop=None, **k):
+            step = steps[0]
+            step.result, step.error = "Message sent to the user via Telegram.", None
+            self.callback("start", step, 1, len(steps))
+            self.callback("success" if result.get("success") else "error", step, 1, len(steps))
+            values = dict(success=False, paused=False, final_output="", error=None)
+            values.update(result)
+            return SimpleNamespace(**values)
+
+    env.monkeypatch.setattr(agent_mod, "Agent", _Agent)
+    env.monkeypatch.setattr(engine_mod, "WorkflowEngine", _Engine)
+
+
+STEPS = [{"tool": "send_to_user", "args": {"message": "hi"}}]
+
+
+# ── AC1: a failed workflow is not done ───────────────────────────────────────
+
+@pytest.mark.parametrize("frequency", ["daily", "once"])
+def test_failed_workflow_is_not_done(env, frequency):
+    """MUTATIONS: `completed` true for `failed`; the unconditional stamp back; the workflow
+    failure mapped to `ok`."""
+    _workflow(env, success=False, error="write refused")
+    manager, task = _task(env, frequency, workflow_steps=STEPS)
+    out = manager.run_task(task, new_terminal=False)
+    assert out.startswith("# Workflow Failed") and "write refused" in out
+    assert _pushed(env) == [("error", out)]
+    assert env.synced == ["error"]
+    assert list(env.out.iterdir()) == [], "a failed workflow's report became an output file"
+    _assert_not_done(env, frequency)
+
+
+def test_successful_workflow_is_done(env):
+    """The success path now runs through the common tail: stamped, logged and pushed once,
+    with its short summary, and its send step still suppresses the second messenger push."""
+    _workflow(env, success=True)
+    manager, task = _task(env, workflow_steps=STEPS)
+    out = manager.run_task(task, new_terminal=False)
+    assert out.startswith("# Workflow Execution Report")
+    [(status, text, kwargs)] = env.pushed
+    assert status == "success" and "ist fertig" in text and "1 Schritte" in text
+    assert kwargs["deliver_messenger"] is False and kwargs["output_file"] is None
+    assert env.synced == ["success"] and _log(env) == ["success"]
+    assert _record(env)["last_run"] and _record(env)["last_completed_local_date"]
+    assert list(env.out.iterdir()) == []
+
+
+# ── AC2: a timed-out prompt run is not done ──────────────────────────────────
+
+def _time_out(env, *, finish_in_grace=False):
+    from vaf.core import bounded_run
+
+    def bounded(fn, *, timeout, stop_check=None, poll=0.5, label="tool"):
+        if finish_in_grace:
+            fn()
+        return f"{bounded_run.TIMEOUT_PREFIX} ran past {timeout}s"
+
+    env.monkeypatch.setattr(bounded_run, "run_bounded", bounded)
+    if not finish_in_grace:
+        env.monkeypatch.setattr(automation, "_wait_for_abandoned_run", lambda *a, **k: False)
+
+
+@pytest.mark.parametrize("frequency", ["daily", "once"])
+def test_timed_out_prompt_is_not_done(env, frequency):
+    """MUTATIONS: stamp a `timed_out` run; the old note back."""
+    _prompt_agent(env, returns="never seen", chunks=["Half a sent"])
+    _time_out(env)
+    manager, task = _task(env, frequency)
+    out = manager.run_task(task, new_terminal=False)
+    [(status, text)] = _pushed(env)
+    assert status == "error" and text == out
+    assert "Zeitlimit überschritten" in text and "'report'" in text
+    assert "meldet er sich selbst" not in text and not text.startswith("Error:")
+    assert "Half a sent" not in text, "a partial stream was delivered"
+    assert list(env.out.iterdir()) == []
+    _assert_not_done(env, frequency)
+
+
+def test_a_turn_finished_in_the_grace_is_judged_like_any_turn(env):
+    """A run that finished within the grace window is no timeout, and its turn decides: a
+    failed one is failed, not a completion."""
+    _prompt_agent(env, returns="[Error] backend down", turn=FAILED_TURN)
+    _time_out(env, finish_in_grace=True)
+    manager, task = _task(env)
+    manager.run_task(task, new_terminal=False)
+    assert _pushed(env) == [("error", "[Error] backend down")]
+    _assert_not_done(env, "daily")
+
+
+# ── AC3 / AC4: a failed turn is failed ───────────────────────────────────────
+
+API_ERROR = "[API Error from groq: 500]"
+
+
+@pytest.mark.parametrize("returns, chunks, shown", [
+    pytest.param("[Error] backend down", [], "[Error] backend down", id="unstreamed"),
+    pytest.param(API_ERROR, [API_ERROR], API_ERROR, id="streamed"),
+    pytest.param("", [], NO_ANSWER_NOTE, id="empty"),
+])
+def test_failed_turn_is_failed(env, returns, chunks, shown):
+    """MUTATION: drop the `returned_turn_copy` meta check, judging from the stream again."""
+    turn = TurnStatus(failed=True, failure=API_ERROR if chunks else "")
+    _prompt_agent(env, returns=returns, chunks=chunks, turn=turn)
+    manager, task = _task(env)
+    manager.run_task(task, new_terminal=False)
+    assert _pushed(env) == [("error", shown)]
+    assert env.synced == ["error"]
+    assert list(env.out.iterdir()) == []
+    _assert_not_done(env, "daily")
+
+
+def test_system_log_only_is_failed(env):
+    """The engine's notice after its empty retries ran out is no answer.
+    MUTATION: judge `turn.failed` alone."""
+    _prompt_agent(env, returns="[SYSTEM_LOG_ONLY]API returned empty response after retries.")
+    manager, task = _task(env)
+    manager.run_task(task, new_terminal=False)
+    assert _pushed(env) == [("error", "API returned empty response after retries.")]
+    _assert_not_done(env, "daily")
+
+
+# ── AC5 / AC6: what an answered turn and an unanswered turn deliver ──────────
+
+@pytest.mark.parametrize("returns, chunks, turn, shown", [
+    pytest.param("Antwort eins.\n\nAntwort zwei.",
+                 ["<think>a</think>\n\nAntwort eins.", "<think>b</think>\n\nAntwort zwei."],
+                 ANSWERED_TWICE, "Antwort eins.\n\nAntwort zwei.", id="two-answers"),
+    pytest.param("[ASYNC_ACK] Ich habe einen Helfer gestartet.", ["Moment, ich schaue nach."],
+                 TOOL_ROUND, "Ich habe einen Helfer gestartet.", id="async-ack"),
+])
+def test_answered_turn_delivers_its_return_value(env, returns, chunks, turn, shown):
+    """MUTATIONS: back to the cleaned joined stream for an answered turn (the first answer is
+    lost); drop the `ASYNC_ACK` clause (the narration is delivered instead)."""
+    _prompt_agent(env, returns=returns, chunks=chunks, turn=turn)
+    manager, task = _task(env)
+    out = manager.run_task(task, new_terminal=False)
+    assert out == shown and _pushed(env) == [("success", shown)]
+    assert _record(env)["last_run"], "an answered run was not stamped"
+    [written] = list(env.out.iterdir())
+    assert written.read_text(encoding="utf-8").endswith(shown)
+
+
+def test_answerless_turn_keeps_the_stream_path(env):
+    """A turn closed by a tool returns a status line; what it streamed is the result, as before.
+    MUTATION: deliver the return value for an unanswered turn ("..." is pushed)."""
+    _prompt_agent(env, returns="...", chunks=["Bericht gespeichert."], turn=TOOL_ROUND)
+    manager, task = _task(env)
+    manager.run_task(task, new_terminal=False)
+    assert _pushed(env) == [("success", "Bericht gespeichert.")]
+
+
+# ── AC7 / AC8 ────────────────────────────────────────────────────────────────
+
+def test_a_raising_turn_runs_once(env):
+    """MUTATION: call `chat_step` again in the fallback after an exception."""
+    seen = _prompt_agent(env, raises=RuntimeError("provider exploded"))
+    manager, task = _task(env)
+    out = manager.run_task(task, new_terminal=False)
+    assert seen["calls"] == 1, "a failed turn was started a second time"
+    assert out == "Error: provider exploded"
+    assert _pushed(env) == [("error", "Error: provider exploded")]
+    assert seen["shutdowns"] >= 1, "the agent of a failed turn was not shut down"
+    _assert_not_done(env, "daily")
+
+
+def test_an_answer_starting_with_error_is_ok(env):
+    """The text no longer carries the status. MUTATION: the `startswith("Error:")` status back."""
+    answer = "Error: 3 von 5 Tests sind rot, die Details stehen unten."
+    _prompt_agent(env, returns=answer, chunks=[answer],
+                  turn=TurnStatus(rounds=(TurnRound(1, (), True),)))
+    manager, task = _task(env)
+    manager.run_task(task, new_terminal=False)
+    assert _pushed(env) == [("success", answer)]
+    assert _log(env) == ["success"] and env.synced == ["success"]
+    assert _record(env)["last_run"]
+
+
+# ── AC9: a paused workflow ───────────────────────────────────────────────────
+
+@pytest.mark.parametrize("frequency", ["daily", "once"])
+def test_paused_workflow_counts_and_writes_no_file(env, frequency):
+    """MUTATION: the file gate reads `completed` instead of `status == "ok"`."""
+    _workflow(env, success=False, paused=True, waiting_for_agent="librarian_agent",
+              waiting_for_task="t-1")
+    manager, task = _task(env, frequency, workflow_steps=STEPS)
+    out = manager.run_task(task, new_terminal=False)
+    assert out.startswith("# Workflow Still Running")
+    assert _pushed(env) == [("success", out)]
+    assert list(env.out.iterdir()) == [], "a paused workflow's report became an output file"
+    if frequency == "once":
+        assert _record(env) is None
+    else:
+        assert _record(env)["last_run"] and _log(env) == ["success"]
+
+
+# ── AC10: the room-trigger lane ──────────────────────────────────────────────
+
+def test_room_triggered_failed_turn_is_not_done(env):
+    """A room-triggered prompt run is the same lane with a trigger. MUTATION: as for AC3."""
+    import vaf.core.turn_binding as turn_binding
+    bound = []
+    env.monkeypatch.setattr(automation, "_room_trigger_binding", lambda task, trigger: "binding")
+    env.monkeypatch.setattr(turn_binding, "bind_turn", lambda agent, b: bound.append(("bind", b)))
+    env.monkeypatch.setattr(turn_binding, "end_turn", lambda agent: bound.append(("end",)))
+    seen = _prompt_agent(env, returns="[Error] backend down", turn=FAILED_TURN)
+    trigger = {"kind": "room_message", "room_id": "room-t"}
+    manager, task = _task(env, "on_event", trigger=dict(trigger))
+    stored_trigger = _record(env)["trigger"]
+    manager.run_task(task, new_terminal=False,
+                     trigger={"room_id": "room-t", "frames": [], "text": "deploy it"})
+    assert seen["calls"] == 1, "the frames of a failed run were run again"
+    assert bound == [("bind", "binding"), ("end",)]
+    assert _pushed(env) == [("error", "[Error] backend down")]
+    record = _record(env)
+    assert record["last_run"] is None and record["trigger"] == stored_trigger
+    assert _log(env) == ["error"]
+
+
+# ── AC11: `vaf automation run` ───────────────────────────────────────────────
+
+@pytest.mark.parametrize("status, success", [
+    ("failed", False), ("timed_out", False), ("ok", True), ("paused", True), (None, False),
+])
+def test_cli_run_holds_the_window_on_failure(monkeypatch, status, success):
+    """MUTATIONS: `ok = True` whatever the outcome; never call `on_outcome`. `None` is a run
+    that ended without an outcome (skipped, locked, revoked)."""
+    from typer.testing import CliRunner
+    import vaf.cli.autoclose as autoclose
+
+    task = SimpleNamespace(id=TID, name="report")
+
+    def run_task(t, callback=None, new_terminal=True, trigger=None, *, on_outcome=None):
+        assert new_terminal is False
+        if status is not None and on_outcome is not None:
+            on_outcome(RunOutcome(status, "text"))
+        return "text"
+
+    finished = []
+    monkeypatch.setattr(automation, "get_manager",
+                        lambda: SimpleNamespace(get=lambda tid: task, run_task=run_task))
+    monkeypatch.setattr(autoclose, "finish_terminal", lambda **k: finished.append(k))
+    result = CliRunner().invoke(automation.automation_app, ["run", TID])
+    assert result.exception is None, result.output
+    assert finished == [{"success": success}]
+
+
+def test_run_task_hands_its_outcome_to_the_caller_once(env):
+    """The real run_task calls `on_outcome` once with the decided outcome, after the run log, and
+    a callback that raises does not cost the delivery; a run that never started has none.
+    MUTATION: drop the `on_outcome(outcome)` call."""
+    from vaf.core.lock_manager import LockManager
+    _prompt_agent(env, returns="[Error] backend down", turn=FAILED_TURN)
+    manager, task = _task(env)
+    seen = []
+
+    def hook(outcome):
+        seen.append((outcome.status, outcome.text, _log(env)))
+        raise RuntimeError("the caller's own bug")
+
+    manager.run_task(task, new_terminal=False, on_outcome=hook)
+    assert seen == [("failed", "[Error] backend down", ["error"])]
+    assert _pushed(env) == [("error", "[Error] backend down")]
+
+    env.monkeypatch.setattr(LockManager, "acquire", lambda lock_id: False)
+    later = []
+    out = manager.run_task(task, new_terminal=False, on_outcome=later.append)
+    assert out.startswith("[LOCK]") and later == []
+
+
+# ── AC12: decided once ───────────────────────────────────────────────────────
+
+def _run_task_node():
+    tree = ast.parse(Path(automation.__file__).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == "AutomationManager":
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef) and item.name == "run_task":
+                    return tree, item
+    raise AssertionError("AutomationManager.run_task not found")
+
+
+def _name(call):
+    f = call.func
+    return f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "")
+
+
+def test_outcome_is_decided_once():
+    """MUTATIONS: a literal status passed to the run log, the delivery or the workspace sync;
+    a second `_record_successful_run` call, or one outside `if outcome.completed`; a `return`
+    back in the workflow lane; any `startswith("Error:")` in the module."""
+    tree, run_task = _run_task_node()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and _name(node) == "startswith":
+            for arg in node.args:
+                assert not (isinstance(arg, ast.Constant) and str(arg.value).startswith("Error")), \
+                    f"a run's status is read from its text again (line {node.lineno})"
+
+    calls = [n for n in ast.walk(run_task) if isinstance(n, ast.Call)]
+    status_args = {"append_run_log": ("status", None), "_push_result_to_web_ui": (None, 1),
+                   "_sync_workspace_automation_state": ("run_status", None)}
+    checked = 0
+    for call in calls:
+        if _name(call) not in status_args:
+            continue
+        keyword, position = status_args[_name(call)]
+        values = [k.value for k in call.keywords if k.arg == keyword] if keyword else []
+        if position is not None and len(call.args) > position:
+            values.append(call.args[position])
+        assert values, f"{_name(call)} (line {call.lineno}) passes no status"
+        for value in values:
+            assert not isinstance(value, ast.Constant), \
+                f"{_name(call)} (line {call.lineno}) is given a literal status"
+        checked += 1
+    assert checked == 3, "each consumer is called once, for both lanes"
+
+    stamps = [c for c in calls if _name(c) == "_record_successful_run"]
+    assert len(stamps) == 1, "the run is stamped in more than one place"
+    guarded = [n for n in ast.walk(run_task) if isinstance(n, ast.If)
+               and isinstance(n.test, ast.Attribute) and n.test.attr == "completed"
+               and any(c is stamps[0] for c in ast.walk(n))]
+    assert guarded, "the stamp is not guarded by the outcome's `completed`"
+
+    lanes = [n for n in ast.walk(run_task) if isinstance(n, ast.If)
+             and "workflow_steps" in ast.unparse(n.test)]
+    assert lanes, "the workflow lane moved - re-anchor this guard"
+    returns = [n for stmt in lanes[0].body for n in ast.walk(stmt) if isinstance(n, ast.Return)]
+    assert returns == [], "the workflow lane returns before the common tail again"
+
+
+# ── the outcome itself ───────────────────────────────────────────────────────
+
+def test_run_outcome_coerces_at_the_boundary():
+    """An unknown status is a failure, so it never counts as done."""
+    for status in ("done", "", None, 1, "OK"):
+        outcome = RunOutcome(status, None)
+        assert outcome.status == "failed" and outcome.text == "" and not outcome.completed
+        assert outcome.wire_status == "error"
+    assert [RunOutcome(s).completed for s in automation.RUN_STATUSES] == [True, True, False, False]
+    assert RunOutcome("ok", "short", report="long").returned == "long"
+    assert RunOutcome("ok", "short").returned == "short"
+
+
+# ── fuzz: the prompt classifier against an independent rule ──────────────────
+
+_BLANKS = ("", " ", "\n", "  \n", "\t ")
+_BODIES = ("", "Fertig.", "Error: steht im Text.", "[Error] backend down",
+           "[API Error from x: 500]", "Siehe [ASYNC_ACK] im Text.",
+           "Zitat: [SYSTEM_LOG_ONLY] mitten drin.", "Zeile eins\nZeile zwei", "   ")
+_HEADS = ("", "[ASYNC_ACK]", "[SYSTEM_LOG_ONLY]", "[Error] ", "[API Error from x: 503] ")
+
+
+def _draw(rng):
+    if rng.random() < 0.08:
+        answer = None
+    else:
+        answer = rng.choice(_BLANKS) + rng.choice(_HEADS) + rng.choice(_BODIES)
+        if rng.random() < 0.2:
+            answer += rng.choice(_HEADS) + rng.choice(_BODIES)
+        answer = answer[:4096]
+    rounds = tuple(TurnRound(i + 1, ("c",) if rng.random() < 0.5 else (), rng.random() < 0.4)
+                   for i in range(rng.randint(0, 3)))
+    turn = TurnStatus(failed=rng.random() < 0.25, rounds=rounds)
+    return answer, turn, rng.random() < 0.15
+
+
+def _reference(answer, turn, timed_out):
+    """The rule, written apart from the code: timeout first, then a failed turn or a
+    `[SYSTEM_LOG_ONLY]` head is failed, everything else ok. An answered turn (an answering
+    round or an `[ASYNC_ACK]` head) with text delivers its text without the head; the rest
+    delivers the stream."""
+    if timed_out:
+        return "timed_out", "NOTE"
+    text = "" if answer is None else answer
+    lead = text.lstrip()
+    head = next((m for m in ("[ASYNC_ACK]", "[SYSTEM_LOG_ONLY]") if lead.startswith(m)), "")
+    rest = lead[len(head):].strip() if head else text.strip()
+    if turn.failed or head == "[SYSTEM_LOG_ONLY]":
+        return "failed", rest or NO_ANSWER_NOTE
+    if (any(r.answer for r in turn.rounds) or head == "[ASYNC_ACK]") and rest:
+        return "ok", rest
+    return "ok", "STREAM"
+
+
+def test_prompt_outcome_fuzz():
+    """Seeded draws in the suite; `VAF_FUZZ_DRAWS` runs more outside it."""
+    rng = random.Random(458)
+    draws = int(os.environ.get("VAF_FUZZ_DRAWS", "400"))
+    mismatches = []
+    for n in range(draws):
+        answer, turn, timed_out = _draw(rng)
+        streamed = []
+
+        def stream():
+            streamed.append(1)
+            return "STREAM"
+
+        outcome = _prompt_outcome(answer, turn, stream, timed_out=timed_out, timeout_note="NOTE")
+        want = _reference(answer, turn, timed_out)
+        if (outcome.status, outcome.text) != want:
+            mismatches.append((n, answer, turn, timed_out, (outcome.status, outcome.text), want))
+        assert outcome.completed == (outcome.status in ("ok", "paused"))
+        if streamed:
+            assert outcome.status == "ok", "a status other than ok came from the stream path"
+    assert mismatches == [], mismatches[:5]

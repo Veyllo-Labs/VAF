@@ -22,6 +22,7 @@ from types import SimpleNamespace
 import pytest
 
 from vaf.core import revocation
+from vaf.core.session import TurnStatus
 
 SCOPE = "ab12cd34-0000-4000-8000-0000000000a1"
 OTHER = "ab12cd34-0000-4000-8000-0000000000b2"
@@ -510,6 +511,7 @@ def test_a_prompt_automation_revoked_mid_run_is_not_stamped_or_saved(monkeypatch
         history = []
         _current_username = "alice"
         _tool_authorizer = None
+        last_turn = property(lambda self: TurnStatus())
 
         def __init__(self, *a, **k):
             pass

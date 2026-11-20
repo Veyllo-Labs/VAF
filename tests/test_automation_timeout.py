@@ -62,16 +62,6 @@ def test_bounded_return_is_evaluated():
     assert "_wait_for_abandoned_run(_chat_done)" in src
 
 
-def test_unresolved_timeout_yields_honest_note_not_partial():
-    src = _src()
-    assert "Zeitlimit überschritten" in src
-    assert 'result = (\n                        f"Error: Zeitlimit' in src, (
-        "the timeout note must start with 'Error:' so the push carries status=error"
-    )
-
-
-def test_unresolved_timeout_skips_the_legacy_file_wrap():
-    src = _src()
-    assert "if task.output_path and not prompt_timeout_unresolved:" in src, (
-        "the legacy output save regained the junk-wrap path on timeouts"
-    )
+# What an unresolved timeout delivers (the note, status `error`, no stamp, no output file) is
+# driven through the real run_task in tests/test_automation_run_outcome.py
+# (test_timed_out_prompt_is_not_done).

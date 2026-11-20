@@ -1181,7 +1181,7 @@ def automation_cli(monkeypatch):
                            next_run_label="tomorrow")
     listed = SimpleNamespace(**{**vars(task), "name": "[i]daily"})
 
-    def run_task(t, callback=None, new_terminal=False):
+    def run_task(t, callback=None, new_terminal=False, **k):
         callback("[/x] arr[i] :CD: [conceal]h[/conceal]")
         raise RuntimeError("[/y] [i]boom")
 

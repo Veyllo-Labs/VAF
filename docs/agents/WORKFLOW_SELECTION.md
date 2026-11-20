@@ -281,12 +281,12 @@ in front. A failed step then does what the step says: the run stops (`stop_on_er
 (`optional`, the step stays failed and the run reports failed), or jumps (`on_failure`, the
 step counts as handled and the run can still succeed).
 
-NAMED BOUNDARIES, each its own change: a `bash` step whose command exits non-zero still counts
+NAMED BOUNDARY, its own change: a `bash` step whose command exits non-zero still counts
 as done, because its answer opens with `$ <command>` and the exit line comes after the output
 (and `grep`, `diff` or `test` exit 1 as an answer, not a failure; the exit status has to come
-back as data, not as another text rule). And a workflow automation whose run failed is still
-recorded as a successful run (see "Run log" in
-[AUTOMATIONS.md](../platform/AUTOMATIONS.md)), although its report says `# Workflow Failed`.
+back as data, not as another text rule). A workflow automation whose run failed is recorded and
+delivered as a failed run and is not counted as done (see "How a run's outcome is decided" in
+[AUTOMATIONS.md](../platform/AUTOMATIONS.md)).
 
 ### `create_agent_workflow` - runtime workflow creation
 

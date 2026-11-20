@@ -228,18 +228,15 @@ def test_a_mixed_pool_still_reports_the_naive_ones():
     assert kinds == {"a1", "a2"}
 
 
-def test_the_workflow_success_path_also_records_a_run():
-    """That branch RETURNS before the run log at the end of run_task, so it needs its own write.
-    Without it every workflow-based automation is invisible to the log, and the findings built on
-    the log would quietly describe only the prompt-based ones.
-
-    Checked statically: exercising it for real would mean running an automation end to end."""
-    import re
-    from pathlib import Path as _P
+def test_both_lanes_record_their_run_in_one_place():
+    """The workflow success path used to return early and needed a run-log write of its own;
+    without it every workflow-based automation was invisible to the log, and the findings built
+    on it described only the prompt-based ones. Both lanes now end in one tail: one write, and
+    no lane returns before it. The behaviour per outcome is driven through the real run_task in
+    tests/test_automation_run_outcome.py; this pins the shape."""
+    import inspect
     import vaf.core.automation as automation
 
-    src = _P(automation.__file__).read_text(encoding="utf-8")
-    m = re.search(r"if workflow_saved_file:(.*?)\n                    return result", src, re.S)
-    assert m, "the workflow-saved-file branch moved - re-anchor this guard"
-    assert "append_run_log(" in m.group(1), \
-        "the workflow success path returns without recording the run"
+    src = inspect.getsource(automation.AutomationManager.run_task)
+    assert src.count("append_run_log(") == 1, "a lane records its run on its own path again"
+    assert "return result" not in src, "a lane returns before the run log again"

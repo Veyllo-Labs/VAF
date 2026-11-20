@@ -19,6 +19,7 @@ other name is refused; every other scoped request stands as given. `send_to_main
 `get_whatsapp_chat_jid` and both bridge send entries (and the sender loop, for a request file
 of older code) apply it. Fake Node processes only; no Node, no network.
 """
+import ast
 import io
 import json
 import queue
@@ -29,7 +30,6 @@ from types import SimpleNamespace
 import pytest
 
 from vaf.api import whatsapp_bridge as wa
-from vaf.core import config as config_mod
 from vaf.core import messaging_connections as mc
 from vaf.core import whatsapp_reply
 from vaf.core.channel_ingress_policy import set_front_office
@@ -449,8 +449,27 @@ def test_a_lookup_reads_the_config_a_fixed_number_of_times(world, monkeypatch, l
     assert small == large, (small, large)
 
 
-def test_the_helpers_live_in_the_framework():
-    """The rule is decided once, in `vaf.core`: the bridge imports it rather than a private
-    helper of the messenger module."""
-    assert wa.messenger_lane_identity is config_mod.messenger_lane_identity
-    assert mc.messenger_lane_identity is config_mod.messenger_lane_identity
+@pytest.mark.parametrize("module, names", [
+    (wa, ("messenger_lane_identity",)),
+    (mc, ("messenger_lane_identity", "is_local_admin_name")),
+], ids=["bridge", "messenger-module"])
+def test_the_helpers_live_in_the_framework(module, names):
+    """The rule is decided once, in `vaf.core`: the bridge and the messenger module import it
+    from `vaf.core.config` and define no copy of their own. Asked by the function's own module
+    and name and by the importing module's source, not by object identity: a test elsewhere in
+    the suite reloads `vaf.core.config` (tests/test_tui_theme_bridge.py), which rebinds every
+    function there while the importers keep the objects they imported. MUTATION: define a
+    local `messenger_lane_identity` in the bridge -> red."""
+    tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+    imported = {alias.asname or alias.name for node in ast.walk(tree)
+                if isinstance(node, ast.ImportFrom) and node.module == "vaf.core.config"
+                for alias in node.names}
+    defined = {node.name for node in ast.walk(tree)
+               if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+    assigned = {target.id for node in ast.walk(tree) if isinstance(node, ast.Assign)
+                for target in node.targets if isinstance(target, ast.Name)}
+    for name in names:
+        func = getattr(module, name)
+        assert (func.__module__, func.__qualname__) == ("vaf.core.config", name)
+        assert name in imported, f"{name} is not imported from vaf.core.config"
+        assert name not in defined | assigned, f"{module.__name__} defines its own {name}"

@@ -32,7 +32,7 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from vaf.core.config import Config
+from vaf.core.config import Config, messenger_lane_identity
 from vaf.core.contacts_store import whatsapp_send_jid
 from vaf.core.channel_ingress_policy import evaluate_ingress, should_log_unauthorized
 from vaf.core.messaging_connections import front_office_open
@@ -55,6 +55,9 @@ _processes: Dict[str, subprocess.Popen] = {}
 _process_lock = threading.Lock()
 # What a send answers when the account has no Node process of its own (see _process_for).
 NO_PROCESS_FOR_ACCOUNT = "No WhatsApp process runs for this account. Link WhatsApp in Settings, Connections."
+# What a send answers when it carries no scope and names somebody other than the local admin
+# (`config.messenger_lane_identity`): no account can be told, so nothing is sent.
+NO_ACCOUNT_FOR_REQUEST = "WhatsApp: Cannot send - a request without an account acts only for the local admin."
 _outgoing_queue: Optional[queue.Queue] = None
 # username -> user_scope_id of every running process, so the sender loop stores outbound
 # rows in the same per-scope store the inbound lane writes to.
@@ -765,7 +768,16 @@ def _get_allowed_phones_for_user(username: str, user_scope_id: str) -> Tuple[Lis
     read by `contacts_store.contact_access` at the decision site, because a set built from a
     flag cannot tell "allowed" from "denied" and was consulted first, so a denial was never
     seen. What is left of it is one debug line for a user whose book and whitelist are both
-    empty. A caller that wants the answer, not the list, asks `evaluate_ingress`."""
+    empty. A caller that wants the answer, not the list, asks `evaluate_ingress`.
+
+    Named boundary: an entry without a scope filed under "admin" or no name is not the local
+    admin's registered number here on an install whose admin has another name (it matches
+    neither the admin's name nor scope), while the endpoint reader does give it to the admin
+    (`messaging_connections._whatsapp_registered_entries`). A send of the admin's scopeless
+    lane to that number therefore goes to the web UI with Inbound closed, and with Inbound open
+    to the admin's own number through the admin's own process. Where an ordinary account is
+    named "admin", the name match counts the entry as that account's number too. Giving the
+    entry the admin's scope fixes both, and the Connections page always writes one."""
     config_phones: List[str] = []
     allowed_phones: List[str] = []
     whatsapp_config = Config.get("whatsapp_config") or {}
@@ -897,7 +909,16 @@ def _process_for(username: str, user_scope_id: Optional[str] = None
     asks without holding `_process_lock` (this takes it). Measured on the twelve hand copies
     this replaced, which took the only process whoever it belonged to: an account without a
     linked WhatsApp sent from another account's agent number, read its chat list and loaded
-    its history."""
+    its history.
+
+    Named boundary: a request without a scope is settled by its name alone. Only the read and
+    sync lanes ask that way (the chat list, history, avatars, names, LID mappings, the
+    connection check), and they pass the signed-in account's own name
+    (`user_routes.request_account` refuses a sign-in without a scope or a name). Every send lane
+    carries a scope: `_enqueue_reply`, `send_whatsapp_with_confirmation` and the sender loop
+    convert a scopeless request with `config.messenger_lane_identity` (the local admin's, or
+    refused) before they get here. Refusing a scopeless request in here would cut every
+    ordinary account off its own chat list."""
     name = (username or "").strip()
     wanted = str(user_scope_id or "").strip()
     with _process_lock:
@@ -983,6 +1004,18 @@ def _sender_loop() -> None:
                 continue
             if not voice_path and not text and not document_path:
                 continue
+            if not str(item_scope or "").strip():
+                # Both send entries convert before they queue, so only a request file from a
+                # process still running older code arrives without a scope: the same rule here,
+                # never a process picked by its name alone.
+                ident = messenger_lane_identity(None, username)
+                if ident is None:
+                    logger.warning("WhatsApp: refused a send without an account for %r", username)
+                    if req_id:
+                        _complete_send_request(req_id, False, NO_ACCOUNT_FOR_REQUEST,
+                                               response_path=response_path)
+                    continue
+                item_scope, username = str(ident[0]), ident[1]
             _, proc = _process_for(username, item_scope)
             if not proc or proc.poll() is not None:
                 # Never another account's process: that would send from its agent number.
@@ -1124,7 +1157,10 @@ def _is_reply_allowed(username: str, chat_jid: str, user_scope_id: Optional[str]
     shapes is how the two sides drift: the agent could be allowed to answer somebody who is
     no longer allowed to write, or refuse to answer a stranger the open channel just admitted.
     An unresolved @lid matches nothing. Explicit recipients (`send_whatsapp(to_phone=...)`)
-    do not pass through here."""
+    do not pass through here.
+
+    A missing scope is still resolved from the name below, for a direct caller only: both
+    send entries hand this the scope and name of `config.messenger_lane_identity` first."""
     from vaf.core.config import scope_id_for_username
     uname = (username or "").strip() or "admin"
     scope = str(user_scope_id).strip() if user_scope_id else None
@@ -1154,7 +1190,16 @@ def _enqueue_reply(username: str, chat_jid: str, text: str, voice_path: Optional
 
     Returns True only if the reply was actually placed on the outgoing queue for the Node bridge, False if
     it was dropped (recipient not allowed, no outgoing queue, or a queue error). Callers that need a real
-    delivery signal (e.g. send_to_main_messenger's fallback decision) rely on this."""
+    delivery signal (e.g. send_to_main_messenger's fallback decision) rely on this.
+
+    A reply without a scope is the local admin's under the admin's own scope and name, and one
+    naming anybody else is refused (`config.messenger_lane_identity`): read by its name, the
+    literal "admin" went out through an ordinary account named "admin"."""
+    ident = messenger_lane_identity(user_scope_id, username)
+    if ident is None:
+        logger.warning("WhatsApp: refused a reply without an account for %r", username)
+        return False
+    user_scope_id, username = ident
     if not _is_reply_allowed(username, chat_jid, user_scope_id=user_scope_id):
         logger.warning("WhatsApp: blocked reply to JID %s for user %s (not owner, contact or open conversation)", chat_jid, username)
         return False
@@ -1218,8 +1263,15 @@ def send_whatsapp_with_confirmation(
     origin="owner" marks a message the person sent from the dashboard: it is stored under
     OWNER_SENDER and opens no reply window (the agent did not write to that number).
     user_scope_id, when given, is the scope the send is made for: only that scope's process
-    sends it (`_process_for`), on both the in-process and the file-IPC path.
+    sends it (`_process_for`), on both the in-process and the file-IPC path. Without one the
+    send is the local admin's under the admin's own scope and name, or, naming anybody else,
+    refused with NO_ACCOUNT_FOR_REQUEST (`config.messenger_lane_identity`).
     """
+    ident = messenger_lane_identity(user_scope_id, username)
+    if ident is None:
+        logger.warning("WhatsApp: refused a send without an account for %r", username)
+        return NO_ACCOUNT_FOR_REQUEST
+    user_scope_id, username = ident
     # Voice/document need more time (TTS synthesis, file upload)
     if voice_path or document_path:
         timeout = max(timeout, 45.0)

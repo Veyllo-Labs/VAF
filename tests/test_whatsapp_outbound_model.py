@@ -1059,14 +1059,18 @@ def test_a_message_the_person_sent_from_the_dashboard_is_not_the_agent_writing(i
 
 def test_the_owner_origin_travels_through_both_send_paths(isolated, monkeypatch, tmp_path):
     """The sender loop stores the outbound row, so the origin has to reach it: as the
-    eighth queue element in-process, as the `origin` field over the file IPC."""
+    eighth queue element in-process, as the `origin` field over the file IPC. The send
+    carries the account's scope, as the dashboard route always does: a send without one
+    that names an ordinary account is refused at the entry."""
     import queue as _queue
     q = _queue.Queue()
     monkeypatch.setattr(wa, "_outgoing_queue", q)
     monkeypatch.setattr(wa, "_processes", {"alice": SimpleNamespace(poll=lambda: None)})
+    monkeypatch.setattr(wa, "_scope_by_user", {"alice": SCOPE})
     monkeypatch.setattr(wa, "_pending_sends", {})
     out = wa.send_whatsapp_with_confirmation("alice", "491700000051@s.whatsapp.net", "hi",
-                                             timeout=0.05, allow_contact_send=True, origin="owner")
+                                             timeout=0.05, allow_contact_send=True, origin="owner",
+                                             user_scope_id=SCOPE)
     item = q.get_nowait()
     assert len(item) == 9 and item[7] == "owner" and item[2] == "hi"
     assert "No delivery confirmation" in out                    # nobody answered the fake process
@@ -1076,11 +1080,13 @@ def test_the_owner_origin_travels_through_both_send_paths(isolated, monkeypatch,
     wa._write_json_atomic(wa._ipc_state_path(), {"running": True, "usernames": ["alice"], "updated_at": time.time()})
     monkeypatch.setattr(wa, "_wait_for_external_send_result", lambda *a, **k: "Message sent via WhatsApp.")
     assert wa.send_whatsapp_with_confirmation("alice", "491700000051@s.whatsapp.net", "hi",
-                                              allow_contact_send=True, origin="owner").startswith("Message sent")
+                                              allow_contact_send=True, origin="owner",
+                                              user_scope_id=SCOPE).startswith("Message sent")
     dequeued = wa._dequeue_external_send_request()
     assert dequeued is not None and dequeued[7] == "owner" and dequeued[0] == "alice"
     # an agent send carries no origin on either path
-    wa.send_whatsapp_with_confirmation("alice", "491700000051@s.whatsapp.net", "hi", allow_contact_send=True)
+    wa.send_whatsapp_with_confirmation("alice", "491700000051@s.whatsapp.net", "hi", allow_contact_send=True,
+                                       user_scope_id=SCOPE)
     assert wa._dequeue_external_send_request()[7] is None
 
 

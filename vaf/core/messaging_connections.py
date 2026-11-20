@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from vaf.core.config import Config, is_admin_account, is_local_admin_lane  # noqa: F401 (is_local_admin_lane re-exported)
+from vaf.core.config import is_local_admin_name, messenger_lane_identity
 from vaf.core.platform import Platform
 from vaf.core.channel_secrets import channel_secret, has_channel_secret
 from vaf.core.contacts_store import phone_digits_canonical, whatsapp_lid_map
@@ -556,6 +557,12 @@ def get_whatsapp_chat_jid_from_whitelist(
     nameless notification resolved the admin's registered number (the admin's entry came
     first), which `get_whatsapp_chat_jid` then saved as the non-admin's own endpoint. The name
     is the key only for a caller without a scope (the legacy single-user lane).
+
+    The local admin's scope also matches an entry without a scope filed under an admin name
+    (`is_local_admin_name`), the attribution `_whatsapp_registered_entries` gives it, first
+    match in whitelist order: the scopeless lane is read under the admin's scope
+    (`messenger_lane_identity`), and an older install's entry filed under "admin" without a
+    scope is still the admin's registered number.
     """
     whatsapp_config = Config.get("whatsapp_config") or {}
     if not isinstance(whatsapp_config, dict) or not whatsapp_config.get("whitelist"):
@@ -563,11 +570,14 @@ def get_whatsapp_chat_jid_from_whitelist(
     whitelist = whatsapp_config.get("whitelist") or []
     scope_str = str(user_scope_id).strip() if user_scope_id is not None else ""
     vaf_username = (username or "").strip() or "admin"
+    admin_lane = bool(scope_str) and scope_str == _local_admin_scope()
     for entry in whitelist:
         if not isinstance(entry, dict) or not entry.get("phone_number"):
             continue
         if scope_str:
-            matches = str(entry.get("user_scope_id") or "").strip() == scope_str
+            entry_scope = str(entry.get("user_scope_id") or "").strip()
+            matches = entry_scope == scope_str or (
+                admin_lane and not entry_scope and is_local_admin_name(entry.get("vaf_username")))
         else:
             matches = entry.get("vaf_username") == vaf_username
         if matches:
@@ -580,8 +590,8 @@ def _whatsapp_registered_entries() -> List[Tuple[str, Optional[str], str]]:
     entry, in whitelist order; the number is "" for an entry without a usable one.
 
     The owning scope is the entry's scope. An entry without one is the local admin's when its
-    name is empty, "admin" or the local admin's name (the reading `is_local_admin_lane` gives
-    a missing scope), and nobody's otherwise ("unattributed", None). Named boundary: the
+    name is one `is_local_admin_name` holds, empty, "admin" or the local admin's name (the
+    reading `is_local_admin_lane` gives a missing scope), and nobody's otherwise ("unattributed", None). Named boundary: the
     bridge counts a scopeless entry filed under "alice" as Alice's by name
     (`whatsapp_bridge._get_allowed_phones_for_user` matches by name OR scope), so reading it
     as the admin's would drop Alice's own endpoint on every message she sends; an
@@ -594,31 +604,16 @@ def _whatsapp_registered_entries() -> List[Tuple[str, Optional[str], str]]:
     if not isinstance(entries, list):
         return []
     admin_scope = _local_admin_scope()
-    from vaf.core.config import get_local_admin_username  # per call, as `_local_admin_scope`
-    admin_names = {"", "admin", get_local_admin_username().lower()}
     out: List[Tuple[str, Optional[str], str]] = []
     for entry in entries:
         if not isinstance(entry, dict):
             continue
         name = str(entry.get("vaf_username") or "").strip()
         scope = str(entry.get("user_scope_id") or "").strip()
-        if not scope and name.lower() in admin_names:
+        if not scope and is_local_admin_name(name):
             scope = admin_scope
         out.append((phone_digits_canonical(str(entry.get("phone_number") or "")), scope or None, name))
     return out
-
-
-def _whatsapp_lane(user_scope_id: Optional[Any], username: Optional[str], admin_scope: str) -> Optional[str]:
-    """Whose an endpoint lookup is: its scope, and for a caller without one the local admin's
-    when the name is empty, "admin" or the local admin's name (`_lane_owner_scope`). A caller
-    without a scope that names somebody else is that account's lane by name (the bridge picks
-    its process by name, `whatsapp_bridge._process_for`), whose scope the store cannot tell:
-    None, and the lookup repairs nothing there."""
-    if user_scope_id is not None and str(user_scope_id).strip():
-        return _lane_owner_scope(user_scope_id, admin_scope)
-    from vaf.core.config import get_local_admin_username  # per call, as `_local_admin_scope`
-    name = (username or "").strip().lower()
-    return admin_scope if name in {"", "admin", get_local_admin_username().lower()} else None
 
 
 def _whatsapp_name_is_lanes(name: str, lane: str, entries: List[Tuple[str, Optional[str], str]],
@@ -631,11 +626,21 @@ def _whatsapp_name_is_lanes(name: str, lane: str, entries: List[Tuple[str, Optio
     admin's), and the store keeps the admin's chat under it, which that lane must neither take
     nor clear.
 
-    Named boundary: when the local admin's own entry is filed under a name (empty, "admin", or
-    a scoped entry without a name) that an ordinary account is also filed under, the key counts
-    as the admin's, and the admin's lanes read whatever that account stored there (an own-map
-    LID, an unregistered self-chat). The lane's own entry names win, as in Telegram's
-    `_telegram_account_names`; the store cannot tell two accounts filed under one name apart,
+    The local admin's lanes read the admin's own name here, never the literal "admin" unless
+    the admin is named so: a lane without a scope arrives converted (`messenger_lane_identity`).
+    When they read "admin" as an alias, the admin's entry filed under "admin" (or without a
+    name) made that key the admin's while an ordinary account named "admin" owned it too, and
+    the two lanes reset each other's saved chat on every read (measured: 12 security events in
+    10 alternations before, 0 after).
+
+    Named boundary, what remains: two accounts filed under ONE name. That is an ordinary
+    account literally named "admin" (possible only while the local admin has another name), or
+    two entries of different scopes given the same name by an admin's hand. That account's
+    lane reads its own name key, as Telegram's `_telegram_account_names` does, and older
+    versions also wrote the local admin's scopeless chats under "admin": a value there that is
+    the admin's registered number is dropped as foreign, while one that is no registered number
+    (the admin's old self-chat, an unmapped LID) is returned to that account until its own
+    first message overwrites the key. The store cannot tell two accounts under one name apart,
     so the fix belongs with the name rules of the whitelist, not with this reader."""
     low = name.strip().lower()
     filed = [(scope, (n or "admin").lower()) for _, scope, n in entries]
@@ -644,8 +649,7 @@ def _whatsapp_name_is_lanes(name: str, lane: str, entries: List[Tuple[str, Optio
     if any(scope is not None and scope != lane and n == low for scope, n in filed):
         return False
     if lane != admin_scope:
-        from vaf.core.config import get_local_admin_username  # per call, as `_local_admin_scope`
-        return low not in {"admin", get_local_admin_username().lower()}
+        return not is_local_admin_name(low)
     return True
 
 
@@ -679,13 +683,12 @@ def get_whatsapp_chat_jid(
     `whatsapp_by_scope[<a non-admin's scope>]` holding the admin's registered number, and (b)
     `whatsapp_by_username["admin"]` holding a non-admin's number, which the scoped admin read
     found only while the admin had no scope key, and the lane without a scope (old reminders,
-    `send_to_main_messenger(None, ...)`) found always. With Inbound open, a later process of
-    the right account would have sent a private note there. Both keys this lookup consults are
-    checked on every read, so a scoped admin read also clears a foreign "admin" key that only
-    the scopeless lane would have returned; such a key is removed before anything is sent and
-    recorded once as the security event `owner_endpoint_reset`, the same repair
-    `telegram_chat_id_of` makes, so every delivery lane is covered with no migration step to
-    forget. The lookup then falls back to the account's own registered number, if any.
+    `send_to_main_messenger(None, ...)`) found always while it read the literal "admin". With
+    Inbound open, a later process of the right account would have sent a private note there.
+    Both keys this lookup consults are checked on every read; such a key is removed before
+    anything is sent and recorded once as the security event `owner_endpoint_reset`, the same
+    repair `telegram_chat_id_of` makes, so every delivery lane is covered with no migration
+    step to forget. The lookup then falls back to the account's own registered number, if any.
 
     Whose a number is: `_whatsapp_registered_entries` (by scope; an entry without one is the
     local admin's only under the admin's name, otherwise nobody's), and a LID's number comes
@@ -693,9 +696,15 @@ def get_whatsapp_chat_jid(
     lane itself is never foreign, even when another account registered it too. A name key that
     another account holds (`_whatsapp_name_is_lanes`) is not this lane's: it is not read at
     all (an unregistered self-chat there is that account's, not this lane's), never deleted,
-    and the fallback is saved under the scope only. A fallback found by name that is another
-    account's number (an ordinary account named "admin" on the scopeless lane) is not used, and
-    the lane gets nothing. Pinned by tests/test_whatsapp_owner_endpoint_repair.py.
+    and the fallback is saved under the scope only. The fallback is found by scope, with the
+    attribution above, so it is never another account's number.
+
+    Whose lane the lookup is comes first (`config.messenger_lane_identity`): a caller without a
+    scope under an admin name is the local admin's lane under the admin's own scope and name, so
+    it reads `whatsapp_by_scope[<admin scope>]` and the admin's own name key, and never shares
+    the key of an ordinary account named "admin". A caller without a scope that names anybody
+    else gets None and the store is not touched. Pinned by
+    tests/test_whatsapp_owner_endpoint_repair.py and tests/test_whatsapp_scopeless_lane.py.
 
     Named boundaries:
     - A JID that is no registered number is returned as stored. Until v0.1.0a28 the bridge
@@ -705,9 +714,9 @@ def get_whatsapp_chat_jid(
       remove both, and with no number registered proactive WhatsApp messages would then go to
       the web UI only. That trade is not made here; the reply check refuses a send to such a
       JID unless that number may be answered.
-    - A caller without a scope that names an account other than the local admin's repairs
-      nothing (`_whatsapp_lane`): the store cannot tell that account's scope, so its stored
-      JID is returned unchecked, as before.
+    - Two accounts filed under one name (`_whatsapp_name_is_lanes`): an ordinary account named
+      "admin" reads its own name key, which older versions also wrote the local admin's chats
+      under; a value there that is no registered number is returned to that account.
     - The registered-number helpers stay private: this is the one reader of "whose number is
       this"; a second reader is the measurement that would earn a public primitive.
     - Cost: one canonicalisation per whitelist entry, plus one LID-map copy when another
@@ -715,27 +724,31 @@ def get_whatsapp_chat_jid(
       LIDs, 19 ms at 10,000 and 200 ms at 100,000. Only an admin adds whitelist entries beyond
       an account's own one, so no account can grow it for another.
     """
-    scope_key = str(user_scope_id) if user_scope_id is not None else None
-    # The name is a key of its own only when it was given, or for a caller without any
-    # scope (the legacy single-user lane): a scoped caller without a name must not read
-    # the local admin's endpoint under the default name.
-    uname = (username or "").strip() or ("admin" if user_scope_id is None else "")
+    # Whose lane this is, decided once (`messenger_lane_identity`): a lane without a scope is
+    # the local admin's under the admin's own scope and name, and one naming anybody else is
+    # refused before the store is touched. Every lane read below therefore has a scope.
+    ident = messenger_lane_identity(user_scope_id, username)
+    if ident is None:
+        return None
+    user_scope_id, username = ident
+    scope_key = str(user_scope_id)
+    uname = (username or "").strip()
     # Config is read before the store lock is taken, never under it.
     admin_scope = _local_admin_scope()
-    lane = _whatsapp_lane(user_scope_id, username, admin_scope)
-    entries = _whatsapp_registered_entries() if lane is not None else []
+    lane = _lane_owner_scope(user_scope_id, admin_scope)
+    entries = _whatsapp_registered_entries()
     own = {num for num, scope, _ in entries if num and scope == lane}
     foreign: Dict[str, str] = {}
     for num, scope, name in entries:
         if num and scope is not None and scope != lane and num not in own:
             foreign.setdefault(num, name)
     lid_map = whatsapp_lid_map(lane) if foreign else None
-    name_is_lanes = bool(uname) and (lane is None or _whatsapp_name_is_lanes(uname, lane, entries, admin_scope))
+    name_is_lanes = bool(uname) and _whatsapp_name_is_lanes(uname, lane, entries, admin_scope)
     found: Optional[str] = None
     dropped: List[Tuple[str, str]] = []
     with _ENDPOINTS_LOCK:
         data = _load_endpoints()
-        consulted = ([("whatsapp_by_scope", scope_key)] if scope_key is not None else []) \
+        consulted = [("whatsapp_by_scope", scope_key)] \
             + ([("whatsapp_by_username", uname)] if name_is_lanes else [])
         changed = False
         for block, key in consulted:
@@ -754,14 +767,9 @@ def get_whatsapp_chat_jid(
             _save_endpoints(data)
     own_jid: Optional[str] = None
     if dropped or not found:
+        # By scope, with the same attribution as `_whatsapp_registered_entries`, so the
+        # number it finds is in `own` and never in `foreign`.
         own_jid = get_whatsapp_chat_jid_from_whitelist(user_scope_id, username)
-        # The scopeless lane finds its number by name, and an ordinary account may be named
-        # "admin": a fallback that is another account's number would be saved and dropped
-        # again. No number stands in for it: a request without a scope is settled by its name
-        # in the bridge (`whatsapp_bridge._process_for`), so the local admin's own number would
-        # leave through that account's process. The lane gets nothing, and the web UI.
-        if own_jid and _whatsapp_jid_number(own_jid, lid_map) in foreign:
-            own_jid = None
     if dropped:
         from vaf.core.config import resolve_caller_username
         account = resolve_caller_username(username, scope_key)
@@ -775,7 +783,7 @@ def get_whatsapp_chat_jid(
             _report_owner_endpoint_reset("whatsapp", account, str(jid), f"{what}; {outcome}")
     if found:
         return found
-    if own_jid and (name_is_lanes or user_scope_id is not None):
+    if own_jid:
         # Never under a name another account holds: a lane that passed the local admin's
         # name would otherwise overwrite the admin's key with its own number.
         save_whatsapp_chat_jid(user_scope_id, username if name_is_lanes else None, own_jid)
@@ -1060,6 +1068,16 @@ def send_to_main_messenger(
     caption = ("\U0001F4CE " + _os.path.basename(attach)) if attach else ""
     if not text and not attach:
         return False, None
+    # Whose delivery this is, before any lane reads a name: a request without a scope (the
+    # Discord bridge's turn, a reminder saved by an older version) is the local admin's and
+    # goes out under the admin's own scope and name, so the connections, the endpoint, the
+    # bridge's process and the mirrored session are all the admin's; one naming anybody else
+    # is refused (`messenger_lane_identity`), and the caller falls back to the web UI. Read
+    # by its name instead, the literal "admin" reached an ordinary account named "admin".
+    ident = messenger_lane_identity(user_scope_id, username)
+    if ident is None:
+        return False, None
+    user_scope_id, username = ident
     # One name for the whole delivery, resolved from the scope when none was given: a nameless
     # caller is not the local admin (`resolve_caller_username`). Every lane below used to read
     # `username or "admin"`, and a non-admin's nameless notification went out through the

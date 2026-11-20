@@ -512,7 +512,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   saved chat before every send and removes one that is another account's registered number.
   It then sends to your other saved chat or your own registered number, or to the web UI
   when you have neither, and records the removal in the security log as "Delivery chat
-  corrected".
+  corrected". Messages from lanes that carry no account, such as the Discord bridge and
+  reminders saved by older versions, now always go out through your own linked WhatsApp to
+  your own number. Before, an account that another person had registered under the name
+  "admin" could send them from its WhatsApp to itself or to you, and the delivery fix above
+  could reset that account's saved chat again on every message. A send without an account
+  that names any other account is no longer made.
 - **Telegram: another account can no longer read your Telegram conversation or take over
   your contacts through its relay list.** Any account could add any Telegram ID as its
   relay contact. Adding your own ID opened your whole conversation with your agent in that

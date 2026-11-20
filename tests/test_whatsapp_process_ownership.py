@@ -111,27 +111,40 @@ def test_the_sender_loop_refuses_another_accounts_item(admin_only, monkeypatch):
     results = {}
     monkeypatch.setattr(wa, "_complete_send_request",
                         lambda req_id, ok, err=None, **k: results.__setitem__(req_id, (ok, err)))
+    """A scoped item of another account finds no process of its own; a scopeless item naming
+    another account is refused before any process is asked (`messenger_lane_identity`), and a
+    scopeless item under an admin name is the local admin's."""
     q = queue.Queue()
-    q.put(("alice", "491700000042@s.whatsapp.net", "from alice", None, "r1"))
+    q.put(("alice", "491700000042@s.whatsapp.net", "from alice", None, "r1", None, None, None, ALICE_SCOPE))
     q.put(("Admin", "491700000042@s.whatsapp.net", "from the admin", None, "r2"))
+    q.put(("alice", "491700000042@s.whatsapp.net", "from alice, no scope", None, "r3"))
     q.put(None)
     monkeypatch.setattr(wa, "_outgoing_queue", q)
     wa._sender_loop()
     assert [c["text"] for c in _asked(admin_only)] == ["from the admin"]
     assert results["r1"] == (False, wa.NO_PROCESS_FOR_ACCOUNT)
+    assert results["r3"] == (False, wa.NO_ACCOUNT_FOR_REQUEST)
 
 
 def test_a_send_for_an_account_without_a_process_never_rides_another(admin_only, monkeypatch):
     """`send_whatsapp_with_confirmation`, the route's and the tool's lane: in-process it does not
-    take the admin's process, it hands the request to the sender loop, which refuses it."""
+    take the admin's process, it hands the request to the sender loop, which refuses it. The
+    same send without a scope is refused at the entry: no queue item, no request file."""
     taken = []
     monkeypatch.setattr(wa, "_outgoing_queue", queue.Queue())
     monkeypatch.setattr(wa, "_read_bridge_state", lambda: {"running": True, "usernames": ["admin"]})
     monkeypatch.setattr(wa, "_write_json_atomic", lambda path, data: taken.append(data))
     monkeypatch.setattr(wa, "_wait_for_external_send_result", lambda *a, **k: "WhatsApp could not deliver")
-    out = wa.send_whatsapp_with_confirmation("alice", "491700000042@s.whatsapp.net", "hi", allow_contact_send=True)
+    out = wa.send_whatsapp_with_confirmation("alice", "491700000042@s.whatsapp.net", "hi", allow_contact_send=True,
+                                             user_scope_id=ALICE_SCOPE)
     assert wa._outgoing_queue.empty(), "queued for the admin's process"
     assert [t["username"] for t in taken] == ["alice"] and "could not" in out
+    assert [t["user_scope_id"] for t in taken] == [ALICE_SCOPE]
+    taken.clear()
+    out = wa.send_whatsapp_with_confirmation("alice", "491700000042@s.whatsapp.net", "hi", allow_contact_send=True)
+    assert out == wa.NO_ACCOUNT_FOR_REQUEST
+    assert wa._outgoing_queue.empty() and taken == []
+    assert _asked(admin_only) == []
 
 
 def test_the_fallback_lives_in_one_place():

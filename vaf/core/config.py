@@ -2435,6 +2435,58 @@ def is_local_admin_lane(user_scope_id: Optional[Any]) -> bool:
     return not scope_str or scope_str == str(get_local_admin_scope_id() or "").strip()
 
 
+def is_local_admin_name(name: Optional[str]) -> bool:
+    """Whether a name on a messenger lane stands for the local admin: empty, the literal
+    "admin" (what the Discord bridge enqueues and what a lane without a name has always been
+    read as), or the local admin's own name; stripped and compared casefolded. The one copy
+    of this set; the WhatsApp endpoint reader, its whitelist attribution and its name-key
+    rule all ask here."""
+    low = str(name or "").strip().casefold()
+    return low in ("", "admin") or low == get_local_admin_username().strip().casefold()
+
+
+def messenger_lane_identity(
+    user_scope_id: Optional[Any],
+    username: Optional[str],
+) -> Optional[Tuple[Any, Optional[str]]]:
+    """Whose messenger lane a send request is, as the (scope, name) it is delivered under, or
+    None when it cannot be routed. Never raises, and never looks an account up.
+
+    - A scope `is_local_admin_lane` reads as the local admin's (the admin's own, none, or a
+      blank one) with a name `is_local_admin_name` holds: the local admin's own
+      (`get_local_admin_scope_id()`, `get_local_admin_username()`). That is the Discord
+      bridge's turn (`{"user_scope_id": None, "username": "admin"}`, `identity_binding`),
+      a reminder or automation saved without a scope by an older version, and the admin's
+      scope with the literal "admin" or no name.
+    - Any other scoped request: returned unchanged, so scoped behaviour does not move.
+    - No scope with any other name: None. A name that is another account's is that
+      account's text without its scope, and an unknown name is nobody's; neither can be
+      routed safely, and no record VAF writes today produces one. Deliberately no
+      `scope_id_for_username`: it would put a database query on every send to answer a
+      question whose answer is "refuse" either way.
+
+    The literal "admin" without a scope is the local admin's even when an ordinary account
+    is named "admin" (possible while the admin registered under another name): the
+    username cannot decide a scopeless lane (`is_local_admin_lane`). That account keeps its
+    own scoped lane. Read by name instead, a scopeless WhatsApp send went out through that
+    account's process (measured: 8 of 8 shapes where it had no whitelist entry, and both
+    Inbound states where the admin's entry was filed under "admin"), and the admin's lanes
+    shared its endpoint key, so the two lanes reset each other's saved chat on every read
+    (12 security events in 10 alternations). Deliberately not `is_admin_identity`: a second
+    admin has admin rights, not the local admin's own number and process.
+
+    Named boundary: this is `vaf.core`, not the facade. No messenger lane is facade surface
+    today; this joins the facade together with the first one that is."""
+    try:
+        if is_local_admin_lane(user_scope_id) and is_local_admin_name(username):
+            return get_local_admin_scope_id(), get_local_admin_username()
+    except Exception:
+        pass  # the admin's identity unreadable: a scoped request still stands as given
+    if user_scope_id is not None and str(user_scope_id).strip():
+        return user_scope_id, username
+    return None
+
+
 def get_local_admin_username() -> str:
     """Return the local admin username. Use for display and paths when no JWT."""
     return (Config.get("local_admin_username") or "admin").strip()

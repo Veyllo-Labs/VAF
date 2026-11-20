@@ -337,10 +337,14 @@ def jail_allows(path, *, user_scope_id, user_role=None, mode="read") -> bool:
     changes the jail of the run it is called from. ``path`` is resolved, so a link inside an
     allowed folder is judged by where it points. Fail-closed: any error is False.
 
-    A network share or device path is False first, for every caller (`vaf.is_remote_path`):
-    resolving it on Windows already contacts that host."""
+    A path longer than any file system opens (`vaf.is_overlong_path`) and a network share or
+    device path (`vaf.is_remote_path`) are False first, for every caller: resolving the first
+    costs time that grows with the square of its length, resolving the second on Windows
+    already contacts that host."""
     try:
-        from vaf.core.path_jail import is_remote_path
+        from vaf.core.path_jail import is_overlong_path, is_remote_path
+        if is_overlong_path(str(path or "")):
+            return False
         if is_remote_path(str(path or "")):
             return False
         if not str(user_scope_id or ""):
@@ -538,6 +542,8 @@ VAF_STATE_READ_REFUSAL = "Access denied: VAF's own data directory"
 REMOTE_PATH_REFUSAL = (
     "Access denied: a network share or device path (\\\\server\\share, //server/share, "
     "\\\\?\\, \\\\.\\) is not opened by the file tools")
+PATH_TOO_LONG_REFUSAL = (
+    "Access denied: the path is longer than 4096 characters; use a shorter path")
 
 
 def tool_work_folder(kwargs) -> Tuple[str, str]:
@@ -612,7 +618,11 @@ def is_safe_path(path, *, read_only=False):
     # Before anything below touches the disk (the state check already resolves): on Windows
     # resolving a share path opens an SMB connection to that host with the account's NTLM
     # login attempt, and the path comes from the model, which a page or a mail can steer.
-    from vaf.core.path_jail import is_remote_path
+    # Before that, the length: every check below resolves or compares the path, in time that
+    # grows with the square of its length, and no file system opens one this long.
+    from vaf.core.path_jail import is_overlong_path, is_remote_path
+    if is_overlong_path(str(path or "")):
+        return False, PATH_TOO_LONG_REFUSAL
     if is_remote_path(str(path or "")):
         return False, REMOTE_PATH_REFUSAL
     try:

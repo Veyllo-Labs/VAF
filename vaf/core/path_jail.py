@@ -28,15 +28,34 @@ the same comparison remain (the coder's documentation write, the threat list,
 the skill scanner). Converting them deletes a few lines each and is mechanical,
 but each sits in a different subsystem with its own design doc, and none of them
 is broken - so they are a follow-up, not a silent drive-by inside this one.
+
+The cost of an answer is bounded by the length of the text, not by its square. A path
+fragment reaches these helpers from an HTTP body (up to the server's body cap), and both
+resolving it and comparing it with pathlib grow with the square of its length: CPython's
+``realpath`` rebuilds the path string once per component, and ``root in target.parents``
+builds every parent and compares each one. Measured with ``"a/" * n``: 1.3 s for 32 KB in
+one call, on the event loop of every route that asks inline. So the text is refused first,
+while it is still text, when it is longer than any file system opens (`is_overlong_path`,
+`PATH_CHARS_MAX`; a single name: `NAME_CHARS_MAX`), and the containment comparison asks the
+one parent that can equal the root (`_within`) instead of all of them.
 """
 import os
 import unicodedata
 from pathlib import Path
 from typing import Optional, Tuple
 
-__all__ = ["FolderMoved", "PathEscape", "WriteRefused", "contained_path", "discard_written",
-           "is_remote_path", "is_rooted", "open_folder", "open_for_read", "open_for_write",
-           "safe_entry_name"]
+__all__ = ["FolderMoved", "NAME_CHARS_MAX", "PATH_CHARS_MAX", "PathEscape", "WriteRefused",
+           "contained_path", "discard_written", "is_overlong_path", "is_remote_path",
+           "is_rooted", "open_folder", "open_for_read", "open_for_write", "safe_entry_name"]
+
+# Longer than any path a Linux or macOS system call opens: PATH_MAX is 4096 bytes on Linux
+# (the terminating NUL included) and 1024 on macOS, and every character is at least one byte
+# in the file system encoding (UTF-8, or surrogateescape for undecodable bytes). A text this
+# long joined to any root therefore ends in ENAMETOOLONG, whatever it names.
+PATH_CHARS_MAX = 4096
+# Longer than any single entry name: NAME_MAX is 255 bytes on ext4 and APFS and 255 UTF-16
+# units on NTFS, and every code point is at least one of either.
+NAME_CHARS_MAX = 255
 
 
 class PathEscape(ValueError):
@@ -151,6 +170,64 @@ def is_remote_path(spelled: str) -> bool:
     return norm.startswith("//") or norm.startswith("/??/")
 
 
+def is_overlong_path(spelled) -> bool:
+    """True if a path text is longer than any file system opens (`PATH_CHARS_MAX` characters,
+    the ends' whitespace not counted), whatever the host.
+
+    Ask it first, before anything resolves, stats or compares the path, `is_remote_path`
+    included. Both of CPython's ways to answer a containment question grow with the square of
+    the path's length: ``Path.resolve()`` (``posixpath.realpath`` builds ``path + name`` once
+    per component; measured 0.05 s at 32 KB, 0.48 s at 128 KB, 1.85 s at 256 KB) and pathlib's
+    ``root in target.parents`` / ``is_relative_to`` (1.27 s at 32 KB; ``jail_allows`` 3.8 s).
+    A request body may carry megabytes, and a route that asks inline holds the event loop for
+    every other request while it waits. Such a path opens nowhere anyway: Linux refuses more
+    than 4096 bytes, macOS more than 1024, with ENAMETOOLONG.
+
+    Lexical and constant-time for a text whose ends carry no whitespace (``strip`` then
+    returns the very same string); it touches no disk.
+
+    Asked first by: `contained_path` (so the workspace routes, the room folder routes and
+    every other caller of it), `jail_allows`, the file tools' screen ``is_safe_path`` and the
+    web file routes (``_allowed_file_path``, whose admin branch never reaches ``jail_allows``).
+    On the facade as ``vaf.is_overlong_path`` for a surface built to the route recipe in
+    docs/EMBEDDING.md, which has the same admin shape.
+
+    NAMED BOUNDARY, Windows: with long paths enabled Windows opens up to 32 767 characters,
+    so a path between 4097 and 32 767 characters is refused there although the OS could open
+    it. No caller produces one: every source is a folder the UI shows, a room member, a cloud
+    file name, a chat file or a git name.
+
+    NAMED BOUNDARY, the screens a model's text reaches without an account's request:
+    ``project_dir_refusal`` and ``is_unsafe_project_dir`` (vaf/core/workspace_guard.py),
+    ``run_in_workspace``, ``codesearch``, ``download_file``, the coder's project folder checks
+    and a sandbox environment's mount ask `is_remote_path` but not this. Their cost is bounded
+    by what a model writes in one call (measured about 5 s for a 64 KB path on the thinking
+    workspace lane before `contained_path` asked this), and no account can send them a request
+    body. The same holds for the remaining ``parents`` / ``is_relative_to`` comparisons in
+    vaf/: every one an account's request reaches sits behind one of the four screens above,
+    where a path is at most 4096 characters (``jail_allows`` measured 0.14 s at 4 KB). They
+    are candidates for `_within` if a profile ever shows them.
+    """
+    return len(str(spelled or "").strip()) > PATH_CHARS_MAX
+
+
+def _within(target: Path, root: Path) -> bool:
+    """``target == root or root in target.parents``, in time linear in the path's length.
+
+    The membership test builds every parent and compares each one with ``root``, which is
+    quadratic in the number of parts. Only one parent can be equal: pathlib's equality
+    (case-folded for the Windows flavour, exact for POSIX) holds only between paths with the
+    same number of parts, so the candidate is the parent with as many parts as ``root``.
+    Comparing that one keeps pathlib's own equality, which a string prefix test would not:
+    it compares case-exact where Windows folds case, and ``root + sep`` refuses everything
+    below an anchor root (``/``, ``C:\\``, ``\\\\srv\\share\\``) that already ends in one.
+    """
+    if target == root:
+        return True
+    depth = len(target.parts) - len(root.parts)
+    return depth > 0 and target.parents[depth - 1] == root
+
+
 def contained_path(root, relative: str = "", *, must_exist: bool = False) -> Path:
     """The absolute, resolved path ``relative`` names inside ``root``.
 
@@ -170,13 +247,25 @@ def contained_path(root, relative: str = "", *, must_exist: bool = False) -> Pat
     would land BEFORE it happens.
 
     ``must_exist=True`` additionally requires the resolved path to be an
-    existing directory - the shape a listing or a browse needs.
+    existing directory - the shape a listing or a browse needs. A path the OS
+    cannot even look at (too long for it, no permission) is "folder not found"
+    as well, never a raw `OSError`: it is not a folder a listing can use.
+
+    A fragment longer than `PATH_CHARS_MAX` characters is refused with "path is
+    too long" before anything else, the separator and upward-walk checks
+    included: no file system opens it, and resolving and comparing it would
+    cost time that grows with the square of its length (see `is_overlong_path`).
+    The containment comparison itself is linear (`_within`).
 
     The returned path is the RESOLVED one, which is the location a write
     actually reaches. Callers that keep displaying the unresolved name are
     showing a label, not a target.
     """
     fragment = str(relative or "").strip()
+    # First, while it is still text and before any split or Path: the cheapest refusal, and
+    # the one that bounds every step below.
+    if is_overlong_path(fragment):
+        raise PathEscape("path is too long")
     # Both separators, whatever the host: a fragment reaches this from a JSON
     # body or a peer, so it carries the sender's convention, not ours.
     normalized = fragment.replace("\\", "/").strip("/")
@@ -199,10 +288,17 @@ def contained_path(root, relative: str = "", *, must_exist: bool = False) -> Pat
 
     root_resolved = Path(root).resolve()
     target = root_resolved.joinpath(*parts).resolve() if parts else root_resolved
-    if target != root_resolved and root_resolved not in target.parents:
+    if not _within(target, root_resolved):
         raise PathEscape("path must stay inside the root")
-    if must_exist and not target.is_dir():
-        raise PathEscape("folder not found")
+    if must_exist:
+        # Path.is_dir() swallows only "does not exist"-like errors and re-raises the rest
+        # (ENAMETOOLONG, EACCES), which a route would answer with a 500.
+        try:
+            is_dir = target.is_dir()
+        except OSError:
+            is_dir = False
+        if not is_dir:
+            raise PathEscape("folder not found")
     return target
 
 
@@ -222,8 +318,14 @@ def safe_entry_name(name: str, *, allow_hidden: bool = False) -> str:
     Hidden names stay out by default: the surfaces that hand a name straight to
     a filesystem call are the ones that also hide dotfiles when listing, and a
     name that cannot be seen afterwards is not a name the caller can manage.
+
+    A name longer than `NAME_CHARS_MAX` characters is refused with "name is too
+    long" before every other check: no file system holds one, and the
+    character scan below would otherwise run over all of it.
     """
     raw = str(name or "").strip()
+    if len(raw) > NAME_CHARS_MAX:
+        raise PathEscape("name is too long")
     if not raw:
         raise PathEscape("name must not be empty")
     if raw in (".", ".."):

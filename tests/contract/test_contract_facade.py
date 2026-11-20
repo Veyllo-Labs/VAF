@@ -68,6 +68,7 @@ EXPORTED = [
     "invited_rooms",
     "is_error_reply",
     "is_host_config",
+    "is_overlong_path",
     "is_remote_path",
     "is_vaf_state",
     "jail_allows",

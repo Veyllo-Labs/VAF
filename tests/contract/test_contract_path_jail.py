@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-"""Contract: vaf.contained_path, vaf.safe_entry_name, vaf.PathEscape, vaf.is_remote_path.
+"""Contract: vaf.contained_path, vaf.safe_entry_name, vaf.PathEscape, vaf.is_remote_path,
+vaf.is_overlong_path.
 
 docs/EMBEDDING.md promises an embedder that a tool taking a path from a model,
 a request body or a peer can decide containment with a supported primitive
@@ -11,6 +12,8 @@ that made this a primitive), a path that does not exist yet still gets an
 answer, and the refusal is one exception type an embedder can catch. And an
 absolute path from outside can be refused while it is still text when it names a
 network share or a device path, which resolving it on Windows already contacts.
+And a path or a name longer than any file system opens is refused as text, because
+resolving and comparing it costs time that grows with the square of its length.
 """
 import os
 
@@ -146,3 +149,19 @@ def test_a_drive_in_a_later_part_is_refused_before_anything_resolves(tmp_path, m
     assert resolved == [], resolved
     # A colon further into a name is not a drive.
     assert vaf.contained_path(tmp_path, "sub/notes:v2.txt") == tmp_path.resolve() / "sub" / "notes:v2.txt"
+
+
+def test_a_path_longer_than_any_file_system_opens_is_named_as_text():
+    assert vaf.is_overlong_path("a" * 4096) is False
+    assert vaf.is_overlong_path("a" * 4097) is True
+    # Whitespace at the ends is not part of the path, as in contained_path.
+    assert vaf.is_overlong_path(" " * 10 + "a" * 4096 + " ") is False
+    assert vaf.is_overlong_path("") is False and vaf.is_overlong_path(None) is False
+
+
+def test_an_overlong_fragment_or_name_is_one_more_PathEscape(tmp_path):
+    with pytest.raises(vaf.PathEscape, match="too long"):
+        vaf.contained_path(tmp_path, "a" * 4097)
+    with pytest.raises(vaf.PathEscape, match="too long"):
+        vaf.safe_entry_name("n" * 256)
+    assert vaf.safe_entry_name("n" * 255) == "n" * 255

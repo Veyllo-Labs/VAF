@@ -4370,11 +4370,16 @@ def _allowed_file_path(path_str: str, request: Request, *, mode: str = "read",
     0. Before anything touches the disk: a network share or a device path is refused while it
        is still text (``is_remote_path``). On Windows resolving ``\\\\host\\share`` already
        opens an SMB connection to that host with the account's NTLM login attempt, so the root
-       check below would come too late."""
+       check below would come too late. Before that, a path longer than any file system opens
+       is refused with 400 (``is_overlong_path``): resolving it and comparing it with the roots
+       cost time that grows with the square of its length, on the event loop of an inline
+       route, and an admin never reaches ``jail_allows``, which asks the same question."""
     from vaf.api.user_routes import caller_is_admin
-    from vaf.core.path_jail import is_remote_path
+    from vaf.core.path_jail import is_overlong_path, is_remote_path
     from vaf.core.platform import Platform
     from vaf.tools.filesystem import jail_allows
+    if is_overlong_path(path_str):
+        raise HTTPException(status_code=400, detail="Invalid path")
     if is_remote_path(path_str):
         raise HTTPException(status_code=403, detail="Access denied")
     try:

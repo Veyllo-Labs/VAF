@@ -143,7 +143,9 @@ This is the contract. Treat it as a stable API.
   path that arrived from outside inside the directory it may touch, decided on
   RESOLVED paths so a symlink cannot lead out of the root, and
   `vaf.is_remote_path`, asked before anything resolves an absolute path from
-  outside: on Windows resolving a network share already contacts it
+  outside: on Windows resolving a network share already contacts it, and
+  `vaf.is_overlong_path`, asked before that: a path longer than any file system
+  opens costs time that grows with the square of its length to resolve
   (contract in [EMBEDDING.md](EMBEDDING.md))
 - `vaf.terminal_text` - text from a model or another party as a terminal may
   show it, its control characters removed; the definition VAF's own terminal
@@ -168,7 +170,7 @@ The authoritative list is `vaf.__all__` plus that page; this one is a summary.
   (`CoreAgent`, `ToolCaller`, `ToolRequest`, `VoiceTurnEngine`, `TurnOutcome`,
   `extract_pdf_markdown`, `set_account_allowlist_resolver`,
   `account_allows_tool`, `contained_path`, `safe_entry_name`,
-  `PathEscape`, `is_remote_path`, `is_error_reply`, `TurnStatus`, `stored_turn_copy`,
+  `PathEscape`, `is_remote_path`, `is_overlong_path`, `is_error_reply`, `TurnStatus`, `stored_turn_copy`,
   `returned_turn_copy`, `model_text`, `terminal_text`, `own_links_as_labels`,
   `strip_think_blocks`) are the deliberate
   exceptions - import them from `vaf`, not from `vaf.core`.

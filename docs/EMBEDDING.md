@@ -1460,10 +1460,12 @@ Hard limits you must respect (they are architecture, not fine print):
 - **A surface of your own that serves or stores a file for an account asks the same
   boundary.** A download link, a preview or an editor's save button reaches whatever
   files you let it, unless it asks the rule the account's tools obey. First, while the path is
-  still text, ask `vaf.is_remote_path(path)` and refuse on True: the questions below resolve
-  the path, and on Windows resolving a share path (`\\host\share`, `//host/share`, `\\?\`,
+  still text, ask `vaf.is_overlong_path(path)` and `vaf.is_remote_path(path)` and refuse on
+  True: the questions below resolve the path and compare it, which for a path of a few tens
+  of kilobytes costs seconds that grow with the square of its length, and on Windows
+  resolving a share path (`\\host\share`, `//host/share`, `\\?\`,
   `\\.\`, `\??\`) already opens an SMB connection to that host with the account's NTLM login
-  attempt. VAF's own file routes and file tools ask it first for that reason. Then ask
+  attempt. VAF's own file routes and file tools ask both first for that reason. Then ask
   `vaf.jail_allows(path, user_scope_id=..., user_role=..., mode="read")` (or
   `mode="write"` before you store). VAF's own web file routes are why this is a
   primitive and not an example: they carried a hand copy that knew the account's folder
@@ -3282,7 +3284,8 @@ Stable public surface (safe to build on):
   Entering the write-mode jail needs no pre-provisioned per-user directories - the
   boundary is computed, not created, so a fresh tenant costs nothing to confine.
 - `vaf.jail_allows(path, *, user_scope_id, user_role=None, mode="read") -> bool` - False
-  first, for every caller, for a network share or device path (`vaf.is_remote_path`). Then the
+  first, for every caller, for a path longer than any file system opens
+  (`vaf.is_overlong_path`) and for a network share or device path (`vaf.is_remote_path`). Then the
   same boundary asked from outside a tool run, for a route or a UI that serves or stores
   a file on an account's behalf. It answers exactly what `user_jail` enforces for that
   identity and mode, fail-closed, on the RESOLVED path, so a link is judged by its
@@ -3394,6 +3397,18 @@ Stable public surface (safe to build on):
   absolute path from outside (a request, a tool argument) before anything resolves, stats or
   opens it, because on Windows that already contacts the share. A relative fragment through
   `vaf.contained_path` needs no extra question; it refuses every rooted fragment.
+- `vaf.is_overlong_path(spelled) -> bool` - True when a path text is longer than 4096
+  characters, whitespace at its ends not counted. No Linux or macOS system call opens such a
+  path (PATH_MAX is 4096 bytes on Linux and 1024 on macOS, and every character is at least
+  one byte), and answering anything about it costs time that grows with the square of its
+  length: CPython's `Path.resolve()` rebuilds the path string once per component, and
+  pathlib's `root in target.parents` and `is_relative_to` compare every parent (measured 1.3 s
+  for a 32 KB path, in one call, on the event loop of a route that asks inline). Lexical, so
+  it touches nothing: ask it first for a path from outside, before `vaf.is_remote_path`.
+  `vaf.contained_path`, `vaf.safe_entry_name` and `vaf.jail_allows` apply the limit
+  themselves. Named boundary: Windows with long paths enabled opens up to 32 767 characters,
+  so a path between 4097 and 32 767 characters is refused there although the OS could open
+  it.
 - `vaf.contained_path(root, relative="", *, must_exist=False)` /
   `vaf.safe_entry_name(name, *, allow_hidden=False)` / `vaf.PathEscape` - keeping a
   path that came from OUTSIDE inside the directory it may touch. The jail above
@@ -3414,7 +3429,12 @@ Stable public surface (safe to build on):
   relative text and joined onto your root. A drive in a later part (`a/Z:/x`, `sub/b:x`)
   is refused too, as text: on Windows joining it replaces the path with a drive-relative
   one (`Z:x`) whose resolve probes that drive. On POSIX this refuses the rare name whose
-  second character is a colon.
+  second character is a colon. A fragment longer than 4096 characters ("path is too long")
+  and a name longer than 255 ("name is too long") are refused before anything else, as
+  text (see `vaf.is_overlong_path`), and the containment comparison is linear in the
+  path's length, so the cost of an answer is bounded by the text. With `must_exist=True`,
+  a path the OS cannot even look at (too long for it once joined to the root, no
+  permission) is `PathEscape("folder not found")`, never a raw `OSError`.
 - `vaf.code_audit(root, *, scope=, base=, paths=, include_untracked=, profile=, ask=,
   checks=, max_files=, remember=, batch_chars=, progress=, parallel=, should_stop=,
   verify_steps=, linked_worktree=, expect_folder=)` /

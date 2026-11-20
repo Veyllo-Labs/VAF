@@ -13,6 +13,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Added
 
+- **`vaf.is_overlong_path(path)`**: True for a path longer than any file system opens (4096
+  characters). Ask it first, before `vaf.is_remote_path`, for a path that comes from outside.
+  `vaf.contained_path`, `vaf.safe_entry_name` and `vaf.jail_allows` already apply the limit
+  themselves.
 - **`vaf.strip_think_blocks(text, greedy=False)`**: the rule VAF uses to remove a model's
   marked reasoning (`<think>`, `<thinking>`, `<redacted_reasoning>`), for applications that
   store or forward a stream.
@@ -506,6 +510,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **A very long path no longer stalls VAF for everyone.** A folder path of a few tens of
+  kilobytes sent to the chat workspace, a room's shared folder or the file routes kept the
+  server busy for seconds, growing with the square of its length, while every other request
+  waited. VAF now refuses a path longer than 4096 characters and a file name longer than 255
+  before it looks at the disk; no file system opens one that long anyway. A workspace folder
+  path that is too long for the disk now answers "not found" instead of an internal error.
 - **WhatsApp: a notification can no longer go to another account's number because of an old
   saved chat.** Earlier versions could save the admin's registered number as another
   account's WhatsApp chat, or another account's number as the admin's. VAF now checks the

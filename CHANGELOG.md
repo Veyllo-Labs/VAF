@@ -527,15 +527,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   again. Only your account's own list of servers counts, never the computer's shared one.
 - **WhatsApp: each account's switch is its own.** Turning WhatsApp off in Connections stops only
   your own connection, for admins too, and an ordinary account can use WhatsApp while the
-  owner's is off. The reconnect check now reconnects each account whose connection stays down,
+  admin's is off. The reconnect check now reconnects each account whose connection stays down,
   leaves a connection you stopped stopped, says why a reconnect failed, and brings a crashed
   WhatsApp back up to three times.
 - **Connections and the WhatsApp window now show why WhatsApp could not be switched, started or
   refreshed, instead of failing silently.** After an admin's restart that skipped an account,
   the notice goes away by itself once that account runs again.
-- **Two settings saved at the same moment right after VAF started no longer undo each other.**
-  The lock around the settings file could be created twice by its first two users, so both
-  waited ten seconds and then wrote without it, and one change could be lost.
+- **Two settings saved at the same moment right after VAF started could lose one of the
+  changes.** Both are kept now.
 
 ### Changed
 

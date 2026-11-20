@@ -273,3 +273,9 @@ def test_the_master_gate_is_gone():
     doc = " ".join((whatsapp_bridge.__doc__ or "").split())
     assert "own switch AND the master gate of every start" not in doc
     assert "NAMED BOUNDARY: the global" not in doc
+    # The docs a stranger reads say it no more either.
+    stale = ("is still the master switch of every start", "a second admin's Connections switch still stops",
+             "and the master switch: while it is off", "bridge's master switch")
+    said = [(path.relative_to(ROOT).as_posix(), phrase) for path in sorted((ROOT / "docs").rglob("*.md"))
+            for phrase in stale if phrase in " ".join(path.read_text(encoding="utf-8").split())]
+    assert said == []

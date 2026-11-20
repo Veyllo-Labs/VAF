@@ -1792,7 +1792,8 @@ class Config:
         """
         For non-admin save: extract telegram/whatsapp/discord enabled from body into connection_enabled_by_scope entry,
         and return (body_without_connection_configs, { scope_id: { telegram, whatsapp, discord } }).
-        Caller merges the returned dict into connection_enabled_by_scope and merges body_filtered into config (so global connection configs are not overwritten).
+        The caller (`split_connection_toggles`) writes each returned switch through `set_own_channel_switch`
+        and merges body_filtered into config (so global connection configs are not overwritten).
         """
         # The connection blocks leave a non-admin's body in EVERY case. They used to leave
         # only when an `enabled` toggle came with them: a block without one (or a caller

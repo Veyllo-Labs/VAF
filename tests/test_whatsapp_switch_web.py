@@ -51,6 +51,26 @@ def _run_ts(module: str, cases):
     return json.loads(out)
 
 
+def _run_js(module: str, body: str):
+    """Run `body` (a JS function body that gets the module's exports as `lib` and returns a
+    JSON value) against one web/lib module in node."""
+    if shutil.which("node") is None or not TS.is_dir():
+        pytest.skip("node or web/node_modules/typescript is not installed")
+    script = (
+        "const ts = require(process.argv[1]);"
+        "const fs = require('fs');"
+        "const src = fs.readFileSync(process.argv[2], 'utf8');"
+        "const js = ts.transpileModule(src, {compilerOptions: {module: ts.ModuleKind.CommonJS,"
+        " target: ts.ScriptTarget.ES2019}}).outputText;"
+        "const m = {exports: {}}; new Function('module', 'exports', js)(m, m.exports);"
+        "const run = new Function('lib', process.argv[3]);"
+        "process.stdout.write(JSON.stringify(run(m.exports)));"
+    )
+    out = subprocess.run(["node", "-e", script, str(TS), str(WEB / "lib" / module), body],
+                         capture_output=True, text=True, check=True, timeout=60).stdout
+    return json.loads(out)
+
+
 def _src(path: Path) -> str:
     return path.read_bytes().decode("utf-8")
 
@@ -82,16 +102,34 @@ def test_refusal_text():
 
 
 def test_restart_notice_resolves():
-    """MUTATION: treat an absent account as unresolved; resolve on a null map."""
+    """MUTATION: treat an absent account as unresolved; resolve on a null map; resolve on the
+    map from before the restart (its refresh failed)."""
     cases = [
-        ["restartNoticeResolved", [["alice", "bob"], {"admin": True, "alice": True, "bob": True}]],
-        ["restartNoticeResolved", [["alice", "bob"], {"admin": True, "alice": True, "bob": False}]],
-        ["restartNoticeResolved", [["alice"], {"admin": True}]],
-        ["restartNoticeResolved", [["alice"], None]],
-        ["restartNoticeResolved", [["constructor"], {"admin": True}]],
-        ["restartNoticeResolved", [[], {}]],
+        ["restartNoticeResolved", [["alice", "bob"], {"admin": True, "alice": True, "bob": True}, 2, 1]],
+        ["restartNoticeResolved", [["alice", "bob"], {"admin": True, "alice": True, "bob": False}, 2, 1]],
+        ["restartNoticeResolved", [["alice"], {"admin": True}, 2, 1]],
+        ["restartNoticeResolved", [["alice"], None, 2, 1]],
+        ["restartNoticeResolved", [["constructor"], {"admin": True}, 2, 1]],
+        ["restartNoticeResolved", [[], {}, 2, 1]],
+        # The load after the restart failed: the window still holds the map from before it,
+        # where Bob (the account the restart skipped) was missing.
+        ["restartNoticeResolved", [["bob"], {"admin": True}, 1, 1]],
+        ["restartNoticeResolved", [["bob"], {"admin": True, "bob": True}, 1, 1]],
     ]
-    assert _run_ts("whatsappRestartNotice.ts", cases) == [True, False, True, False, True, True]
+    assert _run_ts("whatsappRestartNotice.ts", cases) == [True, False, True, False, True, True, False, False]
+
+
+def test_an_older_answer_does_not_win():
+    """The switch is turned on and at once off; the answers arrive the other way round. Only
+    the newest call's answer is applied. MUTATION: `isLatest` answers true for every token."""
+    body = (
+        "const g = lib.latestGate(); let shown = null;"
+        "const on = g.begin(); const off = g.begin();"
+        "if (g.isLatest(off)) shown = false;"      # the off answer arrives first
+        "if (g.isLatest(on)) shown = true;"        # the on answer arrives last
+        "return [shown, g.isLatest(on), g.isLatest(off)];"
+    )
+    assert _run_js("latestOnly.ts", body) == [False, False, True]
 
 
 # -- AC10: the toggle and the disconnect -----------------------------------------------------------
@@ -108,6 +146,11 @@ def test_the_toggle_and_the_disconnect_act_on_the_callers_own_whatsapp():
     for gone in ("api/whatsapp/stop", "api/whatsapp/start", "api('api/config')", "'PATCH'"):
         assert gone not in toggle, gone
     assert "setWhatsappSwitchError(null)" in toggle.split("fetch(", 1)[0], "cleared on the next toggle"
+    # Only the newest toggle's answer is applied, and the line is set after the status read.
+    assert "const token = whatsappToggles.current.begin();" in toggle.split("fetch(", 1)[0]
+    gate = toggle.index("if (!whatsappToggles.current.isLatest(token)) return;")
+    assert gate < toggle.index("enabled: answered") and toggle.count("isLatest(token)) return;") == 2
+    assert toggle.index("await checkConnectionStatus()") < toggle.index("setWhatsappSwitchError(refused)")
 
     disconnect = _between(src, "const handleDisconnect", "if (appId === 'email')")
     whatsapp = disconnect[disconnect.index("if (appId === 'whatsapp')"):]
@@ -116,9 +159,13 @@ def test_the_toggle_and_the_disconnect_act_on_the_callers_own_whatsapp():
 
     # The refusal's line under the card, and the status re-read that answers the stored switch.
     assert "{app.id === 'whatsapp' && whatsappSwitchError && (" in src
-    assert 'role="alert">{whatsappSwitchError}</p>' in src
+    # Breaks anywhere: a server text with one long token (a path) must not widen the card.
+    assert '[overflow-wrap:anywhere]" role="alert">{whatsappSwitchError}</p>' in src
     status = _between(src, "const checkConnectionStatus", "const startTelegramPairing")
     assert "whatsappEnabled = status.enabled" in status and "return { whatsappEnabled };" in status
+    # The line has done its job once WhatsApp runs, or was linked since the last read.
+    assert "status?.running === true" in status and "setWhatsappSwitchError(null)" in status
+    assert "whatsappWasLinked.current === false" in status
 
 
 # -- AC11: the window's Start and Refresh ------------------------------------------------------
@@ -135,7 +182,15 @@ def test_the_dashboard_starts_its_own_whatsapp_and_reads_the_answers():
     assert "api/whatsapp/start" not in refresh
     assert "await startOwn()" in refresh
     assert "refusalText(sync.ok," in refresh and "refusalText(start.ok," in refresh
-    assert refresh.count("t('refreshFailed')") == 3 and refresh.count("setNote(") == 3
+    # Its refusal goes to the banner, drawn with or without a selected chat, never to the
+    # selected chat's note; and a new Refresh clears the old line first.
+    assert refresh.count("t('refreshFailed')") == 3 and "setNote(" not in refresh
+    assert refresh.count("setRefreshError(") == 4
+    assert refresh.split("await fetchDashboard()", 1)[0].strip().endswith("setRefreshError(null);")
+    banner = _between(src, "const banner = ", "const conversationExtra")
+    assert "stoppedBanner || restartNotice || refreshError ?" in banner
+    row = _between(banner, "{refreshError && (", "{stoppedBanner}")
+    assert 'role="alert"' in row and "break-words [overflow-wrap:anywhere]" in row and "{refreshError}" in row
 
     handler = _between(src, "const handleStartOwn", "const saveWhatsAppConfig")
     assert "await startOwn()" in handler
@@ -148,6 +203,8 @@ def test_the_dashboard_starts_its_own_whatsapp_and_reads_the_answers():
     # The gear's Restart is the admin's restart of every account, unchanged.
     settings = _between(src, "const settingsContent", "</SettingsCard>")
     assert "onClick={handleRestartBridge}" in settings
+    restart = _between(src, "const handleRestartBridge", "const handleRelink")
+    assert "refusalText(res.ok, json, t('startFailed'))" in restart and "json?.detail ||" not in restart
 
 
 # -- AC12: the notice clears itself ---------------------------------------------------------------
@@ -155,8 +212,9 @@ def test_the_dashboard_starts_its_own_whatsapp_and_reads_the_answers():
 def test_the_restart_notice_clears_itself():
     """MUTATION: drop the clear; drop the quiet re-check."""
     src = _src(DASHBOARD)
-    assert "restartNoticeResolved(restartNoticeNames, data?.running_by_account ?? null)" in src
-    effect = _between(src, "if (restartNotice && restartNoticeResolved(", "}, [data, restartNotice, restartNoticeNames]);")
+    assert "restartNoticeResolved(restartNoticeNames, data?.running_by_account ?? null, loadSeq, restartLoadSeq)" in src
+    effect = _between(src, "if (restartNotice && restartNoticeResolved(",
+                      "}, [data, loadSeq, restartLoadSeq, restartNotice, restartNoticeNames]);")
     assert "setRestartNotice(null)" in effect and "setRestartNoticeNames([])" in effect
     timer = _between(src, "if (!isOpen || !restartNotice) return;", "}, [isOpen, restartNotice, fetchDashboard]);")
     assert "setInterval(() => { fetchDashboard({ quiet: true }); }, 60000)" in timer
@@ -165,9 +223,13 @@ def test_the_restart_notice_clears_itself():
     assert "if (!quiet) {" in fetch and "if (!quiet) setLoadFailed(true)" in fetch
     assert "if (!quiet) setLoading(false)" in fetch
     assert "running_by_account:" in fetch
+    # A successful load counts, a failed one does not.
+    assert "setLoadSeq(n => n + 1);" in fetch
+    assert fetch.index("if (!res.ok)") < fetch.index("setLoadSeq(n => n + 1);")
     restart = _between(src, "const handleRestartBridge", "const handleRelink")
     assert "setRestartNoticeNames(notStarted)" in restart
     assert "setRestartNoticeNames([])" in restart.split("try {", 1)[0]
+    assert "setRestartLoadSeq(loadSeq)" in restart.split("try {", 1)[0]
 
 
 # -- AC14: the new keys ----------------------------------------------------------------------------
@@ -188,3 +250,9 @@ def test_the_new_keys_exist_everywhere():
     src = _src(PANEL) + _src(DASHBOARD)
     for _, key in KEYS:
         assert f"t('{key}')" in src, key
+    # Each fallback names the next step, and the Turkish switch text says on/off, not "changed".
+    messages = {path.stem: json.loads(path.read_text(encoding="utf-8"))["settings"] for path in catalogues}
+    for key in ("startFailed", "refreshFailed"):
+        assert "Try again" in messages["en"]["whatsappDashboard"][key], key
+        assert "noch einmal" in messages["de"]["whatsappDashboard"][key], key
+    assert "a\u00e7\u0131l\u0131p kapat\u0131lamad\u0131" in messages["tr"]["connectionsPanel"]["whatsappSwitchFailed"]

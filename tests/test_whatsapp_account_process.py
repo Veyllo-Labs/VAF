@@ -1291,7 +1291,7 @@ def test_an_admin_restart_names_the_accounts_it_could_not_start(world):
     # connection hides.
     stopped = src[src.index("const stoppedBanner"):src.index("const banner = ")]
     assert "restartNotice" not in stopped
-    assert "const banner = stoppedBanner || restartNotice ?" in src
+    assert "const banner = stoppedBanner || restartNotice || refreshError ?" in src
     assert src.count("{restartNotice && ") == 2, "the banner line and the settings card"
     for path in sorted((Path(__file__).resolve().parent.parent / "web" / "messages").glob("*.json")):
         text = json.loads(path.read_text(encoding="utf-8"))["settings"]["whatsappDashboard"]["restartNotForAccounts"]

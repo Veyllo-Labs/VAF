@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
     MessageCircle, Phone, Mail, Slack, Plus, Settings,
     CheckCircle2, XCircle, Loader2, Trash2, Power,
@@ -13,6 +13,7 @@ import {
 import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
 import { refusalText } from '@/lib/apiRefusal';
+import { latestGate } from '@/lib/latestOnly';
 import McpSignIns from './McpSignIns';
 
 /** GitHub logo (official mark) as black SVG for Connections. */
@@ -497,6 +498,11 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
     // Why the WhatsApp switch did not do what was asked (the server's reason, or a fallback);
     // cleared on the next toggle.
     const [whatsappSwitchError, setWhatsappSwitchError] = useState<string | null>(null);
+    // Two quick toggles send two requests whose answers can arrive in either order: only the
+    // newest toggle's answer is applied (`latestGate`).
+    const whatsappToggles = useRef(latestGate());
+    // Whether the last status read found WhatsApp linked, so a link made since clears the line.
+    const whatsappWasLinked = useRef<boolean | null>(null);
     /** Cloud accounts from API (source of truth; config can be stale after OAuth) */
     const [cloudAccountsFromApi, setCloudAccountsFromApi] = useState<any[]>([]);
     /** Email accounts from API (source of truth; config only has legacy email_config, not email_config_by_user) */
@@ -615,6 +621,13 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
             const res = await fetch(api('api/whatsapp/status'), { credentials: 'include' });
             const status = await res.json();
             if (res.ok && typeof status?.enabled === 'boolean') whatsappEnabled = status.enabled;
+            // The red line under the card has done its job once WhatsApp runs, or once it was
+            // linked since the last read (the line said to link it).
+            if (res.ok && (status?.running === true
+                || (status?.linked === true && whatsappWasLinked.current === false))) {
+                setWhatsappSwitchError(null);
+            }
+            if (res.ok) whatsappWasLinked.current = status?.linked === true;
             setWhatsappInfo({ linked_phone: status.linked_phone || null, owner_number: status.owner_number || null });
             setConnectionStatus(prev => ({
                 ...prev,
@@ -738,9 +751,11 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
             // This account's own switch and own connection, for admins too: one call writes
             // the switch and then starts or stops this account's WhatsApp and nobody else's.
             const currentConfig = config.whatsapp_config || {};
+            const token = whatsappToggles.current.begin();
             onConfigChange('whatsapp_config', { ...currentConfig, enabled });
             setWhatsappSwitchError(null);
             let refused: string | null = null;
+            let answered: boolean | null = null;
             try {
                 const res = await fetch(api('api/whatsapp/switch'), {
                     method: 'PUT',
@@ -750,17 +765,20 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                 });
                 const json = await res.json().catch(() => null);
                 refused = refusalText(res.ok, json, t('whatsappSwitchFailed'));
-                if (refused === null) {
-                    onConfigChange('whatsapp_config', { ...currentConfig, enabled: typeof json?.enabled === 'boolean' ? json.enabled : enabled });
-                }
+                if (refused === null) answered = typeof json?.enabled === 'boolean' ? json.enabled : enabled;
             } catch {
                 refused = t('whatsappSwitchFailed');
             }
-            if (refused !== null) setWhatsappSwitchError(refused);
+            // A newer toggle was sent meanwhile: its answer decides what the card shows.
+            if (!whatsappToggles.current.isLatest(token)) return;
+            if (answered !== null) onConfigChange('whatsapp_config', { ...currentConfig, enabled: answered });
             const { whatsappEnabled } = await checkConnectionStatus();
-            // After a refusal the switch shows what is stored, whatever was asked.
-            if (refused !== null && whatsappEnabled !== null) {
-                onConfigChange('whatsapp_config', { ...currentConfig, enabled: whatsappEnabled });
+            if (!whatsappToggles.current.isLatest(token)) return;
+            // After a refusal the switch shows what is stored, whatever was asked; the line is
+            // set after the status read, which clears an old line once WhatsApp runs.
+            if (refused !== null) {
+                setWhatsappSwitchError(refused);
+                if (whatsappEnabled !== null) onConfigChange('whatsapp_config', { ...currentConfig, enabled: whatsappEnabled });
             }
         }
     };
@@ -1161,7 +1179,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                     </p>
                                                 )}
                                                 {app.id === 'whatsapp' && whatsappSwitchError && (
-                                                    <p className="text-xs text-red-600 mt-1 break-words" role="alert">{whatsappSwitchError}</p>
+                                                    <p className="text-xs text-red-600 mt-1 break-words [overflow-wrap:anywhere]" role="alert">{whatsappSwitchError}</p>
                                                 )}
                                                 {app.id === 'front_office' && (
                                                     <p className="text-xs text-gray-600 mt-1">

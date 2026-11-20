@@ -1508,9 +1508,14 @@ def test_a_killed_lock_holder_does_not_block(store, workspaces, monkeypatch):
 
 def test_a_busy_decision_answers_busy(store, workspaces, monkeypatch):
     """While another decision of the account holds the lock past the timeout, the approve
-    answers "handoff is being decided" and applies nothing. MUTATION: answer `HandoffBusy`
-    with "handoff already decided" in the WebSocket branch."""
+    answers "handoff is being decided", applies nothing, and sends no log line or
+    notification. MUTATION: answer `HandoffBusy` with "handoff already decided" in the
+    WebSocket branch."""
+    import vaf.core.user_notifications as un
+
     ws = workspaces
+    notes = []
+    monkeypatch.setattr(un, "append_notification", lambda *a, **kw: notes.append(kw["title"]))
     hid = _create_handoff(ws)
     before = _a_tasks(store)
     monkeypatch.setattr(ws.tw, "_DECISION_LOCK_TIMEOUT_S", 0.2)
@@ -1525,13 +1530,18 @@ def test_a_busy_decision_answers_busy(store, workspaces, monkeypatch):
     holder.start()
     try:
         assert held.wait(10)
-        replies = _ws(monkeypatch, role="user", scope=TENANT_A, frames=[
+        seen = []
+        replies = _ws(monkeypatch, role="user", scope=TENANT_A, seen=seen, frames=[
             _handoff("approve", ws.task_a, hid), _handoff("reject", ws.task_a, hid)])
     finally:
         done.set()
         holder.join(10)
     for reply in replies:
         assert reply["ok"] is False and reply["error"] == "handoff is being decided", reply
+    logs = [m["entry"]["message"] for m in seen if m.get("type") == "new_log"
+            and "Thinking Workspace handoff" in m["entry"]["message"]]
+    assert logs == [], logs
+    assert notes == [], notes
     assert _a_tasks(store) == before and _record(ws, hid)["status"] == "pending"
 
 

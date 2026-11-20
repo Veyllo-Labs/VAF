@@ -31,6 +31,7 @@ from vaf.core.docx_native_model import (
     NativeDocxDocument,
     make_warning,
 )
+from vaf.core.office_package import open_word
 
 
 _ALIGNMENT_MAP = {
@@ -51,7 +52,9 @@ _SECTION_START_MAP = {
 
 def import_docx_to_native_model(path: str | Path) -> NativeDocxDocument:
     target = Path(path).resolve()
-    doc = Document(str(target))
+    # From its bytes: the library's own error for a package of the wrong type quotes the path
+    # it was handed (vaf/core/office_package.py).
+    doc = open_word(target)
     body_children = list(_iter_body_blocks(doc))
 
     sections: list[DocxSection] = []

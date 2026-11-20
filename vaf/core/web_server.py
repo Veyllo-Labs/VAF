@@ -15,7 +15,6 @@ import threading
 import inspect
 import html
 import os
-import sys
 import time
 import queue
 import functools
@@ -4516,27 +4515,9 @@ def _docx_to_pdf_via_libreoffice(docx_path: str) -> bytes | None:
     return None
 
 
-# python-docx and python-pptx answer a file that is not a valid package (not a zip, empty) with
-# `PackageNotFoundError`, which is not an OSError, so `describe_error` keeps its text, and the
-# text is "Package not found at '<the absolute resolved path>'", with a "~" spelling expanded.
-_OFFICE_PACKAGE_ERRORS = (("docx.opc.exceptions", "Word"), ("pptx.exc", "PowerPoint"))
-
-
-def _office_conversion_error(exc) -> str:
-    """The reason a conversion route gives for ``exc``: "not a valid Word file" (or PowerPoint)
-    for the two libraries' `PackageNotFoundError`, else `describe_error`'s text. Asked through
-    the loaded module, so a library that is not installed costs nothing here (its import would
-    have failed before)."""
-    for module, label in _OFFICE_PACKAGE_ERRORS:
-        error = getattr(sys.modules.get(module), "PackageNotFoundError", None)
-        if isinstance(error, type) and isinstance(exc, error):
-            return f"not a valid {label} file"
-    return describe_error(exc)
-
-
 def _docx_to_html(target) -> str:
-    from docx import Document
-    doc = Document(str(target))
+    from vaf.core.office_package import open_word
+    doc = open_word(target)
     parts = []
     for para in doc.paragraphs:
         text = para.text.strip()
@@ -4590,8 +4571,8 @@ def _xlsx_to_html(target) -> str:
 
 
 def _pptx_to_html(target) -> str:
-    from pptx import Presentation
-    prs = Presentation(str(target))
+    from vaf.core.office_package import open_powerpoint
+    prs = open_powerpoint(target)
     parts = []
     for i, slide in enumerate(list(prs.slides)[:PPTX_MAX_SLIDES], 1):
         parts.append(f"<h2>Slide {i}</h2>")
@@ -4646,9 +4627,10 @@ def _office_loss_report(target) -> list:
             finally:
                 wb.close()
         elif suf == ".pptx":
-            from pptx import Presentation
             from pptx.enum.shapes import MSO_SHAPE_TYPE
-            prs = Presentation(str(target))
+
+            from vaf.core.office_package import open_powerpoint
+            prs = open_powerpoint(target)
             slides = list(prs.slides)
             if len(slides) > PPTX_MAX_SLIDES:
                 reasons.append("too_large")
@@ -4734,7 +4716,7 @@ async def get_file_as_html(request: Request, path: str = Query(..., description=
     except ImportError as e:
         raise HTTPException(status_code=503, detail=f"Support not installed: {e}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to convert to HTML: {_office_conversion_error(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to convert to HTML: {describe_error(e)}")
 
 
 @app.get("/api/file/docx-model")
@@ -4756,7 +4738,7 @@ async def get_file_as_docx_model(request: Request, path: str = Query(..., descri
     except ImportError as e:
         raise HTTPException(status_code=503, detail=f"DOCX support not installed: {e}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to convert docx to native model: {_office_conversion_error(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to convert docx to native model: {describe_error(e)}")
 
 
 class FileSaveRequest(BaseModel):

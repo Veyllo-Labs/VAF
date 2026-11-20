@@ -18,28 +18,38 @@ exactly that, and a remote room member reaches the shared-folder routes. Pinned 
   or a template in a variable, ``getattr`` or an attribute read of ``args``, ``filename``,
   ``strerror``; through any plain ``x = e`` alias) is read only as an argument of a log call
   (``log``, ``log_*``, ``*_log``, ``logger.<level>``, ``print``), of ``describe_error`` or in a
-  comparison, judged by the NEAREST call it is an argument of; traceback text and
-  ``sys.exc_info()`` only in a log call or ``describe_error``;
-- the office conversion routes answer a file that is not a valid Word or PowerPoint package
-  with words of their own, because that library error is not an OSError and quotes the path.
+  comparison, judged by the NEAREST call it is an argument of; it is never an argument of an
+  exception that is raised (``raise Wrapper(e)``); traceback text and ``sys.exc_info()`` only
+  in a log call or ``describe_error``;
+- the office conversion routes and both upload lanes answer a Word or PowerPoint file that is
+  not a package, or a package of the wrong type, with words of their own: the libraries'
+  errors are not OSErrors and quote the path they were handed, so the package is opened from
+  its bytes (vaf/core/office_package.py).
 
 The guard fails closed: an exception name it cannot resolve to a class counts as one that
 can catch an OSError. It has no exemptions.
 
 NAMED BOUNDARIES of the guard:
 
-- It reads the handler's own body, by name. Shapes it does not follow: an exception handed
-  whole to a helper that builds the reply (measured: two in scope, ``_stt_busy_payload`` for
-  ``QueueBusy``, not an OSError, and ``_is_db_not_ready_error``, a classification);
-  ``json.dumps(..., default=str)`` over a structure holding the exception; a comprehension or
-  ``map(str, ...)`` over a list holding it; ``traceback.TracebackException`` and
-  ``print_exc(file=...)`` into a buffer. None of them occurs in scope.
+- It reads the handler's own body, by name, and an exception built around the caught one
+  (``raise Wrapper(e)``). Shapes it does not follow, none of which occurs in scope: an
+  exception handed whole to a helper that builds the reply (measured: two in scope,
+  ``_stt_busy_payload`` for ``QueueBusy``, not an OSError, and ``_is_db_not_ready_error``, a
+  classification); an exception saved in the handler and read after it; an alias made by a
+  walrus, by unpacking (``err, = (e,)``), by a conditional (``e if e else None``) or through
+  a container (``errs = [e]; str(errs[0])``); ``str(e or "")``, ``str(*[e])``,
+  ``operator.attrgetter("filename")(e)``; ``e.__cause__`` and ``e.__context__``;
+  ``sys.exception()``; ``print(e, file=buf)``, ``print_exc(file=...)`` or
+  ``traceback.TracebackException`` into a buffer read later; ``json.dumps(...,
+  default=str)``; a comprehension or ``map(str, ...)`` over the exception; and a call named
+  like a log that also replies (``log_and_reply(str(e))``), which the ``log_*`` rule passes.
 - Text that is not an OSError's passes unchanged (rule (a) of ``describe_error``): it is the
   text its raiser wrote, and some raisers write a path. Measured: ``Path.relative_to``'s
   ``ValueError`` (its two calls in route modules run on paths already contained: an ``rglob``
   under the room workspace and a ``contained_path`` result); python-docx's and python-pptx's
-  ``PackageNotFoundError`` (answered at the two conversion routes, the only place a route
-  hands a caller's file to them); VAF's own ``PathEscape`` from ``open_folder``,
+  ``PackageNotFoundError`` and ``ValueError`` (the package is opened from its bytes at every
+  call site, so they name a ``BytesIO``, and the opener answers them with words of its own);
+  VAF's own ``PathEscape`` from ``open_folder``,
   ``open_for_read`` and ``vaf/core/persistence.py``, which no route module calls; and VAF's
   own exceptions that wrap a caught error's text (``UserAdminError`` and ``BackupError``, the
   two that reach a reply, build it with ``describe_error`` now).
@@ -300,18 +310,40 @@ def scan_source(source, filename, module_name):
             continue
         if not catches_oserror(handler.type, imports, module_name):
             continue
-        names = _aliases(handler)
-        stack = list(handler.body)
+        aliases = _aliases(handler)
+        stack = [(node, aliases) for node in handler.body]
         while stack:
-            node = stack.pop()
+            node, names = stack.pop()
             if isinstance(node, ast.ExceptHandler) and node.name in names:
-                continue  # rebinds the name: judged as a handler of its own
-            if _reads_text(node, names):
-                if not _in_allowed_sink(node, parents):
-                    findings.append((node.lineno, node.col_offset))
-                continue
-            stack.extend(ast.iter_child_nodes(node))
+                # Rebinds that one name, which is judged as a handler of its own; the other
+                # names still hold the outer exception in its body.
+                names = names - {node.name}
+            if _reads_text(node, names) and not _in_allowed_sink(node, parents):
+                findings.append((node.lineno, node.col_offset))
+            if _wraps_into_a_raise(node, names):
+                findings.append((node.lineno, node.col_offset))
+            # A recognised read is no reason to stop: getattr(e, "filename", send(str(e)))
+            # runs its default eagerly.
+            stack.extend((child, names) for child in ast.iter_child_nodes(node))
     return sorted(f"{filename}:{line}" for line, _col in set(findings))
+
+
+def _wraps_into_a_raise(node, names):
+    """``raise Wrapper(e)``: an exception built with the caught one as an argument carries its
+    text (rule (a) of describe_error passes a wrapper's text unchanged, so the global handler
+    answered ``raise RuntimeError(e)`` with the path). ``raise X(...) from e`` alone is fine."""
+    if not (isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call)):
+        return False
+    values = list(node.exc.args) + [k.value for k in node.exc.keywords]
+    for value in values:
+        if isinstance(value, ast.Starred):
+            value = value.value
+        if isinstance(value, ast.Name) and value.id in names:
+            return True
+        if isinstance(value, (ast.Tuple, ast.List)) and any(
+                isinstance(e, ast.Name) and e.id in names for e in value.elts):
+            return True
+    return False
 
 
 def _scan_tree():
@@ -383,6 +415,19 @@ _FLAGGED = {
     "template_format": ('try:\n    x()\nexcept Exception as e:\n    tmpl = "x {}"\n'
                         '    y(tmpl.format(e))\n'),
     "format_map": 'try:\n    x()\nexcept Exception as e:\n    y("{x}".format_map({"x": e}))\n',
+    # an exception built around the caught one carries its text
+    "raise_wrapper": 'try:\n    x()\nexcept Exception as e:\n    raise RuntimeError(e)\n',
+    "raise_wrapper_from": 'try:\n    x()\nexcept Exception as e:\n    raise ValueError(e) from e\n',
+    "raise_keyword": ('try:\n    x()\nexcept Exception as e:\n'
+                      '    raise HTTPException(500, detail=e)\n'),
+    "raise_alias": 'try:\n    x()\nexcept Exception as e:\n    err = e\n    raise ValueError("x", err)\n',
+    # a nested handler rebinds one name; the outer one still holds the OSError
+    "nested_rebinding": ('try:\n    x()\nexcept Exception as e:\n    err = e\n    try:\n'
+                         '        z()\n    except ValueError as err:\n'
+                         '        return {"error": str(e)}\n'),
+    # a recognised read is no end: its default runs eagerly
+    "getattr_default": ('try:\n    x()\nexcept Exception as e:\n'
+                        '    log(getattr(e, "filename", send(str(e))))\n'),
 }
 
 _ALLOWED = {
@@ -406,6 +451,13 @@ _ALLOWED = {
     "log_prefix": 'try:\n    x()\nexcept Exception as e:\n    log_attachment("X", error=str(e))\n',
     "getattr_status": ('try:\n    x()\nexcept Exception as e:\n'
                        '    y(getattr(e, "status_code", None))\n'),
+    "raise_from_only": ('try:\n    x()\nexcept Exception as e:\n'
+                        '    raise HTTPException(500, detail="failed") from e\n'),
+    "raise_described": ('try:\n    x()\nexcept Exception as e:\n'
+                        '    raise HTTPException(500, detail=describe_error(e)) from e\n'),
+    "reraise": 'try:\n    x()\nexcept Exception as e:\n    log("x", f"{e}")\n    raise\n',
+    "nested_inner_text": ('try:\n    x()\nexcept Exception as e:\n    err = e\n    try:\n'
+                          '        z()\n    except ValueError as err:\n        y(str(err))\n'),
     "rebound": ('try:\n    x()\nexcept Exception as e:\n    try:\n        z()\n'
                 '    except ValueError as e:\n        y(str(e))\n'),
 }
@@ -571,28 +623,78 @@ def test_the_workspace_routes_answer_the_reason_without_the_path(workspace, monk
     assert (workspace / "old.txt").exists()
 
 
-# ---- the office conversion routes -----------------------------------------------------------
+# ---- the office conversion routes and the upload lanes --------------------------------------
 
-@pytest.mark.parametrize("name, data, route, label", [
-    ("empty.docx", b"", "/api/file/as-html", "Word"),
-    ("empty.docx", b"", "/api/file/docx-model", "Word"),
-    ("notes.docx", b"plain text, not a zip", "/api/file/as-html", "Word"),
-    ("notes.docx", b"plain text, not a zip", "/api/file/docx-model", "Word"),
-    ("slides.pptx", b"plain text, not a zip", "/api/file/as-html", "PowerPoint"),
-    ("empty.pptx", b"", "/api/file/as-html", "PowerPoint"),
+def _office_package(tmp_path, kind):
+    """The bytes of a real package of ``kind``: "docx", "pptx", "xlsx", or one whose main
+    content type was swapped: "template" (.dotx), "macro" (.docm), "deck_template" (.potx)."""
+    import zipfile
+
+    docx = pytest.importorskip("docx")
+    pptx = pytest.importorskip("pptx")
+    openpyxl = pytest.importorskip("openpyxl")
+    folder = tmp_path / "packages"
+    folder.mkdir(exist_ok=True)
+    made = {"docx": folder / "real.docx", "pptx": folder / "real.pptx",
+            "xlsx": folder / "real.xlsx"}
+    if not made["docx"].exists():
+        docx.Document().save(made["docx"])
+        pptx.Presentation().save(made["pptx"])
+        openpyxl.Workbook().save(made["xlsx"])
+    if kind in made:
+        return made[kind].read_bytes()
+    source, old, new = {
+        "template": ("docx", b"wordprocessingml.document.main+xml",
+                     b"wordprocessingml.template.main+xml"),
+        "macro": ("docx",
+                  b"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml",
+                  b"application/vnd.ms-word.document.macroEnabled.main+xml"),
+        "deck_template": ("pptx", b"presentationml.presentation.main+xml",
+                          b"presentationml.template.main+xml"),
+    }[kind]
+    out = folder / f"{kind}.zip"
+    with zipfile.ZipFile(made[source]) as zin, zipfile.ZipFile(out, "w") as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == "[Content_Types].xml":
+                assert old in data
+                data = data.replace(old, new)
+            zout.writestr(item, data)
+    return out.read_bytes()
+
+
+_WORD_ROUTES = ("/api/file/as-html", "/api/file/docx-model")
+
+
+@pytest.mark.parametrize("name, content, routes, label", [
+    # not a package at all
+    ("empty.docx", b"", _WORD_ROUTES, "Word"),
+    ("notes.docx", b"plain text, not a zip", _WORD_ROUTES, "Word"),
+    ("slides.pptx", b"plain text, not a zip", ("/api/file/as-html",), "PowerPoint"),
+    ("empty.pptx", b"", ("/api/file/as-html",), "PowerPoint"),
+    # a valid package of the wrong type: the library's ValueError quotes the path it was given
+    ("sheet.docx", "xlsx", _WORD_ROUTES, "Word"),
+    ("deck.docx", "pptx", _WORD_ROUTES, "Word"),
+    ("template.docx", "template", _WORD_ROUTES, "Word"),
+    ("macro.docx", "macro", _WORD_ROUTES, "Word"),
+    ("letter.pptx", "docx", ("/api/file/as-html",), "PowerPoint"),
+    ("sheet.pptx", "xlsx", ("/api/file/as-html",), "PowerPoint"),
+    ("template.pptx", "deck_template", ("/api/file/as-html",), "PowerPoint"),
 ])
 def test_an_office_file_that_is_no_package_answers_without_the_path(tmp_path, monkeypatch, name,
-                                                                     data, route, label):
-    """python-docx and python-pptx raise PackageNotFoundError, not an OSError, for a file that
-    is not a valid package, and its text quotes the absolute resolved path (a "~" spelling
-    expanded to the home folder). MUTATION: answer `describe_error(e)` at either converter."""
-    pytest.importorskip("docx")
-    pytest.importorskip("pptx")
+                                                                     content, routes, label):
+    """python-docx and python-pptx quote the path they were handed: PackageNotFoundError for a
+    file that is not a package, a ValueError for a package of the wrong type, with a "~"
+    spelling expanded to the home folder. MUTATION: open from the path again in
+    vaf/core/office_package.py, or answer the library's own error."""
     from fastapi.testclient import TestClient
 
     from vaf.core.platform import Platform
     from vaf.core.web_server import app
 
+    data = content if isinstance(content, bytes) else _office_package(tmp_path, content)
+    pytest.importorskip("docx")
+    pytest.importorskip("pptx")
     home = tmp_path / "home-ab12cd34"
     docs = home / "Documents"
     docs.mkdir(parents=True)
@@ -602,11 +704,98 @@ def test_an_office_file_that_is_no_package_answers_without_the_path(tmp_path, mo
     monkeypatch.setattr(Platform, "served_file_roots", staticmethod(lambda: [docs.resolve()]))
     monkeypatch.setattr("vaf.api.user_routes.caller_is_admin", lambda request: True)
     client = TestClient(app, raise_server_exceptions=False, client=("127.0.0.1", 50000))
-    for spelled in (str(docs / name), "~/Documents/" + name):
-        answer = client.get(route, params={"path": spelled})
-        assert answer.status_code == 500, (spelled, answer.status_code, answer.text[:200])
-        assert answer.json()["detail"].endswith(f": not a valid {label} file"), answer.text
-        assert str(home) not in answer.text and str(home.resolve()) not in answer.text
+    for route in routes:
+        for spelled in (str(docs / name), "~/Documents/" + name, f"{docs}/./{name}"):
+            answer = client.get(route, params={"path": spelled})
+            assert answer.status_code == 500, (route, spelled, answer.status_code, answer.text[:200])
+            assert answer.json()["detail"].endswith(f": not a valid {label} file"), answer.text
+            assert str(home) not in answer.text and str(home.resolve()) not in answer.text
+
+
+@pytest.mark.parametrize("name, kind, label", [
+    ("deck.docx", "pptx", "Word"),
+    ("template.docx", "template", "Word"),
+    ("letter.pptx", "docx", "PowerPoint"),
+])
+def test_an_uploaded_office_file_of_the_wrong_type_names_no_temporary_path(tmp_path, monkeypatch,
+                                                                           name, kind, label):
+    """Both upload lanes write the file to the temporary folder (on Windows under
+    C:\\Users\\<name>) and let the librarian read it. MUTATION: open the package from its
+    path in vaf/tools/librarian.py again."""
+    import base64
+    import tempfile
+
+    from vaf.core import web_server
+    from vaf.core.web_server import process_files_to_sidebar_list, process_uploaded_files
+
+    # The sidebar lane also asks for a preview (the Gotenberg service, then LibreOffice as a
+    # subprocess); neither belongs in this test.
+    monkeypatch.setattr(web_server, "_office_to_pdf_via_gotenberg", lambda *a, **k: None)
+    monkeypatch.setattr(web_server, "_docx_to_pdf_via_libreoffice", lambda *a, **k: None)
+    data = base64.b64encode(_office_package(tmp_path, kind)).decode("ascii")
+    upload = [{"name": name, "data": data, "mimeType": "application/octet-stream"}]
+    temporary = tempfile.gettempdir()
+    (entry,) = asyncio.run(process_files_to_sidebar_list(upload))
+    assert f"not a valid {label} file" in entry["content"], entry["content"][:300]
+    assert temporary not in entry["content"]
+    chat_text = asyncio.run(process_uploaded_files(upload))
+    assert f"not a valid {label} file" in chat_text and temporary not in chat_text, chat_text[:300]
+
+
+@pytest.mark.parametrize("name, kind, label", [
+    ("deck.docx", "pptx", "Word"),
+    ("letter.pptx", "docx", "PowerPoint"),
+])
+def test_the_read_file_tool_opens_an_office_file_from_its_bytes(tmp_path, monkeypatch, name,
+                                                                kind, label):
+    """The model's file reader answers a package of the wrong type in the opener's words.
+    MUTATION: open from the path again in vaf/tools/filesystem.py - red."""
+    from vaf.tools import filesystem
+
+    target = tmp_path / "home-ab12cd34" / name
+    target.parent.mkdir()
+    target.write_bytes(_office_package(tmp_path, kind))
+    monkeypatch.setattr(filesystem, "is_safe_path", lambda path, read_only=True: (True, str(target)))
+    out = filesystem.ReadFileTool()._read(path=str(target))
+    assert f"not a valid {label} file" in out and str(target.parent) not in out, out[:300]
+
+
+def test_the_office_opener_hands_the_libraries_bytes_never_a_path(tmp_path, monkeypatch):
+    """Mapping the open's errors covers the shapes measured; the bytes cover every other error
+    the libraries raise later, which then names a BytesIO. An open file would not do: its
+    repr carries the name. MUTATION: hand the library the path - red."""
+    import io
+
+    docx = pytest.importorskip("docx")
+    pptx = pytest.importorskip("pptx")
+    from vaf.core.office_package import open_powerpoint, open_word
+
+    target = tmp_path / "home-ab12cd34" / "x.docx"
+    target.parent.mkdir()
+    target.write_bytes(b"anything")
+    handed = []
+    monkeypatch.setattr(docx, "Document", lambda arg: handed.append(arg) or "doc")
+    monkeypatch.setattr(pptx, "Presentation", lambda arg: handed.append(arg) or "deck")
+    assert open_word(target) == "doc" and open_powerpoint(target) == "deck"
+    assert [type(arg) for arg in handed] == [io.BytesIO, io.BytesIO]
+    assert all(arg.getvalue() == b"anything" for arg in handed)
+
+
+def test_the_office_opener_reads_a_bounded_size(tmp_path):
+    """Opened from its bytes, a package is held whole in memory: more than the bound is
+    refused before the library sees it, with no path. MUTATION: drop the bound."""
+    from vaf.core.office_package import OfficeFileUnreadable, open_powerpoint, open_word
+
+    target = tmp_path / "home-ab12cd34" / "big.docx"
+    target.parent.mkdir()
+    target.write_bytes(_office_package(tmp_path, "docx"))
+    size = target.stat().st_size
+    assert open_word(target, max_bytes=size) is not None
+    for opener in (open_word, open_powerpoint):
+        with pytest.raises(OfficeFileUnreadable) as refused:
+            opener(target, max_bytes=size - 1)
+        assert "too large to open here" in str(refused.value)
+        assert str(target.parent) not in str(refused.value)
 
 
 def test_a_services_http_error_keeps_its_status_and_drops_its_url():

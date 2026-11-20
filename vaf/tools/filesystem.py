@@ -1067,8 +1067,8 @@ For semantic analysis across many files, consider librarian_agent instead."""
             # ═══════════════════════════════════════════════════════════
             elif ext == '.docx':
                 try:
-                    from docx import Document
-                    doc = Document(res)
+                    from vaf.core.office_package import open_word
+                    doc = open_word(res)
                     
                     content = []
                     
@@ -1140,8 +1140,8 @@ For semantic analysis across many files, consider librarian_agent instead."""
             # ═══════════════════════════════════════════════════════════
             elif ext == '.pptx':
                 try:
-                    from pptx import Presentation
-                    prs = Presentation(res)
+                    from vaf.core.office_package import open_powerpoint
+                    prs = open_powerpoint(res)
                     
                     content = []
                     content.append(f"**Slides:** {len(prs.slides)}\n")

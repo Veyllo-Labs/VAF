@@ -1108,3 +1108,26 @@ def test_a_failed_backup_names_the_reason_not_the_path(install, monkeypatch, tmp
         assert str(err.value) == (f"The backup failed: PermissionError: "
                                   f"{os.strerror(errno.EACCES)}{where}")
         assert str(tmp_path) not in str(err.value)
+
+
+def test_a_failed_backup_names_the_folder_by_its_most_specific_root(install, monkeypatch):
+    """With a data folder inside the app folder (a custom VAF home), the failing folder is
+    named from the data root, not from the app root that also holds it. MUTATION: take the
+    first root that holds the file - red."""
+    import errno
+
+    from vaf.core import data_stores as stores
+
+    roots = dict(install["roots"])
+    roots["data"] = roots["app"] / "data"
+    roots["data"].mkdir()
+    assert list(roots)[0] == "app", "the outer root comes first, so a first match would win"
+    monkeypatch.setattr(stores, "roots", lambda: roots)
+
+    def _refused(staging, container=None):
+        raise PermissionError(errno.EACCES, "Permission denied", str(roots["data"] / "sub" / "x"))
+
+    monkeypatch.setattr(backup, "_dump_postgres", _refused)
+    with pytest.raises(backup.BackupError) as err:
+        backup.create_backup(install["out"], include_volumes=False)
+    assert str(err.value).endswith(" (data/sub/x)"), str(err.value)

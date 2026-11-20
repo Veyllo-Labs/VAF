@@ -3457,17 +3457,21 @@ Stable public surface (safe to build on):
   for any other module (`shutil.Error` quotes the pairs it failed to copy, Pillow's
   `UnidentifiedImageError` the file, a `requests` error the URL). The withheld text is
   `"<ClassName> (details in the server log)"`, or `"<ClassName> (HTTP <code>)"` when the
-  error carries a `response` with an integer `status_code` (the HTTP errors of `requests` and
-  `huggingface_hub` are OSErrors), so a refused login and a missing file stay told apart.
+  error carries a `response` with an integer `status_code` from 100 to 999 (the HTTP errors
+  of `requests` and `huggingface_hub` are OSErrors), so a refused login and a missing file
+  stay told apart.
   With `log=True` the full `str(exc)`, cut at 2000 characters, goes to the
   `vaf.core.path_jail` logger at WARNING, so the detail stays on the server. Pass
   `log=False` when you log the exception yourself. Nothing is logged when nothing was
   withheld. It never raises an `Exception`: not for a `__str__` that raises or returns a
   `str` subclass, a class whose name cannot be read, or a log handler that raises. Rule (a)
   is a boundary you own: a library's error that is not an `OSError` keeps its text, and some
-  quote paths (python-docx and python-pptx raise `PackageNotFoundError` with the full path
-  of a file that is not a valid document), so a route that hands a caller's file to such a
-  library answers those errors with words of its own.
+  quote paths (python-docx and python-pptx raise `PackageNotFoundError` or a `ValueError`
+  with the full path of a file that is not a valid document of their type), so a route that
+  hands a caller's file to such a library opens it from its bytes (`io.BytesIO`, never an
+  open file, whose repr carries the name) and answers those errors with words of its own.
+  Wrapping the caught error in an exception of your own (`raise MyError(e)`) carries its
+  text past this rule as well.
 - `vaf.code_audit(root, *, scope=, base=, paths=, include_untracked=, profile=, ask=,
   checks=, max_files=, remember=, batch_chars=, progress=, parallel=, should_stop=,
   verify_steps=, linked_worktree=, expect_folder=)` /

@@ -1686,8 +1686,8 @@ Remove duplicates and ensure smooth flow.
             # ═══════════════════════════════════════════════════════════
             elif ext == '.docx':
                 try:
-                    from docx import Document
-                    doc = Document(file_path)
+                    from vaf.core.office_package import open_word
+                    doc = open_word(file_path)
                     
                     content = []
                     
@@ -1767,8 +1767,8 @@ Remove duplicates and ensure smooth flow.
             # ═══════════════════════════════════════════════════════════
             elif ext == '.pptx':
                 try:
-                    from pptx import Presentation
-                    prs = Presentation(file_path)
+                    from vaf.core.office_package import open_powerpoint
+                    prs = open_powerpoint(file_path)
                     
                     content = []
                     content.append(f"**Slides:** {len(prs.slides)}\n")

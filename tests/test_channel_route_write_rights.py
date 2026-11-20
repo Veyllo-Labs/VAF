@@ -382,7 +382,7 @@ def test_a_non_admin_leaves_every_other_accounts_entry_alone(config_file, monkey
 
 BRIDGE_LIFECYCLE = {
     "start_bridge", "stop_bridge", "restart_bridge", "restart_bridge_result", "start_missing_accounts",
-    "start_account", "stop_account", "restart_account",
+    "start_account", "stop_account", "restart_account", "stop_scope", "forget_account_login",
 }
 WHOLE_BRIDGE = {"start_bridge", "stop_bridge", "restart_bridge", "restart_bridge_result", "start_missing_accounts"}
 
@@ -395,6 +395,10 @@ PROCESS_RULES = {
     "whatsapp_routes:start_whatsapp_bridge": "own-process",
     "whatsapp_routes:stop_whatsapp_bridge": "own-process",
     "whatsapp_routes:restart_whatsapp_bridge": "own-process",
+    # Re-link: the caller's own process stops before its login is removed.
+    "whatsapp_routes:reset_whatsapp_auth": "own-process",
+    # Deleting an account ends its WhatsApp and removes its login.
+    "user_routes:delete_user": "admin",
 }
 PROCESS_RULE_KINDS = {"admin", "own-process"}
 
@@ -488,6 +492,8 @@ PROCESS_PROBES = {
     "whatsapp_routes:start_whatsapp_bridge": ("post", "/api/whatsapp/start", 200),
     "whatsapp_routes:stop_whatsapp_bridge": ("post", "/api/whatsapp/stop", 200),
     "whatsapp_routes:restart_whatsapp_bridge": ("post", "/api/whatsapp/restart", 200),
+    "whatsapp_routes:reset_whatsapp_auth": ("post", "/api/whatsapp/qr/reset", 200),
+    "user_routes:delete_user": ("delete", "/api/users/11111111-0000-4000-8000-000000000001", 403),
 }
 
 
@@ -509,7 +515,8 @@ def test_a_non_admin_drives_only_their_own_process(config_file, monkeypatch, rou
     answers = {"start_account": (True, "started"), "restart_account": (True, "restarted"),
                "stop_account": True, "start_bridge": True, "restart_bridge": True,
                "restart_bridge_result": (True, "", []),
-               "start_missing_accounts": [], "stop_bridge": None}
+               "start_missing_accounts": [], "stop_bridge": None, "stop_scope": None,
+               "forget_account_login": True}
     for channel in ("whatsapp", "telegram", "discord"):
         module = importlib.import_module(f"vaf.api.{channel}_bridge")
         for name in BRIDGE_LIFECYCLE:

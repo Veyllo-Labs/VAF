@@ -89,8 +89,7 @@ def request_account(request: Request) -> Dict[str, str]:
 
     The WhatsApp start, stop and restart read it for anybody who is not an admin, because
     they act on that account's own process. Routes that read no account are not covered: the
-    Telegram and Discord bot switches, the WhatsApp QR log path and the Telegram
-    verification. The WhatsApp chat history asks the session gate with the authenticated
+    Telegram and Discord bot switches and the Telegram verification. The WhatsApp chat history asks the session gate with the authenticated
     scope instead (`session_access_allowed`), which refuses a non-admin caller without one."""
     user = getattr(request.state, "user", None)
     if not user or not isinstance(user, dict):
@@ -447,6 +446,21 @@ async def _apply_access_change(scope: str, *, revoke: bool = False, restore: boo
         logger.warning(f"Applying an access change to running work failed: {e}")
 
 
+async def _forget_whatsapp_login(username: str, scope: str) -> None:
+    """A deleted account's WhatsApp ends with it: its process stops and its login and picture
+    cache are removed (`whatsapp_bridge.forget_account_login`), so an account created later
+    under the same name does not run it. Off the event loop (it waits for a process to end);
+    never raises, the deletion stands either way."""
+    if not str(username or "").strip():
+        return
+    try:
+        import asyncio
+        from vaf.api.whatsapp_bridge import forget_account_login
+        await asyncio.to_thread(forget_account_login, username, scope)
+    except Exception as e:
+        logger.warning(f"The deleted account's WhatsApp login was not removed: {describe_error(e)}")
+
+
 @router.put("/{user_id}")
 async def update_user(user_id: str, data: UserUpdate, admin: Dict[str, Any] = Depends(require_admin)):
     """Update a user's details (admin only)."""
@@ -714,12 +728,14 @@ async def delete_user(user_id: str, admin: Dict[str, Any] = Depends(require_admi
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=reason)
 
             scope = str(user.user_scope_id)
+            username = str(getattr(user, "username", "") or "")
             await db.delete(user)
             await db.commit()
 
             # The token, the queued turns, the sub-agents and the sockets of a deleted account
             # end now, not when the token expires.
             await _apply_access_change(scope, revoke=True)
+            await _forget_whatsapp_login(username, scope)
 
             return {"message": "User deleted successfully"}
 

@@ -11,8 +11,13 @@ admin's chats, loaded their history and asked the admin's phone for avatars and 
 
 THE RULE: one helper, `whatsapp_bridge._process_for`, answers the account's own process, or
 the only process when it was started for the SAME scope (the same account under another
-spelling of its name), and nothing else. Fake processes only; no Node, no network.
+spelling of its name), and nothing else. Every lane names the account's scope; a request
+without one gets no process. Measured while the read lanes still asked by name alone: a
+deleted "bob"'s process, still registered under "bob", answered the new account "bob" on every
+read lane, and with the account directory down an account "Straße" reached the local admin
+"strasse"'s process. Fake processes only; no Node, no network.
 """
+import ast
 import io
 import json
 import queue
@@ -23,8 +28,11 @@ from types import SimpleNamespace
 import pytest
 
 from vaf.api import whatsapp_bridge as wa
+from vaf.core import config as _config_module
 from vaf.core.config import Config
 from vaf.core.platform import Platform
+
+_REAL_SCOPE_ID_FOR_USERNAME = _config_module.scope_id_for_username
 
 ADMIN_SCOPE = "ab12cd34-0000-4000-8000-0000000000aa"
 ALICE_SCOPE = "ab12cd34-0000-4000-8000-000000000001"
@@ -67,17 +75,18 @@ def _store_one(username, scope):
 # Every lane, called for an account; each returns what its caller would see.
 def _lanes(name, scope):
     return {
-        "has_process_for_user": lambda: wa.has_process_for_user(name),
-        "get_whatsapp_chats": lambda: wa.get_whatsapp_chats(name, wait_timeout=0.05),
-        "sync_whatsapp_chats": lambda: wa.sync_whatsapp_chats(name, wait_timeout=0.05),
+        "has_process_for_user": lambda: wa.has_process_for_user(name, scope),
+        "get_whatsapp_chats": lambda: wa.get_whatsapp_chats(name, wait_timeout=0.05, user_scope_id=scope),
+        "sync_whatsapp_chats": lambda: wa.sync_whatsapp_chats(name, wait_timeout=0.05, user_scope_id=scope),
         "fetch_older_messages": lambda: (_store_one(name, scope),
                                          wa.fetch_older_messages(name, "491700000042@s.whatsapp.net", "+491700000042",
                                                                  scope, wait_timeout=0.05))[1],
-        "get_avatar": lambda: wa.get_avatar(name, "491700000042@s.whatsapp.net", wait_timeout=0.05),
+        "get_avatar": lambda: wa.get_avatar(name, "491700000042@s.whatsapp.net", wait_timeout=0.05,
+                                            user_scope_id=scope),
         "resync_contacts": lambda: wa.resync_contacts(name, wait_timeout=0.05, user_scope_id=scope),
-        "get_connection_status": lambda: wa.get_connection_status(name, wait_timeout=0.05),
-        "get_lid_mappings": lambda: wa.get_lid_mappings(name, wait_timeout=0.05),
-        "get_contact_names": lambda: wa.get_contact_names(name, wait_timeout=0.05),
+        "get_connection_status": lambda: wa.get_connection_status(name, wait_timeout=0.05, user_scope_id=scope),
+        "get_lid_mappings": lambda: wa.get_lid_mappings(name, wait_timeout=0.05, user_scope_id=scope),
+        "get_contact_names": lambda: wa.get_contact_names(name, wait_timeout=0.05, user_scope_id=scope),
         "names_pass": lambda: (_store_one(name, scope), wa._fetch_names_per_chat(name, scope))[1],
     }
 
@@ -96,15 +105,98 @@ def test_another_account_never_reaches_the_admins_process(admin_only, lane):
     assert "Admin's friend" not in json.dumps(out, default=str)
 
 
-@pytest.mark.parametrize("lane", ["has_process_for_user", "get_avatar", "get_connection_status", "names_pass",
-                                  "fetch_older_messages", "get_whatsapp_chats"])
-def test_the_same_account_under_another_spelling_still_gets_it(admin_only, lane):
-    """The case the fallback exists for; stays green when the scope comparison is removed."""
-    _lanes("Admin", ADMIN_SCOPE)[lane]()
+@pytest.mark.parametrize("lane", LANES)
+@pytest.mark.parametrize("name", ["admin", "Admin"])
+def test_the_account_still_reaches_its_own_process(admin_only, lane, name):
+    """Its own name, and the same account under another spelling (the case the fallback exists
+    for). MUTATION: any lane passes no scope (it then reaches nothing) - red."""
+    out = _lanes(name, ADMIN_SCOPE)[lane]()
     if lane == "has_process_for_user":
-        assert wa.has_process_for_user("Admin") is True
+        assert out is True
     else:
         assert _asked(admin_only), f"{lane} did not reach the account's own process"
+
+
+@pytest.mark.parametrize("lane", LANES)
+def test_a_reused_name_never_reaches_the_old_process(admin_only, monkeypatch, lane):
+    """A deleted "bob"'s process is still registered under "bob" (its stop failed, or it was
+    deleted before deletion stopped it); a NEW account "bob" asks with its own scope. The old
+    lanes asked by name alone and reached it on every lane. MUTATION: one lane back to asking
+    without the scope, with `_process_for` settling a scopeless request by its name - red."""
+    old_bob, new_bob = "ab12cd34-0000-4000-8000-0000000000b0", "ab12cd34-0000-4000-8000-0000000000b1"
+    written = io.StringIO()
+    monkeypatch.setattr(wa, "_processes", {"bob": SimpleNamespace(stdin=written, poll=lambda: None)})
+    monkeypatch.setattr(wa, "_scope_by_user", {"bob": old_bob})
+    monkeypatch.setattr("vaf.core.config.scope_id_for_username",
+                        lambda name: new_bob if str(name or "").casefold() == "bob" else None)
+    out = _lanes("bob", new_bob)[lane]()
+    assert _asked(written) == [], f"{lane} wrote to the deleted account's process"
+    assert out in (False, None, [], {}, 0, (False, "WhatsApp bridge is not running.")) or (
+        isinstance(out, dict) and out.get("ok") is False), (lane, out)
+
+
+@pytest.mark.parametrize("lane", LANES)
+@pytest.mark.parametrize("spelling", ["Straße", "STRASSE"])
+def test_a_twin_never_reaches_the_owner_while_the_directory_is_down(admin_only, monkeypatch, lane, spelling):
+    """The local admin "strasse" runs alone; an account "Straße", created while names were
+    compared with `lower()` only, asks while the account directory answers nothing. The name
+    resolved to the admin by casefold and the one-process fallback took the admin's process.
+    MUTATION: one lane back to asking without the scope, with `_process_for` settling a
+    scopeless request by its name - red."""
+    from vaf.core import tool_dispatch
+    twin = "ab12cd34-0000-4000-8000-0000000000c5"
+    state = {"local_admin_scope_id": ADMIN_SCOPE, "local_admin_username": "strasse",
+             "whatsapp_config": {"enabled": True}}
+    monkeypatch.setattr(Config, "get", classmethod(lambda cls, key, default=None: state.get(key, default)))
+    import vaf.core.config as config_module
+    monkeypatch.setattr(config_module, "scope_id_for_username", _REAL_SCOPE_ID_FOR_USERNAME)
+    monkeypatch.setattr(tool_dispatch, "_account_directory_resolver", lambda: [])    # down: nobody known
+    written = io.StringIO()
+    monkeypatch.setattr(wa, "_processes", {"strasse": SimpleNamespace(stdin=written, poll=lambda: None)})
+    monkeypatch.setattr(wa, "_scope_by_user", {"strasse": ADMIN_SCOPE})
+    assert config_module.scope_id_for_username(spelling) == ADMIN_SCOPE, "the world: the name resolves to the admin"
+    _lanes(spelling, twin)[lane]()
+    assert _asked(written) == [], f"{lane} wrote to the local admin's process"
+
+
+def test_every_process_for_call_names_a_scope():
+    """Every call of `_process_for` in vaf/ passes two arguments and neither is a literal None:
+    a lane that forgets the scope is a lane that settles by name. MUTATION: one call back to
+    `_process_for(username)` - red."""
+    root = Path(wa.__file__).resolve().parents[1]
+    calls = []
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            name = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else ""
+            if name == "_process_for":
+                calls.append((path.name, node.lineno, node))
+    assert len(calls) >= 12, f"the scan found only {len(calls)} calls; it is broken"
+    bad = []
+    for where, line, node in calls:
+        values = list(node.args) + [k.value for k in node.keywords]
+        if len(values) < 2 or any(isinstance(v, ast.Constant) and v.value is None for v in values):
+            bad.append(f"{where}:{line}")
+    assert not bad, "a _process_for call without a scope: " + ", ".join(bad)
+
+
+def test_a_request_without_a_scope_gets_no_process(admin_only):
+    """Even under the process's own name. MUTATION: drop the empty-scope answer - red."""
+    assert wa._process_for("admin", None) == (None, None)
+    assert wa._process_for("admin", "  ") == (None, None)
+    assert wa.has_process_for_user("admin") is False
+    assert wa._process_for("admin", ADMIN_SCOPE)[0] == "admin"
+
+
+def test_the_docstring_no_longer_calls_a_scopeless_read_safe():
+    """MUTATION: restore the old named boundary - red."""
+    doc = wa._process_for.__doc__ or ""
+    assert "a request without a scope is settled by its name alone" not in doc.lower()
+    assert "without one gets no process" in doc or "without a scope gets no process" in doc
+    assert "Straße" in doc and '"bob"' in doc, "the rule's measurement is gone"
 
 
 def test_the_sender_loop_refuses_another_accounts_item(admin_only, monkeypatch):

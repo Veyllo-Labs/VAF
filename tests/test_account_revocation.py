@@ -187,8 +187,8 @@ def _fake_user_route(monkeypatch, *, active=True, role="user", tools=None):
 
     calls = []
     user = SimpleNamespace(id="11111111-0000-4000-8000-000000000001", user_scope_id=SCOPE,
-                           role=role, is_active=active, permissions={"tools": tools or []},
-                           updated_at=None)
+                           username="testperson", role=role, is_active=active,
+                           permissions={"tools": tools or []}, updated_at=None)
 
     class _Result:
         rowcount = 0
@@ -224,6 +224,10 @@ def _fake_user_route(monkeypatch, *, active=True, role="user", tools=None):
     monkeypatch.setattr(revocation, "revoke_account", lambda s: calls.append("revoke"))
     monkeypatch.setattr(revocation, "restore_account", lambda s: calls.append("restore"))
     monkeypatch.setattr(revocation, "stop_account_work", lambda s: calls.append("stop"))
+    # The deletion's WhatsApp half must never reach the real bridge or a real login folder.
+    import vaf.api.whatsapp_bridge as bridge
+    monkeypatch.setattr(bridge, "forget_account_login",
+                        lambda name, scope: calls.append(("forget", name, scope)) or True)
     return calls
 
 
@@ -273,7 +277,7 @@ def test_deleting_an_account_revokes_it(monkeypatch):
     import vaf.api.user_routes as ur
     calls = _fake_user_route(monkeypatch)
     asyncio.run(ur.delete_user("11111111-0000-4000-8000-000000000001", admin=ADMIN))
-    assert calls == ["delete", "commit", "invalidate", "revoke"]
+    assert calls == ["delete", "commit", "invalidate", "revoke", ("forget", "testperson", SCOPE)]
 
 
 # ── work already running ─────────────────────────────────────────────────────

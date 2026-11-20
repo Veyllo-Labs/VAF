@@ -20,6 +20,7 @@ import pytest
 from vaf.core.whatsapp_auth import harden_auth_dir
 
 REPO = Path(__file__).resolve().parent.parent
+ALICE_SCOPE = "ab12cd34-0000-4000-8000-000000000001"
 posix_only = pytest.mark.skipif(sys.platform == "win32", reason="chmod bits do not exist on Windows")
 
 
@@ -112,7 +113,9 @@ def test_the_qr_flow_protects_the_directory_even_when_it_ends_early(tmp_path, mo
     monkeypatch.setattr(wa, "get_whatsapp_auth_dir", lambda username: auth)
     from vaf.core import node_runtime
     monkeypatch.setattr(node_runtime, "find", lambda name: None)  # no Node: the flow returns early
-    routes._run_qr_login("alice")
+    flow = object()
+    monkeypatch.setattr(routes, "_qr_flows", {ALICE_SCOPE: flow})
+    routes._run_qr_login("alice", ALICE_SCOPE, flow)
     assert _mode(auth) == 0o700
     assert all(_mode(auth / n) == 0o600 for n in ("creds.json", "session-4917.json", "pre-key-7.json"))
 
@@ -138,10 +141,12 @@ def test_a_directory_that_cannot_be_prepared_ends_the_qr_flow_with_an_answer(tmp
     spawned = []
     monkeypatch.setattr(bridge, "spawn_node_bridge", lambda *a: spawned.append(a))
     monkeypatch.setattr(routes, "_qr_state", {})
+    flow = object()
+    monkeypatch.setattr(routes, "_qr_flows", {ALICE_SCOPE: flow})
 
-    routes._run_qr_login("alice")
+    routes._run_qr_login("alice", ALICE_SCOPE, flow)
 
-    assert "could not be prepared" in routes._qr_state["alice"]["error"]
+    assert "could not be prepared" in routes._qr_state[ALICE_SCOPE]["error"]
     assert spawned == []
 
 

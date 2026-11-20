@@ -55,7 +55,7 @@ def test_every_route_that_serves_foreign_image_bytes_asks_the_allowlist():
 def _avatar(monkeypatch, data, mime):
     import vaf.api.whatsapp_bridge as bridge
     from vaf.api import whatsapp_routes as wr
-    monkeypatch.setattr(bridge, "get_avatar", lambda username, jid, timeout: (data, mime))
+    monkeypatch.setattr(bridge, "get_avatar", lambda username, jid, timeout, **k: (data, mime))
     monkeypatch.setattr(bridge, "is_bridge_running", lambda: False)
     req = Request({"type": "http", "method": "GET", "path": "/api/whatsapp/avatar", "headers": []})
     return asyncio.run(wr.get_whatsapp_avatar(req, "491701234567"))

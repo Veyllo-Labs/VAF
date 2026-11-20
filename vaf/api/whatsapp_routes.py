@@ -12,6 +12,7 @@ import logging
 import re
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -29,12 +30,28 @@ logger = logging.getLogger("vaf.api.whatsapp")
 
 router = APIRouter(prefix="/api/whatsapp", tags=["whatsapp"])
 
-# QR state per username: { "qr_png": base64 PNG of the current code, "ts": time }. The
-# code's own value is not kept: it is drawn once when the bridge emits it, see _run_qr_login.
+# The link flow is the account's, keyed by its scope (`_flow_key`), never by its name: a name
+# can be a deleted account's, given to a new one. Measured before, keyed by name: a new
+# account under a deleted account's name polled that account's flow, and a revoked account's
+# flow went on. All three are guarded by `_qr_lock`; lock order `_qr_lock`, then the bridge's
+# `_spawned_nodes_lock` (the spawn of the link Node), never the other way.
+# QR state per scope: { "qr_png": base64 PNG of the current code, "ts": time }. The code's own
+# value is not kept: it is drawn once when the bridge emits it, see _run_qr_login.
 _qr_state: Dict[str, Dict[str, Any]] = {}
-# QR process per username (to terminate before starting a new one)
+# The link Node per scope (ended before a new flow starts).
 _qr_procs: Dict[str, subprocess.Popen] = {}
+# The current flow per scope: a fresh token per `/qr/start`. A flow writes state and spawns its
+# Node only while its token is the current one, so a flow replaced or ended while it waited
+# (the dependency install can take minutes) spawns nothing and writes nothing afterwards.
+_qr_flows: Dict[str, object] = {}
 _qr_lock = threading.Lock()
+
+LOGIN_IN_USE = ("WhatsApp is running on this account's login. Stop it, or use Re-link in the "
+                "WhatsApp window, before you scan a new code.")
+
+
+def _flow_key(user_scope_id: Any) -> str:
+    return str(user_scope_id or "").strip().lower()
 
 
 def _jid_to_phone(jid: str) -> str:
@@ -65,8 +82,7 @@ def get_current_vaf_user(request: Request) -> Dict[str, str]:
     request without a scope or a name is refused. Every WhatsApp route that acts for an
     account acts on that account's own linked number, auth folder or chats, so a lenient
     reader that filled the gap with the local admin's identity would hand a stranger the
-    admin's (the QR reset would even delete the admin's login). The QR log path reads no
-    account and does not call this."""
+    admin's (the QR reset would even delete the admin's login)."""
     return request_account(request)
 
 
@@ -89,17 +105,23 @@ class LidAssignRequest(BaseModel):
 
 @router.get("/dashboard/debug")
 async def get_whatsapp_dashboard_debug(request: Request):
-    """Debug: raw_chats count from bridge. Helps diagnose empty chat list."""
-    from vaf.api.whatsapp_bridge import get_connection_status, get_whatsapp_chats, is_bridge_running
+    """Debug: whether the caller's own process runs and how many chats it reports. Helps
+    diagnose an empty chat list. Whether the bridge runs at all (for anybody) is an admin's
+    to know: `bridge_running` is sent to an admin only."""
+    from vaf.api.whatsapp_bridge import get_whatsapp_chats, has_process_for_user, is_bridge_running
 
     user_info = get_current_vaf_user(request)
     username = user_info["username"]
-    raw_chats = get_whatsapp_chats(username, wait_timeout=3.0)
-    return {
-        "bridge_running": is_bridge_running(),
+    user_scope_id = user_info.get("user_scope_id")
+    raw_chats = get_whatsapp_chats(username, wait_timeout=3.0, user_scope_id=user_scope_id)
+    out = {
+        "running": has_process_for_user(username, user_scope_id),
         "raw_chats_count": len(raw_chats),
         "username": username,
     }
+    if caller_is_admin(request):
+        out["bridge_running"] = is_bridge_running()
+    return out
 
 
 def _composer_enabled() -> bool:
@@ -193,12 +215,9 @@ async def get_whatsapp_dashboard(request: Request):
 
     whitelist = _visible_whitelist(request, whatsapp_config, user_scope_id)
 
-    current_linked = whatsapp_auth_exists(username)
-    any_whitelist_linked = any(
-        whatsapp_auth_exists((e.get("vaf_username") or "admin").strip())
-        for e in whitelist if isinstance(e, dict)
-    )
-    linked = current_linked or any_whitelist_linked
+    # The caller's own login: another account named in a visible whitelist entry being linked
+    # is not this account's WhatsApp (it used to make `linked` true here).
+    linked = whatsapp_auth_exists(username)
 
     activity_raw = list(whatsapp_config.get("chat_activity") or [])[-100:]
     if caller_is_admin(request):
@@ -231,7 +250,7 @@ async def get_whatsapp_dashboard(request: Request):
         return _normalize_chat_id(s) or s
 
     sessions_by_chat: Dict[str, Dict[str, Any]] = {}
-    raw_chats = get_whatsapp_chats(username, wait_timeout=3.0)
+    raw_chats = get_whatsapp_chats(username, wait_timeout=3.0, user_scope_id=user_scope_id)
     for c in raw_chats:
         jid = c.get("jid") or c.get("phone") or ""
         if not jid:
@@ -394,7 +413,7 @@ async def get_whatsapp_dashboard(request: Request):
     # Names WhatsApp shows (address book, business, push name) for the numbers still unnamed.
     try:
         from vaf.api.whatsapp_bridge import get_contact_names, _phone_digits_canonical as _canon
-        wa_names = get_contact_names(username, wait_timeout=2.0)
+        wa_names = get_contact_names(username, wait_timeout=2.0, user_scope_id=user_scope_id)
         if wa_names:
             for rec in sessions_by_chat.values():
                 if (rec.get("name") or "").strip():
@@ -422,7 +441,7 @@ async def get_whatsapp_dashboard(request: Request):
     node_by_lid: Dict[str, str] = {}
     try:
         from vaf.api.whatsapp_bridge import get_lid_mappings
-        for m in get_lid_mappings(username, wait_timeout=2.0):
+        for m in get_lid_mappings(username, wait_timeout=2.0, user_scope_id=user_scope_id):
             lid_val = m.get("lid") or ""
             e164_val = (m.get("e164") or "").strip()
             if lid_val and e164_val:
@@ -491,7 +510,7 @@ async def get_whatsapp_dashboard(request: Request):
     node_by_lid: dict = {}
     try:
         from vaf.api.whatsapp_bridge import get_lid_mappings
-        lid_mappings_from_node = get_lid_mappings(username, wait_timeout=2.0)
+        lid_mappings_from_node = get_lid_mappings(username, wait_timeout=2.0, user_scope_id=user_scope_id)
         node_by_lid = {m.get("lid", ""): (m.get("e164") or "").strip() for m in lid_mappings_from_node if m.get("lid")}
     except Exception:
         pass
@@ -606,13 +625,18 @@ async def get_whatsapp_dashboard(request: Request):
     # not this account's WhatsApp running.
     running = has_process_for_user(username, user_scope_id)
     enabled_effective = channel_enabled_for_scope("whatsapp", user_scope_id)
-    connected = get_connection_status(username, wait_timeout=5.0) if (running and enabled_effective) else False
+    connected = (get_connection_status(username, wait_timeout=5.0, user_scope_id=user_scope_id)
+                 if (running and enabled_effective) else False)
 
-    try:
-        from vaf.core.log_helper import get_dated_log_path
-        log_path = str(get_dated_log_path("whatsapp_qr", "log"))
-    except Exception:
-        log_path = "logs/whatsapp_qr.log"
+    # An absolute path on the host, of a log every account's link and process writes into: an
+    # admin's to see, nobody else's (the window hides the line when it is null).
+    log_path = None
+    if caller_is_admin(request):
+        try:
+            from vaf.core.log_helper import get_dated_log_path
+            log_path = str(get_dated_log_path("whatsapp_qr", "log"))
+        except Exception:
+            log_path = "logs/whatsapp_qr.log"
 
     # Front Office contacts (Can reach your assistant) with WhatsApp number – for dashboard display
     front_office_contacts: list = []
@@ -657,7 +681,7 @@ async def get_whatsapp_dashboard(request: Request):
     return {
         "configured": linked,
         "linked": linked,
-        "linked_phone": get_linked_phone(username) if current_linked else None,
+        "linked_phone": get_linked_phone(username) if linked else None,
         "owner_number": _owner_number_for(whitelist, username, user_info.get("user_scope_id")),
         "reply_window_hours": _reply_window_hours(),
         "inbound_to_agent": whatsapp_inbound_to_agent(),
@@ -908,12 +932,76 @@ async def get_whatsapp_session_history(session_id: str, request: Request):
 _QR_DRAW_FAILED = "The QR code could not be drawn. Try again with a new code."
 
 
-def _run_qr_login(username: str) -> None:
-    """Spawn Node process for QR login, capture QR to _qr_state."""
+def _flow_is_current(key: str, flow: object) -> bool:
+    """Whether `flow` is still the account's current link flow. Caller holds `_qr_lock`."""
+    return _qr_flows.get(key) is flow
+
+
+def _set_flow_state(key: str, flow: object, state: Dict[str, Any]) -> bool:
+    """Write the account's link state, but only while `flow` is its current flow. False when
+    the flow was replaced or ended: the caller stops."""
+    with _qr_lock:
+        if not _flow_is_current(key, flow):
+            return False
+        _qr_state[key] = state
+        return True
+
+
+def _end_link_flow(user_scope_id: Any) -> bool:
+    """End the account's link flow: its token, its state and its Node go, and the Node is
+    terminated (3 s, then killed, 3 s more). The flow's thread then spawns nothing and writes
+    nothing. True when no link Node of this account runs afterwards."""
+    key = _flow_key(user_scope_id)
+    with _qr_lock:
+        _qr_flows.pop(key, None)
+        _qr_state.pop(key, None)
+        proc = _qr_procs.pop(key, None)
+    if proc is None or proc.poll() is not None:
+        return True
+    try:
+        proc.terminate()
+        proc.wait(timeout=3)
+        return True
+    except Exception:
+        pass
+    try:
+        proc.kill()
+        proc.wait(timeout=3)
+        return True
+    except Exception:
+        return proc.poll() is not None
+
+
+def _on_link_account_revoked(user_scope_id: str) -> None:
+    """Revocation listener: a deactivated or deleted account's link flow ends; a narrowing of
+    its rights or a demotion leaves it alone."""
+    key = _flow_key(user_scope_id)
+    with _qr_lock:
+        if key not in _qr_flows and key not in _qr_procs:
+            return
+    from vaf.core import revocation
+    scope = str(user_scope_id or "").strip()
+    if revocation.is_revoked(scope) or not revocation.account_stands(scope):
+        _end_link_flow(scope)
+
+
+def register_revocation_listener() -> None:
+    from vaf.core import revocation
+    revocation.add_revocation_listener(_on_link_account_revoked)
+
+
+register_revocation_listener()
+
+
+def _run_qr_login(username: str, user_scope_id: str, flow: object) -> None:
+    """The link flow of one account: spawn Node on the account's login folder, capture its QR
+    code into `_qr_state[<scope>]`, and end when the phone linked. Acts only while `flow` is
+    the account's current flow (`_qr_flows`); `/qr/start` and a revocation end it."""
     from vaf.core.log_helper import log_whatsapp_qr
     from vaf.core.whatsapp_auth import get_whatsapp_auth_dir
     import json
 
+    key = _flow_key(user_scope_id)
     log_whatsapp_qr(f"[VAF] QR flow started for user={username}")
     auth_dir = get_whatsapp_auth_dir(username)
     # Owner-only before anything can return early: a missing Node or a failed dependency
@@ -928,33 +1016,40 @@ def _run_qr_login(username: str) -> None:
         harden_auth_dir(auth_dir)
     except OSError as e:
         log_whatsapp_qr(f"[VAF] Session directory not usable: {e}")
-        with _qr_lock:
-            _qr_state[username] = {"error": f"The WhatsApp session folder could not be prepared: {describe_error(e)}", "ts": 0}
+        _set_flow_state(key, flow, {"error": f"The WhatsApp session folder could not be prepared: {describe_error(e)}", "ts": 0})
         return
     from vaf.core import node_runtime
     node = node_runtime.find("node")
     wa_js = Path(__file__).resolve().parents[1] / "whatsapp_node" / "wa-bridge.js"
     if not node or not wa_js.exists():
-        with _qr_lock:
-            _qr_state[username] = {"error": "Node.js not found. Install Node.js 18+ (with npm) and open WhatsApp setup again.", "ts": 0}
+        _set_flow_state(key, flow, {"error": "Node.js not found. Install Node.js 18+ (with npm) and open WhatsApp setup again.", "ts": 0})
         return
     # The bridge's node_modules are installed here, not by hand: first link on a fresh
     # install, or a lockfile bump after `vaf update`, both land on this path.
-    from vaf.api.whatsapp_bridge import ensure_bridge_deps
-    with _qr_lock:
-        _qr_state[username] = {"message": "Preparing the WhatsApp bridge (installing its dependencies)...", "ts": 0}
+    from vaf.api.whatsapp_bridge import LoginInUse, _terminate, ensure_bridge_deps, spawn_node_bridge
+    if not _set_flow_state(key, flow, {"message": "Preparing the WhatsApp bridge (installing its dependencies)...", "ts": 0}):
+        return
     deps_ok, deps_msg = ensure_bridge_deps()
     if not deps_ok:
         log_whatsapp_qr(f"[VAF] {deps_msg}")
-        with _qr_lock:
-            _qr_state[username] = {"error": deps_msg, "ts": 0}
+        _set_flow_state(key, flow, {"error": deps_msg, "ts": 0})
         return
+    proc = None
     try:
-        from vaf.api.whatsapp_bridge import spawn_node_bridge
-        proc = spawn_node_bridge(node, wa_js, auth_dir)
-        log_whatsapp_qr(f"[VAF] Node process spawned pid={proc.pid}")
+        # Spawned and registered under the lock, and only while this flow is current: a flow
+        # replaced during the install (minutes) must not start a Node next to its successor's.
         with _qr_lock:
-            _qr_procs[username] = proc
+            if not _flow_is_current(key, flow):
+                log_whatsapp_qr("[VAF] QR flow replaced before its Node started; nothing spawned")
+                return
+            try:
+                proc = spawn_node_bridge(node, wa_js, auth_dir)
+            except LoginInUse:
+                _qr_state[key] = {"error": LOGIN_IN_USE, "ts": time.time()}
+                log_whatsapp_qr("[VAF] QR flow refused: a WhatsApp process runs on this login")
+                return
+            _qr_procs[key] = proc
+        log_whatsapp_qr(f"[VAF] Node process spawned pid={proc.pid}")
 
         def _log_stderr():
             try:
@@ -995,39 +1090,42 @@ def _run_qr_login(username: str) -> None:
                     except Exception as e:
                         # Only the exception's type: its text may quote the value.
                         log_whatsapp_qr(f"[VAF] QR code could not be drawn ({type(e).__name__})")
-                        with _qr_lock:
-                            _qr_state[username] = {"error": _QR_DRAW_FAILED, "ts": __import__("time").time()}
+                        _set_flow_state(key, flow, {"error": _QR_DRAW_FAILED, "ts": time.time()})
                         proc.terminate()
                         return
-                    with _qr_lock:
-                        _qr_state[username] = {"qr_png": qr_png, "ts": __import__("time").time()}
+                    if not _set_flow_state(key, flow, {"qr_png": qr_png, "ts": time.time()}):
+                        return
                 elif typ == "connected":
                     self_jid = obj.get("selfJid") or ""
                     phone = _jid_to_phone(self_jid)
                     log_whatsapp_qr(f"[VAF] Received: connected selfJid={self_jid} phone={phone}")
-                    with _qr_lock:
-                        _qr_state[username] = {"connected": True, "phone": phone, "ts": __import__("time").time()}
-                    proc.terminate()
+                    # Ended BEFORE the state says connected: the wizard's next step starts the
+                    # account's process on this login, which must not find the link Node still
+                    # on it (two sockets on one login evict each other).
+                    if not _terminate(proc):
+                        log_whatsapp_qr("[VAF] The link process did not end after the link")
+                    _set_flow_state(key, flow, {"connected": True, "phone": phone, "ts": time.time()})
                     return
                 elif typ == "error":
                     log_whatsapp_qr(f"[VAF] Received: error msg={obj.get('message', '')}")
-                    with _qr_lock:
-                        _qr_state[username] = {"error": obj.get("message", "Unknown error"), "ts": __import__("time").time()}
+                    if not _set_flow_state(key, flow, {"error": obj.get("message", "Unknown error"), "ts": time.time()}):
+                        return
             if proc.poll() is not None:
                 with _qr_lock:
-                    s = _qr_state.get(username, {})
-                    if not s.get("connected") and not s.get("error"):
+                    s = _qr_state.get(key, {})
+                    if _flow_is_current(key, flow) and not s.get("connected") and not s.get("error"):
                         code = proc.returncode or -1
                         log_whatsapp_qr(f"[VAF] Process exited without connected/error code={code}")
-                        _qr_state[username] = {"error": f"Process exited (code {code}). Check logs/whatsapp_qr.log for details.", "ts": __import__("time").time()}
+                        _qr_state[key] = {"error": f"Process exited (code {code}). Check logs/whatsapp_qr.log for details.", "ts": time.time()}
         finally:
             with _qr_lock:
-                _qr_procs.pop(username, None)
+                if _qr_procs.get(key) is proc:
+                    _qr_procs.pop(key, None)
     except Exception as e:
+        _set_flow_state(key, flow, {"error": describe_error(e), "ts": 0})
         with _qr_lock:
-            _qr_state[username] = {"error": describe_error(e), "ts": 0}
-        with _qr_lock:
-            _qr_procs.pop(username, None)
+            if proc is not None and _qr_procs.get(key) is proc:
+                _qr_procs.pop(key, None)
 
 
 @router.get("/chat-messages")
@@ -1096,7 +1194,8 @@ async def get_whatsapp_avatar(request: Request, chat_id: str):
     if not chat_jid:
         raise HTTPException(status_code=404, detail="no picture")
     # A cached answer needs no bridge; only a first lookup does.
-    result = await asyncio.to_thread(get_avatar, username, chat_jid, 8.0 if is_bridge_running() else 0.1)
+    result = await asyncio.to_thread(get_avatar, username, chat_jid, 8.0 if is_bridge_running() else 0.1,
+                                     user_scope_id=user_info.get("user_scope_id"))
     if not result:
         raise HTTPException(status_code=404, detail="no picture")
     data, mime = result
@@ -1161,13 +1260,6 @@ async def load_older_whatsapp_messages(request: Request, body: OlderMessagesRequ
             "no_cursor": bool(result.get("no_cursor"))}
 
 
-@router.get("/qr/log-path")
-async def get_qr_log_path(request: Request):
-    """Return path to whatsapp_qr_YYYY-MM-DD.log for debugging."""
-    from vaf.core.log_helper import get_dated_log_path
-    return {"path": str(get_dated_log_path("whatsapp_qr", "log"))}
-
-
 def _qr_answer(content: Dict[str, Any]) -> JSONResponse:
     """Every answer of the QR poll is `no-store`: one of them carries the code that links a
     device, and no cache between here and the browser may keep it."""
@@ -1177,13 +1269,14 @@ def _qr_answer(content: Dict[str, Any]) -> JSONResponse:
 @router.get("/qr")
 async def get_qr_code(request: Request):
     """Get current QR code for linking (or status). Poll until connected. The code comes as
-    `qr_png`, a PNG drawn on this machine; its value is not part of the answer."""
+    `qr_png`, a PNG drawn on this machine; its value is not part of the answer. The state is
+    the calling account's own flow, read by its scope."""
     try:
         user_info = get_current_vaf_user(request)
-        username = user_info["username"]
+        key = _flow_key(user_info.get("user_scope_id"))
 
         with _qr_lock:
-            state = _qr_state.get(username, {})
+            state = dict(_qr_state.get(key, {})) if key else {}
 
         if state.get("connected"):
             phone = state.get("phone") or ""
@@ -1200,46 +1293,55 @@ async def get_qr_code(request: Request):
 
 @router.post("/qr/reset")
 async def reset_whatsapp_auth(request: Request):
-    """Clear WhatsApp auth for current user. Use when 'Logged out' to allow a fresh QR scan."""
-    import shutil
+    """Remove the caller's WhatsApp login, so the next QR flow links afresh (Re-link, or a
+    session that was logged out). The caller's own link flow and own process end first, held
+    to the caller's scope; nothing is removed while a process still runs on the login (500
+    when the caller's own did not end, 409 when another one runs on it). Nobody else's
+    process is stopped."""
+    import asyncio
 
-    from vaf.core.whatsapp_auth import get_whatsapp_auth_dir
+    from vaf.api.whatsapp_bridge import PREVIOUS_NOT_ENDED, STOP_FAILED, login_in_use, stop_account
+    from vaf.core.whatsapp_auth import get_whatsapp_auth_dir, remove_login
 
     user_info = get_current_vaf_user(request)
     username = user_info["username"]
-    auth_dir = get_whatsapp_auth_dir(username)
-    removed = 0
-    if auth_dir.exists():
-        for p in auth_dir.iterdir():
-            try:
-                if p.is_file():
-                    p.unlink()
-                    removed += 1
-                elif p.is_dir():
-                    shutil.rmtree(p)
-                    removed += 1
-            except OSError:
-                pass
+    user_scope_id = user_info.get("user_scope_id")
+    await asyncio.to_thread(_end_link_flow, user_scope_id)
+    if await asyncio.to_thread(stop_account, username, user_scope_id) is False:
+        raise HTTPException(status_code=500, detail=STOP_FAILED)
+    if login_in_use(get_whatsapp_auth_dir(username)):
+        raise HTTPException(status_code=409, detail=PREVIOUS_NOT_ENDED)
+    if not await asyncio.to_thread(remove_login, username):
+        raise HTTPException(status_code=500, detail="The WhatsApp login could not be removed completely; try again.")
     return {"status": "reset", "message": "Auth cleared. You can start a new QR flow."}
 
 
 @router.post("/qr/start")
 async def start_qr_flow(request: Request):
-    """Start QR login flow for current user. QR will appear in /qr poll."""
+    """Start the caller's QR link flow; the code appears in the `/qr` poll. The caller's
+    previous link flow ends first. While a WhatsApp process runs on the caller's login (its
+    own connection, or a link Node that did not end) nothing starts: 409, and `/qr` shows
+    LOGIN_IN_USE, since the wizard reads the poll and not this answer."""
+    import asyncio
+
+    from vaf.api.whatsapp_bridge import login_in_use
+    from vaf.core.whatsapp_auth import get_whatsapp_auth_dir
+
     user_info = get_current_vaf_user(request)
     username = user_info["username"]
+    user_scope_id = user_info.get("user_scope_id")
+    key = _flow_key(user_scope_id)
 
+    await asyncio.to_thread(_end_link_flow, user_scope_id)
+    flow = object()
+    if login_in_use(get_whatsapp_auth_dir(username)):
+        with _qr_lock:
+            _qr_flows[key] = flow
+            _qr_state[key] = {"error": LOGIN_IN_USE, "ts": time.time()}
+        return JSONResponse(status_code=409, content={"detail": LOGIN_IN_USE})
     with _qr_lock:
-        old_proc = _qr_procs.pop(username, None)
-        _qr_state.pop(username, None)
-    if old_proc is not None and old_proc.poll() is None:
-        try:
-            old_proc.terminate()
-            old_proc.wait(timeout=3)
-        except Exception:
-            pass
-
-    t = threading.Thread(target=_run_qr_login, args=(username,), daemon=True)
+        _qr_flows[key] = flow
+    t = threading.Thread(target=_run_qr_login, args=(username, user_scope_id, flow), daemon=True)
     t.start()
     return {"status": "started", "message": "Scan the QR code in WhatsApp (Linked Devices). Poll GET /api/whatsapp/qr for the QR."}
 
@@ -1444,7 +1546,8 @@ async def sync_whatsapp_chats_route(request: Request):
     username = user_info["username"]
     if not is_bridge_running():
         raise HTTPException(status_code=503, detail="WhatsApp bridge not running. Start it in Connections first.")
-    chats = await asyncio.to_thread(sync_whatsapp_chats, username, 25.0)
+    chats = await asyncio.to_thread(sync_whatsapp_chats, username, 25.0,
+                                    user_scope_id=user_info.get("user_scope_id"))
     return {"status": "ok", "chats_count": len(chats), "message": "Chat list synced from WhatsApp. Refresh the dashboard to see all chats."}
 
 

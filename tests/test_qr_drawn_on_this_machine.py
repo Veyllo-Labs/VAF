@@ -37,6 +37,7 @@ WEB = ROOT / "web"
 VAF = ROOT / "vaf"
 WA_WIZARD = WEB / "components" / "connections" / "WhatsAppSetupWizard.tsx"
 LOCALES = ("en", "de", "ja", "ko", "th", "tr", "zh")
+ALICE_SCOPE = "ab12cd34-0000-4000-8000-000000000001"
 
 _PRUNED_DIRS = {"node_modules", ".next", "__pycache__", "out"}
 
@@ -247,13 +248,18 @@ def flow(tmp_path, monkeypatch):
     monkeypatch.setattr(bridge, "ensure_bridge_deps", lambda *a, **k: (True, ""))
     monkeypatch.setattr(routes, "_qr_state", {})
     monkeypatch.setattr(routes, "_qr_procs", {})
-    monkeypatch.setattr(routes, "get_current_vaf_user", lambda request: {"username": "alice"})
+    monkeypatch.setattr(routes, "_qr_flows", {})
+    monkeypatch.setattr(bridge, "_terminate", lambda proc: proc.terminate() or True)
+    monkeypatch.setattr(routes, "get_current_vaf_user",
+                        lambda request: {"username": "alice", "user_scope_id": ALICE_SCOPE})
 
     def run(values=(_VALUE,)):
         proc = _FakeProc(values)
         procs.append(proc)
         monkeypatch.setattr(bridge, "spawn_node_bridge", lambda *a, **k: proc)
-        routes._run_qr_login("alice")
+        flow = object()
+        routes._qr_flows[ALICE_SCOPE] = flow
+        routes._run_qr_login("alice", ALICE_SCOPE, flow)
         return proc
 
     def poll():
@@ -301,7 +307,7 @@ def test_every_answer_is_no_store(flow, monkeypatch, state):
             raise RuntimeError("no session")
         monkeypatch.setattr(routes, "get_current_vaf_user", refuse)
     else:
-        routes._qr_state["alice"] = {
+        routes._qr_state[ALICE_SCOPE] = {
             "connected": {"connected": True, "phone": "+49123456789", "ts": 1},
             "error": {"error": "Node.js not found.", "ts": 0},
             "qr": {"qr_png": "iVBORw0KGgo=", "ts": 1},
@@ -334,7 +340,7 @@ def test_a_code_that_cannot_be_drawn_ends_in_an_error_the_wizard_shows(flow, mon
         raise ValueError(f"data too long: {text}")
     monkeypatch.setattr(auth_routes, "qr_png_base64", cannot_draw)
     proc = flow.run()
-    assert flow.routes._qr_state["alice"]["error"] == flow.routes._QR_DRAW_FAILED
+    assert flow.routes._qr_state[ALICE_SCOPE]["error"] == flow.routes._QR_DRAW_FAILED
     assert proc.terminated
     response, body = flow.poll()
     assert body == {"status": "error", "error": flow.routes._QR_DRAW_FAILED}

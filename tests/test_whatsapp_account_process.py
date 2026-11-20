@@ -273,10 +273,10 @@ ACCOUNT = ("start_account", "stop_account", "restart_account")
 
 def _quiet_reads(monkeypatch):
     """The dashboard's read lanes answer at once instead of waiting on a fake process."""
-    monkeypatch.setattr(wa, "get_connection_status", lambda username, wait_timeout=2.0: False)
-    monkeypatch.setattr(wa, "get_whatsapp_chats", lambda username, wait_timeout=2.0: [])
-    monkeypatch.setattr(wa, "get_contact_names", lambda username, wait_timeout=2.0: {})
-    monkeypatch.setattr(wa, "get_lid_mappings", lambda username, wait_timeout=2.0: [])
+    monkeypatch.setattr(wa, "get_connection_status", lambda username, wait_timeout=2.0, **k: False)
+    monkeypatch.setattr(wa, "get_whatsapp_chats", lambda username, wait_timeout=2.0, **k: [])
+    monkeypatch.setattr(wa, "get_contact_names", lambda username, wait_timeout=2.0, **k: {})
+    monkeypatch.setattr(wa, "get_lid_mappings", lambda username, wait_timeout=2.0, **k: [])
 
 
 def _client(user):

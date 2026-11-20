@@ -29,6 +29,22 @@ session that expired stops its own account's process only. NAMED BOUNDARY: the g
 `whatsapp_config.enabled` is the local admin's own switch AND the master gate of every start,
 an ordinary account's own included; decoupling the two touches the startup auto-start, the
 reconnect worker and the meaning of the local admin's switch.
+
+The account's end. A deactivated or deleted account's process stops and its pending start is
+cancelled (`stop_scope`, called by this module's revocation listener only when the account is
+revoked or no longer stands; a demotion or a narrowed tool list stops nothing). Deleting an
+account also removes its login and the name's cached chat list, LID mappings, names, own
+number and connection state (`forget_account_login`, called by the delete route), once no
+Node runs on the folder any more. Measured before: a revoked account's process stayed
+registered and alive, and a new account created under a deleted account's name ran its
+login. NAMED BOUNDARY: the revocation does not tell a deletion from a deactivation, so the
+delete route calls `forget_account_login` itself; one consumer (this login) needs the
+difference, and a second store that must forget at deletion makes it a flag on the listener.
+
+One Node per login folder. `spawn_node_bridge`, the one place Node starts (the account's
+process and the QR link alike), refuses a second live Node on a folder one already runs on,
+reached by the same path or through a link (`LoginInUse`, `login_in_use`): two Baileys sockets
+on one login evict each other. Measured before: two spawns on one folder ran two Nodes.
 """
 import hashlib
 import json
@@ -499,9 +515,15 @@ _failed_reinstall_lock = ""
 _deps_notes: set = set()
 
 # Every Node spawn_node_bridge started, the QR-link ones included: while one of them runs from
-# node_modules, the tree is not swapped under it.
+# node_modules, the tree is not swapped under it, and no second Node starts on the login folder
+# one of them runs on (`proc._vaf_login`, see `login_in_use`). Lock order: `_spawn_lock` and the
+# routes' `_qr_lock` before this one; nothing takes another lock while holding it.
 _spawned_nodes: List[subprocess.Popen] = []
 _spawned_nodes_lock = threading.Lock()
+
+
+class LoginInUse(RuntimeError):
+    """`spawn_node_bridge` refused: a live Node already runs on this login folder."""
 
 
 def _installed_baileys_version(node_dir: Path) -> str:
@@ -1005,6 +1027,9 @@ def _run_user_process(username: str, auth_dir: Path) -> Optional[subprocess.Pope
         return None
     try:
         return spawn_node_bridge(node, wa_js, auth_dir)
+    except LoginInUse:
+        logger.error("WhatsApp: %s not started, another process runs on its login", username)
+        return None
     except Exception as e:
         logger.exception("Failed to start WhatsApp bridge for %s: %s", username, e)
         return None
@@ -1019,11 +1044,16 @@ def spawn_node_bridge(node: str, wa_js: Path, auth_dir: Path) -> subprocess.Pope
     measurement), so Node runs with umask 077 and every key file Baileys writes is born
     0600, and whatever an earlier start wrote is fixed first. `umask=` rather than a
     preexec_fn, which is not safe in a threaded process; POSIX only, Windows ignores both.
+
+    Raises `LoginInUse` and spawns nothing while a Node it started still runs on the same
+    folder (`login_in_use`): the check, the spawn and the record happen under one lock, so two
+    threads cannot both pass it.
     """
     from vaf.core import node_runtime
     from vaf.core.whatsapp_auth import harden_auth_dir
     auth_dir.mkdir(parents=True, exist_ok=True)
     harden_auth_dir(auth_dir)
+    login = _login_identity(auth_dir)
     kwargs: dict = {
         "env": node_runtime.child_env(node),
         "stdin": subprocess.PIPE,
@@ -1038,10 +1068,51 @@ def spawn_node_bridge(node: str, wa_js: Path, auth_dir: Path) -> subprocess.Pope
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
     else:
         kwargs["umask"] = 0o077
-    proc = subprocess.Popen([node, str(wa_js), "--auth-dir", str(auth_dir.resolve())], **kwargs)
     with _spawned_nodes_lock:
+        if _login_taken(login):
+            raise LoginInUse(f"a WhatsApp process already runs on {auth_dir}")
+        proc = subprocess.Popen([node, str(wa_js), "--auth-dir", str(auth_dir.resolve())], **kwargs)
+        try:
+            proc._vaf_login = login
+        except Exception:
+            logger.warning("WhatsApp: could not record the login folder of %r", proc, exc_info=True)
         _spawned_nodes.append(proc)
     return proc
+
+
+def _login_identity(auth_dir: Path) -> Tuple[str, Optional[Tuple[int, int]]]:
+    """(absolute path, (st_dev, st_ino)) of a login folder; the second is None while the folder
+    does not exist or the file system reports no inode. Two spellings of one folder (a link, a
+    case-insensitive file system) share the second."""
+    path = os.path.abspath(os.fspath(auth_dir))
+    try:
+        st = os.stat(path)
+        ino = (st.st_dev, st.st_ino) if st.st_ino else None
+    except OSError:
+        ino = None
+    return path, ino
+
+
+def _same_login(a: Any, b: Any) -> bool:
+    if not (isinstance(a, tuple) and isinstance(b, tuple) and len(a) == 2 and len(b) == 2):
+        return False
+    return a[0] == b[0] or (a[1] is not None and a[1] == b[1])
+
+
+def _login_taken(login: Tuple[str, Optional[Tuple[int, int]]]) -> bool:
+    """Whether a live Node of `_spawned_nodes` runs on this login; prunes the ended ones.
+    Caller holds `_spawned_nodes_lock`."""
+    _spawned_nodes[:] = [p for p in _spawned_nodes if _still_running(p)]
+    return any(_same_login(getattr(p, "_vaf_login", None), login) for p in _spawned_nodes)
+
+
+def login_in_use(auth_dir: Path) -> bool:
+    """Whether a live Node VAF started (an account's process or a QR link) runs on this login
+    folder, reached by the same path or as the same folder through another one. A deletion
+    and a reset remove nothing while it does, and no second Node starts on it."""
+    login = _login_identity(Path(auth_dir))
+    with _spawned_nodes_lock:
+        return _login_taken(login)
 
 
 def _account_scope(username: str) -> str:
@@ -1057,46 +1128,42 @@ def _account_scope(username: str) -> str:
     return str(scope_id_for_username(name) or "").strip()
 
 
-def _process_for(username: str, user_scope_id: Optional[str] = None
+def _process_for(username: str, user_scope_id: Optional[str]
                  ) -> Tuple[Optional[str], Optional[subprocess.Popen]]:
     """(name, process) of the Node process that acts for this account, or (None, None).
 
-    The account's own live process first. Otherwise the only running process, but ONLY when
-    it was started for the same scope (the same account under another spelling of its name).
-    A request that carries its scope (`user_scope_id`, the reply lane's and the send lanes'
-    queue items) is held to it on BOTH steps: a process started for another scope is refused
-    even when its name matches, because a name can be a caller's default rather than the
-    account's own (measured: a non-admin's nameless notification arrived as "admin" and went
-    out through the admin's process). Every lane that writes to a Node process asks here, and
-    asks without holding `_process_lock` (this takes it). Measured on the twelve hand copies
-    this replaced, which took the only process whoever it belonged to: an account without a
-    linked WhatsApp sent from another account's agent number, read its chat list and loaded
-    its history.
+    THE RULE: every request names its account's scope, and only a process started for that
+    scope acts for it. The account's own live process first (registered under this name AND
+    started for this scope). Otherwise the only running process, but ONLY when it was started
+    for the same scope (the same account under another spelling of its name). A request
+    without a scope gets no process at all. Every lane that writes to a Node process asks
+    here, and asks without holding `_process_lock` (this takes it): the sender loop, the send
+    lanes and the reply lane with the scope of their queue item (`config.messenger_lane_identity`
+    gives a scopeless send the local admin's, or refuses it), the read and sync lanes (the
+    chat list and its sync, history, avatars, names, LID mappings, the connection check) with
+    the signed-in account's scope (`user_routes.request_account` refuses a sign-in without
+    one), the bridge's own chat-sync loop and the reconnect check with each process's
+    registered scope.
 
-    Named boundary: a request without a scope is settled by its name alone. Only the read and
-    sync lanes ask that way (the chat list, history, avatars, names, LID mappings, the
-    connection check), with the signed-in account's own name (`user_routes.request_account`
-    refuses a sign-in without a scope or a name). The name resolves through
-    `scope_id_for_username`, where the exact name decides and a casefolded match counts only
-    when one account has it, so an account named "Straße" next to an admin named "strasse"
-    is its own account here, not the admin's spelling. A spelling neither of them is
-    exactly, matched by both only by casefold, resolves to nobody and gets no process.
-    A scope does not take the name out of the decision: the name still picks the account's
-    own process, which the scope must match, and while several processes run, a name that is
-    not the scope's own process gets none. A scope stands in for the name only in the
-    one-process fallback (`_account_scope`), so passing it from those lanes would settle that
-    fallback with no spelling question at all.
-    Every send lane carries a scope: `_enqueue_reply`, `send_whatsapp_with_confirmation` and
-    the sender loop convert a scopeless request with `config.messenger_lane_identity` (the
-    local admin's, or refused) before they get here. Refusing a scopeless request in here
-    would cut every ordinary account off its own chat list."""
+    A name is no proof of an account: it can be a caller's default, a deleted account's name
+    given to a new one, or a twin that differs only by Unicode case folding. Measured with the
+    read lanes still settling a scopeless request by its name: a deleted "bob"'s process,
+    still registered under "bob", answered the NEW account "bob"'s chat list, history,
+    avatars and connection check; and with the account directory unreachable, an account
+    "Straße" (and "STRASSE") reached the local admin "strasse"'s process, because the
+    one-process fallback compared against the scope the name resolved to. Before that, twelve
+    hand copies took the only process whoever it belonged to: an account without a linked
+    WhatsApp sent from another account's agent number, read its chat list and loaded its
+    history; and a non-admin's nameless notification arrived as "admin" and went out through
+    the admin's process."""
     name = (username or "").strip()
     wanted = str(user_scope_id or "").strip()
+    if not wanted:
+        return None, None
     with _process_lock:
         own = _processes.get(name) if name else None
         own_scope = str(_scope_by_user.get(name) or "").strip() if own is not None else ""
-        if (own is not None and own.poll() is None and not _is_retired(own)
-                and (not wanted or own_scope == wanted)):
+        if own is not None and own.poll() is None and not _is_retired(own) and own_scope == wanted:
             return name, own
         only_name, only = next(iter(_processes.items())) if len(_processes) == 1 else (None, None)
         if _is_retired(only):
@@ -1104,7 +1171,7 @@ def _process_for(username: str, user_scope_id: Optional[str] = None
         only_scope = str(_scope_by_user.get(only_name) or "").strip() if only_name else ""
     if only is None or only.poll() is not None or not only_scope:
         return None, None
-    if (wanted or _account_scope(name)) != only_scope:
+    if wanted != only_scope:
         return None, None
     return only_name, only
 
@@ -2440,11 +2507,11 @@ def _chat_sync_loop(stop: Optional[threading.Event] = None) -> None:
         return
     while not stop.is_set():
         with _process_lock:
-            usernames = list(_processes.keys())
-        for username in usernames:
+            registered = [(name, _scope_by_user.get(name)) for name in _processes]
+        for username, scope in registered:
             if stop.is_set():
                 return
-            _request_chats(username)
+            _request_chats(username, scope)
         if stop.wait(interval):
             return
     logger.debug("WhatsApp chat sync loop exited")
@@ -2465,13 +2532,16 @@ def _registered_alive(username: str) -> bool:
 
 
 def _blocked_by_previous(username: str, user_scope_id: str) -> bool:
-    """Whether a live process registered under this name stands in the way of a start: one VAF
-    tried to end and could not (retired, a survivor: its readers stopped), or one started for
-    another scope (an account that reuses a deleted account's name). Neither is this start's
-    process, and a second Node next to it would share its login."""
+    """Whether a live process stands in the way of a start: one registered under this name that
+    VAF tried to end and could not (retired, a survivor: its readers stopped), one registered
+    under it for another scope (an account that reuses a deleted account's name), or, with
+    nothing registered, a Node VAF started on this account's login for something else (a QR
+    link). None is this start's process, and a second Node next to it would share its login.
+    A spawn that races past this check is refused by `spawn_node_bridge` itself (`LoginInUse`)
+    and answers START_FAILED."""
     current = _registered_live(username)
     if current is None:
-        return False
+        return login_in_use(get_whatsapp_auth_dir((username or "").strip()))
     with _process_lock:
         scope = str(_scope_by_user.get(username) or "").strip()
         return _is_retired(current) or scope != str(user_scope_id or "").strip()
@@ -2980,6 +3050,154 @@ def start_missing_accounts() -> List[str]:
     return started
 
 
+def _scope_key(user_scope_id: Any) -> str:
+    return str(user_scope_id or "").strip().lower()
+
+
+def _registrations_of(user_scope_id: Any) -> List[Tuple[str, str]]:
+    """(name, scope as registered) of every process and pending start of this scope, the
+    scope compared stripped and case-insensitively. Sorted by name."""
+    key = _scope_key(user_scope_id)
+    if not key:
+        return []
+    found: Dict[str, str] = {}
+    with _spawn_lock:
+        for name, pending in _pending_starts.items():
+            if _scope_key(pending.user_scope_id) == key:
+                found[name] = pending.user_scope_id
+        with _process_lock:
+            for name, scope in _scope_by_user.items():
+                if _scope_key(scope) == key:
+                    found[name] = scope
+    return sorted(found.items())
+
+
+def stop_scope(user_scope_id: Any) -> Optional[bool]:
+    """`stop_account` for every process and pending start of this account's scope, under
+    whichever name each is registered: the account's end (a deactivation, a deletion). True
+    when it stopped something, None when there was nothing, False when a process did not end.
+    Never touches another scope's process, even one under the same name."""
+    result: Optional[bool] = None
+    for name, scope in _registrations_of(user_scope_id):
+        stopped = stop_account(name, scope)
+        if stopped is False:
+            result = False
+        elif stopped and result is None:
+            result = True
+    return result
+
+
+def _on_account_revoked(user_scope_id: str) -> None:
+    """Revocation listener: a deactivated or deleted account's WhatsApp stops; a narrowing of
+    its rights (work stopped, account not revoked) or a demotion stops nothing. Reactivation
+    starts nothing by itself (the admin's Start, the account's own Start or Refresh does)."""
+    if not _registrations_of(user_scope_id):
+        return      # nothing runs for it: no directory query for every narrowing
+    from vaf.core import revocation
+    scope = str(user_scope_id or "").strip()
+    if revocation.is_revoked(scope) or not revocation.account_stands(scope):
+        if stop_scope(scope) is False:
+            logger.error("WhatsApp: the process of a revoked account did not end")
+
+
+def register_revocation_listener() -> None:
+    from vaf.core import revocation
+    revocation.add_revocation_listener(_on_account_revoked)
+
+
+def _forget_cached(names) -> None:
+    """Drop what the bridge cached under these names: the chat list, LID mappings, contact
+    names, own number, connection state and the contact-sync throttle."""
+    names = [n for n in names if n]
+    with _chat_lists_lock:
+        for n in names:
+            _chat_lists.pop(n, None)
+            _chat_list_events.pop(n, None)
+    with _lid_mappings_lock:
+        for n in names:
+            _lid_mappings.pop(n, None)
+            _lid_mappings_events.pop(n, None)
+    with _contact_names_lock:
+        for n in names:
+            _contact_names.pop(n, None)
+            _contact_names_events.pop(n, None)
+    with _connection_lock:
+        for n in names:
+            _connection_status.pop(n, None)
+            _connection_events.pop(n, None)
+    for n in names:
+        _self_phone.pop(n, None)
+        _contact_sync_last.pop(n, None)
+
+
+def _folder_of_another_account(username: str, user_scope_id: Any) -> Optional[str]:
+    """The name of another account (the local admin included) whose login folder is this
+    name's folder on this file system, or None. Only names with the same
+    `path_jail.portable_name_key` can be: the same name under another scope (an ordinary
+    account named like a local admin that has no row of its own), or a twin created before
+    names were compared that way ("Straße" next to "strasse"), which only a case-insensitive
+    file system makes one folder. Removing such a folder would remove the other account's
+    login."""
+    from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
+    from vaf.core.path_jail import portable_name_key
+    name = (username or "").strip()
+    key, gone = portable_name_key(name), _scope_key(user_scope_id)
+    others = []
+    try:
+        if _scope_key(get_local_admin_scope_id()) != gone:
+            others.append(str(get_local_admin_username() or "").strip())
+    except Exception:
+        pass
+    try:
+        from vaf.core.tool_dispatch import resolve_account_directory
+        others += [str(r.get("username") or "").strip() for r in resolve_account_directory()
+                   if _scope_key(r.get("user_scope_id")) != gone]
+    except Exception:
+        pass
+    mine = get_whatsapp_auth_dir(name)
+    for other in others:
+        if not other or portable_name_key(other) != key:
+            continue
+        try:
+            if os.path.samefile(get_whatsapp_auth_dir(other), mine):
+                return other
+        except OSError:
+            continue
+    return None
+
+
+def forget_account_login(username: str, user_scope_id: Any) -> bool:
+    """A deleted account's WhatsApp ends with it: its process stops and its pending start is
+    cancelled (`stop_scope`), the name's cached chat list, LID mappings, names, own number and
+    connection state are dropped, and its login and picture cache are removed
+    (`whatsapp_auth.remove_login`). True when the login is gone.
+
+    Nothing is removed (False, a warning) while a Node still runs on the folder (one that
+    survived its kill writes into it) or when the folder is another account's too (a
+    case-insensitive file system and a name twin from before names were compared by
+    `portable_name_key`). Such a folder is moved aside when the name is used again
+    (`user_admin.create_local_user`)."""
+    name = (username or "").strip()
+    if not name:
+        return False
+    names = {n for n, _ in _registrations_of(user_scope_id)} | {name}
+    if stop_scope(user_scope_id) is False:
+        logger.error("WhatsApp: the process of the deleted account %s did not end", name)
+    folder = get_whatsapp_auth_dir(name)
+    if login_in_use(folder):
+        logger.warning("WhatsApp: the login of the deleted account %s is kept, a process still "
+                       "runs on it", name)
+        return False
+    other = _folder_of_another_account(name, user_scope_id)
+    if other is not None:
+        logger.warning("WhatsApp: the login of the deleted account %s is kept, it is the folder "
+                       "of the account %s on this file system", name, other)
+        return False
+    _forget_cached(names)
+    from vaf.core.whatsapp_auth import remove_login
+    return remove_login(name, avatars=True)
+
+
 def is_bridge_running() -> bool:
     return _bridge_thread is not None and _bridge_thread.is_alive()
 
@@ -2988,13 +3206,13 @@ def any_process_connected(wait_timeout: float = 2.0) -> bool:
     """True when at least one running per-user process reports an open WhatsApp socket.
     The reconnect worker asks this instead of naming an account."""
     with _process_lock:
-        names = [u for u, p in _processes.items() if p.poll() is None]
-    return any(get_connection_status(u, wait_timeout=wait_timeout) for u in names)
+        names = [(u, _scope_by_user.get(u)) for u, p in _processes.items() if p.poll() is None]
+    return any(get_connection_status(u, wait_timeout=wait_timeout, user_scope_id=s) for u, s in names)
 
 
 def has_process_for_user(username: str, user_scope_id: Optional[str] = None) -> bool:
-    """True if we have a running Node process for this user (so sends will not be dropped).
-    With `user_scope_id`, only a process started for that scope counts (`_process_for`)."""
+    """True if a running Node process acts for this account (so sends will not be dropped):
+    one started for `user_scope_id` (`_process_for`). Without a scope, False."""
     if not is_bridge_running():
         return False
     uname = (username or "").strip() or "admin"
@@ -3002,9 +3220,9 @@ def has_process_for_user(username: str, user_scope_id: Optional[str] = None) -> 
     return bool(proc is not None and proc.poll() is None and proc.stdin)
 
 
-def _request_chats(username: str) -> Optional[str]:
+def _request_chats(username: str, user_scope_id: Optional[str]) -> Optional[str]:
     """Send getChats to the Node process. Returns the username whose process was used (for lookup), or None."""
-    target_username, proc = _process_for(username)
+    target_username, proc = _process_for(username, user_scope_id)
     if proc and proc.poll() is None and proc.stdin:
         try:
             proc.stdin.write(json.dumps({"cmd": "getChats"}) + "\n")
@@ -3015,9 +3233,9 @@ def _request_chats(username: str) -> Optional[str]:
     return None
 
 
-def _request_sync_chats(username: str) -> Optional[str]:
+def _request_sync_chats(username: str, user_scope_id: Optional[str]) -> Optional[str]:
     """Send syncChats to the Node (triggers Baileys fetchMessageHistory so full chat list is synced). Returns username used, or None."""
-    target_username, proc = _process_for(username)
+    target_username, proc = _process_for(username, user_scope_id)
     if proc and proc.poll() is None and proc.stdin:
         try:
             proc.stdin.write(json.dumps({"cmd": "syncChats"}) + "\n")
@@ -3028,12 +3246,14 @@ def _request_sync_chats(username: str) -> Optional[str]:
     return None
 
 
-def get_whatsapp_chats(username: str, force_refresh: bool = False, wait_timeout: float = 3.0) -> List[Dict[str, Any]]:
-    """Return the list of all WhatsApp chats. Requests from bridge when running."""
+def get_whatsapp_chats(username: str, force_refresh: bool = False, wait_timeout: float = 3.0, *,
+                       user_scope_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Return the list of all WhatsApp chats. Requests from the account's own process
+    (`user_scope_id`) when it runs, else the last list stored under this name."""
     if not is_bridge_running():
         with _chat_lists_lock:
             return list(_chat_lists.get(username, []))
-    used_username = _request_chats(username)
+    used_username = _request_chats(username, user_scope_id)
     if not used_username:
         with _chat_lists_lock:
             return list(_chat_lists.get(username, []))
@@ -3047,12 +3267,13 @@ def get_whatsapp_chats(username: str, force_refresh: bool = False, wait_timeout:
         return list(_chat_lists.get(used_username, []))
 
 
-def sync_whatsapp_chats(username: str, wait_timeout: float = 25.0) -> List[Dict[str, Any]]:
+def sync_whatsapp_chats(username: str, wait_timeout: float = 25.0, *,
+                        user_scope_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Request full chat list sync from WhatsApp (Node calls Baileys fetchMessageHistory), then return the updated list. Use when the left-side list is incomplete."""
     if not is_bridge_running():
         with _chat_lists_lock:
             return list(_chat_lists.get(username, []))
-    used_username = _request_sync_chats(username)
+    used_username = _request_sync_chats(username, user_scope_id)
     if not used_username:
         with _chat_lists_lock:
             return list(_chat_lists.get(username, []))
@@ -3102,7 +3323,7 @@ def fetch_older_messages(
         # instead of asking: the first stored message (an inbound, a send) is the cursor.
         out.update({"ok": True, "no_cursor": True})
         return out
-    _, proc = _process_for(uname)
+    _, proc = _process_for(uname, user_scope_id)
     if not proc or proc.poll() is not None or not proc.stdin:
         out["error"] = "WhatsApp bridge is not running."
         return out
@@ -3154,9 +3375,9 @@ def fetch_older_messages(
 
 
 def avatar_cache_dir(username: str) -> Path:
-    """Per-user cache of profile pictures, beside that user's WhatsApp credentials (never
-    shared between users: the pictures belong to the people this user's agent talks to)."""
-    return get_whatsapp_auth_dir(username).parent / "whatsapp_avatars"
+    """Per-user cache of profile pictures (`whatsapp_auth.get_whatsapp_avatar_dir`)."""
+    from vaf.core.whatsapp_auth import get_whatsapp_avatar_dir
+    return get_whatsapp_avatar_dir(username)
 
 
 def _avatar_key(chat_jid: str) -> str:
@@ -3165,13 +3386,17 @@ def _avatar_key(chat_jid: str) -> str:
     return (digits or "x") + ("_lid" if (chat_jid or "").endswith("@lid") else "")
 
 
-def get_avatar(username: str, chat_jid: str, wait_timeout: float = 8.0) -> Optional[Tuple[bytes, str]]:
+def get_avatar(username: str, chat_jid: str, wait_timeout: float = 8.0, *,
+               user_scope_id: Optional[str] = None) -> Optional[Tuple[bytes, str]]:
     """The profile picture of a chat as (bytes, mime), or None when the person shows none
-    (privacy setting, no picture, or the bridge is down).
+    (privacy setting, no picture, or the bridge is down), asked of the account's own process
+    (`user_scope_id`; without one, None).
 
     Cached on disk for AVATAR_TTL_SECONDS in both directions: a `.none` marker records
     "asked, nothing there", so a private profile is not queried on every render. One
     Node query runs at a time (see _avatar_query_lock)."""
+    if not str(user_scope_id or "").strip():
+        return None
     uname = (username or "").strip() or "admin"
     jid = (chat_jid or "").strip()
     # Only people have a profile picture worth asking for: newsletters, groups and the
@@ -3191,7 +3416,7 @@ def get_avatar(username: str, chat_jid: str, wait_timeout: float = 8.0) -> Optio
             return None
     except OSError:
         pass
-    _, proc = _process_for(uname)
+    _, proc = _process_for(uname, user_scope_id)
     if not proc or proc.poll() is not None or not proc.stdin:
         return None
     with _avatar_query_lock:
@@ -3242,7 +3467,7 @@ def resync_contacts(username: str, wait_timeout: float = 60.0, user_scope_id: Op
     app-state contact collection; see `resyncContacts` in wa-bridge.js). Returns
     (ok, error). Slow by nature: WhatsApp streams the whole collection."""
     uname = (username or "").strip() or "admin"
-    _, proc = _process_for(uname)
+    _, proc = _process_for(uname, user_scope_id)
     if not proc or proc.poll() is not None or not proc.stdin:
         return False, "WhatsApp bridge is not running."
     req_id = str(uuid.uuid4())
@@ -3299,7 +3524,7 @@ def _fetch_names_per_chat(username: str, user_scope_id: Optional[str]) -> int:
             newest = []
         if not newest or not newest[0].get("message_id") or str(newest[0]["message_id"]).startswith("_"):
             continue
-        _, proc = _process_for(uname)
+        _, proc = _process_for(uname, user_scope_id)
         if not proc or proc.poll() is not None or not proc.stdin:
             break
         cmd = {
@@ -3322,9 +3547,9 @@ def _fetch_names_per_chat(username: str, user_scope_id: Optional[str]) -> int:
     return sent
 
 
-def _request_lid_mappings(username: str) -> Optional[str]:
+def _request_lid_mappings(username: str, user_scope_id: Optional[str]) -> Optional[str]:
     """Ask Node for LID→E.164 from Baileys lidMapping. Returns username used for lookup."""
-    target_username, proc = _process_for(username)
+    target_username, proc = _process_for(username, user_scope_id)
     if proc and proc.poll() is None and proc.stdin:
         try:
             proc.stdin.write(json.dumps({"cmd": "getLidMappings"}) + "\n")
@@ -3335,9 +3560,9 @@ def _request_lid_mappings(username: str) -> Optional[str]:
     return None
 
 
-def _request_contacts(username: str) -> Optional[str]:
+def _request_contacts(username: str, user_scope_id: Optional[str]) -> Optional[str]:
     """Ask the Node for its named numbers. Returns the username whose process answered, or None."""
-    target_username, proc = _process_for(username)
+    target_username, proc = _process_for(username, user_scope_id)
     if proc and proc.poll() is None and proc.stdin:
         try:
             proc.stdin.write(json.dumps({"cmd": "getContacts"}) + "\n")
@@ -3348,14 +3573,15 @@ def _request_contacts(username: str) -> Optional[str]:
     return None
 
 
-def get_contact_names(username: str, wait_timeout: float = 2.5) -> Dict[str, Dict[str, str]]:
+def get_contact_names(username: str, wait_timeout: float = 2.5, *,
+                      user_scope_id: Optional[str] = None) -> Dict[str, Dict[str, str]]:
     """Phone digits -> {name, source, e164} as WhatsApp shows them (address book, business
     name or push name), from the Node's contact store. The last answer when the bridge is
     down or slow; empty when it never answered."""
     if not is_bridge_running():
         with _contact_names_lock:
             return dict(_contact_names.get(username, {}))
-    used = _request_contacts(username)
+    used = _request_contacts(username, user_scope_id)
     if not used:
         with _contact_names_lock:
             return dict(_contact_names.get(username, {}))
@@ -3369,12 +3595,13 @@ def get_contact_names(username: str, wait_timeout: float = 2.5) -> Dict[str, Dic
         return dict(_contact_names.get(used, {}))
 
 
-def get_lid_mappings(username: str, wait_timeout: float = 2.5) -> List[Dict[str, str]]:
+def get_lid_mappings(username: str, wait_timeout: float = 2.5, *,
+                     user_scope_id: Optional[str] = None) -> List[Dict[str, str]]:
     """Return LID→E.164 known by Node (Baileys). Requests from bridge when running. Empty if not available."""
     if not is_bridge_running():
         with _lid_mappings_lock:
             return list(_lid_mappings.get(username, []))
-    used_username = _request_lid_mappings(username)
+    used_username = _request_lid_mappings(username, user_scope_id)
     if not used_username:
         with _lid_mappings_lock:
             return list(_lid_mappings.get(username, []))
@@ -3388,12 +3615,14 @@ def get_lid_mappings(username: str, wait_timeout: float = 2.5) -> List[Dict[str,
         return list(_lid_mappings.get(used_username, []))
 
 
-def get_connection_status(username: str, wait_timeout: float = 5.0) -> bool:
-    """Check if the WhatsApp socket is connected (Node has currentSock). Runs ping/pong with the bridge. Timeout 5s so read loop can be busy (e.g. transcribing)."""
+def get_connection_status(username: str, wait_timeout: float = 5.0, *,
+                          user_scope_id: Optional[str] = None) -> bool:
+    """Check if the account's WhatsApp socket is connected (Node has currentSock): ping/pong
+    with the process started for `user_scope_id`. Timeout 5s so read loop can be busy (e.g. transcribing)."""
     if not is_bridge_running():
         return False
     uname = (username or "").strip() or "admin"
-    target, proc = _process_for(uname)
+    target, proc = _process_for(uname, user_scope_id)
     if not proc or proc.poll() is not None or not proc.stdin:
         return False
     with _connection_lock:
@@ -3409,3 +3638,6 @@ def get_connection_status(username: str, wait_timeout: float = 5.0) -> bool:
     ev.wait(timeout=wait_timeout)
     with _connection_lock:
         return _connection_status.get(target, False)
+
+
+register_revocation_listener()

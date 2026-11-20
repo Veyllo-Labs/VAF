@@ -44,6 +44,8 @@ def isolated(monkeypatch, tmp_path):
     monkeypatch.setattr(Config, "save", classmethod(lambda cls, cfg: overrides.__setitem__("whatsapp_config", cfg.get("whatsapp_config") or {})))
     monkeypatch.setattr(wa, "_wa_pending", {})
     monkeypatch.setattr(wa, "_lid_mappings", {})
+    # A process the tests register under "alice" acts for Alice's scope (`_process_for`).
+    monkeypatch.setattr(wa, "_scope_by_user", {"alice": SCOPE})
     return overrides
 
 
@@ -790,10 +792,10 @@ def test_avatar_is_fetched_once_and_cached_in_both_directions(isolated, monkeypa
         wa._dispatch_bridge_event("alice", SCOPE, "avatar", {"req_id": cmd["req_id"], **answers[cmd["jid"]]})
         return r
     written.write = _w
-    assert wa.get_avatar("alice", "491700000009@s.whatsapp.net", wait_timeout=2.0) == (b"JPEGDATA", "image/jpeg")
-    assert wa.get_avatar("alice", "491700000009@s.whatsapp.net", wait_timeout=2.0) == (b"JPEGDATA", "image/jpeg")   # disk cache
-    assert wa.get_avatar("alice", "491700000005@s.whatsapp.net", wait_timeout=2.0) is None
-    assert wa.get_avatar("alice", "491700000005@s.whatsapp.net", wait_timeout=2.0) is None                          # negative cache
+    assert wa.get_avatar("alice", "491700000009@s.whatsapp.net", wait_timeout=2.0, user_scope_id=SCOPE) == (b"JPEGDATA", "image/jpeg")
+    assert wa.get_avatar("alice", "491700000009@s.whatsapp.net", wait_timeout=2.0, user_scope_id=SCOPE) == (b"JPEGDATA", "image/jpeg")   # disk cache
+    assert wa.get_avatar("alice", "491700000005@s.whatsapp.net", wait_timeout=2.0, user_scope_id=SCOPE) is None
+    assert wa.get_avatar("alice", "491700000005@s.whatsapp.net", wait_timeout=2.0, user_scope_id=SCOPE) is None                          # negative cache
     assert asked == ["491700000009@s.whatsapp.net", "491700000005@s.whatsapp.net"]
     cache = wa.avatar_cache_dir("alice")
     assert (cache / "491700000009.jpg").is_file() and (cache / "491700000005.none").is_file()
@@ -865,12 +867,12 @@ def test_avatar_lookups_skip_newsletters_and_remember_whatsapps_refusals(isolate
     # Newsletters, groups and the status broadcast are never asked: each such query would
     # hold the one-at-a-time lock for the whole timeout (live: minutes of queue).
     for jid in ("120363000000000001@newsletter", "120363000000000000@g.us", "status@broadcast"):
-        assert wa.get_avatar("alice", jid, wait_timeout=1.0) is None
+        assert wa.get_avatar("alice", jid, wait_timeout=1.0, user_scope_id=SCOPE) is None
     assert asked == []
     # WhatsApp's own refusal (item-not-found / not-authorized) is a "no picture", cached
     # like an empty answer, not a transport error to retry on every render.
-    assert wa.get_avatar("alice", "491700000009@s.whatsapp.net", wait_timeout=1.0) is None
-    assert wa.get_avatar("alice", "491700000009@s.whatsapp.net", wait_timeout=1.0) is None
+    assert wa.get_avatar("alice", "491700000009@s.whatsapp.net", wait_timeout=1.0, user_scope_id=SCOPE) is None
+    assert wa.get_avatar("alice", "491700000009@s.whatsapp.net", wait_timeout=1.0, user_scope_id=SCOPE) is None
     assert asked == ["491700000009@s.whatsapp.net"]
     assert (wa.avatar_cache_dir("alice") / "491700000009.none").is_file()
 
@@ -889,7 +891,7 @@ def test_resync_contacts_asks_the_node_and_clears_the_sync_throttle(isolated, mo
         wa._dispatch_bridge_event("alice", SCOPE, "resync_contacts_result", {"req_id": cmd["req_id"], "success": True, "names": 12})
         return r
     written.write = _w
-    assert wa.resync_contacts("alice", wait_timeout=2.0) == (True, "")
+    assert wa.resync_contacts("alice", wait_timeout=2.0, user_scope_id=SCOPE) == (True, "")
     assert "alice" not in wa._contact_sync_last
 
 

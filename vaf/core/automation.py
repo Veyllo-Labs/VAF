@@ -2196,7 +2196,7 @@ vaf automation delete <id>   # Delete task
         nothing was written, because the record has fired already (another start claimed it
         first; the run lock alone cannot tell two starts at the same instant apart), is gone,
         or belongs to a task created anew; the run must not go. "unwritten": the store is busy
-        or cannot be written. Never raises: that must not stop the run it was scheduled for, so
+        or cannot be written; the captured `task` carries the mark all the same. Never raises: that must not stop the run it was scheduled for, so
         the failure is logged and the run goes; the run's removal after it is then the only
         guard left (the named boundary in docs/platform/AUTOMATIONS.md)."""
         stamp = datetime.now().isoformat()
@@ -2213,6 +2213,9 @@ vaf automation delete <id>   # Delete task
             self._mutate_record(task, claim, same_incarnation=True)
         except Exception as e:
             append_domain_log("backend", f"[AUTOMATION] one-time {task.id} not marked consumed: {e!r}")
+            # The run goes, so this copy is consumed all the same: run again (the store having
+            # recovered, nothing stamped and nothing removed), it must not go a second time.
+            task.consumed_at = stamp
             return "unwritten"
         if not claimed["done"]:
             return "refused"

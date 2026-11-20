@@ -605,6 +605,36 @@ def test_a_mark_that_cannot_be_written_does_not_stop_the_run(env):
     assert _pushed(env) == [("success", "Fertig.")]
 
 
+def test_a_run_whose_mark_was_not_written_still_marks_its_own_copy(env):
+    """The store refused the mark, the stamp and both removals; the run went (it may have sent)
+    and failed. Once the store recovers, the same captured object must not run again: it
+    carries the mark in memory. MUTATION: return "unwritten" without marking the copy."""
+    from vaf.core.automation import AutomationStoreBusy
+    seen = _prompt_agent(env, returns="[Error] backend down", turn=FAILED_TURN)
+    manager, task = _task(env, "once")
+    broken = {"on": True}
+    real_mutate, real_delete = AutomationManager._mutate_record, AutomationManager._delete
+
+    def mutate(self, *a, **k):
+        if broken["on"]:
+            raise OSError("store not writable")
+        return real_mutate(self, *a, **k)
+
+    def delete(self, *a, **k):
+        if broken["on"]:
+            raise AutomationStoreBusy("automation store is busy")
+        return real_delete(self, *a, **k)
+
+    env.monkeypatch.setattr(AutomationManager, "_mutate_record", mutate)
+    env.monkeypatch.setattr(AutomationManager, "_delete", delete)
+    manager.run_task(task, new_terminal=False)
+    assert seen["calls"] == 1 and _record(env)["consumed_at"] is None
+    broken["on"] = False                                          # the store recovers
+    out = manager.run_task(task, new_terminal=False)
+    assert seen["calls"] == 1, "the same one-time run went a second time"
+    assert SKIPPED in out
+
+
 @pytest.mark.parametrize("status", ["unconsumed", "consumed"])
 def test_a_manual_run_of_a_consumed_one_time_task_is_refused(env, status):
     """`vaf automation run` loads the record again; one whose removal failed after its run

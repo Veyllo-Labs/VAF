@@ -566,10 +566,11 @@ def get_whatsapp_chat_jid_from_whitelist(
     page's copy of a number it had just added (`{phone_number, vaf_username: null}`), and the
     lookups before this one did not find that copy either. Matched as the admin's, first in
     whitelist order, it took the place of the admin's own scoped entry, whatever number it
-    held. The repair is to give the entry the admin's scope AND the admin's own username:
-    with the scope alone, the name "admin" still matches an ordinary account named "admin" in
-    the bridge (`_get_allowed_phones_for_user`). Registering the number again on the
-    Connections page writes an entry with the account's scope and name.
+    held. The repair is to edit that entry so it carries the admin's scope AND the admin's own
+    username, or to remove it: with the scope alone, the name "admin" still matches an
+    ordinary account named "admin" in the bridge (`_get_allowed_phones_for_user`).
+    Registering the number again on the Connections page is not enough: it writes or updates
+    the admin's own entry and leaves the old one in place.
     """
     whatsapp_config = Config.get("whatsapp_config") or {}
     if not isinstance(whatsapp_config, dict) or not whatsapp_config.get("whitelist"):
@@ -704,8 +705,9 @@ def get_whatsapp_chat_jid(
     lane itself is never foreign, even when another account registered it too. A name key that
     another account holds (`_whatsapp_name_is_lanes`) is not this lane's: it is not read at
     all (an unregistered self-chat there is that account's, not this lane's), never deleted,
-    and the fallback is saved under the scope only. The fallback is found by scope, with the
-    attribution above, so it is never another account's number.
+    and the fallback is saved under the scope only. The fallback is found by scope only: the
+    number of an entry filed under the lane's own scope, which the attribution above never
+    counts as foreign to the lane (see the boundary below on whose number that is).
 
     Whose lane the lookup is comes first (`config.messenger_lane_identity`): a caller without a
     scope under an admin name is the local admin's lane under the admin's own scope and name, so
@@ -725,6 +727,13 @@ def get_whatsapp_chat_jid(
     - Two accounts filed under one name (`_whatsapp_name_is_lanes`): an ordinary account named
       "admin" reads its own name key, which older versions also wrote the local admin's chats
       under; a value there that is no registered number is returned to that account.
+    - An entry filed under a lane's scope is that lane's number, whoever's number it is. An
+      admin who registers a number for another account on the WhatsApp window sends only that
+      account's name; the route files the number under the admin's own scope, and its update
+      loop, which matches by scope, overwrites the admin's own entry with it. Every lane of the
+      local admin, the ones without a scope included (`messenger_lane_identity`), then
+      delivers to that number through the admin's own process. The cause is that route, not
+      this reader, and it is not closed here.
     - The registered-number helpers stay private: this is the one reader of "whose number is
       this"; a second reader is the measurement that would earn a public primitive.
     - Cost: one canonicalisation per whitelist entry, plus one LID-map copy when another

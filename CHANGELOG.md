@@ -514,7 +514,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   when you have neither, and records the removal in the security log as "Delivery chat
   corrected". Messages from lanes that carry no account, such as the Discord bridge and
   reminders saved by older versions, now go out only through your own linked WhatsApp, to
-  your own chat, or to the web UI. Before, an account that another person had registered
+  the chat registered under your account, or to the web UI. Before, an account that another
+  person had registered
   under the name "admin" could send them from its WhatsApp to itself or to you, and the
   delivery fix above could reset that account's saved chat again on every message. A send
   without an account that names any other account is no longer made.

@@ -82,11 +82,14 @@ def request_account(request: Request) -> Dict[str, str]:
     out through the admin's process, a read shows the admin's chats. One rule for every
     WhatsApp and every Telegram route that acts for an account; the WhatsApp module's
     `get_current_vaf_user` delegates here, the Telegram one is gone, and the contact routes
-    still carry a lenient `get_current_vaf_user` of their own. Routes that read no account
-    are not covered: the bridge and bot switches, the WhatsApp QR log path and the Telegram
-    verification. The WhatsApp chat history asks the session gate with the authenticated
-    scope instead (`session_access_allowed`), which refuses a non-admin caller without one. It used to be two copies that disagreed (one
-    accepted a scope without a name and then read the caller as the local admin)."""
+    still carry a lenient `get_current_vaf_user` of their own. This rule used to be two
+    copies that disagreed (one accepted a scope without a name and then read the caller as
+    the local admin).
+
+    Routes that read no account are not covered: the bridge and bot switches, the WhatsApp
+    QR log path and the Telegram verification. The WhatsApp chat history asks the session
+    gate with the authenticated scope instead (`session_access_allowed`), which refuses a
+    non-admin caller without one."""
     user = getattr(request.state, "user", None)
     if not user or not isinstance(user, dict):
         return {"user_scope_id": str(get_local_admin_scope_id()), "username": get_local_admin_username()}

@@ -60,10 +60,11 @@ def _normalize_chat_id(chat_id: str) -> str:
 def get_current_vaf_user(request: Request) -> Dict[str, str]:
     """user_scope_id and username of the account the request acts for, strictly
     (`user_routes.request_account`): the tokenless desktop is the local admin, and a signed-in
-    request without a scope or a name is refused. Every WhatsApp route acts on an account's
-    own linked number, auth folder or chats, so a lenient reader that filled the gap with the
-    local admin's identity would hand a stranger the admin's (the QR reset would even delete
-    the admin's login)."""
+    request without a scope or a name is refused. Every WhatsApp route that acts for an
+    account acts on that account's own linked number, auth folder or chats, so a lenient
+    reader that filled the gap with the local admin's identity would hand a stranger the
+    admin's (the QR reset would even delete the admin's login). The bridge's start, stop and
+    restart and the QR log path read no account and do not call this."""
     return request_account(request)
 
 

@@ -112,14 +112,24 @@ def _snapshot(root: Path) -> dict:
 def _ws(monkeypatch, *, role, scope, frames, seen=None):
     """Send `frames` ([(frame, reply_type), ...]) over one real `/ws` connection opened with a
     signed token; the replies in order. `role=None` signs no role claim (the machine owner's
-    tokenless identity carries none). `seen`, a list, receives every message read."""
+    tokenless identity carries none). `seen`, a list, receives every message read.
+
+    The account-standing check of the handshake answers what it answers with the auth store
+    unreachable (the token stands) without asking it: it dialed the store four times per
+    connection, about eight seconds on a Windows runner, and these tests are about who
+    reaches which automation, not about account standing (tests/test_account_revocation.py)."""
     import jwt
     from starlette.testclient import TestClient
 
     import vaf.auth.crypto as crypto
+    import vaf.core.web_server as web_server
     from vaf.core.web_server import app
 
+    async def stands(*_a, **_kw):
+        return True
+
     monkeypatch.setattr(crypto, "get_jwt_secret", lambda: "s" * 32)
+    monkeypatch.setattr(web_server, "token_account_stands", stands)
     claims = {"sub": "7", "user_scope_id": scope, "username": "alice"}
     if role is not None:
         claims["role"] = role

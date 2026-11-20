@@ -512,9 +512,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **For applications built on VAF: the account directory also names the account behind a
   scope.** A directory registered with `set_account_directory_resolver` now answers the
   account name for scheduled work and for `user_scope`, which used to get a synthetic
-  `scope_` name. A name is used only when it is one plain file name, is not "admin" or the
-  machine owner's name, does not start with `scope_` and belongs to exactly one account
-  (compared without case); otherwise the scope keeps its synthetic name.
+  `scope_` name. A name is used only when it is a file name that means the same folder on
+  Linux, Windows and macOS (no trailing dot, no decomposed accents, no invisible
+  characters, no device name such as `CON`), is not "admin" or the machine owner's name,
+  does not start with `scope_` and belongs to exactly one account (compared without case
+  and in one Unicode form); otherwise the scope keeps its synthetic name.
 - **The document editor opens Word and PowerPoint files up to 100 MB.** A larger one is
   refused with "too large to open here (over 100 MB)" instead of being read whole into
   memory. The text of a Word or PowerPoint file attached in a chat is read up to 20 MB, as

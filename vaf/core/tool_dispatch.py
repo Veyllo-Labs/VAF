@@ -1204,25 +1204,39 @@ class AccountDirectoryIndex:
 
     ``rows`` in the resolver's order; ``by_scope`` keyed on the scope lower-cased (the UUID
     column compares without case) and ``by_name`` on the name casefolded, each to the rows
-    that carry it, in the same order. Everything is read-only, so a caller cannot change
+    that carry it, in the same order; ``first_by_name`` gives the first row under each exact
+    name; ``scopes_by_key`` maps a name's
+    ``path_jail.portable_name_key`` (NFC, casefolded: one folder on Windows and macOS) to
+    the distinct scopes, lower-cased, that carry it, so a twin check is one lookup however
+    many rows share the name. Everything is read-only, so a caller cannot change
     what the next lookup in the same block sees. Built once per block: a listing asks it
     once per task, and a scan of the whole directory per lookup made a listing quadratic
     (measured: 10,000 accounts and 3,000 lookups, 4.6 s).
     """
 
-    __slots__ = ("rows", "by_scope", "by_name")
+    __slots__ = ("rows", "by_scope", "by_name", "first_by_name", "scopes_by_key")
 
     def __init__(self, rows) -> None:
         from types import MappingProxyType
+
+        from vaf.core.path_jail import portable_name_key
         frozen = tuple(MappingProxyType(dict(row)) for row in rows)
         by_scope: dict = {}
         by_name: dict = {}
+        scopes_by_key: dict = {}
         for row in frozen:
             by_scope.setdefault(row["user_scope_id"].lower(), []).append(row)
             by_name.setdefault(row["username"].casefold(), []).append(row)
+            scopes_by_key.setdefault(portable_name_key(row["username"]), set()).add(
+                row["user_scope_id"].lower())
         self.rows = frozen
         self.by_scope = MappingProxyType({k: tuple(v) for k, v in by_scope.items()})
         self.by_name = MappingProxyType({k: tuple(v) for k, v in by_name.items()})
+        first: dict = {}
+        for row in frozen:
+            first.setdefault(row["username"], row)
+        self.first_by_name = MappingProxyType(first)
+        self.scopes_by_key = MappingProxyType({k: frozenset(v) for k, v in scopes_by_key.items()})
 
 
 _directory_once_ctx = _contextvars.ContextVar("vaf_account_directory_once", default=None)

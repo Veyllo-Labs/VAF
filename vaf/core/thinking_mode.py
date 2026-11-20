@@ -65,8 +65,8 @@ def _resolve_username_for_scope(user_scope_id: Any) -> Optional[str]:
     Which directory name counts is `config.account_name_for_scope`'s rule: the directory the
     application registered (`tool_dispatch.set_account_directory_resolver`; VAF registers its
     `local_users` table), never the auth store read from here, and only a name that is one
-    plain entry, not the local admin's, not `scope_`-prefixed and carried by this scope
-    alone. VAF's resolver remembers a store it could not reach for 30 seconds
+    portable entry name (one folder on Linux, Windows and macOS), not the local admin's, not
+    `scope_`-prefixed and carried by this scope alone. VAF's resolver remembers a store it could not reach for 30 seconds
     (`permissions._store_down`), and a listing reads the directory once
     (`account_directory_once`).
     """

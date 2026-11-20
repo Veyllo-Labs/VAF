@@ -197,6 +197,28 @@ REFUSED = {
                    {S_A: _synthetic(S_A), S_B: _synthetic(S_B), S_C: _synthetic(S_C)}),
     "path_escape": (_rows(("..", S_A), ("a\\b", S_B), ("bob\x00", S_C)),
                     {S_A: _synthetic(S_A), S_B: _synthetic(S_B), S_C: _synthetic(S_C)}),
+    # Windows drops a trailing dot: "ownerx." opens the owner's folder, "alice." opens
+    # alice's. MUTATION: drop the trailing-dot check in `portable_entry_name`.
+    "trailing_dot_owner": (_rows((OWNER + ".", S_A)), {S_A: _synthetic(S_A)}),
+    "trailing_dot_twin": (_rows(("alice", S_A), ("alice.", S_B)),
+                          {S_A: "alice", S_B: _synthetic(S_B)}),
+    # macOS compares one Unicode form. MUTATION: drop the NFC check in `portable_entry_name`.
+    "decomposed": (_rows(("cafe\u0301", S_A)), {S_A: _synthetic(S_A)}),
+    # The composed name has a decomposed twin: one folder on macOS. MUTATION: key
+    # `scopes_by_key` on the casefolded name without NFC.
+    "nfc_nfd_twins": (_rows(("caf\u00e9", S_A), ("cafe\u0301", S_B)),
+                      {S_A: _synthetic(S_A), S_B: _synthetic(S_B)}),
+    # MUTATION: drop the device-name check.
+    "device_names": (_rows(("CON", S_A), ("nul", S_B), ("COM1.txt", S_C)),
+                     {S_A: _synthetic(S_A), S_B: _synthetic(S_B), S_C: _synthetic(S_C)}),
+    "device_superscript": (_rows(("COM\u00b9", S_A), ("lpt\u00b3.log", S_B)),
+                           {S_A: _synthetic(S_A), S_B: _synthetic(S_B)}),
+    # A name that looks like another. MUTATION: drop the format-character check.
+    "format_chars": (_rows(("alice\u200b", S_A), ("\ufeffbob", S_B), ("\u202ecarol", S_C)),
+                     {S_A: _synthetic(S_A), S_B: _synthetic(S_B), S_C: _synthetic(S_C)}),
+    # MUTATION: drop the check for the characters Windows refuses.
+    "windows_forbidden": (_rows(("a:b", S_A), ("what?", S_B)),
+                          {S_A: _synthetic(S_A), S_B: _synthetic(S_B)}),
     # MUTATION: drop the `scope_` prefix check (UNLISTED's synthetic name is taken).
     "synthetic_prefix": (_rows((_synthetic(UNLISTED), S_A), ("Scope_1234abcd", S_B)),
                          {S_A: _synthetic(S_A), S_B: _synthetic(S_B)}),
@@ -229,6 +251,45 @@ def test_the_owners_name_is_refused_without_an_owner_scope(store, monkeypatch):
     assert _resolve_username_for_scope(S_A) == _synthetic(S_A)
 
 
+def test_the_owners_name_in_another_unicode_form_is_refused(store, monkeypatch):
+    """An owner name stored decomposed in the config and a tenant row in the composed form
+    are one folder on macOS; `is_local_admin_name` compares casefolded only. MUTATION: drop
+    the `portable_name_key(admin_name)` comparison."""
+    from vaf.core.thinking_mode import _resolve_username_for_scope
+
+    _owner_named(monkeypatch, "jose\u0301")
+    monkeypatch.setattr(tool_dispatch, "_account_directory_resolver",
+                        lambda: _rows(("jos\u00e9", S_A)))
+    assert _resolve_username_for_scope(S_A) == _synthetic(S_A)
+
+
+def test_many_rows_under_one_name_stay_cheap(store, monkeypatch):
+    """An embedder directory may list thousands of accounts under one casefolded name. The
+    forward lookup decides from the distinct scopes per name in the index, and the reverse
+    one stops at the second scope. Measured before: 10,000 such rows and 3,000 lookups,
+    15.7 s. MUTATIONS: decide the forward twin check by scanning the rows; drop the early
+    stop in `_accounts_named_casefolded`; find the exact name by scanning the rows under
+    its casefolded name instead of `first_by_name`."""
+    import time as _time
+
+    from vaf.core.config import account_for_username
+    from vaf.core.thinking_mode import _resolve_username_for_scope
+
+    rows = [{"username": "alice", "user_scope_id": f"ab12cd34-0000-4000-8000-{i:012d}"}
+            for i in range(5000)]
+    monkeypatch.setattr(tool_dispatch, "_account_directory_resolver", lambda: rows)
+    with account_directory_once():
+        started = _time.perf_counter()
+        names = {_resolve_username_for_scope(row["user_scope_id"]) for row in rows}
+        forward = _time.perf_counter() - started
+        started = _time.perf_counter()
+        found = {account_for_username("ALICE") for _ in range(10000)}
+        reverse = _time.perf_counter() - started
+    assert "alice" not in names and found == {None}
+    assert forward < 1.0, f"forward lookups took {forward:.2f} s"
+    assert reverse < 1.0, f"reverse lookups took {reverse:.2f} s"
+
+
 def test_a_name_one_account_alone_carries_is_kept(store, monkeypatch):
     """The rule refuses only what another account could have: two distinct names, a name
     with a dot or a space inside, and a scope listed twice under one name all resolve."""
@@ -238,6 +299,29 @@ def test_a_name_one_account_alone_carries_is_kept(store, monkeypatch):
     rows = _rows(("alice", S_A), ("bob.smith", S_B), ("carol", S_C), ("Carol", S_C.upper()))
     monkeypatch.setattr(tool_dispatch, "_account_directory_resolver", lambda: rows)
     assert [_resolve_username_for_scope(s) for s in SCOPES] == ["alice", "bob.smith", "carol"]
+    # Composed accents and names that only start like a device name are plain names.
+    rows[:] = _rows(("caf\u00e9", S_A), ("console", S_B), ("lpt10.d", S_C))
+    assert [_resolve_username_for_scope(s) for s in SCOPES] == ["caf\u00e9", "console", "lpt10.d"]
+
+
+@pytest.mark.parametrize("name", ["alice", "bob.smith", "caf\u00e9", "console", "comx",
+                                  "lpt10", "a b", "\u00e9t\u00e9.2026"])
+def test_a_portable_name_is_kept_as_it_is(name):
+    from vaf.core.path_jail import portable_entry_name
+
+    assert portable_entry_name(name) == name
+
+
+@pytest.mark.parametrize("name", ["alice.", "a. .", "cafe\u0301", "CON", "con.txt", "Con .txt",
+                                  "nul", "AUX", "prn.x", "COM0", "com9.log", "LPT1",
+                                  "COM\u00b2", "lpt\u00b3", "alice\u200b", "\ufeffx",
+                                  "a\u202eb", "a:b", "a<b", "a|b", "a?", "a*", 'a"b',
+                                  "a/b", "..", ".hidden"])
+def test_a_name_one_platform_reads_differently_is_refused(name):
+    from vaf.core.path_jail import PathEscape, portable_entry_name
+
+    with pytest.raises(PathEscape):
+        portable_entry_name(name)
 
 
 def test_an_unreadable_owner_name_fails_closed(store, monkeypatch):

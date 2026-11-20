@@ -122,9 +122,9 @@ PARTICIPANT_LANES = ("agent", "cli", "remote")
 
 def fold_name(name: Any) -> str:
     """A name as names are compared: NFC-normalised and case-folded ("Straße" == "STRASSE",
-    a precomposed "ë" == "e" + combining diaeresis)."""
-    import unicodedata
-    return unicodedata.normalize("NFC", str(name or "").strip()).casefold()
+    a precomposed "ë" == "e" + combining diaeresis): `path_jail.portable_name_key`."""
+    from vaf.core.path_jail import portable_name_key
+    return portable_name_key(str(name or "").strip())
 
 
 #: Punctuation that belongs to the name's own spelling rather than to the sentence around it

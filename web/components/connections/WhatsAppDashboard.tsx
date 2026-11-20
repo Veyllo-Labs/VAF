@@ -302,9 +302,24 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         onOpenSetupWizard?.();
     };
 
+    // A draft for another account must not outlive the right to name one: with the name field
+    // gone, Register would send that account's number as the caller's own.
+    const dropForeignDraft = useCallback(() => {
+        setOwnerAddPhone('');
+        setOwnerAddUsername('');
+        setOwnerAddError(t('ownerDraftCleared'));
+    }, [t]);
+    useEffect(() => {
+        if (data && !data.may_register_for_others && ownerAddUsername.trim()) dropForeignDraft();
+    }, [data, ownerAddUsername, dropForeignDraft]);
+
     const handleOwnerAdd = async () => {
         const raw = ownerAddPhone.trim().replace(/\s/g, '');
         if (!raw) return;
+        if (!data?.may_register_for_others && ownerAddUsername.trim()) {
+            dropForeignDraft();
+            return;
+        }
         const phone = raw.startsWith('+') ? raw : `+${raw}`;
         const forName = data?.may_register_for_others ? ownerAddUsername.trim() : '';
         setOwnerAddError(null);
@@ -908,7 +923,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
             <SettingsCard title={t('cardOwnerTitle')} desc={t('cardOwnerDesc')}>
                 {(data?.owner_numbers || []).map((e, i) => (
                     <KvRow key={i} left={e.phone_number} right={<>
-                        {e.vaf_username && <span>{e.vaf_username}</span>}
+                        {e.vaf_username && <span className="max-w-[7rem] truncate" title={e.vaf_username}>{e.vaf_username}</span>}
                         <button type="button" title={t('remove')} onClick={() => { if (confirm(t('removeOwnerConfirm'))) handleOwnerRemove(e.phone_number); }}
                             className="p-1 rounded hover:bg-red-100 text-gray-500 hover:text-red-600"><Trash2 className="w-3.5 h-3.5" /></button>
                     </>} />
@@ -921,7 +936,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                     )}
                     <button type="button" onClick={handleOwnerAdd} disabled={!ownerAddPhone.trim()} className={BTN_PRIMARY}>{t('register')}</button>
                 </div>
-                {ownerAddError && <p className="mt-2 text-xs text-red-600">{ownerAddError}</p>}
+                {ownerAddError && <p className="mt-2 text-xs text-red-600 break-words">{ownerAddError}</p>}
             </SettingsCard>
 
             <SettingsCard title={t('cardWhoTitle')} desc={t('cardWhoDesc')}>

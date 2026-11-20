@@ -1424,6 +1424,33 @@ def test_a_crash_after_the_create_is_not_repeated(store, workspaces, monkeypatch
     assert record["automation_action_result"]["task_id"] == calls[0]
 
 
+def test_a_failed_automation_write_answers_not_saved(store, workspaces, monkeypatch):
+    """The automation store fails while the claimed action runs: that is a decision not
+    saved (the claim stays and the next approve finishes it), not a missing handoff, and
+    no path reaches the caller. MUTATION: let the `OSError` of the action pass through
+    `_approve_locked`."""
+    ws = workspaces
+    hid = _create_handoff(ws)
+    before = _a_tasks(store)
+    real = AutomationManager._save_task
+    failed = []
+
+    def save_task(self, task):
+        if not failed:
+            failed.append(task.id)
+            raise OSError(28, "No space left on device", str(store / TENANT_A / task.id))
+        return real(self, task)
+
+    monkeypatch.setattr(AutomationManager, "_save_task", save_task)
+    replies = _ws(monkeypatch, role="user", scope=TENANT_A, frames=[
+        _handoff("approve", ws.task_a, hid), _handoff("approve", ws.task_a, hid)])
+    assert replies[0]["ok"] is False and replies[0]["error"] == "handoff decision not saved"
+    assert str(store) not in json.dumps(replies[0])
+    assert replies[1]["ok"] is True, replies[1]
+    assert _a_tasks(store) - before == set(failed), (failed, _a_tasks(store) - before)
+    assert _record(ws, hid)["status"] == "approved"
+
+
 _HOLD_THE_LOCK = (
     "import sys, time\n"
     "from pathlib import Path\n"

@@ -552,8 +552,16 @@ def _approve_locked(user_scope_id: Optional[str], hpath: Path,
             claim["automation_id"] = _unused_automation_id(user_scope_id)
         handoff["claim"] = claim
         _save_decision(hpath, handoff)
-    result = _apply_automation_action(user_scope_id, action,
-                                      planned_id=claim.get("automation_id"))
+    try:
+        result = _apply_automation_action(user_scope_id, action,
+                                          planned_id=claim.get("automation_id"))
+    except OSError as e:
+        # The automation store could not be written. The claim is saved, so this is the
+        # state of a failed decision save and is answered the same way; the error text
+        # names the server's data path and goes to the server log only.
+        append_domain_log("backend", f"[THINKING_WORKSPACE] approve: automation action "
+                                     f"failed after the claim: {e!r}")
+        raise HandoffNotSaved("handoff decision not saved") from None
     handoff["automation_action_result"] = result
     handoff.pop("claim", None)
     handoff["status"] = "approved"

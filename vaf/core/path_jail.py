@@ -399,8 +399,39 @@ class WriteRefused(PermissionError):
     an OSError of its open into a refusal reports this one the same way."""
 
 
+# The WARNING keeps the withheld detail on the server; a `shutil.Error` with thousands of
+# pairs would otherwise write one line of megabytes.
+_LOGGED_CHARS = 2000
+
+
+def _class_name(exc) -> str:
+    try:
+        name = type(exc).__name__
+    except Exception:
+        return "Error"
+    return name if type(name) is str else "Error"
+
+
 def _withheld(exc) -> str:
-    return f"{type(exc).__name__} (details in the server log)"
+    name = _class_name(exc)
+    try:
+        response = getattr(exc, "response", None)
+        status = getattr(response, "status_code", None) if response is not None else None
+    except Exception:
+        status = None
+    if type(status) is int:
+        return f"{name} (HTTP {status})"
+    return f"{name} (details in the server log)"
+
+
+def _exact_text(exc):
+    """``str(exc)`` as an exact `str`, or None when it cannot be read. A ``__str__`` may
+    return a subclass whose own methods raise; ``str.__str__`` copies it into a plain one."""
+    try:
+        text = str(exc)
+        return text if type(text) is str else str.__str__(text)
+    except Exception:
+        return None
 
 
 def describe_error(exc: BaseException, *, log: bool = True) -> str:
@@ -416,12 +447,13 @@ def describe_error(exc: BaseException, *, log: bool = True) -> str:
     In order:
 
     (a) Not an `OSError`: ``str(exc)``, the text its raiser wrote, unchanged.
-    (b) An `OSError` with an ``errno``: its ``strerror`` (else ``os.strerror(errno)``), the
-        operating system's words for the reason ("File name too long", "No space left on
-        device", "Connection refused"), which never contain a path.
-    (c) An `OSError` without an ``errno`` but with a ``filename`` or ``filename2``, or a
-        `WriteRefused` (every one names the path it refused): its ``strerror`` if set, else the
-        withheld text.
+    (b) An `OSError` with an integer ``errno``: ``os.strerror(errno)``, the operating
+        system's own words for it ("File name too long", "No space left on device",
+        "Connection refused"), which never contain a path. Not the error's ``strerror``: any
+        raiser can put text there (``OSError(13, "cannot read /srv/x/key.pem", ...)``).
+    (c) An `OSError` with an ``errno`` that is not an integer, or without one but with a
+        ``strerror``, a ``filename`` or a ``filename2``, or a `WriteRefused` (every one names
+        the path it refused): the withheld text.
     (d) Any other `OSError`: ``str(exc)`` when its class comes from ``builtins`` or from VAF
         (``vaf.``), whose own raise sites put an id in the message ("Session not found: <id>",
         "Task not found"); the withheld text for every other module, whose messages quote
@@ -429,40 +461,48 @@ def describe_error(exc: BaseException, *, log: bool = True) -> str:
         ``UnidentifiedImageError`` (the file it could not read), a ``requests`` error (the
         URL and its query).
 
-    The withheld text is ``"<ClassName> (details in the server log)"``, and with ``log`` true
-    the full ``str(exc)`` goes to this module's logger at WARNING, so the detail stays on the
-    server. ``log=False`` is for a caller that logs the exception itself. Nothing is logged
-    when nothing was withheld. Never raises: an exception whose ``str()`` raises is answered
-    with its class name. One ``str()`` and a few attribute reads; no pattern is matched.
+    The withheld text is ``"<ClassName> (details in the server log)"``, or
+    ``"<ClassName> (HTTP <code>)"`` when the error carries a ``response`` with an integer
+    ``status_code`` (``requests``' and ``huggingface_hub``'s HTTP errors are OSErrors): a
+    refused login, a gated download and a missing file stay told apart without the URL. With
+    ``log`` true the full ``str(exc)`` (its first `_LOGGED_CHARS` characters) goes to this
+    module's logger at WARNING, so the detail stays on the server. ``log=False`` is for a
+    caller that logs the exception itself. Nothing is logged when nothing was withheld.
+
+    Never raises an `Exception`, whatever the exception class does: a ``str()`` that raises
+    or returns a ``str`` subclass, a class whose ``__name__`` raises, a logging handler or
+    filter that raises. One ``str()`` and a few attribute reads; no pattern is matched.
     """
-    try:
-        text = str(exc)
-    except Exception:
-        text = None
+    text = _exact_text(exc)
     try:
         answer = _describe(exc, text)
     except Exception:
         answer = _withheld(exc)
-    if log and answer != text:
-        logging.getLogger(__name__).warning(
-            "%s withheld from a reply: %s", type(exc).__name__,
-            text if text is not None else "(its text could not be read)")
+    try:
+        if log and answer != text:
+            shown = text if text is not None else "(its text could not be read)"
+            if len(shown) > _LOGGED_CHARS:
+                shown = shown[:_LOGGED_CHARS] + f"... ({len(shown)} characters)"
+            logging.getLogger(__name__).warning("%s withheld from a reply: %s",
+                                                _class_name(exc), shown)
+    except Exception:
+        pass
     return answer
 
 
 def _describe(exc, text) -> str:
     if not isinstance(exc, OSError):
-        return text if text is not None else type(exc).__name__
-    reason = exc.strerror if isinstance(exc.strerror, str) and exc.strerror else None
+        return text if text is not None else _class_name(exc)
     if exc.errno is not None:
-        if reason is None and isinstance(exc.errno, int):
+        if type(exc.errno) is int:
             try:
-                reason = os.strerror(exc.errno)
+                return os.strerror(exc.errno)
             except (ValueError, OverflowError):
-                reason = None
-        return reason or _withheld(exc)
-    if exc.filename is not None or exc.filename2 is not None or isinstance(exc, WriteRefused):
-        return reason or _withheld(exc)
+                pass
+        return _withheld(exc)
+    if (exc.strerror is not None or exc.filename is not None or exc.filename2 is not None
+            or isinstance(exc, WriteRefused)):
+        return _withheld(exc)
     module = str(getattr(type(exc), "__module__", "") or "")
     if text is not None and (module == "builtins" or module.startswith("vaf.")):
         return text

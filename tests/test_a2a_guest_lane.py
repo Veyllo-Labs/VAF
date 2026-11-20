@@ -11,6 +11,7 @@ join ticket and nothing else.
 """
 import errno
 import hashlib
+import os
 import re
 import sys
 from pathlib import Path
@@ -343,7 +344,7 @@ def test_a_push_the_host_cannot_store_answers_without_the_host_folder(
                                    params={"seat": seated["seat"], "path": "sub/new.bin"},
                                    content=b"x")
     assert answer.status_code == 500
-    assert answer.json()["detail"] == "could not store the file: Permission denied"
+    assert answer.json()["detail"] == f"could not store the file: {os.strerror(errno.EACCES)}"
     assert str(seated["workspace"]) not in answer.text
 
 

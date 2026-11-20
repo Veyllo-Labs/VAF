@@ -41,6 +41,7 @@ import glob
 import importlib
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -349,8 +350,8 @@ def test_the_global_handler_answers_the_os_reason_and_logs_the_traceback(tmp_pat
     body = response.body.decode("utf-8")
     assert response.status_code == 500
     assert str(tmp_path) not in body
-    assert json.loads(body) == {"ok": False, "error": "File name too long",
-                                "detail": "File name too long"}
+    reason = os.strerror(errno.ENAMETOOLONG)
+    assert json.loads(body) == {"ok": False, "error": reason, "detail": reason}
     # The handler is attached to "uvicorn" itself, because uvicorn's own logging config turns
     # its propagation off; while propagation is on, the root sees the same record again.
     records = list({id(r): r for r in caplog.records if r.name == "uvicorn"}.values())
@@ -448,18 +449,18 @@ def test_the_workspace_routes_answer_the_reason_without_the_path(workspace, monk
         detail = _detail_of(web_server.upload_session_workspace_file(
             web_server.WorkspaceUploadRequest(sessionId="s1", filename="a.txt",
                                               content_base64="aGk="), _request()))
-    assert detail == "Write failed: File name too long"
+    assert detail == f"Write failed: {os.strerror(errno.ENAMETOOLONG)}"
 
     with monkeypatch.context() as patch:
         patch.setattr(web_server.os, "mkdir", _too_long)
         detail = _detail_of(web_server.create_session_workspace_folder(
             web_server.WorkspaceMkdirRequest(sessionId="s1", name="new"), _request()))
-    assert detail == "Create failed: File name too long"
+    assert detail == f"Create failed: {os.strerror(errno.ENAMETOOLONG)}"
 
     (workspace / "old.txt").write_text("x", encoding="utf-8")
     with monkeypatch.context() as patch:
         patch.setattr(web_server.os, "remove", _too_long)
         detail = _detail_of(web_server.delete_session_workspace_entry(
             web_server.WorkspaceDeleteRequest(sessionId="s1", name="old.txt"), _request()))
-    assert detail == "Delete failed: File name too long"
+    assert detail == f"Delete failed: {os.strerror(errno.ENAMETOOLONG)}"
     assert (workspace / "old.txt").exists()

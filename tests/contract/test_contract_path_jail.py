@@ -192,10 +192,52 @@ def _foreign(module, name="UnidentifiedImageError"):
     return type(name, (OSError,), {"__module__": module})
 
 
+class _RaisingName(type):
+    """A metaclass whose classes have no readable name."""
+
+    @property
+    def __name__(cls):
+        raise RuntimeError("no name")
+
+
+class _NamelessOSError(OSError, metaclass=_RaisingName):
+    pass
+
+
+class _HostileText(str):
+    """A ``str`` whose comparisons raise: what a hostile ``__str__`` may hand back."""
+
+    def __eq__(self, other):
+        raise RuntimeError("no comparison")
+
+    def __ne__(self, other):
+        raise RuntimeError("no comparison")
+
+    __hash__ = str.__hash__
+
+
+class _HostileStr(Exception):
+    def __str__(self):
+        return _HostileText("plain words")
+
+
+def _http_error(status):
+    exc = _foreign("requests.exceptions", "HTTPError")(
+        "401 Client Error: Unauthorized for url: https://h.example/x?token=t0k3n")
+    exc.response = type("Response", (), {"status_code": status})()
+    return exc
+
+
 @pytest.mark.parametrize("exc, expected", [
-    # (b) the operating system's reason, whatever path the error quotes
-    (OSError(errno.ENAMETOOLONG, "File name too long", "/home/user/x"), "File name too long"),
-    (OSError(errno.ENOSPC, "No space left on device"), "No space left on device"),
+    # (b) the operating system's words for the errno, whatever path the error quotes
+    (OSError(errno.ENAMETOOLONG, "File name too long", "/home/user/x"),
+     os.strerror(errno.ENAMETOOLONG)),
+    (OSError(errno.ENOSPC, "No space left on device"), os.strerror(errno.ENOSPC)),
+    # (b) a strerror the raiser wrote is not trusted: it can carry the path
+    (OSError(errno.EACCES, "cannot read /srv/x/key.pem", "/srv/x/key.pem"),
+     os.strerror(errno.EACCES)),
+    # (c) an errno that is not a number: withheld, strerror and all
+    (OSError("x", "cannot read /home/user/x"), "OSError" + _WITHHELD_SUFFIX),
     # (d) VAF's own and the builtin classes keep the text their raiser wrote
     (FileNotFoundError("Task not found"), "Task not found"),
     (_foreign("vaf.x", "StoreGone")("Session not found: ab12cd34"), "Session not found: ab12cd34"),
@@ -203,8 +245,14 @@ def _foreign(module, name="UnidentifiedImageError"):
     (shutil.Error([("/home/user/a", "/home/user/b", "why")]), "Error" + _WITHHELD_SUFFIX),
     (_foreign("PIL")("cannot identify image file '/home/user/a.png'"),
      "UnidentifiedImageError" + _WITHHELD_SUFFIX),
-    # (c) a file name without an errno: withheld
+    # (d) an HTTP error keeps its status code and drops the URL
+    (_http_error(401), "HTTPError (HTTP 401)"),
+    (_http_error(True), "HTTPError" + _WITHHELD_SUFFIX),
+    (_http_error("401"), "HTTPError" + _WITHHELD_SUFFIX),
+    # (c) a file name without an errno: withheld, a strerror beside it too
     (OSError(None, None, b"/home/user/x"), "OSError" + _WITHHELD_SUFFIX),
+    (OSError(None, "cannot read /home/user/x", "/home/user/x"), "OSError" + _WITHHELD_SUFFIX),
+    (OSError(None, "cannot read /home/user/x"), "OSError" + _WITHHELD_SUFFIX),
     # (c) WriteRefused names the path it refused
     (vaf.WriteRefused("refusing to write /home/user/x: it is a link"),
      "WriteRefused" + _WITHHELD_SUFFIX),
@@ -212,9 +260,35 @@ def _foreign(module, name="UnidentifiedImageError"):
     (ValueError("bad"), "bad"),
     # never raises
     (_Unprintable(), "_Unprintable"),
+    (_HostileStr(), "plain words"),
+    (_NamelessOSError(None, None, "/home/user/x"), "Error" + _WITHHELD_SUFFIX),
 ])
 def test_describe_error_gives_the_reason_and_never_the_path(exc, expected):
-    assert vaf.describe_error(exc, log=False) == expected
+    answer = vaf.describe_error(exc, log=False)
+    assert type(answer) is str and str.__eq__(answer, expected), (answer, expected)
+
+
+def test_describe_error_never_raises_with_logging_on(caplog):
+    """The comparison with the text and the log call run for these too; neither may raise."""
+    caplog.set_level(logging.WARNING)
+    assert str.__eq__(vaf.describe_error(_HostileStr()), "plain words")
+    assert vaf.describe_error(_NamelessOSError(None, None, "/home/user/x")) == \
+        "Error" + _WITHHELD_SUFFIX
+
+
+def test_a_failing_log_handler_does_not_escape(monkeypatch):
+    class Refusing(logging.Handler):
+        def emit(self, record):
+            raise OSError("logging sink offline")
+
+    logger = logging.getLogger("vaf.core.path_jail")
+    handler = Refusing()
+    logger.addHandler(handler)
+    try:
+        assert vaf.describe_error(OSError(None, None, "/home/user/x")) == \
+            "OSError" + _WITHHELD_SUFFIX
+    finally:
+        logger.removeHandler(handler)
 
 
 def test_describe_error_keeps_the_withheld_text_in_the_log(caplog):
@@ -230,6 +304,15 @@ def test_describe_error_keeps_the_withheld_text_in_the_log(caplog):
     assert caplog.records == []
 
 
+def test_the_logged_detail_is_capped(caplog):
+    """A shutil.Error with thousands of pairs is one WARNING of bounded length, not megabytes."""
+    caplog.set_level(logging.WARNING)
+    pairs = [(f"/home/user/a{i}", f"/home/user/b{i}", "why") for i in range(5000)]
+    vaf.describe_error(shutil.Error(pairs))
+    (record,) = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert "/home/user/a0" in record.getMessage() and len(record.getMessage()) < 2200
+
+
 # Fuzz: every exception shape describe_error can meet, against the invariant it promises.
 _OS_CLASSES = sorted({c for c in vars(builtins).values()
                       if isinstance(c, type) and issubclass(c, OSError)}, key=lambda c: c.__name__)
@@ -237,7 +320,8 @@ _OS_CLASSES += [shutil.Error, shutil.SameFileError, shutil.SpecialFileError, shu
                 vaf.WriteRefused]
 _OS_CLASSES += [_foreign(m, f"Synthetic{i}") for i, m in
                 enumerate(("builtins", "vaf.x", "PIL", "requests.exceptions", "thirdparty"))]
-_REASONS = ["File name too long", "No space left on device", "Permission denied", "Connection refused"]
+_REASONS = ["File name too long", "No space left on device", "Permission denied", "Connection refused",
+            "cannot read {root}"]
 _ROOT_CHARS = "abcXYZ019 _-.'\"\u00e9\u20ac\u4e2d"
 
 
@@ -248,6 +332,7 @@ def _draw(rng):
     cls = rng.choice(_OS_CLASSES + [ValueError, RuntimeError, _Unprintable])
     err = rng.choice([None] + sorted(errno.errorcode))
     reason = rng.choice([None] + _REASONS)
+    reason = reason.format(root=root) if reason else reason
     message = rng.choice([f"failed on {root}", "plain words", ""])
     try:
         if cls is _Unprintable:
@@ -275,25 +360,25 @@ def _check(exc, root):
         assert answer == str(exc)
         return
     module = type(exc).__module__
-    guarded = (exc.errno is not None or exc.filename is not None or exc.filename2 is not None
+    guarded = (exc.errno is not None or exc.strerror is not None or exc.filename is not None
+               or exc.filename2 is not None
                or isinstance(exc, vaf.WriteRefused)
                or not (module == "builtins" or module.startswith("vaf.")))
     if not guarded:
         assert answer == str(exc)
         return
     assert root not in answer and (exc.filename is None or str(exc.filename) not in answer)
-    allowed = {type(exc).__name__ + _WITHHELD_SUFFIX}
-    if isinstance(exc.strerror, str) and exc.strerror:
-        allowed.add(exc.strerror)
-    if isinstance(exc.errno, int):
-        allowed.add(os.strerror(exc.errno))
-    assert answer in allowed, (exc, answer)
+    if type(exc.errno) is int:
+        assert answer == os.strerror(exc.errno), (exc, answer)
+    else:
+        assert answer == type(exc).__name__ + _WITHHELD_SUFFIX, (exc, answer)
 
 
 def test_describe_error_holds_its_invariant_over_a_seeded_corpus():
-    """3000 draws, seed 4450: the class, errno, reason, file names and message vary freely;
-    the answer never contains the drawn root and is the reason, the withheld text, or the
-    unchanged text exactly where rules (a) and (d) say so."""
+    """3000 draws, seed 4450: the class, errno, reason (one of them quoting the root), file
+    names and message vary freely; the answer never contains the drawn root and is the
+    operating system's words for the errno, the withheld text, or the unchanged text exactly
+    where rules (a) and (d) say so."""
     rng = random.Random(4450)
     for _ in range(3000):
         _check(*_draw(rng))

@@ -3448,17 +3448,26 @@ Stable public surface (safe to build on):
   back to whoever made the request. An `OSError` raised by the operating system quotes the
   absolute path it failed on (`[Errno 36] File name too long: '/home/user/...'`), so a reply
   built from `str(e)` leaks the root a route just contained. In order: (a) not an `OSError`:
-  `str(exc)`, unchanged; (b) an `OSError` with an `errno`: its `strerror` (else
-  `os.strerror(errno)`), the operating system's words, which never contain a path; (c) one
-  without an `errno` but with a `filename` or `filename2`, or a `vaf.WriteRefused` (every one
-  names the path it refused): its `strerror` if set, else the withheld text; (d) any other
+  `str(exc)`, unchanged; (b) an `OSError` with an integer `errno`: `os.strerror(errno)`, the
+  operating system's own words, which never contain a path (not the error's `strerror`,
+  which any raiser can fill with a path); (c) one whose `errno` is not an integer, or one
+  without an `errno` but with a `strerror`, a `filename` or a `filename2`, or a
+  `vaf.WriteRefused` (every one names the path it refused): the withheld text; (d) any other
   `OSError`: `str(exc)` when its class comes from `builtins` or from `vaf`, the withheld text
   for any other module (`shutil.Error` quotes the pairs it failed to copy, Pillow's
   `UnidentifiedImageError` the file, a `requests` error the URL). The withheld text is
-  `"<ClassName> (details in the server log)"`; with `log=True` the full `str(exc)` goes to
-  the `vaf.core.path_jail` logger at WARNING, so the detail stays on the server. Pass
+  `"<ClassName> (details in the server log)"`, or `"<ClassName> (HTTP <code>)"` when the
+  error carries a `response` with an integer `status_code` (the HTTP errors of `requests` and
+  `huggingface_hub` are OSErrors), so a refused login and a missing file stay told apart.
+  With `log=True` the full `str(exc)`, cut at 2000 characters, goes to the
+  `vaf.core.path_jail` logger at WARNING, so the detail stays on the server. Pass
   `log=False` when you log the exception yourself. Nothing is logged when nothing was
-  withheld, and it never raises (an exception whose `str()` raises answers its class name).
+  withheld. It never raises an `Exception`: not for a `__str__` that raises or returns a
+  `str` subclass, a class whose name cannot be read, or a log handler that raises. Rule (a)
+  is a boundary you own: a library's error that is not an `OSError` keeps its text, and some
+  quote paths (python-docx and python-pptx raise `PackageNotFoundError` with the full path
+  of a file that is not a valid document), so a route that hands a caller's file to such a
+  library answers those errors with words of its own.
 - `vaf.code_audit(root, *, scope=, base=, paths=, include_untracked=, profile=, ask=,
   checks=, max_files=, remember=, batch_chars=, progress=, parallel=, should_stop=,
   verify_steps=, linked_worktree=, expect_folder=)` /

@@ -2155,6 +2155,9 @@ def test_save_task_never_truncates(store):
     ({"enabled": "disabled"}, {"enabled": False}),
     ({"enabled": "\uff46\uff41\uff4c\uff53\uff45"}, {"enabled": False}),
     ({"enabled": "false\u200b"}, {"enabled": False}), ({"enabled": ["x"]}, {"enabled": False}),
+    ({"enabled": "ein"}, {"enabled": True}), ({"enabled": "Aktiv"}, {"enabled": True}),
+    ({"enabled": "active"}, {"enabled": True}), ({"enabled": float("nan")}, {"enabled": False}),
+    ({"enabled": float("inf")}, {"enabled": False}), ({"enabled": "x" * 65}, {"enabled": False}),
     ({"enabled": "ja"}, {"enabled": True}), ({"enabled": "\uff54\uff52\uff55\uff45"}, {"enabled": True}),
     ({"enabled": True}, {"enabled": True}),
     ({"weekday": " Monday "}, {"weekday": "monday"}), ({"weekday": "Montag"}, {"weekday": "monday"}),
@@ -2536,4 +2539,106 @@ def test_a_next_run_that_cannot_be_read_is_logged_by_id(monkeypatch):
     assert task.calculate_next_run() is None
     assert len(lines) == 1 and "abcd0123" in lines[0] and "TypeError" in lines[0], lines
     assert "secret" not in lines[0]
+
+
+def test_a_long_enabled_text_is_never_folded(monkeypatch):
+    """Folding works character by character, and an `enabled` of 1 MB held the event loop of
+    the WebSocket update for 1.32 s (10 MB: 12.85 s). Text longer than any word it could be
+    is not folded and reads as off; a short one still is folded. Counted, not timed, so a
+    slow runner cannot flake it. MUTATION: drop the length bound in `read_enabled`."""
+    import vaf.core.agent_origin as agent_origin
+
+    calls = []
+    real = agent_origin.folded_text
+
+    def counting(text):
+        calls.append(len(text))
+        return real(text)
+
+    monkeypatch.setattr(agent_origin, "folded_text", counting)
+    assert auto_mod.read_enabled("x" * 10**7) is None
+    assert auto_mod.coerce_schedule_fields({"enabled": "false" * 10**6}) == {"enabled": False}
+    assert AutomationTask(enabled="y" * 10**6).enabled is False
+    assert calls == [], calls[:3]
+    assert auto_mod.read_enabled("\uff46\uff41\uff4c\uff53\uff45") is False
+    assert calls == [5]
+
+
+def test_nan_and_infinity_are_neither_on_nor_off(store, workspaces):
+    """`bool(nan)` is True, so NaN and infinity read as on. They say neither: off when a
+    task is built, refused where a proposal is made. MUTATION: drop the finiteness check
+    in `read_enabled`."""
+    ws = workspaces
+    for value in (float("nan"), float("inf"), float("-inf")):
+        assert auto_mod.read_enabled(value) is None
+        assert AutomationTask(enabled=value).enabled is False
+        with pytest.raises(ValueError):
+            ws.tw.create_handoff(TENANT_A, ws.task_a, "t", "c", automation_action={
+                "operation": "update", "task_id": A_ID, "enabled": value})
+
+
+def test_a_waiting_decision_retries_every_50_ms(store, monkeypatch):
+    """A decision whose lock is held elsewhere tries again every 50 ms on the event loop;
+    without the pause it would spin, taking a pool worker and the loop for every attempt.
+    About 20 attempts in a one-second wait. MUTATION: drop the `asyncio.sleep` between
+    attempts in `_decide_handoff`."""
+    import asyncio
+
+    import vaf.core.thinking_workspace as tw
+    import vaf.core.web_server as web_server
+
+    monkeypatch.setattr(tw, "_DECISION_LOCK_TIMEOUT_S", 1.0)
+    attempts = []
+
+    def always_busy(*a, lock_timeout=None):
+        attempts.append(lock_timeout)
+        raise tw.HandoffBusy("handoff is being decided")
+
+    with pytest.raises(tw.HandoffBusy):
+        asyncio.run(web_server._decide_handoff(TENANT_A, always_busy))
+    assert 2 <= len(attempts) <= 25, len(attempts)
+    assert set(attempts) == {0}
+
+
+def test_the_machine_owners_aliases_are_one_account(store, monkeypatch):
+    """No scope, "default" and the machine owner's scope share one workspace and one lock,
+    so they are one account for the one-decision rule: while a decision for None runs, one
+    for the owner's scope answers busy at once. MUTATION: key `_decide_handoff` by the raw
+    scope instead of `_scope_key`."""
+    import asyncio
+
+    import vaf.core.thinking_workspace as tw
+    import vaf.core.web_server as web_server
+
+    running, release = threading.Event(), threading.Event()
+
+    def slow(*a, lock_timeout=None):
+        running.set()
+        release.wait(5)
+        return True
+
+    def fast(*a, lock_timeout=None):
+        return True
+
+    async def scenario():
+        first = asyncio.ensure_future(web_server._decide_handoff(None, slow))
+        try:
+            for _ in range(500):
+                if running.is_set():
+                    break
+                await asyncio.sleep(0.01)
+            outcomes = []
+            for alias in (LOCAL, "default"):
+                try:
+                    outcomes.append(await asyncio.wait_for(
+                        web_server._decide_handoff(alias, fast), 3))
+                except tw.HandoffBusy as busy:
+                    outcomes.append(busy)
+        finally:
+            release.set()
+        return outcomes, await first
+
+    outcomes, first = asyncio.run(scenario())
+    assert first is True
+    assert all(isinstance(o, tw.HandoffBusy) for o in outcomes), outcomes
 

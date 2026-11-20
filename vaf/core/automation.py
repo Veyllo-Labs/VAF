@@ -14,6 +14,7 @@ Features:
 import os
 import sys
 import json
+import math
 import uuid
 import subprocess
 import threading
@@ -63,8 +64,13 @@ _WEEKDAY_NAMES = {
 # understood, and an automation is then off: a proposal or a request that meant "off" in a
 # word this list lacks must not leave a task running on a schedule.
 _ENABLED_FALSE = frozenset({"false", "0", "no", "off", "", "nein", "aus", "falsch",
-                            "disabled", "disable"})
-_ENABLED_TRUE = frozenset({"true", "1", "yes", "on", "ja", "an", "wahr", "enabled", "enable"})
+                            "disabled", "disable", "inactive", "inaktiv"})
+_ENABLED_TRUE = frozenset({"true", "1", "yes", "on", "ja", "an", "ein", "wahr", "enabled",
+                           "enable", "active", "aktiv"})
+# The longest text that is folded. Every word above has at most 8 letters; folding works
+# character by character, and an unbounded value (the WebSocket admits frames of many MB)
+# held the event loop for seconds: 1.32 s for 1 MB, 12.85 s for 10 MB (measured).
+_ENABLED_FOLD_MAX = 64
 
 
 def read_enabled(value: Any) -> Optional[bool]:
@@ -72,12 +78,18 @@ def read_enabled(value: Any) -> Optional[bool]:
     folded first (`agent_origin.folded_text`: compatibility forms such as a full-width
     "ｆａｌｓｅ" become plain letters, and invisible characters such as a zero-width space
     are dropped), then stripped and lower-cased; it is never `bool()`-ed, because
-    `bool("false")` is True. A bool is itself, a number is off when 0."""
+    `bool("false")` is True. A bool is itself, a number is off when 0; NaN and infinity say
+    neither. Text longer than `_ENABLED_FOLD_MAX` is not folded and says neither: no word is
+    that long, and folding it would cost time in proportion to its length."""
     if isinstance(value, bool):
         return value
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
     if isinstance(value, (int, float)):
         return bool(value)
     if isinstance(value, str):
+        if len(value) > _ENABLED_FOLD_MAX:
+            return None
         from vaf.core.agent_origin import folded_text
 
         word = folded_text(value).strip().lower()
@@ -164,16 +176,14 @@ class AutomationTask:
     def __post_init__(self):
         # The data-model boundary: every constructor and every file loaded through
         # from_dict pass here, so a record written before the coercion (a day of "15")
-        # is read as the clock rule needs it. A value that does not parse falls back to
-        # the field's default; an explicit None for `enabled` stays off, as it read before.
+        # is read as the clock rule needs it. A day or weekday that does not parse becomes
+        # None; `enabled` is on only when it says on (it fails closed), and an explicit
+        # None stays off, as it read before.
         fields = coerce_schedule_fields(
             {"day": self.day, "enabled": self.enabled, "weekday": self.weekday})
         self.day = fields.get("day")
         self.weekday = fields.get("weekday")
-        if self.enabled is not None:
-            self.enabled = fields.get("enabled", True)
-        else:
-            self.enabled = False
+        self.enabled = fields["enabled"] if self.enabled is not None else False
 
     def to_dict(self) -> Dict:
         """Convert to dict, excluding next_run (calculated dynamically)."""

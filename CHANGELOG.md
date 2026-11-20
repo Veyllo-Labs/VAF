@@ -79,11 +79,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 ### Fixed
 
 - **WhatsApp: an account that is not an admin can no longer stop or restart WhatsApp for
-  everybody.** Start, Stop and Restart bridge now act on that account's own connection, a newly
-  linked account's connection starts as soon as it is switched on without restarting WhatsApp
-  for everyone, and an expired session stops only the connection it belongs to. The connection
-  dot and the status in Connections show your own account's connection. An admin's Start, Stop
-  and Restart still act on everybody's.
+  everybody.** Starting, restarting and switching WhatsApp off now act on that account's own
+  connection, and an expired session stops only the connection it belongs to. While WhatsApp is
+  switched on for the server, a newly linked account's connection starts as soon as it is
+  switched on, without restarting WhatsApp for everyone. The connection dot, the status in
+  Connections and the WhatsApp window show your own account's connection, the window's buttons
+  say "Start WhatsApp" and "Restart WhatsApp", and it no longer says the session expired when
+  your connection is only switched off or not started. An admin's start, restart and switching
+  off still act on everybody's.
 - **A local MCP server can no longer freeze its tools.** A call to a local MCP server now gives
   up after the tool time limit (`tool_timeout_seconds`, 2 minutes by default), or when you
   press Stop, and the next call starts the server afresh. Before, an answer the server garbled,

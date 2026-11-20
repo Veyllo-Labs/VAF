@@ -1330,6 +1330,7 @@
       "remove": "Kaldır",
       "removeOwnerConfirm": "Bu numara kaldırılsın mı? Ajan artık sana WhatsApp üzerinden ulaşamaz.",
       "ownerUserPlaceholder": "VAF kullanıcısı (yalnızca yönetici, isteğe bağlı)",
+      "ownerUnknownAccount": "{name} kullanıcı adına sahip bir hesap yok.",
       "register": "Kaydet",
       "cardWhoTitle": "Ajanına başka kimler yazabilir",
       "cardWhoDesc": "Inbound modunda yanıtlananlar: izin verdiğin kişiler ve WhatsApp için Inbound açıkken hakkında karar vermediğin herkes.",

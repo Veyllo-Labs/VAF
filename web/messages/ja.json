@@ -1330,6 +1330,7 @@
       "remove": "削除",
       "removeOwnerConfirm": "この番号を削除しますか？エージェントはWhatsAppで連絡できなくなります。",
       "ownerUserPlaceholder": "VAFユーザー（管理者のみ、任意）",
+      "ownerUnknownAccount": "ユーザー名が{name}のアカウントはありません。",
       "register": "登録",
       "cardWhoTitle": "ほかにエージェントへ送信できる人",
       "cardWhoDesc": "インバウンドモードで返信する相手は、許可した連絡先と、WhatsAppのインバウンドがオンのあいだは、まだ決めていない相手すべてです。",

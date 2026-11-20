@@ -1330,6 +1330,7 @@
       "remove": "삭제",
       "removeOwnerConfirm": "이 번호를 삭제할까요? 그러면 에이전트가 WhatsApp으로 연락할 수 없어요.",
       "ownerUserPlaceholder": "VAF 사용자 (관리자만, 선택)",
+      "ownerUnknownAccount": "사용자 이름이 {name}인 계정이 없어요.",
       "register": "등록",
       "cardWhoTitle": "에이전트에게 쓸 수 있는 다른 사람",
       "cardWhoDesc": "인바운드 모드로 답하는 상대는 허용한 연락처, 그리고 WhatsApp 인바운드가 켜져 있는 동안에는 아직 결정하지 않은 모든 사람이에요.",

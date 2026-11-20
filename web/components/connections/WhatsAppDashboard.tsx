@@ -95,6 +95,9 @@ interface DashboardData {
     reply_window_hours?: number;
     inbound_to_agent: boolean;
     owner_numbers: Array<{ phone_number: string; vaf_username?: string | null }>;
+    /** Whether this account may register a number for another account by user name (an admin):
+     *  the server's own check, so the card shows the name field exactly where it is accepted. */
+    may_register_for_others: boolean;
     front_office_contacts: Array<{ name: string | null; phone_number: string }>;
     connected: boolean;
     running: boolean;
@@ -191,6 +194,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                 reply_window_hours: typeof json?.reply_window_hours === 'number' ? json.reply_window_hours : undefined,
                 inbound_to_agent: json?.inbound_to_agent !== false,
                 owner_numbers: Array.isArray(json?.owner_numbers) ? json.owner_numbers : [],
+                may_register_for_others: json?.may_register_for_others === true,
                 front_office_contacts: Array.isArray(json?.front_office_contacts) ? json.front_office_contacts : [],
                 connected: json?.connected === true,
                 running: json?.running === true,
@@ -302,22 +306,24 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         const raw = ownerAddPhone.trim().replace(/\s/g, '');
         if (!raw) return;
         const phone = raw.startsWith('+') ? raw : `+${raw}`;
+        const forName = data?.may_register_for_others ? ownerAddUsername.trim() : '';
         setOwnerAddError(null);
         try {
             const res = await fetch(api('api/whatsapp/whitelist/add'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
-                body: JSON.stringify({ phone_number: phone, vaf_username: ownerAddUsername.trim() || undefined }),
+                body: JSON.stringify({ phone_number: phone, vaf_username: forName || undefined }),
             });
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
-                setOwnerAddError(err?.detail || res.statusText || String(res.status));
+                setOwnerAddError(res.status === 404 && forName
+                    ? t('ownerUnknownAccount', { name: forName })
+                    : (err?.detail || res.statusText || String(res.status)));
                 return;
             }
             setOwnerAddPhone('');
             setOwnerAddUsername('');
-            onConfigChange('whatsapp_config', { ...config.whatsapp_config, whitelist: [...(config.whatsapp_config?.whitelist || []), { phone_number: phone, vaf_username: ownerAddUsername.trim() || null }] });
             fetchDashboard();
         } catch (e) {
             setOwnerAddError(e instanceof Error ? e.message : String(e));
@@ -332,8 +338,6 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                 credentials: 'include',
                 body: JSON.stringify({ phone_number }),
             });
-            const current = config.whatsapp_config?.whitelist || [];
-            onConfigChange('whatsapp_config', { ...config.whatsapp_config, whitelist: current.filter((e: any) => String(e.phone_number) !== phone_number) });
             fetchDashboard();
         } catch (e) {
             setOwnerAddError(e instanceof Error ? e.message : String(e));
@@ -912,7 +916,9 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                 {(!data?.owner_numbers || data.owner_numbers.length === 0) && <p className="text-[12.5px] text-gray-500 mb-2">{t('ownerNone')}</p>}
                 <div className="flex gap-2 flex-wrap">
                     <input type="tel" placeholder={t('numberPlaceholder')} value={ownerAddPhone} onChange={e => setOwnerAddPhone(e.target.value)} className={cn('flex-1 min-w-[10rem]', INPUT)} />
-                    <input type="text" placeholder={t('ownerUserPlaceholder')} value={ownerAddUsername} onChange={e => setOwnerAddUsername(e.target.value)} className={cn('flex-1 min-w-[10rem]', INPUT)} />
+                    {data?.may_register_for_others && (
+                        <input type="text" placeholder={t('ownerUserPlaceholder')} value={ownerAddUsername} onChange={e => setOwnerAddUsername(e.target.value)} className={cn('flex-1 min-w-[10rem]', INPUT)} />
+                    )}
                     <button type="button" onClick={handleOwnerAdd} disabled={!ownerAddPhone.trim()} className={BTN_PRIMARY}>{t('register')}</button>
                 </div>
                 {ownerAddError && <p className="mt-2 text-xs text-red-600">{ownerAddError}</p>}

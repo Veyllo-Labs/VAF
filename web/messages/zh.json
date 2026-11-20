@@ -1330,6 +1330,7 @@
       "remove": "移除",
       "removeOwnerConfirm": "移除这个号码？之后智能体将无法在 WhatsApp 上联系你。",
       "ownerUserPlaceholder": "VAF 用户（仅管理员，可选）",
+      "ownerUnknownAccount": "没有用户名为 {name} 的账户。",
       "register": "登记",
       "cardWhoTitle": "还有谁可以给你的智能体写消息",
       "cardWhoDesc": "在入站模式下会得到回复的是：你允许的联系人，以及在 WhatsApp 的入站开启时，所有你还没有做决定的人。",

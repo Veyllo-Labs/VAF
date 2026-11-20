@@ -1330,6 +1330,7 @@
       "remove": "Remove",
       "removeOwnerConfirm": "Remove this number? The agent can then no longer reach you on WhatsApp.",
       "ownerUserPlaceholder": "VAF user (admin only, optional)",
+      "ownerUnknownAccount": "There is no account with the user name {name}.",
       "register": "Register",
       "cardWhoTitle": "Who else can write to your agent",
       "cardWhoDesc": "Answered in Inbound mode: contacts you set to allowed, and, while Inbound is on for WhatsApp, everybody you have not decided about.",

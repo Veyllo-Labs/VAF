@@ -549,9 +549,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   yet, and otherwise says the proposal was already approved and shows what was created. A
   rejection reason containing an invalid character emptied the proposal and the account's
   notification list; both are now kept, and a full disk can no longer empty an automation's
-  file. An admin acts on its own automations, the machine owner's and the shared ones, which
-  is exactly what its automation list shows. The automation list also no longer comes back
-  empty when it is the first request of a new connection.
+  file. A monthly day sent as text no longer stops the automations of every account, and
+  switching an automation off with the text "false" now switches it off. An admin acts on
+  its own automations, the machine owner's and the shared ones, which is exactly what its
+  automation list shows. The automation list also no longer comes back empty when it is
+  the first request of a new connection.
 - **WhatsApp: an account can no longer make a stranger your agent's owner, or send as your
   agent's number.** Assigning a chat's hidden WhatsApp ID (LID) to a number used to apply to
   every account. A non-admin could bind any ID to the admin's own number, so that sender was

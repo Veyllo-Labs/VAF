@@ -399,15 +399,17 @@ def test_a_padded_path_is_refused_by_every_screen_before_it_resolves(where, monk
     padded = _PAD + path if where == "leading" else path + _PAD
     assert not is_overlong_path(path)
 
-    monkeypatch.setattr(Platform, "normalize_path", staticmethod(_boom))
-    monkeypatch.setattr(path_jail, "is_remote_path", _boom)
     request = SimpleNamespace(state=SimpleNamespace(user={}), headers={}, client=None)
-    with pytest.raises(HTTPException) as e:
-        ws._allowed_file_path(padded, request)
+    with monkeypatch.context() as m:
+        m.setattr(Platform, "normalize_path", staticmethod(_boom))
+        m.setattr(path_jail, "is_remote_path", _boom)
+        with pytest.raises(HTTPException) as e:
+            ws._allowed_file_path(padded, request)
     assert (e.value.status_code, e.value.detail) == (400, "Invalid path")
 
-    # jail_allows answers False to any error, so a raising stand-in would prove nothing: this
-    # one admits everyone and records that it was asked.
+    # The real is_remote_path from here on: jail_allows answers False to any error, so a
+    # raising stand-in would hide a missing length screen. For the same reason the jail
+    # stand-in admits everyone and records that it was asked.
     asked = []
     monkeypatch.setattr(filesystem, "compute_user_jail",
                         lambda *a, **k: asked.append(a) or {"is_admin": True})

@@ -195,6 +195,8 @@ def world(tmp_path, monkeypatch):
     monkeypatch.setattr(wa, "_chat_sync_thread", None)
     monkeypatch.setattr(wa, "_outgoing_queue", None)
     monkeypatch.setattr(wa, "_pending_starts", {})
+    monkeypatch.setattr(wa, "_survivors", set())
+    monkeypatch.setattr(wa, "_terminating", 0)
     monkeypatch.setattr(wa, "COLD_START_TIMEOUT", 3.0)
 
     def spawn(username, auth_dir):
@@ -239,7 +241,7 @@ def _record(world, monkeypatch, *names, through=True):
         monkeypatch.setattr(wa, name, rec)
 
 
-WHOLE = ("start_bridge", "stop_bridge", "restart_bridge", "start_missing_accounts")
+WHOLE = ("start_bridge", "stop_bridge", "restart_bridge", "restart_bridge_result", "start_missing_accounts")
 ACCOUNT = ("start_account", "stop_account", "restart_account")
 
 
@@ -423,7 +425,7 @@ def test_an_admin_keeps_whole_bridge_control(world, monkeypatch, user):
     world.calls.clear()
     res = client.post("/api/whatsapp/restart")
     assert res.status_code == 200, res.text
-    assert world.calls[0] == ("restart_bridge",) and ("stop_bridge",) in world.calls
+    assert world.calls[0] == ("restart_bridge_result",) and ("stop_bridge",) in world.calls
     assert not any(c[0] in ACCOUNT for c in world.calls)
     assert world.wait_for(lambda: all(world.live(n) for n in ("admin", "alice", "bob")))
 
@@ -824,8 +826,10 @@ def test_a_restart_waits_for_a_slow_shutdown(world, monkeypatch):
 
 def test_a_restart_whose_shutdown_overruns_reports_failure(world, monkeypatch):
     """A shutdown that does not end within its deadline makes the restart a failure (the
-    admin's `/restart` answers 500), never a success with nothing started.
-    MUTATION: drop the check that the old bridge thread has ended before the new start."""
+    admin's `/restart` answers 500 and says the old process did not stop, not to check the
+    installation), never a success with nothing started.
+    MUTATION: drop the check that the old bridge thread has ended before the new start; or
+    answer the overrun with the installation text."""
     monkeypatch.setattr(wa, "TERMINATE_WAIT", 0.3)
     monkeypatch.setattr(wa, "_shutdown_deadline", lambda: 0.1)
     world.proc_class.update(admin=SlowToDie, alice=SlowToDie)
@@ -833,6 +837,7 @@ def test_a_restart_whose_shutdown_overruns_reports_failure(world, monkeypatch):
     old = wa._bridge_thread
     res = _client(ADMIN).post("/api/whatsapp/restart")
     assert res.status_code == 500, res.text
+    assert res.json()["detail"] == wa.SHUTDOWN_OVERRAN == "The old WhatsApp process did not stop in time; try again."
     old.join(timeout=5)
     time.sleep(0.1)
     assert sorted(world.names()) == ["admin", "alice"] and not wa.is_bridge_running()
@@ -865,6 +870,141 @@ def test_a_stop_under_another_scope_leaves_a_pending_start_alone(world):
     assert wa.stop_account("admin", BOB_SCOPE) is None
     assert not pending.cancelled and not pending.done.is_set()
     assert wa.stop_account("admin", ADMIN_SCOPE) is True and pending.cancelled
+
+
+def _survivor_after_restart(world):
+    """A running bridge for the admin and Alice whose process outlived the restart's kill."""
+    world.proc_class["alice"] = Unkillable
+    procs = _bridge_with(world, "admin", "alice")
+    assert wa.restart_bridge() is True
+    assert world.wait_for(lambda: world.names().count("admin") == 2 and world.live("admin"))
+    return procs["alice"]
+
+
+def test_a_kept_survivor_is_never_answered_as_running(world, monkeypatch):
+    """A process the shutdown could not end has no reader any more: Alice's start and restart
+    fail instead of answering "already running", her status is not running, and no lane acts
+    through it. MUTATION: `_spawn_account` and the start into a running bridge treat a live
+    survivor as the account's process; or `_process_for` answers a survivor."""
+    survivor = _survivor_after_restart(world)
+    try:
+        _quiet_reads(monkeypatch)
+        assert wa.start_account("alice", ALICE_SCOPE) == (False, wa.PREVIOUS_NOT_ENDED)
+        res = _client(ALICE).post("/api/whatsapp/start")
+        assert res.status_code == 500 and res.json()["detail"] == wa.PREVIOUS_NOT_ENDED, res.text
+        res = _client(ALICE).post("/api/whatsapp/restart")
+        assert res.status_code == 500, res.text
+        assert wa.has_process_for_user("alice", ALICE_SCOPE) is False
+        assert wa._process_for("alice", ALICE_SCOPE) == (None, None)
+        assert _client(ALICE).get("/api/whatsapp/status").json()["running"] is False
+        assert world.names().count("alice") == 1 and wa._processes["alice"] is survivor
+    finally:
+        survivor.returncode = -9
+
+
+def test_a_new_account_reusing_the_name_of_a_survivor_does_not_start(world):
+    """An account that reuses a deleted account's name gets no "already running" from that
+    account's process, survivor or not. MUTATION: drop the scope comparison from
+    `_blocked_by_previous`."""
+    survivor = _survivor_after_restart(world)
+    try:
+        world.own_switch(CAROL_SCOPE, True)
+        SCOPES["alice"] = CAROL_SCOPE           # the name now belongs to another account
+        assert wa.start_account("alice", CAROL_SCOPE) == (False, wa.PREVIOUS_NOT_ENDED)
+        survivor.returncode = -9
+        world.proc_class.clear()
+        # The same for a process that still has its reader.
+        assert wa.start_account("alice", CAROL_SCOPE) == (True, wa.ACCOUNT_STARTED)
+        SCOPES["alice"] = ALICE_SCOPE
+        world.own_switch(ALICE_SCOPE, True)
+        assert wa.start_account("alice", ALICE_SCOPE) == (False, wa.PREVIOUS_NOT_ENDED)
+    finally:
+        SCOPES["alice"] = ALICE_SCOPE
+        survivor.returncode = -9
+
+
+def test_after_the_survivor_ends_a_start_succeeds(world):
+    """A survivor that has ended blocks nothing: the next start spawns a fresh process and
+    the survivor's mark goes with it. MUTATION: `_blocked_by_previous` ignores whether the
+    registered process is still alive."""
+    survivor = _survivor_after_restart(world)
+    survivor.returncode = -9
+    assert wa.start_account("alice", ALICE_SCOPE) == (True, wa.ACCOUNT_STARTED)
+    assert world.live("alice") and wa._processes["alice"] is not survivor
+    assert wa._survivors == set()
+
+
+def test_a_send_while_the_bridge_is_down_answers_at_once(world, monkeypatch):
+    """A process registered while no bridge runs is read by nobody: a send takes the file
+    path, which answers at once that the bridge is not running, instead of waiting its whole
+    timeout and answering "maybe delivered". MUTATION: drop `not is_bridge_running()` from the
+    send's in-process condition."""
+    monkeypatch.setattr(wa, "_is_reply_allowed", lambda *a, **k: True)
+    with wa._process_lock:
+        wa._processes["alice"] = FakeProc("alice")
+        wa._scope_by_user["alice"] = ALICE_SCOPE
+    assert not wa.is_bridge_running()
+    began = time.monotonic()
+    out = wa.send_whatsapp_with_confirmation("alice", "491700000042@s.whatsapp.net", "hi",
+                                             timeout=3.0, user_scope_id=ALICE_SCOPE)
+    assert time.monotonic() - began < 1.0
+    assert out.startswith("WhatsApp bridge is not running."), out
+
+
+def test_a_crashed_bridge_thread_leaves_no_pending_start_behind(world, monkeypatch):
+    """When the bridge thread fails before it spawns, the start waiting on it is answered at
+    once and cleared, so the next whole start brings that account up. MUTATION: drop the
+    `finally` that answers and clears every pending start in `_run_bridge`."""
+    world.link("admin")
+    world.link("alice")
+    world.own_switch(ALICE_SCOPE, True)
+    monkeypatch.setattr(wa, "COLD_START_TIMEOUT", 1.0)
+    real_users = wa._get_users_to_run
+    crashed = []
+
+    def users():
+        if threading.current_thread() is wa._bridge_thread and not crashed:
+            crashed.append(1)
+            raise RuntimeError("account directory unavailable")
+        return real_users()
+    monkeypatch.setattr(wa, "_get_users_to_run", users)
+    began = time.monotonic()
+    assert wa.start_account("alice", ALICE_SCOPE) == (False, wa.START_FAILED)
+    assert time.monotonic() - began < 0.9
+    wa._bridge_thread.join(timeout=5)
+    assert wa._pending_starts == {}
+    assert wa.start_bridge() is True
+    assert world.wait_for(lambda: world.live("admin") and world.live("alice")), world.names()
+
+
+@pytest.mark.parametrize("where", ["registered", "being terminated"])
+def test_the_shutdown_deadline_covers_every_process(world, monkeypatch, where):
+    """Both waits of `_terminate` for every process still registered or still being terminated
+    by a shutdown that already emptied the registry, one more for a spawn in flight, and a
+    margin. MUTATION: drop the count term; drop the margin; ignore the terminations in
+    progress."""
+    monkeypatch.setattr(wa, "TERMINATE_WAIT", 1.0)
+    n = 3
+    if where == "registered":
+        with wa._process_lock:
+            for i in range(n):
+                wa._processes[f"u{i}"] = FakeProc(f"u{i}")
+    else:
+        monkeypatch.setattr(wa, "_terminating", n)
+    assert wa._shutdown_deadline() >= 2 * wa.TERMINATE_WAIT * (n + 1) + 1.0
+
+
+def test_a_dead_survivor_does_not_keep_an_empty_bridge_up(world):
+    """The bridge that finds nobody to run counts only live processes: a dead entry left in the
+    registry does not keep it up. MUTATION: count every registered entry."""
+    dead = FakeProc("alice")
+    dead.returncode = -9
+    with wa._process_lock:
+        wa._processes["alice"] = dead
+        wa._scope_by_user["alice"] = ALICE_SCOPE
+    assert wa.start_bridge(only="carol")
+    wa._bridge_thread.join(timeout=3)
+    assert not wa.is_bridge_running()
 
 
 # -- Fuzz: the spawn gate -------------------------------------------------------------------------

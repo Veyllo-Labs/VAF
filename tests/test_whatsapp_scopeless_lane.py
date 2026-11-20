@@ -72,6 +72,8 @@ def world(monkeypatch, tmp_path):
     monkeypatch.setattr(wa, "_processes", {name: SimpleNamespace(stdin=out, poll=lambda: None)
                                            for name, out in by.items()})
     monkeypatch.setattr(wa, "_scope_by_user", {"dana": ADM, "admin": B})
+    # The processes are a running bridge's: an in-process send needs one.
+    monkeypatch.setattr(wa, "_bridge_thread", SimpleNamespace(is_alive=lambda: True))
     monkeypatch.setattr(wa, "_append_chat_activity", lambda *a, **k: None)
     monkeypatch.setattr(wa, "_outgoing_queue", queue.Queue())
     monkeypatch.setattr(wa, "_pending_sends", {})

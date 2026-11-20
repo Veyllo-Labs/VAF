@@ -736,12 +736,12 @@ def _account_start_answer(ok: bool, message: str) -> None:
     """Raise what a failed account start answers: 500 when Node could not be started or the
     old process did not end, 400 when the account cannot start (not linked, switched off,
     the bridge stopping, stopped again before it started)."""
-    from vaf.api.whatsapp_bridge import START_FAILED, STOP_FAILED
+    from vaf.api.whatsapp_bridge import PREVIOUS_NOT_ENDED, START_FAILED, STOP_FAILED
     if ok:
         return
     if message == START_FAILED:
         raise HTTPException(status_code=500, detail=START_FAILED_FOR_ACCOUNT)
-    raise HTTPException(status_code=500 if message == STOP_FAILED else 400, detail=message)
+    raise HTTPException(status_code=500 if message in (STOP_FAILED, PREVIOUS_NOT_ENDED) else 400, detail=message)
 
 
 @router.post("/start")
@@ -798,14 +798,17 @@ async def restart_whatsapp_bridge(request: Request):
     """Restart WhatsApp (stop, wait for shutdown, start). Use when 'Restart bridge' doesn't
     reconnect. An admin restarts the whole bridge; anybody else restarts their own account's
     process only."""
-    from vaf.api.whatsapp_bridge import restart_account, restart_bridge
+    from vaf.api.whatsapp_bridge import SHUTDOWN_OVERRAN, restart_account, restart_bridge_result
 
     if caller_is_admin(request):
         if not _global_switch_on():
             raise HTTPException(status_code=400, detail=SWITCHED_OFF_FOR_ADMIN)
-        if await asyncio.to_thread(restart_bridge):
+        ok, message = await asyncio.to_thread(restart_bridge_result)
+        if ok:
             return {"status": "restarted", "message": "WhatsApp bridge restarted. Wait 20-30 s, then refresh."}
-        raise HTTPException(status_code=500, detail="Failed to restart bridge. Check Node.js and npm install in vaf/whatsapp_node.")
+        # An overrun is the old process not ending, not the installation: say which.
+        raise HTTPException(status_code=500, detail=message if message == SHUTDOWN_OVERRAN else
+                            "Failed to restart bridge. Check Node.js and npm install in vaf/whatsapp_node.")
 
     account = request_account(request)
     if not _global_switch_on():

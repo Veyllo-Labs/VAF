@@ -1067,6 +1067,7 @@ def test_the_owner_origin_travels_through_both_send_paths(isolated, monkeypatch,
     monkeypatch.setattr(wa, "_outgoing_queue", q)
     monkeypatch.setattr(wa, "_processes", {"alice": SimpleNamespace(poll=lambda: None)})
     monkeypatch.setattr(wa, "_scope_by_user", {"alice": SCOPE})
+    monkeypatch.setattr(wa, "_bridge_thread", SimpleNamespace(is_alive=lambda: True))
     monkeypatch.setattr(wa, "_pending_sends", {})
     out = wa.send_whatsapp_with_confirmation("alice", "491700000051@s.whatsapp.net", "hi",
                                              timeout=0.05, allow_contact_send=True, origin="owner",

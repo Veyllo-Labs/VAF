@@ -62,6 +62,8 @@ def world(monkeypatch, tmp_path):
     written = io.StringIO()
     monkeypatch.setattr(wa, "_processes", {"admin": SimpleNamespace(stdin=written, poll=lambda: None)})
     monkeypatch.setattr(wa, "_scope_by_user", {"admin": ADMIN_SCOPE})
+    # The process is a running bridge's: an in-process send needs one.
+    monkeypatch.setattr(wa, "_bridge_thread", SimpleNamespace(is_alive=lambda: True))
     monkeypatch.setattr(wa, "_append_chat_activity", lambda *a, **k: None)
     monkeypatch.setattr(wa, "_outgoing_queue", queue.Queue())
     mc.save_whatsapp_chat_jid(ADMIN_SCOPE, "admin", ADMIN_JID)

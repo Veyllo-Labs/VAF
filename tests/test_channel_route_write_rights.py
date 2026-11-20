@@ -381,10 +381,10 @@ def test_a_non_admin_leaves_every_other_accounts_entry_alone(config_file, monkey
 # drive the WhatsApp bridge too, and they are not routes.
 
 BRIDGE_LIFECYCLE = {
-    "start_bridge", "stop_bridge", "restart_bridge", "start_missing_accounts",
+    "start_bridge", "stop_bridge", "restart_bridge", "restart_bridge_result", "start_missing_accounts",
     "start_account", "stop_account", "restart_account",
 }
-WHOLE_BRIDGE = {"start_bridge", "stop_bridge", "restart_bridge", "start_missing_accounts"}
+WHOLE_BRIDGE = {"start_bridge", "stop_bridge", "restart_bridge", "restart_bridge_result", "start_missing_accounts"}
 
 PROCESS_RULES = {
     "config_routes:disconnect_channel": "admin",
@@ -508,6 +508,7 @@ def test_a_non_admin_drives_only_their_own_process(config_file, monkeypatch, rou
     calls = []
     answers = {"start_account": (True, "started"), "restart_account": (True, "restarted"),
                "stop_account": True, "start_bridge": True, "restart_bridge": True,
+               "restart_bridge_result": (True, ""),
                "start_missing_accounts": [], "stop_bridge": None}
     for channel in ("whatsapp", "telegram", "discord"):
         module = importlib.import_module(f"vaf.api.{channel}_bridge")

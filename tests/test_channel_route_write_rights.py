@@ -378,7 +378,8 @@ def test_a_non_admin_leaves_every_other_accounts_entry_alone(config_file, monkey
 #
 # NAMED BOUNDARY of this discovery: a lifecycle function is seen only under one of the names
 # below, spelled as a constant; `web_server.py`'s startup auto-start and its reconnect worker
-# drive the WhatsApp bridge too, and they are not routes.
+# (`whatsapp_bridge.Reconnector`, which restarts single accounts and brings a crashed bridge
+# back) drive the WhatsApp bridge too, and they are not routes.
 
 BRIDGE_LIFECYCLE = {
     "start_bridge", "stop_bridge", "restart_bridge", "restart_bridge_result", "start_missing_accounts",
@@ -395,6 +396,8 @@ PROCESS_RULES = {
     "whatsapp_routes:start_whatsapp_bridge": "own-process",
     "whatsapp_routes:stop_whatsapp_bridge": "own-process",
     "whatsapp_routes:restart_whatsapp_bridge": "own-process",
+    # The caller's own switch and own process, for admins too.
+    "whatsapp_routes:switch_whatsapp": "own-process",
     # Re-link: the caller's own process stops before its login is removed.
     "whatsapp_routes:reset_whatsapp_auth": "own-process",
     # Deleting an account ends its WhatsApp and removes its login.
@@ -481,8 +484,8 @@ def test_the_process_scanner_reports_an_undeclared_route():
     assert process_routes(synthetic) == ["attribute", "direct", "handed_over", "through_a_helper"]
 
 
-# route -> (method, path, the status an account that is not an admin gets). Pinned, so a probe
-# whose URL went stale (404, 405) fails instead of passing on nothing called.
+# route -> (method, path, the status an account that is not an admin gets[, JSON body]).
+# Pinned, so a probe whose URL went stale (404, 405) fails instead of passing on nothing called.
 PROCESS_PROBES = {
     "config_routes:disconnect_channel": ("delete", "/api/config/channels/whatsapp/credentials", 403),
     "discord_routes:start_discord_bridge": ("post", "/api/discord/start", 403),
@@ -492,6 +495,7 @@ PROCESS_PROBES = {
     "whatsapp_routes:start_whatsapp_bridge": ("post", "/api/whatsapp/start", 200),
     "whatsapp_routes:stop_whatsapp_bridge": ("post", "/api/whatsapp/stop", 200),
     "whatsapp_routes:restart_whatsapp_bridge": ("post", "/api/whatsapp/restart", 200),
+    "whatsapp_routes:switch_whatsapp": ("put", "/api/whatsapp/switch", 200, {"enabled": False}),
     "whatsapp_routes:reset_whatsapp_auth": ("post", "/api/whatsapp/qr/reset", 200),
     "user_routes:delete_user": ("delete", "/api/users/11111111-0000-4000-8000-000000000001", 403),
 }
@@ -524,8 +528,9 @@ def test_a_non_admin_drives_only_their_own_process(config_file, monkeypatch, rou
                                 lambda *a, _n=name, _c=channel, **k: calls.append((_c, _n) + a) or answers[_n],
                                 raising=False)
         monkeypatch.setattr(module, "is_bridge_running", lambda: True, raising=False)
-    method, path, expected = PROCESS_PROBES[route]
-    res = getattr(_client(route.split(":", 1)[0]), method)(path)
+    method, path, expected, *body = PROCESS_PROBES[route]
+    call = getattr(_client(route.split(":", 1)[0]), method)
+    res = call(path, json=body[0]) if body else call(path)
     assert res.status_code == expected, (res.status_code, res.text)
     if PROCESS_RULES[route] == "admin":
         assert calls == []

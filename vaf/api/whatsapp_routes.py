@@ -18,7 +18,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictBool
 
 from vaf.core.config import Config
 from vaf.core.security_events import log_security_event
@@ -710,6 +710,12 @@ async def get_whatsapp_dashboard(request: Request):
         pass
 
     from vaf.core.whatsapp_auth import get_linked_phone
+    # An admin's view of which switched-on, linked accounts run (the restart notice clears
+    # itself once the accounts it named run again); it names accounts, so nobody else gets it.
+    running_by_account = None
+    if caller_is_admin(request):
+        from vaf.api.whatsapp_bridge import running_by_account as _running_by_account
+        running_by_account = await asyncio.to_thread(_running_by_account)
     return {
         "configured": linked,
         "linked": linked,
@@ -720,6 +726,7 @@ async def get_whatsapp_dashboard(request: Request):
         # The Composer panel is offered only when the lane is on (the same switch as the mail window).
         "composer_enabled": _composer_enabled(),
         "running": running,
+        "running_by_account": running_by_account,
         "connected": connected,
         "enabled": enabled_effective,
         "username": username,
@@ -776,29 +783,32 @@ async def get_whatsapp_status(request: Request):
     }
 
 
-# What an account that is not an admin is told while the global switch, the local admin's own
-# and the bridge's master switch at once (`whatsapp_bridge` module docstring), is off.
-SWITCHED_OFF_FOR_ACCOUNT = "WhatsApp is switched off on this VAF. An admin has to switch it on first."
-SWITCHED_OFF_FOR_ADMIN = "WhatsApp not enabled. Enable in Settings -> Connections."
-# What such an account is told when Node could not be started: the installation is an admin's.
+# What an account that is not an admin is told when Node could not be started: the
+# installation is an admin's.
 START_FAILED_FOR_ACCOUNT = "Failed to start WhatsApp. Ask an admin to check the WhatsApp installation."
+OWN_SWITCH_OFF = "WhatsApp switched off for this account."
 
 
-def _global_switch_on() -> bool:
-    whatsapp_config = Config.get("whatsapp_config") or {}
-    return isinstance(whatsapp_config, dict) and bool(whatsapp_config.get("enabled"))
-
-
-def _account_start_answer(ok: bool, message: str) -> None:
+def _account_start_answer(ok: bool, message: str, *, admin: bool = False) -> None:
     """Raise what a failed account start answers: 500 when Node could not be started or the
     old process did not end, 400 when the account cannot start (not linked, switched off,
-    the bridge stopping, stopped again before it started)."""
+    the bridge stopping, stopped again before it started). An admin is told the bridge's own
+    text about the installation, anybody else to ask an admin."""
     from vaf.api.whatsapp_bridge import PREVIOUS_NOT_ENDED, START_FAILED, STOP_FAILED
     if ok:
         return
     if message == START_FAILED:
-        raise HTTPException(status_code=500, detail=START_FAILED_FOR_ACCOUNT)
+        raise HTTPException(status_code=500, detail=START_FAILED if admin else START_FAILED_FOR_ACCOUNT)
     raise HTTPException(status_code=500 if message in (STOP_FAILED, PREVIOUS_NOT_ENDED) else 400, detail=message)
+
+
+def _nobody_or_failed(message: str) -> None:
+    """An admin's start of the whole bridge that did not start it: 400 when no account is
+    linked and switched on (nothing to run is no failure), else 500 with `message`."""
+    from vaf.api.whatsapp_bridge import NOBODY_TO_RUN, anyone_to_run
+    if not anyone_to_run():
+        raise HTTPException(status_code=400, detail=NOBODY_TO_RUN)
+    raise HTTPException(status_code=500, detail=message)
 
 
 @router.post("/start")
@@ -811,8 +821,6 @@ async def start_whatsapp_bridge(request: Request):
     )
 
     if caller_is_admin(request):
-        if not _global_switch_on():
-            raise HTTPException(status_code=400, detail=SWITCHED_OFF_FOR_ADMIN)
         if is_bridge_running():
             started = await asyncio.to_thread(start_missing_accounts)
             if started:
@@ -820,11 +828,10 @@ async def start_whatsapp_bridge(request: Request):
             return {"status": "started", "message": "WhatsApp bridge already running."}
         if await asyncio.to_thread(start_bridge):
             return {"status": "started", "message": "WhatsApp bridge started."}
-        raise HTTPException(status_code=500, detail="Failed to start WhatsApp bridge. Ensure Node.js is installed and npm install was run in vaf/whatsapp_node.")
+        await asyncio.to_thread(_nobody_or_failed, "Failed to start WhatsApp bridge. Ensure Node.js is installed "
+                                                   "and npm install was run in vaf/whatsapp_node.")
 
     account = request_account(request)
-    if not _global_switch_on():
-        raise HTTPException(status_code=400, detail=SWITCHED_OFF_FOR_ACCOUNT)
     ok, message = await asyncio.to_thread(start_account, account["username"], account["user_scope_id"])
     _account_start_answer(ok, message)
     return {"status": "started", "message": message}
@@ -855,11 +862,9 @@ async def restart_whatsapp_bridge(request: Request):
     """Restart WhatsApp (stop, wait for shutdown, start). Use when 'Restart bridge' doesn't
     reconnect. An admin restarts the whole bridge; anybody else restarts their own account's
     process only."""
-    from vaf.api.whatsapp_bridge import SHUTDOWN_OVERRAN, restart_account, restart_bridge_result
+    from vaf.api.whatsapp_bridge import NOBODY_TO_RUN, SHUTDOWN_OVERRAN, restart_account, restart_bridge_result
 
     if caller_is_admin(request):
-        if not _global_switch_on():
-            raise HTTPException(status_code=400, detail=SWITCHED_OFF_FOR_ADMIN)
         ok, message, not_started = await asyncio.to_thread(restart_bridge_result)
         if ok:
             # `not_started`: the accounts whose previous process has not ended, so the new run
@@ -867,16 +872,62 @@ async def restart_whatsapp_bridge(request: Request):
             return {"status": "restarted",
                     "message": message if not_started else "WhatsApp bridge restarted. Wait 20-30 s, then refresh.",
                     "not_started": list(not_started)}
+        if message == NOBODY_TO_RUN:
+            raise HTTPException(status_code=400, detail=NOBODY_TO_RUN)
         # An overrun is the old process not ending, not the installation: say which.
         raise HTTPException(status_code=500, detail=message if message == SHUTDOWN_OVERRAN else
                             "Failed to restart bridge. Check Node.js and npm install in vaf/whatsapp_node.")
 
     account = request_account(request)
-    if not _global_switch_on():
-        raise HTTPException(status_code=400, detail=SWITCHED_OFF_FOR_ACCOUNT)
     ok, message = await asyncio.to_thread(restart_account, account["username"], account["user_scope_id"])
     _account_start_answer(ok, message)
     return {"status": "restarted", "message": "WhatsApp restarted for this account. Wait 20-30 s, then refresh."}
+
+
+class SwitchRequest(BaseModel):
+    # Strict: "yes", 1 or null would otherwise be coerced into a switch the caller never set.
+    enabled: StrictBool
+
+
+def _write_own_switch(user_scope_id: str, enabled: bool) -> None:
+    with Config._locked():
+        config = Config.load()
+        if Config.set_own_channel_switch(config, user_scope_id, "whatsapp", enabled):
+            Config.save(config)
+
+
+@router.put("/switch")
+async def switch_whatsapp(request: Request, body: SwitchRequest):
+    """The caller's own WhatsApp switch, admins included: the switch first, then the caller's
+    own process (on: `start_account`, off: `stop_account`), and nobody else's. The account is
+    the sign-in's (`request_account`); no name or scope is read from the body or the query.
+
+    The whole-bridge routes keep their meaning for an admin (`/start`, `/stop`, `/restart`);
+    this is the toggle in Connections, the stopped banner's Start and Refresh. Measured before:
+    the toggle saved the switch and then called `/stop`, which for any admin is the whole
+    bridge, so the local admin turning their own WhatsApp off, and a second admin turning
+    theirs off, both ended every account's. The switch is written before the stop: the spawn
+    gate asks it under the lock the stop takes (`whatsapp_bridge._account_may_start`), so a
+    start racing this switch-off leaves no process behind. A refused start keeps the switch on:
+    it is the account's choice, and the answer (400/500 with `detail`, as `/start`) says why
+    it does not run yet."""
+    account = request_account(request)
+    return await asyncio.to_thread(_switch_own_whatsapp, account["username"], account["user_scope_id"],
+                                   body.enabled, caller_is_admin(request))
+
+
+def _switch_own_whatsapp(username: str, user_scope_id: str, enabled: bool, admin: bool) -> Dict[str, Any]:
+    """The switch route's work, off the event loop: the switch, then the account's own process."""
+    from vaf.api.whatsapp_bridge import STOP_FAILED, start_account, stop_account
+
+    _write_own_switch(user_scope_id, enabled)
+    if not enabled:
+        if stop_account(username, user_scope_id) is False:
+            raise HTTPException(status_code=500, detail=STOP_FAILED)
+        return {"enabled": False, "running": False, "message": OWN_SWITCH_OFF}
+    ok, message = start_account(username, user_scope_id)
+    _account_start_answer(ok, message, admin=admin)
+    return {"enabled": True, "running": True, "message": message}
 
 
 def _get_whatsapp_compaction_info(session_id: str) -> tuple:

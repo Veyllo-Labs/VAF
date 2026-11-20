@@ -1830,8 +1830,9 @@ class Config:
           started. On a shared bot (Telegram) the global `enabled` IS the admin's switch: the
           bot, which they control and ride.
         - The local admin: unchanged.
-        - Every caller: `connection_enabled_by_scope` leaves the body; this step and the
-          pairings are its only writers.
+        - Every caller: `connection_enabled_by_scope` leaves the body; what an account's own
+          switch says is written by `set_own_channel_switch`, called here, by the pairings
+          and by the WhatsApp switch route.
 
         The two paths used to carry the non-admin half by hand, one copy each.
         """
@@ -1859,14 +1860,51 @@ class Config:
                 stored = existing.get(key) if isinstance(existing, dict) else None
                 body[key] = {**block, "enabled": bool(stored.get("enabled", False)) if isinstance(stored, dict) else False}
             scope_toggles = {scope_str: own} if own else {}
-        if scope_toggles:
-            by_scope = existing.get("connection_enabled_by_scope") or {}
-            if not isinstance(by_scope, dict):
-                by_scope = {}
-            for scope_id, toggles in scope_toggles.items():
-                by_scope[scope_id] = {**(by_scope.get(scope_id) or {}), **toggles}
-            existing["connection_enabled_by_scope"] = by_scope
+        for scope_id, toggles in scope_toggles.items():
+            for channel, on in toggles.items():
+                cls.set_own_channel_switch(existing, scope_id, channel, on)
         return body
+
+    @classmethod
+    def set_own_channel_switch(cls, config: dict, user_scope_id: Optional[str], channel: str,
+                               on: bool) -> bool:
+        """Write one account's own switch of one channel into `config`: the write twin of
+        `messaging_connections.channel_enabled_for_scope`, and the one writer of
+        `connection_enabled_by_scope` (the save step, the Telegram and Veyllo App pairings and
+        the WhatsApp switch route call it; `tests/test_channel_switch_one_writer.py` refuses a
+        hand-written store anywhere else).
+
+        - On a channel where every account has its own connection (`Channel.accounts ==
+          "each"`, WhatsApp), the local admin's switch IS the global `<channel>_config.enabled`
+          (a copy of the block is written, created when absent).
+        - Every other case: `connection_enabled_by_scope[<scope>][<channel>]`.
+
+        True when the stored value changed. The caller holds `Config._locked()` from its load
+        to its save, and saves. An empty scope or a channel the registry does not know raises
+        ValueError: a switch written under no account would be read as the local admin's.
+        """
+        from vaf.core.channels import CHANNEL_ACCOUNTS
+        name = str(channel or "").strip().lower()
+        scope = str(user_scope_id or "").strip()
+        if not scope:
+            raise ValueError("an account's own switch needs the account's scope")
+        if name not in CHANNEL_ACCOUNTS:
+            raise ValueError(f"no channel {channel!r} in the channel registry")
+        value = bool(on)
+        if CHANNEL_ACCOUNTS[name] == "each" and is_local_admin_lane(scope):
+            key = f"{name}_config"
+            stored = config.get(key)
+            if isinstance(stored, dict) and stored.get("enabled") is value:
+                return False
+            config[key] = {**(stored if isinstance(stored, dict) else {}), "enabled": value}
+            return True
+        by_scope = config.get("connection_enabled_by_scope")
+        by_scope = by_scope if isinstance(by_scope, dict) else {}
+        mine = by_scope.get(scope) if isinstance(by_scope.get(scope), dict) else {}
+        if mine.get(name) is value:
+            return False
+        config["connection_enabled_by_scope"] = {**by_scope, scope: {**mine, name: value}}
+        return True
 
     @classmethod
     def config_for_user(cls, config: dict, user_scope_id: Optional[str], role: str,

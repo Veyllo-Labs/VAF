@@ -156,7 +156,7 @@ def pair_telegram_account(telegram_user_id: str, telegram_username: Optional[str
     is another account's and `may_take_over` is False: only an admin may move it). The block
     need not be verified yet: the wizard pairs before it saves the bot as set up, and a code
     is only issued for a running bot (`POST /api/telegram/pair`). `switch_on` also turns the account's own Telegram
-    switch on (`connection_enabled_by_scope`), which a pairing by code does: asking for one
+    switch on (`Config.set_own_channel_switch`), which a pairing by code does: asking for one
     is the account saying it wants the lane. A relay entry with this id is removed in the
     same write (recorded as `channel_unpaired`): a paired Telegram account is reached as its
     owner, and the relay writer refuses the reverse order (`pair_telegram_relay`), so an id
@@ -189,13 +189,8 @@ def pair_telegram_account(telegram_user_id: str, telegram_username: Optional[str
             if unrelayed:
                 block["relay_whitelist"] = [e for e in relay if all(e is not u for u in unrelayed)]
             config["telegram_config"] = block
-        if switch_on:
-            by_scope = config.get("connection_enabled_by_scope")
-            by_scope = by_scope if isinstance(by_scope, dict) else {}
-            mine = by_scope.get(scope) if isinstance(by_scope.get(scope), dict) else {}
-            if mine.get("telegram") is not True:
-                config["connection_enabled_by_scope"] = {**by_scope, scope: {**mine, "telegram": True}}
-                dirty = True
+        if switch_on and Config.set_own_channel_switch(config, scope, "telegram", True):
+            dirty = True
         if dirty:
             Config.save(config)
     # A new owner of this Telegram account is an access change; the same pairing sent again
@@ -258,13 +253,8 @@ def pair_telegram_relay(telegram_user_id: str, telegram_username: Optional[str],
         dirty = new_entry
         if new_entry:
             config["telegram_config"] = {**block, "relay_whitelist": [e for e in relay if e is not previous] + [entry]}
-        if switch_on:
-            by_scope = config.get("connection_enabled_by_scope")
-            by_scope = by_scope if isinstance(by_scope, dict) else {}
-            mine = by_scope.get(scope) if isinstance(by_scope.get(scope), dict) else {}
-            if mine.get("telegram") is not True:
-                config["connection_enabled_by_scope"] = {**by_scope, scope: {**mine, "telegram": True}}
-                dirty = True
+        if switch_on and Config.set_own_channel_switch(config, scope, "telegram", True):
+            dirty = True
         if dirty:
             Config.save(config)
     # Access moved only when there was no entry or it was another account's; the same contact

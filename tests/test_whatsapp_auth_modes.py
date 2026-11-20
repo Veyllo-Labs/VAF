@@ -175,5 +175,8 @@ def test_every_linked_account_is_protected_at_startup_whatever_the_switch_says(t
 def test_the_server_runs_the_startup_pass_before_the_switch_decides():
     src = (REPO / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
     sweep = src.index("harden_linked_auth_dirs()")
-    gate = src.index('if isinstance(whatsapp_config, dict) and whatsapp_config.get("enabled"):')
-    assert sweep < gate, "the pass runs outside the 'switched on' branch"
+    # The auto-start asks nobody's switch itself (`start_bridge` starts whoever is linked and
+    # switched on), so the pass runs before it, and no switch check stands in between.
+    start = src.index("elif start_bridge():")
+    assert sweep < start, "the pass runs before the bridge's auto-start"
+    assert 'get("enabled")' not in src[sweep - 400:start], "the pass runs outside any 'switched on' branch"

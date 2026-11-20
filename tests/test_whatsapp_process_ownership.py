@@ -245,8 +245,9 @@ def test_the_fallback_lives_in_one_place():
     assert len(re.findall(r"len\(_processes\)\s*==\s*1", src)) == 1
     helper = src[src.index("def _process_for("):src.index("\ndef ", src.index("def _process_for(") + 1)]
     assert "len(_processes) == 1" in helper
-    # The second read is the spawn gate's (`_registered_live`: which live process is registered
-    # under exactly this name?), which acts on no process.
-    gate = src[src.index("def _registered_live("):src.index("\ndef ", src.index("def _registered_live(") + 1)]
+    # The second read is the registration's (`_registration`: which process is registered under
+    # exactly this name, and for which scope?), asked by the spawn gate (`_registered_live`) and
+    # the reconnect worker; it acts on no process.
+    gate = src[src.index("def _registration("):src.index("\ndef ", src.index("def _registration(") + 1)]
     assert helper.count("_processes.get(") == 1 and gate.count("_processes.get(") == 1
     assert src.count("_processes.get(") == 2, "a lane picks a process by name outside the helper"

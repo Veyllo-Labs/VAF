@@ -385,10 +385,11 @@ def test_a_non_admin_start_on_a_stopped_bridge_starts_only_them(world):
 
 # -- AC5 ----------------------------------------------------------------------------------------
 
-@pytest.mark.parametrize("case", ["not linked", "lane off", "scope mismatch", "global off"])
+@pytest.mark.parametrize("case", ["not linked", "lane off", "scope mismatch"])
 @pytest.mark.parametrize("running", [False, True])
 def test_a_non_admin_cannot_start_what_is_not_theirs(world, monkeypatch, case, running):
-    """MUTATION: remove the `_get_users_to_run` membership check, or the scope equality in it."""
+    """MUTATION: remove the `_get_users_to_run` membership check, or the scope equality in it.
+    The local admin's switch gates nobody else's start (test_whatsapp_own_switch.py)."""
     if running:
         _bridge_with(world, "admin")
     if case != "not linked":
@@ -398,22 +399,16 @@ def test_a_non_admin_cannot_start_what_is_not_theirs(world, monkeypatch, case, r
     # switch is on too.
     world.own_switch(BOB_SCOPE, True)
     user = dict(ALICE, user_scope_id=BOB_SCOPE) if case == "scope mismatch" else ALICE
-    if case == "global off":
-        world.global_switch(False)
     before = world.names()
     _record(world, monkeypatch, *WHOLE, "start_account", "restart_account", "_spawn_account")
     for path in ("/api/whatsapp/start", "/api/whatsapp/restart"):
         res = _client(user).post(path)
         assert res.status_code == 400, (path, res.status_code, res.text)
-        expected = ("WhatsApp is switched off on this VAF. An admin has to switch it on first."
-                    if case == "global off" else wa.NOT_STARTABLE)
-        assert res.json()["detail"] == expected
+        assert res.json()["detail"] == wa.NOT_STARTABLE
     time.sleep(0.05)
     assert world.names() == before
     assert not world.live("alice")
     assert not any(c[0] in WHOLE or c[0] == "_spawn_account" for c in world.calls), world.calls
-    if case == "global off":
-        assert world.calls == []
 
 
 # -- AC6 ----------------------------------------------------------------------------------------
@@ -580,7 +575,10 @@ def test_an_account_start_into_a_bridge_with_nobody_keeps_it_up(world, monkeypat
 # -- AC8 ----------------------------------------------------------------------------------------
 
 def test_session_expiry_stops_only_that_account(world, monkeypatch):
-    """MUTATION: the handler back to `stop_bridge()`; or the switch write made unconditional."""
+    """An expiry line stops that account's own process, nobody else's, and changes no switch,
+    the local admin's included: the window then says "switched on but not running ... link
+    again if the session expired", the true cause. MUTATION: the handler back to
+    `stop_bridge()`; restore the local admin's switch write."""
     procs = _bridge_with(world, "admin", "alice")
     _record(world, monkeypatch, "stop_bridge", "restart_bridge")
 
@@ -592,15 +590,33 @@ def test_session_expiry_stops_only_that_account(world, monkeypatch):
     assert wa._processes["admin"] is procs["admin"] and procs["admin"].returncode is None
     assert not wa._bridge_stop.is_set()
 
-    # The local admin's own expiry: their switch IS the global one.
+    # The local admin's own expiry: their switch IS the global one, and it stays on too.
     world.link("alice")
     assert wa.start_account("alice", ALICE_SCOPE)[0]
+    alice = wa._processes["alice"]
     wa._dispatch_bridge_event("admin", ADMIN_SCOPE, "qr", {})
     assert world.calls == []
-    assert world.cfg()["whatsapp_config"]["enabled"] is False
+    assert world.cfg()["whatsapp_config"]["enabled"] is True
+    assert world.cfg()["connection_enabled_by_scope"][ALICE_SCOPE]["whatsapp"] is True
     assert procs["admin"].returncode is not None and "admin" not in wa._processes
-    assert world.live("alice")
+    assert world.live("alice") and wa._processes["alice"] is alice
     assert not wa._bridge_stop.is_set()
+
+
+def test_the_expiry_handler_writes_no_config():
+    """The `qr` branch of `_dispatch_bridge_event` holds no `Config.save` and no `Config.load`:
+    it used to write the local admin's switch by hand, outside `Config._locked()`, so a
+    concurrent save could be lost. MUTATION: restore the `own_switch` write."""
+    import ast
+    import inspect
+    import textwrap
+    tree = ast.parse(textwrap.dedent(inspect.getsource(wa._dispatch_bridge_event)))
+    branch = next(n for n in ast.walk(tree) if isinstance(n, ast.If) and isinstance(n.test, ast.Compare)
+                  and any(isinstance(c, ast.Constant) and c.value == "qr" for c in n.test.comparators))
+    calls = {f"{n.func.value.id}.{n.func.attr}" for stmt in branch.body for n in ast.walk(stmt)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and isinstance(n.func.value, ast.Name)}
+    assert "_stop_account_held" in ast.dump(branch)
+    assert not calls & {"Config.save", "Config.load"}, calls
 
 
 # -- AC9 ----------------------------------------------------------------------------------------
@@ -622,19 +638,6 @@ def test_status_running_is_the_callers_own_process(world, monkeypatch):
 
 
 # -- Admin refusals, cold starts, stops that do not end, name collisions -----------------------
-
-def test_an_admin_start_is_refused_while_whatsapp_is_switched_off(world, monkeypatch):
-    """The admin branch keeps the master switch gate. MUTATION: drop the global-switch check
-    from the admin branch of `/start` (or of `/restart`)."""
-    world.link("admin")
-    world.global_switch(False)
-    _record(world, monkeypatch, *WHOLE, *ACCOUNT, through=False)
-    for path in ("/api/whatsapp/start", "/api/whatsapp/restart"):
-        res = _client(ADMIN).post(path)
-        assert res.status_code == 400, (path, res.text)
-        assert res.json()["detail"] == "WhatsApp not enabled. Enable in Settings -> Connections."
-    assert world.calls == [] and world.names() == []
-
 
 def test_two_accounts_starting_a_stopped_bridge_both_run(world, monkeypatch):
     """Two different accounts start at once while the bridge is down: the first brings it up
@@ -1127,8 +1130,11 @@ def test_a_crashed_bridge_thread_ends_its_run(world, monkeypatch, where):
 def test_a_bridge_with_nobody_to_run_ends_its_run(world, monkeypatch):
     """The exit with nobody to run ends the run's loops, and the state file says not running
     once the thread has ended, in 200 starts of 200. MUTATION: write True after the bridge
-    thread has started (39 of 200 measured); return from the nobody branch past `_end_run`."""
-    assert wa.start_bridge()
+    thread has started (39 of 200 measured); return from the nobody branch past `_end_run`.
+    A start of the whole bridge with nobody refuses before it starts a thread
+    (`NOBODY_TO_RUN`), so the bridge thread's own exit is reached by a start for one account
+    that is not runnable by the time the thread looks."""
+    assert wa.start_bridge(only="nobody")
     run_stop = wa._bridge_stop
     wa._bridge_thread.join(timeout=5)
     # Its sender loop and its chat-sync loop (a 0 in the config still starts one).
@@ -1141,7 +1147,7 @@ def test_a_bridge_with_nobody_to_run_ends_its_run(world, monkeypatch):
     monkeypatch.setattr(wa, "_write_bridge_state", REAL_STATE)
     stale = 0
     for _ in range(200):
-        assert wa.start_bridge()
+        assert wa.start_bridge(only="nobody")
         wa._bridge_thread.join(timeout=5)
         stale += wa._read_bridge_state()["running"] is not False
     assert stale == 0, f"{stale} of 200 starts left the state file at running"
@@ -1746,9 +1752,9 @@ def test_an_expiry_line_of_a_survivor_changes_nothing(world, monkeypatch):
 
 
 def test_the_reconnect_restart_does_not_wait_for_the_spawn_report(world, monkeypatch):
-    """`restart_bridge` (the reconnect worker's) answers once the new run is up, without
-    waiting for its spawn phase, which an admin's restart waits for to name skipped accounts.
-    MUTATION: `restart_bridge` asks for the report."""
+    """`restart_bridge` answers once the new run is up, without waiting for its spawn phase,
+    which an admin's restart waits for to name skipped accounts. MUTATION: `restart_bridge`
+    asks for the report."""
     _bridge_with(world, "admin")
     monkeypatch.setattr(wa, "RESTART_REPORT_WAIT", 2.0)
     release = threading.Event()

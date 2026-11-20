@@ -555,6 +555,9 @@ def test_a_start_under_way_spawns_nothing_for_a_revoked_account(world, monkeypat
     monkeypatch.setattr(wa, "_write_bridge_state", lambda running: None)
     monkeypatch.setattr(wa, "_read_user_process", lambda *a, **k: None)
     monkeypatch.setattr(wa, "_forward_bridge_stderr", lambda *a, **k: None)
+    # Both switched on: the spawn gate asks the account's own switch too, and the revocation
+    # must be the only reason Alice is refused.
+    world.state["connection_enabled_by_scope"] = {ALICE_SCOPE: {"whatsapp": True}, BOB_SCOPE: {"whatsapp": True}}
     if how == "deactivated":
         world.rows[0]["active"] = False
     else:

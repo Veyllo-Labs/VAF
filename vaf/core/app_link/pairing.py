@@ -293,11 +293,7 @@ def _switch_lane_on(scope: str) -> None:
     from vaf.core.config import Config
     with Config._locked():
         config = Config.load()
-        by_scope = config.get("connection_enabled_by_scope")
-        by_scope = by_scope if isinstance(by_scope, dict) else {}
-        mine = by_scope.get(scope) if isinstance(by_scope.get(scope), dict) else {}
-        if mine.get(CHANNEL) is not True:
-            config["connection_enabled_by_scope"] = {**by_scope, scope: {**mine, CHANNEL: True}}
+        if Config.set_own_channel_switch(config, scope, CHANNEL, True):
             Config.save(config)
 
 

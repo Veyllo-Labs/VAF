@@ -566,11 +566,13 @@ def get_whatsapp_chat_jid_from_whitelist(
     page's copy of a number it had just added (`{phone_number, vaf_username: null}`), and the
     lookups before this one did not find that copy either. Matched as the admin's, first in
     whitelist order, it took the place of the admin's own scoped entry, whatever number it
-    held. The repair is to edit that entry so it carries the admin's scope AND the admin's own
-    username, or to remove it: with the scope alone, the name "admin" still matches an
-    ordinary account named "admin" in the bridge (`_get_allowed_phones_for_user`).
-    Registering the number again on the Connections page is not enough: it writes or updates
-    the admin's own entry and leaves the old one in place.
+    held. The repair depends on the number: if it is the admin's own, edit the entry so it
+    carries the admin's scope AND the admin's own username (with the scope alone, the name
+    "admin" still matches an ordinary account named "admin" in the bridge,
+    `_get_allowed_phones_for_user`); otherwise remove it, since under the admin's scope the
+    fallback by scope would pick it, first in whitelist order, and send the admin's notes to
+    that number. Registering the number again on the Connections page is not enough: it
+    writes or updates the admin's own entry and leaves the old one in place.
     """
     whatsapp_config = Config.get("whatsapp_config") or {}
     if not isinstance(whatsapp_config, dict) or not whatsapp_config.get("whitelist"):
@@ -730,10 +732,15 @@ def get_whatsapp_chat_jid(
     - An entry filed under a lane's scope is that lane's number, whoever's number it is. An
       admin who registers a number for another account on the WhatsApp window sends only that
       account's name; the route files the number under the admin's own scope, and its update
-      loop, which matches by scope, overwrites the admin's own entry with it. Every lane of the
-      local admin, the ones without a scope included (`messenger_lane_identity`), then
-      delivers to that number through the admin's own process. The cause is that route, not
-      this reader, and it is not closed here.
+      loop matches an existing entry by scope or name, first in whitelist order, so it
+      overwrites the admin's own entry or that account's entry with the number under the
+      admin's scope. Every lane of the local admin, the ones without a scope included
+      (`messenger_lane_identity`), then delivers to that number through the admin's own
+      process, while the account the number was registered for counts it as the admin's on
+      its own lane: its saved chat there is reset as foreign (`owner_endpoint_reset`) and its
+      notifications go to the web UI. The bridge's reply check, which also matches by name,
+      still answers that number for the account's own process; that is all it covers. The
+      cause is that route, not this reader, and it is not closed here.
     - The registered-number helpers stay private: this is the one reader of "whose number is
       this"; a second reader is the measurement that would earn a public primitive.
     - Cost: one canonicalisation per whitelist entry, plus one LID-map copy when another

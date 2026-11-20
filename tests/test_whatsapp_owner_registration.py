@@ -447,6 +447,13 @@ def test_one_lookup_per_distinct_name_and_scope(world, monkeypatch):
     channel_pairing.refile_whatsapp_owner_numbers()
     assert counts == Counter()
 
+    # Entries already filed under their own account cost one name lookup each and no admin
+    # lookup. MUTATION: drop the `target == scope` shortcut.
+    counts.clear()
+    world.whitelist(_e(P[1], ALI, "alice"), _e(P[2], CAR, "carl"), _e(P[3], EVE, "eve"), DANA_E)
+    assert channel_pairing.refile_whatsapp_owner_numbers() == []
+    assert counts["scope"] == 0 and counts["name"] == 4, counts
+
 
 # -- AC12 the dashboard says who may name another account -------------------------------------------
 

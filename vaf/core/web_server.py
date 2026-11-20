@@ -5119,6 +5119,27 @@ def _emit_sec_ws(detail: str, ip: str = "") -> None:
     except Exception:
         pass
 
+# Thinking-workspace handoff decisions run here, never on the event loop (one may wait
+# seconds for another decision's lock) and never on the loop's default executor, which
+# speech-to-text and other commands share: contending decisions occupy at most these two
+# threads and queue behind them. The lock's own timeout starts inside the worker.
+_HANDOFF_DECISION_POOL = None
+
+
+def _handoff_decision_pool():
+    global _HANDOFF_DECISION_POOL
+    if _HANDOFF_DECISION_POOL is None:
+        from vaf.core.bounded_run import DaemonPool
+        _HANDOFF_DECISION_POOL = DaemonPool(2, "vaf-handoff-decision")
+    return _HANDOFF_DECISION_POOL
+
+
+async def _decide_handoff(fn, *args, **kwargs):
+    """`fn(*args, **kwargs)` on the handoff decision pool, awaited from the event loop."""
+    return await asyncio.get_running_loop().run_in_executor(
+        _handoff_decision_pool(), functools.partial(fn, *args, **kwargs))
+
+
 async def _announce_handoff_approved(websocket: WebSocket, user_scope_id: Optional[str],
                                      task_id: str, handoff_id: str,
                                      action_result: Optional[dict]) -> None:
@@ -8850,17 +8871,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             time_str = f"{h:02d}:{m:02d}"
                         name = (cmd.get("name") or "").strip() or (prompt[:50] + ("..." if len(prompt) > 50 else ""))
                         description = (cmd.get("description") or "").strip() or prompt[:200]
-                        weekday = (cmd.get("weekday") or "").strip().lower() or None
+                        # Read as the clock rule needs them by AutomationTask itself
+                        # (coerce_schedule_fields), like every other lane's.
+                        weekday = cmd.get("weekday")
                         day = cmd.get("day")
-                        if frequency == "weekly" and weekday:
-                            pass
-                        elif frequency == "monthly" and day is not None:
-                            day = max(1, min(31, int(day)))
-                        else:
-                            if frequency == "weekly":
-                                weekday = None
-                            if frequency == "monthly":
-                                day = None
                         # An event trigger replaces the clock: read at the boundary,
                         # and from here on the task has no time and no clock job.
                         from vaf.core.automation_triggers import read_trigger
@@ -8928,20 +8942,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         if mgr is None or task is None:
                             await websocket.send_json({"type": "update_automation_result", "ok": False, "error": "Automation not found"})
                             continue
+                        # day, weekday and enabled are coerced where every lane's update
+                        # lands (AutomationManager.update, coerce_schedule_fields).
                         update_params = {}
                         for key in ("name", "description", "prompt", "frequency", "time", "weekday", "day", "enabled"):
                             if key in cmd and cmd[key] is not None:
-                                if key == "enabled":
-                                    update_params[key] = bool(cmd[key])
-                                elif key == "day":
-                                    try:
-                                        update_params[key] = max(1, min(31, int(cmd[key])))
-                                    except (TypeError, ValueError):
-                                        pass
-                                elif key == "weekday" and isinstance(cmd.get(key), str):
-                                    update_params[key] = (cmd[key] or "").strip().lower() or None
-                                else:
-                                    update_params[key] = cmd[key]
+                                update_params[key] = cmd[key]
                         if isinstance(cmd.get("trigger"), dict):
                             # Applied AFTER the ordinary fields: an event trigger replaces
                             # the clock, and a frequency or time sent beside it must not
@@ -9031,12 +9037,13 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # data path and is answered like a missing handoff; a handoff decided
                         # before is not applied again. Everything after a saved decision is
                         # best effort and never changes the answer to "not found". The
-                        # decision runs on a worker thread: it may wait seconds for another
-                        # decision's lock, and this loop serves every other socket meanwhile.
+                        # decision runs on its own pool (`_handoff_decision_pool`): it may
+                        # wait seconds for another decision's lock, and this loop serves
+                        # every other socket meanwhile.
                         refusal = "handoff not found"
                         try:
-                            ok = await asyncio.to_thread(approve_handoff, user_scope_id,
-                                                         task_id, handoff_id)
+                            ok = await _decide_handoff(approve_handoff, user_scope_id,
+                                                       task_id, handoff_id)
                         except HandoffAlreadyDecided:
                             ok, refusal = False, "handoff already decided"
                         except HandoffBusy:
@@ -9110,8 +9117,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # "not found"; the notification after a saved decision is best effort.
                         refusal = "handoff not found"
                         try:
-                            ok = await asyncio.to_thread(reject_handoff, user_scope_id, task_id,
-                                                         handoff_id, reason=reason)
+                            ok = await _decide_handoff(reject_handoff, user_scope_id, task_id,
+                                                       handoff_id, reason=reason)
                         except HandoffAlreadyApproved as approved:
                             # An approval claimed earlier had already created its automation;
                             # the reject finished it. Not rejected, and the account is told

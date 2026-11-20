@@ -92,4 +92,9 @@ def test_the_31st_waits_for_a_month_that_has_it(monkeypatch):
                         lambda username=None, identity=None: datetime(2026, 9, 15, 10, 0, tzinfo=TOKYO))
     task = _task(frequency="monthly", day=31)
     assert task.calculate_next_run().astimezone(TOKYO) == datetime(2026, 10, 31, 8, 0, tzinfo=TOKYO)
-    assert _task(frequency="monthly", day=32).calculate_next_run() is None, "a day no month has"
+    # A day past 31 is clamped where every task is built (coerce_schedule_fields), as every
+    # create and update lane did; set past that coercion, it has no next run.
+    assert _task(frequency="monthly", day=32).day == 31
+    past_the_coercion = _task(frequency="monthly", day=1)
+    past_the_coercion.day = 32
+    assert past_the_coercion.calculate_next_run() is None, "a day no month has"

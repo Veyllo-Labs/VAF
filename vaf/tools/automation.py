@@ -284,24 +284,10 @@ Use this when user wants to schedule recurring tasks or a one-time task at a clo
         # When False (default), a near-duplicate at a different time is NOT created — the tool returns a
         # truthful "nothing created, ask the user" prompt instead of silently creating (and lying about it).
         confirm_duplicate = bool(kwargs.get("confirm_duplicate", False))
-        weekday_arg = kwargs.get("weekday")
-        day_arg = kwargs.get("day")
-        # Normalize weekday to English lowercase (e.g. Montag -> monday)
-        weekday_map = {
-            "montag": "monday", "dienstag": "tuesday", "mittwoch": "wednesday",
-            "donnerstag": "thursday", "freitag": "friday", "samstag": "saturday", "sonntag": "sunday",
-            "monday": "monday", "tuesday": "tuesday", "wednesday": "wednesday",
-            "thursday": "thursday", "friday": "friday", "saturday": "saturday", "sunday": "sunday",
-        }
-        weekday = None
-        if weekday_arg and isinstance(weekday_arg, str):
-            weekday = weekday_map.get(weekday_arg.strip().lower(), weekday_arg.strip().lower())
-        day = None
-        if day_arg is not None:
-            try:
-                day = max(1, min(31, int(day_arg)))
-            except (TypeError, ValueError):
-                pass
+        # A German weekday name, a day sent as text: read by AutomationTask itself
+        # (coerce_schedule_fields in vaf.core.automation), like every other lane's.
+        weekday = kwargs.get("weekday")
+        day = kwargs.get("day")
         # IMPORTANT: Distinguish between "not provided" (None) and "default value"
         # This allows us to detect if user explicitly passed a path or not
         output_path_arg = kwargs.get("output_path")
@@ -1246,14 +1232,11 @@ When changing **time**, the new time must be at least 10 minutes apart from all 
                 update_params["frequency"] = kwargs["frequency"]
             if "time" in kwargs and kwargs["time"] and trigger is None:
                 update_params["time"] = kwargs["time"]
+            # Coerced where every lane's update lands (AutomationManager.update).
             if "weekday" in kwargs:
-                w = kwargs.get("weekday")
-                update_params["weekday"] = w.strip().lower() if isinstance(w, str) and w.strip() else None
+                update_params["weekday"] = kwargs.get("weekday")
             if "day" in kwargs and kwargs["day"] is not None:
-                try:
-                    update_params["day"] = max(1, min(31, int(kwargs["day"])))
-                except (TypeError, ValueError):
-                    pass
+                update_params["day"] = kwargs["day"]
             if "output_path" in kwargs and kwargs["output_path"]:
                 update_params["output_path"] = kwargs["output_path"]
             if "parameters" in kwargs and kwargs["parameters"]:

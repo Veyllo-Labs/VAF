@@ -52,6 +52,65 @@ class Frequency(str, Enum):
 AUTOMATION_FORMAT = "automation-1-4e9b27"
 
 
+# The weekday names a lane may be given, to the English lowercase name the clock rule reads.
+_WEEKDAY_NAMES = {
+    "montag": "monday", "dienstag": "tuesday", "mittwoch": "wednesday",
+    "donnerstag": "thursday", "freitag": "friday", "samstag": "saturday", "sonntag": "sunday",
+    "monday": "monday", "tuesday": "tuesday", "wednesday": "wednesday",
+    "thursday": "thursday", "friday": "friday", "saturday": "saturday", "sunday": "sunday",
+}
+_ENABLED_FALSE = frozenset({"false", "0", "no", "off", ""})
+_ENABLED_TRUE = frozenset({"true", "1", "yes", "on"})
+
+
+def coerce_schedule_fields(fields: Dict[str, Any]) -> Dict[str, Any]:
+    """The schedule fields of an automation as the clock rule and the scheduler read them, the
+    one coercion every lane goes through (`AutomationTask.__post_init__` and
+    `AutomationManager.update`). A copy of `fields`, changed only where a key is present and
+    not None:
+
+    - `day`: a whole number from 1 to 31 (`int()`, so "15" and 15.0 are read, then clamped);
+      dropped when it does not parse. A string day used to reach `datetime.replace`, which
+      raised `TypeError` inside `list()`, and so in the scheduler's start and refresh: one
+      approved proposal disarmed every account's automations.
+    - `enabled`: a bool. Text is parsed, never `bool()`-ed: "false", "0", "no", "off" and ""
+      are False, "true", "1", "yes", "on" True (case and spaces ignored); other text is
+      dropped. `bool("false")` is True, which kept running an automation that was meant to
+      be switched off.
+    - `weekday`: stripped and lower-cased, a German name mapped to the English one; "" is
+      None; anything that is not text is dropped.
+
+    `time` is left as it is: each lane formats it its own way, and `calculate_next_run`
+    answers None for one it cannot read."""
+    out = dict(fields)
+    day = out.get("day")
+    if day is not None:
+        try:
+            out["day"] = max(1, min(31, int(day.strip() if isinstance(day, str) else day)))
+        except (TypeError, ValueError, OverflowError):
+            del out["day"]
+    enabled = out.get("enabled")
+    if enabled is not None:
+        if isinstance(enabled, str):
+            word = enabled.strip().lower()
+            if word in _ENABLED_FALSE:
+                out["enabled"] = False
+            elif word in _ENABLED_TRUE:
+                out["enabled"] = True
+            else:
+                del out["enabled"]
+        else:
+            out["enabled"] = bool(enabled)
+    weekday = out.get("weekday")
+    if weekday is not None:
+        if isinstance(weekday, str):
+            word = weekday.strip().lower()
+            out["weekday"] = _WEEKDAY_NAMES.get(word, word) or None
+        else:
+            del out["weekday"]
+    return out
+
+
 @dataclass
 class AutomationTask:
     """A scheduled automation task."""
@@ -86,7 +145,21 @@ class AutomationTask:
     # "room_id": ..., "match"?: ..., "emoji"?: ..., "from"?: ..., "cursor"?: lamport}.
     # Read only through vaf.core.automation_triggers.read_trigger, never trusted raw.
     trigger: Optional[Dict[str, Any]] = None
-    
+
+    def __post_init__(self):
+        # The data-model boundary: every constructor and every file loaded through
+        # from_dict pass here, so a record written before the coercion (a day of "15")
+        # is read as the clock rule needs it. A value that does not parse falls back to
+        # the field's default; an explicit None for `enabled` stays off, as it read before.
+        fields = coerce_schedule_fields(
+            {"day": self.day, "enabled": self.enabled, "weekday": self.weekday})
+        self.day = fields.get("day")
+        self.weekday = fields.get("weekday")
+        if self.enabled is not None:
+            self.enabled = fields.get("enabled", True)
+        else:
+            self.enabled = False
+
     def to_dict(self) -> Dict:
         """Convert to dict, excluding next_run (calculated dynamically)."""
         data = asdict(self)
@@ -166,7 +239,9 @@ class AutomationTask:
             now = after.astimezone(tz) if tz else after
         try:
             next_time = self._next_clock_time(now, hour, minute)
-        except (ValueError, OverflowError):
+        except (ValueError, OverflowError, TypeError, AttributeError):
+            # TypeError and AttributeError too: a day or weekday of a type the calendar
+            # cannot take (set past the coercion) must not make list() raise.
             return None
         return _to_server_local_naive(next_time) if next_time else None
 
@@ -666,6 +741,25 @@ def _read_task_record(path: Path) -> Optional[Dict[str, Any]]:
         return None
     if not isinstance(data, dict) or not str(data.get("id") or "").strip():
         return None
+    return data
+
+
+def scoped_task_record(user_scope_id: str, task_id: str) -> Optional[Dict[str, Any]]:
+    """One task of an account's own store, read strictly: None when there is no such file,
+    `OSError` or `ValueError` when there is one that cannot be read or is not that task's
+    record. For recovery code that must not take an unreadable task for a missing one:
+    `_read_task_record`, the loaders' reader, skips such a file, so `get()` answers None for
+    a task that is on disk. `task_id` must already be one plain entry (the caller checks)."""
+    from vaf.core.platform import Platform
+
+    path = Platform.vaf_dir() / "automations" / user_scope_id / f"{task_id}.json"
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return None
+    data = json.loads(raw.decode("utf-8"))
+    if not isinstance(data, dict) or str(data.get("id") or "").strip() != task_id:
+        raise ValueError("not the task's record")
     return data
 
 
@@ -1446,7 +1540,10 @@ vaf automation delete <id>   # Delete task
             return None
         
         task = self.tasks[task_id]
-        for key, value in kwargs.items():
+        # setattr skips __post_init__, so the schedule fields are coerced here: every
+        # update lane (the WebSocket, the agent's tool, an approved handoff, the CLI)
+        # reaches the store through this call.
+        for key, value in coerce_schedule_fields(kwargs).items():
             if hasattr(task, key):
                 setattr(task, key, value)
         

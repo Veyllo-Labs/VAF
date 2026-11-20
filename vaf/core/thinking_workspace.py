@@ -146,6 +146,11 @@ def _decision_lock(user_scope_id: Optional[str]):
     timeout = _DECISION_LOCK_TIMEOUT_S
     lock_cls = _get_filelock_cls()
     if lock_cls is None:
+        try:
+            ensure_workspace(user_scope_id)
+        except OSError as e:
+            append_domain_log("backend", f"[THINKING_WORKSPACE] workspace not set up: {e!r}")
+            raise HandoffNotSaved("handoff decision not saved") from None
         fallback = _fallback_decision_lock(user_scope_id)
         if not fallback.acquire(timeout=timeout):
             raise HandoffBusy("handoff is being decided")
@@ -192,6 +197,19 @@ def _handoff_paths(user_scope_id: Optional[str], task_id: str,
                 handoff_dir / _entry(f"{handoff_id}.md"))
     except PathEscape:
         return None
+
+
+def _ids_are_entries(task_id: str, handoff_id: str) -> bool:
+    """Whether both client ids are single entries, decided without touching the filesystem:
+    asked before the decision lock, where a refused id must answer "not found" at once and a
+    failing workspace setup must not (it answers "not saved" inside the lock)."""
+    try:
+        _entry(task_id)
+        _entry(f"{handoff_id}.json")
+        _entry(f"{handoff_id}.md")
+    except PathEscape:
+        return False
+    return True
 
 
 def _task_meta_path(user_scope_id: Optional[str], task_id: str) -> Path:
@@ -433,9 +451,8 @@ def _apply_automation_action(user_scope_id: Optional[str], action: Dict[str, Any
     - create: requires prompt; optional name/description/frequency/time/weekday/day/enabled
     - update: requires task_id; supports name/description/prompt/frequency/time/weekday/day/enabled
 
-    `planned_id` is the id the approval's claim chose for a create. When a task with that
-    id already exists, an earlier attempt created it and stopped before the decision was
-    saved, so it is reported, not created a second time.
+    `planned_id` is the id the approval's claim chose for a create. The caller
+    (`_approve_locked`) has read the store strictly and found no task with it.
 
     Named boundary: the update asks `AutomationAccess(user_scope_id)` WITHOUT the role, so a
     second admin's approved proposal reaches only its own automations, not the root and
@@ -458,15 +475,10 @@ def _apply_automation_action(user_scope_id: Optional[str], action: Dict[str, Any
         time_str = str(action.get("time") or "06:00").strip()
         name = (action.get("name") or "").strip() or (prompt[:50] + ("..." if len(prompt) > 50 else ""))
         description = (action.get("description") or "").strip() or prompt[:200]
-        weekday = (action.get("weekday") or "").strip().lower() or None
+        # day, weekday and enabled are read by AutomationTask itself
+        # (coerce_schedule_fields), like every other lane's.
+        weekday = action.get("weekday")
         day = action.get("day")
-        if day is not None:
-            try:
-                day = max(1, min(31, int(day)))
-            except (TypeError, ValueError):
-                day = None
-        if planned_id and mgr.get(planned_id) is not None:
-            return {"ok": True, "operation": "create", "task_id": planned_id}
         task = AutomationTask(
             **({"id": planned_id} if planned_id else {}),
             name=name,
@@ -476,7 +488,7 @@ def _apply_automation_action(user_scope_id: Optional[str], action: Dict[str, Any
             time=time_str,
             weekday=weekday if frequency == "weekly" else None,
             day=day if frequency == "monthly" else None,
-            enabled=bool(action.get("enabled", True)),
+            enabled=action.get("enabled", True),
             user_scope_id=user_scope_id,
         )
         task = mgr.create(task)
@@ -583,31 +595,36 @@ _INVALID_ACTION = {"ok": False, "error": "invalid automation action"}
 
 
 def _planned_task_exists(user_scope_id: Optional[str], planned_id: Optional[str]) -> bool:
-    """Whether the automation a claimed create planned is in the account's store. Never for a
-    blank scope: that manager would be every account's store."""
+    """Whether the automation a claimed create planned is in the account's store, read
+    strictly (`scoped_task_record`): a task file that exists but cannot be read or parsed is
+    not "missing" (the loaders skip it, so `get()` would say so), and a decision built on
+    that would reject over, or create again beside, an automation that is on disk. Such a
+    file raises `HandoffNotSaved` and the claim stays pending. False for a blank scope:
+    there is no account store to look in."""
     if not planned_id or not str(user_scope_id or "").strip():
         return False
-    from vaf.core.automation import AutomationManager
+    from vaf.core.automation import scoped_task_record
 
     try:
-        return AutomationManager(user_scope_id=user_scope_id).get(planned_id) is not None
-    except OSError:
+        return scoped_task_record(str(user_scope_id), planned_id) is not None
+    except (OSError, ValueError) as e:
+        append_domain_log("backend", f"[THINKING_WORKSPACE] planned automation unreadable: "
+                                     f"{e!r}")
         raise HandoffNotSaved("handoff decision not saved") from None
 
 
-def _claim_took_effect(user_scope_id: Optional[str], handoff: Dict[str, Any],
-                       claim: Dict[str, Any]) -> bool:
-    """Whether a claimed approval may already have changed an automation. A create took
-    effect exactly when its planned task exists; an action of the wrong type never ran.
-    Named boundary: whether an update ran cannot be told from the store (the automation
-    exists either way), so a claimed update counts as taken effect."""
+def _created(planned_id: str) -> Dict[str, Any]:
+    return {"ok": True, "operation": "create", "task_id": planned_id}
+
+
+def _claimed_update_may_have_run(handoff: Dict[str, Any]) -> bool:
+    """Whether a claimed update may already have changed its automation. Named boundary:
+    that cannot be told from the store (the automation exists either way), so a claimed
+    update of the right types counts as run; one of the wrong types never ran."""
     action = handoff.get("automation_action") or {}
     if _action_type_error(action) is not None:
         return False
-    op = str(action.get("operation") or "").strip().lower()
-    if op == "create":
-        return _planned_task_exists(user_scope_id, claim.get("automation_id"))
-    return op == "update"
+    return str(action.get("operation") or "").strip().lower() == "update"
 
 
 def _finish_approval(hpath: Path, handoff: Dict[str, Any],
@@ -629,20 +646,26 @@ def _approve_locked(user_scope_id: Optional[str], hpath: Path,
     With an automation action the approval is CLAIMED on the pending record before the
     action runs, carrying the id a create will use, and the claim is replaced by the
     `approved` status after it. A crash or a failed save anywhere in between leaves the
-    claim, and the next approve finishes from it: a create whose task already exists is not
-    created again, an update is applied again with the same values.
+    claim, and the next approve finishes from it: a planned create whose task is on disk is
+    approved with that task and never created again (looked up first, before the type check,
+    so a create that ran with a value an older version accepted is not refused afterwards);
+    an update is applied again with the same values.
 
     An action whose fields have the wrong type (a number as the prompt) is never claimed:
     it is approved with the result "invalid automation action", like the action's own
     refusals ("create requires prompt"). Any other error of the action after the claim
-    (not the store's `OSError`) ends the same way, so no error can keep a handoff pending
-    for every later approve and reject."""
+    (not the store's `OSError`) ends the decision too: approved with the planned task when
+    the create stored it before the error, "invalid automation action" otherwise. No error
+    can keep a handoff pending for every later approve and reject."""
     action = handoff.get("automation_action")
     if not isinstance(action, dict):
         return _finish_approval(hpath, handoff, None)
+    claim = _valid_claim(handoff)
+    planned = claim.get("automation_id") if claim is not None else None
+    if _planned_task_exists(user_scope_id, planned):
+        return _finish_approval(hpath, handoff, _created(planned))
     if _action_type_error(action) is not None:
         return _finish_approval(hpath, handoff, dict(_INVALID_ACTION))
-    claim = _valid_claim(handoff)
     if claim is None:
         claim = {"decision": "approve", "claimed_at": datetime.now().isoformat()}
         op = str(action.get("operation") or "").strip().lower()
@@ -668,10 +691,8 @@ def _approve_locked(user_scope_id: Optional[str], hpath: Path,
     except Exception as e:  # noqa: BLE001 - finished as a refusal; logged
         append_domain_log("backend", f"[THINKING_WORKSPACE] approve: automation action "
                                      f"raised after the claim: {e!r}")
-        if _planned_task_exists(user_scope_id, planned):
-            result = {"ok": True, "operation": "create", "task_id": planned}
-        else:
-            result = dict(_INVALID_ACTION)
+        result = _created(planned) if _planned_task_exists(user_scope_id, planned) \
+            else dict(_INVALID_ACTION)
     return _finish_approval(hpath, handoff, result)
 
 
@@ -691,7 +712,7 @@ def approve_handoff(user_scope_id: Optional[str], task_id: str, handoff_id: str)
     a created task that was deleted in between is created again, because that is what the
     approval asked for; another task created in the same account with the same random 8-hex
     id in between would be taken for the planned one (a 2^-32 chance)."""
-    if _handoff_paths(user_scope_id, task_id, handoff_id) is None:
+    if not _ids_are_entries(task_id, handoff_id):
         return False
     with _decision_lock(user_scope_id):
         found = _decide(user_scope_id, task_id, handoff_id)
@@ -716,7 +737,7 @@ def reject_handoff(user_scope_id: Optional[str], task_id: str, handoff_id: str, 
     never stores `rejected` over an automation that exists. A lone surrogate in the reason
     becomes `?`: it cannot be encoded, and the save would fail on it."""
     reason = str(reason or "").encode("utf-8", errors="replace").decode("utf-8")
-    if _handoff_paths(user_scope_id, task_id, handoff_id) is None:
+    if not _ids_are_entries(task_id, handoff_id):
         return False
     finished_approval = False
     with _decision_lock(user_scope_id):
@@ -725,7 +746,14 @@ def reject_handoff(user_scope_id: Optional[str], task_id: str, handoff_id: str, 
             return False
         hpath, mdpath, handoff = found
         claim = _valid_claim(handoff)
-        if claim is not None and _claim_took_effect(user_scope_id, handoff, claim):
+        planned = claim.get("automation_id") if claim is not None else None
+        if _planned_task_exists(user_scope_id, planned):
+            # The create ran: finish from what was observed. Going through the approval
+            # again would read the store a second time, and a delete in between (it does
+            # not take this lock) would make it create the task anew.
+            action_result = _finish_approval(hpath, handoff, _created(planned))
+            finished_approval = True
+        elif claim is not None and _claimed_update_may_have_run(handoff):
             action_result = _approve_locked(user_scope_id, hpath, handoff)
             finished_approval = True
         else:

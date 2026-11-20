@@ -1777,7 +1777,7 @@ def _decision_fuzz(ws, store, monkeypatch, draws: int, seed: int = 4444) -> list
         others = [o for o in out if o is not True]
         # Whoever locks first decides. Only after a create that took effect does a reject
         # that comes first finish the approval and answer "already approved" (not True).
-        if crash == "create":
+        if crash == "create" and "reject" in actions:
             allowed = {0, 1} if "approve" in actions else {0}
         else:
             allowed = {1}
@@ -1970,52 +1970,57 @@ def test_the_handoff_tool_refuses_a_mistyped_action(store, workspaces):
     assert after == before
 
 
-def test_the_websocket_loop_is_free_while_a_decision_waits(store, workspaces, monkeypatch):
+@pytest.mark.parametrize("action", ["approve", "reject"])
+def test_the_websocket_loop_is_free_while_a_decision_waits(store, workspaces, monkeypatch,
+                                                           action):
     """A decision waiting for another decision's lock held the event loop that serves every
-    socket of the listener. It now waits on a worker thread: a coroutine scheduled on the
-    session's loop meanwhile runs at once. MUTATION: call `approve_handoff` directly in the
-    WebSocket branch again."""
-    import time
-
+    socket of the listener. It now waits on the decision pool: a coroutine scheduled on the
+    session's loop runs while the decision is still waiting, not after it. The lock timeout
+    only bounds the test. MUTATION: call `approve_handoff`, separately `reject_handoff`,
+    directly in its WebSocket branch again."""
     import anyio
 
     ws = workspaces
     hid = _create_handoff(ws)
     monkeypatch.setattr(ws.tw, "_DECISION_LOCK_TIMEOUT_S", 1.5)
-    held, done, deciding = threading.Event(), threading.Event(), threading.Event()
+    held, done = threading.Event(), threading.Event()
+    deciding, decided = threading.Event(), threading.Event()
 
     def hold():
         with ws.tw._decision_lock(TENANT_A):
             held.set()
             done.wait(20)
 
-    real_approve = ws.tw.approve_handoff
+    name = f"{action}_handoff"
+    real = getattr(ws.tw, name)
 
-    def approve(*a, **kw):
+    def deciding_wrapper(*a, **kw):
         deciding.set()
-        return real_approve(*a, **kw)
+        try:
+            return real(*a, **kw)
+        finally:
+            decided.set()
 
-    monkeypatch.setattr(ws.tw, "approve_handoff", approve)
+    monkeypatch.setattr(ws.tw, name, deciding_wrapper)
     holder = threading.Thread(target=hold, daemon=True)
     holder.start()
-    waited = []
+    order = []
 
     def probe(session):
         assert deciding.wait(10)   # the decision has started and waits for the lock
-        time.sleep(0.1)
-        started = time.monotonic()
         session.portal.call(anyio.sleep, 0)
-        waited.append(time.monotonic() - started)
+        order.append("probe before the decision" if not decided.is_set()
+                     else "probe after the decision")
 
     try:
         assert held.wait(10)
         replies = _ws(monkeypatch, role="user", scope=TENANT_A, probe=probe,
-                      frames=[_handoff("approve", ws.task_a, hid)])
+                      frames=[_handoff(action, ws.task_a, hid)])
     finally:
         done.set()
         holder.join(10)
     assert replies[0]["error"] == "handoff is being decided", replies[0]
-    assert waited and waited[0] < 0.5, waited
+    assert order == ["probe before the decision"], order
 
 
 @pytest.mark.parametrize("action", ["approve", "reject"])
@@ -2139,3 +2144,219 @@ def test_save_task_never_truncates(store):
     assert AutomationManager(user_scope_id=TENANT_A).get(A_ID).name == f"Task {A_ID}"
     assert not [p.name for p in path.parent.iterdir() if p.name.startswith(".tmp-")]
 
+
+
+# ── the schedule fields have one coercion; recovery reads the store strictly ────
+
+@pytest.mark.parametrize("given,want", [
+    ({"day": "15"}, {"day": 15}), ({"day": " 7 "}, {"day": 7}), ({"day": 0}, {"day": 1}),
+    ({"day": 99}, {"day": 31}), ({"day": 15.0}, {"day": 15}), ({"day": "x"}, {}),
+    ({"day": [3]}, {}), ({"day": None}, {"day": None}),
+    ({"enabled": "false"}, {"enabled": False}), ({"enabled": " OFF "}, {"enabled": False}),
+    ({"enabled": "0"}, {"enabled": False}), ({"enabled": "no"}, {"enabled": False}),
+    ({"enabled": ""}, {"enabled": False}), ({"enabled": "true"}, {"enabled": True}),
+    ({"enabled": "Yes"}, {"enabled": True}), ({"enabled": "1"}, {"enabled": True}),
+    ({"enabled": "maybe"}, {}), ({"enabled": 0}, {"enabled": False}),
+    ({"enabled": True}, {"enabled": True}),
+    ({"weekday": " Monday "}, {"weekday": "monday"}), ({"weekday": "Montag"}, {"weekday": "monday"}),
+    ({"weekday": ""}, {"weekday": None}), ({"weekday": 3}, {}),
+    ({"name": "kept", "time": "7:5"}, {"name": "kept", "time": "7:5"}),
+])
+def test_coerce_schedule_fields_reads_each_value_one_way(given, want):
+    """The one coercion every lane goes through, value by value. Text is parsed, never
+    `bool()`-ed: "false" is off. MUTATION: `bool(enabled)` for text; separately, keep a day
+    that does not parse."""
+    assert auto_mod.coerce_schedule_fields(given) == want
+
+
+def _armed_scheduler(monkeypatch):
+    """The process scheduler as `refresh_scheduler_from_disk` sees it running: a global
+    manager whose loop thread is alive (a thread that only waits)."""
+    stop = threading.Event()
+    loop = threading.Thread(target=stop.wait, daemon=True)
+    loop.start()
+    sched = AutomationManager()
+    sched._running = True
+    sched._scheduler_thread = loop
+    for task in sched.list(enabled_only=True):
+        sched._schedule_task(task)
+    monkeypatch.setattr(auto_mod, "_scheduler_manager", sched)
+    return sched, stop
+
+
+def test_a_text_day_in_an_approved_update_keeps_every_account_armed(store, workspaces,
+                                                                     monkeypatch):
+    """An approved update with `day: "15"` stored the text; the monthly clock rule then
+    raised in `list()`, so the refresh that follows every update cleared every account's
+    clock jobs and armed none, and a scheduler start failed. The day is now coerced where
+    every update lands. MUTATION: drop the coercion in `AutomationManager.update`."""
+    ws = workspaces
+    path = _path(store, A_ID)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record.update(frequency="monthly", day=3)
+    path.write_text(json.dumps(record), encoding="utf-8")
+    sched, stop = _armed_scheduler(monkeypatch)
+    try:
+        assert B_ID in sched._clock_jobs and LOCAL_ID in sched._clock_jobs
+        hid = ws.tw.create_handoff(TENANT_A, ws.task_a, "Move it", "c", automation_action={
+            "operation": "update", "task_id": A_ID, "day": "15"})["id"]
+        assert ws.tw.approve_handoff(TENANT_A, ws.task_a, hid) is True
+        assert _record(ws, hid)["automation_action_result"]["ok"] is True
+        assert json.loads(path.read_text(encoding="utf-8"))["day"] == 15
+        AutomationManager().list()
+        assert {B_ID, LOCAL_ID, A_ID} <= set(sched._clock_jobs), sorted(sched._clock_jobs)
+    finally:
+        stop.set()
+
+
+def test_a_text_day_already_on_disk_is_read_as_a_number(store):
+    """A record written before the coercion still carries `"day": "15"`: the data-model
+    boundary reads it as 15, and the global list and its next run work. MUTATION: drop the
+    coercion in `AutomationTask.__post_init__`."""
+    path = _path(store, B_ID)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record.update(frequency="monthly", day="15", enabled="false")
+    path.write_text(json.dumps(record), encoding="utf-8")
+    task = AutomationManager().get(B_ID)
+    assert task.day == 15 and task.enabled is False
+    assert AutomationManager(user_scope_id=TENANT_B).get(B_ID).calculate_next_run().day == 15
+
+
+def test_the_next_run_never_raises_on_a_mistyped_field():
+    """`calculate_next_run` promises no exception; a day or weekday of the wrong type set
+    past the coercion raised `TypeError` or `AttributeError` out of `list()`. MUTATION: catch
+    only `ValueError` and `OverflowError` again."""
+    monthly = AutomationTask(frequency="monthly", day=5, time="08:00")
+    monthly.day = "x"
+    weekly = AutomationTask(frequency="weekly", weekday="monday", time="08:00")
+    weekly.weekday = 3
+    assert monthly.calculate_next_run() is None
+    assert weekly.calculate_next_run() is None
+
+
+def test_enabled_false_as_text_switches_an_automation_off(store, workspaces, monkeypatch):
+    """`bool("false")` is True: an update that said "false" kept the automation running.
+    Over the WebSocket and through an approved handoff it is now off. MUTATION: `bool()`
+    for text in `coerce_schedule_fields`."""
+    ws = workspaces
+    replies = _ws(monkeypatch, role="user", scope=TENANT_A, frames=[_upd(A_ID, enabled="false")])
+    assert replies[0]["ok"] is True, replies[0]
+    assert json.loads(_path(store, A_ID).read_text(encoding="utf-8"))["enabled"] is False
+    hid = ws.tw.create_handoff(TENANT_B, ws.task_b, "Off", "c", automation_action={
+        "operation": "update", "task_id": B_ID, "enabled": "false"})["id"]
+    assert ws.tw.approve_handoff(TENANT_B, ws.task_b, hid) is True
+    assert json.loads(_path(store, B_ID).read_text(encoding="utf-8"))["enabled"] is False
+
+
+@pytest.mark.parametrize("decision", ["approve", "reject"])
+def test_an_unreadable_planned_task_keeps_the_claim(store, workspaces, monkeypatch, decision):
+    """The planned task is on disk but cannot be parsed: the loaders skip it, so a lenient
+    lookup took it for missing, and a reject stored `rejected` over it (an approve would
+    have created it anew). It is now "not saved" and the claim stays. MUTATION: look the
+    planned task up through `AutomationManager.get` again."""
+    ws = workspaces
+    hid = _create_handoff(ws)
+    planned = _crash_after_create(ws, monkeypatch, hid)
+    planned_path = store / TENANT_A / f"{planned}.json"
+    planned_path.write_text("{not json", encoding="utf-8")
+    decide = ws.tw.approve_handoff if decision == "approve" else ws.tw.reject_handoff
+    with pytest.raises(ws.tw.HandoffNotSaved):
+        decide(TENANT_A, ws.task_a, hid)
+    record = _record(ws, hid)
+    assert record["status"] == "pending" and record["claim"]["automation_id"] == planned
+    assert planned_path.read_text(encoding="utf-8") == "{not json"
+
+
+def test_a_reject_finishes_from_the_observed_create(store, workspaces, monkeypatch):
+    """A reject that found the planned task finishes the approval from that observation. A
+    second read of the store, through the approval, raced a delete that takes no decision
+    lock and then created the task anew. MUTATION: finish through `_approve_locked` again."""
+    ws = workspaces
+    hid = _create_handoff(ws)
+    planned = _crash_after_create(ws, monkeypatch, hid)
+    real_exists = ws.tw._planned_task_exists
+
+    def exists_then_deleted(scope, planned_id):
+        found = real_exists(scope, planned_id)
+        if found:
+            (store / TENANT_A / f"{planned_id}.json").unlink()   # another tab deletes it
+        return found
+
+    monkeypatch.setattr(ws.tw, "_planned_task_exists", exists_then_deleted)
+    creates = _count_creates(monkeypatch)
+    with pytest.raises(ws.tw.HandoffAlreadyApproved) as approved:
+        ws.tw.reject_handoff(TENANT_A, ws.task_a, hid)
+    assert approved.value.action_result == {"ok": True, "operation": "create",
+                                            "task_id": planned}
+    assert creates == [], creates
+    assert _record(ws, hid)["status"] == "approved"
+
+
+@pytest.mark.parametrize("decision", ["approve", "reject"])
+def test_a_stored_create_with_a_legacy_value_is_approved_not_refused(store, workspaces,
+                                                                      decision):
+    """A claimed create with a value an older version accepted (`day: true`) whose task is
+    already stored: the planned task is looked up before the type check, so the decision
+    is the approval with that task, not "invalid automation action" and not a reject over
+    it. MUTATION: run the type check before the planned lookup in `_approve_locked`."""
+    ws = workspaces
+    hid = _with_action(ws, {"operation": "create", "prompt": "p", "frequency": "monthly",
+                            "day": True}, claim={"decision": "approve", "automation_id": "abcd0123"})
+    _write(store, AutomationTask(id="abcd0123", name="Stored", prompt="p", frequency="monthly",
+                                 day=1, user_scope_id=TENANT_A))
+    if decision == "approve":
+        assert ws.tw.approve_handoff(TENANT_A, ws.task_a, hid) is True
+    else:
+        with pytest.raises(ws.tw.HandoffAlreadyApproved):
+            ws.tw.reject_handoff(TENANT_A, ws.task_a, hid)
+    record = _record(ws, hid)
+    assert record["status"] == "approved" and "claim" not in record, record
+    assert record["automation_action_result"] == {"ok": True, "operation": "create",
+                                                  "task_id": "abcd0123"}
+
+
+def test_a_create_that_stored_its_task_then_raised_is_approved(store, workspaces, monkeypatch):
+    """The catch-all after the claim: the create stored the planned task and then raised an
+    unforeseen error. The decision is the approval with that task, not "invalid automation
+    action". MUTATION: answer every error there with "invalid automation action"."""
+    ws = workspaces
+    hid = _create_handoff(ws)
+    before = _a_tasks(store)
+    real = AutomationManager.create
+
+    def create_then_raise(self, task):
+        real(self, task)
+        raise RuntimeError("after the save")
+
+    monkeypatch.setattr(AutomationManager, "create", create_then_raise)
+    assert ws.tw.approve_handoff(TENANT_A, ws.task_a, hid) is True
+    made = _a_tasks(store) - before
+    record = _record(ws, hid)
+    assert len(made) == 1 and record["status"] == "approved", (made, record)
+    assert record["automation_action_result"] == {"ok": True, "operation": "create",
+                                                  "task_id": next(iter(made))}
+
+
+@pytest.mark.parametrize("lock", ["filelock", "no_filelock"])
+def test_a_workspace_setup_failure_is_not_saved_not_missing(store, workspaces, monkeypatch,
+                                                             lock):
+    """Setting up the workspace (a missing `archive` folder that cannot be made) failed
+    before the lock's error handling and answered "not found" for a handoff that exists. The
+    ids are now checked without the filesystem, and the setup fails inside the lock as "not
+    saved". MUTATIONS: check the ids through `_handoff_paths` before the lock again;
+    separately, drop the setup from the fallback branch."""
+    import vaf.core.secure_store as secure_store
+
+    ws = workspaces
+    hid = _create_handoff(ws)
+    if lock == "no_filelock":
+        monkeypatch.setattr(secure_store, "_get_filelock_cls", lambda: None)
+
+    def unwritable(scope):
+        raise PermissionError(13, "Permission denied", str(ws.root / "x"))
+
+    monkeypatch.setattr(ws.tw, "ensure_workspace", unwritable)
+    for decide in (ws.tw.approve_handoff, ws.tw.reject_handoff):
+        with pytest.raises(ws.tw.HandoffNotSaved):
+            decide(TENANT_A, ws.task_a, hid)
+    assert ws.tw.approve_handoff(TENANT_A, ws.task_a, "../x") is False

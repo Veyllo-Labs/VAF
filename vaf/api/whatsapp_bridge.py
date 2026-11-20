@@ -2338,19 +2338,23 @@ def _spawn_account(user_scope_id: str, username: str, auth_dir: Path) -> bool:
     return True
 
 
+# How long `_terminate` waits after the terminate, and again after the kill.
+TERMINATE_WAIT = 5.0
+
+
 def _terminate(proc: subprocess.Popen) -> bool:
-    """End a Node process: terminate, then kill after five seconds, and wait for it either way.
-    False when it still runs after the kill, so no caller reports a stop that did not happen
-    or starts a second process on the same login next to it."""
+    """End a Node process: terminate, then kill after TERMINATE_WAIT seconds, and wait for it
+    either way. False when it still runs after the kill, so no caller reports a stop that did
+    not happen or starts a second process on the same login next to it."""
     try:
         proc.terminate()
-        proc.wait(timeout=5)
+        proc.wait(timeout=TERMINATE_WAIT)
         return True
     except Exception:
         pass
     try:
         proc.kill()
-        proc.wait(timeout=5)
+        proc.wait(timeout=TERMINATE_WAIT)
         return True
     except Exception:
         return proc.poll() is not None
@@ -2416,11 +2420,16 @@ def _run_bridge(only: Optional[str] = None) -> None:
         _spawns_open = False
         _resolve_pending(BRIDGE_STOPPING)
         with _process_lock:
-            running = list(_processes.items())
+            running = [(name, proc, _scope_by_user.get(name)) for name, proc in _processes.items()]
             _processes.clear()
             _scope_by_user.clear()
-        for username, proc in running:
+        for username, proc, scope in running:
             if not _terminate(proc):
+                # It stays registered, as after an account's own failed stop: the next bridge
+                # start finds it alive and spawns no second Node on its login.
+                with _process_lock:
+                    _processes.setdefault(username, proc)
+                    _scope_by_user.setdefault(username, str(scope or ""))
                 logger.error("WhatsApp: the process of %s did not end on the bridge's stop", username)
     _write_bridge_state(False)
 
@@ -2485,17 +2494,32 @@ def stop_bridge() -> None:
     logger.info("WhatsApp bridge stop requested")
 
 
+def _shutdown_deadline() -> float:
+    """How long the bridge's shutdown may take: both waits of `_terminate` for every registered
+    process, one more for a spawn that was in flight, and a margin for the rest."""
+    with _process_lock:
+        count = len(_processes)
+    return 2 * TERMINATE_WAIT * (count + 1) + 5.0
+
+
 def restart_bridge() -> bool:
-    """Stop the bridge, wait for full shutdown, then start again. Returns True if restarted."""
+    """Stop the bridge, wait for its full shutdown, then start again. True if restarted; False
+    when the old bridge did not end in time, since a start next to its still running thread
+    would answer "already running" and start nothing."""
     global _bridge_thread
     with _lifecycle_lock:
         if _bridge_thread is None or not _bridge_thread.is_alive():
             return start_bridge()
+        old = _bridge_thread
+        deadline = _shutdown_deadline()
         stop_bridge()
         try:
-            _bridge_thread.join(timeout=12)
+            old.join(timeout=deadline)
         except Exception:
             pass
+        if old.is_alive():
+            logger.error("WhatsApp: the bridge did not stop within %.0f s; not started again", deadline)
+            return False
         return start_bridge()
 
 

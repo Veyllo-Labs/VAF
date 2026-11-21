@@ -14,7 +14,9 @@ Pinned here:
 - an overlong fragment, name or path is refused before any Path exists or anything resolves,
   in `contained_path`, `safe_entry_name`, `jail_allows`, `is_safe_path` and the web file routes;
 - below the cap `contained_path` answers exactly what it answered before (a seeded fuzz over a
-  real tree with links, against the previous implementation copied verbatim);
+  real tree with links, against the previous implementation copied verbatim), except a
+  resolve the OS refuses, which is now a refusal instead of a raw OSError; the same fuzz runs
+  again under a seam that makes the OS refuse, since no POSIX host refuses a non-strict resolve;
 - `_within` answers exactly ``t == r or r in t.parents`` for both path flavours on every host
   (the Windows semantics: case folding, drive letters, UNC anchors), and grows linearly;
 - `must_exist` answers "folder not found" for a path the OS cannot stat.
@@ -24,9 +26,12 @@ run outside the suite. Inputs in assertion messages go through ``ascii()``: a cp
 cannot print every fuzz word.
 """
 import asyncio
+import errno
 import os
+import pathlib
 import random
 import time
+from collections import Counter
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import SimpleNamespace
 
@@ -85,6 +90,27 @@ def _outcome(call):
         return ("raised", type(e).__name__)
 
 
+def _reference_outcome(root, fragment, *, must_exist=False, mapped=None):
+    """The head copy's outcome with the one deliberate divergence applied: an `OSError` it
+    raises (the OS refusing a non-strict resolve, or the stat behind `must_exist`) is the
+    refusal `contained_path` documents instead, "folder not found" with `must_exist` and "path
+    cannot be resolved" without, where a route used to answer the raw error with a 500. Only
+    reachable where the OS raises there: ntpath.realpath re-raises errors outside its allow
+    list, posixpath.realpath never raises when not strict. Each mapped refusal is appended to
+    ``mapped`` so a caller can see the branch was exercised."""
+    def call():
+        try:
+            return _reference_contained_path(root, fragment, must_exist=must_exist)
+        except PathEscape:
+            raise
+        except OSError:
+            refusal = "folder not found" if must_exist else "path cannot be resolved"
+            if mapped is not None:
+                mapped.append(refusal)
+            raise PathEscape(refusal)
+    return _outcome(call)
+
+
 class _NoPath:
     """Stands in for pathlib.Path inside path_jail: constructing one is the failure."""
 
@@ -108,7 +134,7 @@ def test_an_overlong_fragment_is_refused_before_anything_resolves(tmp_path, monk
     for fragment in ("a/" * 2047 + "a", "  " + "a/" * 2047 + "a" + "\n", "b" * PATH_CHARS_MAX):
         assert len(fragment.strip()) <= PATH_CHARS_MAX
         got = _outcome(lambda: contained_path(tmp_path, fragment))
-        want = _outcome(lambda: _reference_contained_path(tmp_path, fragment))
+        want = _reference_outcome(tmp_path, fragment)
         assert got == want, (len(fragment), got, want)
     assert PATH_CHARS_MAX == 4096
 
@@ -145,11 +171,12 @@ _WORDS = ["sub", "deep", "out", "in", "loop", "dang", "sib", ".", "..", "", " ",
           "file.txt"]
 
 
-def test_contained_path_equals_the_head_implementation(tmp_path):
+def _fuzz_mismatches(roots, *, draws):
+    """(mismatches, mapped refusals counted per text) of `draws` seeded draws per root,
+    `contained_path` against `_reference_outcome`. The RNG is consumed in one fixed order, so
+    SEED always names the same fragments."""
     rng = random.Random(SEED)
-    roots = _fuzz_tree(tmp_path)
-    mismatches = []
-    draws = _draws(1000)
+    mismatches, mapped = [], []
     for root in roots:
         for _ in range(draws):
             words = [rng.choice(_WORDS) for _ in range(rng.randint(0, 6))]
@@ -158,10 +185,14 @@ def test_contained_path_equals_the_head_implementation(tmp_path):
                 fragment = rng.choice([" ", "\t", "\n "]) + fragment
             must_exist = rng.random() < 0.3
             got = _outcome(lambda: contained_path(root, fragment, must_exist=must_exist))
-            want = _outcome(lambda: _reference_contained_path(root, fragment,
-                                                              must_exist=must_exist))
+            want = _reference_outcome(root, fragment, must_exist=must_exist, mapped=mapped)
             if got != want:
                 mismatches.append((ascii(str(root)), ascii(fragment), must_exist, got, want))
+    return mismatches, Counter(mapped)
+
+
+def test_contained_path_equals_the_head_implementation(tmp_path):
+    mismatches, _ = _fuzz_mismatches(_fuzz_tree(tmp_path), draws=_draws(1000))
     assert not mismatches, (f"seed {SEED}, {len(mismatches)} mismatches, first: "
                             f"{ascii(mismatches[:5])}")
 
@@ -423,24 +454,55 @@ def test_a_padded_path_is_refused_by_every_screen_before_it_resolves(where, monk
 
 # ── a resolve the OS refuses (Windows past MAX_PATH) ───────────────────────
 
-def _resolve_refused_past(monkeypatch, allowed):
-    """``Path.resolve`` as Windows answers a path past MAX_PATH without long-path support:
-    ntpath.realpath re-raises winerror 206 even when it is not strict, because 206 is not in
-    its allow list. Paths in ``allowed`` resolve as usual. A seam, so the Windows class is
-    caught on every host."""
-    import errno
-    import pathlib
-
+def _resolve_refused(monkeypatch, refuses, error):
+    """``Path.resolve`` raising ``error(path)`` for every path ``refuses(path)`` is true for,
+    and resolving the others as usual: a non-strict resolve the OS refuses, which
+    ntpath.realpath does for every Windows error outside its allow list and posixpath.realpath
+    never does. A seam, so the Windows class is caught on every host."""
     real = pathlib.Path.resolve
 
     def resolve(self, *a, **k):
-        if self in allowed:
-            return real(self, *a, **k)
-        # The fourth argument is winerror on Windows and ignored elsewhere.
-        raise OSError(errno.ENAMETOOLONG, "The filename or extension is too long", str(self),
-                      206)
+        if refuses(self):
+            raise error(self)
+        return real(self, *a, **k)
 
     monkeypatch.setattr(pathlib.Path, "resolve", resolve)
+
+
+def _resolve_refused_past(monkeypatch, allowed):
+    """``Path.resolve`` as Windows answers a path past MAX_PATH without long-path support:
+    winerror 206, which is not in ntpath.realpath's allow list. Paths in ``allowed`` resolve
+    as usual. The fourth argument is winerror on Windows and ignored elsewhere."""
+    _resolve_refused(monkeypatch, lambda p: p not in allowed,
+                     lambda p: OSError(errno.ENAMETOOLONG,
+                                       "The filename or extension is too long", str(p), 206))
+
+
+def _through_a_dangling_link(path) -> bool:
+    """A path that walks through the fuzz tree's dangling link `dang` into a name under it."""
+    parts = path.parts
+    return "dang" in parts[:-1]
+
+
+def test_contained_path_equals_the_head_implementation_when_the_os_refuses_a_resolve(
+        tmp_path, monkeypatch):
+    """The Windows leg drew `.\\dang\\ \\//\\out\\loop`: ntpath.realpath raised
+    NotADirectoryError through the dangling link, which the head copy lets escape and
+    `contained_path` refuses. The same fuzz, with the OS made to refuse every resolve through
+    `dang` with the error class the Windows runner raised (winerror 267, ERROR_DIRECTORY, is
+    one Windows code that maps to NotADirectoryError; the log names only the class). Both mapped
+    refusals must occur, so the branch cannot go unexercised. MUTATIONS: drop the mapping in
+    `_reference_outcome`, drop the `except OSError` around the resolve in `contained_path`,
+    or swap its two refusal texts - red; a seam that never refuses - red on the shapes."""
+    roots = _fuzz_tree(tmp_path)
+    _resolve_refused(monkeypatch, _through_a_dangling_link,
+                     lambda p: NotADirectoryError(errno.ENOTDIR, "The directory name is invalid",
+                                                  str(p), 267))
+    mismatches, mapped = _fuzz_mismatches(roots, draws=_draws(1000))
+    assert not mismatches, (f"seed {SEED}, {len(mismatches)} mismatches, first: "
+                            f"{ascii(mismatches[:5])}")
+    assert mapped["folder not found"] and mapped["path cannot be resolved"], (
+        f"seed {SEED}: the OS refusal branch was not exercised in both shapes: {dict(mapped)}")
 
 
 def test_a_resolve_the_os_refuses_is_a_refusal_not_an_oserror(tmp_path, monkeypatch):

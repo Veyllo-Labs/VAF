@@ -591,7 +591,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   source and the release build tools come by hash too. A separate daily run installs the
   newest versions and reports what broke without blocking anything. `scripts/ci_check.sh`
   runs in a venv built from the same lock, one per checkout, and no longer installs anything
-  into your `venv/`.
+  into your `venv/`. Each lane installs the lock into a fresh virtual environment, so packages
+  a CI runner's own Python ships (pipx on Windows) are neither tested nor reported as drift.
 
 ### Security
 

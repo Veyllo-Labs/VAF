@@ -31,8 +31,10 @@ whose markers apply, and reports
 interpreter with the entries whose markers apply to it and prints package / locked / installed
 for every difference: a wrong version, a locked package that is missing, an installed package
 the lock does not name (pip, the project itself and the build tools the interpreter ships are
-not counted unless the lock names them). Exit 1 on a difference; with ``--report`` it prints a
-Markdown table for a CI step summary and exits 0.
+not counted unless the lock names them). It also refuses an interpreter that is not an isolated
+venv (scripts/ci_venv.py says why: a CI runner's own Python ships packages the lock does not
+name), so every lane installs the lock into a fresh venv first. Exit 1 on a difference or a
+refusal; with ``--report`` it prints a Markdown table for a CI step summary and exits 0.
 
 The PyPI reads follow scripts/check_vllm_lock.py and use its ``_get_json`` and ``_get_text``,
 plus a byte download for the few sdists a target builds (checked against PyPI's sha256), each
@@ -85,9 +87,9 @@ WORKFLOWS = (ROOT / ".github" / "workflows" / "ci.yml", ROOT / ".github" / "work
 # editable with --no-deps, so it is never in the lock.
 PROJECT = "vaf"
 # Installed but unlocked, and still no drift: pip comes by hash from .github/requirements/
-# pip.lock, and an interpreter can ship setuptools and wheel. When the lock names one of
-# them, it is compared. A package a CI runner's own Python ships belongs here too (the drift
-# message names this set when it reports one).
+# pip.lock, and an interpreter can ship setuptools and wheel (a 3.10 or 3.11 venv brings
+# setuptools). When the lock names one of them, it is compared. Nothing else belongs here:
+# --drift runs only in a fresh venv, which sees none of the packages a runner's Python ships.
 _UNLOCKED_TOOLS = frozenset({"pip", "setuptools", "wheel", PROJECT})
 
 # A comment starts at a '#' that begins the line or follows whitespace, as pip reads it.
@@ -663,13 +665,30 @@ def drift(entries: list, installed: dict, env: dict) -> list:
     return sorted(rows)
 
 
+def _interpreter_isolation():
+    """None when the running interpreter is an isolated venv, else one sentence why not."""
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    from ci_venv import current_isolation_problem
+    return current_isolation_problem()
+
+
+_USE_A_VENV = ("Every lane installs the lock into a fresh venv made by scripts/ci_venv.py; "
+               "run the check inside it.")
+
+
 def _drift_main(lock: Path, report: bool) -> int:
     env = default_environment()
     rows = drift(parse_lock(lock.read_bytes().decode("utf-8")), installed_distributions(), env)
     where = f"Python {env['python_full_version']} on {env['sys_platform']}"
+    problem = _interpreter_isolation()
     if report:
         print(f"### Installed versions against requirements.lock ({where})")
         print()
+        if problem:
+            print(f"**Not an isolated venv:** {problem} {_USE_A_VENV}")
+            print()
         if not rows:
             print("Every installed version is the locked one.")
             return 0
@@ -684,11 +703,11 @@ def _drift_main(lock: Path, report: bool) -> int:
         print(f"{name}: locked {locked}, installed {have}")
     print(f"{len(rows)} difference(s) between requirements.lock and {where}.")
     if any(locked == "-" for _name, locked, _have in rows):
-        print("A package marked 'locked -' is installed but not in the lock. If the interpreter "
-              "itself ships it (a CI runner's Python, not anything this repository installs), "
-              "add its name to _UNLOCKED_TOOLS in scripts/check_requirements_lock.py; "
-              "otherwise something installed past the lock.")
-    return 1 if rows else 0
+        print("A package marked 'locked -' is installed in this venv but not in the lock: a "
+              "dependency, or a step outside scripts/install_lock.sh, installed it past the lock.")
+    if problem:
+        print(f"{problem} {_USE_A_VENV}")
+    return 1 if rows or problem else 0
 
 
 _USAGE = ("usage: check_requirements_lock.py [--requirements FILE] [path/to/a.lock]\n"

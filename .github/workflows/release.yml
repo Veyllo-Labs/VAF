@@ -69,6 +69,11 @@ jobs:
         with:
           python-version: "3.11"
 
+      # A fresh venv, never the runner's own Python (.github/workflows/_test.yml says why).
+      - name: Create a clean venv
+        shell: bash
+        run: python scripts/ci_venv.py "$RUNNER_TEMP/ci-venv"
+
       - name: Install system dependencies
         run: |
           sudo apt-get update

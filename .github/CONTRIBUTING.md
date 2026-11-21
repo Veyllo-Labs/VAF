@@ -120,7 +120,11 @@ its steps is there: pip comes by hash, the one release without a wheel is built 
 locked setuptools instead of one fetched unpinned, every step reinstalls even a version that
 is already there (pip checks no hash for a requirement it calls satisfied), and the lock is
 installed without pip's cache (pip trusts a wheel it built and cached past
-`--require-hashes`).
+`--require-hashes`). Each CI lane first makes a fresh venv with `scripts/ci_venv.py` and
+installs into that, never into the runner's own Python: a runner image ships packages of its
+own there (pipx on the Windows runner), which the suite would run beside and the drift check
+would report. `check_requirements_lock.py --drift` refuses a Python that is not such an
+isolated venv, so run it by hand inside one as well (`scripts/ci_check.sh` already does).
 
 The CI tools have small locks of their own in `.github/requirements/`: `pip.lock` (installed
 first everywhere), `uv.lock` (regenerating the locks) and `publish.lock` (building and

@@ -1054,6 +1054,8 @@ def test_drift_report_mode_exits_zero(tmp_path, monkeypatch, capsys):
     check = _checker()
     lock = tmp_path / "requirements.lock"
     lock.write_text(_lock("pyotp==2.9.0"), encoding="utf-8")
+    # Independent of the interpreter pytest runs in; the refusal has a test of its own.
+    monkeypatch.setattr(check, "_interpreter_isolation", lambda: None)
     monkeypatch.setattr(check, "installed_distributions", lambda: {"pyotp": "2.12.0"})
     assert check.main(["--drift", "--report", str(lock)]) == 0
     out = capsys.readouterr().out
@@ -1065,20 +1067,243 @@ def test_drift_report_mode_exits_zero(tmp_path, monkeypatch, capsys):
     assert check.main(["--report", str(lock)]) == 2
 
 
-def test_an_unlocked_package_names_where_a_runner_only_one_goes(tmp_path, monkeypatch, capsys):
-    """A package installed but not locked may be one a CI runner's own Python ships: the
-    message says where such a name belongs (_UNLOCKED_TOOLS), and says nothing of it for a
-    plain version difference."""
+def test_the_windows_runner_case_is_drift_not_an_allowlist(tmp_path, monkeypatch, capsys):
+    """The windows-latest 3.12 image ships pipx (with argcomplete and userpath) in the Python
+    setup-python serves. Installed into that interpreter, the lock sits beside them: three
+    'locked -' rows. They are real drift, and the cure is a fresh venv, not a longer
+    allowlist: the message no longer sends anyone to _UNLOCKED_TOOLS, and the set stays the
+    tools every venv brings. MUTATION: add pipx to _UNLOCKED_TOOLS; restore the old advice
+    that names _UNLOCKED_TOOLS - red."""
+    check = _checker()
+    lock_lines = ("packaging==26.2", "filelock==3.29.0")
+    installed = {"packaging": "26.2", "filelock": "3.29.0", "pip": "26.1.2", "vaf": "0.1.0",
+                 "argcomplete": "3.7.2", "pipx": "1.18.16", "userpath": "1.9.2"}
+    assert check.drift(_entries(*lock_lines), installed, _env("3.12", "win32")) == [
+        ("argcomplete", "-", "3.7.2"), ("pipx", "-", "1.18.16"), ("userpath", "-", "1.9.2")]
+    lock = tmp_path / "requirements.lock"
+    lock.write_text(_lock(*lock_lines), encoding="utf-8")
+    monkeypatch.setattr(check, "_interpreter_isolation", lambda: None)
+    monkeypatch.setattr(check, "installed_distributions", lambda: dict(installed))
+    assert check.main(["--drift", str(lock)]) == 1
+    out = capsys.readouterr().out
+    assert "pipx: locked -, installed 1.18.16" in out
+    assert "installed in this venv but not in the lock" in out
+    assert "_UNLOCKED_TOOLS" not in out
+    assert check._UNLOCKED_TOOLS == frozenset({"pip", "setuptools", "wheel", "vaf"})
+
+
+def test_drift_refuses_an_interpreter_that_is_not_a_venv(tmp_path, monkeypatch, capsys):
+    """--drift in a Python that is not an isolated venv fails even when every installed
+    version is the locked one, and says how to get one; --report carries the reason into the
+    summary and still exits 0. MUTATION: return 0 when there are no rows despite the reason;
+    drop the isolation check from _drift_main - red."""
     check = _checker()
     lock = tmp_path / "requirements.lock"
     lock.write_text(_lock("pyotp==2.9.0"), encoding="utf-8")
-    monkeypatch.setattr(check, "installed_distributions", lambda: {"pyotp": "2.9.0", "runner-thing": "1.0"})
+    monkeypatch.setattr(check, "installed_distributions", lambda: {"pyotp": "2.9.0"})
+    reason = "The interpreter at /opt/runner-python is not a venv."
+    monkeypatch.setattr(check, "_interpreter_isolation", lambda: reason)
     assert check.main(["--drift", str(lock)]) == 1
     out = capsys.readouterr().out
-    assert "runner-thing: locked -, installed 1.0" in out and "_UNLOCKED_TOOLS" in out
-    monkeypatch.setattr(check, "installed_distributions", lambda: {"pyotp": "2.12.0"})
-    assert check.main(["--drift", str(lock)]) == 1
-    assert "_UNLOCKED_TOOLS" not in capsys.readouterr().out
+    assert reason in out and "scripts/ci_venv.py" in out
+    assert check.main(["--drift", "--report", str(lock)]) == 0
+    out = capsys.readouterr().out
+    assert reason in out and out.startswith("### Installed versions against requirements.lock")
+    monkeypatch.setattr(check, "_interpreter_isolation", lambda: None)
+    assert check.main(["--drift", str(lock)]) == 0
+    assert "ci_venv" not in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------------------------
+# The fresh venv every drift lane installs the lock into (scripts/ci_venv.py)
+
+_CI_VENV_STEP = 'python scripts/ci_venv.py "$RUNNER_TEMP/ci-venv"'
+
+
+def _ci_venv():
+    name = "ci_venv"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / "ci_venv.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
+
+def _venv_python(env_dir: Path) -> Path:
+    return env_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+
+
+def _bare_env(**extra) -> dict:
+    """The whole environment (Windows needs it), minus what would add to a child's sys.path or
+    write into a real runner's GITHUB_PATH file, plus ``extra``."""
+    env = dict(os.environ)
+    for key in ("PYTHONPATH", "PYTHONHOME", "GITHUB_PATH"):
+        env.pop(key, None)
+    env.update(extra)
+    return env
+
+
+def _dist_names(python: Path, cwd: Path) -> set:
+    code = ("import importlib.metadata as m, json; "
+            "print(json.dumps(sorted({d.metadata['Name'].lower() for d in m.distributions()})))")
+    out = subprocess.run([str(python), "-c", code], capture_output=True, text=True, cwd=cwd,
+                         env=_bare_env(), timeout=60, check=True).stdout
+    return set(json.loads(out))
+
+
+@pytest.mark.skipif(importlib.util.find_spec("ensurepip") is None, reason="needs ensurepip")
+def test_ci_venv_hides_the_base_interpreters_packages(tmp_path):
+    """A base Python that ships a tool of its own (venv A with a pipx distribution, the shape
+    of the windows-latest runner's Python) makes, through scripts/ci_venv.py, a venv B that
+    holds pip and none of A's packages; B's scripts directory is the one line written to
+    GITHUB_PATH, it holds B's python, and B passes --check. MUTATION: system_site_packages=True;
+    write the GITHUB_PATH line twice or not at all; print the venv root instead of its
+    scripts directory - red."""
+    import venv
+
+    base = tmp_path / "base"
+    venv.create(base, with_pip=False, symlinks=os.name != "nt")
+    base_py = _venv_python(base)
+    purelib = subprocess.run([str(base_py), "-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"],
+                             capture_output=True, text=True, cwd=tmp_path, env=_bare_env(), timeout=60,
+                             check=True).stdout.strip()
+    dist_info = Path(purelib) / "pipx-1.18.16.dist-info"
+    dist_info.mkdir(parents=True)
+    (dist_info / "METADATA").write_text("Metadata-Version: 2.1\nName: pipx\nVersion: 1.18.16\n", encoding="utf-8")
+    assert "pipx" in _dist_names(base_py, tmp_path)
+
+    fresh = tmp_path / "fresh"
+    github_path = tmp_path / "github_path"
+    proc = subprocess.run([str(base_py), str(ROOT / "scripts" / "ci_venv.py"), str(fresh)],
+                          capture_output=True, text=True, cwd=tmp_path,
+                          env=_bare_env(GITHUB_PATH=str(github_path)), timeout=300)
+    assert proc.returncode == 0, proc.stderr
+    names = _dist_names(_venv_python(fresh), tmp_path)
+    assert "pip" in names and names <= {"pip", "setuptools"}, names
+    lines = github_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1, lines
+    assert Path(lines[0]) == _venv_python(fresh).parent and Path(lines[0]).is_absolute()
+    assert proc.stdout.strip() == lines[0]
+    check = subprocess.run([str(_venv_python(fresh)), str(ROOT / "scripts" / "ci_venv.py"), "--check"],
+                           capture_output=True, text=True, cwd=tmp_path, env=_bare_env(), timeout=60)
+    assert check.returncode == 0, check.stdout + check.stderr
+
+
+def test_ci_venv_writes_github_path_only_when_set(tmp_path, monkeypatch, capsys):
+    """Without GITHUB_PATH nothing is written; with it, exactly the scripts directory, once.
+    The venv is built with the defaults of `python -m venv` (pip, no system site packages).
+    MUTATION: system_site_packages=True; write the line without GITHUB_PATH set - red."""
+    ci_venv = _ci_venv()
+    built = []
+
+    class FakeBuilder:
+        def __init__(self, **kwargs):
+            built.append(kwargs)
+
+        def create(self, env_dir):
+            bin_dir = Path(ci_venv.scripts_dir(env_dir))
+            bin_dir.mkdir(parents=True)
+            (bin_dir / ("python.exe" if sys.platform == "win32" else "python")).write_bytes(b"")
+
+    monkeypatch.setattr(ci_venv.venv, "EnvBuilder", FakeBuilder)
+    monkeypatch.delenv("GITHUB_PATH", raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert ci_venv.main([str(tmp_path / "a")]) == 0
+    assert capsys.readouterr().out.strip() == ci_venv.scripts_dir(str(tmp_path / "a"))
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["a"]
+    assert built == [{"with_pip": True, "symlinks": os.name != "nt"}]
+    github_path = tmp_path / "gp"
+    monkeypatch.setenv("GITHUB_PATH", str(github_path))
+    assert ci_venv.main([str(tmp_path / "b")]) == 0
+    assert github_path.read_text(encoding="utf-8") == ci_venv.scripts_dir(str(tmp_path / "b")) + "\n"
+
+
+def test_ci_venv_refuses_a_directory_that_is_not_empty(tmp_path, monkeypatch, capsys):
+    """A wrong path must never be wiped: a directory with content (or a file) is refused with
+    exit 1 and stays as it was; wrong usage exits 2. MUTATION: clear=True and no refusal - red."""
+    ci_venv = _ci_venv()
+    monkeypatch.delenv("GITHUB_PATH", raising=False)
+    target = tmp_path / "busy"
+    target.mkdir()
+    (target / "keep.txt").write_bytes(b"precious")
+    proc = subprocess.run([sys.executable, str(ROOT / "scripts" / "ci_venv.py"), str(target)],
+                          capture_output=True, text=True, cwd=tmp_path, env=_bare_env(), timeout=120)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert sorted(p.name for p in target.iterdir()) == ["keep.txt"]
+    assert (target / "keep.txt").read_bytes() == b"precious"
+    a_file = tmp_path / "a-file"
+    a_file.write_bytes(b"x")
+    assert ci_venv.main([str(a_file)]) == 1 and a_file.read_bytes() == b"x"
+    for argv in ([], ["a", "b"], ["--clear"], ["--check", "x"]):
+        assert ci_venv.main(argv) == 2, argv
+    capsys.readouterr()
+
+
+def test_ci_venv_uses_only_the_standard_library():
+    """The script runs before anything is installed. MUTATION: `import packaging` in it - red."""
+    import ast
+
+    tree = ast.parse((ROOT / "scripts" / "ci_venv.py").read_text(encoding="utf-8"))
+    modules = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules |= {alias.name.split(".")[0] for alias in node.names}
+        elif isinstance(node, ast.ImportFrom) and node.level == 0:
+            modules.add(node.module.split(".")[0])
+    assert modules and modules <= set(sys.stdlib_module_names), modules - set(sys.stdlib_module_names)
+
+
+def test_isolation_problem_names_each_leak():
+    """A Python sees more than the lock in three ways: it is no venv at all (the runner's
+    shape), it is a venv with the system site packages, or the user site is on its path. Each
+    is named, also when the path is spelt with a trailing separator or a '..' segment; a clean
+    venv passes. MUTATION: drop the prefix comparison; compare paths without normpath; ignore
+    the user site - red."""
+    problem = _ci_venv().isolation_problem
+    base = os.path.join(os.sep, "opt", "py312")
+    venv_dir = os.path.join(os.sep, "tmp", "ci-venv")
+    base_site = os.path.join(base, "lib", "python3.12", "site-packages")
+    venv_site = os.path.join(venv_dir, "lib", "python3.12", "site-packages")
+    stdlib = [os.path.join(base, "lib", "python312.zip"), os.path.join(base, "lib", "python3.12"), base]
+    user_site = os.path.join(os.sep, "home", "user", ".local", "lib", "python3.12", "site-packages")
+
+    assert "not a venv" in problem(base, base, stdlib + [base_site], [base_site], None)
+    assert "not a venv" in problem(base + os.sep, base, stdlib + [base_site], [base_site], None)
+    assert problem(venv_dir, base, stdlib + [venv_site], [base_site], None) is None
+    for spelling in (base_site, base_site + os.sep,
+                     os.path.join(base, "lib", "python3.12", "x", "..", "site-packages")):
+        reason = problem(venv_dir, base, stdlib + [venv_site, spelling], [base_site], None)
+        assert reason and "system site packages" in reason, spelling
+    reason = problem(venv_dir, base, stdlib + [venv_site, user_site], [base_site], user_site)
+    assert reason and "user site" in reason
+    # A disabled user site is never on the path, so nothing is reported for it.
+    assert problem(venv_dir, base, stdlib + [venv_site], [base_site], None) is None
+
+
+def test_every_drift_lane_runs_in_a_fresh_venv():
+    """Every job that runs `check_requirements_lock.py --drift` first makes a fresh venv with
+    scripts/ci_venv.py (bash, so $RUNNER_TEMP expands on Windows), before any step that
+    installs anything; in _test.yml for both deps modes. The jobs are exactly the push matrix,
+    narrow-console and the release gate. MUTATION: delete the step from one lane; move it after
+    the install; give it `if: inputs.deps == 'lock'`; drop `shell: bash` - red."""
+    found = []
+    for path in sorted(WF.glob("*.yml")):
+        for job_id, job in _wf(path.name)["jobs"].items():
+            steps = job.get("steps") or []
+            if "check_requirements_lock.py --drift" not in _runs(job):
+                continue
+            found.append(f"{path.name}:{job_id}")
+            where = f"{path.name}:{job_id}"
+            venv_steps = [i for i, s in enumerate(steps) if s.get("run", "").strip() == _CI_VENV_STEP]
+            assert len(venv_steps) == 1, f"{where}: no single fresh-venv step"
+            step = steps[venv_steps[0]]
+            assert step.get("shell") == "bash", f"{where}: the step needs bash"
+            assert "if" not in step, f"{where}: the venv step must run in every mode"
+            installs = [i for i, s in enumerate(steps) if "install" in s.get("run", "")]
+            assert installs and venv_steps[0] < min(installs), f"{where}: the venv comes after an install"
+    assert sorted(found) == ["_test.yml:build-and-test", "ci.yml:narrow-console",
+                             "release.yml:gate-and-release"], found
 
 
 # ---------------------------------------------------------------------------------------------

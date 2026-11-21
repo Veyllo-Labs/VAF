@@ -48,6 +48,16 @@ jobs:
         # by a push or the release gate, and pip trusts a wheel it built and cached past
         # --require-hashes. scripts/install_lock.sh also installs the lock with --no-cache-dir.
 
+    # Both deps modes install into a fresh venv, never into the runner's own Python: the image
+    # ships tools of its own there (measured: pipx, argcomplete and userpath on windows-latest
+    # 3.12), which the suite would then run beside and the drift check would report. The
+    # script puts the venv's scripts directory on GITHUB_PATH, so every later python, pip,
+    # ruff, vaf and pytest is the venv's. bash on every runner: pwsh would not expand
+    # $RUNNER_TEMP.
+    - name: Create a clean venv
+      shell: bash
+      run: python scripts/ci_venv.py "$RUNNER_TEMP/ci-venv"
+
     # The portaudio steps (Linux portaudio19-dev, macOS brew portaudio + LDFLAGS/CFLAGS)
     # were removed together with pyaudio: it is no longer a core requirement (optional
     # vaf[speech] extra), so nothing in requirements.txt needs the portaudio headers.
@@ -70,7 +80,8 @@ jobs:
     # there (pip by hash, the locked setuptools for the one sdist, no cached built wheel).
     # --no-build-isolation builds the editable install with the locked setuptools instead
     # of whatever PyPI serves that minute. The drift check proves the runner really holds
-    # the lock and nothing else.
+    # the lock and nothing else. The lock goes into the fresh venv made above, because a
+    # runner's Python can ship tools of its own (measured: pipx on windows-latest 3.12).
     # bash on every runner: pwsh judges a multi-line step by its LAST command only, so a
     # failed install followed by a working one would pass.
     - name: Install dependencies (requirements.lock)

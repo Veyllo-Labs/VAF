@@ -22,6 +22,7 @@ import psutil
 import pytest
 
 from fake_clock import only_on_thread
+from process_wait import ended, still_running
 import vaf.core.service_stack as stack
 
 REPO = Path(__file__).resolve().parents[1]
@@ -139,7 +140,7 @@ def test_cancel_ends_our_own_up_and_nothing_else(hermetic, tmp_path):
         up_tree, stop_tree = _tree(up.pid), _tree(stop.pid)
         trees = [up_tree, stop_tree]
         assert stack.cancel_start() >= 1
-        _gone, alive = psutil.wait_procs(up_tree, timeout=10)
+        alive = still_running(up_tree)
         assert alive == [], f"left running: {alive}"
         assert stop.poll() is None, "the stop command was ended as well"
         assert all(p.is_running() and p.status() != psutil.STATUS_ZOMBIE for p in stop_tree)
@@ -166,10 +167,29 @@ def test_cancel_ends_the_child_its_up_started(hermetic, tmp_path):
         tree = _tree(cli.pid)
         assert len(tree) == 2, tree
         assert stack.cancel_start() >= 1
-        _gone, alive = psutil.wait_procs(tree, timeout=10)
+        alive = still_running(tree)
         assert alive == [], f"left running: {alive}"
     finally:
         _kill_trees([tree], (cli,))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows has no zombie state")
+def test_a_zombie_counts_as_ended():
+    """A compose stand-in reparented to a PID 1 that does not reap stays a zombie after it
+    ended; its pid exists, and psutil.wait_procs called it alive until the timeout. A child
+    of this process that exited and was not waited for is such a zombie.
+    MUTATION: drop the zombie check in tests/process_wait.py - red."""
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    try:
+        handle = psutil.Process(proc.pid)
+        end = time.monotonic() + 20
+        while handle.status() != psutil.STATUS_ZOMBIE and time.monotonic() < end:
+            time.sleep(0.02)
+        assert handle.status() == psutil.STATUS_ZOMBIE
+        assert ended(handle) and still_running([handle], timeout=1) == []
+    finally:
+        proc.wait(timeout=10)
+    assert ended(handle)        # reaped: NoSuchProcess or not running
 
 
 @pytest.mark.parametrize("interrupted,still_ours,passes", [

@@ -12,11 +12,16 @@ import ast
 import importlib.util
 import os
 import re
+import select
+import shutil
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import psutil
 import pytest
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -638,6 +643,7 @@ def test_main_fails_a_green_run_over_budget(tmp_path, monkeypatch, capsys):
     without the missing-file fallback - red; drop the asyncio deadline hint - red."""
     module = _module()
     monkeypatch.setattr(module, "_crlf_checkout_files", lambda: [])
+    monkeypatch.setattr(module, "_venv_launcher", _no_launcher)
     monkeypatch.setattr(sys, "argv", ["hostile_env.py", "tests/test_example.py"])
     seen = []
 
@@ -671,20 +677,32 @@ def test_main_fails_a_green_run_over_budget(tmp_path, monkeypatch, capsys):
     assert "  0 refused local connects" in capsys.readouterr().out
 
 
-def _child_env(module, monkeypatch, platform, tunables):
+def _no_launcher(directory, real):
+    return None, "not available here (stubbed)"
+
+
+def _child_env(module, monkeypatch, platform, tunables, launcher=_no_launcher, argv=None):
     """The environment main() hands pytest, on `platform`, with GLIBC_TUNABLES set to
-    `tunables` in this process (None: unset); subprocess.run is faked, nothing runs."""
+    `tunables` in this process (None: unset); subprocess.run is faked, nothing runs. The
+    venv launcher comes from `launcher` (a stand-in for _venv_launcher); `argv`, a list,
+    receives the command main() ran."""
     monkeypatch.setattr(module, "_crlf_checkout_files", lambda: [])
+    monkeypatch.setattr(module, "_venv_launcher", launcher)
     monkeypatch.setattr(sys, "argv", ["hostile_env.py", "tests/test_example.py"])
     monkeypatch.setattr(module.sys, "platform", platform)
+    # A surrounding hostile run exports these; main() must be seen setting them itself.
+    monkeypatch.delenv("VAF_HOSTILE_VENV_LAUNCHER", raising=False)
+    monkeypatch.delenv("VAF_HOSTILE_REAL_PYTHON", raising=False)
     if tunables is None:
         monkeypatch.delenv("GLIBC_TUNABLES", raising=False)
     else:
         monkeypatch.setenv("GLIBC_TUNABLES", tunables)
     seen = []
 
-    def fake_run(argv, cwd, env):
+    def fake_run(command, cwd, env):
         seen.append(dict(env))
+        if argv is not None:
+            argv[:] = command
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr(module.subprocess, "run", fake_run)
     assert module.main() == 0
@@ -748,3 +766,317 @@ def test_every_port_the_door_harness_avoids_is_refused():
     ports = {int(port) for port in re.findall(r"[0-9]+", named)}
     assert ports == {3000, 8001, 8005, 8443}
     assert ports | {5432, 8080, 9222} <= set(_module()._VAF_SERVICE_PORTS)
+
+
+# The LONG ENV VALUE axis.
+
+# Runs the snippet, then sets variables of a given size through os.environ (the path pytest's
+# PYTEST_CURRENT_TEST takes) and os.putenv with bytes (what os.environ hands it on POSIX).
+_ENV_CHILD = r'''
+import os, subprocess, sys
+snippet, force_nt = sys.argv[1:3]
+plain = os.putenv
+if force_nt == "1":
+    os.name = "nt"
+with open(snippet, encoding="utf-8") as f:
+    exec(compile(f.read(), "sitecustomize", "exec"))
+if force_nt == "1":
+    print(os.putenv is plain)
+    raise SystemExit(0)
+NAME = "VAF_X"
+ROOM = 32767 - len(NAME) - 1            # value length that makes name=value 32767 units
+
+
+def refused(value):
+    try:
+        os.environ[NAME] = value
+    except ValueError as exc:
+        assert str(exc) == "the environment variable is longer than 32767 characters", exc
+        return "refused"
+    return "set"
+
+
+print(refused("a" * ROOM))                              # 32767 units
+seen = subprocess.run([sys.executable, "-c", "import os; print(len(os.environ['VAF_X']))"],
+                      capture_output=True, text=True).stdout.strip()
+print(seen)                                             # the real environment holds it
+print(refused("a" * (ROOM + 1)))                        # 32768 units
+print(refused("a" * (ROOM - 1) + "\U0001F600"))         # 32766 + a pair = 32768 units
+print(refused("a" * (ROOM - 2) + "\U0001F600"))         # 32765 + a pair = 32767 units
+print(refused("\u200b" * ROOM))                    # BMP: one unit each, 32767
+try:
+    os.putenv(NAME.encode(), b"a" * (ROOM + 1))
+except ValueError:
+    print("refused")
+else:
+    print("set")
+'''
+
+
+def _env_child(tmp_path, force_nt=False):
+    snippet = tmp_path / "sitecustomize_snippet.py"
+    snippet.write_text(_blocker(), encoding="utf-8")
+    out = subprocess.run(
+        [sys.executable, "-c", _ENV_CHILD, str(snippet), "1" if force_nt else "0"],
+        capture_output=True, text=True, timeout=60, env=_clean_env())
+    assert out.returncode == 0, out.stderr
+    return out.stdout.split()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="a Windows host has the real limit, nothing is installed")
+def test_the_long_env_axis_refuses_what_windows_refuses(tmp_path, monkeypatch, capsys):
+    """Windows' putenv refuses name=value above 32767 UTF-16 code units with this text
+    (CPython's win32_putenv), pytest's PYTEST_CURRENT_TEST included: a test id over the
+    limit errored at setup and teardown on the Windows runner alone. 32767 is set, and
+    really reaches the environment; 32768 is refused; a character outside the BMP counts
+    twice, one inside it once; bytes from os.environ's POSIX path are measured decoded.
+    MUTATION: drop the wrapper - red; `>=` for `>` - red (32767 refused); count code points
+    instead of UTF-16 units - red (the pair passes); drop the announcement line - red."""
+    assert _env_child(tmp_path) == ["set", "32761", "refused", "refused", "set", "set",
+                                    "refused"]
+    _child_env(_module(), monkeypatch, "linux", None)
+    assert ("  long env value  a variable whose name=value exceeds 32767 UTF-16 units is "
+            "refused") in capsys.readouterr().out
+
+
+def test_the_long_env_axis_is_not_installed_on_windows(tmp_path):
+    """On a Windows host the real limit applies, so os.putenv stays the host's own. Runs on
+    every OS: the child forces os.name to "nt" before the snippet runs.
+    MUTATION: drop the os.name check from the install condition - red."""
+    assert _env_child(tmp_path, force_nt=True) == ["True"]
+
+
+
+def test_the_last_test_plugin_survives_an_id_over_the_limit(tmp_path):
+    """The hostile run's own plugin writes each finished test's id into the environment;
+    an id over Windows' limit stopped the whole session there (INTERNALERROR) under the
+    long env value axis. The start of the id is kept instead.
+    MUTATION: set the full id without the fallback - red."""
+    module = _module()
+    snippet = tmp_path / "sitecustomize_snippet.py"
+    snippet.write_text(_blocker(), encoding="utf-8")
+    plugin = tmp_path / "plugin.py"
+    plugin.write_text(module._LAST_TEST_PLUGIN, encoding="utf-8")
+    code = r'''
+import os, sys
+exec(compile(open(sys.argv[1], encoding="utf-8").read(), "sitecustomize", "exec"))
+namespace = {}
+exec(compile(open(sys.argv[2], encoding="utf-8").read(), "plugin", "exec"), namespace)
+namespace["pytest_runtest_logfinish"](nodeid="t.py::test_a[" + "x" * 40000 + "]", location=None)
+print(os.environ["VAF_HOSTILE_LAST_TEST"] == "t.py::test_a[" + "x" * 4083)
+namespace["pytest_runtest_logfinish"](nodeid="t.py::test_b", location=None)
+print(os.environ["VAF_HOSTILE_LAST_TEST"])
+'''
+    out = subprocess.run([sys.executable, "-c", code, str(snippet), str(plugin)],
+                         capture_output=True, text=True, timeout=60, env=_clean_env())
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.split() == ["True", "t.py::test_b"]
+
+
+# The VENV LAUNCHER axis.
+
+needs_launcher = pytest.mark.skipif(
+    not sys.platform.startswith("linux") or shutil.which("cc") is None,
+    reason="the venv launcher is built with a C compiler (cc), on Linux only")
+
+# Inside a hostile run sys.executable is that run's own launcher; these tests build theirs
+# around the real interpreter.
+_REAL_PYTHON = os.environ.get("VAF_HOSTILE_REAL_PYTHON") or sys.executable
+
+
+@pytest.fixture(scope="module")
+def launcher(tmp_path_factory):
+    path, why = _module()._venv_launcher(tmp_path_factory.mktemp("venv"), _REAL_PYTHON)
+    assert path is not None, why
+    return str(path)
+
+
+def _wait_for(check, seconds=10.0):
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if check():
+            return True
+        time.sleep(0.02)
+    return check()
+
+
+def _stop(proc):
+    if proc.poll() is None:
+        proc.kill()
+    proc.wait(timeout=10)
+    for stream in (proc.stdin, proc.stdout, proc.stderr):
+        if stream is not None:
+            stream.close()
+
+
+# Writes a line, closes its output, says so through a file and lives on until released.
+_CLOSE_AND_WAIT = r'''
+import os, sys, time
+os.write(1, b"x\n")
+os.close(1)
+open(sys.argv[1], "w").close()
+while not os.path.exists(sys.argv[2]):
+    time.sleep(0.02)
+'''
+
+# Writes its pid to a file (whole, through a rename) and sleeps.
+_SLEEPER = r'''
+import os, sys, time
+with open(sys.argv[1] + ".part", "w") as f:
+    f.write(str(os.getpid()))
+os.rename(sys.argv[1] + ".part", sys.argv[1])
+time.sleep(60)
+'''
+
+
+def _holds_output(python, tmp_path):
+    """Whether the reader still saw no end of output once the child had closed its own."""
+    ready, release = tmp_path / "ready", tmp_path / "release"
+    proc = subprocess.Popen([python, "-c", _CLOSE_AND_WAIT, str(ready), str(release)],
+                            stdout=subprocess.PIPE, env=_clean_env())
+    try:
+        assert proc.stdout.readline() == b"x\n"
+        assert _wait_for(ready.exists), "the child did not start"
+        held = not select.select([proc.stdout], [], [], 0.5)[0]
+        release.touch()
+        assert proc.stdout.read() == b""
+        assert proc.wait(timeout=10) == 0
+        return held
+    finally:
+        release.touch()
+        _stop(proc)
+
+
+def _sleeper(python, tmp_path, *args):
+    """(the Popen, the pid of the interpreter that runs the sleeper)."""
+    pid_file = tmp_path / "pid"
+    proc = subprocess.Popen([python, "-c", _SLEEPER, str(pid_file), *args], env=_clean_env())
+    if not _wait_for(pid_file.exists):
+        _stop(proc)
+        raise AssertionError("the sleeper did not start")
+    return proc, int(pid_file.read_text(encoding="utf-8"))
+
+
+@needs_launcher
+def test_the_launcher_holds_the_output_its_child_closed(launcher, tmp_path):
+    """A Windows venv's python.exe keeps the child's standard handles until the child is
+    gone, so a reader sees no end of output while the child lives on; the interpreter run
+    directly gives it at once.
+    MUTATION: execv without the fork (no launcher process) - red."""
+    (tmp_path / "direct").mkdir()
+    (tmp_path / "launched").mkdir()
+    assert _holds_output(_REAL_PYTHON, tmp_path / "direct") is False
+    assert _holds_output(launcher, tmp_path / "launched") is True
+
+
+@needs_launcher
+def test_a_killed_launcher_takes_its_child_along(launcher, tmp_path):
+    """Windows' job object ends the interpreter with its launcher; without that a killed
+    launcher left a child holding a lock.
+    MUTATION: drop PR_SET_PDEATHSIG - red (the child survives)."""
+    proc, pid = _sleeper(launcher, tmp_path)
+    child = psutil.Process(pid)
+    try:
+        assert child.ppid() == proc.pid
+        proc.kill()
+        proc.wait(timeout=10)
+        _gone, alive = psutil.wait_procs([child], timeout=10)
+        assert alive == [], "the child outlived its killed launcher"
+    finally:
+        _stop(proc)
+        if psutil.pid_exists(pid):
+            try:
+                child.kill()
+            except psutil.Error:
+                pass
+
+
+@needs_launcher
+def test_the_launcher_ends_as_its_child_did(launcher, tmp_path):
+    """An exit code passes through; a SIGTERM to the launcher reaches the child, and the
+    child's death by a signal is re-raised, so POSIX `returncode == -SIGTERM` keeps its
+    meaning; so is a signal the child sent itself.
+    MUTATION: exit(1) instead of re-raising - red; do not forward SIGTERM - red (hangs to
+    the deadline)."""
+    assert subprocess.run([launcher, "-c", "raise SystemExit(7)"], env=_clean_env(),
+                          timeout=60).returncode == 7
+    proc, _pid = _sleeper(launcher, tmp_path)
+    try:
+        proc.terminate()
+        assert proc.wait(timeout=10) == -signal.SIGTERM
+    finally:
+        _stop(proc)
+    assert subprocess.run([launcher, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"],
+                          env=_clean_env(), timeout=60).returncode == -signal.SIGKILL
+
+
+@needs_launcher
+def test_a_child_reports_the_launcher_as_its_interpreter(launcher, tmp_path):
+    """A Windows interpreter started by the launcher reports the launcher as sys.executable,
+    so a Python child spawned from it goes through the launcher again.
+    MUTATION: drop the sys.executable line from the snippet - red."""
+    snippet = tmp_path / "sitecustomize_snippet.py"
+    snippet.write_text(_blocker(), encoding="utf-8")
+    code = ("import sys; exec(compile(open(sys.argv[1], encoding='utf-8').read(), "
+            "'sitecustomize', 'exec')); print(sys.executable)")
+
+    def reported(**env):
+        return subprocess.run([launcher, "-c", code, str(snippet)], capture_output=True,
+                              text=True, timeout=60, env=_clean_env(**env)).stdout.strip()
+    assert reported(VAF_HOSTILE_VENV_LAUNCHER=launcher) == launcher
+    assert reported() != launcher
+
+
+@needs_launcher
+def test_the_launcher_shows_its_given_argv(launcher, tmp_path):
+    """Both processes carry the same arguments in the process table, as on Windows, where
+    a scan by command line finds the launcher and its interpreter.
+    MUTATION: execv without the fork - red (the Popen's pid is the interpreter)."""
+    proc, pid = _sleeper(launcher, tmp_path, "an argument")
+    try:
+        shown = psutil.Process(proc.pid)
+        assert shown.cmdline() == [launcher, "-c", _SLEEPER, str(tmp_path / "pid"), "an argument"]
+        assert [c.pid for c in shown.children()] == [pid]
+        assert psutil.Process(pid).cmdline() == [_REAL_PYTHON, *shown.cmdline()[1:]]
+    finally:
+        _stop(proc)
+
+
+def test_the_launcher_is_built_on_linux_only(monkeypatch, tmp_path):
+    """macOS has no PR_SET_PDEATHSIG and Windows the real launcher; without a C compiler
+    the axis is not installed, and the announcement says why.
+    MUTATION: build it on darwin or win32 - red; drop the compiler check - red."""
+    module = _module()
+    for platform, reason in (("darwin", "not available here (Linux only"),
+                             ("win32", "real host")):
+        monkeypatch.setattr(module.sys, "platform", platform)
+        path, why = module._venv_launcher(tmp_path, sys.executable)
+        assert path is None and why.startswith(reason), (platform, why)
+    monkeypatch.setattr(module.sys, "platform", "linux")
+    monkeypatch.setattr(module.shutil, "which", lambda name: None)
+    assert module._venv_launcher(tmp_path, sys.executable) == (
+        None, "not available here (no C compiler)")
+    assert not (tmp_path / "venv-launcher").exists()
+
+
+def test_main_runs_pytest_through_the_launcher(monkeypatch, capsys, tmp_path):
+    """With a launcher, pytest itself starts through it (on the Windows runner `python -m
+    pytest` has the launcher as its parent too), the sitecustomize learns its path and a
+    Linux-only test that inspects its own child finds the real interpreter; without one,
+    the interpreter runs pytest and the announcement gives the reason.
+    MUTATION: run pytest with sys.executable regardless - red; drop the exported path -
+    red; drop the announcement line - red."""
+    module = _module()
+    fake = str(tmp_path / "venv-launcher" / "python")
+    argv = []
+    env = _child_env(module, monkeypatch, "linux", None,
+                     launcher=lambda directory, real: (Path(fake), None), argv=argv)
+    assert argv[0] == fake
+    assert env["VAF_HOSTILE_VENV_LAUNCHER"] == fake
+    assert env["VAF_HOSTILE_REAL_PYTHON"] == sys.executable
+    assert (f"  venv launcher   Python runs as two processes through {fake}"
+            in capsys.readouterr().out)
+    env = _child_env(module, monkeypatch, "linux", None, argv=argv)
+    assert argv[0] == sys.executable
+    assert "VAF_HOSTILE_VENV_LAUNCHER" not in env and "VAF_HOSTILE_REAL_PYTHON" not in env
+    assert "  venv launcher   not available here (stubbed)" in capsys.readouterr().out

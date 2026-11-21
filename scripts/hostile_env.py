@@ -192,6 +192,56 @@ locally, in the time the suite already takes:
                   0.18 s on a 120 K word with the axis, against 0.81 s with
                   the .pyc files present. A C library other than glibc (musl)
                   ignores the variable, and there the axis adds nothing.
+  VENV LAUNCHER   pytest and every Python child run through a launcher, on Linux
+                  only, as in a Windows virtual environment, where python.exe is a
+                  redirector: it starts the base interpreter as its CHILD with the
+                  same arguments, keeps the standard handles open and waits. One
+                  Popen of sys.executable is then two processes, both showing that
+                  argv, and a pipe's end of output arrives only once both are gone.
+                  The CI's test jobs run in such a venv (scripts/ci_venv.py), and two
+                  tests failed there alone: an MCP server that closed its output was
+                  never seen to (the launcher held the pipe, the deadline answered),
+                  and a scan of our descendants found the compose stand-in twice
+                  (assert 2 == 1). A small C program, compiled with cc once per run
+                  into the run's temp dir, is that launcher: named `python`, because
+                  code that recognises an interpreter matches the basename; fork, and
+                  in the child PR_SET_PDEATHSIG (Windows' job object ends the child
+                  with its launcher; a killed stand-in without it left a child holding
+                  a lock) and exec of the real interpreter; in the parent SIGTERM,
+                  SIGINT and SIGHUP sent to it passed on, then the child's exit code,
+                  or its signal re-raised, as its own. VAF_HOSTILE_VENV_LAUNCHER
+                  carries its path, and the sitecustomize sets sys.executable to it,
+                  as a Windows interpreter reports __PYVENV_LAUNCHER__.
+                  VAF_HOSTILE_REAL_PYTHON names the real interpreter for a Linux-only
+                  test that inspects its own child process. Measured when this was
+                  added, the three affected files with the old tests: the MCP test
+                  failed every run; the descendant count raced (it failed 10 of 10
+                  runs alone, 1 of 3 in its file, 2 of 2 beside the MCP file), since
+                  the forwarded SIGTERM can end the child before the scan reaches it,
+                  and so it is asserted by effect now. Named boundaries: macOS has no
+                  PR_SET_PDEATHSIG, so the axis is Linux only; a child started with an
+                  environment that drops PYTHONPATH reports the real interpreter; the
+                  launcher sits in a temp dir, not beside the venv's other scripts as
+                  python.exe does in Scripts, so code that looks for a tool next to
+                  sys.executable finds nothing here; a signal sent to the whole
+                  process group reaches the child twice. Without a C compiler the axis
+                  is not installed and says so.
+  LONG ENV VALUE  setting an environment variable whose name=value exceeds 32767
+                  UTF-16 code units raises ValueError("the environment variable is
+                  longer than 32767 characters"), as CPython's win32_putenv does on
+                  Windows (_MAX_ENV, measured with PyUnicode_AsWideCharString's
+                  length, so a character outside the BMP counts twice), on every host
+                  that is not Windows. os.environ[...] = ... reaches the check through
+                  os's module global putenv. pytest writes each test's id into
+                  PYTEST_CURRENT_TEST, and the Windows runner errored at setup and
+                  teardown of a test whose parameters were 65 K-character lines.
+                  Measured when this was added: 2 of the suite's 21872 ids were over
+                  the limit, both that test's (393297 and 65627 characters); the next
+                  largest has 5098. The axis also stopped this script's own refusal
+                  plugin, which writes the id of the last finished test into the
+                  environment (INTERNALERROR); it keeps the id's start now. Named
+                  boundary: an env= dict handed to subprocess is not checked, since it
+                  never goes through putenv.
 
 WHAT IT CANNOT DO. Real Windows file semantics - ACLs, MoveFileEx sharing
 violations, the read-only-flag-only chmod - need a real Windows machine. Those
@@ -268,6 +318,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -432,6 +483,27 @@ import platform as _platform
 if sys.platform.startswith("linux"):
     _platform.system = lambda: "Darwin"
     _platform.machine = lambda: "arm64"
+
+
+_venv_launcher = _os.environ.get("VAF_HOSTILE_VENV_LAUNCHER")
+if _venv_launcher:
+    # A Windows interpreter started by its venv's python.exe reports that launcher
+    # (__PYVENV_LAUNCHER__), so a Python child spawned from here goes through it again.
+    sys.executable = _venv_launcher
+
+
+if _os.name != "nt":
+    _host_putenv = _os.putenv
+
+    def _windows_putenv(name, value):
+        """Refuse what Windows' putenv refuses: name=value longer than 32767 UTF-16 units.
+        os.environ[...] = ... reaches this through os's module global, looked up per call."""
+        text = _os.fsdecode(name) + "=" + _os.fsdecode(value)
+        if len(text.encode("utf-16-le", "surrogatepass")) // 2 > 32767:
+            raise ValueError("the environment variable is longer than 32767 characters")
+        return _host_putenv(name, value)
+
+    _os.putenv = _windows_putenv
 
 
 import pathlib as _pathlib
@@ -679,7 +751,12 @@ import os
 
 def pytest_runtest_logfinish(nodeid, location):
     """A thread that dials after its test ended is charged as "after <nodeid>"."""
-    os.environ["VAF_HOSTILE_LAST_TEST"] = nodeid
+    try:
+        os.environ["VAF_HOSTILE_LAST_TEST"] = nodeid
+    except ValueError:
+        # Windows refuses a variable over 32767 characters (so does the long env value
+        # axis); the start of the id still names the test, and the run goes on.
+        os.environ["VAF_HOSTILE_LAST_TEST"] = nodeid[:4096]
 '''
 
 _PHASES = (" (setup)", " (call)", " (teardown)")
@@ -732,6 +809,136 @@ def _refusal_verdict(lines, budget=_REFUSAL_BUDGET_S):
 
 def _port_key(port):
     return (0, int(port), "") if port.isdigit() else (1, 0, port)
+
+
+# The venv-launcher axis: what python.exe of a Windows virtual environment does, as a native
+# program, because a shell or Python shim can show neither the given argv in the process
+# table nor the exit status of a signal. @REAL_PYTHON@ becomes a C string literal.
+_LAUNCHER_SOURCE = r'''
+#define _GNU_SOURCE
+#include <errno.h>
+#include <signal.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/prctl.h>
+#include <sys/resource.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+static const char REAL[] = @REAL_PYTHON@;
+static const int FORWARDED[] = {SIGTERM, SIGINT, SIGHUP};
+#define N_FORWARDED (sizeof(FORWARDED) / sizeof(FORWARDED[0]))
+static volatile sig_atomic_t child = 0;
+
+static void forward(int sig, siginfo_t *info, void *context)
+{
+    (void)context;
+    /* A terminal's Ctrl-C or hangup (si_code SI_KERNEL) reaches the whole foreground
+       group, the child included; only a signal sent to this process is passed on. */
+    if (child > 0 && info->si_code <= 0)
+        kill((pid_t)child, sig);
+}
+
+int main(int argc, char **argv)
+{
+    struct sigaction handler, saved[N_FORWARDED];
+    sigset_t block, unblocked;
+    pid_t parent = getpid(), pid;
+    int status;
+    size_t i;
+
+    (void)argc;
+    /* Blocked across the fork, so a signal that arrives before the child exists is
+       forwarded once it does, never sent to pid 0 (the whole group). */
+    sigemptyset(&block);
+    for (i = 0; i < N_FORWARDED; i++)
+        sigaddset(&block, FORWARDED[i]);
+    sigprocmask(SIG_BLOCK, &block, &unblocked);
+    memset(&handler, 0, sizeof(handler));
+    handler.sa_sigaction = forward;
+    handler.sa_flags = SA_SIGINFO | SA_RESTART;
+    sigemptyset(&handler.sa_mask);
+    for (i = 0; i < N_FORWARDED; i++)
+        sigaction(FORWARDED[i], &handler, &saved[i]);
+
+    pid = fork();
+    if (pid < 0) {
+        perror("venv launcher: fork");
+        return 127;
+    }
+    if (pid == 0) {
+        for (i = 0; i < N_FORWARDED; i++)
+            sigaction(FORWARDED[i], &saved[i], NULL);
+        sigprocmask(SIG_SETMASK, &unblocked, NULL);
+        /* Windows' job object ends the interpreter with its launcher; this is that. */
+        prctl(PR_SET_PDEATHSIG, SIGKILL);
+        if (getppid() != parent)
+            _exit(127);
+        argv[0] = (char *)REAL;
+        execv(REAL, argv);
+        perror("venv launcher: exec");
+        _exit(127);
+    }
+    child = pid;
+    sigprocmask(SIG_SETMASK, &unblocked, NULL);
+    /* The standard handles stay open here until the child is gone: the point of it. */
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) {
+            perror("venv launcher: wait");
+            return 127;
+        }
+    }
+    if (WIFEXITED(status))
+        return WEXITSTATUS(status);
+    if (WIFSIGNALED(status)) {
+        struct rlimit no_core = {0, 0};
+        int sig = WTERMSIG(status);
+        sigset_t only;
+        setrlimit(RLIMIT_CORE, &no_core);
+        signal(sig, SIG_DFL);
+        sigemptyset(&only);
+        sigaddset(&only, sig);
+        sigprocmask(SIG_UNBLOCK, &only, NULL);
+        raise(sig);
+        return 128 + sig;
+    }
+    return 1;
+}
+'''
+
+
+def _c_string(text) -> str:
+    """`text` as a C string literal: its file-system bytes, every byte that is not plainly
+    safe written as a three-digit octal escape (which never takes a following digit)."""
+    safe = set(b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-+")
+    return '"' + "".join(chr(b) if b in safe else "\\%03o" % b
+                         for b in os.fsencode(os.fspath(text))) + '"'
+
+
+def _venv_launcher(directory, real):
+    """Build the venv launcher for interpreter `real` in `directory`: (path, None), or
+    (None, the announcement's reason) where it cannot be built. Named `python`, because
+    code that recognises an interpreter matches the basename (vaf.core.instance)."""
+    if sys.platform == "win32":
+        return None, "real host, the venv's python.exe is the launcher"
+    if not sys.platform.startswith("linux"):
+        return None, "not available here (Linux only: it needs PR_SET_PDEATHSIG)"
+    compiler = shutil.which("cc")
+    if not compiler:
+        return None, "not available here (no C compiler)"
+    folder = Path(directory) / "venv-launcher"
+    folder.mkdir(parents=True, exist_ok=True)
+    source = folder / "launcher.c"
+    source.write_text(_LAUNCHER_SOURCE.replace("@REAL_PYTHON@", _c_string(real)),
+                      encoding="utf-8")
+    launcher = folder / "python"
+    try:
+        subprocess.run([compiler, "-O2", "-o", str(launcher), str(source)],
+                       check=True, capture_output=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return None, "not available here (the C compiler failed)"
+    return launcher, None
 
 
 _NO_DOCKER = ("npipe:////./pipe/vaf-hostile-no-docker" if os.name == "nt"
@@ -810,6 +1017,14 @@ def main() -> int:
         large_allocs = sys.platform.startswith("linux")
         if large_allocs:
             env["GLIBC_TUNABLES"] = _large_allocs_tunables(os.environ.get("GLIBC_TUNABLES"))
+        launcher, launcher_off = _venv_launcher(tmp, sys.executable)
+        python = sys.executable
+        if launcher is not None:
+            python = str(launcher)
+            env["VAF_HOSTILE_VENV_LAUNCHER"] = python
+            # For a Linux-only test that inspects its own child process (comm, pid): there
+            # the launcher is an artefact, since such a test never runs on Windows.
+            env["VAF_HOSTILE_REAL_PYTHON"] = sys.executable
 
         print("Running the suite with:")
         print(f"  narrow output   PYTHONIOENCODING=cp1252")
@@ -837,8 +1052,14 @@ def main() -> int:
         print(f"  large allocs    " + (
             "glibc mmap threshold pinned at 32 KiB (glibc only): large temporary strings cost "
             "what they cost on the macOS runner" if large_allocs else "real host, not simulated"))
+        print(f"  venv launcher   " + (
+            f"Python runs as two processes through {launcher}, which holds the standard "
+            "handles, as a Windows venv's python.exe" if launcher is not None else launcher_off))
+        print(f"  long env value  " + (
+            "a variable whose name=value exceeds 32767 UTF-16 units is refused, as on Windows"
+            if os.name != "nt" else "real host, Windows has the real limit"))
         print()
-        code = subprocess.run([sys.executable, "-m", "pytest", "-p", "vaf_hostile_refusals", *args],
+        code = subprocess.run([python, "-m", "pytest", "-p", "vaf_hostile_refusals", *args],
                               cwd=str(ROOT), env=env).returncode
         try:
             with open(refusal_log, encoding="utf-8", errors="replace") as log:

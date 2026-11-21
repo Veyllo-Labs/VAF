@@ -229,15 +229,17 @@ def test_the_share_reading_stays_linear_in_the_length(unit, monkeypatch):
     tokenizer is quadratic on one long word (the reason for the length cap, see
     command_policy), and with it the ratio was 24 on the Windows runner and 47 on the macOS
     one at the same lengths. The whole check at the cap is held to a bound on its own CPU
-    time, outside shlex.split (tests/command_cost.py): measured 0.083 to 0.17 s for the five
+    time, outside shlex.split (tests/command_cost.py): measured 0.08 to 0.17 s for the five
     units, with and without glibc's mmap threshold pinned at 32 KiB; and to at most three
     shlex reads of the text (measured 2.0 to 3.0 times its length). shlex's time is not
     judged: on the fullwidth unit it measured 1.05 s CPU normally, 7.4 to 8.6 s with that
-    threshold pinned, and 11.8 s wall on a shared runner, while the own time stayed 0.133 s.
-    MUTATION: read a colon's suffix to the end of the piece - red, also with the two
-    share-reading asserts removed (by the own time);
-    MUTATION: one more shlex.split of each segment in the tokenizer - red (by the
-    characters)."""
+    threshold pinned, and 11.8 s wall on a shared runner, while the own time stayed about
+    0.13 s.
+    MUTATION: read a colon's suffix to the end of the piece - red, and with the two
+    share-reading asserts removed still red by the own time (`:\\` and the NFKC spelling,
+    own 10.0 and 6.2 s);
+    MUTATION: one more shlex.split of each segment in the tokenizer - red by the characters
+    (`\\\\h\\s:` and `:\\`, read about three times, now 4.7 and 4.0 times)."""
     monkeypatch.setattr(command_policy, "_windows_host", lambda: True)
 
     def text(n):

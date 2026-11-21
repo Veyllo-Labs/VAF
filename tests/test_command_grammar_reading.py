@@ -2280,9 +2280,9 @@ def _filled(head, part, n):
 # and shlex's work is judged by its call count and by the characters it was handed. The two
 # texts do not read their long token through shlex equally often: the plain word twice (the
 # reading as written and the frozen one), three shapes three times: the two ansi-c rows once
-# more in the grammar reading of their decoded `$'...'` text, dot-dot targets once more as
-# the redirections after a subshell, a character ratio of 1.5. Every other shape is judged as
-# it stands, on its total CPU time.
+# more in the grammar reading of their decoded `$'...'` text (ansi-c in arithmetic up to
+# 60 K), dot-dot targets once more as the redirections after a subshell, a character ratio
+# of 1.5. Every other shape is judged as it stands, on its total CPU time.
 _COST_SHAPES = [
     ("brace, no closer", True, lambda n: "bash {" + "," * n),
     ("brace dots, no closer", True, lambda n: "bash {" + "." * n),
@@ -2335,21 +2335,21 @@ _COST_SHAPES = [
 # A one-word shape against a plain word of the same length, the own r(n) = shape(n) /
 # plain(n) on the CPU times outside shlex.split. Red when the own r passes the ceiling at
 # any size, and when the characters the shape hands to shlex.split pass this many times the
-# plain word's at any size. The green rows' own r stayed at or below 2.04 here, without a
-# tunable, with glibc's mmap threshold pinned at 32 KiB, and with that axis on two busy
-# cores; their character ratio is 1.0, or 1.5 for the three rows that read their long token
-# three times, so the character check is red at more than six long passes against the plain
-# word's two. The docstring mutations pass the own ceiling early: the backtracking brace
-# pattern at 15 K (own r about 50), printf's first word read to the word's end at 15 K (own
-# r about 10), printf's option slot without its bound at 30 K (own r about 4.2). The total r
-# is not judged: under the pinned threshold it swung from 0.10 to 1.68 at one size here and
-# reached 5.71 at 60 K alone on the ubuntu runner (glued printf), the two texts' shlex passes
-# landing in different heap modes.
+# plain word's at any size. The green rows' own r stayed at or below 2.07 here in seven
+# runs: one without a tunable, six with glibc's mmap threshold pinned at 32 KiB, three of
+# those on two cores shared with a spinning loop and a loop zeroing 64 MiB. Their character
+# ratio is 1.0, or 1.5 where a row reads its long token three times, so the character check
+# is red at more than six long passes against the plain word's two. The docstring mutations
+# pass the own ceiling early: the backtracking brace pattern at 15 K (own r about 50),
+# printf's first word read to the word's end at 15 K (own r 10.0), printf's option slot
+# without its bound at 30 K (own r 4.27). The total r is not judged: in those six runs it
+# ranged from 0.20 to 2.18 at 60 K across the rows, and on the ubuntu runner it reached 5.71
+# at 60 K alone (glued printf), the two texts' shlex passes landing in different heap modes.
 _ONE_WORD_CEILING = 3.0
 # Red when the own r at 120 K passes the own r at 15 K by this factor. The green rows' own
-# spans lay between 0.82 and 1.03 here in six runs, three of them with the mmap threshold
-# pinned; printf's option slot left unbounded reaches 4.13, and 6.9 to 7.0 with the
-# threshold pinned.
+# spans lay between 0.82 and 1.03 here in twelve runs, nine of them with the mmap threshold
+# pinned; printf's option slot left unbounded reaches 4.13 without it and 4.21 to 7.0 with
+# it.
 _ONE_WORD_SPAN = 1.4
 
 
@@ -2456,7 +2456,7 @@ def test_the_shell_readings_scale_linearly(name, one_word, build):
     plain word's two) and 1.29, 1.24, 5.71, 1.01 for glued printf (both read it the same
     number of times; at 60 K the shape's two passes landed in a slow heap mode and the plain
     word's did not), while the own times, measured here under the same axis, stayed linear.
-    The own r of every green row stayed at or below 2.04 and its own span between 0.82 and
+    The own r of every green row stayed at or below 2.07 and its own span between 0.82 and
     1.03 here, with and without that axis. Every one-word shape calls shlex.split at least
     twice, so a shape the wrapper counts no call for at any size is red: a check that bound
     the name itself (`from shlex import split`) would leave the own time equal to the total
@@ -2464,8 +2464,8 @@ def test_the_shell_readings_scale_linearly(name, one_word, build):
     Named boundary: shlex's own cost, the length-capped exception, is judged only by its
     call count and its character count; its time is never judged. A constant number of
     extra shlex passes is a constant factor, which the character ceiling judges.
-    MUTATION: the brace test as a backtracking pattern - red (the brace rows, by the ceiling
-    on the own r);
+    MUTATION: the brace test as a backtracking pattern - red (the one-word brace rows by the
+    ceiling on the own r, brace words before a name by its doubling);
     MUTATION: read printf's first word from each match to the word's end - red (glued printf,
     by the ceiling on the own r);
     MUTATION: read the text for HOME at every tilde script - red (tilde paths after -c);

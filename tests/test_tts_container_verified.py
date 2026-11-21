@@ -257,8 +257,9 @@ def test_a_failed_swap_puts_the_installed_voice_back(container, monkeypatch):
     stub = _failing_renames(monkeypatch, (".de.incoming", "de"))
     calls = []
     _network(monkeypatch, container, {"onnx": MODEL, "onnx.json": CONFIG}, calls)
-    assert container.download_model("de") is False
+    installed = container.download_model("de")
     assert (".de.incoming", "de") in stub.refused, ("the swap was never refused", stub.refused)
+    assert installed is False
     assert (d / "de.onnx").read_bytes() == b"installed model"
     assert (d / "de.onnx.json").read_bytes() == b"installed config"
     assert sorted(p.name for p in container.MODELS_DIR.iterdir()) == ["de"]
@@ -276,9 +277,10 @@ def test_a_failed_rename_back_keeps_the_old_voice_aside_and_the_next_install_res
     stub = _failing_renames(monkeypatch, (".de.incoming", "de"), (".de.previous", "de"))
     calls = []
     _network(monkeypatch, container, {"onnx": MODEL, "onnx.json": CONFIG}, calls)
-    assert container.download_model("de") is False
+    installed = container.download_model("de")
     for pair in ((".de.incoming", "de"), (".de.previous", "de")):
         assert pair in stub.refused, ("a stubbed rename was never refused", pair, stub.refused)
+    assert installed is False
     status = container.download_progress["de"]
     assert "or the old one restored; install it again" in status["error"], status
     assert len(status["error"]) <= 115, status["error"]

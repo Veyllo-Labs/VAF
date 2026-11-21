@@ -263,11 +263,14 @@ def test_claim_fuzz(ipc, mode):
 
 
 def _unreadable_files_then_a_good_one(ipc):
-    """Two files that are not a request, named to sort before any real `time_ns()` reading, and
-    a good one after them. Fixed names, not two clock readings: on Windows before Python 3.13
-    `time.time_ns()` ticks every 15.625 ms, so three readings in a row are usually equal."""
+    """Files that are not a request (not JSON, not an object, not UTF-8, nested deeper than the
+    parser goes), named to sort before any real `time_ns()` reading, and a good one after them.
+    Fixed names, not clock readings: on Windows before Python 3.13 `time.time_ns()` ticks every
+    15.625 ms, so readings in a row are usually equal."""
     (ipc / "0000000000000000001_bad.json").write_text("{not json", encoding="utf-8")
     (ipc / "0000000000000000002_list.json").write_text(json.dumps([1, 2]), encoding="utf-8")
+    (ipc / "0000000000000000003_bytes.json").write_bytes(b'{"req_id": "\xff\xfe"}')
+    (ipc / "0000000000000000004_deep.json").write_bytes(b"[" * 100_000)
     _write_request("good")
     item = wa._dequeue_external_send_request()
     assert item is not None and item[4] == "good"
@@ -275,8 +278,10 @@ def _unreadable_files_then_a_good_one(ipc):
 
 
 def test_an_unreadable_request_file_leaves_nothing_behind(ipc):
-    """A file that is not JSON, or not an object, is removed with its marker and the next file
-    is served. MUTATION: skip such a file without unlinking it (it stays behind)."""
+    """A file that is not JSON, not an object, not UTF-8 or nested past the parser's depth is
+    removed with its marker and the next file is served. MUTATION: skip such a file without
+    unlinking it; catch only `ValueError` around the parse (the deep file and its marker stay);
+    decode inside the read's `OSError` branch (the non-UTF-8 file and its marker stay)."""
     _unreadable_files_then_a_good_one(ipc)
 
 

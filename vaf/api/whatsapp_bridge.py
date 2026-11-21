@@ -473,13 +473,15 @@ def _dequeue_external_send_request(stop: Optional[threading.Event] = None) -> Op
                 _drop_claim(marker)
                 return None
             try:
-                raw = found.read_text(encoding="utf-8")
+                raw = found.read_bytes()
             except OSError:
                 _drop_claim(marker)
                 continue
             try:
-                data = json.loads(raw)
-            except ValueError:
+                data = json.loads(raw.decode("utf-8"))
+            except (ValueError, RecursionError):
+                # Not UTF-8 (UnicodeDecodeError is a ValueError), not JSON, or nested past the
+                # parser's depth: invalid content, removed like any other below.
                 data = None
             try:
                 found.unlink()

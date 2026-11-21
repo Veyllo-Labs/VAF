@@ -1387,9 +1387,10 @@ def test_isolation_problem_sees_one_directory_through_a_link(tmp_path):
     site-packages (what sysconfig fills in from sys.base_prefix) links to the prefix's, which
     is the spelling sys.path carries, and setup-python's macOS Python has no such link, so CI
     never saw it. A link and its target are one directory in both directions, for the base
-    site, the user site and the prefix; the refusal names the base site as written; a clean
-    venv passes. MUTATION: no realpath in _spellings; resolve only the sys.path side; resolve
-    only the base side - red."""
+    site, the user site and the prefix; the refusal names the base site as written; a match of
+    the written spellings still counts; a clean venv passes. MUTATION: no realpath in
+    _spellings; resolve only the sys.path side; resolve only the base side; drop the written
+    spelling from _spellings - red."""
     problem = _ci_venv().isolation_problem
     target = tmp_path / "homebrew" / "lib" / "python3.14" / "site-packages"
     target.mkdir(parents=True)
@@ -1416,6 +1417,13 @@ def test_isolation_problem_sees_one_directory_through_a_link(tmp_path):
     linked_prefix = tmp_path / "prefix-link"
     _symlink_dir(linked_prefix, base)
     assert "not a venv" in (problem(str(linked_prefix), base, [target], [link], None) or "")
+    # A match of the written spellings is never lost: realpath resolves 'hop' before it
+    # collapses the '..', so the resolved spellings differ while the written ones agree.
+    (tmp_path / "elsewhere" / "inner").mkdir(parents=True)
+    _symlink_dir(tmp_path / "hop", tmp_path / "elsewhere" / "inner")
+    written = os.path.join(str(tmp_path / "hop"), "..", "sp")
+    reason = problem(venv_dir, base, [venv_site, str(tmp_path / "sp")], [written], None)
+    assert reason and "system site packages" in reason, reason
     # A clean venv: neither spelling of the base or the user site is on its path.
     assert problem(venv_dir, base, [venv_site], [link], link) is None
     assert problem(venv_dir, base, [venv_site], [target], target) is None

@@ -42,19 +42,37 @@ def _norm(path: str) -> str:
     return os.path.normcase(os.path.normpath(os.path.abspath(path)))
 
 
+def _spellings(path: str) -> set:
+    """The written and the link-resolved spelling of a directory; two paths name one directory
+    when their sets share a member. A link and its target are one directory: Homebrew's
+    framework site-packages (what sysconfig fills in from sys.base_prefix) is a symlink to the
+    prefix's site-packages, the spelling a --system-site-packages venv carries on sys.path.
+    The written form stays in the set because realpath resolves a link before it collapses a
+    '..' segment, so a resolved form alone could lose a match the written one makes."""
+    spellings = {_norm(path)}
+    try:
+        spellings.add(_norm(os.path.realpath(path)))
+    except (OSError, ValueError):
+        pass
+    return spellings
+
+
 def isolation_problem(prefix: str, base_prefix: str, sys_path, base_site_dirs, user_site_dir) -> str | None:
     """None when an interpreter with these values sees only its own site-packages, else one
     sentence saying why it does not. ``user_site_dir`` is the user site directory whether or
     not site.py enabled it: a PYTHONPATH entry can put it on sys.path all the same."""
-    if _norm(prefix) == _norm(base_prefix):
+    if _spellings(prefix) & _spellings(base_prefix):
         return (f"The interpreter at {prefix} is not a venv: its own site-packages count, and a "
                 f"CI runner's Python ships packages the lock does not name.")
-    on_path = {_norm(p) for p in sys_path if p}
+    on_path = set()
+    for entry in sys_path:
+        if entry:
+            on_path |= _spellings(entry)
     for base_site in base_site_dirs:
-        if base_site and _norm(base_site) in on_path:
+        if base_site and _spellings(base_site) & on_path:
             return (f"The base interpreter's {base_site} is on sys.path: the venv was created "
                     f"with the system site packages.")
-    if user_site_dir and _norm(user_site_dir) in on_path:
+    if user_site_dir and _spellings(user_site_dir) & on_path:
         return f"The user site {user_site_dir} is on sys.path: packages installed with --user count."
     return None
 

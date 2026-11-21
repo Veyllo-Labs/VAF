@@ -1373,6 +1373,131 @@ def test_isolation_problem_names_each_leak():
     assert problem(venv_dir, base, stdlib + [venv_site], [base_site], None) is None
 
 
+def _symlink_dir(link: Path, target) -> None:
+    """A directory symlink, or a skip where the platform refuses one (Windows without the
+    symlink privilege)."""
+    try:
+        os.symlink(target, link, target_is_directory=True)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"cannot create a directory symlink here: {exc}")
+
+
+def test_isolation_problem_sees_one_directory_through_a_link(tmp_path):
+    """Pins the class "a path compared without resolving links": Homebrew's framework
+    site-packages (what sysconfig fills in from sys.base_prefix) links to the prefix's, which
+    is the spelling sys.path carries, and setup-python's macOS Python has no such link, so CI
+    never saw it. A link and its target are one directory in both directions, for the base
+    site, the user site and the prefix; the refusal names the base site as written; a clean
+    venv passes. MUTATION: no realpath in _spellings; resolve only the sys.path side; resolve
+    only the base side - red."""
+    problem = _ci_venv().isolation_problem
+    target = tmp_path / "homebrew" / "lib" / "python3.14" / "site-packages"
+    target.mkdir(parents=True)
+    framework = tmp_path / "Python.framework" / "Versions" / "3.14"
+    (framework / "lib" / "python3.14").mkdir(parents=True)
+    link = framework / "lib" / "python3.14" / "site-packages"
+    _symlink_dir(link, target)
+    venv_dir = tmp_path / "ci-venv"
+    venv_site = venv_dir / "lib" / "python3.14" / "site-packages"
+    venv_site.mkdir(parents=True)
+    base, link, target, venv_dir, venv_site = map(str, (framework, link, target, venv_dir, venv_site))
+
+    # Homebrew's shape: the base spelt through the link, sys.path holding the target.
+    reason = problem(venv_dir, base, [venv_site, target], [link], None)
+    assert reason and "system site packages" in reason and link in reason, reason
+    # The reverse direction.
+    reason = problem(venv_dir, base, [venv_site, link], [target], None)
+    assert reason and "system site packages" in reason and target in reason, reason
+    # The user site reached through a link, both directions.
+    for user_site, entry in ((link, target), (target, link)):
+        reason = problem(venv_dir, base, [venv_site, entry], [], user_site)
+        assert reason and "user site" in reason, (user_site, entry, reason)
+    # A prefix that is a link to the base prefix is the base interpreter itself.
+    linked_prefix = tmp_path / "prefix-link"
+    _symlink_dir(linked_prefix, base)
+    assert "not a venv" in (problem(str(linked_prefix), base, [target], [link], None) or "")
+    # A clean venv: neither spelling of the base or the user site is on its path.
+    assert problem(venv_dir, base, [venv_site], [link], link) is None
+    assert problem(venv_dir, base, [venv_site], [target], target) is None
+
+
+def test_ci_venv_check_refuses_a_base_site_reached_through_a_link(tmp_path):
+    """End to end: a clean venv whose sys.path holds the base interpreter's site-packages
+    under a second spelling, a symlink to it, fails --check and names the base directory as
+    sysconfig spells it; the same venv without that entry passes. Pins the class "a path
+    compared without resolving links" (Homebrew's framework site-packages links to the
+    prefix's; setup-python's macOS Python has no such link, so CI never saw it). Linux cannot
+    rebuild Homebrew's site setup, so PYTHONPATH carries the second spelling. MUTATION: no
+    realpath in _spellings - red."""
+    import venv
+
+    paths = sysconfig.get_paths(vars={"base": sys.base_prefix, "platbase": sys.base_exec_prefix})
+    base_sites = sorted({paths[k] for k in ("purelib", "platlib") if os.path.isdir(paths[k])})
+    if not base_sites:
+        pytest.skip("the base interpreter has no site-packages directory to leak")
+    alias = tmp_path / "alias"
+    _symlink_dir(alias, base_sites[0])
+    clean = tmp_path / "clean"
+    venv.create(clean, with_pip=False, symlinks=os.name != "nt")
+    check = [str(_venv_python(clean)), str(ROOT / "scripts" / "ci_venv.py"), "--check"]
+    proc = subprocess.run(check, capture_output=True, text=True, cwd=tmp_path,
+                          env=_bare_env(PYTHONPATH=str(alias)), timeout=60)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "system site packages" in proc.stdout
+    assert os.path.normcase(base_sites[0]) in os.path.normcase(proc.stdout), (base_sites, proc.stdout)
+    proc = subprocess.run(check, capture_output=True, text=True, cwd=tmp_path, env=_bare_env(), timeout=60)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_isolation_matches_samefile_fuzz(tmp_path):
+    """Seeded fuzz over the base-site comparison: per draw a fresh tree of real directories and
+    symlinks (absolute or relative, some to other links), one name as the base site, up to
+    three sys.path entries spelt plainly, with a trailing separator or with a 'zz/..' segment.
+    Oracle, independent of realpath: refused iff an entry is os.path.samefile with the base.
+    Pins the class "a path compared without resolving links" (Homebrew's framework
+    site-packages links to the prefix's; setup-python's macOS Python has no such link).
+    `VAF_FUZZ_DRAWS` raises the draw count outside the suite. MUTATION: no realpath in
+    _spellings; resolve only one side - red."""
+    problem = _ci_venv().isolation_problem
+    rng = random.Random(500)
+    draws = int(os.environ.get("VAF_FUZZ_DRAWS", "200"))
+    mismatches = []
+    for draw in range(draws):
+        root = tmp_path / f"d{draw}"
+        root.mkdir()
+        names = []
+        for k in range(rng.randint(1, 4)):
+            real = root.joinpath(f"r{k}", *(f"s{j}" for j in range(rng.randint(0, 2))))
+            real.mkdir(parents=True)
+            names.append(str(real))
+        for k in range(rng.randint(0, 4)):
+            link = root.joinpath(*(f"l{k}" if j == 0 else f"m{j}" for j in range(rng.randint(1, 2))))
+            link.parent.mkdir(parents=True, exist_ok=True)
+            target = rng.choice(names)
+            if rng.random() < 0.5:
+                target = os.path.relpath(target, link.parent)
+            _symlink_dir(link, target)
+            names.append(str(link))
+        base_site = rng.choice(names)
+        entries = []
+        for _ in range(rng.randint(0, 3)):
+            name = rng.choice(names)
+            style = rng.randrange(3)
+            if style == 1:
+                name += os.sep
+            elif style == 2:
+                head, tail = os.path.split(name)
+                name = (os.path.join(name, "zz", "..") if rng.random() < 0.5
+                        else os.path.join(head, "zz", "..", tail))
+            entries.append(name)
+        want = any(os.path.samefile(os.path.normpath(e), base_site) for e in entries)
+        reason = problem(str(root / "venv"), str(root / "base-prefix"), entries, [base_site], None)
+        got = bool(reason and "system site packages" in reason)
+        if got != want or (reason and not got):
+            mismatches.append((draw, base_site, entries, want, reason))
+    assert not mismatches, mismatches[:5]
+
+
 def test_every_drift_lane_runs_in_a_fresh_venv():
     """Every job that runs `check_requirements_lock.py --drift` first makes a fresh venv with
     scripts/ci_venv.py (bash, so $RUNNER_TEMP expands on Windows), before any step that

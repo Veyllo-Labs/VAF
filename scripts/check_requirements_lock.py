@@ -30,8 +30,8 @@ whose markers apply, and reports
 ``--drift [--report]`` (offline) compares the distributions installed in the running
 interpreter with the entries whose markers apply to it and prints package / locked / installed
 for every difference: a wrong version, a locked package that is missing, an installed package
-the lock does not name (pip, the project itself and the build tools the interpreter ships are
-not counted unless the lock names them). It also refuses an interpreter that is not an isolated
+the lock does not name (pip, the project itself and the setuptools a 3.10 or 3.11 venv brings
+are not counted unless the lock names them). It also refuses an interpreter that is not an isolated
 venv (scripts/ci_venv.py says why: a CI runner's own Python ships packages the lock does not
 name), so every lane installs the lock into a fresh venv first. Exit 1 on a difference or a
 refusal; with ``--report`` it prints a Markdown table for a CI step summary and exits 0.
@@ -86,11 +86,12 @@ WORKFLOWS = (ROOT / ".github" / "workflows" / "ci.yml", ROOT / ".github" / "work
 # The distribution this repository builds (pyproject.toml [project].name); CI installs it
 # editable with --no-deps, so it is never in the lock.
 PROJECT = "vaf"
-# Installed but unlocked, and still no drift: pip comes by hash from .github/requirements/
-# pip.lock, and an interpreter can ship setuptools and wheel (a 3.10 or 3.11 venv brings
-# setuptools). When the lock names one of them, it is compared. Nothing else belongs here:
-# --drift runs only in a fresh venv, which sees none of the packages a runner's Python ships.
-_UNLOCKED_TOOLS = frozenset({"pip", "setuptools", "wheel", PROJECT})
+# Installed but unlocked, and still no drift: pip comes with every venv (and then by hash from
+# .github/requirements/pip.lock), and a 3.10 or 3.11 venv brings setuptools. When the lock
+# names one of them, it is compared. Nothing else belongs here: --drift runs only in a fresh
+# venv, which sees none of the packages a runner's Python ships, and ensurepip brings no
+# wheel, so a wheel that turns up was installed past the lock.
+_UNLOCKED_TOOLS = frozenset({"pip", "setuptools", PROJECT})
 
 # A comment starts at a '#' that begins the line or follows whitespace, as pip reads it.
 _COMMENT = re.compile(r"(^|\s+)#.*$")
@@ -703,8 +704,9 @@ def _drift_main(lock: Path, report: bool) -> int:
         print(f"{name}: locked {locked}, installed {have}")
     print(f"{len(rows)} difference(s) between requirements.lock and {where}.")
     if any(locked == "-" for _name, locked, _have in rows):
-        print("A package marked 'locked -' is installed in this venv but not in the lock: a "
-              "dependency, or a step outside scripts/install_lock.sh, installed it past the lock.")
+        print("A package marked 'locked -' is installed in this interpreter but not in the "
+              "lock: a dependency, or a step outside scripts/install_lock.sh, installed it past "
+              "the lock.")
     if problem:
         print(f"{problem} {_USE_A_VENV}")
     return 1 if rows or problem else 0

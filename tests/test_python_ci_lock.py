@@ -23,8 +23,10 @@ import random
 import re
 import shlex
 import shutil
+import site
 import subprocess
 import sys
+import sysconfig
 import time
 import urllib.error
 from pathlib import Path
@@ -1072,8 +1074,9 @@ def test_the_windows_runner_case_is_drift_not_an_allowlist(tmp_path, monkeypatch
     setup-python serves. Installed into that interpreter, the lock sits beside them: three
     'locked -' rows. They are real drift, and the cure is a fresh venv, not a longer
     allowlist: the message no longer sends anyone to _UNLOCKED_TOOLS, and the set stays the
-    tools every venv brings. MUTATION: add pipx to _UNLOCKED_TOOLS; restore the old advice
-    that names _UNLOCKED_TOOLS - red."""
+    tools an ensurepip venv brings (no wheel: ensurepip never installs it and the lock pins
+    none, so one that turns up came past the lock). MUTATION: add pipx or wheel to
+    _UNLOCKED_TOOLS; restore the old advice that names _UNLOCKED_TOOLS - red."""
     check = _checker()
     lock_lines = ("packaging==26.2", "filelock==3.29.0")
     installed = {"packaging": "26.2", "filelock": "3.29.0", "pip": "26.1.2", "vaf": "0.1.0",
@@ -1087,9 +1090,11 @@ def test_the_windows_runner_case_is_drift_not_an_allowlist(tmp_path, monkeypatch
     assert check.main(["--drift", str(lock)]) == 1
     out = capsys.readouterr().out
     assert "pipx: locked -, installed 1.18.16" in out
-    assert "installed in this venv but not in the lock" in out
+    assert "installed in this interpreter but not in the lock" in out
     assert "_UNLOCKED_TOOLS" not in out
-    assert check._UNLOCKED_TOOLS == frozenset({"pip", "setuptools", "wheel", "vaf"})
+    assert check._UNLOCKED_TOOLS == frozenset({"pip", "setuptools", "vaf"})
+    assert ("wheel", "-", "0.45.1") in check.drift(_entries(*lock_lines), {**installed, "wheel": "0.45.1"},
+                                                    _env("3.12", "win32"))
 
 
 def test_drift_refuses_an_interpreter_that_is_not_a_venv(tmp_path, monkeypatch, capsys):
@@ -1112,6 +1117,22 @@ def test_drift_refuses_an_interpreter_that_is_not_a_venv(tmp_path, monkeypatch, 
     monkeypatch.setattr(check, "_interpreter_isolation", lambda: None)
     assert check.main(["--drift", str(lock)]) == 0
     assert "ci_venv" not in capsys.readouterr().out
+
+
+def test_the_real_refusal_sees_an_interpreter_that_is_not_a_venv(tmp_path, monkeypatch, capsys):
+    """The refusal unstubbed: with the running interpreter shaped like the runner's (its prefix
+    is its base prefix), check_requirements_lock's own isolation check returns a reason and
+    --drift fails although every version matches. MUTATION: _interpreter_isolation returns
+    None - red."""
+    check = _checker()
+    monkeypatch.setattr(sys, "prefix", sys.base_prefix)
+    reason = check._interpreter_isolation()
+    assert reason and "not a venv" in reason
+    lock = tmp_path / "requirements.lock"
+    lock.write_text(_lock("pyotp==2.9.0"), encoding="utf-8")
+    monkeypatch.setattr(check, "installed_distributions", lambda: {"pyotp": "2.9.0"})
+    assert check.main(["--drift", str(lock)]) == 1
+    assert "not a venv" in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1159,7 +1180,7 @@ def test_ci_venv_hides_the_base_interpreters_packages(tmp_path):
     holds pip and none of A's packages; B's scripts directory is the one line written to
     GITHUB_PATH, it holds B's python, and B passes --check. MUTATION: system_site_packages=True;
     write the GITHUB_PATH line twice or not at all; print the venv root instead of its
-    scripts directory - red."""
+    scripts directory; ask for the user site only when site.py enabled it - red."""
     import venv
 
     base = tmp_path / "base"
@@ -1188,6 +1209,77 @@ def test_ci_venv_hides_the_base_interpreters_packages(tmp_path):
     check = subprocess.run([str(_venv_python(fresh)), str(ROOT / "scripts" / "ci_venv.py"), "--check"],
                            capture_output=True, text=True, cwd=tmp_path, env=_bare_env(), timeout=60)
     assert check.returncode == 0, check.stdout + check.stderr
+    # site.py leaves the user site out of this venv, but a PYTHONPATH entry puts it back on
+    # sys.path; PYTHONUSERBASE places it in tmp_path on every platform.
+    user_base = str(tmp_path / "userbase")
+    user_site = subprocess.run([str(_venv_python(fresh)), "-c", "import site; print(site.getusersitepackages())"],
+                               capture_output=True, text=True, cwd=tmp_path, timeout=60, check=True,
+                               env=_bare_env(PYTHONUSERBASE=user_base)).stdout.strip()
+    assert user_site.startswith(user_base), user_site
+    check = subprocess.run([str(_venv_python(fresh)), str(ROOT / "scripts" / "ci_venv.py"), "--check"],
+                           capture_output=True, text=True, cwd=tmp_path, timeout=60,
+                           env=_bare_env(PYTHONUSERBASE=user_base, PYTHONPATH=user_site))
+    assert check.returncode == 1 and "user site" in check.stdout, check.stdout + check.stderr
+
+
+def test_ci_venv_check_refuses_a_venv_with_the_system_site_packages(tmp_path):
+    """The leak the drift lanes must never run in: a venv that sees the base interpreter's
+    site-packages. --check in it exits 1 and names the base directory it sees. MUTATION:
+    _base_site_dirs returns [] - red."""
+    import venv
+
+    paths = sysconfig.get_paths(vars={"base": sys.base_prefix, "platbase": sys.base_exec_prefix})
+    if not any(os.path.isdir(paths[k]) for k in ("purelib", "platlib")):
+        pytest.skip("the base interpreter has no site-packages directory to leak")
+    leaky = tmp_path / "leaky"
+    venv.create(leaky, system_site_packages=True, with_pip=False, symlinks=os.name != "nt")
+    base_prefix = subprocess.run([str(_venv_python(leaky)), "-c", "import sys; print(sys.base_prefix)"],
+                                 capture_output=True, text=True, cwd=tmp_path, env=_bare_env(), timeout=60,
+                                 check=True).stdout.strip()
+    proc = subprocess.run([str(_venv_python(leaky)), str(ROOT / "scripts" / "ci_venv.py"), "--check"],
+                          capture_output=True, text=True, cwd=tmp_path, env=_bare_env(), timeout=60)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "system site packages" in proc.stdout
+    assert os.path.normcase(base_prefix) in os.path.normcase(proc.stdout), (base_prefix, proc.stdout)
+
+
+def test_base_site_dirs_follow_the_windows_layout():
+    """The base directories come from the install scheme filled in with the base prefixes, so
+    the windows-latest layout (site-packages under Lib) is computed here too, and the running
+    interpreter's are site-packages directories. MUTATION: _base_site_dirs returns [];
+    fills the scheme with the venv's own prefix - red."""
+    import ntpath
+
+    ci_venv = _ci_venv()
+    base = "C:\\hostedtoolcache\\windows\\Python\\3.12.10\\x64"
+    want = {ntpath.normcase(ntpath.join(base, "Lib", "site-packages"))}
+    schemes = [s for s in ("nt", "nt_venv") if s in sysconfig.get_scheme_names()]
+    assert schemes
+    for scheme in schemes:
+        got = {ntpath.normcase(ntpath.normpath(d)) for d in ci_venv._base_site_dirs(scheme, base=base)}
+        assert got == want, (scheme, got)
+    here = ci_venv._base_site_dirs()
+    assert here and all(os.path.basename(d) in ("site-packages", "dist-packages") for d in here), here
+    assert all(os.path.normcase(d).startswith(os.path.normcase(sys.base_prefix))
+               or os.path.normcase(d).startswith(os.path.normcase(sys.base_exec_prefix)) for d in here), here
+
+
+def test_isolation_sees_the_user_site_even_when_site_left_it_out(tmp_path, monkeypatch):
+    """ENABLE_USER_SITE is False in every clean venv, which only stops site.py from adding the
+    user site itself; on sys.path through PYTHONPATH it still counts. MUTATION: ask for the
+    user site only when ENABLE_USER_SITE is set; pass None for it - red."""
+    ci_venv = _ci_venv()
+    user_site = str(tmp_path / "user-site")
+    own_site = str(tmp_path / "venv" / "site-packages")
+    monkeypatch.setattr(sys, "prefix", str(tmp_path / "venv"))
+    monkeypatch.setattr(site, "ENABLE_USER_SITE", False)
+    monkeypatch.setattr(site, "getusersitepackages", lambda: user_site)
+    monkeypatch.setattr(sys, "path", [own_site, user_site])
+    reason = ci_venv.current_isolation_problem()
+    monkeypatch.setattr(sys, "path", [own_site])
+    clean = ci_venv.current_isolation_problem()
+    assert reason and "user site" in reason, reason
+    assert clean is None, clean
 
 
 def test_ci_venv_writes_github_path_only_when_set(tmp_path, monkeypatch, capsys):

@@ -44,8 +44,8 @@ def _norm(path: str) -> str:
 
 def isolation_problem(prefix: str, base_prefix: str, sys_path, base_site_dirs, user_site_dir) -> str | None:
     """None when an interpreter with these values sees only its own site-packages, else one
-    sentence saying why it does not. ``user_site_dir`` is None when the user site is disabled
-    (it always is in a venv without the system site packages)."""
+    sentence saying why it does not. ``user_site_dir`` is the user site directory whether or
+    not site.py enabled it: a PYTHONPATH entry can put it on sys.path all the same."""
     if _norm(prefix) == _norm(base_prefix):
         return (f"The interpreter at {prefix} is not a venv: its own site-packages count, and a "
                 f"CI runner's Python ships packages the lock does not name.")
@@ -59,17 +59,22 @@ def isolation_problem(prefix: str, base_prefix: str, sys_path, base_site_dirs, u
     return None
 
 
-def _base_site_dirs() -> list:
-    """The purelib and platlib directories of the interpreter this one was made from. Taken from
-    sysconfig, not site.getsitepackages(): on Windows the latter also lists the bare base
-    prefix, which every venv there has on sys.path for the standard library."""
-    paths = sysconfig.get_paths(vars={"base": sys.base_prefix, "platbase": sys.base_exec_prefix})
+def _base_site_dirs(scheme: str | None = None, base: str | None = None, platbase: str | None = None) -> list:
+    """The purelib and platlib directories of the interpreter this one was made from: the
+    install scheme's layout filled in with the base prefixes. Taken from sysconfig, because
+    site.getsitepackages() run inside a venv answers with the venv's own directories, never
+    the base interpreter's. ``scheme`` and the prefixes default to the running interpreter's
+    and are parameters so another platform's layout can be computed anywhere."""
+    paths = sysconfig.get_paths(scheme or sysconfig.get_default_scheme(), vars={
+        "base": base or sys.base_prefix, "platbase": platbase or base or sys.base_exec_prefix})
     return sorted({paths["purelib"], paths["platlib"]})
 
 
 def current_isolation_problem() -> str | None:
     """isolation_problem() for the running interpreter."""
-    user_site = site.getusersitepackages() if site.ENABLE_USER_SITE else None
+    # Asked for even when site.py left the user site out (ENABLE_USER_SITE is False in every
+    # venv without the system site packages): only automatic insertion is switched off then.
+    user_site = site.getusersitepackages()
     return isolation_problem(sys.prefix, sys.base_prefix, sys.path, _base_site_dirs(), user_site)
 
 

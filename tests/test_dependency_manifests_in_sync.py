@@ -123,12 +123,23 @@ def _pyproject_names() -> set:
     return names
 
 
-def _package_json_names(rel: str) -> set:
+def _package_json_ranges(rel: str) -> dict:
+    """Package name -> version range as written, over every dependency field."""
     data = json.loads((ROOT / rel).read_text(encoding="utf-8-sig"))
-    names = set()
+    ranges = {}
     for field in ("dependencies", "devDependencies", "optionalDependencies"):
-        names.update(_norm(k) for k in data.get(field, {}))
-    return names
+        ranges.update({_norm(k): v for k, v in data.get(field, {}).items()})
+    return ranges
+
+
+def _package_json_names(rel: str) -> set:
+    return set(_package_json_ranges(rel))
+
+
+def _web_lock_packages() -> dict:
+    """The ``packages`` map of web/package-lock.json: install path -> entry."""
+    data = json.loads((ROOT / "web/package-lock.json").read_text(encoding="utf-8"))
+    return data["packages"]
 
 
 def _bootstrap_dependency_map_keys() -> list:
@@ -145,22 +156,36 @@ def _bootstrap_dependency_map_keys() -> list:
     raise AssertionError("bootstrap() DEPENDENCIES map not found in vaf/main.py")
 
 
-def _third_party_rows() -> dict:
-    """Section title -> package names of the table rows under it."""
+def _third_party_table() -> dict:
+    """Section title -> {package name: Range cell} of the table rows under it."""
     sections: dict = {}
     current = None
     for line in (ROOT / "docs/legal/THIRD_PARTY.md").read_text(encoding="utf-8").splitlines():
         if line.startswith("## "):
             current = line[3:].strip()
-            sections.setdefault(current, set())
+            sections.setdefault(current, {})
             continue
         if current is None or not line.startswith("|"):
             continue
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
         if len(cells) < 3 or cells[0] == "Package" or set(cells[0]) <= set("-: "):
             continue
-        sections[current].add(_norm(cells[0]))
+        sections[current][_norm(cells[0])] = cells[1]
     return sections
+
+
+def _third_party_rows() -> dict:
+    """Section title -> package names of the table rows under it."""
+    return {title: set(rows) for title, rows in _third_party_table().items()}
+
+
+def _ranges_for(prefix: str) -> dict:
+    """Package name -> Range cell of the rows under every section starting with `prefix`."""
+    ranges = {}
+    for title, rows in _third_party_table().items():
+        if title.startswith(prefix):
+            ranges.update(rows)
+    return ranges
 
 
 def _rows_for(prefix: str) -> set:
@@ -280,6 +305,20 @@ def test_third_party_inventory_matches_web_manifest():
     )
 
 
+def test_third_party_ranges_match_the_web_manifest():
+    """The Range column restates web/package.json and every dependency bump edits both by
+    hand. MUTATION: the THIRD_PARTY.md `next` row back to ^16.4.2 - red."""
+    manifest = _package_json_ranges("web/package.json")
+    rows = _ranges_for("Web UI")
+    assert rows, "no web rows found: the parser no longer reads docs/legal/THIRD_PARTY.md"
+    drift = {n: (rows[n], manifest[n]) for n in sorted(rows.keys() & manifest.keys())
+             if rows[n] != manifest[n]}
+    assert not drift, (
+        "docs/legal/THIRD_PARTY.md states another range than web/package.json "
+        f"(row, manifest): {drift}"
+    )
+
+
 def test_third_party_inventory_matches_whatsapp_bridge_manifest():
     deps = _package_json_names("vaf/whatsapp_node/package.json")
     rows = _rows_for("WhatsApp bridge")
@@ -287,6 +326,56 @@ def test_third_party_inventory_matches_whatsapp_bridge_manifest():
         "docs/legal/THIRD_PARTY.md and vaf/whatsapp_node/package.json disagree: "
         f"stale rows {sorted(rows - deps)}, missing rows {sorted(deps - rows)}"
     )
+    ranges = _ranges_for("WhatsApp bridge")
+    manifest = _package_json_ranges("vaf/whatsapp_node/package.json")
+    assert ranges == manifest, (
+        "docs/legal/THIRD_PARTY.md states another range than vaf/whatsapp_node/package.json: "
+        f"rows {ranges}, manifest {manifest}"
+    )
+
+
+def _npm_version(version: str) -> tuple:
+    m = re.match(r"(\d+)\.(\d+)\.(\d+)", version)
+    assert m, f"not a version: {version!r}"
+    return tuple(int(part) for part in m.groups())
+
+
+def test_next_companions_follow_next():
+    """eslint-config-next and the @next/* packages are released together with next, and
+    the SWC binaries and @next/env are loaded by the next that sits beside them. A bump of
+    next alone left eslint-config-next and @next/eslint-plugin-next a patch behind, unseen
+    by any check. MUTATION: the lock's eslint-config-next entry back to 16.4.0, or its
+    package.json range back to ^16.3.8 - red."""
+    packages = _web_lock_packages()
+    expected = packages["node_modules/next"]["version"]
+    companions = {
+        path: entry["version"] for path, entry in packages.items()
+        if path == "node_modules/eslint-config-next"
+        or (path.startswith("node_modules/@next/") and path.count("node_modules/") == 1)
+    }
+    # @next/env, @next/eslint-plugin-next, eight @next/swc-* and eslint-config-next.
+    assert len(companions) >= 11, f"companions not found in the lock: {sorted(companions)}"
+    drift = {path: v for path, v in companions.items() if v != expected}
+    assert not drift, f"web/package-lock.json holds next {expected} beside: {drift}"
+    ranges = _package_json_ranges("web/package.json")
+    assert ranges["eslint-config-next"] == ranges["next"], (
+        "web/package.json: eslint-config-next must carry the range of next, "
+        f"{ranges['eslint-config-next']} != {ranges['next']}"
+    )
+
+
+def test_next_is_at_or_past_the_november_advisory_floor():
+    """Next.js 16.4.5 fixes GHSA-7qx7-33qx-rqx2, GHSA-f3mh-rxg3-f5g2, GHSA-pc58-hwjq-p385,
+    GHSA-rhh4-g77r-r9qj, GHSA-vvgp-ww4w-46vf, GHSA-vc7v-qv4w-wrv8 and GHSA-mfr8-8qww-v76h.
+    Both the lock and the range a fresh resolve starts from must stay at or above it.
+    MUTATION: the lock's next back to 16.4.2, or the package.json range back to ^16.4.2 -
+    red."""
+    floor = (16, 4, 5)
+    locked = _web_lock_packages()["node_modules/next"]["version"]
+    assert _npm_version(locked) >= floor, f"web/package-lock.json locks next {locked}"
+    declared = _package_json_ranges("web/package.json")["next"]
+    assert _npm_version(declared.lstrip("^~=")) >= floor, (
+        f"web/package.json declares next {declared}")
 
 
 def _upper_bounds(spec: str) -> frozenset:

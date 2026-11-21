@@ -277,8 +277,11 @@ never fires on Windows: the code under test renames Path objects, whose str() en
 there. The speech container's swap tests then took the happy path and reported `True is False`.
 Match by `os.path.basename(...)`, `Path(p).name` or `Path(p).parts`, or compare with str() of a
 Path. The scan reads stubs handed to `setattr` on `os`, `os.path`, `shutil`, `Path` or `pathlib`
-as a nested function or a lambda; it does not follow a stub defined elsewhere and passed in, or
-a module patched through `importlib`.
+as a nested function or a lambda; it does not follow a stub defined elsewhere and passed in, a
+module patched through `importlib`, or a str() held in a name first (`t = str(d)`, then
+`t.endswith("/de")`). Deliberately, a needle held in a name (`str(p).endswith(ext)`) is read as
+unreadable and reported even when the name holds `".txt"`: the scan does not track values, and
+the allowlist takes such a site with its reason.
 """
 import ast
 import ntpath
@@ -2524,17 +2527,20 @@ def _str_of(node, params) -> bool:
 
 
 def _separator_needle(node) -> bool:
-    """A needle the scan cannot read (a name, a subscript, a call it does not know), or a
-    literal holding a separator. A literal without one, str() or os.fspath() of something
-    and an f-string are read as host-neutral."""
+    """A needle the scan cannot read (a name, a subscript, a call it does not know), or text
+    holding a separator: a literal, the literal parts of an f-string (`f"/{lang}"`; the
+    `{os.sep}` of `f"{os.sep}de"` is a value, not a literal part), and the literal or f-string
+    inside str() or os.fspath(). str() or os.fspath() of anything else, a Path value, renders
+    the host's own separator and is read as host-neutral."""
     if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
         return any(_separator_needle(e) for e in node.elts)
     if isinstance(node, ast.Constant):
         return isinstance(node.value, str) and ("/" in node.value or "\\" in node.value)
     if isinstance(node, ast.JoinedStr):
-        return False
+        return any(_separator_needle(v) for v in node.values if isinstance(v, ast.Constant))
     if isinstance(node, ast.Call) and _call_name(node) in ("str", "fspath"):
-        return False
+        return (len(node.args) == 1 and isinstance(node.args[0], (ast.Constant, ast.JoinedStr))
+                and _separator_needle(node.args[0]))
     return True
 
 
@@ -2591,9 +2597,19 @@ def test_the_separator_match_class_is_real():
     for neutral in ('lambda s, d: os.path.basename(d) == "de"',
                     'lambda s, d: str(d).startswith(str(root))',
                     'lambda s, d: str(d).endswith(".de.incoming")',
-                    'lambda s, d: str(d).endswith(f"{os.sep}de")'):
+                    'lambda s, d: str(d).endswith(f"{os.sep}de")',
+                    'lambda s, d: str(d).endswith(f"{os.sep}{lang}")',
+                    'lambda s, d: str(d).endswith(str("de"))',
+                    'lambda s, d: str(d).endswith(str(root / "de"))'):
         assert _separator_matches('def test_x(m):\n    m.setattr(os, "rename", '
                                   + neutral + ')\n') == [], neutral
+    # A separator inside a conversion or in an f-string's literal part is still a literal one.
+    # MUTATIONS: read every conversion, or every f-string, as host-neutral again - red.
+    for spelled, needle in (('str("/de")', "str('/de')"), ('os.fspath("/de")', "os.fspath('/de')"),
+                            ('f"/{lang}"', "f'/{lang}'"), ('str(f"\\\\{lang}")', "str(f'\\\\{lang}')")):
+        assert _separator_matches('def test_x(m):\n    m.setattr(os, "rename", lambda s, d: '
+                                  'str(d).endswith(' + spelled + '))\n') == [
+            (2, "test_x", needle)], spelled
     # Not a filesystem stub: a separator in a needle is the code's own business there.
     assert _separator_matches('def test_x(m):\n    m.setattr(client, "get", '
                               'lambda u: str(u).endswith("/api"))\n') == []

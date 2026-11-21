@@ -206,7 +206,7 @@ node on a source they read, one of them searched it for a newline. The rule: cut
 search in Python after the LF normalization and hand node the result, or normalize in
 the script (`.replace(/\r\n/g, '\n')`) before the first newline needle.
 
-Sections 12 to 21 hold the same shape for the other two runners as well: a spelling
+Sections 12 to 24 hold the same shape for the other two runners as well: a spelling
 that this workstation runs one way and the Ubuntu, macOS or Windows runner another.
 Each was a red CI job while every local gate was green.
 
@@ -282,6 +282,22 @@ module patched through `importlib`, or a str() held in a name first (`t = str(d)
 `t.endswith("/de")`). Deliberately, a needle held in a name (`str(p).endswith(ext)`) is read as
 unreadable and reported even when the name holds `".txt"`: the scan does not track values, and
 the allowlist takes such a site with its reason.
+
+## 23. A test never makes two wall-clock readings an order.
+On Windows before Python 3.13, `time.time()` and `time.time_ns()` tick every 15.625 ms,
+so readings taken in a row are usually equal. A test that named files
+`f"{time.time_ns()}_bad.json"` and `f"{time.time_ns() + 1}_list.json"` and expected them
+to sort before a third file named from a later reading found the third one sorted
+between them on the Windows job. A test that needs an order spells it with fixed names.
+
+## 24. A claim in `vaf/` is an exclusive create, never a rename.
+A rename moves a file; on Windows it is no mutex. MoveFileEx opens the source by name and
+renames by handle, so two consumers that opened it before the first rename both own it.
+The A2A ticket claim let three peers join on one invitation on the Windows job, and the
+WhatsApp request claim, written later on the same belief, lost send requests there
+without a trace. A function whose name says claim and that moves a file
+(`os.rename`, `os.replace`, a one-argument `.rename(` or `.replace(`) names `O_EXCL`
+in the same function: the claim itself is `os.open(..., O_CREAT | O_EXCL)`.
 """
 import ast
 import ntpath
@@ -1560,7 +1576,7 @@ def test_no_node_script_searches_a_source_it_read_for_a_newline():
         + ", ".join(hits))
 
 
-# ── 12 to 21: one runner's reading of a spelling this workstation reads another way ──────
+# ── 12 to 24: one runner's reading of a spelling this workstation reads another way ──────
 
 _SELF = "tests/test_windows_path_hygiene.py"
 
@@ -2641,3 +2657,79 @@ def test_the_separator_match_allowlist_carries_no_dead_entries():
         found = {(f, n) for _, f, n in _separator_matches(
             (_REPO / rel).read_text(encoding="utf-8"))}
         assert (fn, needle) in found, f"allowlisted site no longer matches, drop it: {rel} {fn}"
+
+
+# 23 -- two wall-clock readings made an order in a file name
+
+_CLOCK_READINGS = {"time_ns", "time"}
+
+
+def _clock_arithmetic_in_fstrings(tree) -> list:
+    """`f"{time.time_ns() + 1}..."`: a constant added to a clock reading inside an f-string,
+    the spelling that forces an order onto readings a coarse clock makes equal."""
+    def reading(node):
+        return (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr in _CLOCK_READINGS and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "time")
+    hits = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.JoinedStr):
+            continue
+        for part in node.values:
+            value = part.value if isinstance(part, ast.FormattedValue) else None
+            if (isinstance(value, ast.BinOp)
+                    and any(reading(s) for s in (value.left, value.right))
+                    and any(isinstance(s, ast.Constant) for s in (value.left, value.right))):
+                hits.append(node.lineno)
+    return hits
+
+
+def test_no_clock_reading_is_made_an_order_in_a_file_name():
+    """MUTATION: name the list file `f"{time.time_ns() + 1}_list.json"` again in
+    tests/test_whatsapp_send_request_claim.py - red."""
+    assert _clock_arithmetic_in_fstrings(ast.parse('n = f"{time.time_ns() + 1}_x.json"')) == [1]
+    assert _clock_arithmetic_in_fstrings(ast.parse('n = f"{time.time_ns()}_x.json"')) == []
+    hits = [f"{rel}:{no}" for rel, tree, _ in _test_trees() for no in _clock_arithmetic_in_fstrings(tree)]
+    assert hits == [], ("time.time_ns() ticks every 15.625 ms on Windows before Python 3.13, so "
+                        "readings in a row are equal; spell the order with fixed names: "
+                        + ", ".join(hits))
+
+
+# 24 -- a claim that moves a file instead of creating one exclusively
+
+def _claims_without_an_exclusive_create(tree) -> list:
+    hits = []
+    for func in ast.walk(tree):
+        if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)) or "claim" not in func.name.lower():
+            continue
+        moves = False
+        exclusive = False
+        for node in ast.walk(func):
+            if isinstance(node, ast.Attribute) and node.attr == "O_EXCL":
+                exclusive = True
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in ("rename", "replace")):
+                continue
+            owner = node.func.value
+            if isinstance(owner, ast.Name) and owner.id == "os":
+                moves = True
+            elif len(node.args) == 1 and not node.keywords:
+                moves = True
+        if moves and not exclusive:
+            hits.append(func.lineno)
+    return hits
+
+
+def test_no_claim_moves_a_file_without_an_exclusive_create():
+    """MUTATION: the rename claim (`path.rename(claimed)`) back in
+    `whatsapp_bridge._claim_request_file` - red."""
+    assert _claims_without_an_exclusive_create(ast.parse(
+        "def claim(p, q):\n    p.rename(q)\n")) == [1]
+    assert _claims_without_an_exclusive_create(ast.parse(
+        "def claim(p, q):\n    os.open(q, os.O_CREAT | os.O_EXCL)\n    os.replace(p, q)\n")) == []
+    assert _claims_without_an_exclusive_create(ast.parse(
+        "def claim(s):\n    return s.replace('a', 'b')\n")) == []
+    hits = [f"{rel}:{no}" for rel, path in _tracked_python_files(("vaf/",))
+            for no in _claims_without_an_exclusive_create(ast.parse(path.read_text(encoding="utf-8")))]
+    assert hits == [], ("a rename is no mutex on Windows (MoveFileEx opens by name, renames by "
+                        "handle); claim with os.open(..., O_CREAT | O_EXCL): " + ", ".join(hits))

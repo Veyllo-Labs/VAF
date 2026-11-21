@@ -500,6 +500,14 @@ line in its pipe, had that line stop her new process. With the start's `running:
 after the bridge thread started, 39 of 200 starts with nobody to run left the state file saying
 running. Pinned by the same file and `tests/test_whatsapp_send_request_claim.py`, both with a
 seeded fuzz (the spawn gate with injected bridge-thread failures, and the request-file claim).
+The claim was a rename at first, and on the Windows CI job requests vanished without being sent
+and without a file left behind (11 of 600 in the two-consumer test): a rename is no mutex there,
+because MoveFileEx opens the source by name and renames by handle. The claim fuzz and the
+two-consumer test therefore also run under emulated Windows file semantics
+(`tests/windows_file_semantics.py`), where the rename claim lost 276 of 600 requests. The same
+seam runs the switch-off fuzz of `tests/test_whatsapp_own_switch.py`: on Windows a config save
+that replaced `config.json` while another thread read it failed with "Access is denied", so
+`Config` writes through the store writer's bounded retry.
 
 - **Self-chat (the linked account's own chat)**: A message in the linked account's "message yourself" chat is somebody typing on the agent's phone, not the owner talking to the agent. The bridge drops it before the store, the activity and the queue; a downloaded voice file is deleted. In logs you will see `SELF_CHAT dropped`. The Node decides `selfChat` by comparing the sender with the linked account (for `@lid` senders only after resolving the LID to a number).
 
@@ -684,7 +692,7 @@ Outgoing items are tuples: `(username, chat_jid, text, voice_path, req_id, docum
 
 Node responds with `{ "type": "send_result", "req_id": "...", "success": true|false, "error": "..." }`. Python delivers this to the waiting caller (e.g. the `send_whatsapp` tool) via a per-request queue.
 
-A process without the bridge (the CLI, a sub-agent) reads `whatsapp_bridge_ipc/bridge_state.json` and, while it says running, writes its send as a request file into `whatsapp_bridge_ipc/requests/` and waits for the result file. The sender loop claims each request file by renaming it (`<name>.<uuid>.claimed`) before it reads it, so one request is sent once however many loops run; a loop whose run has ended claims nothing, and one whose run ended just as it claimed renames the file back for the next run. Named boundary: a consumer that dies between the claim and the unlink leaves a `.claimed` file nobody delivers, and its sender's wait answers "No delivery confirmation", which is true, since nobody knows whether it left.
+A process without the bridge (the CLI, a sub-agent) reads `whatsapp_bridge_ipc/bridge_state.json` and, while it says running, writes its send as a request file into `whatsapp_bridge_ipc/requests/` and waits for the result file. The sender loop claims each request file with an exclusive create of `<name>.json.claim` beside it before it reads it (not a rename, which is no mutex on Windows), and unlinks the request before it drops the marker, so one request is sent once however many loops run; a loop whose run has ended claims nothing, and one whose run ended just as it claimed drops the marker and leaves the request for the next run. A request that cannot be read after the claim (on Windows another process may hold it) stays for the next pass. Named boundaries: a consumer that dies between the claim and the unlink leaves the marker and the request is never sent, and its sender's wait answers "No delivery confirmation", which is true, since nobody knows whether it left; a request whose unlink Windows refused after it was read keeps its marker, so it is never sent twice; `.claimed` files left by an older version are not read.
 
 ### Outbound Item and Node Command Reference
 

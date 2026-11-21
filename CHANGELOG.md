@@ -87,6 +87,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **Windows: settings saves no longer fail with "Access is denied".** Turning your own WhatsApp
+  off in Connections, or any other settings save, failed when VAF read its configuration at the
+  same moment. A WhatsApp message queued by the CLI or a sub-agent is also no longer lost when
+  two senders pick up the queue at once.
 - **Automations: a run that failed or ran out of time is shown as failed and no longer counts as
   done.** A workflow automation with a failed step, a prompt automation whose model call failed or
   came back empty, and one stopped by its time limit were recorded as successful runs: chat and

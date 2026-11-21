@@ -404,73 +404,109 @@ def _complete_send_request(
 
 
 def _claim_request_file(path: Path) -> Optional[Path]:
-    """Take a request file for this consumer alone: rename it to `<name>.<uuid>.claimed` in the
-    same folder (atomic on POSIX and NTFS) and return the new path, or None when it is not
-    ours. `FileNotFoundError` means another consumer renamed it first, `PermissionError` that a
-    Windows process still holds it. Neither `*.json` glob of a consumer matches the claimed
-    name, nor the writer's `.tmp` name."""
-    claimed = path.with_name(f"{path.name}.{uuid.uuid4().hex}.claimed")
+    """Take a request file for this consumer alone: create `<name>.json.claim` beside it with an
+    exclusive create (`O_CREAT | O_EXCL`) and return the marker, or None when another consumer
+    holds the claim (or the folder is unwritable). The request file itself does not move.
+
+    Not a rename: a rename moves a file, it is no mutex on Windows. MoveFileEx opens the source
+    by name and then renames by handle, so two consumers that both opened it before the first
+    rename both "own" it, and the one whose read is refused by the other's open handle used to
+    delete it. Measured with Windows file semantics emulated (tests/windows_file_semantics.py):
+    276 of 600 requests vanished without being sent and without a file left behind, the shape
+    the Windows CI job showed. An exclusive create is one atomic syscall on POSIX and one
+    `CREATE_NEW` on Windows; the kernel refuses the second caller. Same lesson and pattern as
+    `claim_ticket` in vaf/core/a2a/store.py.
+
+    Named boundary: these two are the only exclusive claims in `vaf/`, four lines each, so they
+    stay inline rather than sharing a helper. Neither `*.json` glob of a consumer matches the
+    marker, nor the writer's temp name."""
+    marker = path.with_name(f"{path.name}.claim")
     try:
-        path.rename(claimed)
+        fd = os.open(str(marker), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except OSError:
         return None
-    return claimed
+    os.close(fd)
+    return marker
+
+
+def _drop_claim(marker: Path) -> None:
+    try:
+        marker.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def _dequeue_external_send_request(stop: Optional[threading.Event] = None) -> Optional[Tuple[Any, ...]]:
     """The oldest request file a process without the bridge wrote, as a queue item, or None.
 
-    Claimed by a rename before it is read: two consumers that read a file before either
-    unlinked it both sent it (measured: 410 of 600 files handed out twice by two threads).
-    `stop` is the consumer's run: once it is set after the claim, the file is renamed back for
-    the next run's loop, since a claim is exclusive and an ended loop would otherwise take a
-    request meant for its successor with it. Checked after the rename, so a stop that was not
-    set then means the run was still active when the file became ours (a stop is never
-    cleared, and a new run starts only after the old one's stop).
+    Claimed before it is read (`_claim_request_file`): two consumers that read a file before
+    either unlinked it both sent it (measured: 410 of 600 files handed out twice by two
+    threads). The order after the claim is the safety argument: the claim's holder reads the
+    request and unlinks it BEFORE it drops the marker, so a consumer that claims after it finds
+    no file and hands nothing out.
 
-    Named boundary: a consumer that dies between the claim and the unlink leaves a `.claimed`
-    file that nobody delivers; its sender's wait then answers SEND_UNCONFIRMED, which is true,
-    since nobody knows whether it left."""
+    `stop` is the consumer's run: once it is set after the claim, the marker is dropped and the
+    request stays for the next run's loop, since an ended loop would otherwise take a request
+    meant for its successor with it. Checked after the claim, so a stop that was not set then
+    means the run was still active when the file became ours (a stop is never cleared, and a
+    new run starts only after the old one's stop).
+
+    A read that fails with an `OSError` is not a verdict on the request: the file is gone
+    because another consumer finished it, or on Windows another process holds it (Defender,
+    the indexer) or it is being deleted. The marker is dropped and the request, if it is still
+    there, waits for the next pass; nothing is deleted and no result is written. Content that is
+    not a JSON object is removed (no result is written, since its result path is unknown).
+
+    Named boundaries: a consumer that dies between the claim and the unlink leaves the marker,
+    and that request is never sent; its sender's wait answers SEND_UNCONFIRMED, which is true,
+    since nobody knows whether it left. A request whose unlink was refused after it was read
+    keeps its marker as the record that it was handed out, so it is never sent twice; it stays
+    in the folder and costs one refused exclusive create per poll. `.claimed` files left by the
+    rename claim of an older version are not read (they were never delivered then either)."""
     try:
         _ensure_ipc_dirs()
         for found in sorted(_ipc_requests_dir().glob("*.json")):
-            path = _claim_request_file(found)
-            if path is None:
+            marker = _claim_request_file(found)
+            if marker is None:
                 continue
             if stop is not None and stop.is_set():
-                try:
-                    path.rename(found)
-                    return None
-                except OSError:
-                    # Not handed back: read below, and the ended loop answers it as stopping.
-                    pass
-            response_path: Optional[Path] = None
-            req_id: Optional[str] = None
+                _drop_claim(marker)
+                return None
             try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                path.unlink(missing_ok=True)
-                if not isinstance(data, dict):
-                    continue
-                req_id = str(data.get("req_id") or "").strip() or None
-                response_path_str = str(data.get("response_path") or "").strip()
-                response_path = Path(response_path_str) if response_path_str else None
-                return (
-                    str(data.get("username") or "").strip(),
-                    str(data.get("chat_jid") or "").strip(),
-                    str(data.get("text") or ""),
-                    str(data.get("voice_path") or "").strip() or None,
-                    req_id,
-                    str(data.get("document_path") or "").strip() or None,
-                    response_path,
-                    str(data.get("origin") or "").strip() or None,
-                    str(data.get("user_scope_id") or "").strip() or None,
-                )
-            except Exception as e:
-                try:
-                    path.unlink(missing_ok=True)
-                except Exception:
-                    pass
-                _write_external_send_result(response_path, False, f"Invalid IPC request: {e}")
+                raw = found.read_text(encoding="utf-8")
+            except OSError:
+                _drop_claim(marker)
+                continue
+            try:
+                data = json.loads(raw)
+            except ValueError:
+                data = None
+            try:
+                found.unlink()
+            except FileNotFoundError:
+                # Removed by someone else after the read: not ours to hand out.
+                _drop_claim(marker)
+                continue
+            except OSError:
+                # A Windows holder refused the unlink. The marker stays, so no later pass
+                # hands this request out again.
+                pass
+            else:
+                _drop_claim(marker)
+            if not isinstance(data, dict):
+                continue
+            response_path_str = str(data.get("response_path") or "").strip()
+            return (
+                str(data.get("username") or "").strip(),
+                str(data.get("chat_jid") or "").strip(),
+                str(data.get("text") or ""),
+                str(data.get("voice_path") or "").strip() or None,
+                str(data.get("req_id") or "").strip() or None,
+                str(data.get("document_path") or "").strip() or None,
+                Path(response_path_str) if response_path_str else None,
+                str(data.get("origin") or "").strip() or None,
+                str(data.get("user_scope_id") or "").strip() or None,
+            )
     except Exception:
         return None
     return None

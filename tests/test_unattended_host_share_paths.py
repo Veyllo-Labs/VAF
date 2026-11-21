@@ -11,10 +11,10 @@ a yes runs it. Every command here is a Python literal that is classified, never 
 tests patch the runners and assert they were never reached.
 """
 import subprocess
-import time
 
 import pytest
 
+from command_cost import measure_check
 from vaf.core import command_policy
 from vaf.core.command_policy import classify_command, python_code_categories, share_paths
 
@@ -228,8 +228,16 @@ def test_the_share_reading_stays_linear_in_the_length(unit, monkeypatch):
     The ratio is taken of the share reading alone: the whole check also runs shlex, whose
     tokenizer is quadratic on one long word (the reason for the length cap, see
     command_policy), and with it the ratio was 24 on the Windows runner and 47 on the macOS
-    one at the same lengths. The whole check is held to an absolute bound at the cap.
-    MUTATION: read a colon's suffix to the end of the piece - red."""
+    one at the same lengths. The whole check at the cap is held to a bound on its own CPU
+    time, outside shlex.split (tests/command_cost.py): measured 0.083 to 0.17 s for the five
+    units, with and without glibc's mmap threshold pinned at 32 KiB; and to at most three
+    shlex reads of the text (measured 2.0 to 3.0 times its length). shlex's time is not
+    judged: on the fullwidth unit it measured 1.05 s CPU normally, 7.4 to 8.6 s with that
+    threshold pinned, and 11.8 s wall on a shared runner, while the own time stayed 0.133 s.
+    MUTATION: read a colon's suffix to the end of the piece - red, also with the two
+    share-reading asserts removed (by the own time);
+    MUTATION: one more shlex.split of each segment in the tokenizer - red (by the
+    characters)."""
     monkeypatch.setattr(command_policy, "_windows_host", lambda: True)
 
     def text(n):
@@ -241,9 +249,13 @@ def test_the_share_reading_stays_linear_in_the_length(unit, monkeypatch):
     small, large = _best_of_three(read, text(8192)), _best_of_three(read, text(65536))
     assert large <= 20 * small + 0.05, (small, large)
     assert _best_of_three(read, text(128 * 1024 - 8)) < 1.0
-    started = time.perf_counter()
-    classify_command(text(128 * 1024 - 8), profile="host_unattended")
-    assert time.perf_counter() - started < 10.0
+    whole = text(128 * 1024 - 8)
+    cost = measure_check(whole, classify_command)
+    # A check that bound shlex.split under another name would leave the own time the total
+    # and the character count zero.
+    assert cost.calls > 0, cost
+    assert cost.own < 1.0, cost
+    assert cost.chars <= 3 * len(whole), (cost, len(whole))
 
 
 def test_many_different_pieces_stay_linear(monkeypatch):

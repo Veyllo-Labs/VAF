@@ -176,6 +176,17 @@ locally, in the time the suite already takes:
                   (ansi-c in a default word, span 1.49: the shape reads its
                   long token through shlex three times, the plain word twice),
                   so the span now reads the CPU time outside shlex.split.
+                  Then the ceiling on the total r tripped at one size (glued
+                  printf, 5.71 at 60 K, back to 1.01 at 120 K), and the share
+                  test's 10 s wall bound on one check at the length cap took
+                  11.77 s. Both were shlex, not VAF: under this axis its cost
+                  per character depends on the heap's free room at that
+                  moment (one 60 K pass costs 0.054, 0.158 or 0.307 s, and
+                  repeats within 2 % in one heap state), while the CPU time
+                  outside shlex.split stayed linear and the same with and
+                  without the axis. Those gates now time only the CPU outside
+                  shlex.split and count shlex's calls and characters
+                  (tests/command_cost.py).
                   Five other timing-heavy test files:
                   1489 passed with and without it, 74 s against 75 s.
                   The whole run took 1623 s with it (21623 passed, 238
@@ -184,8 +195,11 @@ locally, in the time the suite already takes:
                   Named boundaries: 32 KiB is harsher than the one macOS
                   sample at the top size (12.7 against 6.4), so a test that is
                   red under this axis but green on a real Mac is an artefact
-                  of the axis; none exists today. glibc maps a block only when
-                  its heap has no free room for it, so the axis bites only on a
+                  of the axis. Two gates went red under it on the ubuntu
+                  runner, both by timing shlex (above); what the macOS job
+                  made of them is not part of that evidence, and neither gate
+                  times shlex any more. glibc maps a block only when its heap
+                  has no free room for it, so the axis bites only on a
                   heap without much free space: a process that compiled its
                   imports from source (a tree without .pyc files and
                   PYTHONDONTWRITEBYTECODE set) left so much that shlex took

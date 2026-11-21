@@ -24,6 +24,8 @@ from types import SimpleNamespace
 import psutil
 import pytest
 
+from process_wait import still_running
+
 _ROOT = Path(__file__).resolve().parent.parent
 
 _CHILD = r'''
@@ -850,8 +852,11 @@ def test_the_long_env_axis_is_not_installed_on_windows(tmp_path):
 def test_the_last_test_plugin_survives_an_id_over_the_limit(tmp_path):
     """The hostile run's own plugin writes each finished test's id into the environment;
     an id over Windows' limit stopped the whole session there (INTERNALERROR) under the
-    long env value axis. The start of the id is kept instead.
-    MUTATION: set the full id without the fallback - red."""
+    long env value axis. The start of the id is kept instead, with a digest of the whole
+    id, so two long ids that share their start are charged apart; an id that fits is kept
+    as it is.
+    MUTATION: set the full id without the fallback - red; drop the digest - red (the two
+    long ids merge)."""
     module = _module()
     snippet = tmp_path / "sitecustomize_snippet.py"
     snippet.write_text(_blocker(), encoding="utf-8")
@@ -863,14 +868,17 @@ exec(compile(open(sys.argv[1], encoding="utf-8").read(), "sitecustomize", "exec"
 namespace = {}
 exec(compile(open(sys.argv[2], encoding="utf-8").read(), "plugin", "exec"), namespace)
 namespace["pytest_runtest_logfinish"](nodeid="t.py::test_a[" + "x" * 40000 + "]", location=None)
-print(os.environ["VAF_HOSTILE_LAST_TEST"] == "t.py::test_a[" + "x" * 4083)
+first = os.environ["VAF_HOSTILE_LAST_TEST"]
+print(first.startswith("t.py::test_a[" + "x" * 4083 + " [sha256:") and first.endswith("]"))
+namespace["pytest_runtest_logfinish"](nodeid="t.py::test_a[" + "x" * 40000 + "y]", location=None)
+print(os.environ["VAF_HOSTILE_LAST_TEST"] != first)
 namespace["pytest_runtest_logfinish"](nodeid="t.py::test_b", location=None)
 print(os.environ["VAF_HOSTILE_LAST_TEST"])
 '''
     out = subprocess.run([sys.executable, "-c", code, str(snippet), str(plugin)],
                          capture_output=True, text=True, timeout=60, env=_clean_env())
     assert out.returncode == 0, out.stderr
-    assert out.stdout.split() == ["True", "t.py::test_b"]
+    assert out.stdout.split() == ["True", "True", "t.py::test_b"]
 
 
 # The VENV LAUNCHER axis.
@@ -886,7 +894,10 @@ _REAL_PYTHON = os.environ.get("VAF_HOSTILE_REAL_PYTHON") or sys.executable
 
 @pytest.fixture(scope="module")
 def launcher(tmp_path_factory):
-    path, why = _module()._venv_launcher(tmp_path_factory.mktemp("venv"), _REAL_PYTHON)
+    # A space in its path, as a temp dir or a profile can have: the path is baked into the C
+    # source as a literal and handed to the child whole.
+    path, why = _module()._venv_launcher(tmp_path_factory.mktemp("venv") / "with space",
+                                         _REAL_PYTHON)
     assert path is not None, why
     return str(path)
 
@@ -935,12 +946,16 @@ def _holds_output(python, tmp_path):
     proc = subprocess.Popen([python, "-c", _CLOSE_AND_WAIT, str(ready), str(release)],
                             stdout=subprocess.PIPE, env=_clean_env())
     try:
+        # Every read has a deadline: a stalled start or a pipe held past the release fails
+        # the test, and the cleanup below runs, instead of a read blocking the suite.
+        assert select.select([proc.stdout], [], [], 20)[0], "the child wrote nothing"
         assert proc.stdout.readline() == b"x\n"
         assert _wait_for(ready.exists), "the child did not start"
         held = not select.select([proc.stdout], [], [], 0.5)[0]
         release.touch()
-        assert proc.stdout.read() == b""
-        assert proc.wait(timeout=10) == 0
+        out, _err = proc.communicate(timeout=10)
+        assert out == b""
+        assert proc.returncode == 0
         return held
     finally:
         release.touch()
@@ -980,8 +995,7 @@ def test_a_killed_launcher_takes_its_child_along(launcher, tmp_path):
         assert child.ppid() == proc.pid
         proc.kill()
         proc.wait(timeout=10)
-        _gone, alive = psutil.wait_procs([child], timeout=10)
-        assert alive == [], "the child outlived its killed launcher"
+        assert still_running([child]) == [], "the child outlived its killed launcher"
     finally:
         _stop(proc)
         if psutil.pid_exists(pid):
@@ -1034,7 +1048,7 @@ def test_a_child_reports_the_launcher_as_its_interpreter(launcher, tmp_path):
         out = subprocess.run([python, "-c", code, str(snippet), _REAL_PYTHON],
                              capture_output=True, text=True, timeout=60, env=_clean_env())
         assert out.returncode == 0, out.stderr
-        return out.stdout.split()
+        return out.stdout.splitlines()
     assert reported(launcher) == [launcher, _REAL_PYTHON]
     assert reported(_REAL_PYTHON) == [_REAL_PYTHON, _REAL_PYTHON]
 
@@ -1052,6 +1066,51 @@ def test_the_launcher_shows_its_given_argv(launcher, tmp_path):
         assert psutil.Process(pid).cmdline() == [_REAL_PYTHON, *shown.cmdline()[1:]]
     finally:
         _stop(proc)
+
+
+@needs_launcher
+@pytest.mark.parametrize("failure", ["refused exec", "interpreter missing"])
+def test_a_launcher_that_cannot_run_is_not_installed(monkeypatch, tmp_path, failure):
+    """A temp dir on a noexec mount builds the launcher and then refuses to start it. It is
+    tried once before the run, so the axis says it is not available and pytest runs on
+    the real interpreter, rather than the run failing at its first exec, or a failed run
+    being retried with no way to tell the launcher from a test.
+    MUTATION: drop the trial run - red (the path is returned)."""
+    module = _module()
+    real = _REAL_PYTHON if failure == "refused exec" else str(tmp_path / "no-python")
+    real_run = module.subprocess.run
+
+    def run(command, **kwargs):
+        done = real_run(command, **kwargs)
+        if failure == "refused exec" and command[0] == shutil.which("cc"):
+            # What a noexec mount does to the file the compiler just wrote.
+            Path(command[command.index("-o") + 1]).chmod(0o644)
+        return done
+    monkeypatch.setattr(module.subprocess, "run", run)
+    assert module._venv_launcher(tmp_path, real) == (
+        None, "not available here (the launcher cannot run)")
+
+
+@needs_launcher
+def test_a_refused_parent_death_signal_stops_the_child(tmp_path):
+    """Where a syscall filter refuses PR_SET_PDEATHSIG, the interpreter would run on
+    unbound to its launcher: the child stops with a message instead. Forced here with a
+    signal number prctl refuses (EINVAL).
+    MUTATION: ignore prctl's result - red (the interpreter runs)."""
+    module = _module()
+    folder = tmp_path / "refused"
+    folder.mkdir()
+    built = folder / "python"
+    (folder / "launcher.c").write_text(module._launcher_source(_REAL_PYTHON, built),
+                                       encoding="utf-8")
+    subprocess.run([shutil.which("cc"), "-DVAF_PDEATHSIG=1000", "-o", str(built),
+                    str(folder / "launcher.c")], check=True, capture_output=True, timeout=120)
+    ran = tmp_path / "ran"
+    out = subprocess.run([str(built), "-c", "import sys; open(sys.argv[1], 'w').close()",
+                          str(ran)], capture_output=True, text=True, timeout=60, env=_clean_env())
+    assert out.returncode == 127
+    assert "venv launcher: prctl(PR_SET_PDEATHSIG)" in out.stderr
+    assert not ran.exists(), "the interpreter ran without the parent-death signal"
 
 
 def test_the_launcher_is_built_on_linux_only(monkeypatch, tmp_path):

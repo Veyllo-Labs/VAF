@@ -230,12 +230,15 @@ locally, in the time the suite already takes:
                   boundaries: macOS has no PR_SET_PDEATHSIG, so the axis is Linux
                   only; a child started with an environment that drops PYTHONPATH,
                   or with -S or -I, reports the real interpreter and keeps the
-                  variable, which Windows clears in C; the
-                  launcher sits in a temp dir, not beside the venv's other scripts as
-                  python.exe does in Scripts, so code that looks for a tool next to
-                  sys.executable finds nothing here; a signal sent to the whole
-                  process group reaches the child twice. Without a C compiler the axis
-                  is not installed and says so.
+                  variable, which Windows clears in C; the launcher sits in a temp
+                  dir, not beside the venv's other scripts as python.exe does in
+                  Scripts, so code that looks for a tool next to sys.executable finds
+                  nothing here; a signal sent to the whole process group reaches the
+                  child twice. Without a C compiler, or when the built launcher cannot
+                  run (a temp dir on a noexec mount; it is tried once with `-c pass`
+                  before the run), the axis is not installed, says so, and pytest runs
+                  on the real interpreter. A child whose PR_SET_PDEATHSIG is refused
+                  (a syscall filter) stops with a message instead of running unbound.
   LONG ENV VALUE  setting an environment variable whose name=value exceeds 32767
                   UTF-16 code units raises ValueError("the environment variable is
                   longer than 32767 characters"), as CPython's win32_putenv does on
@@ -768,8 +771,11 @@ def pytest_runtest_logfinish(nodeid, location):
         os.environ["VAF_HOSTILE_LAST_TEST"] = nodeid
     except ValueError:
         # Windows refuses a variable over 32767 characters (so does the long env value
-        # axis); the start of the id still names the test, and the run goes on.
-        os.environ["VAF_HOSTILE_LAST_TEST"] = nodeid[:4096]
+        # axis). The start of the id still names the test, and a digest of the whole id
+        # keeps two ids that share that start apart in the refusal budget.
+        import hashlib
+        digest = hashlib.sha256(nodeid.encode("utf-8", "surrogatepass")).hexdigest()[:16]
+        os.environ["VAF_HOSTILE_LAST_TEST"] = nodeid[:4096] + " [sha256:" + digest + "]"
 '''
 
 _PHASES = (" (setup)", " (call)", " (teardown)")
@@ -841,6 +847,11 @@ _LAUNCHER_SOURCE = r'''
 #include <sys/wait.h>
 #include <unistd.h>
 
+/* Overridable at compile time only so that a test can make the registration fail. */
+#ifndef VAF_PDEATHSIG
+#define VAF_PDEATHSIG SIGKILL
+#endif
+
 static const char REAL[] = @REAL_PYTHON@;
 static const char SELF[] = @LAUNCHER@;
 static const int FORWARDED[] = {SIGTERM, SIGINT, SIGHUP};
@@ -887,8 +898,12 @@ int main(int argc, char **argv)
         for (i = 0; i < N_FORWARDED; i++)
             sigaction(FORWARDED[i], &saved[i], NULL);
         sigprocmask(SIG_SETMASK, &unblocked, NULL);
-        /* Windows' job object ends the interpreter with its launcher; this is that. */
-        prctl(PR_SET_PDEATHSIG, SIGKILL);
+        /* Windows' job object ends the interpreter with its launcher; this is that. A
+           refused registration (a syscall filter) would leave the interpreter unbound. */
+        if (prctl(PR_SET_PDEATHSIG, VAF_PDEATHSIG) != 0) {
+            perror("venv launcher: prctl(PR_SET_PDEATHSIG)");
+            _exit(127);
+        }
         if (getppid() != parent)
             _exit(127);
         /* __PYVENV_LAUNCHER__'s part: the interpreter reports this launcher. */
@@ -934,10 +949,17 @@ def _c_string(text) -> str:
                          for b in os.fsencode(os.fspath(text))) + '"'
 
 
+def _launcher_source(real, launcher) -> str:
+    """The launcher's C source for interpreter `real`, to be built at path `launcher`."""
+    return (_LAUNCHER_SOURCE.replace("@REAL_PYTHON@", _c_string(real))
+            .replace("@LAUNCHER@", _c_string(launcher)))
+
+
 def _venv_launcher(directory, real):
     """Build the venv launcher for interpreter `real` in `directory`: (path, None), or
-    (None, the announcement's reason) where it cannot be built. Named `python`, because
-    code that recognises an interpreter matches the basename (vaf.core.instance)."""
+    (None, the announcement's reason) where it cannot be built or cannot run. Named
+    `python`, because code that recognises an interpreter matches the basename
+    (vaf.core.instance)."""
     if sys.platform == "win32":
         return None, "real host, the venv's python.exe is the launcher"
     if not sys.platform.startswith("linux"):
@@ -949,13 +971,20 @@ def _venv_launcher(directory, real):
     folder.mkdir(parents=True, exist_ok=True)
     source = folder / "launcher.c"
     launcher = folder / "python"
-    source.write_text(_LAUNCHER_SOURCE.replace("@REAL_PYTHON@", _c_string(real))
-                      .replace("@LAUNCHER@", _c_string(launcher)), encoding="utf-8")
+    source.write_text(_launcher_source(real, launcher), encoding="utf-8")
     try:
         subprocess.run([compiler, "-O2", "-o", str(launcher), str(source)],
                        check=True, capture_output=True, timeout=120)
     except (OSError, subprocess.SubprocessError):
         return None, "not available here (the C compiler failed)"
+    # Tried once before the run is announced: a temp dir on a noexec mount builds the
+    # launcher and then refuses to start it, and pytest's own exit code says nothing
+    # about whether the launcher or a test failed.
+    try:
+        subprocess.run([str(launcher), "-c", "pass"], check=True, capture_output=True,
+                       timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return None, "not available here (the launcher cannot run)"
     return launcher, None
 
 

@@ -1373,13 +1373,16 @@ def test_isolation_problem_names_each_leak():
     assert problem(venv_dir, base, stdlib + [venv_site], [base_site], None) is None
 
 
-def _symlink_dir(link: Path, target) -> None:
-    """A directory symlink, or a skip where the platform refuses one (Windows without the
-    symlink privilege)."""
+def _symlink_or_skip(link, target) -> None:
+    """A symlink, or a skip where the platform refuses one (Windows without the symlink
+    privilege)."""
+    # The link's kind follows its target: Windows makes file and directory links, and a
+    # directory link to a file cannot be opened as a file there (POSIX ignores the flag).
+    is_dir = os.path.isdir(os.path.join(os.path.dirname(link), target))
     try:
-        os.symlink(target, link, target_is_directory=True)
-    except (OSError, NotImplementedError) as exc:
-        pytest.skip(f"cannot create a directory symlink here: {exc}")
+        os.symlink(target, link, target_is_directory=is_dir)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available here")
 
 
 def test_isolation_problem_sees_one_directory_through_a_link(tmp_path):
@@ -1397,7 +1400,7 @@ def test_isolation_problem_sees_one_directory_through_a_link(tmp_path):
     framework = tmp_path / "Python.framework" / "Versions" / "3.14"
     (framework / "lib" / "python3.14").mkdir(parents=True)
     link = framework / "lib" / "python3.14" / "site-packages"
-    _symlink_dir(link, target)
+    _symlink_or_skip(link, target)
     venv_dir = tmp_path / "ci-venv"
     venv_site = venv_dir / "lib" / "python3.14" / "site-packages"
     venv_site.mkdir(parents=True)
@@ -1415,12 +1418,12 @@ def test_isolation_problem_sees_one_directory_through_a_link(tmp_path):
         assert reason and "user site" in reason, (user_site, entry, reason)
     # A prefix that is a link to the base prefix is the base interpreter itself.
     linked_prefix = tmp_path / "prefix-link"
-    _symlink_dir(linked_prefix, base)
+    _symlink_or_skip(linked_prefix, base)
     assert "not a venv" in (problem(str(linked_prefix), base, [target], [link], None) or "")
     # A match of the written spellings is never lost: realpath resolves 'hop' before it
     # collapses the '..', so the resolved spellings differ while the written ones agree.
     (tmp_path / "elsewhere" / "inner").mkdir(parents=True)
-    _symlink_dir(tmp_path / "hop", tmp_path / "elsewhere" / "inner")
+    _symlink_or_skip(tmp_path / "hop", tmp_path / "elsewhere" / "inner")
     written = os.path.join(str(tmp_path / "hop"), "..", "sp")
     reason = problem(venv_dir, base, [venv_site, str(tmp_path / "sp")], [written], None)
     assert reason and "system site packages" in reason, reason
@@ -1444,7 +1447,7 @@ def test_ci_venv_check_refuses_a_base_site_reached_through_a_link(tmp_path):
     if not base_sites:
         pytest.skip("the base interpreter has no site-packages directory to leak")
     alias = tmp_path / "alias"
-    _symlink_dir(alias, base_sites[0])
+    _symlink_or_skip(alias, base_sites[0])
     clean = tmp_path / "clean"
     venv.create(clean, with_pip=False, symlinks=os.name != "nt")
     check = [str(_venv_python(clean)), str(ROOT / "scripts" / "ci_venv.py"), "--check"]
@@ -1484,7 +1487,7 @@ def test_isolation_matches_samefile_fuzz(tmp_path):
             target = rng.choice(names)
             if rng.random() < 0.5:
                 target = os.path.relpath(target, link.parent)
-            _symlink_dir(link, target)
+            _symlink_or_skip(link, target)
             names.append(str(link))
         base_site = rng.choice(names)
         entries = []

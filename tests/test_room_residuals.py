@@ -755,7 +755,10 @@ def test_a_name_holding_a_zero_width_space_beside_its_cut_goes_to_the_room(tmp_p
     assert room.address_from_mention("@Mia hi") == {"peer": "p-0"}
 
 
-@pytest.mark.parametrize("line", ["@" + ZWSP * 65535 + " hi", "@" + "." * 65534 + ZWSP + " hi"])
+# Named ids: pytest writes a test's id into PYTEST_CURRENT_TEST, and Windows refuses a
+# variable over 32767 characters, so an id built from these 65 K-character lines errored there.
+@pytest.mark.parametrize("line", ["@" + ZWSP * 65535 + " hi", "@" + "." * 65534 + ZWSP + " hi"],
+                         ids=["zero-width-run", "full-stops-then-zero-width"])
 def test_a_long_run_of_zero_width_spaces_costs_one_pass(tmp_path, line):
     import tracemalloc
     room = _members_room(tmp_path, ["Bob"], "room-zw3")

@@ -86,25 +86,90 @@ def test_a_new_start_is_not_cancelled_by_an_old_stop(hermetic, monkeypatch):
     assert [c for c in calls if "tts" in c]
 
 
-def test_cancel_ends_our_own_up_and_nothing_else(hermetic):
-    """By parentage: our child running this compose file with `up` is ended; our child
-    running it with `stop` is not. MUTATION: match on the file name alone and the stop
-    dies too."""
-    sleeper = "import time, sys; time.sleep(30)"
-    up = subprocess.Popen([sys.executable, "-c", sleeper, stack.COMPOSE_FILENAME, "up", "-d"])
-    stop = subprocess.Popen([sys.executable, "-c", sleeper, stack.COMPOSE_FILENAME, "stop"])
+# A compose stand-in: says it runs through the ready file named last in its argv, then waits.
+_SLEEPER = "import sys, time; open(sys.argv[-1], 'w').close(); time.sleep(30)"
+
+
+def _tree(pid):
+    """The process and every descendant, as psutil handles."""
+    top = psutil.Process(pid)
+    return [top, *top.children(recursive=True)]
+
+
+def _wait_ready(path, seconds=20.0):
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if path.exists():
+            return True
+        time.sleep(0.02)
+    return path.exists()
+
+
+def _kill_trees(trees, popens):
+    """Every process of `trees`, and the Popen handles: a killed launcher can leave its
+    child behind, so the handles alone are not enough."""
+    for proc in [p for tree in trees for p in tree]:
+        try:
+            proc.kill()
+        except psutil.Error:
+            pass
+    for popen in popens:
+        try:
+            popen.kill()
+        except OSError:
+            pass
+        popen.wait(timeout=10)
+
+
+def test_cancel_ends_our_own_up_and_nothing_else(hermetic, tmp_path):
+    """By parentage: our child running this compose file with `up` is ended, with every
+    process below it; our child running it with `stop` is not. Asserted by effect, not by
+    count: in a Windows virtual environment one Popen of sys.executable is two processes
+    (the launcher and its interpreter, both with this argv), and ending the launcher can take
+    the interpreter down before the scan reaches it.
+    MUTATION: match on the file name alone and the stop dies too."""
+    up_ready, stop_ready = tmp_path / "up.ready", tmp_path / "stop.ready"
+    up = subprocess.Popen([sys.executable, "-c", _SLEEPER, stack.COMPOSE_FILENAME, "up", "-d",
+                           str(up_ready)])
+    stop = subprocess.Popen([sys.executable, "-c", _SLEEPER, stack.COMPOSE_FILENAME, "stop",
+                             str(stop_ready)])
+    trees = []
     try:
-        time.sleep(0.3)
-        assert stack.cancel_start() == 1
-        up.wait(timeout=10)
+        assert _wait_ready(up_ready) and _wait_ready(stop_ready), "the stand-ins did not start"
+        up_tree, stop_tree = _tree(up.pid), _tree(stop.pid)
+        trees = [up_tree, stop_tree]
+        assert stack.cancel_start() >= 1
+        _gone, alive = psutil.wait_procs(up_tree, timeout=10)
+        assert alive == [], f"left running: {alive}"
         assert stop.poll() is None, "the stop command was ended as well"
+        assert all(p.is_running() and p.status() != psutil.STATUS_ZOMBIE for p in stop_tree)
         assert stack._start_interrupted.is_set()
     finally:
-        for p in (up, stop):
-            try:
-                p.kill()
-            except Exception:
-                pass
+        _kill_trees(trees, (up, stop))
+
+
+def test_cancel_ends_the_child_its_up_started(hermetic, tmp_path):
+    """The docker CLI runs the compose plugin as its own child with the same arguments, so
+    one `docker compose ... up` is two matching processes, and both must end: ending the
+    parent alone leaves the child running. Run on the base interpreter, which starts no
+    launcher: a Windows venv's launcher, or the hostile run's, would take the child down with
+    its parent and hide a scan that stops at our direct children.
+    MUTATION: children(recursive=False) in cancel_start - red (the plugin's stand-in lives)."""
+    python = getattr(sys, "_base_executable", None) or sys.executable
+    plugin = ("import subprocess, sys; raise SystemExit(subprocess.call("
+              f"[{python!r}, '-c', {_SLEEPER!r}, *sys.argv[1:]]))")
+    ready = tmp_path / "plugin.ready"
+    cli = subprocess.Popen([python, "-c", plugin, stack.COMPOSE_FILENAME, "up", "-d", str(ready)])
+    tree = []
+    try:
+        assert _wait_ready(ready), "the plugin stand-in did not start"
+        tree = _tree(cli.pid)
+        assert len(tree) == 2, tree
+        assert stack.cancel_start() >= 1
+        _gone, alive = psutil.wait_procs(tree, timeout=10)
+        assert alive == [], f"left running: {alive}"
+    finally:
+        _kill_trees([tree], (cli,))
 
 
 @pytest.mark.parametrize("interrupted,still_ours,passes", [

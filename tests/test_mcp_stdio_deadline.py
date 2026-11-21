@@ -40,6 +40,7 @@ import vaf.tools.mcp_client as mcp_client  # noqa: E402
 from vaf.tools.mcp_client import MCPClientTool  # noqa: E402
 
 SERVER = Path(__file__).resolve().parent / "fixtures" / "mcp_stdio" / "deadline_server.py"
+LAUNCHER = Path(__file__).resolve().parent / "fixtures" / "mcp_stdio" / "launcher.py"
 
 
 def _bounded(fn, seconds=10.0):
@@ -78,9 +79,10 @@ def _timed(fn, seconds=10.0):
 
 @pytest.fixture
 def server(tmp_path, monkeypatch):
-    """`server(mode)` -> (client, command). Every process the client starts is recorded and
-    stopped by its own handle at the end, the ones the client retired itself included."""
-    if " " in sys.executable or " " in str(tmp_path):
+    """`server(mode, interpreter=None)` -> (client, command), the stub run by `interpreter`
+    (by default sys.executable). Every process the client starts is recorded and stopped by
+    its own handle at the end, the ones the client retired itself included."""
+    if " " in str(tmp_path):
         pytest.skip("the MCP client splits a server command on spaces")
     script = tmp_path / "deadline_server.py"
     shutil.copyfile(SERVER, script)
@@ -94,10 +96,13 @@ def server(tmp_path, monkeypatch):
 
     monkeypatch.setattr(subprocess, "Popen", _RecordingPopen)
 
-    def make(mode):
+    def make(mode, interpreter=None):
+        interpreter = interpreter or sys.executable
+        if " " in interpreter:
+            pytest.skip("the MCP client splits a server command on spaces")
         client = MCPClientTool()
         clients.append(client)
-        return client, f"{sys.executable} {script} {mode}"
+        return client, f"{interpreter} {script} {mode}"
 
     make.started = started
     make.requests = lambda: ((tmp_path / "requests.log").read_text(encoding="utf-8").split()
@@ -355,16 +360,43 @@ def test_the_previous_message_is_let_go_before_the_next_line_is_decoded(monkeypa
 
 # ── the end of the stream, a failed write, a line without end, a deadline already past ────
 
+def _own_process_interpreter() -> str:
+    """An interpreter that runs a script in the process the client starts: the base one. In
+    a Windows virtual environment sys.executable is a launcher that runs the interpreter as
+    its child and holds the pipes, so the end of the output never comes through it (the
+    test below). deadline_server.py imports only the standard library, which is why the
+    base interpreter, without the venv's packages, can run it; keep it that way."""
+    return getattr(sys, "_base_executable", None) or sys.executable
+
+
 def test_a_server_that_closed_its_output_is_replaced(server):
     """Its process lives on, so before every later call read the closed stream and failed
     the same way until VAF restarted; the end of the output now retires the process."""
-    client, command = server("close_stdout")
+    client, command = server("close_stdout", _own_process_interpreter())
     out = _bounded(lambda: client.call_stdio(command, "echo", {"text": "a"}, timeout=5))
     assert out == "Error: No response from MCP server"
     first = server.started[0]
     assert command not in client._server_processes, "the process with a closed output stayed"
     assert _wait_until(lambda: first.poll() is not None), "it was not stopped"
     _bounded(lambda: client.call_stdio(command, "echo", {"text": "b"}, timeout=5))
+    assert len(server.started) == 2 and server.started[1].pid != first.pid
+
+
+def test_a_launcher_that_holds_the_output_is_retired_at_the_deadline(server, tmp_path):
+    """A wrapper that runs the server as its child and waits (a Windows venv's python.exe, a
+    shell script without `exec`) keeps the output open after the server closed its own, so
+    no end arrives: the deadline retires the wrapper instead, and the next call starts a
+    fresh process. Measured on the Windows runner, where sys.executable is that launcher."""
+    launcher = tmp_path / "launcher.py"
+    shutil.copyfile(LAUNCHER, launcher)
+    client, command = server("close_stdout")
+    command = command.replace(" ", f" {launcher} ", 1)
+    out = _bounded(lambda: client.call_stdio(command, "echo", {"text": "a"}, timeout=2))
+    assert out == _timeout_text(2)
+    first = server.started[0]
+    assert command not in client._server_processes, "the held process stayed"
+    assert _wait_until(lambda: first.poll() is not None), "it was not stopped"
+    _bounded(lambda: client.call_stdio(command, "echo", {"text": "b"}, timeout=2))
     assert len(server.started) == 2 and server.started[1].pid != first.pid
 
 

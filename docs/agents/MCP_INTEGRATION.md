@@ -304,6 +304,12 @@ non-blocking mode; the client uses neither, and a test keeps it that way. Named 
 
 - a descendant of the server that keeps the output pipe open after the stop (below) leaves
   one helper thread blocked on it until it lets go; the call and the lock are not held;
+- the end of a server's output is seen only once no other process holds the pipe. A
+  wrapper that runs the server as its child and waits (the `python.exe` of a Windows virtual
+  environment, a shell script that does not `exec`) keeps it open, so a server behind one
+  that closes its output and lives on is retired at the deadline with the -32001 answer
+  instead, and the next call starts a fresh process (measured on the Windows CI runner, whose
+  venv interpreter is such a launcher);
 - a line is read up to 64 MiB and held in memory whole; a longer one ends the request with
   a -32700 error ("a line longer than 64 MiB") and retires the process, since the rest of
   it is still on the stream. Measured before the limit: a server that wrote one line

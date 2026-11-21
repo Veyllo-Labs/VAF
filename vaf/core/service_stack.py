@@ -688,11 +688,14 @@ _DRAIN_S = 8.0
 
 def cancel_start() -> int:
     """Stop the stack start of THIS process: no further phase runs, and every compose
-    `up`/`build` this process is still running is ended. Returns how many were ended.
+    `up`/`build` this process is still running is ended. Returns how many processes were
+    ended.
 
-    Found by PARENTAGE, not by name: children of this process whose command line names
-    this compose file with an `up` or `build` verb - another program's compose command,
-    or another VAF process's, is never touched. Never raises."""
+    Found by PARENTAGE, not by name: descendants of this process whose command line names
+    this compose file with an `up` or `build` verb (the docker CLI runs the compose plugin
+    as its own child, with the same arguments, so one `docker compose up` is two such
+    processes, and each one ended counts) - another program's compose command, or another
+    VAF process's, is never touched. Never raises."""
     _start_cancelled.set()
     ended = 0
     try:

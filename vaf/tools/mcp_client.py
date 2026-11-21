@@ -717,7 +717,10 @@ class MCPClientTool(BaseTool):
         same as a read: a server that stopped reading its input held a large request's write
         forever. The end of the output, and a write that failed, retire the process too: its
         pipe cannot be used again, and a server that closed its output while it lived on
-        failed every later call until VAF restarted.
+        failed every later call until VAF restarted. That end arrives only once no other
+        process holds the pipe: behind a wrapper that runs the server as its child and waits
+        (the python.exe of a Windows virtual environment, a shell script without ``exec``),
+        such a server is retired at the deadline instead, with the -32001 answer.
 
         A line is read up to `_MAX_LINE` bytes. One that reaches the limit without its line
         feed ends the request with the error -32700 and retires the process, since the rest of

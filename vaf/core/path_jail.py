@@ -514,8 +514,7 @@ def describe_error(exc: BaseException, *, log: bool = True) -> str:
     folder, the account name, the data directory's layout. That is the second way a contained
     root leaks, after the path itself, and it is reached by text alone: a name over 255
     characters makes ``is_file()``, ``mkdir`` and ``write_bytes`` raise exactly that on Linux
-    and macOS (on Windows ``open`` answers EINVAL, ``Invalid argument``, and ``is_file()``
-    reads it as missing).
+    and macOS (on Windows ``open`` answers EINVAL, ``Invalid argument``).
 
     In order:
 

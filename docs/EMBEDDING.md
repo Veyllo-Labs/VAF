@@ -3481,17 +3481,16 @@ Stable public surface (safe to build on):
   which any raiser can fill with a path); the words are the host's, and hosts word one cause
   differently (an over-long name is ENAMETOOLONG, "File name too long", on Linux and macOS,
   and EINVAL, "Invalid argument", from the Windows C runtime), so a test compares with
-  `os.strerror` of the expected errno, not a literal; (c) one whose `errno` is not an integer, or one
-  without an `errno` but with a `strerror`, a `filename` or a `filename2`, or a
-  `vaf.WriteRefused` (every one names the path it refused): the withheld text; (d) any other
-  `OSError`: `str(exc)` when its class comes from `builtins` or from `vaf`, the withheld text
-  for any other module (`shutil.Error` quotes the pairs it failed to copy, Pillow's
-  `UnidentifiedImageError` the file, a `requests` error the URL). The withheld text is
-  `"<ClassName> (details in the server log)"`, or `"<ClassName> (HTTP <code>)"` when the
+  `os.strerror` of the expected errno, not a literal; (c) one whose `errno` is not an
+  integer, or one without an `errno` but with a `strerror`, a `filename` or a `filename2`,
+  or a `vaf.WriteRefused` (every one names the path it refused): the withheld text; (d) any
+  other `OSError`: `str(exc)` when its class comes from `builtins` or from `vaf`, the
+  withheld text for any other module (`shutil.Error` quotes the pairs it failed to copy,
+  Pillow's `UnidentifiedImageError` the file, a `requests` error the URL). The withheld text
+  is `"<ClassName> (details in the server log)"`, or `"<ClassName> (HTTP <code>)"` when the
   error carries a `response` with an integer `status_code` from 100 to 999 (the HTTP errors
   of `requests` and `huggingface_hub` are OSErrors), so a refused login and a missing file
-  stay told apart.
-  With `log=True` the full `str(exc)`, cut at 2000 characters, goes to the
+  stay told apart. With `log=True` the full `str(exc)`, cut at 2000 characters, goes to the
   `vaf.core.path_jail` logger at WARNING, so the detail stays on the server. Pass
   `log=False` when you log the exception yourself. Nothing is logged when nothing was
   withheld. It never raises an `Exception`: not for a `__str__` that raises or returns a

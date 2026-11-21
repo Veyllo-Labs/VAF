@@ -261,7 +261,10 @@ WHAT IT CANNOT DO. Real Windows file semantics - ACLs, MoveFileEx sharing
 violations, the read-only-flag-only chmod - need a real Windows machine. Those
 are covered by seams and simulated branches in tests/test_at_rest_cross_platform.py
 instead, and the honest boundary is written down there rather than pretended
-away here. Windows-only SERIALIZATION defects (str(PurePath) renders with the
+away here. The sharing rules themselves (no rename, replace or delete of a file
+another handle holds open, and a rename that opens by name and moves by handle)
+are modelled per folder by tests/windows_file_semantics.py, which the WhatsApp
+claim and switch fuzzes run under. Windows-only SERIALIZATION defects (str(PurePath) renders with the
 host's separator, invisible on Linux where it equals as_posix) are covered by a
 static guard, tests/test_windows_path_hygiene.py, which fails on any OS. Nor can
 it put the CHECKOUT INSIDE THE HOME, where the Linux and macOS runners have it

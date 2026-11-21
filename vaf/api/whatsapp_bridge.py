@@ -304,10 +304,14 @@ def _ensure_ipc_dirs() -> None:
 
 
 def _write_json_atomic(path: Path, data: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
-    tmp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp_path.replace(path)
+    """The IPC files (bridge state, requests, results) through the store writer: temp file,
+    fsync, and a replace that retries a transient Windows sharing violation. A bare replace of
+    `bridge_state.json` failed there whenever a process without the bridge was reading it, and
+    `_write_bridge_state` swallows the error, so the file could keep saying `running: true`
+    after the run ended. Created 0600: request files carry message text. The temp name
+    (`.tmp-*.part`) matches neither `*.json` glob of a consumer."""
+    from vaf.core.secure_store import atomic_write_bytes
+    atomic_write_bytes(path, json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"))
 
 
 def _write_bridge_state(running: bool) -> None:

@@ -14,7 +14,11 @@ destination without FILE_SHARE_DELETE, which `open()` does not request. Every
 store in the round writes through `_atomic_write_bytes`, so one unretried
 failure is a lost chat save or a lost keyring write - and the holders are all
 transient (Defender scanning the file just written, the Search indexer, a
-concurrent reader).
+concurrent reader). The config file (`Config.save`) and the WhatsApp bridge's
+IPC files (`bridge_state.json`, the send requests) are proven against a real
+holder too: tests/windows_file_semantics.py emulates the sharing rules for the
+files under one folder, so a reader thread really keeps the file open while
+the writer replaces it.
 
 **The recovery kit's write order.** The note is the only copy of the secret
 that opens the wrap, and every way it can fail is platform-shaped: a Desktop
@@ -24,9 +28,11 @@ guard that considers the job done forever.
 """
 import json
 import os
+import threading
 
 import pytest
 
+import windows_file_semantics
 from fake_clock import only_on_thread
 from vaf.core import recovery_kit, secure_store
 
@@ -125,6 +131,143 @@ def test_the_browser_holder_record_retries_a_windows_sharing_violation(monkeypat
     data = json.loads((bj._state_dir() / "vaf-browser.json").read_bytes())
     assert data["holders"] == [], "a sharing violation kept the holder entry"
     assert calls["n"] >= 6, "the writes must have been retried, not abandoned"
+
+
+def _hold_until_the_first_retry(monkeypatch, target):
+    """A reader thread that keeps `target` open until the writer's first retry sleep, which
+    releases it and waits until it is closed. Returns the thread."""
+    opened, release, closed = threading.Event(), threading.Event(), threading.Event()
+
+    def reader():
+        with open(target, "rb"):
+            opened.set()
+            release.wait(10)
+        closed.set()
+
+    def first_retry(_s):
+        release.set()
+        assert closed.wait(10)
+
+    monkeypatch.setattr(secure_store.time, "sleep", only_on_thread(first_retry))
+    t = threading.Thread(target=reader, daemon=True)
+    t.start()
+    assert opened.wait(10)
+    return t
+
+
+@pytest.fixture
+def config_file(tmp_path, monkeypatch):
+    from vaf.core.config import Config
+    app = tmp_path / "app"
+    app.mkdir()
+    monkeypatch.setattr(Config, "APP_DIR", app)
+    monkeypatch.setattr(Config, "CONFIG_FILE", app / "config.json")
+    monkeypatch.setattr(Config, "_filelock", None)  # the singleton points at another path otherwise
+    monkeypatch.setattr(Config, "_observers", [])
+    (app / "config.json").write_text(json.dumps({"provider": "local"}), encoding="utf-8")
+    return app / "config.json"
+
+
+def test_a_config_save_waits_out_a_reader_on_windows(config_file, tmp_path, monkeypatch):
+    """Every Config.get opens config.json, so on Windows a save that replaced it while another
+    thread or process was reading failed with "Access is denied" (the WhatsApp switch-off of
+    the Connections page answered 500). The save outlasts the reader.
+
+    MUTATION: `os.replace(tmp, cls.CONFIG_FILE)` back in `Config._write_config_file` - red."""
+    from vaf.core.config import Config
+    seam = windows_file_semantics.install(monkeypatch, tmp_path)
+    windows_file_semantics.retry_like_windows(monkeypatch)
+    reader = _hold_until_the_first_retry(monkeypatch, config_file)
+
+    Config.save({"provider": "openai"})
+
+    reader.join(10)
+    assert json.loads(config_file.read_bytes())["provider"] == "openai"
+    assert seam.refusals >= 1, "the reader never stood in the writer's way"
+
+
+def test_a_config_save_against_a_permanent_holder_still_raises(config_file, tmp_path, monkeypatch):
+    """The retry must not turn a holder that never lets go into a silent no-op, and the temp
+    file goes. MUTATION: swallow the last PermissionError in the write, or drop the temp
+    cleanup - red."""
+    from vaf.core.config import Config
+    windows_file_semantics.install(monkeypatch, tmp_path)
+    windows_file_semantics.retry_like_windows(monkeypatch)
+    monkeypatch.setattr(secure_store.time, "sleep", only_on_thread(lambda _s: None))
+    before = config_file.read_bytes()
+
+    with open(config_file, "rb"):
+        with pytest.raises(PermissionError):
+            Config.save({"provider": "openai"})
+
+    assert config_file.read_bytes() == before
+    litter = [p.name for p in config_file.parent.iterdir() if p.name.startswith(".config-")]
+    assert litter == [], f"the temp file was left behind: {litter}"
+
+
+def test_the_whatsapp_bridge_state_waits_out_a_reader_on_windows(tmp_path, monkeypatch):
+    """A process without the bridge (the CLI, a sub-agent) reads bridge_state.json before it
+    queues a send. A replace refused while it read left the file at `running: true` after the
+    run ended, silently (`_write_bridge_state` swallows the error), and every send from
+    outside then waited its full timeout.
+
+    MUTATION: a bare `tmp_path.replace(path)` back in `whatsapp_bridge._write_json_atomic` -
+    red."""
+    from vaf.api import whatsapp_bridge as wa
+    from vaf.core.platform import Platform
+    monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: tmp_path / "data"))
+    seam = windows_file_semantics.install(monkeypatch, tmp_path)
+    windows_file_semantics.retry_like_windows(monkeypatch)
+    wa._write_bridge_state(True)
+    assert json.loads(wa._ipc_state_path().read_bytes())["running"] is True
+    reader = _hold_until_the_first_retry(monkeypatch, wa._ipc_state_path())
+
+    wa._write_bridge_state(False)
+
+    reader.join(10)
+    assert json.loads(wa._ipc_state_path().read_bytes())["running"] is False
+    assert seam.refusals >= 1, "the reader never stood in the writer's way"
+
+
+def test_the_windows_file_seam_sees_pathlib(tmp_path, monkeypatch):
+    """The seam is only worth its tests if it intercepts the calls the code under test makes,
+    on the running Python (3.10 binds them into `pathlib._NormalAccessor`, later versions look
+    them up in `os` and `io`). MUTATION: stop wrapping `io.open`, or drop the accessor patch
+    (red on the 3.10 leg)."""
+    root = tmp_path / "root"
+    root.mkdir()
+    outside = tmp_path / "outside.txt"
+    seam = windows_file_semantics.install(monkeypatch, root)
+    a, b, c = root / "a.txt", root / "b.txt", root / "c.txt"
+
+    a.write_text("a", encoding="utf-8")
+    b.write_text("b", encoding="utf-8")
+    assert seam.opened == 2, "Path.open (write_text) went past the seam"
+    assert a.read_text(encoding="utf-8") == "a" and seam.opened == 3, "Path.read_text went past the seam"
+    outside.write_text("o", encoding="utf-8")
+    assert seam.opened == 3, "a file outside the root was counted"
+
+    with a.open("rb"):
+        for move in (lambda: b.replace(a), lambda: a.unlink(), lambda: a.rename(c)):
+            with pytest.raises(PermissionError):
+                move()
+    assert seam.refusals == 3
+    assert a.exists() and b.exists() and not c.exists()
+
+    taken, release = threading.Event(), threading.Event()
+
+    def hold(_src):
+        taken.set()
+        release.wait(10)
+    seam.pause = hold
+    mover = threading.Thread(target=a.rename, args=(c,), daemon=True)
+    mover.start()
+    assert taken.wait(10)
+    with pytest.raises(PermissionError):
+        a.read_text(encoding="utf-8")
+    release.set()
+    mover.join(10)
+    assert c.read_text(encoding="utf-8") == "a" and not a.exists()
 
 
 # ── the recovery kit's write order ──────────────────────────────────────────────

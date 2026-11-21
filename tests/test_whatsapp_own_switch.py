@@ -27,6 +27,7 @@ import time
 
 import pytest
 
+import windows_file_semantics
 from vaf.api import whatsapp_bridge as wa
 from vaf.api import whatsapp_routes as routes
 from vaf.core.messaging_connections import channel_enabled_for_scope
@@ -483,10 +484,26 @@ def test_switch_off_fuzz(world, monkeypatch):
     Oracle: after every thread has joined, no account whose stored switch is off has a live,
     unretired process, and no account has two live processes. `VAF_FUZZ_DRAWS` raises the draw
     count outside the suite; the seed is printed on failure."""
+    _switch_off_fuzz(world, monkeypatch, 150, "switch-off fuzz")
+
+
+def test_switch_off_fuzz_with_windows_file_semantics(world, monkeypatch, tmp_path):
+    """The same fuzz with the files under tmp_path behaving as on Windows. Every switch-off saves
+    the config while the other lanes read it (`channel_enabled_for_scope`), and on Windows a
+    replace of a file another thread holds open is refused: the Windows CI job had every
+    failing draw end in `raised: PermissionError(13, 'Access is denied')`.
+
+    MUTATION: `os.replace(tmp, cls.CONFIG_FILE)` back in `Config._write_config_file` - red."""
+    seam = windows_file_semantics.install(monkeypatch, tmp_path)
+    windows_file_semantics.retry_like_windows(monkeypatch)
+    _switch_off_fuzz(world, monkeypatch, 40, "switch-off fuzz, Windows file semantics", seam)
+
+
+def _switch_off_fuzz(world, monkeypatch, default_draws, label, seam=None):
     _quiet_reads(monkeypatch)
     monkeypatch.setattr(wa, "TERMINATE_WAIT", 0.05)
     HUNG.clear()
-    draws = int(os.environ.get("VAF_FUZZ_DRAWS", "150"))
+    draws = int(os.environ.get("VAF_FUZZ_DRAWS", str(default_draws)))
     seed = int(os.environ.get("VAF_FUZZ_SEED", "454"))
     master = random.Random(seed)
     failures = []
@@ -514,6 +531,7 @@ def test_switch_off_fuzz(world, monkeypatch):
         if HUNG.is_set():
             break       # a lane still runs: no shared state is trustworthy from here on
         _stop_and_join()
-    print(f"switch-off fuzz: {draws} draws, seed {seed}, {len(failures)} mismatches, "
-          f"longest lane {LONGEST_LANE[0]:.2f} s")
+    print(f"{label}: {draws} draws, seed {seed}, {len(failures)} mismatches, "
+          f"longest lane {LONGEST_LANE[0]:.2f} s"
+          + (f", {seam.refusals} refusals absorbed" if seam is not None else ""))
     assert failures == [], f"seed {seed}: {failures[:3]}"

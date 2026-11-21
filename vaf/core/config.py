@@ -958,6 +958,13 @@ class Config:
     # tmp+fsync+os.replace makes every read see either the old or the new
     # complete file; the file lock closes the read-modify-write lost-update
     # race between processes (precedent: vaf/core/secure_store.py).
+    # The replace goes through secure_store._replace_with_retry: on Windows,
+    # MoveFileEx refuses to replace config.json while any reader holds it open
+    # (Python's open() never grants FILE_SHARE_DELETE), and every Config.get
+    # opens it, so a bare os.replace failed a settings save with "Access is
+    # denied" whenever another thread or process read the config at that
+    # instant. The readers are transient; the bounded retry outlasts them and
+    # a permanent denial still raises.
 
     _filelock = None  # lazy singleton; filelock is reentrant per (instance, thread)
     # Guards the singleton's creation. Two first users at once each made a FileLock and the
@@ -996,9 +1003,12 @@ class Config:
     @classmethod
     def _write_config_file(cls, data: dict) -> None:
         """Atomic write: mkstemp in the SAME directory as the target (0600
-        from birth, and os.replace stays on one filesystem - atomic on POSIX
+        from birth, and the replace stays on one filesystem - atomic on POSIX
         and Windows). Readers never see a partial file; secrets never sit
-        world-readable before hardening."""
+        world-readable before hardening. The replace retries a transient
+        Windows sharing violation (see the block comment above)."""
+        # Lazy: secure_store imports Config at module level.
+        from vaf.core.secure_store import _replace_with_retry
         target_dir = Path(cls.CONFIG_FILE).parent
         target_dir.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(data, indent=4).encode("utf-8")
@@ -1008,7 +1018,7 @@ class Config:
                 f.write(payload)
                 f.flush()
                 os.fsync(f.fileno())
-            os.replace(tmp, cls.CONFIG_FILE)
+            _replace_with_retry(tmp, cls.CONFIG_FILE)
         except Exception:
             try:
                 os.unlink(tmp)

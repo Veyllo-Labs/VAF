@@ -600,6 +600,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **The web interface runs on Next.js 16.4.5.** 16.4.2 carried seven advisories published on
+  3 November (the image optimizer with SVG files, a cookie header on Edge routes, a forwarded
+  response whose length did not match its body, and four cache leaks in `use cache`,
+  `unstable_cache` and Cache Components). None reached VAF: its image optimizer is off, it has
+  no Edge route and no cache function, and its `/api` route on port 3000 has no proxy in front
+  of it. A development-only file-pattern library (minimatch) moves to 11 for a denial of
+  service in pattern handling, and the development-only validation library zod to 4.6.7 for
+  a memory exhaustion on oversized lists. `vaf update` installs the new packages and rebuilds
+  the interface at the next start.
 - **WhatsApp: a new account can no longer take over a deleted account's WhatsApp.** An
   account created with the name of a deleted account used to run the deleted account's linked
   WhatsApp as its own agent number and see its chats. Deleting an account now stops its

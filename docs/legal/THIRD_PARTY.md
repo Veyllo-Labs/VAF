@@ -207,7 +207,7 @@ VAF Web UI is itself licensed AGPL-3.0-or-later (per `web/package.json`).
 | mammoth | ^1.12.1 | BSD-2-Clause |
 | marked | ^17.0.2 | MIT |
 | monaco-editor | ^0.56.0 | MIT |
-| next | ^16.4.2 | MIT |
+| next | ^16.4.5 | MIT |
 | next-intl | ^4.13.6 | MIT |
 | react | ^18 | MIT |
 | react-chartjs-2 | ^5.3.1 | MIT |
@@ -228,7 +228,7 @@ VAF Web UI is itself licensed AGPL-3.0-or-later (per `web/package.json`).
 | @types/react-dom | ^18 | MIT |
 | autoprefixer | ^10.5.4 | MIT |
 | eslint | ^9.39.2 | MIT |
-| eslint-config-next | ^16.3.8 | MIT |
+| eslint-config-next | ^16.4.5 | MIT |
 | postcss | ^8.5.23 | MIT |
 | tailwindcss | ^3.3.0 | MIT |
 | tailwindcss-animate | ^1.0.7 | MIT |

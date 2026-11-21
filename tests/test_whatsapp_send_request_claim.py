@@ -12,7 +12,7 @@ failed bridge thread, whose sender loop kept polling next to the next run's.
 THE SECOND DEFECT, on the Windows CI job: the claim was a rename, and a rename is no mutex there
 (MoveFileEx opens the source by name, then renames by handle). Requests vanished without being
 handed out and without a file left behind (11 of 600 here, 2 of 20 in a fuzz draw). With Windows
-file semantics emulated (tests/windows_file_semantics.py) the rename claim lost 276 of 600.
+file semantics emulated (tests/windows_file_semantics.py) the rename claim lost 329 of 600.
 
 THE RULE: a consumer claims a file with an exclusive create of `<name>.json.claim` before it reads
 it (`_claim_request_file`), unlinks the request before it drops the marker, and a loop whose run

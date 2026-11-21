@@ -412,7 +412,7 @@ def _claim_request_file(path: Path) -> Optional[Path]:
     by name and then renames by handle, so two consumers that both opened it before the first
     rename both "own" it, and the one whose read is refused by the other's open handle used to
     delete it. Measured with Windows file semantics emulated (tests/windows_file_semantics.py):
-    276 of 600 requests vanished without being sent and without a file left behind, the shape
+    329 of 600 requests vanished without being sent and without a file left behind, the shape
     the Windows CI job showed. An exclusive create is one atomic syscall on POSIX and one
     `CREATE_NEW` on Windows; the kernel refuses the second caller. Same lesson and pattern as
     `claim_ticket` in vaf/core/a2a/store.py.

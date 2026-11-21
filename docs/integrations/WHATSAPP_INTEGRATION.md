@@ -504,7 +504,7 @@ The claim was a rename at first, and on the Windows CI job requests vanished wit
 and without a file left behind (11 of 600 in the two-consumer test): a rename is no mutex there,
 because MoveFileEx opens the source by name and renames by handle. The claim fuzz and the
 two-consumer test therefore also run under emulated Windows file semantics
-(`tests/windows_file_semantics.py`), where the rename claim lost 276 of 600 requests. The same
+(`tests/windows_file_semantics.py`), where the rename claim lost 329 of 600 requests. The same
 seam runs the switch-off fuzz of `tests/test_whatsapp_own_switch.py`: on Windows a config save
 that replaced `config.json` while another thread read it failed with "Access is denied", so
 `Config` writes through the store writer's bounded retry.

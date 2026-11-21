@@ -270,6 +270,15 @@ slower Windows runner. The settle predicate names the query itself.
 glibc's getaddrinfo reads `127.1` as 127.0.0.1; Windows' refuses it with error 11001,
 before any connect is made. A test that loops create_connection over such spellings asks
 first (`_resolver_takes`) whether this host's resolver accepts the spelling.
+
+## 22. A filesystem stub in a test matches a path by its components, never by a separator-bearing piece of its str().
+A test that stands in for `os.rename` and fails only the rename it means (`str(dst).endswith("/de")`)
+never fires on Windows: the code under test renames Path objects, whose str() ends in `\\de`
+there. The speech container's swap tests then took the happy path and reported `True is False`.
+Match by `os.path.basename(...)`, `Path(p).name` or `Path(p).parts`, or compare with str() of a
+Path. The scan reads stubs handed to `setattr` on `os`, `os.path`, `shutil`, `Path` or `pathlib`
+as a nested function or a lambda; it does not follow a stub defined elsewhere and passed in, or
+a module patched through `importlib`.
 """
 import ast
 import ntpath
@@ -2464,3 +2473,155 @@ def test_no_shorthand_address_reaches_a_resolver_unasked():
     hits = [f"{rel}:{no}" for rel, tree, _ in _test_trees() for no in _unasked_shorthand_dials(tree)]
     assert hits == [], ("Windows' getaddrinfo refuses 127.1 (error 11001) before any connect; "
                         "ask _resolver_takes first: " + ", ".join(hits))
+
+
+# 22 -- a filesystem stub matching a separator-bearing piece of a path's str()
+
+# The last name of a `setattr` target that holds filesystem calls: os, os.path, shutil,
+# pathlib and pathlib.Path, whatever module they are reached through (`path_jail.os`).
+_FS_TARGETS = {"os", "path", "shutil", "Path", "pathlib"}
+
+# (path, outermost function, needle as written) -> why the separator is right on every host.
+_SEPARATOR_MATCH_ALLOWED = {
+    ("tests/test_code_audit_folder_pinned.py", "test_a_held_folder_is_found_without_a_kernel_path",
+     "'/proc/self/fd/'"): (
+        "the product spells that handle path as a POSIX literal on every host "
+        "(path_jail._fd_path reads os.readlink(f\"/proc/self/fd/{fd}\"))"),
+}
+
+
+def _fs_setattr_stub(call, local_defs):
+    """The stub a `setattr(<filesystem module>, "name", stub)` call installs (a lambda, or a
+    function defined in the same scope), else None. The two-argument string form
+    (`setattr("os.rename", stub)`) counts as well."""
+    if _call_name(call) != "setattr" or len(call.args) < 2:
+        return None
+    first = call.args[0]
+    if isinstance(first, ast.Constant) and isinstance(first.value, str) and len(call.args) == 2:
+        target, stub = first.value.rsplit(".", 1)[0], call.args[1]
+    elif len(call.args) >= 3:
+        try:
+            target = ast.unparse(first)
+        except Exception:
+            return None
+        stub = call.args[2]
+    else:
+        return None
+    if target.split(".")[-1] not in _FS_TARGETS:
+        return None
+    if isinstance(stub, ast.Lambda):
+        return stub
+    if isinstance(stub, ast.Name):
+        return local_defs.get(stub.id)
+    return None
+
+
+def _str_of(node, params) -> bool:
+    """`str(p)` or `os.fspath(p)` of one of the stub's own parameters."""
+    return (isinstance(node, ast.Call) and _call_name(node) in ("str", "fspath")
+            and len(node.args) == 1 and isinstance(node.args[0], ast.Name)
+            and node.args[0].id in params)
+
+
+def _separator_needle(node) -> bool:
+    """A needle the scan cannot read (a name, a subscript, a call it does not know), or a
+    literal holding a separator. A literal without one, str() or os.fspath() of something
+    and an f-string are read as host-neutral."""
+    if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+        return any(_separator_needle(e) for e in node.elts)
+    if isinstance(node, ast.Constant):
+        return isinstance(node.value, str) and ("/" in node.value or "\\" in node.value)
+    if isinstance(node, ast.JoinedStr):
+        return False
+    if isinstance(node, ast.Call) and _call_name(node) in ("str", "fspath"):
+        return False
+    return True
+
+
+def _separator_matches(source: str):
+    """(line, outermost function, needle as written) per piece of a path's str() a filesystem
+    stub matches with `.endswith`, `.startswith` or `in`, in a function the Windows leg runs."""
+    hits = []
+    for fn in _functions_run_on_windows(ast.parse(source)):
+        local_defs = {n.name: n for n in ast.walk(fn)
+                      if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n is not fn}
+        stubs = [s for n in ast.walk(fn) if isinstance(n, ast.Call)
+                 for s in [_fs_setattr_stub(n, local_defs)] if s is not None]
+        for stub in stubs:
+            a = stub.args
+            params = {x.arg for x in a.posonlyargs + a.args + a.kwonlyargs}
+            params |= {x.arg for x in (a.vararg, a.kwarg) if x is not None}
+            for node in ast.walk(stub):
+                needles = []
+                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                        and node.func.attr in ("endswith", "startswith")
+                        and _str_of(node.func.value, params) and node.args):
+                    needles.append(node.args[0])
+                elif isinstance(node, ast.Compare):
+                    left = node.left
+                    for op, right in zip(node.ops, node.comparators):
+                        if isinstance(op, (ast.In, ast.NotIn)) and _str_of(right, params):
+                            needles.append(left)
+                        left = right
+                for needle in needles:
+                    if _separator_needle(needle):
+                        hits.append((needle.lineno, fn.name, ast.unparse(needle)))
+    return hits
+
+
+def test_the_separator_match_class_is_real():
+    """MUTATION: read every needle that is not a literal as host-neutral - red on the tuple
+    parameter case."""
+    from pathlib import PureWindowsPath as W
+    assert not str(W("models") / "de").endswith("/de")
+    tts = ('import os\n'
+           'def _failing(monkeypatch, *failing):\n'
+           '    def rename(src, dst):\n'
+           '        for a, b in failing:\n'
+           '            if str(src).endswith(a) and str(dst).endswith(b):\n'
+           '                raise PermissionError(13, "x")\n'
+           '    monkeypatch.setattr(os, "rename", rename)\n')
+    assert _separator_matches(tts) == [(5, "_failing", "a"), (5, "_failing", "b")]
+    literal = ('def test_x(monkeypatch):\n'
+               '    monkeypatch.setattr(mod.os.path, "exists", lambda p: str(p).endswith("/de"))\n')
+    assert _separator_matches(literal) == [(2, "test_x", "'/de'")]
+    contained = ('def test_x(m):\n'
+                 '    m.setattr(Path, "exists", lambda self: "\\\\de" in os.fspath(self))\n')
+    assert _separator_matches(contained) == [(2, "test_x", "'\\\\de'")]
+    for neutral in ('lambda s, d: os.path.basename(d) == "de"',
+                    'lambda s, d: str(d).startswith(str(root))',
+                    'lambda s, d: str(d).endswith(".de.incoming")',
+                    'lambda s, d: str(d).endswith(f"{os.sep}de")'):
+        assert _separator_matches('def test_x(m):\n    m.setattr(os, "rename", '
+                                  + neutral + ')\n') == [], neutral
+    # Not a filesystem stub: a separator in a needle is the code's own business there.
+    assert _separator_matches('def test_x(m):\n    m.setattr(client, "get", '
+                              'lambda u: str(u).endswith("/api"))\n') == []
+    # The string form of setattr names its target in the text.
+    assert _separator_matches('def test_x(m):\n    m.setattr("os.rename", '
+                              'lambda s, d: str(d).endswith("/de"))\n') == [(2, "test_x", "'/de'")]
+    skipped = ('import os, pytest\n@pytest.mark.skipif(os.name == "nt", reason="posix")\n'
+               + literal)
+    assert _separator_matches(skipped) == []
+    module_skip = ('import sys, pytest\nif sys.platform == "win32":\n'
+                   '    pytest.skip("posix only", allow_module_level=True)\n' + literal)
+    assert _separator_matches(module_skip) == []
+
+
+def test_no_filesystem_stub_matches_a_separator_piece():
+    """MUTATION: `str(src).endswith(a) and str(dst).endswith(b)` back in
+    tests/test_tts_container_verified.py's `_failing_renames` - red."""
+    hits = [f"{rel}:{no} {fn} {needle}" for rel, _tree, source in _test_trees()
+            for no, fn, needle in _separator_matches(source)
+            if (rel, fn, needle) not in _SEPARATOR_MATCH_ALLOWED]
+    assert hits == [], ("str() of a Path renders the host's separator, so a stub matching a "
+                        "piece of it with / or \\ never fires on Windows; compare "
+                        "os.path.basename(...) or Path(p).parts, or add the site to "
+                        "_SEPARATOR_MATCH_ALLOWED with its reason: " + ", ".join(hits))
+
+
+def test_the_separator_match_allowlist_carries_no_dead_entries():
+    for rel, fn, needle in _SEPARATOR_MATCH_ALLOWED:
+        found = {(f, n) for _, f, n in _separator_matches(
+            (_REPO / rel).read_text(encoding="utf-8"))}
+        assert (fn, needle) in found, f"allowlisted site no longer matches, drop it: {rel} {fn}"

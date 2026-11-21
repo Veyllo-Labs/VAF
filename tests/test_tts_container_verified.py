@@ -229,28 +229,36 @@ def _installed(container, model=b"installed model", config=b"installed config"):
 
 
 def _failing_renames(monkeypatch, *failing):
-    """os.rename raising for the given (source suffix, destination suffix) pairs."""
+    """os.rename raising for the given (source name, destination name) pairs, and the list
+    of pairs it refused. Names are compared as whole last components: the container renames
+    Path objects, and str() of a Path renders the host's separator, so a needle such as
+    "/de" never matches on Windows and the failure path silently becomes the happy path.
+    The tests assert the refusals happened, so a stub that stops matching on any host fails
+    on that assertion, not on a misleading return value."""
     import os
     real_rename = os.rename
+    refused = []
 
     def rename(src, dst):
-        for a, b in failing:
-            if str(src).endswith(a) and str(dst).endswith(b):
-                raise PermissionError(13, "Permission denied")
+        pair = (os.path.basename(os.fspath(src)), os.path.basename(os.fspath(dst)))
+        if pair in failing:
+            refused.append(pair)
+            raise PermissionError(13, "Permission denied")
         return real_rename(src, dst)
 
     monkeypatch.setattr(os, "rename", rename)
-    return real_rename
+    return types.SimpleNamespace(real=real_rename, refused=refused)
 
 
 def test_a_failed_swap_puts_the_installed_voice_back(container, monkeypatch):
     """Both files verified, then the staged folder cannot take the installed one's place:
     the installed folder is renamed back, whole. MUTATION: drop the rename back: red."""
     d = _installed(container)
-    _failing_renames(monkeypatch, (".de.incoming", "/de"))
+    stub = _failing_renames(monkeypatch, (".de.incoming", "de"))
     calls = []
     _network(monkeypatch, container, {"onnx": MODEL, "onnx.json": CONFIG}, calls)
     assert container.download_model("de") is False
+    assert (".de.incoming", "de") in stub.refused, ("the swap was never refused", stub.refused)
     assert (d / "de.onnx").read_bytes() == b"installed model"
     assert (d / "de.onnx.json").read_bytes() == b"installed config"
     assert sorted(p.name for p in container.MODELS_DIR.iterdir()) == ["de"]
@@ -265,10 +273,12 @@ def test_a_failed_rename_back_keeps_the_old_voice_aside_and_the_next_install_res
     MUTATIONS: report the double fault as a plain rename failure (red: the line), or let
     the next attempt start without recovering (red: the old voice is lost)."""
     _installed(container)
-    real_rename = _failing_renames(monkeypatch, (".de.incoming", "/de"), (".de.previous", "/de"))
+    stub = _failing_renames(monkeypatch, (".de.incoming", "de"), (".de.previous", "de"))
     calls = []
     _network(monkeypatch, container, {"onnx": MODEL, "onnx.json": CONFIG}, calls)
     assert container.download_model("de") is False
+    for pair in ((".de.incoming", "de"), (".de.previous", "de")):
+        assert pair in stub.refused, ("a stubbed rename was never refused", pair, stub.refused)
     status = container.download_progress["de"]
     assert "or the old one restored; install it again" in status["error"], status
     assert len(status["error"]) <= 115, status["error"]
@@ -281,7 +291,7 @@ def test_a_failed_rename_back_keeps_the_old_voice_aside_and_the_next_install_res
     assert sorted(p.name for p in container.MODELS_DIR.iterdir()) == [".de.previous"]
 
     import os
-    monkeypatch.setattr(os, "rename", real_rename)
+    monkeypatch.setattr(os, "rename", stub.real)
     _network(monkeypatch, container, {"onnx": MODEL + b"x", "onnx.json": CONFIG}, calls)
     assert container.download_model("de") is False
     d = container.MODELS_DIR / "de"

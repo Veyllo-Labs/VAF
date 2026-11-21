@@ -2447,8 +2447,12 @@ def test_the_shell_readings_scale_linearly(name, one_word, build):
     word, ansi-c in arithmetic and dot-dot targets), so wherever shlex's cost per byte steps
     up the total r drifts towards 3/2 with no change in VAF's own code: on the ubuntu
     runner, with glibc's mmap threshold pinned at 32 KiB, ansi-c in a default word went from
-    r 1.26 to 1.88 while its own time stayed linear. The own span of every green row stayed
-    between 0.82 and 1.03 here, with and without that axis.
+    r 1.26 to 1.88; that runner recorded no own times, and the row's own time, measured here
+    under the same axis, stayed linear. The own span of every green row stayed between 0.82
+    and 1.03 here, with and without that axis. Every one-word shape calls shlex.split at
+    least twice, so a shape the wrapper counts no call for is red: a check that bound the
+    name itself (`from shlex import split`) would leave the own time equal to the total and
+    quietly bring back the span on totals.
     Named boundary: shlex's own cost, the length-capped exception, is judged only by the
     ceiling and by the call count; a constant number of extra shlex passes is a constant
     factor, which only the ceiling judges.
@@ -2461,13 +2465,17 @@ def test_the_shell_readings_scale_linearly(name, one_word, build):
     distinct here-strings rows);
     MUTATION: printf's option slot without its bound, so it runs to the word's end - red
     (glued printf, by the span on the own times and by the ceiling), which a comparison of
-    doubling ratios let pass. The checks of the verdict and of the measurement are pinned by
-    the tests after this one, each with its own mutations."""
+    doubling ratios let pass;
+    MUTATION: the wrapper counts no call - red (every one-word row).
+    The checks of the verdict and of the measurement are pinned by the tests after this one,
+    each with its own mutations."""
     sizes = (15000, 30000, 60000, 120000)
     if one_word:
         pairs = [_paired_cpu_times(build(n), _plain_word(len(build(n)))) for n in sizes]
         times, own, calls = ([shape[k] for shape, _ in pairs] for k in range(3))
         plain, own_plain = ([ref[k] for _, ref in pairs] for k in range(2))
+        assert calls[0] > 0, (name, calls, "the shlex.split wrapper saw no call: the own "
+                              "times would be the totals")
         verdict = _one_word_verdict(times, plain, own, own_plain, calls, _cpu_clock_step())
         assert verdict is None, (name, times, plain, own, own_plain, calls, verdict)
         return

@@ -209,18 +209,28 @@ locally, in the time the suite already takes:
                   with its launcher; a killed stand-in without it left a child holding
                   a lock) and exec of the real interpreter; in the parent SIGTERM,
                   SIGINT and SIGHUP sent to it passed on, then the child's exit code,
-                  or its signal re-raised, as its own. VAF_HOSTILE_VENV_LAUNCHER
-                  carries its path, and the sitecustomize sets sys.executable to it,
-                  as a Windows interpreter reports __PYVENV_LAUNCHER__.
-                  VAF_HOSTILE_REAL_PYTHON names the real interpreter for a Linux-only
-                  test that inspects its own child process. Measured when this was
-                  added, the three affected files with the old tests: the MCP test
-                  failed every run; the descendant count raced (it failed 10 of 10
-                  runs alone, 1 of 3 in its file, 2 of 2 beside the MCP file), since
-                  the forwarded SIGTERM can end the child before the scan reaches it,
-                  and so it is asserted by effect now. Named boundaries: macOS has no
-                  PR_SET_PDEATHSIG, so the axis is Linux only; a child started with an
-                  environment that drops PYTHONPATH reports the real interpreter; the
+                  or its signal re-raised, as its own. It hands its own path to its
+                  child alone, in VAF_HOSTILE_VENV_LAUNCHER, and the sitecustomize sets
+                  sys.executable to it and removes the variable, as a Windows
+                  interpreter reads and clears __PYVENV_LAUNCHER__ (bpo-35873).
+                  Exported to the whole run instead, it reached an interpreter of a
+                  second venv, and the six real-restart cases re-executed into the
+                  wrong one. VAF_HOSTILE_REAL_PYTHON names the real interpreter for a
+                  Linux-only test that inspects its own child process (one today:
+                  test_a_retitled_comm_is_reported). Measured when this was added,
+                  the three affected files with the old tests: the MCP test failed
+                  every run; the descendant count raced (it failed 10 of 10 runs
+                  alone, 1 of 3 in its file, 2 of 2 beside the MCP file), since the
+                  forwarded SIGTERM can end the child before the scan reaches it, and
+                  so it is asserted by effect now. The whole suite under both new
+                  axes, with those fixes: 7 failed, 21641 passed, 238 skipped in
+                  1614 s, the comm test and the six restart cases named above, both
+                  since fixed; then the 60 test files that start sys.executable or
+                  name _base_executable: 2381 passed, 29 skipped in 316 s. Named
+                  boundaries: macOS has no PR_SET_PDEATHSIG, so the axis is Linux
+                  only; a child started with an environment that drops PYTHONPATH,
+                  or with -S or -I, reports the real interpreter and keeps the
+                  variable, which Windows clears in C; the
                   launcher sits in a temp dir, not beside the venv's other scripts as
                   python.exe does in Scripts, so code that looks for a tool next to
                   sys.executable finds nothing here; a signal sent to the whole
@@ -239,7 +249,8 @@ locally, in the time the suite already takes:
                   the limit, both that test's (393297 and 65627 characters); the next
                   largest has 5098. The axis also stopped this script's own refusal
                   plugin, which writes the id of the last finished test into the
-                  environment (INTERNALERROR); it keeps the id's start now. Named
+                  environment (INTERNALERROR); it keeps the id's start now. With the
+                  ids named, the whole run under the axis had no test refused. Named
                   boundary: an env= dict handed to subprocess is not checked, since it
                   never goes through putenv.
 
@@ -485,11 +496,13 @@ if sys.platform.startswith("linux"):
     _platform.machine = lambda: "arm64"
 
 
-_venv_launcher = _os.environ.get("VAF_HOSTILE_VENV_LAUNCHER")
-if _venv_launcher:
-    # A Windows interpreter started by its venv's python.exe reports that launcher
-    # (__PYVENV_LAUNCHER__), so a Python child spawned from here goes through it again.
-    sys.executable = _venv_launcher
+# Set by the venv launcher for its own child only, and removed once read, as a Windows
+# interpreter reads and clears __PYVENV_LAUNCHER__: it reports the launcher, so a Python child
+# spawned from here goes through it again, while an interpreter of another venv, or one
+# started without the launcher, reports itself.
+_launcher_path = _os.environ.pop("VAF_HOSTILE_VENV_LAUNCHER", None)
+if _launcher_path:
+    sys.executable = _launcher_path
 
 
 if _os.name != "nt":
@@ -813,12 +826,14 @@ def _port_key(port):
 
 # The venv-launcher axis: what python.exe of a Windows virtual environment does, as a native
 # program, because a shell or Python shim can show neither the given argv in the process
-# table nor the exit status of a signal. @REAL_PYTHON@ becomes a C string literal.
+# table nor the exit status of a signal. @REAL_PYTHON@ and @LAUNCHER@ become C string
+# literals: the interpreter it runs and its own path, which it hands its child.
 _LAUNCHER_SOURCE = r'''
 #define _GNU_SOURCE
 #include <errno.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
@@ -827,6 +842,7 @@ _LAUNCHER_SOURCE = r'''
 #include <unistd.h>
 
 static const char REAL[] = @REAL_PYTHON@;
+static const char SELF[] = @LAUNCHER@;
 static const int FORWARDED[] = {SIGTERM, SIGINT, SIGHUP};
 #define N_FORWARDED (sizeof(FORWARDED) / sizeof(FORWARDED[0]))
 static volatile sig_atomic_t child = 0;
@@ -875,6 +891,8 @@ int main(int argc, char **argv)
         prctl(PR_SET_PDEATHSIG, SIGKILL);
         if (getppid() != parent)
             _exit(127);
+        /* __PYVENV_LAUNCHER__'s part: the interpreter reports this launcher. */
+        setenv("VAF_HOSTILE_VENV_LAUNCHER", SELF, 1);
         argv[0] = (char *)REAL;
         execv(REAL, argv);
         perror("venv launcher: exec");
@@ -930,9 +948,9 @@ def _venv_launcher(directory, real):
     folder = Path(directory) / "venv-launcher"
     folder.mkdir(parents=True, exist_ok=True)
     source = folder / "launcher.c"
-    source.write_text(_LAUNCHER_SOURCE.replace("@REAL_PYTHON@", _c_string(real)),
-                      encoding="utf-8")
     launcher = folder / "python"
+    source.write_text(_LAUNCHER_SOURCE.replace("@REAL_PYTHON@", _c_string(real))
+                      .replace("@LAUNCHER@", _c_string(launcher)), encoding="utf-8")
     try:
         subprocess.run([compiler, "-O2", "-o", str(launcher), str(source)],
                        check=True, capture_output=True, timeout=120)
@@ -1021,7 +1039,6 @@ def main() -> int:
         python = sys.executable
         if launcher is not None:
             python = str(launcher)
-            env["VAF_HOSTILE_VENV_LAUNCHER"] = python
             # For a Linux-only test that inspects its own child process (comm, pid): there
             # the launcher is an artefact, since such a test never runs on Windows.
             env["VAF_HOSTILE_REAL_PYTHON"] = sys.executable

@@ -149,7 +149,11 @@ def test_a_retitled_comm_is_reported():
     code = ("import ctypes, time; "
             "ctypes.CDLL(None).prctl(15, b'next-' + b'server (v1', 0, 0, 0); "
             "time.sleep(20)")
-    fake = _spawn([sys.executable, "-c", code])
+    # The comm belongs to the interpreter that called prctl. In the venv-launcher run of
+    # scripts/hostile_env.py the Popen is a launcher in front of it, an artefact for this
+    # test, which never runs on Windows; that run names the real interpreter.
+    python = os.environ.get("VAF_HOSTILE_REAL_PYTHON") or sys.executable
+    fake = _spawn([python, "-c", code])
     try:
         hits = {m.pid: m.kind for m in mod.find_running_app()}
     finally:

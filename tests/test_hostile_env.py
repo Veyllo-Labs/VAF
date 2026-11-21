@@ -1013,18 +1013,30 @@ def test_the_launcher_ends_as_its_child_did(launcher, tmp_path):
 @needs_launcher
 def test_a_child_reports_the_launcher_as_its_interpreter(launcher, tmp_path):
     """A Windows interpreter started by the launcher reports the launcher as sys.executable,
-    so a Python child spawned from it goes through the launcher again.
-    MUTATION: drop the sys.executable line from the snippet - red."""
+    so a Python child spawned from it goes through the launcher again. The launcher hands
+    its own path to its child alone, and the child clears it once read, as Windows does with
+    __PYVENV_LAUNCHER__: an interpreter started any other way (another venv's, which a
+    restart test re-executes) reports itself, even as a grandchild that inherits the rest of
+    the environment.
+    MUTATION: drop the sys.executable line from the snippet - red; read the variable
+    without removing it - red (the grandchild reports the launcher); the launcher does not
+    set it - red."""
     snippet = tmp_path / "sitecustomize_snippet.py"
     snippet.write_text(_blocker(), encoding="utf-8")
-    code = ("import sys; exec(compile(open(sys.argv[1], encoding='utf-8').read(), "
-            "'sitecustomize', 'exec')); print(sys.executable)")
+    load = ("import os, subprocess, sys; exec(compile(open(sys.argv[1], encoding='utf-8')"
+            ".read(), 'sitecustomize', 'exec')); ")
+    grandchild = (f"import sys; exec(compile(open({str(snippet)!r}, encoding='utf-8').read(), "
+                  "'sitecustomize', 'exec')); print(sys.executable)")
+    code = load + ("print(sys.executable); sys.stdout.flush(); "
+                   f"subprocess.run([sys.argv[2], '-c', {grandchild!r}])")
 
-    def reported(**env):
-        return subprocess.run([launcher, "-c", code, str(snippet)], capture_output=True,
-                              text=True, timeout=60, env=_clean_env(**env)).stdout.strip()
-    assert reported(VAF_HOSTILE_VENV_LAUNCHER=launcher) == launcher
-    assert reported() != launcher
+    def reported(python):
+        out = subprocess.run([python, "-c", code, str(snippet), _REAL_PYTHON],
+                             capture_output=True, text=True, timeout=60, env=_clean_env())
+        assert out.returncode == 0, out.stderr
+        return out.stdout.split()
+    assert reported(launcher) == [launcher, _REAL_PYTHON]
+    assert reported(_REAL_PYTHON) == [_REAL_PYTHON, _REAL_PYTHON]
 
 
 @needs_launcher
@@ -1061,18 +1073,20 @@ def test_the_launcher_is_built_on_linux_only(monkeypatch, tmp_path):
 
 def test_main_runs_pytest_through_the_launcher(monkeypatch, capsys, tmp_path):
     """With a launcher, pytest itself starts through it (on the Windows runner `python -m
-    pytest` has the launcher as its parent too), the sitecustomize learns its path and a
+    pytest` has the launcher as its parent too), which hands its path to pytest itself, and a
     Linux-only test that inspects its own child finds the real interpreter; without one,
     the interpreter runs pytest and the announcement gives the reason.
-    MUTATION: run pytest with sys.executable regardless - red; drop the exported path -
-    red; drop the announcement line - red."""
+    MUTATION: run pytest with sys.executable regardless - red; drop the exported real
+    interpreter - red; drop the announcement line - red."""
     module = _module()
     fake = str(tmp_path / "venv-launcher" / "python")
     argv = []
     env = _child_env(module, monkeypatch, "linux", None,
                      launcher=lambda directory, real: (Path(fake), None), argv=argv)
     assert argv[0] == fake
-    assert env["VAF_HOSTILE_VENV_LAUNCHER"] == fake
+    # The launcher hands its path to its own child; exported, it would reach interpreters
+    # it never started.
+    assert "VAF_HOSTILE_VENV_LAUNCHER" not in env
     assert env["VAF_HOSTILE_REAL_PYTHON"] == sys.executable
     assert (f"  venv launcher   Python runs as two processes through {fake}"
             in capsys.readouterr().out)

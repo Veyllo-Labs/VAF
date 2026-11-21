@@ -365,6 +365,9 @@ LANE_HANG = 60.0
 LONGEST_LANE = [0.0]
 # Set once a lane hung: the fuzz stops at that draw.
 HUNG = threading.Event()
+# The name of every fuzz lane thread, so a check can find exactly those among the process's
+# threads (other tests leave pool threads of their own alive).
+LANE_PREFIX = "switch-off-fuzz-lane-"
 
 
 def _fuzz_draw(world, rng, violations):
@@ -416,7 +419,8 @@ def _fuzz_draw(world, rng, violations):
     # operations into the next draw. A lane that hangs is a violation that ends the whole fuzz
     # (`HUNG`): no later draw runs next to it, and as a daemon thread it cannot keep the test
     # process from exiting.
-    threads = [threading.Thread(target=lane, args=(items,), daemon=True) for items in lanes]
+    threads = [threading.Thread(target=lane, args=(items,), daemon=True, name=f"{LANE_PREFIX}{i}")
+               for i, items in enumerate(lanes)]
     for t in threads:
         t.start()
     for t in threads:
@@ -463,9 +467,11 @@ def test_a_hung_lane_stops_the_fuzz_and_cannot_hold_the_process(world, monkeypat
         _fuzz_draw(world, _OneOpRng(), violations)
         assert HUNG.is_set()
         assert any("hung" in v for v in violations), violations
-        stuck = [t for t in threading.enumerate() if t.is_alive() and t is not threading.main_thread()
-                 and not t.daemon]
-        assert stuck == [], stuck
+        # Only the fuzz's own lanes: the hung one still runs, and none of them may hold the
+        # process (other tests' pool threads are not this test's business).
+        lanes = [t for t in threading.enumerate() if t.name.startswith(LANE_PREFIX) and t.is_alive()]
+        assert lanes, "the hung lane is not among the threads"
+        assert all(t.daemon for t in lanes), [t for t in lanes if not t.daemon]
     finally:
         release.set()
         HUNG.clear()

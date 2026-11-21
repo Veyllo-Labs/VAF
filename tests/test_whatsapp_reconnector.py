@@ -22,6 +22,7 @@ import ast
 import logging
 import os
 import random
+import sys
 import threading
 import time
 from pathlib import Path
@@ -31,7 +32,7 @@ import pytest
 from vaf.api import whatsapp_bridge as wa
 
 from test_whatsapp_account_process import (  # noqa: F401 - `world` is a fixture
-    ADMIN, ALICE, ALICE_SCOPE, BOB_SCOPE, SCOPES, Unkillable, WHOLE, _bridge_with, _client, _quiet_reads,
+    ADMIN, ALICE, ALICE_SCOPE, BOB_SCOPE, CAROL_SCOPE, SCOPES, Unkillable, WHOLE, _bridge_with, _client, _quiet_reads,
     _record, world,
 )
 
@@ -517,6 +518,214 @@ def test_a_recovery_with_nobody_left_starts_no_bridge(world, monkeypatch, caplog
     assert not [r for r in caplog.records if "did not start again" in r.getMessage()]
 
 
+# -- the recovery's own checks: the current run, eligibility, preflight, the launch -------------
+
+CAROL = {"username": "carol", "role": "user", "user_scope_id": CAROL_SCOPE}
+
+
+def _during_the_pass_read(monkeypatch, action):
+    """Run `action` inside the pass's look at who is runnable (`_bring_back`'s
+    `_get_users_to_run`, after it took the failed run's outcome), once."""
+    real, done = wa._get_users_to_run, []
+
+    def users():
+        if not done and threading.current_thread() is threading.main_thread():
+            done.append(True)
+            action()
+        return real()
+    monkeypatch.setattr(wa, "_get_users_to_run", users)
+    return done
+
+
+@pytest.mark.parametrize("meanwhile", ["carol_cold_start_and_stops", "admin_start"])
+def test_a_recovery_of_a_replaced_run_is_not_started(world, monkeypatch, caplog, meanwhile):
+    """The pass took the failed run's outcome; before its recovery starts, another run replaces
+    it. (a) Carol's own cold start publishes a run, Alice and Carol stop their own WhatsApp
+    before its spawn phase (their Stops act on that run), and it ends with nobody to run: a
+    recovery of the old run would start Alice again. (b) An admin's whole Start brought the
+    bridge up: that is not this recovery's success. Either way the recovery answers
+    "cancelled": nothing is started by it and no try is counted. MUTATION: drop the check that
+    `recover` is the current run."""
+    crash = _crashing_runs(monkeypatch)
+    _bridge_with(world, "alice", "bob")
+    _crash_and_wait(crash)
+    failed = wa._run_outcome
+    world.link("carol")
+    world.own_switch(CAROL_SCOPE, True)
+    world.spawned.clear()
+
+    def carol_cold_start_and_stops():
+        hold = threading.Event()
+        monkeypatch.setattr("vaf.core.channel_pairing.refile_whatsapp_owner_numbers",
+                            lambda: hold.wait(timeout=5) and [])
+        answer = {}
+        start = threading.Thread(target=lambda: answer.update(r=wa.start_account("carol", CAROL_SCOPE)))
+        start.start()
+        assert _wait(lambda: wa._run_outcome is not failed and wa.is_bridge_running())
+        assert _own_stop(ALICE).status_code == 200
+        assert _own_stop(CAROL).status_code == 200
+        hold.set()
+        start.join(timeout=10)
+        assert _wait(lambda: not wa.is_bridge_running())
+
+    def admin_start():
+        assert _client(ADMIN).post("/api/whatsapp/start").status_code == 200
+        assert _wait(lambda: wa._run_outcome.settled.is_set())
+    hooked = _during_the_pass_read(monkeypatch, carol_cold_start_and_stops if meanwhile.startswith("carol")
+                                   else admin_start)
+    spawned_before = list(world.names())
+    reconnector = wa.Reconnector()
+    with caplog.at_level(logging.WARNING, logger="vaf.api.whatsapp_bridge"):
+        assert reconnector.step(0.0) == []
+    assert hooked and reconnector._crash_restarts == 0
+    assert not [r for r in caplog.records if "after a failed run" in r.getMessage()]
+    if meanwhile.startswith("carol"):
+        time.sleep(0.1)
+        assert world.names() == spawned_before and not world.live("alice") and not world.live("carol")
+
+
+def test_a_stop_with_no_run_up_puts_no_end_marker_into_a_new_run(world, monkeypatch):
+    """An admin's Stop while no run is up, and Alice's own cold start published right after the
+    Stop set its stop: the end marker goes to the queue of the run the Stop ended (none), never
+    into the new run's queue, whose sender loop would end on it. MUTATION: `stop_bridge` reads
+    the queue after its locked step; publication assigns the queue outside its locked step."""
+    world.link("alice")
+    world.own_switch(ALICE_SCOPE, True)
+    real = wa._marks_lock
+
+    class AfterRelease:
+        hook = None
+
+        def __enter__(self):
+            real.acquire()
+            return self
+
+        def __exit__(self, *exc):
+            real.release()
+            hook, AfterRelease.hook = AfterRelease.hook, None
+            if hook:
+                hook()
+    monkeypatch.setattr(wa, "_marks_lock", AfterRelease())
+    AfterRelease.hook = lambda: wa.start_account("alice", ALICE_SCOPE)
+    assert _client(ADMIN).post("/api/whatsapp/stop").status_code == 200
+    assert world.wait_for(lambda: world.live("alice"))
+    assert wa.is_bridge_running() and None not in list(wa._outgoing_queue.queue)
+
+
+def test_a_recovery_whose_thread_could_not_launch_is_tried_again(world, monkeypatch):
+    """The recovery's bridge thread could not be launched: that was a try, and the intent stays,
+    so the next pass after the cooldown starts the members. MUTATION: the failed launch leaves
+    a run that is not marked failed (the recovery is lost)."""
+    crash = _crashing_runs(monkeypatch)
+    _bridge_with(world, "alice")
+    _crash_and_wait(crash)
+    world.spawned.clear()
+    launches = []
+
+    class Threads:
+        def __getattr__(self, name):
+            return getattr(threading, name)
+
+        class Thread(threading.Thread):
+            def start(self):
+                if getattr(self, "_target", None) is wa._run_bridge:
+                    launches.append(True)
+                    if len(launches) == 1:
+                        raise RuntimeError("can't start new thread")
+                return super().start()
+    monkeypatch.setattr(wa, "threading", Threads())
+    reconnector = wa.Reconnector(cooldown=0.0)
+    assert [(a[0], a[1]) for a in reconnector.step(0.0)] == [("*", False)]
+    assert not wa.is_bridge_running()
+    assert [(a[0], a[1]) for a in reconnector.step(1.0)] == [("*", True)]
+    assert world.wait_for(lambda: world.live("alice"))
+    assert len(launches) == 2 and reconnector._crash_restarts == 2
+
+
+@pytest.mark.parametrize("meanwhile", ["admin_stop", "last_member_stops"])
+def test_a_recovery_overtaken_during_its_preflight_is_no_try(world, monkeypatch, caplog, meanwhile):
+    """The recovery's dependency check fails, and while it ran an admin stopped the bridge, or
+    the last member stopped its own WhatsApp: the attempt was overtaken, so it spends no try and
+    logs no failure. MUTATION: report the preflight failure without asking whether the attempt
+    was overtaken."""
+    crash = _crashing_runs(monkeypatch)
+    _bridge_with(world, "alice")
+    _crash_and_wait(crash)
+
+    def deps_fail_after_a_stop():
+        if meanwhile == "admin_stop":
+            assert _client(ADMIN).post("/api/whatsapp/stop").status_code == 200
+        else:
+            assert _own_stop(ALICE).status_code == 200
+        return False, "npm ci failed"
+    monkeypatch.setattr(wa, "ensure_bridge_deps", deps_fail_after_a_stop)
+    reconnector = wa.Reconnector(cooldown=0.0)
+    with caplog.at_level(logging.WARNING, logger="vaf.api.whatsapp_bridge"):
+        assert reconnector.step(0.0) == []
+    assert reconnector._crash_restarts == 0
+    assert not [r for r in caplog.records if "npm ci failed" in r.getMessage()
+                or "did not start again" in r.getMessage()]
+
+
+@pytest.mark.parametrize("others", ["alone", "others_run"])
+def test_a_recovery_reads_who_is_runnable_at_its_publication(world, monkeypatch, caplog, others):
+    """Alice, the failed run's only member, is switched off during the recovery's preflight
+    (a settings save). The recovery reads who is runnable again right before it publishes:
+    nobody of its members is, so it answers "nobody", publishes no run and spends no try, also
+    when another account (Carol, no member) is linked and switched on. MUTATION: publish for
+    the members without reading who is runnable again; drop the recovery's own "nobody"
+    answer."""
+    crash = _crashing_runs(monkeypatch)
+    _bridge_with(world, "alice")
+    _crash_and_wait(crash)
+    failed = wa._run_outcome
+    if others == "others_run":
+        world.link("carol")
+        world.own_switch(CAROL_SCOPE, True)
+    real_node = wa._node_path
+
+    def node_after_a_switch_off():
+        world.own_switch(ALICE_SCOPE, False)
+        return real_node()
+    monkeypatch.setattr(wa, "_node_path", node_after_a_switch_off)
+    world.spawned.clear()
+    reconnector = wa.Reconnector()
+    with caplog.at_level(logging.WARNING, logger="vaf.api.whatsapp_bridge"):
+        assert reconnector.step(0.0) == []
+    assert wa._run_outcome is failed and not wa.is_bridge_running()
+    assert reconnector._crash_restarts == 0 and world.names() == []
+
+
+@pytest.mark.parametrize("start", ["admin_whole_start", "recovery"])
+def test_a_stop_after_the_first_filter_is_kept(world, monkeypatch, start):
+    """Alice's own Stop lands after the spawn phase filtered its users by the run's members and
+    before its loop reaches her (between the two, the run installs its reply callback, outside
+    the lock): the check before each spawn skips her. MUTATION: drop that check."""
+    hooked = []
+    real_callback = wa.set_whatsapp_reply_callback
+
+    def callback_then_stop(cb):
+        real_callback(cb)
+        if cb is not None and not hooked and threading.current_thread() is wa._bridge_thread:
+            hooked.append(True)
+            assert _own_stop(ALICE).status_code == 200
+    if start == "recovery":
+        crash = _crashing_runs(monkeypatch)
+        _bridge_with(world, "alice", "bob")
+        _crash_and_wait(crash)
+        world.spawned.clear()
+        monkeypatch.setattr(wa, "set_whatsapp_reply_callback", callback_then_stop)
+        assert [(a[0], a[1]) for a in wa.Reconnector().step(0.0)] == [("*", True)]
+    else:
+        for name, scope in (("alice", ALICE_SCOPE), ("bob", BOB_SCOPE)):
+            world.link(name)
+            world.own_switch(scope, True)
+        monkeypatch.setattr(wa, "set_whatsapp_reply_callback", callback_then_stop)
+        assert _client(ADMIN).post("/api/whatsapp/start").status_code == 200
+    assert world.wait_for(lambda: wa._run_outcome.settled.is_set() and world.live("bob"))
+    assert hooked and world.names() == ["bob"] and not world.live("alice")
+
+
 # -- AC8 -----------------------------------------------------------------------------------------
 
 def test_a_crashed_bridge_is_brought_back_three_times(world, monkeypatch):
@@ -627,6 +836,16 @@ EXPLICIT = (
 )
 
 
+# How long a lane of the route fuzz may run before the fuzz stops (`_LaneHung`).
+ROUTE_LANE_HANG = 60.0
+
+
+class _LaneHung(Exception):
+    def __init__(self, plan):
+        super().__init__(plan)
+        self.plan = plan
+
+
 def _route_draw(world, rng, crash):
     """One draw: lane A sends 3 to 6 explicit operations through the routes, lane B runs 3 to 6
     automatic events (a crash of the bridge thread, a reconnect pass, a process death), with 0
@@ -685,12 +904,16 @@ def _route_draw(world, rng, crash):
             except BaseException as e:  # noqa: BLE001 - the oracle reports it
                 errors.append(f"raised: {e!r}")
         return run
+    plan = [p[0][0] + ":" + p[1] for p in plan_a] + [p[0] + ":" + p[1] for p in plan_b]
     threads = [threading.Thread(target=guarded(fn), daemon=True) for fn in (lane_a, lane_b)]
     for t in threads:
         t.start()
     for t in threads:
-        t.join(timeout=60)
-    violations = list(errors) + ["lane hung" for t in threads if t.is_alive()]
+        t.join(timeout=ROUTE_LANE_HANG)
+    if any(t.is_alive() for t in threads):
+        # A lane that still runs would act on the next draw's state: no verdict, no next draw.
+        raise _LaneHung(plan)
+    violations = list(errors)
 
     def undone():
         return [name for name in FUZZ_USERS
@@ -702,13 +925,19 @@ def _route_draw(world, rng, crash):
     before_the_end = undone()
     if thread is not None and thread.is_alive() and wa._bridge_stop.is_set():
         thread.join(timeout=10)
-    if wa.is_bridge_running():
-        wa._run_outcome.settled.wait(timeout=5)
+        if thread.is_alive():
+            violations.append("the stopped run did not end within 10 s; no verdict on its Stops")
+            return plan, violations
+    # The verdict reads process liveness: only once the run's spawn phase is over.
+    if wa.is_bridge_running() and not wa._run_outcome.settled.wait(timeout=10):
+        violations.append(f"the spawn phase did not settle within 10 s (registered: {sorted(wa._processes)}); "
+                          "no verdict on its Stops")
+        return plan, violations
     late = undone()
     if before_the_end and not late:
         ENDING_AT_CHECK[0] += 1
     violations.extend(f"{name}: its Stop was undone" for name in late)
-    return [p[0][0] + ":" + p[1] for p in plan_a] + [p[0] + ":" + p[1] for p in plan_b], violations
+    return plan, violations
 
 
 def test_route_stop_fuzz(world, monkeypatch):
@@ -735,7 +964,11 @@ def test_route_stop_fuzz(world, monkeypatch):
         draw_rng = random.Random(master.random())
         assert wa.start_bridge()
         assert world.wait_for(lambda: all(world.live(n) for n in FUZZ_USERS), timeout=30)
-        plan, violations = _route_draw(world, draw_rng, crash)
+        try:
+            plan, violations = _route_draw(world, draw_rng, crash)
+        except _LaneHung as hung:
+            pytest.fail(f"seed {seed}, draw {draw}: a lane did not end within {ROUTE_LANE_HANG:.0f} s; plan {hung.plan}. "
+                        "No further draw runs on this state.")
         if violations:
             failures.append((draw, plan, violations))
             print(f"draw {draw}: {failures[-1]}")
@@ -745,3 +978,35 @@ def test_route_stop_fuzz(world, monkeypatch):
     print(f"route stop fuzz: {draws} draws, seed {seed}, {len(failures)} mismatches, "
           f"{ENDING_AT_CHECK[0]} with the Stop's run still ending at the first look")
     assert failures == [], f"seed {seed}: {failures[:3]}"
+
+
+class _StepsOnly:
+    """A draw's random source: lane A sends one own Stop, lane B runs reconnect passes."""
+
+    def choice(self, seq):
+        if "step" in seq:
+            return "step"
+        return seq[0] if not isinstance(seq[0], tuple) else next(e for e in seq if e[0] == "own_stop")
+
+    def randint(self, a, b):
+        return a
+
+    def uniform(self, a, b):
+        return 0.0
+
+
+def test_a_hung_route_fuzz_lane_stops_the_fuzz(world, monkeypatch):
+    """A lane still running after its deadline gives no verdict and no further draw: the draw
+    raises with its plan instead of judging a state the lane may still change. MUTATION: judge
+    the draw anyway (record the hang and go on)."""
+    _bridge_with(world, "alice", "bob")
+    _quiet_reads(monkeypatch)
+    monkeypatch.setattr(sys.modules[__name__], "ROUTE_LANE_HANG", 0.2)
+    release = threading.Event()
+    monkeypatch.setattr(wa.Reconnector, "step", lambda self, now: release.wait(30) and [])
+    try:
+        with pytest.raises(_LaneHung) as hung:
+            _route_draw(world, _StepsOnly(), threading.Event())
+        assert any(p.startswith("step:") for p in hung.value.plan)
+    finally:
+        release.set()

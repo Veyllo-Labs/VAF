@@ -155,6 +155,30 @@ def test_an_older_status_read_does_not_clear_a_newer_refusal():
     assert _run_js("latestOnly.ts", body) == ["B refused", None]
 
 
+def test_a_stale_read_does_not_swallow_a_link_transition():
+    """Toggle B is refused (not linked) while read A, started before B, is under way; the account
+    is linked meanwhile and A returns linked. A, stale, neither clears B's line nor records the
+    link state, so the next current read sees the transition and clears the line. The rule the
+    panel applies (`ConnectionsPanel` status read), driven by `latestGate`. MUTATION: record the
+    link state from a stale read."""
+    body = (
+        "const g = lib.latestGate(); let error = null; let wasLinked = false;"
+        "const read = (gen, linked, running) => {"
+        "  const current = g.isLatest(gen);"
+        "  if (current && (running || (linked && wasLinked === false))) error = null;"
+        "  if (current) wasLinked = linked;"
+        "};"
+        "g.begin();"                              # toggle A
+        "const aRead = g.peek();"                 # A's status read starts
+        "g.begin(); error = 'link it first';"     # toggle B, refused: not linked
+        "read(aRead, true, false);"               # A returns: linked now, not running
+        "const afterA = [error, wasLinked];"
+        "read(g.peek(), true, false);"            # the next current read
+        "return [afterA, error];"
+    )
+    assert _run_js("latestOnly.ts", body) == [["link it first", False], None]
+
+
 # -- AC10: the toggle and the disconnect -----------------------------------------------------------
 
 def test_the_toggle_and_the_disconnect_act_on_the_callers_own_whatsapp():
@@ -191,6 +215,8 @@ def test_the_toggle_and_the_disconnect_act_on_the_callers_own_whatsapp():
     # ...and only while no newer toggle was sent since this read started.
     assert status.index("const toggleSeen = whatsappToggles.current.peek();") < status.index("fetch(api('api/whatsapp/status')")
     assert "whatsappToggles.current.isLatest(toggleSeen) && (status?.running === true" in status
+    # The link state is recorded by a current read only, the same gate.
+    assert "if (res.ok && whatsappToggles.current.isLatest(toggleSeen)) whatsappWasLinked.current =" in status
     assert "whatsappWasLinked.current === false" in status
 
 

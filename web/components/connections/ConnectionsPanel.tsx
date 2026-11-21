@@ -630,7 +630,9 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                 || (status?.linked === true && whatsappWasLinked.current === false))) {
                 setWhatsappSwitchError(null);
             }
-            if (res.ok) whatsappWasLinked.current = status?.linked === true;
+            // Only a current read records the link state: a stale one recording "linked" would
+            // swallow the transition the next current read needs to clear an obsolete line.
+            if (res.ok && whatsappToggles.current.isLatest(toggleSeen)) whatsappWasLinked.current = status?.linked === true;
             setWhatsappInfo({ linked_phone: status.linked_phone || null, owner_number: status.owner_number || null });
             setConnectionStatus(prev => ({
                 ...prev,

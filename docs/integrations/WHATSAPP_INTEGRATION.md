@@ -340,11 +340,11 @@ the caller's own process for anybody else:
   for ...", with the next step: Restart WhatsApp again in a minute, since a survivor that has
   ended blocks nothing, or restart VAF if it never ends, which drops its registration). It
   takes them from the spawn decisions themselves, waiting for the new run's spawn phase at
-  most `RESTART_REPORT_WAIT` (15 s) and naming nobody after that. A send while no bridge runs answers at once that the bridge
-  is not running. A whole restart waits for the shutdown (both waits of every process still
-  registered or still being terminated, plus a margin) and answers failure (500, "The old
-  WhatsApp process did not stop in time; try again.") when it overruns, instead of a success
-  that started nothing.
+  most `RESTART_REPORT_WAIT` (15 s) and naming nobody after that. A send while no bridge runs
+  answers at once that the bridge is not running. A whole restart waits for the shutdown
+  (both waits of every process still registered or still being terminated, plus a margin)
+  and answers failure (500, "The old WhatsApp process did not stop in time; try again.")
+  when it overruns, instead of a success that started nothing.
 - **A run has one end.** Each bridge start makes a new stop for that run, and its sender loop,
   chat-sync loop and readers watch only their own, so no thread of an earlier run wakes into a
   later one. However the bridge thread ends (a stop, nobody to run, or a failure), the same
@@ -382,18 +382,23 @@ the caller's own process for anybody else:
   admin's `POST /api/whatsapp/stop` counts one whether or not a run is up, and the count is
   read in one step with the new run's start, so a Stop during the recovery cancels it), and
   fewer than three such starts were made in a row without an account seen connected; it starts
-  only the failed run's current members, read in that same step, so an account stopped on
-  request before the failure or during the recovery stays stopped. A start that a Stop
-  overtook, or one that found no member left to run, is no try. The spawn phase of every run
+  only the failed run's current members that are still linked and switched on, read in that
+  same step, so an account stopped on request before the failure or during the recovery stays
+  stopped. The recovery is of the current run only: once another run replaced the failed one,
+  it is not started. A start that a Stop overtook, or one that found no member left to run, is
+  no try, also when its preflight failed meanwhile; a recovery whose bridge thread could not
+  be launched keeps its intent, and the next pass tries again. The spawn phase of every run
   starts only the run's current members, so an account's own Stop that lands while an admin's
-  whole Start is under way holds too. A Stop or a run with nobody to run stays down. Named boundary: an account switched on by a settings save alone (not the toggle) has no
+  whole Start is under way holds too. A Stop or a run with nobody to run stays down.
+  Named boundary: an account switched on by a settings save alone (not the toggle) has no
   registration, so the worker does not start it; the next VAF start, its own Refresh or an
   admin's Start does. Named boundary: a bridge whose last process was stopped by its owner
   stays up with its sender and chat-sync loops idle, because ending the run on the last stop
-  would turn the next account's start into a cold start of the whole run. Measured before: the worker restarted the whole bridge while no process
-  was connected, so an account's own Stop on a bridge running nobody else was undone for it at
-  the next pass, a failed restart was retried without a log line, nothing ran while the local
-  admin's switch was off, and a crashed bridge stayed down.
+  would turn the next account's start into a cold start of the whole run. Measured before: the
+  worker restarted the whole bridge while no process was connected, so an account's own Stop
+  on a bridge running nobody else was undone for it at the next pass, a failed restart was
+  retried without a log line, nothing ran while the local admin's switch was off, and a
+  crashed bridge stayed down.
 - **An account that ends takes its WhatsApp with it.** Deactivating or deleting an account
   (Settings, Users) stops its process, cancels its pending start and ends its link flow (the
   revocation listeners of `whatsapp_bridge` and `whatsapp_routes`); a demotion or a narrowed tool

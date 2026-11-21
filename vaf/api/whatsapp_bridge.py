@@ -2827,15 +2827,25 @@ def _start_bridge(only: Optional[str] = None, *, recover: Optional["_RunOutcome"
     dependencies, the threads).
 
     A crash recovery (`Reconnector`) passes the failed run's outcome as `recover`. The new run
-    is for that run's CURRENT members, read under `_spawn_lock` in the same step that publishes
-    it, so an account whose own Stop landed at any point before (`_leave_run` takes that lock
-    too) is not started; and it is published only while no whole Stop came since the failed
-    run started (`_whole_stops`, read under `_marks_lock` with the publishing). Measured before,
-    with a copy of the members handed over: a Stop between the copy and the start was undone."""
+    is for that run's CURRENT members that are still runnable (linked, switched on, standing,
+    read again right before the publishing), the members read under `_spawn_lock` in the same
+    step that publishes it, so an account whose own Stop landed at any point before
+    (`_leave_run` takes that lock too) is not started; it is published only while `recover` is
+    still the current run (`_leave_run` works on the current one, so a recovery of a run another
+    run replaced would miss the Stops sent during that other run) and no whole Stop came since
+    the failed run started (`_whole_stops`, read under `_marks_lock` with the publishing).
+    A recovery overtaken that way answers "cancelled" or "nobody", also when its preflight
+    failed meanwhile: it was no try. Measured before, with a copy of the members handed over: a
+    Stop between the copy and the start was undone."""
     global _bridge_thread, _sender_thread, _chat_sync_thread, _outgoing_queue, _bridge_stop, _spawns_open
     global _run_outcome
 
     with _lifecycle_lock:
+        # `_run_outcome` is replaced only here, under this lock: a recovery of a run that is no
+        # longer the current one is not one, and an explicit Start that replaced it is not
+        # this recovery's success either.
+        if recover is not None and recover is not _run_outcome:
+            return "cancelled"
         if _bridge_thread is not None and _bridge_thread.is_alive():
             return "running"
         # Whom this run is for: its members from the start, so a run that fails before its
@@ -2848,17 +2858,23 @@ def _start_bridge(only: Optional[str] = None, *, recover: Optional["_RunOutcome"
         whatsapp_config = Config.get("whatsapp_config") or {}
         if not isinstance(whatsapp_config, dict):
             whatsapp_config = {}
+        def failed(*log_args) -> str:
+            # A recovery that a Stop or the end of every member's WhatsApp overtook during its
+            # preflight was no try, whatever the preflight found.
+            overtaken = _recovery_overtaken(recover) if recover is not None else None
+            if overtaken is not None:
+                return overtaken
+            logger.error(*log_args)
+            return "failed"
+
         if not _node_path():
-            logger.error("Node.js not found. Install Node >= 18 for WhatsApp.")
-            return "failed"
+            return failed("Node.js not found. Install Node >= 18 for WhatsApp.")
         if not _wa_bridge_path().exists():
-            logger.error("wa-bridge.js not found at %s", _wa_bridge_path())
-            return "failed"
+            return failed("wa-bridge.js not found at %s", _wa_bridge_path())
 
         deps_ok, deps_msg = ensure_bridge_deps()
         if not deps_ok:
-            logger.error("WhatsApp bridge not started: %s", deps_msg)
-            return "failed"
+            return failed("WhatsApp bridge not started: %s", deps_msg)
 
         # A new stop per run, never a cleared one: every thread of this run watches its own,
         # so a thread of an earlier run that missed its stop cannot wake into this one.
@@ -2866,8 +2882,15 @@ def _start_bridge(only: Optional[str] = None, *, recover: Optional["_RunOutcome"
         run_queue: queue.Queue = queue.Queue()
         run_outcome = _RunOutcome()
         _ensure_ipc_dirs()
+        if recover is not None:
+            # Who is runnable now, not when the pass looked: a switch turned off or an account
+            # unlinked during the preflight takes its member out (a change after the
+            # publication meets the spawn gate).
+            intended &= _runnable_pairs()
         with _spawn_lock:
             if recover is not None:
+                if recover is not _run_outcome:
+                    return "cancelled"
                 intended &= recover.members
                 if not intended:
                     logger.info("WhatsApp: recovery not started: %s", NOBODY_TO_RUN)
@@ -2879,7 +2902,9 @@ def _start_bridge(only: Optional[str] = None, *, recover: Optional["_RunOutcome"
                     return "cancelled"
                 _bridge_stop = run_stop
                 run_outcome.started_after = _whole_stops
-            _outgoing_queue = run_queue
+                # With the stop, in the step a whole Stop reads both: its end marker goes to
+                # the run it stopped, never to this one's queue.
+                _outgoing_queue = run_queue
             _run_outcome = run_outcome
             _spawns_open = True
             # Before the bridge thread starts, so its end's False is the last word
@@ -2899,6 +2924,11 @@ def _start_bridge(only: Optional[str] = None, *, recover: Optional["_RunOutcome"
             # on it, no start waits on its spawn, and a process a start into it registered
             # meanwhile is retired and terminated rather than left without readers.
             logger.exception("WhatsApp bridge could not start its threads")
+            if recover is not None:
+                # The recovery's intent stays: its members, minus any Stop that landed meanwhile,
+                # and the whole-Stop count it was published under. The next pass tries again
+                # after its cooldown while tries are left.
+                run_outcome.failed = True
             _end_run(run_stop, requested=False)
             run_outcome.settled.set()
             _bridge_thread = None
@@ -2917,17 +2947,41 @@ def _start_bridge(only: Optional[str] = None, *, recover: Optional["_RunOutcome"
         return "started"
 
 
+def _runnable_pairs() -> set:
+    """(name, scope key) of every account linked and switched on now (`_get_users_to_run`)."""
+    return {(name, _scope_key(scope)) for scope, name, _ in _get_users_to_run()}
+
+
+def _recovery_overtaken(recover: "_RunOutcome") -> Optional[str]:
+    """"cancelled" when the recovery of `recover` no longer stands (another run replaced it, or
+    a whole Stop came since it started), "nobody" when none of its members is runnable any
+    more, else None."""
+    runnable = _runnable_pairs()
+    with _spawn_lock:
+        if recover is not _run_outcome:
+            return "cancelled"
+        with _marks_lock:
+            if _whole_stops != recover.started_after:
+                return "cancelled"
+        if not (runnable & recover.members):
+            return "nobody"
+    return None
+
+
 def stop_bridge() -> None:
     """Request bridge stop. Counted (`_whole_stops`) in one step with setting the current run's
     stop, so a crash recovery whose start is under way either finds the count changed and
     publishes nothing, or is the run this stop ends."""
-    global _outgoing_queue, _whole_stops
+    global _whole_stops
     with _marks_lock:
         _whole_stops += 1
         _bridge_stop.set()
-    if _outgoing_queue is not None:
+        # The queue of the run this stop ends, read in the same step: a run published right
+        # after must not get its end marker (its sender loop would end on it).
+        stopped_queue = _outgoing_queue
+    if stopped_queue is not None:
         try:
-            _outgoing_queue.put(None)
+            stopped_queue.put(None)
         except Exception:
             pass
     _write_bridge_state(False)

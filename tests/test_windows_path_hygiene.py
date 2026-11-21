@@ -289,6 +289,8 @@ so readings taken in a row are usually equal. A test that named files
 `f"{time.time_ns()}_bad.json"` and `f"{time.time_ns() + 1}_list.json"` and expected them
 to sort before a third file named from a later reading found the third one sorted
 between them on the Windows job. A test that needs an order spells it with fixed names.
+The scan is narrow on purpose: it sees a constant added to a clock reading inside the
+f-string itself, so `ts = time.time_ns()` followed by `f"{ts + 1}_x.json"` is not caught.
 
 ## 24. A claim in `vaf/` is an exclusive create, never a rename.
 A rename moves a file; on Windows it is no mutex. MoveFileEx opens the source by name and

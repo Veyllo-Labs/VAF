@@ -20,6 +20,7 @@ that whenever the marker ran, the twin with `rm` in its place is refused.
 import os
 import random
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1474,7 +1475,6 @@ _NEST_TRIGGERS = ["# it's" + NL, ": \"${x#'}'}\"; "]
 
 
 def _nested(trigger, runner, depth, size):
-    import shlex
     unit = "a[;"
 
     def wrap(inner):
@@ -2273,7 +2273,12 @@ def _filled(head, part, n):
 # at each size: shlex builds a long token one character at a time, so its own cost grows
 # faster than linear (a named exception), and how much faster depends on the platform's
 # allocator (on the macOS runner the plain word grew 6.4 times in its last doubling, here 3).
-# Every other shape is judged as it stands.
+# The two texts do not read their long token through shlex equally often: the plain word
+# twice (the reading as written and the frozen one), three shapes three times: the two
+# ansi-c rows once more in the grammar reading of their decoded `$'...'` text, dot-dot
+# targets once more as the redirections after a subshell. So the span is judged on the CPU
+# time outside shlex.split, and only the ceiling sees the total. Every other shape is judged
+# as it stands.
 _COST_SHAPES = [
     ("brace, no closer", True, lambda n: "bash {" + "," * n),
     ("brace dots, no closer", True, lambda n: "bash {" + "." * n),
@@ -2323,15 +2328,17 @@ _COST_SHAPES = [
 ]
 
 
-# A one-word shape against a plain word of the same length, r(n) = shape(n) / plain(n).
-# Red when r passes the ceiling at any size. The green rows reached 1.5 here, with glibc's
-# mmap threshold pinned at 32 KiB as well, and 1.1 in the macOS runner's sample; the
-# docstring mutations reach 5.4 or more at 15 K (printf's first word read to the word's
-# end 5.4, the backtracking brace pattern about 24).
+# A one-word shape against a plain word of the same length, r(n) = shape(n) / plain(n) on
+# the total CPU times. Red when r passes the ceiling at any size. The green rows reached 1.5
+# here, 1.63 with glibc's mmap threshold pinned at 32 KiB, 1.88 in the ubuntu runner's
+# sample under that axis and 1.1 in the macOS runner's; the docstring mutations reach 5.4
+# or more at 15 K (printf's first word read to the word's end 5.4 to 6.1, the backtracking
+# brace pattern about 24).
 _ONE_WORD_CEILING = 3.0
-# Red when r(120K) passes r(15K) by this factor. The green rows reached 1.12 here, 1.19 with
-# the mmap threshold pinned (three runs) and 0.93 in the macOS runner's sample; printf's
-# option slot left unbounded reaches 1.75.
+# Red when the own r (the same ratio on the CPU time outside shlex.split) at 120 K passes
+# the own r at 15 K by this factor. The green rows' own spans lay between 0.82 and 1.03
+# here in six runs, three of them with the mmap threshold pinned; printf's option slot left
+# unbounded reaches 4.13, and 6.9 to 7.0 with the threshold pinned.
 _ONE_WORD_SPAN = 1.4
 
 
@@ -2350,37 +2357,75 @@ def _cpu_clock_step():
 
 
 def _paired_cpu_times(text, reference, runs=3):
-    """The CPU time the command check spends on `text` and on `reference`, best of `runs`
-    each. The two are measured alternately (text, reference, text, ...), so both pay the
-    same machine state: the heap a previous run left, the caches, a neighbour's load."""
+    """What the command check spends on `text` and on `reference`, one `(total, own, calls)`
+    per side: `total` is the CPU time, best of `runs`; `own` the CPU time outside
+    shlex.split, best of `runs` on its own; `calls` how often a run called shlex.split. The
+    two are measured alternately (text, reference, text, ...), so both pay the same machine
+    state: the heap a previous run left, the caches, a neighbour's load. For the length of
+    each check shlex.split is a wrapper that adds up its own CPU time; the command check
+    looks it up on the module at every call, and the original is back on every exit."""
     for which in (text, reference):
         assert len(which) <= cp._MAX_COMMAND_CHARS, len(which)
-    best = [None, None]
+    original = shlex.split
+    best = [[None, None, 0], [None, None, 0]]
     for _ in range(runs):
-        for i, which in enumerate((text, reference)):
-            start = time.process_time()
-            classify_command(which, profile="host_unattended")
-            spent = time.process_time() - start
-            best[i] = spent if best[i] is None else min(best[i], spent)
-    return best[0], best[1]
+        for side, which in zip(best, (text, reference)):
+            inside = [0.0, 0]
+
+            def timed(*args, **kwargs):
+                start = time.process_time()
+                try:
+                    return original(*args, **kwargs)
+                finally:
+                    inside[0] += time.process_time() - start
+                    inside[1] += 1
+            shlex.split = timed
+            try:
+                start = time.process_time()
+                classify_command(which, profile="host_unattended")
+                spent = time.process_time() - start
+            finally:
+                shlex.split = original
+            own = max(spent - inside[0], 0.0)
+            side[0] = spent if side[0] is None else min(side[0], spent)
+            side[1] = own if side[1] is None else min(side[1], own)
+            side[2] = max(side[2], inside[1])
+    return tuple(best[0]), tuple(best[1])
 
 
-def _one_word_verdict(times, plain, step=0.0):
+def _over(top, bottom):
+    """top / bottom, where a bottom of zero reads as an endless ratio, or as 0 over 0."""
+    if bottom > 0:
+        return top / bottom
+    return float("inf") if top > 0 else 0.0
+
+
+def _one_word_verdict(times, plain, own, own_plain, calls=None, step=0.0):
     """None when a one-word shape scales like a plain word of the same length, otherwise
-    the reason. `times` and `plain` hold the CPU times at the same sizes, smallest first.
-    Red when r = times / plain passes _ONE_WORD_CEILING at any size, or when the last r
-    passes _ONE_WORD_SPAN times the first. `step` is the clock's granularity: each check
-    reads the r a reading off by one step makes least likely to be red, so a coarse clock
-    cannot fail a linear row (the span is not judged when the first plain time is within
-    one step of zero)."""
-    low = [max(s - step, 0.0) / (p + step) for s, p in zip(times, plain)]
+    the reason. `times` and `plain` hold the total CPU times at the same sizes, smallest
+    first, `own` and `own_plain` the CPU times outside shlex.split, `calls` how often the
+    shape called shlex.split at each size. Red when r = times / plain passes
+    _ONE_WORD_CEILING at any size; when the own r = own / own_plain at the largest size
+    passes _ONE_WORD_SPAN times the one at the smallest; or when the shape calls shlex.split
+    more often at the largest size than at the smallest, which would move a growing cost
+    out of the own times. `step` is the clock's granularity: each check reads the r a
+    reading off by one step makes least likely to be red, so a coarse clock cannot fail a
+    linear row. An own time is a difference of 1 + calls clock readings, so its step is that
+    many times larger, and the span is not judged when the first own plain time is within
+    that step of zero."""
+    low = [_over(max(s - step, 0.0), p + step) for s, p in zip(times, plain)]
     shown = [round(s / p, 2) if p else None for s, p in zip(times, plain)]
     if max(low) > _ONE_WORD_CEILING:
         return "r = shape / plain passes %g: %s" % (_ONE_WORD_CEILING, shown)
-    if plain[0] > step:
-        first = (times[0] + step) / (plain[0] - step)
-        if low[-1] > _ONE_WORD_SPAN * first:
-            return "the last r passes %g times the first: %s" % (_ONE_WORD_SPAN, shown)
+    own_step = step * (1 + max(calls)) if calls else step
+    if own_plain[0] > own_step:
+        first = (own[0] + own_step) / (own_plain[0] - own_step)
+        last = _over(max(own[-1] - own_step, 0.0), own_plain[-1] + own_step)
+        if last > _ONE_WORD_SPAN * first:
+            own_shown = [round(s / p, 2) if p else None for s, p in zip(own, own_plain)]
+            return "the last own r passes %g times the first: %s" % (_ONE_WORD_SPAN, own_shown)
+    if calls and calls[-1] > calls[0]:
+        return "shlex runs more often at the largest size: %s" % (list(calls),)
     return None
 
 
@@ -2390,16 +2435,23 @@ def test_the_shell_readings_scale_linearly(name, one_word, build):
     past the length limit) each doubling costs at most 2.6 times the CPU time (plus 0.03 s), a
     quadratic scan 4 times, and 120 K stays under 3 s; CPU time, best of two, so a busy
     machine does not move the bound. A one-word shape is measured alternately with a plain
-    word of the same length, best of three each, and r(n) = shape(n) / plain(n) stays at most
-    3.0 at every size, r(120K) at most 1.4 times r(15K) (_one_word_verdict). Both texts pay
-    shlex's per-character token build and the allocator behind it, so the platform cancels
-    out of r: on the macOS runner the plain word's own doublings went 2.5, 3.5 and 6.4, a step
-    in its cost per byte rather than an algorithm, and a rule that compared the shape's
-    doubling with that one, measured seconds apart, failed a linear row there.
-    Named limitation: where the platform makes shlex itself grow close to quadratically (57
-    times over the span on the macOS runner, more with glibc's mmap threshold pinned at
-    32 KiB), an added quadratic scan of a one-word text with a smaller constant than shlex's
-    own hides inside it; the ceiling still catches any scan that costs a multiple of shlex.
+    word of the same length, best of three each (_one_word_verdict): r(n) = shape(n) /
+    plain(n) on the total CPU times stays at most 3.0 at every size; the own r, the same
+    ratio on the CPU time outside shlex.split, at 120 K stays at most 1.4 times the one at
+    15 K; and the shape calls shlex.split no more often at 120 K than at 15 K. Pairing the
+    two texts takes the platform out of r: on the macOS runner the plain word's own
+    doublings went 2.5, 3.5 and 6.4, a step in its cost per byte rather than an algorithm,
+    and a rule that compared the shape's doubling with that one, measured seconds apart,
+    failed a linear row there. The span leaves shlex out because the two texts do not read
+    the long token through it equally often (three times against two for ansi-c in a default
+    word, ansi-c in arithmetic and dot-dot targets), so wherever shlex's cost per byte steps
+    up the total r drifts towards 3/2 with no change in VAF's own code: on the ubuntu
+    runner, with glibc's mmap threshold pinned at 32 KiB, ansi-c in a default word went from
+    r 1.26 to 1.88 while its own time stayed linear. The own span of every green row stayed
+    between 0.82 and 1.03 here, with and without that axis.
+    Named boundary: shlex's own cost, the length-capped exception, is judged only by the
+    ceiling and by the call count; a constant number of extra shlex passes is a constant
+    factor, which only the ceiling judges.
     MUTATION: the brace test as a backtracking pattern - red (the brace rows);
     MUTATION: read printf's first word from each match to the word's end - red (glued printf);
     MUTATION: read the text for HOME at every tilde script - red (tilde paths after -c);
@@ -2408,13 +2460,16 @@ def test_the_shell_readings_scale_linearly(name, one_word, build):
     MUTATION: the here-strings of the shell readings joined with a list test - red (the
     distinct here-strings rows);
     MUTATION: printf's option slot without its bound, so it runs to the word's end - red
-    (glued printf, by both checks), which a comparison of doubling ratios let pass."""
+    (glued printf, by the span on the own times and by the ceiling), which a comparison of
+    doubling ratios let pass. The checks of the verdict and of the measurement are pinned by
+    the tests after this one, each with its own mutations."""
     sizes = (15000, 30000, 60000, 120000)
     if one_word:
         pairs = [_paired_cpu_times(build(n), _plain_word(len(build(n)))) for n in sizes]
-        times, plain = [s for s, _ in pairs], [p for _, p in pairs]
-        verdict = _one_word_verdict(times, plain, _cpu_clock_step())
-        assert verdict is None, (name, times, plain, verdict)
+        times, own, calls = ([shape[k] for shape, _ in pairs] for k in range(3))
+        plain, own_plain = ([ref[k] for _, ref in pairs] for k in range(2))
+        verdict = _one_word_verdict(times, plain, own, own_plain, calls, _cpu_clock_step())
+        assert verdict is None, (name, times, plain, own, own_plain, calls, verdict)
         return
 
     def took(text):
@@ -2437,64 +2492,136 @@ def test_the_one_word_verdict_replays_the_macos_sample():
     and red under the rule it replaced (each doubling at most 1.25 times the plain word's own
     doubling, plus 0.03 s). The plain word is rebuilt from the bounds that run reported
     (3.18, 4.35, 8.00, so its doublings 2.54765, 3.48220, 6.40132) and the row's local
-    same-size ratio of 1.1 at 15 K.
+    same-size ratio of 1.1 at 15 K. That run recorded no own times, so the span reads the
+    totals here, as it did when the sample was taken.
     MUTATION: judge each doubling against 1.25 times the plain word's doubling in
     _one_word_verdict - red."""
     shape = [0.021561, 0.049407, 0.127142, 1.144095]
     plain = [shape[0] / 1.1]
     for ratio in (2.54765, 3.48220, 6.40132):
         plain.append(plain[-1] * ratio)
-    assert _one_word_verdict(shape, plain) is None
+    assert _one_word_verdict(shape, plain, shape, plain) is None
     old_bound = 1.25 * plain[3] / plain[2]
     assert round(old_bound, 5) == 8.00165
     assert 1.144095 > old_bound * 0.127142 + 0.03
 
 
-def test_the_one_word_verdict_has_two_checks():
-    """The relative ceiling and the span each turn a row red on their own; a green row
-    measured here passes both.
-    MUTATION: drop the ceiling - red (the flat r of 3.5); drop the span - red (r rising to
-    1.6); compare the last r with the one before it instead of the first - red."""
+def test_the_one_word_verdict_replays_the_github_hostile_sample():
+    """The ubuntu runner's sample of ansi-c in a default word under glibc's mmap threshold
+    pinned at 32 KiB: r on the totals went 1.26, 1.26, 1.33, 1.88, a span of 1.49, while the
+    shape read its long token through shlex three times and the plain word twice. Judged on
+    the totals, as the span was before, it is red; judged on the time outside shlex it is
+    green. The first two plain times are rebuilt from the reported r of 1.26 (the log cut
+    them short). The runner recorded no own times: they are this row's own times measured
+    here under the same axis, scaled by the runner's speed at 15 K (0.02184 / 0.0189), and
+    its three calls of shlex.split at every size, counted here.
+    MUTATION: judge the span on the total times - red."""
+    shape = [0.027519401000063226, 0.06221288999995522, 0.16038787699994828, 2.6745328380000046]
+    plain = [0.02184, 0.04938, 0.12053130900005726, 1.4222758610000028]
+    own = [0.0155, 0.0301, 0.0613, 0.1215]
+    own_plain = [0.0109, 0.0214, 0.0436, 0.0872]
+    assert _one_word_verdict(shape, plain, shape, plain).startswith("the last own r passes 1.4")
+    assert _one_word_verdict(shape, plain, own, own_plain, [3, 3, 3, 3]) is None
+
+
+def test_the_one_word_verdict_has_three_checks():
+    """The relative ceiling, the span of the own times and the call count each turn a row
+    red on their own; a green row measured here passes all three, and so does a row whose
+    total r rises only because shlex reads its long token more often than the plain word's.
+    MUTATION: drop the ceiling - red (the flat r of 3.5); drop the span - red (own r rising
+    to 1.6); judge the span on the totals - red (the total r rising to 1.88); compare the
+    last own r with the one before it instead of the first - red; drop the call count - red
+    (2, 2, 3, 4 calls); read any change of the call count as red - red (6, 6, 6, 5 calls)."""
     # Printf's first word read to the word's end, measured: r 5.4, 8.2, 12.1, 15.5.
     m2 = ([0.1416, 0.5033, 1.9145, 7.2639], [0.0261, 0.0617, 0.1586, 0.4696])
-    # Nested braces on the fixed code, measured here.
+    # Nested braces on the fixed code, measured here (totals only).
     green = ([0.0292, 0.0686, 0.1697, 0.4812], [0.0262, 0.0631, 0.1575, 0.4649])
     plain = green[1]
+    own_plain = [0.0109, 0.0214, 0.0436, 0.0872]
+    assert _one_word_verdict(*m2, *m2).startswith("r = shape / plain passes 3")
     flat = [3.5 * p for p in plain]
-    rising = [r * p for r, p in zip((1.0, 1.07, 1.18, 1.6), plain)]
-    assert _one_word_verdict(*m2).startswith("r = shape / plain passes 3")
-    assert _one_word_verdict(flat, plain).startswith("r = shape / plain passes 3")
-    assert _one_word_verdict(rising, plain).startswith("the last r passes 1.4")
-    assert _one_word_verdict(*green) is None
+    assert _one_word_verdict(flat, plain, own_plain, own_plain).startswith(
+        "r = shape / plain passes 3")
+    level = [1.1 * p for p in plain]
+    rising = [r * p for r, p in zip((1.0, 1.07, 1.18, 1.6), own_plain)]
+    assert _one_word_verdict(level, plain, rising, own_plain).startswith(
+        "the last own r passes 1.4")
+    drifting = [r * p for r, p in zip((1.26, 1.26, 1.33, 1.88), plain)]
+    own = [1.43 * p for p in own_plain]
+    assert _one_word_verdict(drifting, plain, own, own_plain) is None
+    assert _one_word_verdict(drifting, plain, own, own_plain, [2, 2, 3, 4]).startswith(
+        "shlex runs more often at the largest size")
+    assert _one_word_verdict(drifting, plain, own, own_plain, [6, 6, 6, 5]) is None
+    assert _one_word_verdict(*green, *green) is None
 
 
 def test_the_one_word_verdict_reads_a_coarse_clock_in_the_rows_favour():
     """A clock that counts process time in ticks of 15.625 ms puts a 15 K text at two or
     three ticks, and a reading off by one tick moves r by half: each check then reads the r
-    least likely to be red, and a row a tick-exact clock would fail still fails.
+    least likely to be red, and a row a tick-exact clock would fail still fails. An own time
+    is a difference of 1 + calls readings, so its step is that many ticks.
     MUTATION: read the span without the step - red (the r of 0.67 at 15 K); read the ceiling
     without it - red (the r of 4 from one tick of plain word); judge the span when the first
-    plain time is a single tick - red."""
+    plain time is a single tick - red; one step for an own time, whatever the calls - red (two
+    ticks of own plain time with two calls)."""
     tick = 0.015625
     # Plain three ticks and shape two at 15 K, then linear: r 0.67, 1.0, 1.06, 1.06.
     rounded = ([2 * tick, 7 * tick, 19 * tick, 57 * tick], [3 * tick, 7 * tick, 18 * tick, 54 * tick])
-    assert _one_word_verdict(*rounded) is not None
-    assert _one_word_verdict(*rounded, step=tick) is None
+    assert _one_word_verdict(*rounded, *rounded) is not None
+    assert _one_word_verdict(*rounded, *rounded, step=tick) is None
     # One tick of plain word against four of shape at 15 K, then linear.
     one_tick = ([4 * tick, 4 * tick, 10 * tick, 30 * tick], [1 * tick, 3 * tick, 9 * tick, 27 * tick])
-    assert _one_word_verdict(*one_tick) is not None
-    assert _one_word_verdict(*one_tick, step=tick) is None
+    assert _one_word_verdict(*one_tick, *one_tick) is not None
+    assert _one_word_verdict(*one_tick, *one_tick, step=tick) is None
     m2 = ([0.1416, 0.5033, 1.9145, 7.2639], [0.0261, 0.0617, 0.1586, 0.4696])
-    assert _one_word_verdict(*m2, step=tick) is not None
+    assert _one_word_verdict(*m2, *m2, step=tick) is not None
+    # Two shlex calls: an own plain time of two ticks at 15 K is within three ticks of zero.
+    totals = ([4 * tick, 8 * tick, 20 * tick, 70 * tick], [4 * tick, 8 * tick, 18 * tick, 40 * tick])
+    owns = ([0.0, 4 * tick, 10 * tick, 60 * tick], [2 * tick, 4 * tick, 9 * tick, 30 * tick])
+    assert _one_word_verdict(*totals, *owns, [2, 2, 2, 2], step=tick) is None
 
 
 def test_the_pair_is_measured_alternately(monkeypatch):
     """Shape and plain word take turns, so a heap state or a neighbour's load that lasts a
-    few runs lands on both sides of r.
-    MUTATION: measure every run of the shape first, then every run of the plain word - red."""
-    calls = []
-    monkeypatch.setattr(sys.modules[__name__], "classify_command",
-                        lambda text, profile: calls.append((text, profile)))
+    few runs lands on both sides of r; each side counts its own calls of shlex.split, and the
+    original shlex.split is back afterwards.
+    MUTATION: measure every run of the shape first, then every run of the plain word - red;
+    drop the restore of shlex.split - red."""
+    original, seen = shlex.split, []
+
+    def check(text, profile):
+        seen.append((text, profile))
+        shlex.split("a b")
+    monkeypatch.setattr(sys.modules[__name__], "classify_command", check)
     best = _paired_cpu_times("A", "B", runs=3)
-    assert calls == [("A", "host_unattended"), ("B", "host_unattended")] * 3
-    assert len(best) == 2 and all(spent >= 0 for spent in best)
+    assert seen == [("A", "host_unattended"), ("B", "host_unattended")] * 3
+    assert len(best) == 2
+    for total, own, calls in best:
+        assert total >= 0 and own >= 0 and calls == 1
+    assert shlex.split is original
+
+
+def test_the_own_time_leaves_out_shlex(monkeypatch):
+    """A check that only splits a 20 K-character word spends next to nothing outside
+    shlex.split, and a check that raises still leaves the original shlex.split in place. A
+    clock that counts in ticks may put the own time one tick off at each of its two
+    readings, so up to two steps are allowed.
+    MUTATION: own = total, nothing subtracted - red; restore shlex.split only after a
+    check that returned - red (the raising check)."""
+    original = shlex.split
+    word = "echo " + "a" * 20000
+    module = sys.modules[__name__]
+    monkeypatch.setattr(module, "classify_command", lambda text, profile: shlex.split(word))
+    (total, own, calls), _ = _paired_cpu_times("A", "B", runs=3)
+    step = _cpu_clock_step()
+    assert calls == 1
+    assert own <= max(total / 5, 2 * step), (total, own, step)
+    assert shlex.split is original
+
+    def failing(text, profile):
+        shlex.split("a b")
+        raise RuntimeError("the check failed")
+    monkeypatch.setattr(module, "classify_command", failing)
+    with pytest.raises(RuntimeError, match="the check failed"):
+        _paired_cpu_times("A", "B", runs=1)
+    assert shlex.split is original

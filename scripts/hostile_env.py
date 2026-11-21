@@ -171,7 +171,12 @@ locally, in the time the suite already takes:
                   32 KiB that gate failed here (dot-dot targets, 3.8 and 4.4 s
                   at 120 K in two runs) and the paired one that replaced it
                   passed in three; at 64 KiB the old gate passed, which is why
-                  the threshold is 32 KiB. Five other timing-heavy test files:
+                  the threshold is 32 KiB. On the ubuntu runner the paired
+                  gate's span on total times then failed under this axis
+                  (ansi-c in a default word, span 1.49: the shape reads its
+                  long token through shlex three times, the plain word twice),
+                  so the span now reads the CPU time outside shlex.split.
+                  Five other timing-heavy test files:
                   1489 passed with and without it, 74 s against 75 s.
                   The whole run took 1623 s with it (21623 passed, 238
                   skipped, in a worktree), against 1693 s in a full local CI

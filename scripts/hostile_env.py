@@ -152,6 +152,41 @@ locally, in the time the suite already takes:
                   on it would be listed and an only-bound socket never is. A
                   port listed there stays a refusal. Installed with the slow
                   refusal axis on Linux only; macOS has the real behaviour.
+  LARGE ALLOCS    glibc's mmap threshold is pinned at 32 KiB, on Linux only
+                  (GLIBC_TUNABLES=glibc.malloc.mmap_threshold=32768, appended
+                  after a value already set). Every larger block is then mapped
+                  and unmapped afresh and its page faults count as the
+                  process's CPU time, where glibc normally raises the threshold
+                  on its own, up to 32 MiB, after the first large free. Large
+                  temporary strings then cost per byte about what they cost on
+                  the macOS runner. A timing gate that compared one shape's
+                  doubling with a plain word's, measured seconds apart, passed
+                  here and failed on the macOS job: shlex builds a long token
+                  one character at a time, and there the plain word's last
+                  doubling cost 6.4 times, here 3.0. Measured when this was
+                  added (a plain word of 15 K to 120 K characters through the
+                  command check, CPU time, three runs each): doublings 2.34,
+                  2.53, 3.0 unpinned; 2.36, 2.56, 5.5 at 64 KiB; 2.33, 2.96,
+                  12.7 at 32 KiB; 2.55, 3.48, 6.40 on the macOS runner. At
+                  32 KiB that gate failed here (dot-dot targets, 3.8 and 4.4 s
+                  at 120 K in two runs) and the paired one that replaced it
+                  passed in three; at 64 KiB the old gate passed, which is why
+                  the threshold is 32 KiB. Five other timing-heavy test files:
+                  1489 passed with and without it, 74 s against 75 s.
+                  The whole run took 1623 s with it (21623 passed, 238
+                  skipped, in a worktree), against 1693 s in a full local CI
+                  run without it (21775 passed, 80 skipped).
+                  Named boundaries: 32 KiB is harsher than the one macOS
+                  sample at the top size (12.7 against 6.4), so a test that is
+                  red under this axis but green on a real Mac is an artefact
+                  of the axis; none exists today. glibc maps a block only when
+                  its heap has no free room for it, so the axis bites only on a
+                  heap without much free space: a process that compiled its
+                  imports from source (a tree without .pyc files and
+                  PYTHONDONTWRITEBYTECODE set) left so much that shlex took
+                  0.18 s on a 120 K word with the axis, against 0.81 s with
+                  the .pyc files present. A C library other than glibc (musl)
+                  ignores the variable, and there the axis adds nothing.
 
 WHAT IT CANNOT DO. Real Windows file semantics - ACLs, MoveFileEx sharing
 violations, the read-only-flag-only chmod - need a real Windows machine. Those
@@ -697,6 +732,17 @@ def _port_key(port):
 _NO_DOCKER = ("npipe:////./pipe/vaf-hostile-no-docker" if os.name == "nt"
               else "unix:///nonexistent/vaf-hostile/docker.sock")
 
+# The large-allocs axis: glibc maps every block above 32 KiB afresh instead of raising the
+# threshold on its own, so large temporary strings cost per byte about what they cost on
+# the macOS runner.
+_LARGE_ALLOCS_TUNABLE = "glibc.malloc.mmap_threshold=32768"
+
+
+def _large_allocs_tunables(current):
+    """GLIBC_TUNABLES with the large-allocs axis appended after `current` (glibc separates
+    tunables with ':'), so a value the caller set is kept."""
+    return f"{current}:{_LARGE_ALLOCS_TUNABLE}" if current else _LARGE_ALLOCS_TUNABLE
+
 
 def _crlf_checkout_files() -> list:
     """The tracked files a Windows checkout with core.autocrlf holds with CRLF: text git
@@ -756,6 +802,9 @@ def main() -> int:
             VAF_HOSTILE_REFUSAL_LOG=str(refusal_log),
             VAF_HOSTILE_REFUSE_PORTS=",".join(str(port) for port in _VAF_SERVICE_PORTS),
         )
+        large_allocs = sys.platform.startswith("linux")
+        if large_allocs:
+            env["GLIBC_TUNABLES"] = _large_allocs_tunables(os.environ.get("GLIBC_TUNABLES"))
 
         print("Running the suite with:")
         print(f"  narrow output   PYTHONIOENCODING=cp1252")
@@ -780,6 +829,9 @@ def main() -> int:
         print(f"  unlistened port " + (
             "a connect to a bound port that does not listen times out, as on macOS"
             if sys.platform.startswith("linux") else "real host, not simulated"))
+        print(f"  large allocs    " + (
+            "glibc mmap threshold pinned at 32 KiB (glibc only): large temporary strings cost "
+            "what they cost on the macOS runner" if large_allocs else "real host, not simulated"))
         print()
         code = subprocess.run([sys.executable, "-m", "pytest", "-p", "vaf_hostile_refusals", *args],
                               cwd=str(ROOT), env=env).returncode

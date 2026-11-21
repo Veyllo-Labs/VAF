@@ -671,6 +671,54 @@ def test_main_fails_a_green_run_over_budget(tmp_path, monkeypatch, capsys):
     assert "  0 refused local connects" in capsys.readouterr().out
 
 
+def _child_env(module, monkeypatch, platform, tunables):
+    """The environment main() hands pytest, on `platform`, with GLIBC_TUNABLES set to
+    `tunables` in this process (None: unset); subprocess.run is faked, nothing runs."""
+    monkeypatch.setattr(module, "_crlf_checkout_files", lambda: [])
+    monkeypatch.setattr(sys, "argv", ["hostile_env.py", "tests/test_example.py"])
+    monkeypatch.setattr(module.sys, "platform", platform)
+    if tunables is None:
+        monkeypatch.delenv("GLIBC_TUNABLES", raising=False)
+    else:
+        monkeypatch.setenv("GLIBC_TUNABLES", tunables)
+    seen = []
+
+    def fake_run(argv, cwd, env):
+        seen.append(dict(env))
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    assert module.main() == 0
+    return seen[-1]
+
+
+def test_the_large_allocs_axis_pins_the_mmap_threshold_on_linux(monkeypatch, capsys):
+    """On Linux the child pytest runs with glibc's mmap threshold pinned at 32 KiB, and a
+    GLIBC_TUNABLES already set is kept, the threshold appended after glibc's ':'.
+    MUTATION: drop the axis - red; overwrite the value already set instead of appending -
+    red; drop its line from the announcement - red."""
+    module = _module()
+    env = _child_env(module, monkeypatch, "linux", None)
+    assert env["GLIBC_TUNABLES"] == "glibc.malloc.mmap_threshold=32768"
+    assert "  large allocs    glibc mmap threshold pinned at 32 KiB" in capsys.readouterr().out
+    env = _child_env(module, monkeypatch, "linux", "glibc.foo=1")
+    assert env["GLIBC_TUNABLES"] == "glibc.foo=1:glibc.malloc.mmap_threshold=32768"
+    capsys.readouterr()
+
+
+def test_the_large_allocs_axis_is_linux_only(monkeypatch, capsys):
+    """macOS has its own allocator and Windows no glibc: there the variable is left as the
+    caller had it, and the axis says the host is real.
+    MUTATION: set the variable on every platform - red."""
+    module = _module()
+    for platform in ("darwin", "win32"):
+        env = _child_env(module, monkeypatch, platform, None)
+        assert "GLIBC_TUNABLES" not in env, platform
+        assert "  large allocs    real host, not simulated" in capsys.readouterr().out
+    env = _child_env(module, monkeypatch, "darwin", "glibc.foo=1")
+    assert env["GLIBC_TUNABLES"] == "glibc.foo=1"
+    capsys.readouterr()
+
+
 def test_one_local_address_predicate_serves_the_snippet_and_the_conftest():
     """tests/conftest.py refuses the service ports through `local_address`, and the generated
     sitecustomize through `_local`; both are the one `_LOCAL_ADDRESS_SOURCE`, so the snippet

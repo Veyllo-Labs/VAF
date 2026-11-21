@@ -115,8 +115,13 @@ def test_restart_notice_resolves():
         # where Bob (the account the restart skipped) was missing.
         ["restartNoticeResolved", [["bob"], {"admin": True}, 1, 1]],
         ["restartNoticeResolved", [["bob"], {"admin": True, "bob": True}, 1, 1]],
+        # Read 3 was under way when the restart answered (three reads had started): its map,
+        # from before the restart, shows Bob running and says nothing about the restart.
+        ["restartNoticeResolved", [["bob"], {"admin": True, "bob": True}, 3, 3]],
+        ["restartNoticeResolved", [["bob"], {"admin": True, "bob": True}, 4, 3]],
     ]
-    assert _run_ts("whatsappRestartNotice.ts", cases) == [True, False, True, False, True, True, False, False]
+    assert _run_ts("whatsappRestartNotice.ts", cases) == [True, False, True, False, True, True, False, False,
+                                                          False, True]
 
 
 def test_an_older_answer_does_not_win():
@@ -130,6 +135,24 @@ def test_an_older_answer_does_not_win():
         "return [shown, g.isLatest(on), g.isLatest(off)];"
     )
     assert _run_js("latestOnly.ts", body) == [False, False, True]
+
+
+def test_an_older_status_read_does_not_clear_a_newer_refusal():
+    """Toggle A's status read starts (`peek`), toggle B is sent and refused, then A's read
+    finds WhatsApp running: it must not clear B's refusal. A read that starts after B may.
+    MUTATION: `peek` answers 0 (a read that never matches), or the status read ignores it."""
+    body = (
+        "const g = lib.latestGate(); let error = null;"
+        "g.begin();"                              # toggle A
+        "const aRead = g.peek();"                 # A's status read starts
+        "g.begin(); error = 'B refused';"         # toggle B, refused
+        "if (g.isLatest(aRead)) error = null;"    # A's read finds WhatsApp running
+        "const afterB = error;"
+        "const bRead = g.peek();"                 # a status read after B
+        "if (g.isLatest(bRead)) error = null;"
+        "return [afterB, error];"
+    )
+    assert _run_js("latestOnly.ts", body) == ["B refused", None]
 
 
 # -- AC10: the toggle and the disconnect -----------------------------------------------------------
@@ -165,6 +188,9 @@ def test_the_toggle_and_the_disconnect_act_on_the_callers_own_whatsapp():
     assert "whatsappEnabled = status.enabled" in status and "return { whatsappEnabled };" in status
     # The line has done its job once WhatsApp runs, or was linked since the last read.
     assert "status?.running === true" in status and "setWhatsappSwitchError(null)" in status
+    # ...and only while no newer toggle was sent since this read started.
+    assert status.index("const toggleSeen = whatsappToggles.current.peek();") < status.index("fetch(api('api/whatsapp/status')")
+    assert "whatsappToggles.current.isLatest(toggleSeen) && (status?.running === true" in status
     assert "whatsappWasLinked.current === false" in status
 
 
@@ -194,6 +220,9 @@ def test_the_dashboard_starts_its_own_whatsapp_and_reads_the_answers():
 
     handler = _between(src, "const handleStartOwn", "const saveWhatsAppConfig")
     assert "await startOwn()" in handler
+    # A start that worked clears an earlier Refresh refusal, as a restart that worked does.
+    assert "setRefreshError(null);" in handler.split("else {", 1)[1].split("}", 1)[0]
+    assert "setRefreshError(null);" in _between(src, "setRestartLoadSeq(fetchSeqRef.current);", "await fetchDashboard();")
     assert "refusalText(res.ok, await res.json().catch(() => null), t('startFailed'))" in handler
     assert "setRestartError(refused)" in handler and "setRestartError(t('startFailed'))" in handler
 
@@ -212,9 +241,9 @@ def test_the_dashboard_starts_its_own_whatsapp_and_reads_the_answers():
 def test_the_restart_notice_clears_itself():
     """MUTATION: drop the clear; drop the quiet re-check."""
     src = _src(DASHBOARD)
-    assert "restartNoticeResolved(restartNoticeNames, data?.running_by_account ?? null, loadSeq, restartLoadSeq)" in src
+    assert "restartNoticeResolved(restartNoticeNames, data?.running_by_account ?? null, dataSeq, restartLoadSeq)" in src
     effect = _between(src, "if (restartNotice && restartNoticeResolved(",
-                      "}, [data, loadSeq, restartLoadSeq, restartNotice, restartNoticeNames]);")
+                      "}, [data, dataSeq, restartLoadSeq, restartNotice, restartNoticeNames]);")
     assert "setRestartNotice(null)" in effect and "setRestartNoticeNames([])" in effect
     timer = _between(src, "if (!isOpen || !restartNotice) return;", "}, [isOpen, restartNotice, fetchDashboard]);")
     assert "setInterval(() => { fetchDashboard({ quiet: true }); }, 60000)" in timer
@@ -223,13 +252,18 @@ def test_the_restart_notice_clears_itself():
     assert "if (!quiet) {" in fetch and "if (!quiet) setLoadFailed(true)" in fetch
     assert "if (!quiet) setLoading(false)" in fetch
     assert "running_by_account:" in fetch
-    # A successful load counts, a failed one does not.
-    assert "setLoadSeq(n => n + 1);" in fetch
-    assert fetch.index("if (!res.ok)") < fetch.index("setLoadSeq(n => n + 1);")
+    # Reads are numbered as they start; a failed one shows nothing, and an older one that
+    # answers after a newer one does not replace its data.
+    assert fetch.index("const seq = ++fetchSeqRef.current;") < fetch.index("await fetch(")
+    guard = fetch.index("if (seq < appliedSeqRef.current) return;")
+    assert fetch.index("if (!res.ok)") < guard < fetch.index("setData({") < fetch.index("setDataSeq(seq);")
     restart = _between(src, "const handleRestartBridge", "const handleRelink")
     assert "setRestartNoticeNames(notStarted)" in restart
     assert "setRestartNoticeNames([])" in restart.split("try {", 1)[0]
-    assert "setRestartLoadSeq(loadSeq)" in restart.split("try {", 1)[0]
+    # The anchor is taken when the restart has answered, before the read that verifies it.
+    anchor = restart.index("setRestartLoadSeq(fetchSeqRef.current);")
+    assert restart.index("if (refused !== null) { setRestartError(refused); return; }") < anchor
+    assert anchor < restart.index("await fetchDashboard();")
 
 
 # -- AC14: the new keys ----------------------------------------------------------------------------

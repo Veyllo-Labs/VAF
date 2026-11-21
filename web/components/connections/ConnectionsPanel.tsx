@@ -617,13 +617,16 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
         // Asked regardless of the on/off toggle: "configured" means an account is linked
         // (the agent's own number), and that is known only to the backend.
         setConnectionStatus(prev => ({ ...prev, whatsapp: 'checking' }));
+        // The newest toggle when this read starts: what it finds clears the red line only while
+        // no newer toggle was sent, whose own refusal it must not erase.
+        const toggleSeen = whatsappToggles.current.peek();
         try {
             const res = await fetch(api('api/whatsapp/status'), { credentials: 'include' });
             const status = await res.json();
             if (res.ok && typeof status?.enabled === 'boolean') whatsappEnabled = status.enabled;
             // The red line under the card has done its job once WhatsApp runs, or once it was
             // linked since the last read (the line said to link it).
-            if (res.ok && (status?.running === true
+            if (res.ok && whatsappToggles.current.isLatest(toggleSeen) && (status?.running === true
                 || (status?.linked === true && whatsappWasLinked.current === false))) {
                 setWhatsappSwitchError(null);
             }

@@ -10,10 +10,11 @@
  * its job once every named account runs again, or is no longer in the map at all: switched
  * off or unlinked meanwhile, so there is nothing left to start.
  *
- * Only a map from a load that succeeded after the restart counts (`dataLoad` greater than
- * `restartLoad`, the window's count of successful loads then): when the load after the
- * restart fails, the window keeps the map from before it, where an account the restart was
- * meant for can be missing and would read as resolved.
+ * Only a map from a read that STARTED after the restart answered counts: `dataLoad` is the
+ * start number of the read whose data is shown, `restartLoad` the number of reads started when
+ * the answer arrived. A read already under way during the restart, or the map kept from before
+ * it when the read after it failed, can lack an account the restart was meant for, or still
+ * show it running from before, and would read as resolved.
  */
 
 export function restartNoticeResolved(names: string[], runningByAccount: Record<string, boolean> | null,

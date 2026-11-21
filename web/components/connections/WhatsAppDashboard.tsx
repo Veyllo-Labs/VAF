@@ -140,9 +140,14 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
     // names runs again (`restartNoticeNames`, checked against `running_by_account`).
     const [restartNotice, setRestartNotice] = useState<string | null>(null);
     const [restartNoticeNames, setRestartNoticeNames] = useState<string[]>([]);
-    // Successful dashboard loads so far, and that count when the last restart began: only a
-    // load after the restart may clear its notice (`restartNoticeResolved`).
-    const [loadSeq, setLoadSeq] = useState(0);
+    // Dashboard reads are numbered as they START (`fetchSeqRef`); the data shown is from read
+    // `dataSeq`, and an older read that answers after a newer one is not shown. The restart
+    // notice may clear only on data from a read that started after the restart answered
+    // (`restartLoadSeq`, the count then): a read already under way during the restart, or the
+    // map kept from before it when the read after it failed, says nothing about the restart.
+    const fetchSeqRef = useRef(0);
+    const appliedSeqRef = useRef(0);
+    const [dataSeq, setDataSeq] = useState(0);
     const [restartLoadSeq, setRestartLoadSeq] = useState(0);
     // Why Refresh could not sync or start: shown in the banner over the conversation, which is
     // drawn whether or not a chat is selected; cleared when Refresh is pressed again.
@@ -199,6 +204,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
     // load failure, and leaves the reply window field alone while somebody may be typing in it.
     const fetchDashboard = useCallback(async (opts?: { quiet?: boolean }) => {
         const quiet = opts?.quiet === true;
+        const seq = ++fetchSeqRef.current;
         if (!quiet) {
             setLoading(true);
             setLoadFailed(false);
@@ -207,6 +213,9 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
             const res = await fetch(api('api/whatsapp/dashboard'), { credentials: 'include' });
             const json = await res.json();
             if (!res.ok) { if (!quiet) setLoadFailed(true); return; }
+            // A newer read's answer is shown already: this older one does not replace it.
+            if (seq < appliedSeqRef.current) return;
+            appliedSeqRef.current = seq;
             const sessions: WhatsAppSession[] = Array.isArray(json?.sessions) ? json.sessions : [];
             setData({
                 linked: json?.linked === true,
@@ -225,7 +234,7 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
                 log_path: json?.log_path || null,
                 composer_enabled: json?.composer_enabled !== false,
             });
-            setLoadSeq(n => n + 1);
+            setDataSeq(seq);
             if (!quiet && typeof json?.reply_window_hours === 'number') setWindowInput(String(json.reply_window_hours));
             setSelectedChatId(prev => prev ?? (sessions[0]?.chat_id ?? null));
             const pendingJump = jumpPendingRef.current;
@@ -277,11 +286,11 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
     // no longer linked and switched on); while it stands and the window is open, the
     // dashboard is re-read quietly every minute to find out.
     useEffect(() => {
-        if (restartNotice && restartNoticeResolved(restartNoticeNames, data?.running_by_account ?? null, loadSeq, restartLoadSeq)) {
+        if (restartNotice && restartNoticeResolved(restartNoticeNames, data?.running_by_account ?? null, dataSeq, restartLoadSeq)) {
             setRestartNotice(null);
             setRestartNoticeNames([]);
         }
-    }, [data, loadSeq, restartLoadSeq, restartNotice, restartNoticeNames]);
+    }, [data, dataSeq, restartLoadSeq, restartNotice, restartNoticeNames]);
     useEffect(() => {
         if (!isOpen || !restartNotice) return;
         const timer = setInterval(() => { fetchDashboard({ quiet: true }); }, 60000);
@@ -330,7 +339,11 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
             const res = await startOwn();
             const refused = refusalText(res.ok, await res.json().catch(() => null), t('startFailed'));
             if (refused !== null) setRestartError(refused);
-            else if (config?.whatsapp_config?.enabled !== true) onConfigChange('whatsapp_config', { ...(config?.whatsapp_config || {}), enabled: true });
+            else {
+                // Running again: an earlier Refresh refusal no longer applies.
+                setRefreshError(null);
+                if (config?.whatsapp_config?.enabled !== true) onConfigChange('whatsapp_config', { ...(config?.whatsapp_config || {}), enabled: true });
+            }
             await fetchDashboard();
         } catch {
             setRestartError(t('startFailed'));
@@ -357,13 +370,15 @@ export default function WhatsAppDashboard({ isOpen, onClose, config, onConfigCha
         setRestartError(null);
         setRestartNotice(null);
         setRestartNoticeNames([]);
-        setRestartLoadSeq(loadSeq);
         try {
             await saveWhatsAppConfig({ enabled: true });
             const res = await fetch(api('api/whatsapp/restart'), { method: 'POST', credentials: 'include' });
             const json = await res.json().catch(() => null);
             const refused = refusalText(res.ok, json, t('startFailed'));
             if (refused !== null) { setRestartError(refused); return; }
+            // Only a read that starts from here on can tell whether the restart's accounts run.
+            setRestartLoadSeq(fetchSeqRef.current);
+            setRefreshError(null);
             await new Promise(r => setTimeout(r, 3000));
             await fetchDashboard();
             // An admin's restart that skipped an account whose previous process has not ended.

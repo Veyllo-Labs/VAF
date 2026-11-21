@@ -105,6 +105,7 @@ def test_nobody_to_run_is_a_400_not_a_start(world, monkeypatch, path):
     res = _client(ADMIN).post(f"/api/whatsapp/{path}")
     assert res.status_code == 400, res.text
     assert res.json()["detail"] == wa.NOBODY_TO_RUN
+    assert res.json()["detail"].endswith("Link WhatsApp and switch it on first."), "it names the next step"
     time.sleep(0.05)
     assert world.names() == [] and not wa.is_bridge_running()
     assert wa.start_bridge() is False and not wa.is_bridge_running()

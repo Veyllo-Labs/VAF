@@ -841,11 +841,14 @@ async def start_whatsapp_bridge(request: Request):
 async def stop_whatsapp_bridge(request: Request):
     """Stop WhatsApp. An admin stops the whole bridge; anybody else stops their own account's
     process and nobody else's."""
-    from vaf.api.whatsapp_bridge import is_bridge_running, stop_account, stop_bridge
+    from vaf.api.whatsapp_bridge import stop_account, stop_bridge
 
     if caller_is_admin(request):
-        if is_bridge_running():
-            stop_bridge()
+        # Also when no run is up: after a failed run the Stop is what cancels its recovery
+        # (`whatsapp_bridge._whole_stops`); on an ended run it only sets a stop already set.
+        # Measured before, behind `if is_bridge_running()`: an admin's Stop after a crash was
+        # never counted, and the next reconnect pass brought every member back.
+        stop_bridge()
         return {"status": "stopped", "message": "WhatsApp bridge stopped."}
 
     account = request_account(request)

@@ -123,7 +123,7 @@ ACCOUNT_STARTED = "WhatsApp started for this account."
 ACCOUNT_ALREADY_RUNNING = "WhatsApp already runs for this account."
 # What a start of the whole bridge answers when no account is linked and switched on: nothing
 # to run is no failure of the installation (the routes answer it with 400, not 500).
-NOBODY_TO_RUN = "No account has WhatsApp linked and switched on."
+NOBODY_TO_RUN = "No account has WhatsApp linked and switched on. Link WhatsApp and switch it on first."
 
 
 class _PendingStart:
@@ -161,16 +161,14 @@ class _RunOutcome:
         # back (`Reconnector`). A stop on request or a run with nobody to run stays down.
         self.failed = False
         # (name, scope key) of every account this run was started for or spawned, minus the ones
-        # stopped on request since (`stop_account`, an expired session): who a crash recovery
-        # brings back, and whose automatic reconnect may go on after a failed spawn. Guarded by
-        # `_spawn_lock`.
+        # stopped on request since (`stop_account`, an expired session): whom its own spawn
+        # phase starts, whom a crash recovery brings back, and whose automatic reconnect may go
+        # on. Seeded when the run is published and only removed from afterwards, apart from an
+        # explicit start into the running bridge (`_spawn_account`). Guarded by `_spawn_lock`.
         self.members: set = set()
         # `_whole_stops` when the run was published: a whole-bridge Stop since then cancels any
-        # recovery of this run (`start_bridge(unless_stopped_after=...)`).
+        # recovery of this run (`_start_bridge(recover=...)`).
         self.started_after = 0
-        # A crash recovery's run starts only these (name, scope key) pairs: the failed run's
-        # members. None for every other run.
-        self.recover_only: Optional[set] = None
 
 
 # The current (or last) run's outcome, replaced by `start_bridge` with each run.
@@ -2712,10 +2710,11 @@ def _run_bridge_until_stopped(only: Optional[str], stop: threading.Event,
     users = _get_users_to_run()
     if only is not None:
         users = [u for u in users if u[1] == only]
-    if outcome.recover_only is not None:
-        users = [u for u in users if (u[1], _scope_key(u[0])) in outcome.recover_only]
     with _spawn_lock:
-        outcome.members.update((u[1], _scope_key(u[0])) for u in users)
+        # Whom the run was published for, as that stands now: an account stopped on request
+        # since the publication (`_leave_run`) is not started by this spawn phase. Read again
+        # before each spawn below, under the same lock as the stop.
+        users = [u for u in users if (u[1], _scope_key(u[0])) in outcome.members]
         # An account start that raced this one may already have a process here: then the
         # bridge stays up for it.
         with _process_lock:
@@ -2735,6 +2734,11 @@ def _run_bridge_until_stopped(only: Optional[str], stop: threading.Event,
             pending = _pending_starts.pop(username, None)
             if pending is not None and pending.cancelled:
                 pending.resolve(False, START_CANCELLED)
+                continue
+            if (username, _scope_key(user_scope_id)) not in outcome.members:
+                # Stopped on request after the users were read.
+                if pending is not None:
+                    pending.resolve(False, START_CANCELLED)
                 continue
             try:
                 blocked = _blocked_by_previous(username, user_scope_id)
@@ -2807,64 +2811,72 @@ def anyone_to_run() -> bool:
     return bool(_get_users_to_run())
 
 
-def start_bridge(only: Optional[str] = None, *, recover: Optional[set] = None,
-                 unless_stopped_after: Optional[int] = None) -> bool:
+def start_bridge(only: Optional[str] = None) -> bool:
     """Start the WhatsApp bridge. Returns True if started (or already running). With `only`,
     the bridge comes up with that account's process alone; nobody else's starts. Without it,
     False when no account is linked and switched on (`anyone_to_run`), before Node is looked
     for or the dependencies are installed: a VAF where nobody uses WhatsApp starts nothing and
     logs no missing Node. No global switch gates it: each account's own switch decides its
-    own process (module docstring).
+    own process (module docstring)."""
+    return _start_bridge(only) in ("running", "started")
 
-    A crash recovery (`Reconnector`) passes `recover`, the failed run's members as (name,
-    scope key) pairs, so accounts stopped on request before the failure stay stopped, and
-    `unless_stopped_after`, the whole-Stop count at that run's start: a Stop since then makes
-    the start answer False without publishing a run, checked in one step with the publishing
-    (`_marks_lock`)."""
+
+def _start_bridge(only: Optional[str] = None, *, recover: Optional["_RunOutcome"] = None) -> str:
+    """`start_bridge`'s work, answering why: "running" (already), "started", "nobody" (no
+    account to run), "cancelled" (a recovery a whole Stop overtook) or "failed" (Node, its
+    dependencies, the threads).
+
+    A crash recovery (`Reconnector`) passes the failed run's outcome as `recover`. The new run
+    is for that run's CURRENT members, read under `_spawn_lock` in the same step that publishes
+    it, so an account whose own Stop landed at any point before (`_leave_run` takes that lock
+    too) is not started; and it is published only while no whole Stop came since the failed
+    run started (`_whole_stops`, read under `_marks_lock` with the publishing). Measured before,
+    with a copy of the members handed over: a Stop between the copy and the start was undone."""
     global _bridge_thread, _sender_thread, _chat_sync_thread, _outgoing_queue, _bridge_stop, _spawns_open
     global _run_outcome
 
     with _lifecycle_lock:
         if _bridge_thread is not None and _bridge_thread.is_alive():
-            return True
+            return "running"
         # Whom this run is for: its members from the start, so a run that fails before its
         # spawn phase is still recovered for them (`_RunOutcome.members`).
         intended = {(name, _scope_key(scope)) for scope, name, _ in _get_users_to_run()
                     if only is None or name == only}
-        if recover is not None:
-            intended &= set(recover)
-        if only is None and recover is None and not intended:
+        if only is None and not intended:
             logger.info("WhatsApp bridge not started: %s", NOBODY_TO_RUN)
-            return False
+            return "nobody"
         whatsapp_config = Config.get("whatsapp_config") or {}
         if not isinstance(whatsapp_config, dict):
             whatsapp_config = {}
         if not _node_path():
             logger.error("Node.js not found. Install Node >= 18 for WhatsApp.")
-            return False
+            return "failed"
         if not _wa_bridge_path().exists():
             logger.error("wa-bridge.js not found at %s", _wa_bridge_path())
-            return False
+            return "failed"
 
         deps_ok, deps_msg = ensure_bridge_deps()
         if not deps_ok:
             logger.error("WhatsApp bridge not started: %s", deps_msg)
-            return False
+            return "failed"
 
         # A new stop per run, never a cleared one: every thread of this run watches its own,
         # so a thread of an earlier run that missed its stop cannot wake into this one.
         run_stop = threading.Event()
         run_queue: queue.Queue = queue.Queue()
         run_outcome = _RunOutcome()
-        run_outcome.members.update(intended)
-        if recover is not None:
-            run_outcome.recover_only = set(recover)
         _ensure_ipc_dirs()
         with _spawn_lock:
+            if recover is not None:
+                intended &= recover.members
+                if not intended:
+                    logger.info("WhatsApp: recovery not started: %s", NOBODY_TO_RUN)
+                    return "nobody"
+            run_outcome.members.update(intended)
             with _marks_lock:
-                if unless_stopped_after is not None and _whole_stops != unless_stopped_after:
+                if recover is not None and _whole_stops != recover.started_after:
                     logger.info("WhatsApp: recovery not started, the bridge was stopped meanwhile")
-                    return False
+                    return "cancelled"
                 _bridge_stop = run_stop
                 run_outcome.started_after = _whole_stops
             _outgoing_queue = run_queue
@@ -2890,7 +2902,7 @@ def start_bridge(only: Optional[str] = None, *, recover: Optional[set] = None,
             _end_run(run_stop, requested=False)
             run_outcome.settled.set()
             _bridge_thread = None
-            return False
+            return "failed"
         # Periodic chat list sync (default every 10 min) so bot has latest chats
         try:
             sync_interval = int((whatsapp_config.get("chat_sync_interval_sec") or 600))
@@ -2902,7 +2914,7 @@ def start_bridge(only: Optional[str] = None, *, recover: Optional[set] = None,
         except Exception:
             pass
         logger.info("WhatsApp bridge started%s", f" for {only}" if only is not None else "")
-        return True
+        return "started"
 
 
 def stop_bridge() -> None:
@@ -3041,7 +3053,10 @@ def _reconnect_account(username: str, user_scope_id: str,
             if current is not None or (name, key) not in _run_outcome.members:
                 return None
         else:
-            if current is not judged or registered != str(user_scope_id or "").strip():
+            # Membership as well: a Stop on request whose process did not end leaves it
+            # registered, retired, and out of the run; once it exits it is not restarted.
+            if (current is not judged or registered != str(user_scope_id or "").strip()
+                    or (name, key) not in _run_outcome.members):
                 return None
             stopped = _stop_account_held(name, user_scope_id)
             if stopped is False:
@@ -3473,11 +3488,13 @@ class Reconnector:
     resets its count.
 
     While the bridge is down, it is started again only when its last run failed (the thread
-    raised), no whole-bridge Stop came since that run started, and fewer than
-    CRASH_RESTARTS_MAX such starts were made in a row without an account seen connected; it
-    starts only that run's members (`start_bridge(recover=...)`), so an account stopped on
-    request before the failure stays stopped. A stop on request or a run with nobody to run
-    stays down.
+    raised), no whole-bridge Stop came since that run started (an admin's `POST /stop` counts
+    one whether or not a run is up), and fewer than CRASH_RESTARTS_MAX such starts were made in
+    a row without an account seen connected; it starts only that run's current members
+    (`_start_bridge(recover=...)`, read in the step that publishes the new run), so an account
+    stopped on request before the failure, or during the recovery, stays stopped. A start that
+    a Stop or the end of every member's WhatsApp overtook is no try: it spends no count and
+    logs no failure. A stop on request or a run with nobody to run stays down.
 
     Measured before, with a worker that restarted the whole bridge: an account's own Stop was
     undone for everybody at the next pass (its empty bridge counted as "nothing connected"),
@@ -3568,12 +3585,17 @@ class Reconnector:
                 return []       # stopped on request since that run started
         with _spawn_lock:
             members = set(outcome.members)
-        eligible = {(name, _scope_key(scope)) for scope, name, _ in _get_users_to_run()} & members
-        if not eligible:
+        if not {(name, _scope_key(scope)) for scope, name, _ in _get_users_to_run()} & members:
+            return []
+        # The members are read again, and the Stop count too, in the start's own publishing
+        # step: what was read here only decides whether a start is worth trying.
+        answer = _start_bridge(recover=outcome)
+        if answer in ("nobody", "cancelled"):
+            # Not a try: a Stop or the end of every member's WhatsApp overtook it.
             return []
         self._crash_restarts += 1
         self._last_crash_restart = now
-        ok = start_bridge(recover=eligible, unless_stopped_after=outcome.started_after)
+        ok = answer in ("started", "running")
         message = "WhatsApp bridge started again after a failed run." if ok else START_FAILED
         if ok:
             logger.warning("WhatsApp: %s (%d of %d)", message, self._crash_restarts, self.crash_restarts_max)

@@ -306,7 +306,8 @@ the caller's own process for anybody else:
   switch-off leaves no process behind; a start the switch refused at that point answers 400,
   not 500.
 - **Nobody to run.** An admin's Start or Restart with no account linked and switched on
-  answers 400 "No account has WhatsApp linked and switched on." and starts nothing (it used to
+  answers 400 "No account has WhatsApp linked and switched on. Link WhatsApp and switch it on
+  first." and starts nothing (it used to
   answer "WhatsApp bridge started." with nothing running).
 - **A newly linked account** therefore starts as soon as it is switched on in Connections,
   with no restart and nobody else's connection touched.
@@ -374,13 +375,18 @@ the caller's own process for anybody else:
   while the account is still a member of the run (`_RunOutcome.members`), and the account's
   own Stop ends that. It leaves alone every other account without a registration (stopped by
   its owner or an admin, or ended by an expired session) and a process that survived its kill
-  while it runs; once that one has ended, the account is started again. While the bridge is
-  down, it is started again only when its last run failed (the bridge thread raised), no Stop
-  of the whole bridge came since that run started (counted in one step with the new run's
-  start, so a Stop during the recovery cancels it), and fewer than three such starts were made
-  in a row without an account seen connected; it starts only the failed run's members, so an
-  account stopped on request before the failure stays stopped. A Stop or a run with nobody to
-  run stays down. Named boundary: an account switched on by a settings save alone (not the toggle) has no
+  while it runs; once that one has ended, the account is started again while it is still a
+  member of the run (the survivor of an admin's restart is; a process its owner's Stop could
+  not end is not). While the bridge is down, it is started again only when its last run failed
+  (the bridge thread raised), no Stop of the whole bridge came since that run started (an
+  admin's `POST /api/whatsapp/stop` counts one whether or not a run is up, and the count is
+  read in one step with the new run's start, so a Stop during the recovery cancels it), and
+  fewer than three such starts were made in a row without an account seen connected; it starts
+  only the failed run's current members, read in that same step, so an account stopped on
+  request before the failure or during the recovery stays stopped. A start that a Stop
+  overtook, or one that found no member left to run, is no try. The spawn phase of every run
+  starts only the run's current members, so an account's own Stop that lands while an admin's
+  whole Start is under way holds too. A Stop or a run with nobody to run stays down. Named boundary: an account switched on by a settings save alone (not the toggle) has no
   registration, so the worker does not start it; the next VAF start, its own Refresh or an
   admin's Start does. Named boundary: a bridge whose last process was stopped by its owner
   stays up with its sender and chat-sync loops idle, because ending the run on the last stop

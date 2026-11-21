@@ -430,8 +430,13 @@ def _claim_request_file(path: Path) -> Optional[Path]:
 
 
 def _drop_claim(marker: Path) -> None:
+    """Remove a claim marker. On Windows a scanner (Defender, the indexer) may hold the new
+    0-byte file for a moment and the unlink is refused; the store writer's bounded retry
+    outlasts it. A marker that still cannot be removed stays, and its request is never sent,
+    the same bounded loss as a consumer that dies after its claim (see the dequeue)."""
+    from vaf.core.secure_store import _retry_sharing_violation
     try:
-        marker.unlink(missing_ok=True)
+        _retry_sharing_violation(lambda: marker.unlink(missing_ok=True))
     except OSError:
         pass
 
@@ -459,10 +464,13 @@ def _dequeue_external_send_request(stop: Optional[threading.Event] = None) -> Op
 
     Named boundaries: a consumer that dies between the claim and the unlink leaves the marker,
     and that request is never sent; its sender's wait answers SEND_UNCONFIRMED, which is true,
-    since nobody knows whether it left. A request whose unlink was refused after it was read
-    keeps its marker as the record that it was handed out, so it is never sent twice; it stays
-    in the folder and costs one refused exclusive create per poll. `.claimed` files left by the
-    rename claim of an older version are not read (they were never delivered then either)."""
+    since nobody knows whether it left. The same holds for a marker that `_drop_claim` could not
+    remove even after its retry. A request whose unlink was refused after it was read keeps its
+    marker as the record that it was handed out, so it is never sent twice. No marker is ever
+    aged out: each of these cases leaves its marker (and, unless it was unlinked, its request)
+    in the folder for good, and costs one refused exclusive create per poll. `.claimed` files
+    left by the rename claim of an older version are not read (they were never delivered then
+    either)."""
     try:
         _ensure_ipc_dirs()
         for found in sorted(_ipc_requests_dir().glob("*.json")):

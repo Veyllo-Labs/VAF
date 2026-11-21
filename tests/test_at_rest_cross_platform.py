@@ -133,28 +133,6 @@ def test_the_browser_holder_record_retries_a_windows_sharing_violation(monkeypat
     assert calls["n"] >= 6, "the writes must have been retried, not abandoned"
 
 
-def _hold_until_the_first_retry(monkeypatch, target):
-    """A reader thread that keeps `target` open until the writer's first retry sleep, which
-    releases it and waits until it is closed. Returns the thread."""
-    opened, release, closed = threading.Event(), threading.Event(), threading.Event()
-
-    def reader():
-        with open(target, "rb"):
-            opened.set()
-            release.wait(10)
-        closed.set()
-
-    def first_retry(_s):
-        release.set()
-        assert closed.wait(10)
-
-    monkeypatch.setattr(secure_store.time, "sleep", only_on_thread(first_retry))
-    t = threading.Thread(target=reader, daemon=True)
-    t.start()
-    assert opened.wait(10)
-    return t
-
-
 @pytest.fixture
 def config_file(tmp_path, monkeypatch):
     from vaf.core.config import Config
@@ -177,7 +155,7 @@ def test_a_config_save_waits_out_a_reader_on_windows(config_file, tmp_path, monk
     from vaf.core.config import Config
     seam = windows_file_semantics.install(monkeypatch, tmp_path)
     windows_file_semantics.retry_like_windows(monkeypatch)
-    reader = _hold_until_the_first_retry(monkeypatch, config_file)
+    reader = windows_file_semantics.hold_until_the_first_retry(monkeypatch, config_file)
 
     Config.save({"provider": "openai"})
 
@@ -220,7 +198,7 @@ def test_the_whatsapp_bridge_state_waits_out_a_reader_on_windows(tmp_path, monke
     windows_file_semantics.retry_like_windows(monkeypatch)
     wa._write_bridge_state(True)
     assert json.loads(wa._ipc_state_path().read_bytes())["running"] is True
-    reader = _hold_until_the_first_retry(monkeypatch, wa._ipc_state_path())
+    reader = windows_file_semantics.hold_until_the_first_retry(monkeypatch, wa._ipc_state_path())
 
     wa._write_bridge_state(False)
 

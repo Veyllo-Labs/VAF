@@ -162,9 +162,16 @@ def _replace_with_retry(tmp: str, path: Path) -> None:
     into a delay; a genuine permission problem still raises after the last
     attempt rather than being swallowed.
     """
+    _retry_sharing_violation(lambda: os.replace(tmp, path))
+
+
+def _retry_sharing_violation(op: Callable[[], None]) -> None:
+    """Run a file operation that Windows refuses while another handle holds the file (a
+    replace, an unlink), with the bounded retry described at `_replace_with_retry`. POSIX
+    never retries: there a PermissionError is a real one."""
     for attempt in range(_REPLACE_ATTEMPTS):
         try:
-            os.replace(tmp, path)
+            op()
             return
         except PermissionError:
             if not _on_windows() or attempt == _REPLACE_ATTEMPTS - 1:

@@ -228,6 +228,31 @@ def install(monkeypatch, root, pause=None):
     return seam
 
 
+def hold_until_the_first_retry(monkeypatch, target):
+    """A reader thread that keeps `target` open until the calling thread's first retry sleep
+    (`secure_store.time.sleep`), which releases it and waits until it is closed. Other threads
+    sleep for real. Returns the thread."""
+    from fake_clock import only_on_thread
+    from vaf.core import secure_store
+    opened, release, closed = threading.Event(), threading.Event(), threading.Event()
+
+    def reader():
+        with open(target, "rb"):
+            opened.set()
+            release.wait(10)
+        closed.set()
+
+    def first_retry(_s):
+        release.set()
+        assert closed.wait(10)
+
+    monkeypatch.setattr(secure_store.time, "sleep", only_on_thread(first_retry))
+    t = threading.Thread(target=reader, daemon=True)
+    t.start()
+    assert opened.wait(10)
+    return t
+
+
 def retry_like_windows(monkeypatch):
     """The store writer's retry as it runs on Windows (`secure_store._on_windows`), with the
     machine key pinned to the file backend so nothing reaches for the OS keyring."""

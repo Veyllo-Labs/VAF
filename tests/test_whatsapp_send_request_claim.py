@@ -354,3 +354,32 @@ def test_a_request_whose_unlink_is_refused_is_never_handed_out_twice(ipc, tmp_pa
         assert wa._dequeue_external_send_request() is None
     assert wa._dequeue_external_send_request() is None
     assert _leftovers(ipc) == sorted([found.name, found.name + ".claim"])
+
+
+def test_a_marker_a_scanner_holds_is_dropped_after_the_retry(ipc, tmp_path, monkeypatch):
+    """A Windows scanner holds the fresh 0-byte marker as a loop whose run ends drops its claim:
+    the unlink is refused once, the retry removes the marker, and the next run gets the request.
+    MUTATION: unlink the marker in `_drop_claim` without the retry - the marker stays and the
+    request is never sent."""
+    seam = windows_file_semantics.install(monkeypatch, tmp_path)
+    windows_file_semantics.retry_like_windows(monkeypatch)
+    _write_request("after-the-scan")
+    (found,) = ipc.glob("*.json")
+    stop = threading.Event()
+    real_claim = wa._claim_request_file
+    readers = []
+
+    def claim_held_by_a_scanner(path):
+        marker = real_claim(path)
+        readers.append(windows_file_semantics.hold_until_the_first_retry(monkeypatch, marker))
+        stop.set()
+        return marker
+    monkeypatch.setattr(wa, "_claim_request_file", claim_held_by_a_scanner)
+    assert wa._dequeue_external_send_request(stop) is None
+    for reader in readers:
+        reader.join(10)
+    assert seam.refusals >= 1, "the scanner never stood in the drop's way"
+    assert _leftovers(ipc) == [found.name]
+    monkeypatch.setattr(wa, "_claim_request_file", real_claim)
+    item = wa._dequeue_external_send_request(threading.Event())
+    assert item is not None and item[4] == "after-the-scan"

@@ -385,8 +385,11 @@ the caller's own process for anybody else:
   only the failed run's current members that are still linked and switched on, read in that
   same step, so an account stopped on request before the failure or during the recovery stays
   stopped. The recovery is of the current run only: once another run replaced the failed one,
-  it is not started. A start that a Stop overtook, or one that found no member left to run, is
-  no try, also when its preflight failed meanwhile; a recovery whose bridge thread could not
+  it is not started. Named boundary: the failed run's other members are then not brought back
+  automatically (an account's own cold start that ended with nobody to run replaces it too);
+  they come back through their own start, an admin's Start or a VAF restart. A start that a
+  Stop overtook, or one that found no member left to run, is no try, also when its preflight
+  failed meanwhile; a recovery whose bridge thread could not
   be launched keeps its intent, and the next pass tries again. The spawn phase of every run
   starts only the run's current members, so an account's own Stop that lands while an admin's
   whole Start is under way holds too. A Stop or a run with nobody to run stays down.

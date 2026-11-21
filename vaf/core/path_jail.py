@@ -513,7 +513,9 @@ def describe_error(exc: BaseException, *, log: bool = True) -> str:
     from ``str(e)`` hands the caller the outside of the root it was just contained in: the home
     folder, the account name, the data directory's layout. That is the second way a contained
     root leaks, after the path itself, and it is reached by text alone: a name over 255
-    characters makes ``is_file()``, ``mkdir`` and ``write_bytes`` raise exactly that.
+    characters makes ``is_file()``, ``mkdir`` and ``write_bytes`` raise exactly that on Linux
+    and macOS (on Windows ``open`` answers EINVAL, ``Invalid argument``, and ``is_file()``
+    reads it as missing).
 
     In order:
 
@@ -521,7 +523,10 @@ def describe_error(exc: BaseException, *, log: bool = True) -> str:
     (b) An `OSError` with an integer ``errno``: ``os.strerror(errno)``, the operating
         system's own words for it ("File name too long", "No space left on device",
         "Connection refused"), which never contain a path. Not the error's ``strerror``: any
-        raiser can put text there (``OSError(13, "cannot read /srv/x/key.pem", ...)``).
+        raiser can put text there (``OSError(13, "cannot read /srv/x/key.pem", ...)``). The
+        words are the host's, and hosts word one cause differently (an over-long name is
+        ENAMETOOLONG on Linux and macOS, EINVAL from the Windows C runtime), so a test
+        compares with ``os.strerror`` of the errno it expects, not a literal.
     (c) An `OSError` with an ``errno`` that is not an integer, or without one but with a
         ``strerror``, a ``filename`` or a ``filename2``, or a `WriteRefused` (every one names
         the path it refused): the withheld text.

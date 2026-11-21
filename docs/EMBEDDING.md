@@ -3478,7 +3478,10 @@ Stable public surface (safe to build on):
   built from `str(e)` leaks the root a route just contained. In order: (a) not an `OSError`:
   `str(exc)`, unchanged; (b) an `OSError` with an integer `errno`: `os.strerror(errno)`, the
   operating system's own words, which never contain a path (not the error's `strerror`,
-  which any raiser can fill with a path); (c) one whose `errno` is not an integer, or one
+  which any raiser can fill with a path); the words are the host's, and hosts word one cause
+  differently (an over-long name is ENAMETOOLONG, "File name too long", on Linux and macOS,
+  and EINVAL, "Invalid argument", from the Windows C runtime), so a test compares with
+  `os.strerror` of the expected errno, not a literal; (c) one whose `errno` is not an integer, or one
   without an `errno` but with a `strerror`, a `filename` or a `filename2`, or a
   `vaf.WriteRefused` (every one names the path it refused): the withheld text; (d) any other
   `OSError`: `str(exc)` when its class comes from `builtins` or from `vaf`, the withheld text

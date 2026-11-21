@@ -22,6 +22,7 @@ WebSocket tests open a real `/ws` with a signed token.
 """
 import ast
 import asyncio
+import errno
 import json
 import os
 import random
@@ -1236,10 +1237,13 @@ def test_multibyte_ids_answer_like_missing(store, workspaces, monkeypatch, actio
 def test_workspace_tools_quote_no_server_path(store, workspaces):
     """The model's three workspace tools answered an OS error with its text, which quotes
     the server's data path. Multibyte ids are refused like missing tasks, and an error the
-    OS raises (a file name too long inside the task) gives only its reason. MUTATIONS: answer
-    the `except` of the read or the write tool with `str(e)`; make `vaf.describe_error`
-    return `str(e)`. (A character count in `_entry` is caught by the byte tests above: this
-    `except OSError` is the backstop that keeps such an id pathless here too.)"""
+    OS raises (a file name too long inside the task) gives only its reason, in the host's
+    words: Linux and macOS raise ENAMETOOLONG for the 303-character name, the Windows C
+    runtime maps a name past NTFS's 255-unit component limit to EINVAL, measured on the
+    windows-latest job. MUTATIONS: answer the `except` of the read or the write tool with
+    `str(e)`; make `vaf.describe_error` return `str(e)`, or a fixed "Invalid argument". (A
+    character count in `_entry` is caught by the byte tests above: this `except OSError` is
+    the backstop that keeps such an id pathless here too.)"""
     from vaf.tools.thinking_workspace_handoff import ThinkingWorkspaceHandoffTool
     from vaf.tools.thinking_workspace_read import ThinkingWorkspaceReadTool
     from vaf.tools.thinking_workspace_write import ThinkingWorkspaceWriteTool
@@ -1261,9 +1265,37 @@ def test_workspace_tools_quote_no_server_path(store, workspaces):
     for out in outs:
         assert out.startswith("Error"), out
         assert str(ws.root) not in out and "Errno" not in out and TENANT_A not in out, out
-    assert "File name too long" in outs[-2], outs[-2]
+    expected = os.strerror(errno.EINVAL if os.name == "nt" else errno.ENAMETOOLONG)
+    assert outs[-2] == f"Error writing workspace: {expected}", outs[-2]
     from vaf.core.path_jail import describe_error
     assert describe_error(FileNotFoundError("Task not found")) == "Task not found"
+
+
+def test_an_overlong_name_answered_the_windows_way_is_pathless_too(store, workspaces,
+                                                                   monkeypatch):
+    """The Windows C runtime answers an over-long name with EINVAL, whose OSError quotes the
+    full path just as ENAMETOOLONG's does. The write tool answers the host's words for it and
+    nothing else, on every host: the module's `open` raises what the Windows runner raised.
+    MUTATIONS: answer the write tool's `except` with `str(e)`; make `vaf.describe_error`
+    return `str(e)` - red."""
+    import builtins
+
+    from vaf.tools.thinking_workspace_write import ThinkingWorkspaceWriteTool
+
+    ws = workspaces
+    long_name = "n" * 300 + ".md"
+    real_open = builtins.open
+
+    def crt_open(file, *a, **k):
+        if os.path.basename(os.fspath(file)) == long_name:
+            raise OSError(errno.EINVAL, "Invalid argument", str(file))
+        return real_open(file, *a, **k)
+
+    monkeypatch.setattr(ws.tw, "open", crt_open, raising=False)
+    out = ThinkingWorkspaceWriteTool().run(mode="write_file", task_id=ws.task_a, path=long_name,
+                                           content="x", user_scope_id=TENANT_A)
+    assert out == "Error writing workspace: " + os.strerror(errno.EINVAL), out
+    assert str(ws.root) not in out and "Errno" not in out and TENANT_A not in out, out
 
 
 # ── one decision at a time, and a claimed approval is finished, never repeated ──

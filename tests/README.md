@@ -266,12 +266,13 @@ A test that bounds how long something takes times CPU (`time.process_time`), not
 clock, which a shared runner stretches. It judges either a ratio against a twin measured
 alternately with it (the same heap and the same neighbours land on both sides) or an
 absolute bound with a measured margin, written next to the bound. A gate on the command
-check never times shlex: it measures with `tests/command_cost.py`, which reports the CPU
-time outside `shlex.split` and counts shlex's calls and characters. shlex builds a long
-token one character at a time, so its cost depends on the heap's free room at that moment:
-with glibc's mmap threshold pinned (the LARGE ALLOCS axis of `scripts/hostile_env.py`) one
-60 K pass measured 0.054, 0.158 or 0.307 s, and one check at the 128 K cap 7.4 to 8.6 s
-against 1.05 s without it, while the time outside shlex stayed 0.133 s.
+check whose text holds one long word never times shlex: it measures with
+`tests/command_cost.py`, which reports the CPU time outside `shlex.split` and counts
+shlex's calls and characters. shlex builds a long token one character at a time, so its
+cost depends on the heap's free room at that moment: with glibc's mmap threshold pinned
+(the LARGE ALLOCS axis of `scripts/hostile_env.py`) one 60 K pass measured 0.054, 0.158 or
+0.307 s, and one check at the 128 K cap 7.4 to 8.6 s against 1.05 s without it, while the
+time outside shlex stayed 0.133 s.
 
 ## Dependencies
 

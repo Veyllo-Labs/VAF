@@ -4,17 +4,18 @@
 """What one command check costs, split into VAF's own CPU time and shlex's work.
 
 A timing gate on a command check whose text holds one long word times VAF's own CPU time and
-counts shlex's work; it never times shlex. A text of short words may be timed whole: its tokens
-stay far below glibc's 32 KiB mmap threshold, where the effect below cannot act.
-`shlex.shlex.read_token` builds a token one character at a time (`self.token += nextchar`), so
-each character allocates a new string while the old one is still alive, and the cost of one
-long word depends on how much contiguous free room the heap has at that moment, not on VAF.
-With glibc's mmap threshold pinned at 32 KiB (the LARGE ALLOCS axis of scripts/hostile_env.py)
-one shlex pass over the same 60 K word measured 0.054, 0.158 or 0.307 s CPU depending on the
-heap state, and repeated within 2 % in that state, so neither a best-of-N nor a re-measure
-escapes it. The whole check of a 128 K one-word text at the length cap measured 7.4 to 8.6 s
-CPU under that axis (about 1.05 s without it) and 11.8 s wall on a shared 4-vCPU runner, while
-the CPU time outside shlex was 0.133 s in every regime.
+counts shlex's work; it never times shlex. The longest token that
+tests/test_command_grammar_reading.py times whole, 40,003 characters in "a name in pieces" at
+120 K, cost that check the same 0.09 s inside shlex with and without the pinned threshold
+described below, so that row stays timed whole. `shlex.shlex.read_token` builds a token one
+character at a time (`self.token += nextchar`), so each character allocates a new string while
+the old one is still alive, and the cost of one long word depends on how much contiguous free
+room the heap has at that moment, not on VAF. With glibc's mmap threshold pinned at 32 KiB (the
+LARGE ALLOCS axis of scripts/hostile_env.py) one shlex pass over the same 60 K word measured
+0.054, 0.158 or 0.307 s CPU depending on the heap state, and repeated within 2 % in that state,
+so neither a best-of-N nor a re-measure escapes it. The whole check of a 128 K one-word text at
+the length cap measured 7.4 to 8.6 s CPU under that axis (about 1.05 s without it) and 11.8 s
+wall on a shared 4-vCPU runner, while the CPU time outside shlex was 0.133 s in every regime.
 
 So `measure_check` reports, for one run of the check:
 - `total`: the CPU time (`time.process_time`) of the whole check;
@@ -47,6 +48,9 @@ def measure_check(text, classify, profile="host_unattended"):
     `shlex.split` on the shlex module is a wrapper that adds up its CPU time, its calls and the
     length of the text it was handed; the command check looks it up on the module at every
     call, and the original is back on every exit, an exception from `classify` included.
+    The swap is process-wide and not thread-safe: a check another thread ran meanwhile would
+    be counted, and its CPU time would land in `own`, since `process_time` counts the whole
+    process; the suite measures one check at a time.
     `classify` is passed in, so a caller hands over its module's global at call time and a
     test that monkeypatches that global measures the fake."""
     original = shlex.split

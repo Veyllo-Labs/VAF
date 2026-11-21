@@ -230,11 +230,11 @@ def test_the_share_reading_stays_linear_in_the_length(unit, monkeypatch):
     command_policy), and with it the ratio was 24 on the Windows runner and 47 on the macOS
     one at the same lengths. The whole check at the cap is held to a bound on its own CPU
     time, outside shlex.split (tests/command_cost.py): measured 0.08 to 0.17 s for the five
-    units, with and without glibc's mmap threshold pinned at 32 KiB; and to at most three
-    shlex reads of the text (measured 2.0 to 3.0 times its length). shlex's time is not
-    judged: on the fullwidth unit it measured 1.05 s CPU normally, 7.4 to 8.6 s with that
-    threshold pinned, and 11.8 s wall on a shared runner, while the own time stayed about
-    0.13 s.
+    units, with and without glibc's mmap threshold pinned at 32 KiB; and to at most 3.5
+    times its length in characters handed to shlex.split (measured 2.0 to 3.0; at 3.0 the
+    `:\\` unit would sit one character under the bound). shlex's time is not judged: on the
+    fullwidth unit it measured 1.05 s CPU normally, 7.4 to 8.6 s with that threshold pinned,
+    and 11.8 s wall on a shared runner, while the own time stayed about 0.13 s.
     MUTATION: read a colon's suffix to the end of the piece - red, and with the two
     share-reading asserts removed still red by the own time (`:\\` and the NFKC spelling,
     own 10.0 and 6.2 s);
@@ -257,7 +257,7 @@ def test_the_share_reading_stays_linear_in_the_length(unit, monkeypatch):
     # and the character count zero.
     assert cost.calls > 0, cost
     assert cost.own < 1.0, cost
-    assert cost.chars <= 3 * len(whole), (cost, len(whole))
+    assert cost.chars <= 3.5 * len(whole), (cost, len(whole))
 
 
 def test_many_different_pieces_stay_linear(monkeypatch):

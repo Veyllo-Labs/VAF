@@ -2442,25 +2442,31 @@ _MULTI_WORD_SLACK = 0.03
 _MULTI_WORD_CEILING = 3.0
 
 
-def _multi_word_verdict(times):
+def _multi_word_verdict(times, step=0.0):
     """None when a multi-word shape's CPU times, one per size from 15 K up in doublings,
     scale linearly, otherwise the reason. Red when a size reaches _MULTI_WORD_CEILING (the
     list may end there, the larger sizes unmeasured); when two consecutive doublings are
     over; or when the last time passes _MULTI_WORD_DOUBLING cubed times the first plus
-    _MULTI_WORD_SLACK. One doubling over alone is not red: on the macOS runner `closers with
+    _MULTI_WORD_SLACK. `step` is the clock's granularity (_cpu_clock_step): a time is the
+    difference of two clock readings, so it may be off by one step, and every comparison
+    reads each time in the row's favour, the smaller one a step up and the larger one a step
+    down, so a coarse clock cannot fail a linear row. On the Windows runner, whose process
+    clock ticks in 15.625 ms, `digit substring starts` went 0.0, 0.03125, 0.078125,
+    0.15625 s, and without the step a first time of 0.0 left the overall bound at the
+    slack alone. One doubling over alone is not red: on the macOS runner `closers with
     descriptor 3` went 0.068, 0.138, 0.398, 0.527 s, a 2.88 times step from 30 K to 60 K and
     1.33 times after it, a spike at one size rather than a growing cost. A quadratic scan
     costs 4 times per doubling, so every doubling past the slack is over, and 64 times
     overall passes the 17.6 times bound once its first time passes 0.65 ms, lower than the
     1.34 ms a single over doubling needed to catch it at 120 K."""
-    if max(times) >= _MULTI_WORD_CEILING:
+    if max(times) - step >= _MULTI_WORD_CEILING:
         return "a size takes %g s or longer: %s" % (_MULTI_WORD_CEILING, times)
-    over = [large > _MULTI_WORD_DOUBLING * small + _MULTI_WORD_SLACK
+    over = [large - step > _MULTI_WORD_DOUBLING * (small + step) + _MULTI_WORD_SLACK
             for small, large in zip(times, times[1:])]
     if any(a and b for a, b in zip(over, over[1:])):
         return "two consecutive doublings pass %g times plus %g s: %s" % (
             _MULTI_WORD_DOUBLING, _MULTI_WORD_SLACK, times)
-    if times[-1] > _MULTI_WORD_DOUBLING ** 3 * times[0] + _MULTI_WORD_SLACK:
+    if times[-1] - step > _MULTI_WORD_DOUBLING ** 3 * (times[0] + step) + _MULTI_WORD_SLACK:
         return "the largest size passes %g times the smallest plus %g s: %s" % (
             round(_MULTI_WORD_DOUBLING ** 3, 3), _MULTI_WORD_SLACK, times)
     return None
@@ -2473,7 +2479,8 @@ def test_the_shell_readings_scale_linearly(name, one_word, build):
     doublings that cost more than 2.6 times the CPU time (plus 0.03 s), a quadratic scan 4
     times, 120 K costs at most 2.6 cubed times 15 K (plus 0.03 s), and no size takes 3 s
     (the larger sizes are not measured once one does); CPU time, best of two, so a busy
-    machine does not move the bound. A one-word shape is measured alternately with a plain
+    machine does not move the bound, each time read one clock step in the row's favour, so
+    a clock that ticks in 15.6 ms does not either. A one-word shape is measured alternately with a plain
     word of the same length, best of three each (_one_word_verdict), and only on the CPU
     time outside shlex.split (the own time) and on shlex's call and character counts
     (tests/command_cost.py): the own r(n) = shape(n) / plain(n) stays at most 3.0 at every
@@ -2536,12 +2543,13 @@ def test_the_shell_readings_scale_linearly(name, one_word, build):
             spent = time.process_time() - start
             best = spent if best is None else min(best, spent)
         return best
+    step = _cpu_clock_step()
     times = []
     for n in sizes:
         times.append(took(build(n)))
-        if times[-1] >= _MULTI_WORD_CEILING:    # red already; a larger size only costs more
+        if times[-1] - step >= _MULTI_WORD_CEILING:     # red already; a larger size only costs more
             break
-    verdict = _multi_word_verdict(times)
+    verdict = _multi_word_verdict(times, step)
     assert verdict is None, (name, times, verdict)
 
 
@@ -2560,6 +2568,31 @@ def test_the_multi_word_verdict_replays_the_macos_sample():
     assert "consecutive" in _multi_word_verdict([0.01, 0.04, 0.16, 0.64])
     assert "largest size" in _multi_word_verdict([0.02, 0.1, 0.12, 0.6])
     assert "takes 3 s" in _multi_word_verdict([0.5, 1.0, 3.0])
+
+
+def test_the_multi_word_verdict_reads_a_coarse_clock_in_the_rows_favour():
+    """The Windows runner's sample of `digit substring starts`, whose process clock ticks in
+    15.625 ms, is green under _multi_word_verdict with that step and red without it, where a
+    first time of 0.0 leaves the overall bound at the slack alone. The macOS sample stays
+    green with the step. Under the step the quadratic row stays red (by the overall bound:
+    its first doublings are within a step and the slack of linear), a row twice the size of
+    the two-doublings-apart row is red by the overall bound, and a row a step past the
+    ceiling is red by the ceiling. A row two doublings over in a row under the step is red by
+    that rule.
+    MUTATION: the step dropped from every comparison - the Windows sample turns red;
+    MUTATION: one doubling over is red - the macOS sample turns red;
+    MUTATION: the overall bound dropped - the row twice the size turns green;
+    MUTATION: the ceiling dropped - the row a step past it turns green."""
+    tick = 0.015625
+    windows = [0.0, 0.03125, 0.078125, 0.15625]
+    assert _multi_word_verdict(windows, tick) is None
+    assert "largest size" in _multi_word_verdict(windows)
+    macos = [0.0684720000000425, 0.13814100000001872, 0.39781700000003184, 0.5272109999999657]
+    assert _multi_word_verdict(macos, tick) is None
+    assert _multi_word_verdict([0.01, 0.04, 0.16, 0.64], tick) is not None
+    assert "consecutive" in _multi_word_verdict([0.1, 0.4, 1.6, 2.9], tick)
+    assert "largest size" in _multi_word_verdict([0.04, 0.2, 0.24, 1.2], tick)
+    assert "takes 3 s" in _multi_word_verdict([0.5, 1.0, 3.02], tick)
 
 
 def test_the_one_word_verdict_replays_the_macos_sample():

@@ -26,11 +26,12 @@ readme = "README.md"
 license = "AGPL-3.0-or-later"
 license-files = ["LICENSE", "LICENSING.md", "NOTICE"]
 authors = [{ name = "Veyllo GmbH", email = "legal@veyllo.io" }]
-# Floor only, DELIBERATELY no upper cap: an upper bound makes pip silently
-# resolve older releases on newer interpreters instead of failing clearly.
-# The supported range (3.10-3.13) is enforced by the installers and kept in
-# lockstep with the CI matrix via tests/test_installer_python_gate.py.
-requires-python = ">=3.10"
+# The supported range (3.10-3.13), the CI-tested one: a newer interpreter lacks
+# wheels for several dependencies, so pip refuses it here instead of failing
+# mid-build. Named boundary: pip on such an interpreter can still resolve an
+# older release published before the cap. Kept equal to the installers' range
+# by tests/test_installer_python_gate.py.
+requires-python = ">=3.10,<3.14"
 dynamic = ["version"]
 classifiers = [
     "Development Status :: 3 - Alpha",

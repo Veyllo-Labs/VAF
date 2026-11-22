@@ -85,6 +85,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   seconds), for a lane that serves several people. VAF's own Veyllo App limits and the web
   room lane use it.
 
+### Changed
+
+- **Python 3.10 to 3.13 only.** The package now declares `requires-python = ">=3.10,<3.14"`, so
+  pip refuses a newer interpreter instead of failing while it builds dependencies, and
+  `scripts/setup_mac.sh` builds the venv with the newest supported Python it finds
+  (`python3.13` down to `python3.10`, then `python3`) instead of Homebrew's newest. Without
+  one it stops and names `brew install python@3.13`; an existing venv on an unsupported Python
+  is rebuilt.
+
 ### Fixed
 
 - **Windows: settings saves no longer fail with "Access is denied".** Turning your own WhatsApp

@@ -13,7 +13,7 @@ Yes (prerelease during the alpha): `pip install --pre vaf` gets the slim base,
 (`git clone` + `pip install -e .`) works too. See [EMBEDDING.md](EMBEDDING.md).
 
 **Which Python versions are supported?**
-3.10 or newer (`requires-python` in pyproject.toml).
+3.10 to 3.13, the range CI tests (`requires-python` in pyproject.toml).
 
 **Do I need Docker?**
 The agent itself runs without it. Docker is hard-required for code-execution

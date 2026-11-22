@@ -15,14 +15,61 @@ fi
 echo "📦 Installing system libraries..."
 brew install portaudio git ffmpeg || echo "⚠️  Brew finished with warnings."
 
-# 2. Virtual Environment
+# 2. Python and Virtual Environment
+# Supported range, the CI-tested one; tests/test_installer_python_gate.py keeps it equal to
+# install.sh. A bare python3 is Homebrew's newest (3.14 and up), which the dependencies do
+# not ship wheels for yet, so the newest supported versioned interpreter is preferred.
+MIN_PYTHON_VERSION="3.10"
+MAX_PYTHON_VERSION="3.13"
+
+# Exit 0 when interpreter "$1" runs and its major.minor lies within the supported range.
+# The interpreter compares its own version_info, so no version text is parsed here.
+python_in_range() {
+    "$1" -c "import sys; sys.exit(0 if (${MIN_PYTHON_VERSION/./,}) <= sys.version_info[:2] <= (${MAX_PYTHON_VERSION/./,}) else 1)" 2>/dev/null
+}
+
+PY_MAJOR=${MAX_PYTHON_VERSION%%.*}
+PY_MINOR=${MAX_PYTHON_VERSION#*.}
+PY_CANDIDATES=""
+while [ "$PY_MINOR" -ge "${MIN_PYTHON_VERSION#*.}" ]; do
+    PY_CANDIDATES="$PY_CANDIDATES python$PY_MAJOR.$PY_MINOR"
+    PY_MINOR=$((PY_MINOR - 1))
+done
+PYTHON_CMD=""
+for cmd in $PY_CANDIDATES python3; do
+    if command -v "$cmd" &> /dev/null && python_in_range "$cmd"; then
+        PYTHON_CMD="$cmd"
+        break
+    fi
+done
+if [ -z "$PYTHON_CMD" ]; then
+    echo "No supported Python found. VAF supports Python $MIN_PYTHON_VERSION to $MAX_PYTHON_VERSION."
+    echo "Install Python $MAX_PYTHON_VERSION with:  brew install python@$MAX_PYTHON_VERSION"
+    echo "Then run this script again."
+    exit 1
+fi
+echo "Using $("$PYTHON_CMD" --version 2>&1) ($(command -v "$PYTHON_CMD"))"
+
+# A venv built with an unsupported Python (for example 3.14 from an earlier run) reproduces
+# the failed wheel builds. It holds only the packages this script installs, so it is rebuilt;
+# with the dependency install skipped, a rebuilt venv would stay empty, so stop instead.
+if [ -x "venv/bin/python" ] && ! python_in_range "venv/bin/python"; then
+    if [ "$VAF_SKIP_PIP_INSTALL" = "1" ]; then
+        echo "The existing venv uses $(venv/bin/python --version 2>&1), outside $MIN_PYTHON_VERSION to $MAX_PYTHON_VERSION."
+        echo "Remove the venv folder and run the installer again."
+        exit 1
+    fi
+    echo "The existing venv uses $(venv/bin/python --version 2>&1), outside $MIN_PYTHON_VERSION to $MAX_PYTHON_VERSION - recreating it..."
+    rm -rf venv
+fi
+
 if [ ! -d "venv" ]; then
-    echo "🐍 Creating virtual environment..."
-    python3 -m venv venv
+    echo "Creating virtual environment..."
+    "$PYTHON_CMD" -m venv venv
 fi
 
 source venv/bin/activate
-echo "ℹ️ Python Version: $(python3 --version)"
+echo "Python Version: $(python3 --version)"
 
 # 3. Critical Dependencies First (Ensure Agent runs even if AI fails)
 if [ "$VAF_SKIP_PIP_INSTALL" = "1" ]; then

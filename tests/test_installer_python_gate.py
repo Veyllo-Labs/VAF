@@ -14,7 +14,8 @@ These guards pin three things:
   2. That range equals exactly the CI matrix (ci.yml + ci-nightly.yml) - the tested versions
      ARE the supported versions; whoever bumps the matrix must bump the installers (and vice
      versa) in the same change.
-  3. pyaudio stays OUT of the core requirements.txt and the headless set it includes (it is
+  3. pyproject's requires-python and scripts/setup_mac.sh declare that same range.
+  4. pyaudio stays OUT of the core requirements.txt and the headless set it includes (it is
      the optional vaf[speech] extra); its no-wheel-for-new-Python source build is what broke
      the install in the first place.
 """
@@ -39,11 +40,11 @@ def _ps1_range() -> tuple[str, str]:
     return lo.group(1), hi.group(1)
 
 
-def _sh_range() -> tuple[str, str]:
-    src = (ROOT / "install.sh").read_text(encoding="utf-8")
+def _sh_range(path: Path = ROOT / "install.sh") -> tuple[str, str]:
+    src = path.read_text(encoding="utf-8")
     lo = re.search(r'^MIN_PYTHON_VERSION="(\d+\.\d+)"', src, re.M)
     hi = re.search(r'^MAX_PYTHON_VERSION="(\d+\.\d+)"', src, re.M)
-    assert lo and hi, "install.sh must define MIN_PYTHON_VERSION and MAX_PYTHON_VERSION"
+    assert lo and hi, f"{path.name} must define MIN_PYTHON_VERSION and MAX_PYTHON_VERSION"
     return lo.group(1), hi.group(1)
 
 
@@ -77,6 +78,21 @@ def test_installer_range_matches_ci_matrix():
     assert max(matrix, key=_minor) == hi, (
         f"CI matrix maximum {max(matrix, key=_minor)} != installer MAX {hi} - "
         "the tested versions ARE the supported versions; change both in the same commit"
+    )
+
+
+def test_pyproject_and_setup_mac_declare_installer_range():
+    # MUTATION: requires-python "<3.15", or setup_mac.sh MAX "3.14" - red.
+    lo, hi = _sh_range()
+    hi_major, hi_minor = _minor(hi)
+    src = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    m = re.search(r'^requires-python\s*=\s*"([^"]*)"', src, re.M)
+    assert m, "pyproject.toml must declare requires-python"
+    assert m.group(1).replace(" ", "") == f">={lo},<{hi_major}.{hi_minor + 1}", (
+        f"requires-python {m.group(1)!r} disagrees with the installers' range {lo}-{hi}"
+    )
+    assert _sh_range(ROOT / "scripts" / "setup_mac.sh") == (lo, hi), (
+        "scripts/setup_mac.sh picks its interpreter from a range other than install.sh's"
     )
 
 

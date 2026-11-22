@@ -12,7 +12,9 @@ until its deadline (`timeout=`, by default `tool_timeout_seconds`) or until its 
 up, and then the process is retired, so the next call starts a fresh one.
 
 The stub server is tests/fixtures/mcp_stdio/deadline_server.py, run as a real process. Every
-call runs under `_bounded`, so a regression fails instead of hanging the suite.
+call runs under `_bounded`, so a regression fails instead of hanging the suite. A test whose
+point is a request on a running server starts that server first (`_warm`), so its deadline
+does not also have to cover a cold start; the tests of the handshake's deadline start cold.
 """
 import ast
 import gc
@@ -60,6 +62,13 @@ def _bounded(fn, seconds=10.0):
     if "error" in box:
         raise box["error"]
     return box["value"]
+
+
+def _warm(client, command):
+    """Start `command`'s server and finish its handshake before a timed request, so its
+    deadline covers only the request on a running server and not a cold start, which under
+    load takes longer than a 1 s deadline. Its own 30 s, never the tool budget."""
+    assert _bounded(lambda: client._ensure_server(command, timeout=30), 30) is not None
 
 
 def _wait_until(check, seconds=5.0) -> bool:
@@ -136,6 +145,7 @@ def _timeout_text(seconds) -> str:
 
 def test_a_non_json_answer_ends_at_the_deadline(server):
     client, command = server("nonjson_once")
+    _warm(client, command)
     out, took = _timed(lambda: client.call_stdio(command, "echo", {"text": "a"}, timeout=1))
     assert out == _timeout_text(1)
     assert took < 2.5, f"the call took {took:.1f} s"
@@ -154,6 +164,7 @@ def _second_call_is_fresh(server, client, command):
 
 def test_the_deadline_frees_the_lock_and_retires_the_process(server):
     client, command = server("nonjson_once")
+    _warm(client, command)
     assert _bounded(lambda: client.call_stdio(command, "echo", {"text": "a"}, timeout=1)) == (
         _timeout_text(1))
     _second_call_is_fresh(server, client, command)
@@ -161,6 +172,7 @@ def test_the_deadline_frees_the_lock_and_retires_the_process(server):
 
 def test_a_skipped_scalar_then_silence_ends_at_the_deadline(server):
     client, command = server("scalar_once")
+    _warm(client, command)
     out, took = _timed(lambda: client.call_stdio(command, "echo", {"text": "a"}, timeout=1))
     assert out == _timeout_text(1)
     assert took < 2.5, f"the call took {took:.1f} s"
@@ -226,6 +238,7 @@ def test_a_line_that_is_not_utf8_is_skipped(server):
 
 def test_a_write_to_a_server_that_stopped_reading_ends_at_the_deadline(server):
     client, command = server("deaf_after_init")
+    _warm(client, command)
     big = {"text": "x" * 200_000}
     out, took = _timed(lambda: client.call_stdio(command, "echo", big, timeout=1))
     assert out == _timeout_text(1)
@@ -240,6 +253,7 @@ def test_the_callers_budget_ends_the_read(server):
     behind it ends within the poll, long before the call's own 60 s, and frees the server."""
     from vaf.core.bounded_run import TIMEOUT_PREFIX, run_bounded
     client, command = server("silent_once")
+    _warm(client, command)
     out = run_bounded(lambda: client.call_stdio(command, "echo", {"text": "a"}, timeout=60),
                       timeout=1.0, poll=0.05, label="mcp")
     assert str(out).startswith(TIMEOUT_PREFIX)
@@ -255,6 +269,7 @@ def test_the_callers_budget_ends_the_read(server):
 def test_the_default_deadline_is_the_tool_budget(server, monkeypatch):
     _tool_budget(monkeypatch, 1)
     client, command = server("silent")
+    _warm(client, command)
     out, took = _timed(lambda: client.call_stdio(command, "echo", {"text": "a"}))
     assert out == _timeout_text(1)
     assert took < 2.5, f"the call took {took:.1f} s"
@@ -391,6 +406,7 @@ def test_a_launcher_that_holds_the_output_is_retired_at_the_deadline(server, tmp
     shutil.copyfile(LAUNCHER, launcher)
     client, command = server("close_stdout")
     command = command.replace(" ", f" {launcher} ", 1)
+    _warm(client, command)
     out = _bounded(lambda: client.call_stdio(command, "echo", {"text": "a"}, timeout=2))
     assert out == _timeout_text(2)
     first = server.started[0]
@@ -479,6 +495,7 @@ def test_a_retired_process_is_freed_without_a_garbage_collection(tmp_path, monke
     gc.disable()
     try:
         for _ in range(5):
+            _warm(client, command)
             assert _bounded(lambda: client.call_stdio(command, "echo", {}, timeout=0.5)) == (
                 _timeout_text(0.5))
         assert _wait_until(lambda: not client._stopping, seconds=10), "a stop never ended"
@@ -550,6 +567,7 @@ def no_posix_pipe_io(monkeypatch):
 @pytest.mark.usefixtures("no_posix_pipe_io")
 def test_the_deadline_works_without_select_simulated_windows(server):
     client, command = server("nonjson_once")
+    _warm(client, command)
     out, took = _timed(lambda: client.call_stdio(command, "echo", {"text": "a"}, timeout=1))
     assert out == _timeout_text(1)
     assert took < 2.5, f"the call took {took:.1f} s"

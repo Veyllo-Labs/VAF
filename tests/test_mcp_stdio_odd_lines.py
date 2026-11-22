@@ -368,6 +368,10 @@ _STUB = (
 # A launcher that runs the stub as its child instead of replacing itself, as a shell script
 # or a wrapper does; the child inherits the output pipe. `wait`: the launcher waits for the
 # child. `leave`: it exits at once and leaves the child behind, out of its process tree.
+# `leave_on_call`: it stays until the stub has received a tool call, then exits and leaves the
+# child behind, so a request that started on a live launcher meets an exited one at its
+# deadline. It waits for the stub's `silent.mark` (polled every 0.01 s, at most 30 s), so it
+# works only with the `silent` and `stubborn` modes, which write that mark.
 _LAUNCHER = (
     "import os, subprocess, sys\n"
     "how, stub, mode = sys.argv[1], sys.argv[2], sys.argv[3]\n"
@@ -376,6 +380,11 @@ _LAUNCHER = (
     "with open(target + '.tmp', 'w') as f: f.write(str(child.pid))\n"
     "os.replace(target + '.tmp', target)\n"
     "if how == 'wait': child.wait()\n"
+    "if how == 'leave_on_call':\n"
+    "    import time\n"
+    "    mark = os.path.join(os.path.dirname(stub), 'silent.mark')\n"
+    "    end = time.monotonic() + 30\n"
+    "    while not os.path.exists(mark) and time.monotonic() < end: time.sleep(0.01)\n"
 )
 
 
@@ -531,6 +540,13 @@ def _bounded(fn, seconds=10.0):
     return box["value"]
 
 
+def _warm(client, command):
+    """Start `command`'s server and finish its handshake before a timed request, so its
+    deadline covers only the request on a running server and not a cold start, which under
+    load takes longer than a 1 s deadline. Its own 30 s, never the tool budget."""
+    assert _bounded(lambda: client._ensure_server(command, timeout=30), 30) is not None
+
+
 def test_stub_server_with_a_stray_number_before_every_answer(stub, monkeypatch):
     client, command = stub("stray")
     tools = _bounded(lambda: client.list_server_tools(command))
@@ -572,7 +588,10 @@ def test_unread_output_after_an_unreadable_line_does_not_reach_the_next_call(stu
 
 def _silent_call(stub, client, command, seconds=1):
     """A call on a silent server, which answers its tool call with a line that is not JSON
-    and then nothing: it ends at its deadline. Returns (answer, seconds taken, process)."""
+    and then nothing: it ends at its deadline. Returns (answer, seconds taken, process). The
+    server is started first (`_warm`; a no-op when it already runs), and the clock starts
+    after that."""
+    _warm(client, command)
     began = time.monotonic()
     out = _bounded(lambda: client.call_stdio(command, "echo", {"text": "a"}, timeout=seconds))
     assert (stub.dir / "silent.mark").exists(), "the call never reached the server"
@@ -619,19 +638,31 @@ def test_retiring_a_process_that_is_no_longer_cached_leaves_the_replacement_alon
     assert _bounded(lambda: client.call_stdio(command, "echo", {"text": "b"})) == "echoed: b"
 
 
-@pytest.mark.parametrize("how", ["wait", "leave"])
+@pytest.mark.parametrize("how", ["wait", "leave_on_call"])
 def test_a_deadline_on_a_server_behind_a_launcher_stops_the_launchers_child(stub, how):
     """A launcher whose child inherits the output pipe: the server leads its own process
     group, so retiring it at the deadline reaches the child, also one the launcher left
-    behind out of its tree."""
+    behind out of its tree.
+
+    `wait`: the launcher is alive at the deadline. `leave_on_call`: it exits once the tool
+    call reached the stub, so the deadline meets a leader that has exited and only its group
+    reaches the child. The timed call starts no replacement: the old `leave` launcher exited
+    before the call, so the call replaced it, and that replacement, not the deadline, stopped
+    the child (and under load the 1 s deadline also had to cover the fresh start). That the
+    leader is gone before the deadline is not asserted, since that would put the launcher's
+    exit under a deadline of its own. Measured with 24 busy loops on the test's two cores: a
+    `_retire` that skips an exited leader failed this test 5 of 5 times, so the leader had
+    left before the deadline on every run. On a run where it has not, the test passes
+    through the live leader."""
     if os.name == "nt":
         pytest.skip("POSIX process groups; Windows stops the child tree only")
     client, command = stub("silent", how=how)
     # Started and handshaken first, and the child taken then, before any deadline runs: a
     # child taken after the deadline may already be gone, which is the success looked for.
-    assert _bounded(lambda: client._ensure_server(command)) is not None
+    _warm(client, command)
     child = stub.child()
     out, took, _process = _silent_call(stub, client, command)
+    assert len(stub.started) == 1, "the timed call started a replacement"
     assert out == _TIMEOUT_ANSWER and took < 2.5, (out, took)
     assert _wait_until(lambda: _gone(child)), "the launcher's child kept running"
 

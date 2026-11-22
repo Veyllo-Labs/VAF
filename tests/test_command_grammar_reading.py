@@ -2434,11 +2434,45 @@ def _one_word_verdict(times, plain, own, own_plain, calls=None, step=0.0, chars=
     return None
 
 
+# A multi-word shape's bounds, CPU seconds: a doubling is over when it costs more than
+# _MULTI_WORD_DOUBLING times the size before plus _MULTI_WORD_SLACK, and no size may take
+# _MULTI_WORD_CEILING or longer.
+_MULTI_WORD_DOUBLING = 2.6
+_MULTI_WORD_SLACK = 0.03
+_MULTI_WORD_CEILING = 3.0
+
+
+def _multi_word_verdict(times):
+    """None when a multi-word shape's CPU times, one per size from 15 K up in doublings,
+    scale linearly, otherwise the reason. Red when a size reaches _MULTI_WORD_CEILING (the
+    list may end there, the larger sizes unmeasured); when two consecutive doublings are
+    over; or when the last time passes _MULTI_WORD_DOUBLING cubed times the first plus
+    _MULTI_WORD_SLACK. One doubling over alone is not red: on the macOS runner `closers with
+    descriptor 3` went 0.068, 0.138, 0.398, 0.527 s, a 2.88 times step from 30 K to 60 K and
+    1.33 times after it, a spike at one size rather than a growing cost. A quadratic scan
+    costs 4 times per doubling, so every doubling past the slack is over, and 64 times
+    overall passes the 17.6 times bound once its first time passes 0.65 ms, lower than the
+    1.34 ms a single over doubling needed to catch it at 120 K."""
+    if max(times) >= _MULTI_WORD_CEILING:
+        return "a size takes %g s or longer: %s" % (_MULTI_WORD_CEILING, times)
+    over = [large > _MULTI_WORD_DOUBLING * small + _MULTI_WORD_SLACK
+            for small, large in zip(times, times[1:])]
+    if any(a and b for a, b in zip(over, over[1:])):
+        return "two consecutive doublings pass %g times plus %g s: %s" % (
+            _MULTI_WORD_DOUBLING, _MULTI_WORD_SLACK, times)
+    if times[-1] > _MULTI_WORD_DOUBLING ** 3 * times[0] + _MULTI_WORD_SLACK:
+        return "the largest size passes %g times the smallest plus %g s: %s" % (
+            round(_MULTI_WORD_DOUBLING ** 3, 3), _MULTI_WORD_SLACK, times)
+    return None
+
+
 @pytest.mark.parametrize("name, one_word, build", _COST_SHAPES, ids=[s[0] for s in _COST_SHAPES])
 def test_the_shell_readings_scale_linearly(name, one_word, build):
     """Gate against superlinear scans: from 15 K to 120 K characters (every text read, none
-    past the length limit) each doubling costs at most 2.6 times the CPU time (plus 0.03 s), a
-    quadratic scan 4 times, and 120 K stays under 3 s; CPU time, best of two, so a busy
+    past the length limit) a multi-word shape (_multi_word_verdict) has no two consecutive
+    doublings that cost more than 2.6 times the CPU time (plus 0.03 s), a quadratic scan 4
+    times, 120 K costs at most 2.6 cubed times 15 K (plus 0.03 s), and no size takes 3 s
+    (the larger sizes are not measured once one does); CPU time, best of two, so a busy
     machine does not move the bound. A one-word shape is measured alternately with a plain
     word of the same length, best of three each (_one_word_verdict), and only on the CPU
     time outside shlex.split (the own time) and on shlex's call and character counts
@@ -2465,7 +2499,7 @@ def test_the_shell_readings_scale_linearly(name, one_word, build):
     call count and its character count; its time is never judged. A constant number of
     extra shlex passes is a constant factor, which the character ceiling judges.
     MUTATION: the brace test as a backtracking pattern - red (the one-word brace rows by the
-    ceiling on the own r, brace words before a name by its doubling);
+    ceiling on the own r, brace words before a name by _multi_word_verdict);
     MUTATION: read printf's first word from each match to the word's end - red (glued printf,
     by the ceiling on the own r);
     MUTATION: read the text for HOME at every tilde script - red (tilde paths after -c);
@@ -2502,10 +2536,30 @@ def test_the_shell_readings_scale_linearly(name, one_word, build):
             spent = time.process_time() - start
             best = spent if best is None else min(best, spent)
         return best
-    times = [took(build(n)) for n in sizes]
-    for small, large in zip(times, times[1:]):
-        assert large <= 2.6 * small + 0.03, (name, times)
-    assert times[-1] < 3.0, (name, times)
+    times = []
+    for n in sizes:
+        times.append(took(build(n)))
+        if times[-1] >= _MULTI_WORD_CEILING:    # red already; a larger size only costs more
+            break
+    verdict = _multi_word_verdict(times)
+    assert verdict is None, (name, times, verdict)
+
+
+def test_the_multi_word_verdict_replays_the_macos_sample():
+    """The macOS runner's sample of `closers with descriptor 3` (one doubling 2.88 times,
+    the next 1.33 times) is green under _multi_word_verdict and red under the rule it
+    replaced, every doubling at most 2.6 times plus 0.03 s. A quadratic row is red by two
+    consecutive doublings, one with two over doublings apart by the overall bound, and a
+    time at the ceiling by the ceiling.
+    MUTATION: one doubling over is red - the sample turns red;
+    MUTATION: the overall bound dropped - the row with two doublings apart turns green;
+    MUTATION: the ceiling dropped - the row at the ceiling turns green."""
+    sample = [0.0684720000000425, 0.13814100000001872, 0.39781700000003184, 0.5272109999999657]
+    assert _multi_word_verdict(sample) is None
+    assert any(large > 2.6 * small + 0.03 for small, large in zip(sample, sample[1:]))
+    assert "consecutive" in _multi_word_verdict([0.01, 0.04, 0.16, 0.64])
+    assert "largest size" in _multi_word_verdict([0.02, 0.1, 0.12, 0.6])
+    assert "takes 3 s" in _multi_word_verdict([0.5, 1.0, 3.0])
 
 
 def test_the_one_word_verdict_replays_the_macos_sample():

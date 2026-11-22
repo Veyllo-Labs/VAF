@@ -28,42 +28,52 @@ python_in_range() {
     "$1" -c "import sys; sys.exit(0 if (${MIN_PYTHON_VERSION/./,}) <= sys.version_info[:2] <= (${MAX_PYTHON_VERSION/./,}) else 1)" 2>/dev/null
 }
 
-PY_MAJOR=${MAX_PYTHON_VERSION%%.*}
-PY_MINOR=${MAX_PYTHON_VERSION#*.}
-PY_CANDIDATES=""
-while [ "$PY_MINOR" -ge "${MIN_PYTHON_VERSION#*.}" ]; do
-    PY_CANDIDATES="$PY_CANDIDATES python$PY_MAJOR.$PY_MINOR"
-    PY_MINOR=$((PY_MINOR - 1))
-done
-PYTHON_CMD=""
-for cmd in $PY_CANDIDATES python3; do
-    if command -v "$cmd" &> /dev/null && python_in_range "$cmd"; then
-        PYTHON_CMD="$cmd"
-        break
+# An existing venv on a supported Python is used as it is, whatever PATH offers. One built
+# with an unsupported Python (for example 3.14 from an earlier run) reproduces the failed
+# wheel builds; it holds only the packages this script installs, so it is rebuilt. With the
+# dependency install skipped a rebuilt venv would stay empty, so stop instead.
+VENV_STATE="missing"
+if [ -x "venv/bin/python" ]; then
+    if python_in_range "venv/bin/python"; then
+        VENV_STATE="supported"
+    else
+        VENV_STATE="unsupported"
     fi
-done
-if [ -z "$PYTHON_CMD" ]; then
-    echo "No supported Python found. VAF supports Python $MIN_PYTHON_VERSION to $MAX_PYTHON_VERSION."
-    echo "Install Python $MAX_PYTHON_VERSION with:  brew install python@$MAX_PYTHON_VERSION"
-    echo "Then run this script again."
+fi
+if [ "$VENV_STATE" = "unsupported" ] && [ "$VAF_SKIP_PIP_INSTALL" = "1" ]; then
+    echo "The existing venv uses $(venv/bin/python --version 2>&1), outside $MIN_PYTHON_VERSION to $MAX_PYTHON_VERSION."
+    echo "Remove the venv folder and run the installer again."
     exit 1
 fi
-echo "Using $("$PYTHON_CMD" --version 2>&1) ($(command -v "$PYTHON_CMD"))"
 
-# A venv built with an unsupported Python (for example 3.14 from an earlier run) reproduces
-# the failed wheel builds. It holds only the packages this script installs, so it is rebuilt;
-# with the dependency install skipped, a rebuilt venv would stay empty, so stop instead.
-if [ -x "venv/bin/python" ] && ! python_in_range "venv/bin/python"; then
-    if [ "$VAF_SKIP_PIP_INSTALL" = "1" ]; then
-        echo "The existing venv uses $(venv/bin/python --version 2>&1), outside $MIN_PYTHON_VERSION to $MAX_PYTHON_VERSION."
-        echo "Remove the venv folder and run the installer again."
+# PATH is searched only when the venv must be created or replaced. The old venv is removed
+# only once a supported interpreter for its replacement is found.
+if [ "$VENV_STATE" != "supported" ]; then
+    PY_MAJOR=${MAX_PYTHON_VERSION%%.*}
+    PY_MINOR=${MAX_PYTHON_VERSION#*.}
+    PY_CANDIDATES=""
+    while [ "$PY_MINOR" -ge "${MIN_PYTHON_VERSION#*.}" ]; do
+        PY_CANDIDATES="$PY_CANDIDATES python$PY_MAJOR.$PY_MINOR"
+        PY_MINOR=$((PY_MINOR - 1))
+    done
+    PYTHON_CMD=""
+    for cmd in $PY_CANDIDATES python3; do
+        if command -v "$cmd" &> /dev/null && python_in_range "$cmd"; then
+            PYTHON_CMD="$cmd"
+            break
+        fi
+    done
+    if [ -z "$PYTHON_CMD" ]; then
+        echo "No supported Python found. VAF supports Python $MIN_PYTHON_VERSION to $MAX_PYTHON_VERSION."
+        echo "Install Python $MAX_PYTHON_VERSION with:  brew install python@$MAX_PYTHON_VERSION"
+        echo "Then run this script again."
         exit 1
     fi
-    echo "The existing venv uses $(venv/bin/python --version 2>&1), outside $MIN_PYTHON_VERSION to $MAX_PYTHON_VERSION - recreating it..."
-    rm -rf venv
-fi
-
-if [ ! -d "venv" ]; then
+    echo "Using $("$PYTHON_CMD" --version 2>&1) ($(command -v "$PYTHON_CMD"))"
+    if [ "$VENV_STATE" = "unsupported" ]; then
+        echo "The existing venv uses $(venv/bin/python --version 2>&1), outside $MIN_PYTHON_VERSION to $MAX_PYTHON_VERSION - recreating it..."
+        rm -rf venv
+    fi
     echo "Creating virtual environment..."
     "$PYTHON_CMD" -m venv venv
 fi

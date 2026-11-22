@@ -1689,11 +1689,14 @@ def test_includes_system_site_matches_the_interpreter_fuzz(tmp_path):
     the venv's pyvenv.cfg keeps its own lines minus every include line (so `home` stays and
     the interpreter starts) and gains up to four drawn lines (keys in several spellings,
     separators, values, a commented include line, an include line without '=', LF or CRLF).
-    The oracle is the child's site.PREFIXES, which carries the base prefixes exactly when
-    site.py honoured the flag; a sys.path rewrite like Homebrew's leaves it intact. It runs on
-    every CI Python, so a change to CPython's parse turns it red. `VAF_FUZZ_DRAWS` raises the
-    draw count outside the suite. MUTATION: default "false"; no .lower() on the key; no
-    .lower() on the value; the first line wins - red."""
+    The oracle asks whether the child's site.PREFIXES holds sys.base_prefix or
+    sys.base_exec_prefix, which site.py adds exactly when it honoured the flag; a sys.path
+    rewrite like Homebrew's leaves it intact. The list's shape is no oracle: up to 3.13 a
+    false flag leaves [sys.prefix], but 3.14 sets sys.prefix to the venv before site runs,
+    so its default [sys.prefix, sys.exec_prefix] names the venv twice and stays when the flag
+    is false. It runs on every CI Python, so a change to CPython's parse turns it red.
+    `VAF_FUZZ_DRAWS` raises the draw count outside the suite. MUTATION: default "false"; no
+    .lower() on the key; no .lower() on the value; the first line wins - red."""
     import venv
 
     includes_system_site = _ci_venv().includes_system_site
@@ -1702,7 +1705,19 @@ def test_includes_system_site_matches_the_interpreter_fuzz(tmp_path):
     cfg = env_dir / "pyvenv.cfg"
     own = [line for line in cfg.read_bytes().splitlines(keepends=True)
            if not line.strip().lower().startswith(b"include")]
-    oracle = [str(_venv_python(env_dir)), "-c", "import site, sys; print(site.PREFIXES != [sys.prefix])"]
+    oracle = [str(_venv_python(env_dir)), "-c",
+              "import site, sys; print(sys.base_prefix in site.PREFIXES or sys.base_exec_prefix in site.PREFIXES)"]
+
+    def interpreter_says(content: bytes) -> bool:
+        cfg.write_bytes(content)
+        proc = subprocess.run(oracle, capture_output=True, text=True, cwd=tmp_path, env=_bare_env(),
+                              timeout=60)
+        assert proc.returncode == 0, (content, proc.stderr)
+        return proc.stdout.strip() == "True"
+
+    # The oracle itself first: the plain flag both ways, as venv writes it.
+    assert interpreter_says(b"".join(own) + b"include-system-site-packages = false\n") is False
+    assert interpreter_says(b"".join(own) + b"include-system-site-packages = true\n") is True
     rng = random.Random(507)
     draws = int(os.environ.get("VAF_FUZZ_DRAWS", "60"))
     mismatches = []
@@ -1718,11 +1733,7 @@ def test_includes_system_site_matches_the_interpreter_fuzz(tmp_path):
                 text = rng.choice(_CFG_KEYS) + rng.choice(_CFG_SEPARATORS) + rng.choice(_CFG_VALUES)
             lines.append(text.encode("utf-8") + rng.choice([b"\n", b"\r\n"]))
         content = b"".join(own + lines)
-        cfg.write_bytes(content)
-        proc = subprocess.run(oracle, capture_output=True, text=True, cwd=tmp_path, env=_bare_env(),
-                              timeout=60)
-        assert proc.returncode == 0, (content, proc.stderr)
-        want = proc.stdout.strip() == "True"
+        want = interpreter_says(content)
         if includes_system_site(str(cfg)) is not want:
             mismatches.append((draw, content, want))
     assert not mismatches, (f"{len(mismatches)} of {draws} draws", mismatches[:5])

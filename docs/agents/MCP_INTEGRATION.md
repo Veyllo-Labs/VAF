@@ -352,15 +352,19 @@ exit in that window still stops its group.
 
 Named boundary: a launcher that exits once it has started its server, and leaves the server
 running in its group on the pipe it inherited, counts as exited on the next call. Every call
-after the first therefore stops that server, starts it again and does the handshake inside
-its own deadline, and the server keeps nothing between calls (measured with a test launcher:
-four calls, four starts). A launcher that waits for its server stays alive and is reused
-(measured: a shell script that runs the server without `exec`, four calls, one start; the
-`python.exe` of a Windows virtual environment is such a launcher, see above). The reason is
-that liveness is judged by the process VAF started. The replacement signals the old group
-at once, inside the same call that found its leader exited, while keeping such a server
-cached for later calls could leave its group id naming another group after a wait of
-unbounded length.
+after the first therefore stops that server, starts it again and does the handshake
+(measured with a test launcher: four calls, four starts), all within that call's one
+deadline. The stop of the old group comes first (up to the 2 s grace and a SIGKILL, as
+above), so the start and the handshake get only what is left, and a short deadline can run
+out before the request is written; the call then answers `Error: Failed to initialize MCP
+server (no answer within N s)`. What the server holds in memory does not survive from one
+call to the next; what it saved to a file or a database does. A launcher that waits for its
+server stays alive and is reused (measured: a shell script that runs the server without
+`exec`, four calls, one start; the `python.exe` of a Windows virtual environment is such a
+launcher, see above). The reason is that liveness is judged by the process VAF started. The
+replacement signals the old group at once, inside the same call that found its leader
+exited, while keeping such a server cached for later calls could leave its group id naming
+another group after a wait of unbounded length.
 
 Being in their own group, the servers are out of reach of a terminal's Ctrl+C and hangup, so
 VAF stops them when it exits: at a normal exit (`atexit`), on the agent's signal shutdown,

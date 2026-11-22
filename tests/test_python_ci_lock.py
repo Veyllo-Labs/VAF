@@ -1224,8 +1224,9 @@ def test_ci_venv_hides_the_base_interpreters_packages(tmp_path):
 
 def test_ci_venv_check_refuses_a_venv_with_the_system_site_packages(tmp_path):
     """The leak the drift lanes must never run in: a venv that sees the base interpreter's
-    site-packages. --check in it exits 1 and names the base directory it sees. MUTATION:
-    _base_site_dirs returns [] - red."""
+    site-packages. --check in it exits 1 and names the base prefix it sees. Two checks see
+    this venv on Linux, the pyvenv.cfg flag and the base site on sys.path, so the mutation
+    breaks both. MUTATION: drop the pyvenv.cfg check AND _base_site_dirs returns [] - red."""
     import venv
 
     paths = sysconfig.get_paths(vars={"base": sys.base_prefix, "platbase": sys.base_exec_prefix})
@@ -1271,7 +1272,11 @@ def test_isolation_sees_the_user_site_even_when_site_left_it_out(tmp_path, monke
     ci_venv = _ci_venv()
     user_site = str(tmp_path / "user-site")
     own_site = str(tmp_path / "venv" / "site-packages")
+    # The faked prefix is a venv without the system site packages, as site.py would read it.
+    (tmp_path / "venv").mkdir()
+    (tmp_path / "venv" / "pyvenv.cfg").write_bytes(b"include-system-site-packages = false\n")
     monkeypatch.setattr(sys, "prefix", str(tmp_path / "venv"))
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "venv" / "bin" / "python"))
     monkeypatch.setattr(site, "ENABLE_USER_SITE", False)
     monkeypatch.setattr(site, "getusersitepackages", lambda: user_site)
     monkeypatch.setattr(sys, "path", [own_site, user_site])
@@ -1387,15 +1392,17 @@ def _symlink_or_skip(link, target) -> None:
 
 def test_isolation_problem_sees_one_directory_through_a_link(tmp_path):
     """Pins the class "a path compared without resolving links": Homebrew's framework
-    site-packages (what sysconfig fills in from sys.base_prefix) links to the prefix's, which
-    is the spelling sys.path carries, and setup-python's macOS Python has no such link, so CI
-    never saw it. A link and its target are one directory in both directions, for the base
-    site, the user site and the prefix; the refusal names the base site as written; a match of
-    the written spellings still counts; a clean venv passes. MUTATION: no realpath in
+    site-packages (what sysconfig fills in from sys.base_prefix) is a link into the Cellar,
+    and setup-python's macOS Python has no such link, so CI never saw it. A link and its
+    target are one directory in both directions, for the base site, the user site and the
+    prefix; the refusal names the base site as written; a match of the written spellings still
+    counts; a clean venv passes. Homebrew's own shape, where sys.path carries a different real
+    directory (its sitecustomize rewrites the entry to the prefix's site-packages), is blind
+    to every spelling and refused through the venv's pyvenv.cfg. MUTATION: no realpath in
     _spellings; resolve only the sys.path side; resolve only the base side; drop the written
-    spelling from _spellings - red."""
+    spelling from _spellings; drop the pyvenv.cfg check - red."""
     problem = _ci_venv().isolation_problem
-    target = tmp_path / "homebrew" / "lib" / "python3.14" / "site-packages"
+    target = tmp_path / "Cellar" / "python@3.14" / "3.14.0" / "lib" / "python3.14" / "site-packages"
     target.mkdir(parents=True)
     framework = tmp_path / "Python.framework" / "Versions" / "3.14"
     (framework / "lib" / "python3.14").mkdir(parents=True)
@@ -1430,16 +1437,28 @@ def test_isolation_problem_sees_one_directory_through_a_link(tmp_path):
     # A clean venv: neither spelling of the base or the user site is on its path.
     assert problem(venv_dir, base, [venv_site], [link], link) is None
     assert problem(venv_dir, base, [venv_site], [target], target) is None
+    # Homebrew's sitecustomize: sys.path carries the prefix's site-packages, a different real
+    # directory from the Cellar one the framework link names. No spelling matches, so only
+    # the venv's own flag can refuse it.
+    brew_site = tmp_path / "homebrew" / "lib" / "python3.14" / "site-packages"
+    brew_site.mkdir(parents=True)
+    leaky_cfg, clean_cfg = tmp_path / "leaky.cfg", tmp_path / "clean.cfg"
+    leaky_cfg.write_bytes(b"home = /opt/homebrew/bin\ninclude-system-site-packages = true\n")
+    clean_cfg.write_bytes(b"home = /opt/homebrew/bin\ninclude-system-site-packages = false\n")
+    mac_path = [venv_site, str(brew_site)]
+    reason = problem(venv_dir, base, mac_path, [link], None, venv_cfg=str(leaky_cfg))
+    assert reason and "system site packages" in reason and str(leaky_cfg) in reason, reason
+    assert problem(venv_dir, base, mac_path, [link], None, venv_cfg=str(clean_cfg)) is None
 
 
 def test_ci_venv_check_refuses_a_base_site_reached_through_a_link(tmp_path):
     """End to end: a clean venv whose sys.path holds the base interpreter's site-packages
     under a second spelling, a symlink to it, fails --check and names the base directory as
     sysconfig spells it; the same venv without that entry passes. Pins the class "a path
-    compared without resolving links" (Homebrew's framework site-packages links to the
-    prefix's; setup-python's macOS Python has no such link, so CI never saw it). Linux cannot
-    rebuild Homebrew's site setup, so PYTHONPATH carries the second spelling. MUTATION: no
-    realpath in _spellings - red."""
+    compared without resolving links" (Homebrew's framework site-packages is a link into the
+    Cellar; setup-python's macOS Python has no such link, so CI never saw it). The venv is a
+    clean one, so its pyvenv.cfg passes and only the path comparison can see this entry;
+    PYTHONPATH carries the second spelling. MUTATION: no realpath in _spellings - red."""
     import venv
 
     paths = sysconfig.get_paths(vars={"base": sys.base_prefix, "platbase": sys.base_exec_prefix})
@@ -1466,7 +1485,7 @@ def test_isolation_matches_samefile_fuzz(tmp_path):
     three sys.path entries spelt plainly, with a trailing separator or with a 'zz/..' segment.
     Oracle, independent of realpath: refused iff an entry is os.path.samefile with the base.
     Pins the class "a path compared without resolving links" (Homebrew's framework
-    site-packages links to the prefix's; setup-python's macOS Python has no such link).
+    site-packages is a link into the Cellar; setup-python's macOS Python has no such link).
     `VAF_FUZZ_DRAWS` raises the draw count outside the suite. MUTATION: no realpath in
     _spellings; resolve only one side - red."""
     problem = _ci_venv().isolation_problem
@@ -1507,6 +1526,206 @@ def test_isolation_matches_samefile_fuzz(tmp_path):
         if got != want or (reason and not got):
             mismatches.append((draw, base_site, entries, want, reason))
     assert not mismatches, mismatches[:5]
+
+
+# A sitecustomize that swaps every base site entry on sys.path for a different real directory,
+# the way Homebrew's rewrites its Cellar site-packages to the prefix's. Both sides are compared
+# written and resolved, so the rewrite holds whatever spelling site.py used.
+_REWRITING_SITECUSTOMIZE = """\
+import os, sys, sysconfig
+
+def _spellings(path):
+    return {os.path.normcase(os.path.normpath(os.path.abspath(path))),
+            os.path.normcase(os.path.realpath(path))}
+
+_paths = sysconfig.get_paths(vars={"base": sys.base_prefix, "platbase": sys.base_exec_prefix})
+_base = _spellings(_paths["purelib"]) | _spellings(_paths["platlib"])
+sys.path[:] = [ELSEWHERE if entry and _spellings(entry) & _base else entry for entry in sys.path]
+"""
+
+_REWRITE_PROBE = """\
+import json, os, sys, sysconfig
+
+def spellings(path):
+    return {os.path.normcase(os.path.normpath(os.path.abspath(path))),
+            os.path.normcase(os.path.realpath(path))}
+
+paths = sysconfig.get_paths(vars={"base": sys.base_prefix, "platbase": sys.base_exec_prefix})
+base = spellings(paths["purelib"]) | spellings(paths["platlib"])
+import brewpkg
+print(json.dumps({"brewpkg": brewpkg.__file__, "prefix": sys.prefix, "base_prefix": sys.base_prefix,
+                  "base_on_path": [e for e in sys.path if e and spellings(e) & base]}))
+"""
+
+
+def test_ci_venv_check_refuses_a_base_site_rewritten_by_sitecustomize(tmp_path):
+    """Pins the class "a base Python whose site module rewrites sys.path": Homebrew's
+    sitecustomize replaces the base site entry with a different real directory, so a
+    --system-site-packages venv imports the base's packages while no spelling of the base
+    site is on sys.path. setup-python's Python has no such sitecustomize, so no CI lane or
+    local gate had this shape. Here a sitecustomize on PYTHONPATH rewrites the entry to
+    `elsewhere`; the leaky venv imports a package from there (asserted, not assumed), and
+    --check refuses it, naming the system site packages, the venv's pyvenv.cfg and the base
+    prefix; a clean venv under the same sitecustomize passes. MUTATION: drop the pyvenv.cfg
+    check; look for pyvenv.cfg only beside the executable - red."""
+    import venv
+
+    paths = sysconfig.get_paths(vars={"base": sys.base_prefix, "platbase": sys.base_exec_prefix})
+    if not any(os.path.isdir(paths[k]) for k in ("purelib", "platlib")):
+        pytest.skip("the base interpreter has no site-packages directory to leak")
+    elsewhere = tmp_path / "elsewhere"
+    (elsewhere / "brewpkg").mkdir(parents=True)
+    (elsewhere / "brewpkg" / "__init__.py").write_bytes(b"")
+    custom = tmp_path / "custom"
+    custom.mkdir()
+    (custom / "sitecustomize.py").write_text(
+        _REWRITING_SITECUSTOMIZE.replace("ELSEWHERE", repr(str(elsewhere))), encoding="utf-8")
+    leaky, clean = tmp_path / "leaky", tmp_path / "clean"
+    venv.create(leaky, system_site_packages=True, with_pip=False, symlinks=os.name != "nt")
+    venv.create(clean, with_pip=False, symlinks=os.name != "nt")
+
+    probe = subprocess.run([str(_venv_python(leaky)), "-c", _REWRITE_PROBE], capture_output=True,
+                           text=True, cwd=tmp_path, env=_bare_env(PYTHONPATH=str(custom)), timeout=60)
+    assert probe.returncode == 0, probe.stdout + probe.stderr
+    seen = json.loads(probe.stdout)
+    assert Path(seen["brewpkg"]).parent.parent == elsewhere, seen
+    assert seen["base_on_path"] == [], seen
+
+    proc = subprocess.run([str(_venv_python(leaky)), str(ROOT / "scripts" / "ci_venv.py"), "--check"],
+                          capture_output=True, text=True, cwd=tmp_path,
+                          env=_bare_env(PYTHONPATH=str(custom)), timeout=60)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    out = os.path.normcase(proc.stdout)
+    assert "system site packages" in proc.stdout, proc.stdout
+    assert os.path.normcase(os.path.join(seen["prefix"], "pyvenv.cfg")) in out, (seen, proc.stdout)
+    assert os.path.normcase(seen["base_prefix"]) in out, (seen, proc.stdout)
+    proc = subprocess.run([str(_venv_python(clean)), str(ROOT / "scripts" / "ci_venv.py"), "--check"],
+                          capture_output=True, text=True, cwd=tmp_path,
+                          env=_bare_env(PYTHONPATH=str(custom)), timeout=60)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_includes_system_site_reads_pyvenv_cfg_as_site_does(tmp_path):
+    """The include-system-site-packages flag parsed as site.py parses it: a missing key is
+    true, key and value compare stripped and in lower case, only "true" is true, the last line
+    wins, CRLF line ends read the same, a commented line and a line without '=' are ignored.
+    A pyvenv.cfg that cannot be read is a refusal, never a pass. MUTATION: default "false";
+    no .lower() on the key; no .lower() on the value; the first line wins; isolation_problem
+    catches the read error and returns None - red."""
+    ci_venv = _ci_venv()
+    key = b"include-system-site-packages"
+    cases = [
+        (b"home = /usr/bin\n", True),
+        (b"", True),
+        (key + b" = True\n", True),
+        (key + b" =  TRUE \n", True),
+        (key + b"=true\n", True),
+        (key + b" = false\n", False),
+        (key + b" = yes\n", False),
+        (key + b" = 1\n", False),
+        (key + b" =\n", False),
+        (key + b" = true # c\n", False),
+        (b"Include-System-Site-Packages = false\n", False),
+        (b"  " + key + b"  = false\n", False),
+        (key + b" = true\n" + key + b" = false\n", False),
+        (key + b" = false\n" + key + b" = true\n", True),
+        (b"home = /usr/bin\r\n" + key + b" = true\r\n", True),
+        (b"home = /usr/bin\r\n" + key + b" = false\r\n", False),
+        (key + b" = false\n# " + key + b" = true\n", False),
+        (b"# " + key + b" = false\n", True),
+        (key + b" = false\n" + key + b" true\n", False),
+        (key + b" false\n", True),
+        (b"include_system_site_packages = false\n", True),
+    ]
+    wrong = []
+    for n, (content, want) in enumerate(cases):
+        cfg = tmp_path / f"c{n}.cfg"
+        cfg.write_bytes(content)
+        if ci_venv.includes_system_site(str(cfg)) is not want:
+            wrong.append((content, want))
+    assert not wrong, wrong
+
+    problem = ci_venv.isolation_problem
+    venv_dir, base = str(tmp_path / "venv"), str(tmp_path / "base")
+    missing = str(tmp_path / "no-such-dir" / "pyvenv.cfg")
+    reason = problem(venv_dir, base, [], [], None, venv_cfg=missing)
+    assert reason and reason.startswith(f"Cannot read {missing} (") and "unknown" in reason, reason
+    garbled = tmp_path / "garbled.cfg"
+    garbled.write_bytes(b"home = /usr/\xff\xfe\n")
+    reason = problem(venv_dir, base, [], [], None, venv_cfg=str(garbled))
+    assert reason and "Cannot read" in reason and "UnicodeDecodeError" in reason, reason
+    # The prefix check comes first: the base interpreter itself is "not a venv" whatever the file.
+    assert "not a venv" in problem(base, base, [], [], None, venv_cfg=missing)
+
+
+def test_venv_config_looks_where_site_does(tmp_path):
+    """site.py takes the pyvenv.cfg beside the executable, else the one in the prefix (the
+    parent of the executable's directory, which stays right when sys.executable is rewritten
+    to a launcher elsewhere); with neither, the prefix's, so the read fails closed. MUTATION:
+    prefer the prefix's file; look only beside the executable - red."""
+    venv_config = _ci_venv().venv_config
+    prefix = tmp_path / "venv"
+    bin_dir = prefix / "bin"
+    bin_dir.mkdir(parents=True)
+    exe = str(bin_dir / "python")
+    launcher = str(tmp_path / "launcher" / "python")
+    assert venv_config(exe, str(prefix)) == str(prefix / "pyvenv.cfg")
+    (prefix / "pyvenv.cfg").write_bytes(b"include-system-site-packages = false\n")
+    assert venv_config(exe, str(prefix)) == str(prefix / "pyvenv.cfg")
+    assert venv_config(launcher, str(prefix)) == str(prefix / "pyvenv.cfg")
+    (bin_dir / "pyvenv.cfg").write_bytes(b"include-system-site-packages = true\n")
+    assert venv_config(exe, str(prefix)) == str(bin_dir / "pyvenv.cfg")
+
+
+_CFG_KEYS = ["include-system-site-packages", "Include-System-Site-Packages",
+             " include-system-site-packages ", "include_system_site_packages",
+             "include-system-site-package", "prompt", "version"]
+_CFG_SEPARATORS = ["=", " = ", " =", "= "]
+_CFG_VALUES = ["true", "True", " TRUE ", "false", "False", "yes", "1", "", "true # c", "tru e", "=true"]
+
+
+def test_includes_system_site_matches_the_interpreter_fuzz(tmp_path):
+    """Seeded fuzz over the pyvenv.cfg parse with the real interpreter as the oracle: per draw
+    the venv's pyvenv.cfg keeps its own lines minus every include line (so `home` stays and
+    the interpreter starts) and gains up to four drawn lines (keys in several spellings,
+    separators, values, a commented include line, an include line without '=', LF or CRLF).
+    The oracle is the child's site.PREFIXES, which carries the base prefixes exactly when
+    site.py honoured the flag; a sys.path rewrite like Homebrew's leaves it intact. It runs on
+    every CI Python, so a change to CPython's parse turns it red. `VAF_FUZZ_DRAWS` raises the
+    draw count outside the suite. MUTATION: default "false"; no .lower() on the key; no
+    .lower() on the value; the first line wins - red."""
+    import venv
+
+    includes_system_site = _ci_venv().includes_system_site
+    env_dir = tmp_path / "fuzz-venv"
+    venv.create(env_dir, with_pip=False, symlinks=os.name != "nt")
+    cfg = env_dir / "pyvenv.cfg"
+    own = [line for line in cfg.read_bytes().splitlines(keepends=True)
+           if not line.strip().lower().startswith(b"include")]
+    oracle = [str(_venv_python(env_dir)), "-c", "import site, sys; print(site.PREFIXES != [sys.prefix])"]
+    rng = random.Random(507)
+    draws = int(os.environ.get("VAF_FUZZ_DRAWS", "60"))
+    mismatches = []
+    for draw in range(draws):
+        lines = []
+        for _ in range(rng.randint(0, 4)):
+            shape = rng.random()
+            if shape < 0.1:
+                text = f"# include-system-site-packages = {rng.choice(_CFG_VALUES)}"
+            elif shape < 0.2:
+                text = f"include-system-site-packages {rng.choice(_CFG_VALUES)}"
+            else:
+                text = rng.choice(_CFG_KEYS) + rng.choice(_CFG_SEPARATORS) + rng.choice(_CFG_VALUES)
+            lines.append(text.encode("utf-8") + rng.choice([b"\n", b"\r\n"]))
+        content = b"".join(own + lines)
+        cfg.write_bytes(content)
+        proc = subprocess.run(oracle, capture_output=True, text=True, cwd=tmp_path, env=_bare_env(),
+                              timeout=60)
+        assert proc.returncode == 0, (content, proc.stderr)
+        want = proc.stdout.strip() == "True"
+        if includes_system_site(str(cfg)) is not want:
+            mismatches.append((draw, content, want))
+    assert not mismatches, (f"{len(mismatches)} of {draws} draws", mismatches[:5])
 
 
 def test_every_drift_lane_runs_in_a_fresh_venv():

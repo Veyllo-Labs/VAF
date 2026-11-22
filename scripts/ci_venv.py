@@ -45,10 +45,10 @@ def _norm(path: str) -> str:
 def _spellings(path: str) -> set:
     """The written and the link-resolved spelling of a directory; two paths name one directory
     when their sets share a member. A link and its target are one directory: Homebrew's
-    framework site-packages (what sysconfig fills in from sys.base_prefix) is a symlink to the
-    prefix's site-packages, the spelling a --system-site-packages venv carries on sys.path.
-    The written form stays in the set because realpath resolves a link before it collapses a
-    '..' segment, so a resolved form alone could lose a match the written one makes."""
+    framework site-packages (what sysconfig fills in from sys.base_prefix) is a symlink into
+    the Cellar, so a path entry spelt either way names the same site-packages. The written
+    form stays in the set because realpath resolves a link before it collapses a '..'
+    segment, so a resolved form alone could lose a match the written one makes."""
     spellings = {_norm(path)}
     try:
         spellings.add(_norm(os.path.realpath(path)))
@@ -57,13 +57,55 @@ def _spellings(path: str) -> set:
     return spellings
 
 
-def isolation_problem(prefix: str, base_prefix: str, sys_path, base_site_dirs, user_site_dir) -> str | None:
+def venv_config(executable: str, prefix: str) -> str:
+    """The pyvenv.cfg site.py reads for an interpreter: the file beside ``executable`` when it
+    exists, else the one in ``prefix``, in site.py's order. ``prefix`` is what site.py set
+    from the parent of the executable's directory, so it stays right when something rewrites
+    sys.executable later, as a venv launcher does. When neither exists, reading the one in
+    ``prefix`` fails and the check refuses."""
+    beside = os.path.join(os.path.dirname(os.path.abspath(executable)), "pyvenv.cfg")
+    return beside if os.path.isfile(beside) else os.path.join(prefix, "pyvenv.cfg")
+
+
+def includes_system_site(cfg: str) -> bool:
+    """Whether the pyvenv.cfg at ``cfg`` gives the venv the system site packages, parsed as
+    site.py parses it: the key is missing means yes, the last include-system-site-packages
+    line wins, key and value are compared stripped and in lower case, and only "true" is
+    true. This flag decides the leak, not a path on sys.path: Homebrew's sitecustomize
+    rewrites the base site entry on sys.path to a different real directory, so no path
+    comparison sees that leak, while the flag site.py itself obeys still says it. A read
+    error (OSError, UnicodeDecodeError) is raised to the caller."""
+    value = "true"
+    with open(cfg, encoding="utf-8") as fh:
+        for line in fh:
+            if "=" in line:
+                key, _, rest = line.partition("=")
+                if key.strip().lower() == "include-system-site-packages":
+                    value = rest.strip().lower()
+    return value == "true"
+
+
+def isolation_problem(prefix: str, base_prefix: str, sys_path, base_site_dirs, user_site_dir,
+                      venv_cfg: str | None = None) -> str | None:
     """None when an interpreter with these values sees only its own site-packages, else one
     sentence saying why it does not. ``user_site_dir`` is the user site directory whether or
-    not site.py enabled it: a PYTHONPATH entry can put it on sys.path all the same."""
+    not site.py enabled it: a PYTHONPATH entry can put it on sys.path all the same.
+    ``venv_cfg`` is the venv's pyvenv.cfg; when given, its include-system-site-packages flag
+    is read before any path is compared. The path comparison stays: it is what sees a base
+    or user site that PYTHONPATH or a .pth file put on a clean venv's path."""
     if _spellings(prefix) & _spellings(base_prefix):
         return (f"The interpreter at {prefix} is not a venv: its own site-packages count, and a "
                 f"CI runner's Python ships packages the lock does not name.")
+    if venv_cfg is not None:
+        try:
+            system_site = includes_system_site(venv_cfg)
+        except (OSError, UnicodeDecodeError) as exc:
+            return (f"Cannot read {venv_cfg} ({type(exc).__name__}): whether the venv sees the "
+                    f"system site packages is unknown.")
+        if system_site:
+            return (f"{venv_cfg} does not set include-system-site-packages to false: the venv "
+                    f"sees the site packages of the base interpreter at {base_prefix}; it was "
+                    f"created with the system site packages.")
     on_path = set()
     for entry in sys_path:
         if entry:
@@ -93,7 +135,8 @@ def current_isolation_problem() -> str | None:
     # Asked for even when site.py left the user site out (ENABLE_USER_SITE is False in every
     # venv without the system site packages): only automatic insertion is switched off then.
     user_site = site.getusersitepackages()
-    return isolation_problem(sys.prefix, sys.base_prefix, sys.path, _base_site_dirs(), user_site)
+    return isolation_problem(sys.prefix, sys.base_prefix, sys.path, _base_site_dirs(), user_site,
+                             venv_cfg=venv_config(sys.executable, sys.prefix))
 
 
 def scripts_dir(env_dir: str) -> str:

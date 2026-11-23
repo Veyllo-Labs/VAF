@@ -31,6 +31,35 @@ export interface ChangelogEntry {
 // the full technical record lives in /CHANGELOG.md.
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.1.0a37',
+    date: '2026-11-23',
+    sections: [
+      {
+        kind: 'new',
+        items: [
+          'Veyllo App room: once you pair a Veyllo App, a chat at the top of the list shows what you, your agent and the agent in the app wrote to each other. Start a line with @ and your agent\'s name to ask your agent.',
+          'DeepSeek reads images with the deepseek-flash model, without a separate vision provider.',
+        ],
+      },
+      {
+        kind: 'improved',
+        items: [
+          'WhatsApp per account: turning WhatsApp off stops only your own connection, and a connection that stays down is reconnected for each account.',
+          'VAF now runs on Python 3.10 to 3.13, and the macOS setup picks a supported Python by itself.',
+        ],
+      },
+      {
+        kind: 'fixed',
+        items: [
+          'Windows: saving settings no longer fails with "Access is denied", and a queued WhatsApp message is no longer lost.',
+          'Automations: a run that failed or ran out of time shows as failed, a restored automation runs again right away, and a deleted one stops.',
+          'WhatsApp no longer sends one message twice after a failed start.',
+          'The web interface moves to Next.js 16.4.5 for seven security advisories, none of which reached VAF.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.1.0a36',
     date: '2026-11-09',
     sections: [

@@ -11,6 +11,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+## [0.1.0a37] - 2026-11-23
+
 ### Added
 
 - **`vaf.describe_error(exc)`**: the text of an error that is safe to send back. An
@@ -93,6 +95,61 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   (`python3.13` down to `python3.10`, then `python3`) instead of Homebrew's newest. Without
   one it stops and names `brew install python@3.13`; an existing venv on an unsupported Python
   is rebuilt.
+- **For applications built on VAF: the account directory also names the account behind a
+  scope.** A directory registered with `set_account_directory_resolver` now answers the
+  account name for scheduled work and for `user_scope`, which used to get a synthetic
+  `scope_` name. A name is used only when it is a file name that means the same folder on
+  Linux, Windows and macOS (no trailing dot, no decomposed accents, no invisible
+  characters, no device name such as `CON`, no Windows short name such as `ALEXAN~1`, at
+  most 255 bytes), is not "admin" or the machine owner's name,
+  does not start with `scope_` and belongs to exactly one account (compared without case
+  and in one Unicode form); otherwise the scope keeps its synthetic name.
+- **The document editor opens Word and PowerPoint files up to 100 MB.** A larger one is
+  refused with "too large to open here (over 100 MB)" instead of being read whole into
+  memory. The text of a Word or PowerPoint file attached in a chat is read up to 20 MB, as
+  before.
+- **Speech voices whose licence forbids commercial use are no longer offered.** VAF now
+  offers only voices whose licence allows commercial use, and records each licence. Piper on your
+  computer speaks English, German, French, Spanish, Italian, Icelandic, Swedish, Ukrainian,
+  Kazakh, Greek and Dutch; the other languages are read by the English voice, and VAF says
+  so once. English, German and French get another voice (114, 77 and 77 MB). The speech
+  container drops Japanese and Turkish, for which no voice with such a licence exists, and
+  gets new voices for English, Russian and Chinese. Voices an earlier version downloaded and
+  this one no longer offers are deleted; a container voice from an earlier version is
+  downloaded again at the first start (28 to 77 MB per language).
+- **API, llama.cpp and vLLM in one picker in the terminal app.** `c` and Settings > AI Provider
+  list `local · llama.cpp` and `local · vLLM` above the API providers; picking an engine there or
+  under Settings > Engine moves the main chat to this machine, and asks before installing vLLM.
+  While vLLM runs, the top bar names the vLLM model instead of the llama.cpp file.
+- **`vaf models config provider` refuses a provider without an API key** (exit 2), like
+  Settings, and `vaf models config subagent_provider` now switches the sub-agent provider on
+  instead of storing a name that did nothing. `vaf engine` says when the main chat still runs
+  on an API provider.
+- **The local model now runs on llama.cpp 1.0.0 (build b12359).** As before, VAF installs
+  only the build it ships with, and its checksum is checked before anything is unpacked.
+  llama.cpp now lives in its own folder, `bin/llama-cpp/`. Updating it no longer removes an
+  installed vLLM environment or Piper voice. The first start after the update downloads the
+  new build (about 13 to 36 MB on Linux and macOS, up to about 700 MB on Windows with an
+  NVIDIA GPU) and checks that it starts on your computer before anything is replaced; if it
+  does not, the old build keeps running and stays installed. Only then is a llama server that
+  is still running stopped and the old llama.cpp files in `bin/` removed.
+- **Screenshots your agent takes to check its work no longer pile up as attachments.** They
+  now show inside the step that took them, and when there are many, as one row you scroll
+  sideways. Click a picture to see it large. Files you asked for stay attachments as before.
+- **The phishing filter's documentation now lists what it really scores.** Look-alike domains
+  were never scored; the dead rule that claimed to is gone.
+- **Veyllo App: no more probing an app that is not connected.** When the Veyllo App is not
+  connected, your agent asks it at most twice per turn and then tells you to open the app; its
+  send tools say the message is kept and whether a push notice goes out. VAF calls the paired
+  device the Veyllo App everywhere.
+- **CI now tests every push and release against `requirements.lock`**, one hash-pinned lock
+  for Linux, macOS and Windows on Python 3.10 to 3.13, so a new upstream release can no longer
+  turn a push red that the local checks passed. pip, the tools that build a package from
+  source and the release build tools come by hash too. A separate daily run installs the
+  newest versions and reports what broke without blocking anything. `scripts/ci_check.sh`
+  runs in a venv built from the same lock, one per checkout, and no longer installs anything
+  into your `venv/`. Each lane installs the lock into a fresh virtual environment, so packages
+  a CI runner's own Python ships (pipx on Windows) are neither tested nor reported as drift.
 
 ### Fixed
 
@@ -548,64 +605,6 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   the notice goes away by itself once that account runs again.
 - **Two settings saved at the same moment right after VAF started could lose one of the
   changes.** Both are kept now.
-
-### Changed
-
-- **For applications built on VAF: the account directory also names the account behind a
-  scope.** A directory registered with `set_account_directory_resolver` now answers the
-  account name for scheduled work and for `user_scope`, which used to get a synthetic
-  `scope_` name. A name is used only when it is a file name that means the same folder on
-  Linux, Windows and macOS (no trailing dot, no decomposed accents, no invisible
-  characters, no device name such as `CON`, no Windows short name such as `ALEXAN~1`, at
-  most 255 bytes), is not "admin" or the machine owner's name,
-  does not start with `scope_` and belongs to exactly one account (compared without case
-  and in one Unicode form); otherwise the scope keeps its synthetic name.
-- **The document editor opens Word and PowerPoint files up to 100 MB.** A larger one is
-  refused with "too large to open here (over 100 MB)" instead of being read whole into
-  memory. The text of a Word or PowerPoint file attached in a chat is read up to 20 MB, as
-  before.
-- **Speech voices whose licence forbids commercial use are no longer offered.** VAF now
-  offers only voices whose licence allows commercial use, and records each licence. Piper on your
-  computer speaks English, German, French, Spanish, Italian, Icelandic, Swedish, Ukrainian,
-  Kazakh, Greek and Dutch; the other languages are read by the English voice, and VAF says
-  so once. English, German and French get another voice (114, 77 and 77 MB). The speech
-  container drops Japanese and Turkish, for which no voice with such a licence exists, and
-  gets new voices for English, Russian and Chinese. Voices an earlier version downloaded and
-  this one no longer offers are deleted; a container voice from an earlier version is
-  downloaded again at the first start (28 to 77 MB per language).
-- **API, llama.cpp and vLLM in one picker in the terminal app.** `c` and Settings > AI Provider
-  list `local · llama.cpp` and `local · vLLM` above the API providers; picking an engine there or
-  under Settings > Engine moves the main chat to this machine, and asks before installing vLLM.
-  While vLLM runs, the top bar names the vLLM model instead of the llama.cpp file.
-- **`vaf models config provider` refuses a provider without an API key** (exit 2), like
-  Settings, and `vaf models config subagent_provider` now switches the sub-agent provider on
-  instead of storing a name that did nothing. `vaf engine` says when the main chat still runs
-  on an API provider.
-- **The local model now runs on llama.cpp 1.0.0 (build b12359).** As before, VAF installs
-  only the build it ships with, and its checksum is checked before anything is unpacked.
-  llama.cpp now lives in its own folder, `bin/llama-cpp/`. Updating it no longer removes an
-  installed vLLM environment or Piper voice. The first start after the update downloads the
-  new build (about 13 to 36 MB on Linux and macOS, up to about 700 MB on Windows with an
-  NVIDIA GPU) and checks that it starts on your computer before anything is replaced; if it
-  does not, the old build keeps running and stays installed. Only then is a llama server that
-  is still running stopped and the old llama.cpp files in `bin/` removed.
-- **Screenshots your agent takes to check its work no longer pile up as attachments.** They
-  now show inside the step that took them, and when there are many, as one row you scroll
-  sideways. Click a picture to see it large. Files you asked for stay attachments as before.
-- **The phishing filter's documentation now lists what it really scores.** Look-alike domains
-  were never scored; the dead rule that claimed to is gone.
-- **Veyllo App: no more probing an app that is not connected.** When the Veyllo App is not
-  connected, your agent asks it at most twice per turn and then tells you to open the app; its
-  send tools say the message is kept and whether a push notice goes out. VAF calls the paired
-  device the Veyllo App everywhere.
-- **CI now tests every push and release against `requirements.lock`**, one hash-pinned lock
-  for Linux, macOS and Windows on Python 3.10 to 3.13, so a new upstream release can no longer
-  turn a push red that the local checks passed. pip, the tools that build a package from
-  source and the release build tools come by hash too. A separate daily run installs the
-  newest versions and reports what broke without blocking anything. `scripts/ci_check.sh`
-  runs in a venv built from the same lock, one per checkout, and no longer installs anything
-  into your `venv/`. Each lane installs the lock into a fresh virtual environment, so packages
-  a CI runner's own Python ships (pipx on Windows) are neither tested nor reported as drift.
 
 ### Security
 
